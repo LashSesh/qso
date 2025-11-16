@@ -1,0 +1,38 @@
+[package]
+name = "apollyon-mef-bridge"
+version = "0.1.0"
+edition = "2021"
+authors = ["APOLLYON-MEF Integration Team"]
+description = "Integration bridge between APOLLYON-5D and Infinity-Ledger (MEF-Core)"
+license = "MIT"
+
+[dependencies]
+# APOLLYON-5D
+core_5d = { path = "../apollyon_5d/core" }
+metatron = { path = "../apollyon_5d/metatron" }
+bridge = { path = "../apollyon_5d/bridge" }
+
+# MEF-Core (only what we need for adapters)
+mef-schemas = { path = "../infinity-ledger/mef-schemas" }
+mef-router = { path = "../infinity-ledger/mef-router" }
+
+# Common dependencies
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+nalgebra = "0.33"
+sha2 = "0.10"
+num_cpus = "1.16"
+chrono = "0.4"
+
+[dev-dependencies]
+criterion = "0.5"
+tokio-test = "0.4"
+tempfile = "3.0"
+
+[[bench]]
+name = "cognitive_engine_bench"
+harness = false

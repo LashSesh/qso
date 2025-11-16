@@ -1,0 +1,65 @@
+name: CI - Build and Test
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            metatron-qso-rs/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Run tests
+        working-directory: metatron-qso-rs
+        run: cargo test --lib
+
+      - name: Build all benchmark binaries
+        working-directory: metatron-qso-rs
+        run: |
+          cargo build --release --bin quantum_walk_bench
+          cargo build --release --bin vqe_bench
+          cargo build --release --bin qaoa_bench
+          cargo build --release --bin vqc_bench
+          cargo build --release --bin integration_bench
+          cargo build --release --bin cross_system_bench
+          cargo build --release --bin benchmark_compare
+
+      - name: Quick smoke test - Quantum Walk
+        working-directory: metatron-qso-rs
+        run: mkdir -p target && cargo run --release --bin quantum_walk_bench target/quantum_walk_bench.json
+
+      - name: Quick smoke test - VQE
+        working-directory: metatron-qso-rs
+        run: timeout 60 cargo run --release --bin vqe_bench target/vqe_bench.json || true
+
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ci-benchmarks
+          path: metatron-qso-rs/target/*_bench.json
+

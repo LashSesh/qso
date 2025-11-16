@@ -1,0 +1,47 @@
+[package]
+name = "metatron_backend"
+version = "0.1.0"
+edition = "2021"
+authors = ["Q⊗DASH Team"]
+description = "Quantum backend abstraction for Q⊗DASH supporting multiple providers"
+license = "MIT"
+
+[dependencies]
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Numerics
+nalgebra = { workspace = true }
+num-complex = { workspace = true }
+
+# Async
+tokio = { workspace = true, features = ["full"], optional = true }
+reqwest = { version = "0.11", features = ["json"], optional = true }
+
+# Logging
+log = { workspace = true }
+tracing = { workspace = true }
+
+# Config
+figment = { version = "0.10", features = ["toml", "env"] }
+
+# Local backend (uses existing Q⊗DASH quantum state)
+metatron-qso-rs = { path = "../metatron-qso-rs" }
+
+# Utilities
+rand = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+approx = { workspace = true }
+
+[features]
+default = ["local"]
+local = []
+ibm = ["tokio", "reqwest"]
+all-backends = ["local", "ibm"]

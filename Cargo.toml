@@ -1,0 +1,86 @@
+[workspace]
+members = [
+    "metatron-qso-rs",
+    "metatron_dionice_bridge",
+    "metatron_telemetry",
+    "metatron_backend",
+    "metatron_triton",
+    "external/dioniceos/apollyon_5d/core",
+    "external/dioniceos/apollyon_5d/bridge",
+    "external/dioniceos/apollyon_5d/metatron",
+    "external/dioniceos/apollyon-mef-bridge",
+    "external/dioniceos/infinity-ledger/mef-core",
+    "external/dioniceos/infinity-ledger/mef-ledger",
+    "external/dioniceos/infinity-ledger/mef-storage",
+    "external/dioniceos/infinity-ledger/mef-memory",
+    "external/dioniceos/infinity-ledger/mef-router",
+    "external/dioniceos/infinity-ledger/mef-spiral",
+    "external/dioniceos/infinity-ledger/mef-hdag",
+    "external/dioniceos/infinity-ledger/mef-coupling",
+    "external/dioniceos/infinity-ledger/mef-schemas",
+    "external/dioniceos/infinity-ledger/mef-topology",
+    "external/dioniceos/overlay/unified_5d_cube",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Q⊗DASH Team"]
+license = "MIT"
+repository = "https://github.com/LashSesh/qdash"
+
+[workspace.dependencies]
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Numerics
+nalgebra = { version = "0.33", features = ["std"] }
+ndarray = "0.15"
+num-complex = { version = "0.4", features = ["serde"] }
+
+# Random number generation
+rand = "0.8"
+rand_distr = "0.4"
+
+# Cryptography
+sha2 = "0.10"
+uuid = { version = "1.0", features = ["v4", "serde"] }
+
+# Date/Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Async runtime
+tokio = { version = "1.0", features = ["full"] }
+
+# Logging
+log = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Testing
+proptest = "1.0"
+approx = "0.5"
+
+# Other utilities
+petgraph = "0.6"
+rayon = "1.10"
+
+# Web framework
+axum = "0.7"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 16
+
+[profile.dev]
+opt-level = 0
+
+[profile.test]
+opt-level = 1

@@ -1,0 +1,41 @@
+[package]
+name = "metatron_dionice_bridge"
+version = "0.1.0"
+edition = "2021"
+authors = ["Q⊗DASH Team"]
+description = "Bridge connecting Q⊗DASH Seraphic Calibration Shell with dioniceOS backend"
+license = "MIT"
+
+[lib]
+name = "metatron_dionice_bridge"
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Numerics
+nalgebra = { workspace = true }
+
+# Logging
+log = { workspace = true }
+
+# dioniceOS crates
+core_5d = { path = "../external/dioniceos/apollyon_5d/core" }
+bridge = { path = "../external/dioniceos/apollyon_5d/bridge" }
+apollyon-mef-bridge = { path = "../external/dioniceos/apollyon-mef-bridge" }
+
+# Python bindings (optional)
+pyo3 = { version = "0.21", features = ["extension-module"], optional = true }
+
+[dev-dependencies]
+approx = { workspace = true }
+
+[features]
+default = []
+python = ["pyo3"]

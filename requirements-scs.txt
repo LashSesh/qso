@@ -1,0 +1,2 @@
+# Seraphic Calibration Shell (SCS) dependencies
+numpy>=1.20.0

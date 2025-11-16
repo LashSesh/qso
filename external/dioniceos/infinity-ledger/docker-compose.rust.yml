@@ -1,0 +1,171 @@
+version: '3.8'
+
+# ============================================================================
+# Docker Compose Configuration for MEF Rust Services
+# ============================================================================
+# This configuration runs the Rust-based MEF API server with monitoring
+#
+# Usage:
+#   Development:   docker-compose -f docker-compose.rust.yml up
+#   Production:    docker-compose -f docker-compose.rust.yml --profile production up
+#   With Monitoring: docker-compose -f docker-compose.rust.yml --profile monitoring up
+# ============================================================================
+
+services:
+  # ============================================================================
+  # MEF API Service (Rust)
+  # ============================================================================
+  mef-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mef-api
+    ports:
+      - "8080:8080"
+      - "9090:9090"  # Metrics port
+    environment:
+      - BIND_HOST=0.0.0.0
+      - PORT=8080
+      - METRICS_PORT=9090
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - DATA_PATH=/data
+      - ENABLE_METRICS=true
+      - AUTH_TOKEN_REQUIRED=${AUTH_TOKEN_REQUIRED:-false}
+    volumes:
+      - mef-data:/data
+      - ./config:/config:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - mef-network
+    deploy:
+      resources:
+        limits:
+          cpus: "${API_CPU_LIMIT:-2.0}"
+          memory: "${API_MEMORY_LIMIT:-2G}"
+        reservations:
+          cpus: "0.5"
+          memory: "512M"
+
+  # ============================================================================
+  # Prometheus - Metrics Collection
+  # ============================================================================
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: mef-prometheus
+    profiles: ["monitoring"]
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./infinity-ledger-main/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+    networks:
+      - mef-network
+    depends_on:
+      - mef-api
+
+  # ============================================================================
+  # Grafana - Metrics Visualization
+  # ============================================================================
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: mef-grafana
+    profiles: ["monitoring"]
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./infinity-ledger-main/monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./infinity-ledger-main/monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    restart: unless-stopped
+    networks:
+      - mef-network
+    depends_on:
+      - prometheus
+
+  # ============================================================================
+  # Vector Database - Qdrant (Optional)
+  # ============================================================================
+  qdrant:
+    image: qdrant/qdrant:v1.7.0
+    container_name: mef-qdrant
+    profiles: ["vectordb"]
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    restart: unless-stopped
+    networks:
+      - mef-network
+
+  # ============================================================================
+  # Load Testing - k6 (for running load tests)
+  # ============================================================================
+  k6:
+    image: grafana/k6:0.48.0
+    container_name: mef-k6
+    profiles: ["loadtest"]
+    volumes:
+      - ./load-tests:/scripts:ro
+    environment:
+      - API_BASE_URL=http://mef-api:8080
+    networks:
+      - mef-network
+    depends_on:
+      - mef-api
+    command: run /scripts/api-load-test.js
+
+# ============================================================================
+# Networks
+# ============================================================================
+networks:
+  mef-network:
+    driver: bridge
+    name: mef-network
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16
+
+# ============================================================================
+# Volumes
+# ============================================================================
+volumes:
+  mef-data:
+    name: mef-data
+    driver: local
+  
+  prometheus-data:
+    name: mef-prometheus-data
+    driver: local
+  
+  grafana-data:
+    name: mef-grafana-data
+    driver: local
+  
+  qdrant-data:
+    name: mef-qdrant-data
+    driver: local

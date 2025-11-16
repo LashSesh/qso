@@ -1,0 +1,45 @@
+{
+  "metadata": {
+    "timestamp": "2025-11-13T05:21:16.589565595Z",
+    "version": "0.1.0",
+    "commit_hash": "unknown",
+    "system_info": "Metatron QSO VQC Benchmarks - Classification Tasks"
+  },
+  "binary_classification": {
+    "problem_name": "Binary Classification",
+    "training_samples": 8,
+    "feature_dim": 4,
+    "training_accuracy": 1.0,
+    "training_loss": 0.040544137188325516,
+    "test_accuracy": 1.0,
+    "iterations": 32,
+    "quantum_evaluations": 5024,
+    "converged": true,
+    "execution_time_ms": 7440.1165630000005
+  },
+  "linearly_separable": {
+    "problem_name": "Linearly Separable",
+    "training_samples": 8,
+    "feature_dim": 4,
+    "training_accuracy": 1.0,
+    "training_loss": 0.05771611557429816,
+    "test_accuracy": 1.0,
+    "iterations": 15,
+    "quantum_evaluations": 2355,
+    "converged": true,
+    "execution_time_ms": 3521.5477690000002
+  },
+  "performance_metrics": {
+    "total_execution_time_ms": 10961.859226,
+    "avg_iteration_time_ms": 233.23104736170214,
+    "total_quantum_evaluations": 7379,
+    "evaluations_per_second": 673.1522315574024
+  },
+  "quality_metrics": {
+    "best_training_accuracy": 1.0,
+    "worst_training_accuracy": 1.0,
+    "avg_training_accuracy": 1.0,
+    "avg_test_accuracy": 1.0,
+    "convergence_rate": 1.0
+  }
+}

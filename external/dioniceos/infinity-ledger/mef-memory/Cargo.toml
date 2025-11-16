@@ -1,0 +1,34 @@
+[package]
+name = "mef-memory"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mef-schemas = { path = "../mef-schemas" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+async-trait = "0.1"
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+
+[features]
+default = ["inmemory", "optimization"]
+inmemory = []
+faiss = []
+hnsw = []
+
+# Performance optimization features (per mef_integration_spec.md)
+optimization = ["stability-filter", "ophan-sharding", "adaptive-routing", "mandorla"]
+stability-filter = []
+ophan-sharding = []
+adaptive-routing = []
+mandorla = []

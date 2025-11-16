@@ -1,0 +1,17 @@
+[package]
+name = "metatron"
+version = "0.1.0"
+edition = "2021"
+authors = ["Sebastian Klemm"]
+description = "Metatron-R: Post-symbolic cognition engine with geometric reasoning"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rand = { version = "0.8", features = ["std"] }
+rand_distr = "0.4"
+num-complex = "0.4"
+thiserror = "1.0"
+
+[dev-dependencies]
+approx = "0.5"
