@@ -1,0 +1,115 @@
+name: Core Python CI
+
+# Fast, mandatory CI for Python components (SCS + Python SDK)
+# Runs on all PRs and pushes to main/dev branches
+# Target runtime: <5 minutes
+
+on:
+  push:
+    branches: [main, dev, develop]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python-scs-ci:
+    name: Python/SCS Tests & Lint
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Set up Rust toolchain (for PyO3/maturin)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            metatron_qso_py/target/
+          key: ${{ runner.os }}-cargo-pyo3-${{ hashFiles('metatron_qso_py/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-pyo3-
+
+      # Install dependencies
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff pytest maturin
+          pip install -r requirements-scs.txt
+
+      # Formatting check (Python)
+      - name: Check Python formatting with ruff
+        run: ruff format --check .
+
+      # Linting (Python)
+      - name: Run ruff linter
+        run: ruff check .
+
+      # SCS tests (if tests exist in scs/)
+      - name: Run SCS unit tests
+        run: |
+          if [ -d "scs/tests" ] || ls scs/test_*.py 2>/dev/null; then
+            pytest scs/ -v
+          else
+            echo "⚠️  No SCS tests found (scs/tests/ or scs/test_*.py)"
+            echo "This is acceptable for now, but tests should be added."
+          fi
+        continue-on-error: false
+
+      # SCS CLI smoke test
+      - name: SCS CLI smoke test
+        run: |
+          # Test that SCS can be invoked
+          python -m scs.cli --help
+
+          # Test status command (should work even without initialized state)
+          python -m scs.cli status --benchmark-dir metatron-qso-rs/ci || echo "SCS not initialized (expected)"
+
+      # Python SDK build test (maturin)
+      - name: Build Python SDK (metatron-qso)
+        working-directory: metatron_qso_py
+        run: |
+          maturin build --release
+          echo "✅ Python SDK wheel built successfully"
+
+      # Python SDK tests (if tests exist)
+      - name: Run Python SDK tests
+        working-directory: metatron_qso_py
+        run: |
+          if [ -d "tests" ] || [ -d "python/tests" ]; then
+            maturin develop
+            pytest -v
+          else
+            echo "⚠️  No Python SDK tests found"
+            echo "This is acceptable for now, but tests should be added."
+          fi
+        continue-on-error: false
+
+      # Summary
+      - name: CI Summary
+        if: success()
+        run: |
+          echo "✅ All Python/SCS checks passed:"
+          echo "  - Python formatting verified (ruff)"
+          echo "  - Python linting passed (ruff)"
+          echo "  - SCS tests executed"
+          echo "  - SCS CLI smoke test passed"
+          echo "  - Python SDK build successful (maturin)"

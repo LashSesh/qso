@@ -1,12 +1,11 @@
 name: SCS Calibration
 
+# Heavy, optional SCS auto-tuning workflow
+# Runs weekly or on-demand for parameter optimization
+# Target runtime: 10-20 minutes
+
 on:
-  # Run SCS calibration after benchmark workflows
-  workflow_run:
-    workflows: ["Comprehensive Benchmarks", "Quantum Benchmarks"]
-    types:
-      - completed
-  # Allow manual trigger
+  # Allow manual trigger (primary use case)
   workflow_dispatch:
     inputs:
       num_steps:
@@ -14,6 +13,10 @@ on:
         required: false
         default: '3'
         type: string
+
+  # Weekly scheduled run
+  schedule:
+    - cron: '0 3 * * 0'  # Sunday at 3 AM UTC
 
 permissions:
   contents: write

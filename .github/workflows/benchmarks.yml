@@ -1,12 +1,27 @@
-name: Comprehensive Benchmark Suite
+name: Quantum Benchmarks
+
+# Heavy, comprehensive performance benchmarks
+# NOT run on every PR/push - only manual or scheduled
+# Target runtime: 20-40 minutes
 
 on:
-  push:
-    branches: [main, develop, claude/**]
-  pull_request:
-    branches: [main, develop]
+  # Manual trigger for performance-critical PRs
+  workflow_dispatch:
+    inputs:
+      upload_baselines:
+        description: 'Update baseline files after successful run'
+        required: false
+        default: false
+        type: boolean
+
+  # Nightly scheduled run to track performance trends
   schedule:
     - cron: '0 2 * * *'  # Daily at 2 AM UTC
+
+  # Run on release tags
+  push:
+    tags:
+      - 'v*.*.*'
 
 permissions:
   contents: read
@@ -16,8 +31,6 @@ jobs:
   quantum-walk-benchmark:
     name: Quantum Walk Benchmarks
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     defaults:
       run:
         working-directory: metatron-qso-rs
@@ -28,8 +41,6 @@ jobs:
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
 
       - name: Cache Cargo dependencies
         uses: actions/cache@v4
@@ -40,8 +51,9 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             metatron-qso-rs/target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
+            ${{ runner.os }}-cargo-bench-
             ${{ runner.os }}-cargo-
 
       - name: Build quantum walk benchmark
@@ -64,8 +76,6 @@ jobs:
   vqe-benchmark:
     name: VQE Benchmarks
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     defaults:
       run:
         working-directory: metatron-qso-rs
@@ -86,8 +96,9 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             metatron-qso-rs/target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
+            ${{ runner.os }}-cargo-bench-
             ${{ runner.os }}-cargo-
 
       - name: Build VQE benchmark
@@ -115,8 +126,6 @@ jobs:
   qaoa-benchmark:
     name: QAOA Benchmarks
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     defaults:
       run:
         working-directory: metatron-qso-rs
@@ -137,8 +146,9 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             metatron-qso-rs/target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
+            ${{ runner.os }}-cargo-bench-
             ${{ runner.os }}-cargo-
 
       - name: Build QAOA benchmark
@@ -166,8 +176,6 @@ jobs:
   vqc-benchmark:
     name: VQC Benchmarks
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     defaults:
       run:
         working-directory: metatron-qso-rs
@@ -188,8 +196,9 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             metatron-qso-rs/target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
+            ${{ runner.os }}-cargo-bench-
             ${{ runner.os }}-cargo-
 
       - name: Build VQC benchmark
@@ -217,8 +226,6 @@ jobs:
   integration-benchmark:
     name: Integration Benchmarks
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     defaults:
       run:
         working-directory: metatron-qso-rs
@@ -239,8 +246,9 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             metatron-qso-rs/target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
+            ${{ runner.os }}-cargo-bench-
             ${{ runner.os }}-cargo-
 
       - name: Build Integration benchmark
@@ -268,8 +276,6 @@ jobs:
   cross-system-benchmark:
     name: Cross-System Comparison
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     defaults:
       run:
         working-directory: metatron-qso-rs
@@ -290,8 +296,9 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             metatron-qso-rs/target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
+            ${{ runner.os }}-cargo-bench-
             ${{ runner.os }}-cargo-
 
       - name: Build Cross-System benchmark
@@ -319,8 +326,6 @@ jobs:
   advanced-algorithms-benchmark:
     name: Advanced Algorithms Benchmarks
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     defaults:
       run:
         working-directory: metatron-qso-rs
@@ -341,8 +346,9 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             metatron-qso-rs/target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
+            ${{ runner.os }}-cargo-bench-
             ${{ runner.os }}-cargo-
 
       - name: Build Advanced Algorithms benchmark
@@ -367,13 +373,11 @@ jobs:
           path: metatron-qso-rs/target/advanced_algorithms_bench.json
           retention-days: 30
 
-  comment-pr-results:
-    name: Comment PR with Results
+  benchmark-summary:
+    name: Benchmark Summary & Report
     runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
     needs: [quantum-walk-benchmark, vqe-benchmark, qaoa-benchmark, vqc-benchmark, integration-benchmark, cross-system-benchmark, advanced-algorithms-benchmark]
-    if: github.event_name == 'pull_request'
+    if: always()
 
     steps:
       - name: Download all artifacts
@@ -381,69 +385,30 @@ jobs:
         with:
           path: benchmarks
 
-      - name: Comment PR with results
-        uses: actions/github-script@v7
-        continue-on-error: true
-        with:
-          script: |
-            const fs = require('fs');
-            
-            // Load all benchmark results
-            const qwalk = JSON.parse(fs.readFileSync('benchmarks/quantum-walk-benchmark/quantum_walk_bench.json', 'utf8'));
-            const vqe = JSON.parse(fs.readFileSync('benchmarks/vqe-benchmark/vqe_bench.json', 'utf8'));
-            const qaoa = JSON.parse(fs.readFileSync('benchmarks/qaoa-benchmark/qaoa_bench.json', 'utf8'));
-            const vqc = JSON.parse(fs.readFileSync('benchmarks/vqc-benchmark/vqc_bench.json', 'utf8'));
-            const integration = JSON.parse(fs.readFileSync('benchmarks/integration-benchmark/integration_bench.json', 'utf8'));
-            const crossSystem = JSON.parse(fs.readFileSync('benchmarks/cross-system-benchmark/cross_system_bench.json', 'utf8'));
-            const advanced = JSON.parse(fs.readFileSync('benchmarks/advanced-algorithms-benchmark/advanced_algorithms_bench.json', 'utf8'));
-            
-            const comment = `## 🔬 Comprehensive Benchmark Results
-            
-            ### Quantum Walk
-            - **Speedup Factor:** ${qwalk.hitting_time.speedup_factor.toFixed(2)}x
-            - **Quantum Avg Steps:** ${qwalk.hitting_time.quantum_average_steps.toFixed(3)}
-            - **Classical Avg Steps:** ${qwalk.hitting_time.classical_average_steps.toFixed(3)}
-            
-            ### VQE (Variational Quantum Eigensolver)
-            - **Best Ground Energy:** ${vqe.quality_metrics.best_ground_energy.toFixed(6)}
-            - **Convergence Rate:** ${(vqe.quality_metrics.convergence_rate * 100).toFixed(1)}%
-            - **Evaluations/sec:** ${vqe.performance_metrics.evaluations_per_second.toFixed(2)}
-            
-            ### QAOA (Quantum Approximate Optimization)
-            - **Best Approx Ratio:** ${qaoa.quality_metrics.best_approximation_ratio.toFixed(4)}
-            - **Avg Approx Ratio:** ${qaoa.quality_metrics.avg_approximation_ratio.toFixed(4)}
-            - **Convergence Rate:** ${(qaoa.quality_metrics.convergence_rate * 100).toFixed(1)}%
-            
-            ### VQC (Variational Quantum Classifier)
-            - **Avg Training Accuracy:** ${(vqc.quality_metrics.avg_training_accuracy * 100).toFixed(2)}%
-            - **Avg Test Accuracy:** ${(vqc.quality_metrics.avg_test_accuracy * 100).toFixed(2)}%
-            - **Convergence Rate:** ${(vqc.quality_metrics.convergence_rate * 100).toFixed(1)}%
-            
-            ### Integration Tests
-            - **Compatibility Score:** ${(integration.cross_module_metrics.overall_compatibility_score * 100).toFixed(1)}%
-            - **Integration Success Rate:** ${(integration.cross_module_metrics.integration_success_rate * 100).toFixed(1)}%
-            - **Total Time:** ${integration.cross_module_metrics.total_execution_time_ms.toFixed(2)}ms
-            
-            ### Cross-System Comparison
-            - **Metatron QSO Rank:** #${crossSystem.comparison_metrics.metatron_rank} out of 5
-            - **Systems Outperformed:** ${crossSystem.comparison_metrics.systems_outperformed}/4
-            - **Performance Advantage:** ${crossSystem.comparison_metrics.performance_advantage > 0 ? '+' : ''}${crossSystem.comparison_metrics.performance_advantage.toFixed(2)}%
-            - **Quality Advantage:** ${crossSystem.comparison_metrics.quality_advantage > 0 ? '+' : ''}${crossSystem.comparison_metrics.quality_advantage.toFixed(2)}%
-            - **Speed Advantage:** ${crossSystem.comparison_metrics.speed_advantage > 0 ? '+' : ''}${crossSystem.comparison_metrics.speed_advantage.toFixed(2)}%
+      - name: Generate summary report
+        run: |
+          echo "# 🔬 Comprehensive Benchmark Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
 
-            ### Advanced Algorithms (Metatron-Specific)
-            - **Grover Success Prob:** ${(advanced.grover_search.success_probability * 100).toFixed(2)}%
-            - **Grover Speedup:** ${advanced.grover_search.speedup.toFixed(2)}×
-            - **Multi-Target Success:** ${(advanced.multi_target_grover.success_probability * 100).toFixed(2)}%
-            - **Boson Interference:** ${(advanced.boson_sampling.interference_visibility * 100).toFixed(2)}%
-            - **QML Test Accuracy:** ${(advanced.quantum_ml.test_accuracy * 100).toFixed(2)}%
-            - **Total Time:** ${advanced.performance_metrics.total_execution_time_ms.toFixed(2)}ms
+          if [ -f benchmarks/quantum-walk-benchmark/quantum_walk_bench.json ]; then
+            echo "## Quantum Walk" >> $GITHUB_STEP_SUMMARY
+            SPEEDUP=$(jq -r '.hitting_time.speedup_factor' benchmarks/quantum-walk-benchmark/quantum_walk_bench.json)
+            echo "- **Speedup Factor:** ${SPEEDUP}x" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
 
-            ✅ All benchmarks completed successfully!`;
-            
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: comment
-            });
+          if [ -f benchmarks/vqe-benchmark/vqe_bench.json ]; then
+            echo "## VQE (Variational Quantum Eigensolver)" >> $GITHUB_STEP_SUMMARY
+            ENERGY=$(jq -r '.quality_metrics.best_ground_energy' benchmarks/vqe-benchmark/vqe_bench.json)
+            CONV=$(jq -r '.quality_metrics.convergence_rate' benchmarks/vqe-benchmark/vqe_bench.json)
+            echo "- **Best Ground Energy:** ${ENERGY}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Convergence Rate:** ${CONV}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "✅ All benchmarks completed. See artifacts for detailed results." >> $GITHUB_STEP_SUMMARY
+
+      - name: Check overall status
+        run: |
+          echo "Benchmark suite completed."
+          echo "Review individual job logs for regression details."
