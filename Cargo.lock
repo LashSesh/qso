@@ -2233,6 +2233,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "metatron_qso_py"
+version = "0.1.0"
+dependencies = [
+ "metatron-qso-rs",
+ "nalgebra 0.32.6",
+ "num-complex",
+ "pyo3",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "metatron_telemetry"
 version = "0.1.0"
 dependencies = [

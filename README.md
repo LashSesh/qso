@@ -130,11 +130,88 @@ fn main() -> Result<()> {
 }
 ```
 
+## 🐍 Python SDK (metatron_qso)
+
+**High-Performance Quantum Computing in Python** - Powered by Rust
+
+Das Python SDK bietet eine benutzerfreundliche API für Data Scientists, ML-Researcher und Entwickler:
+
+```python
+import metatron_qso
+
+# Metatron Cube Graph erstellen
+graph = metatron_qso.MetatronGraph()
+
+# Quantum Walk ausführen
+result = metatron_qso.run_quantum_walk(
+    graph=graph,
+    source_nodes=[0],  # Zentralknoten
+    t_max=5.0,
+    dt=0.1
+)
+
+# MaxCut mit QAOA lösen
+qaoa_result = metatron_qso.solve_maxcut_qaoa(
+    graph=graph,
+    depth=3,
+    max_iters=100
+)
+
+# VQE für Grundzustand
+vqe_result = metatron_qso.run_vqe(
+    graph=graph,
+    depth=2,
+    max_iters=150,
+    ansatz_type="hardware_efficient"
+)
+```
+
+### Installation
+
+```bash
+# Rust Toolchain installieren (falls nicht vorhanden)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Maturin installieren
+pip install maturin
+
+# Python SDK bauen und installieren
+cd metatron_qso_py
+maturin develop --release
+```
+
+### Features
+
+- ✅ **Python-idiomatische API** - dict returns, list parameters
+- ✅ **Rust-Performance** - Zero-cost Python bindings via PyO3
+- ✅ **Jupyter-ready** - Interactive notebooks mit Visualisierungen
+- ✅ **Type Safety** - Klare Fehlerbehandlung ohne Panics
+
+### Beispiele & Notebooks
+
+```bash
+# Beispiele ausführen
+python metatron_qso_py/examples/01_quantum_walk_basic.py
+python metatron_qso_py/examples/02_qaoa_maxcut_basic.py
+python metatron_qso_py/examples/03_vqe_ground_state.py
+
+# Jupyter Notebook starten
+jupyter notebook metatron_qso_py/notebooks/QuantumWalk_Intro.ipynb
+```
+
+### Dokumentation
+
+- [Python SDK Guide](docs/PYTHON_SDK_GUIDE.md) - Vollständige API-Referenz
+- [Python SDK README](metatron_qso_py/README.md) - Quick Start Guide
+- [Jupyter Notebooks](metatron_qso_py/notebooks/) - Interaktive Tutorials
+
+---
+
 ## 📊 Architektur
 
 ```
 qdash/
-├── metatron-qso-rs/          # Hauptimplementierung in Rust
+├── metatron-qso-rs/          # Rust Core Library
 │   ├── src/
 │   │   ├── lib.rs            # Library entry point
 │   │   ├── qso.rs            # Quantum State Operator (Haupt-API)
@@ -146,7 +223,14 @@ qdash/
 │   ├── bins/                 # 8 Benchmark-Executables
 │   ├── ci/                   # Baseline-Daten für CI/CD
 │   └── docs/                 # Detaillierte Dokumentation
+├── metatron_qso_py/          # Python SDK (PyO3/Maturin)
+│   ├── src/lib.rs            # Python bindings
+│   ├── examples/             # Python-Beispiele
+│   ├── notebooks/            # Jupyter Notebooks
+│   ├── Cargo.toml            # cdylib configuration
+│   └── pyproject.toml        # Maturin build config
 ├── docs/                     # Globale Dokumentation
+│   ├── PYTHON_SDK_GUIDE.md   # Python API Guide
 │   ├── QUANTENINFORMATIONSVERARBEITUNG_DOKUMENTATION.md
 │   ├── VQA_IMPLEMENTATION_GUIDE.md (aktualisiert für Rust)
 │   └── BENCHMARK_*.md

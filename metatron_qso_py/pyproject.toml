@@ -1,0 +1,52 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "metatron-qso"
+version = "0.1.0"
+description = "Python SDK for Metatron Quantum State Operator - High-performance quantum computing on sacred geometry"
+authors = [
+    {name = "Q⊗DASH Team"}
+]
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+keywords = ["quantum", "computing", "metatron", "vqa", "quantum-walk", "qaoa"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "numpy>=1.20.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-benchmark>=4.0.0",
+    "jupyter>=1.0.0",
+    "matplotlib>=3.5.0",
+    "networkx>=3.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/LashSesh/qdash"
+Documentation = "https://github.com/LashSesh/qdash/tree/main/docs"
+Repository = "https://github.com/LashSesh/qdash"
+Issues = "https://github.com/LashSesh/qdash/issues"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+python-source = "python"
