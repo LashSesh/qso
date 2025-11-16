@@ -2,6 +2,14 @@
 name = "metatron-qso-rs"
 version = "0.1.0"
 edition = "2024"
+authors = ["Q⊗DASH Team"]
+description = "Metatron Quantum State Operator - A quantum computing framework based on 13-dimensional sacred geometry"
+license = "MIT"
+repository = "https://github.com/LashSesh/qdash"
+documentation = "https://docs.rs/metatron-qso-rs"
+readme = "README.md"
+keywords = ["quantum", "computing", "metatron", "vqa", "quantum-walk"]
+categories = ["science", "algorithms", "mathematics"]
 
 [dependencies]
 nalgebra = { version = "0.32", features = ["std"] }
@@ -61,3 +69,19 @@ path = "src/bin/benchmark_compare.rs"
 [[example]]
 name = "vqa_demo"
 path = "examples/vqa_demo.rs"
+
+[[example]]
+name = "quantum_walk_basic"
+path = "examples/quantum_walk_basic.rs"
+
+[[example]]
+name = "qaoa_maxcut_basic"
+path = "examples/qaoa_maxcut_basic.rs"
+
+[features]
+default = ["walks", "vqa", "dtl"]
+walks = []
+vqa = []
+codes = []
+dtl = []
+advanced = []
