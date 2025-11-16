@@ -3,7 +3,6 @@
 **Quantum State Operator Framework**
 
 [![Rust](https://img.shields.io/badge/rust-1.85.0-orange.svg)](https://www.rust-lang.org/)
-[![Comprehensive Benchmark Suite](https://github.com/LashSesh/qdash/actions/workflows/comprehensive_benchmarks.yml/badge.svg)](https://github.com/LashSesh/qdash/actions/workflows/comprehensive_benchmarks.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **Hochmodernes Quantencomputing-Framework in pure Rust**
