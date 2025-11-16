@@ -1,0 +1,71 @@
+name: Core Rust CI
+
+# Fast, mandatory CI for Rust core components
+# Runs on all PRs and pushes to main/dev branches
+# Target runtime: <5 minutes
+
+on:
+  push:
+    branches: [main, dev, develop]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-core-ci:
+    name: Rust Build, Test & Lint
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: metatron-qso-rs
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            metatron-qso-rs/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      # Formatting check (fast)
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      # Linting (comprehensive)
+      - name: Run Clippy linter
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      # Unit and integration tests
+      - name: Run tests
+        run: cargo test --workspace
+
+      # Verify release build compiles
+      - name: Build release binary
+        run: cargo build --release
+
+      # Summary
+      - name: CI Summary
+        if: success()
+        run: |
+          echo "✅ All Rust core checks passed:"
+          echo "  - Code formatting verified"
+          echo "  - Clippy linting passed (zero warnings)"
+          echo "  - All tests passed"
+          echo "  - Release build successful"

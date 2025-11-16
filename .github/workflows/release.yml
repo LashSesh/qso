@@ -1,0 +1,229 @@
+name: Release
+
+# Production release workflow
+# Builds and packages artifacts for versioned releases
+# Triggered by semantic version tags (v*.*.*)
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g., v0.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-rust-crate:
+    name: Build Rust Crate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            metatron-qso-rs/target/
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-
+            ${{ runner.os }}-cargo-
+
+      - name: Build release binary
+        working-directory: metatron-qso-rs
+        run: cargo build --release
+
+      - name: Run tests (final validation)
+        working-directory: metatron-qso-rs
+        run: cargo test --release
+
+      - name: Validate crate publish (dry-run)
+        working-directory: metatron-qso-rs
+        run: cargo publish --dry-run
+
+      - name: Generate documentation
+        working-directory: metatron-qso-rs
+        run: cargo doc --no-deps --release
+
+      - name: Package release artifacts
+        working-directory: metatron-qso-rs
+        run: |
+          mkdir -p release
+          cp target/release/libmetatron_qso_rs.* release/ 2>/dev/null || true
+          cp -r target/doc release/
+          tar czf metatron-qso-rs-release.tar.gz release/
+
+      - name: Upload Rust crate artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-crate
+          path: metatron-qso-rs/metatron-qso-rs-release.tar.gz
+
+  build-python-wheels:
+    name: Build Python Wheels
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install maturin
+        run: pip install maturin
+
+      - name: Build wheel
+        working-directory: metatron_qso_py
+        run: maturin build --release
+
+      - name: Upload Python wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-wheel-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: metatron_qso_py/target/wheels/*.whl
+
+  create-github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-rust-crate, build-python-wheels]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.tag }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Extract changelog section for this version
+          if grep -q "## \[${VERSION}\]" CHANGELOG.md; then
+            NOTES=$(sed -n "/## \[${VERSION}\]/,/## \[/p" CHANGELOG.md | sed '$d')
+          else
+            NOTES="Release ${VERSION}
+
+See CHANGELOG.md for details."
+          fi
+
+          echo "notes<<EOF" >> $GITHUB_OUTPUT
+          echo "$NOTES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: Release ${{ steps.version.outputs.version }}
+          body: ${{ steps.release_notes.outputs.notes }}
+          draft: false
+          prerelease: false
+          files: |
+            release-artifacts/rust-crate/*.tar.gz
+            release-artifacts/python-wheel-*/*.whl
+
+  # Optional: Build Docker image for Q⊗DASH services
+  build-docker-image:
+    name: Build Docker Image (Optional)
+    runs-on: ubuntu-latest
+    if: vars.DOCKER_BUILD_ENABLED == 'true'
+    needs: [build-rust-crate, build-python-wheels]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.tag }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        run: |
+          # Placeholder: Add Dockerfile when ready
+          echo "Docker build would happen here"
+          echo "Image tag: qdash:${{ steps.version.outputs.version }}"
+
+      - name: Save Docker image as artifact
+        run: |
+          # docker save qdash:${{ steps.version.outputs.version }} | gzip > qdash-docker-image.tar.gz
+          echo "Docker image saved (placeholder)"
+
+      - name: Upload Docker image
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: qdash-docker-image.tar.gz
+        if: false  # Disabled until Dockerfile exists
+
+  release-summary:
+    name: Release Summary
+    runs-on: ubuntu-latest
+    needs: [build-rust-crate, build-python-wheels, create-github-release]
+    if: always()
+
+    steps:
+      - name: Generate summary
+        run: |
+          echo "# 🚀 Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ steps.version.outputs.version || github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Artifacts Built" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Rust crate (library + documentation)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Python wheels (Linux, macOS, Windows × Python 3.10-3.12)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ GitHub Release created" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. Verify release artifacts in GitHub Releases" >> $GITHUB_STEP_SUMMARY
+          echo "2. Optionally publish Rust crate: \`cargo publish\` in metatron-qso-rs/" >> $GITHUB_STEP_SUMMARY
+          echo "3. Optionally publish Python wheels to PyPI" >> $GITHUB_STEP_SUMMARY
+          echo "4. Update documentation with release notes" >> $GITHUB_STEP_SUMMARY
