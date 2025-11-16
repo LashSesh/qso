@@ -29,6 +29,14 @@ from ._metatron_qso_internal import (
     __doc__ as _internal_doc,
 )
 
+# Import auto-tuning integration (optional SCS support)
+from .auto_tuning import (
+    run_quantum_walk_with_tuning,
+    solve_maxcut_qaoa_with_tuning,
+    run_vqe_with_tuning,
+    SCS_AVAILABLE,
+)
+
 __all__ = [
     "MetatronGraph",
     # Core functions
@@ -41,5 +49,10 @@ __all__ = [
     "quantum_walk_connectivity",
     # QAOA Optimizer
     "solve_maxcut_qaoa_advanced",
+    # Auto-Tuning Integration (SCS)
+    "run_quantum_walk_with_tuning",
+    "solve_maxcut_qaoa_with_tuning",
+    "run_vqe_with_tuning",
+    "SCS_AVAILABLE",
     "__version__",
 ]

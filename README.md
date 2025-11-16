@@ -205,6 +205,115 @@ jupyter notebook metatron_qso_py/notebooks/QuantumWalk_Intro.ipynb
 - [Python SDK README](metatron_qso_py/README.md) - Quick Start Guide
 - [Jupyter Notebooks](metatron_qso_py/notebooks/) - Interaktive Tutorials
 
+## 🔧 Seraphic Calibration Shell (SCS) - Auto-Tuner
+
+**Automatische Hyperparameter-Optimierung für Quantenalgorithmen**
+
+Die Seraphic Calibration Shell ist ein Meta-Algorithmus, der Quantenalgorithmen automatisch optimiert. SCS nutzt field-theoretisches Feedback und Fixpoint-Dynamiken, um die beste Konfiguration für Ihre Algorithmen zu finden.
+
+### Kernkonzepte
+
+**Performance Triplet Φ(c) = (ψ, ρ, ω)**
+- **ψ** (Quality): Algorithmen-spezifische Qualität (z.B. Approximation Ratio bei QAOA)
+- **ρ** (Stability): Robustheit über mehrere Runs
+- **ω** (Efficiency): Recheneffizienz (Evaluationen/Sekunde)
+
+**Mandorla Field M(t)**
+- 16-dimensionales Resonanzfeld für Feedback-Akkumulation
+- Speichert historische Performance-Muster
+- Leitet Konfigurationsänderungen
+
+**Double-Kick Operator T = Φ_V ∘ Φ_U**
+- Update-Kick Φ_U: Verbessert Qualität
+- Stabilization-Kick Φ_V: Optimiert Stabilität & Effizienz
+- Konvergiert zu Fixpoint-Attraktoren
+
+**Proof-of-Resonance (PoR)**
+- Akzeptanzkriterium für neue Konfigurationen
+- Garantiert monotone Qualitätsverbesserung
+- Validiert Field-Resonanz
+
+**CRI (Calibration Regime Initialization)**
+- Erkennt Stagnation im lokalen Optimum
+- Wechselt automatisch zu neuem Regime (z.B. VQE → QAOA)
+- Ermöglicht globale Exploration
+
+### Quick Start
+
+**Mit Python SDK:**
+```python
+import metatron_qso
+
+graph = metatron_qso.MetatronGraph()
+
+# QAOA mit Auto-Calibration
+result, proposal = metatron_qso.solve_maxcut_qaoa_with_tuning(
+    graph=graph,
+    depth=3,
+    max_iters=100,
+    auto_calibrate=True
+)
+
+print(f"Approximation ratio: {result['approximation_ratio']:.3f}")
+if proposal.por_accepted:
+    print(f"SCS schlägt neue Konfiguration vor: depth={proposal.config.ansatz_depth}")
+```
+
+**Mit CLI:**
+```bash
+# SCS initialisieren
+python -m scs.cli init
+
+# 5 Calibration-Schritte ausführen
+python -m scs.cli step -n 5
+
+# Status anzeigen
+python -m scs.cli status
+
+# Beste Konfiguration exportieren
+python -m scs.cli export -o best_config.json
+```
+
+**Auto-Tuning Loop:**
+```python
+from scs import AutoTuner
+
+tuner = AutoTuner(benchmark_dir="benchmarks", enabled=True)
+tuner.initialize()
+
+for iteration in range(10):
+    # Algorithmus ausführen
+    result = run_your_algorithm()
+
+    # Metrics berechnen
+    metrics = {"psi": 0.85, "rho": 0.80, "omega": 0.72}
+
+    # In SCS einspeisen
+    tuner.ingest_benchmark("qaoa", config, metrics, result)
+
+    # Neue Konfiguration vorschlagen
+    proposal = tuner.propose_new_config()
+
+    if proposal.por_accepted:
+        # Neue Config anwenden
+        config = proposal.config
+```
+
+### Features
+
+- ✅ **Opt-in Design** - SCS ist optional und stört bestehende Workflows nicht
+- ✅ **Generisches Benchmark-Schema** - Unterstützt alle Quantenalgorithmen
+- ✅ **Persistenter Zustand** - Speichert Field-State und History
+- ✅ **CLI & Python API** - Flexible Nutzung
+- ✅ **Integration mit QW & QAOA** - Native Auto-Tuning-Hooks
+- ✅ **Nachvollziehbar** - Alle Schritte dokumentiert und erklärbar
+
+### Dokumentation
+
+- [SCS Core Design](docs/SCS_CORE_DESIGN.md) - Architektur & Datenfluss
+- [SCS Benchmark Schema](docs/SCS_BENCHMARK_SCHEMA.md) - JSON-Schema Spezifikation
+- [SCS Usage Guide](docs/SCS_USAGE_GUIDE.md) - Workflows & Best Practices
+
 ---
 
 ## 📊 Architektur
@@ -225,15 +334,35 @@ qdash/
 │   └── docs/                 # Detaillierte Dokumentation
 ├── metatron_qso_py/          # Python SDK (PyO3/Maturin)
 │   ├── src/lib.rs            # Python bindings
+│   ├── python/               # Pure Python helpers
+│   │   └── metatron_qso/
+│   │       ├── __init__.py   # Public API
+│   │       └── auto_tuning.py # SCS integration
 │   ├── examples/             # Python-Beispiele
 │   ├── notebooks/            # Jupyter Notebooks
 │   ├── Cargo.toml            # cdylib configuration
 │   └── pyproject.toml        # Maturin build config
+├── scs/                      # Seraphic Calibration Shell (Auto-Tuner)
+│   ├── config.py             # Configuration space
+│   ├── performance.py        # Performance triplet (ψ, ρ, ω)
+│   ├── field.py              # Mandorla field M(t)
+│   ├── operators.py          # Double-kick operator T
+│   ├── por.py                # Proof-of-Resonance
+│   ├── cri.py                # CRI regime switching
+│   ├── calibrator.py         # Main orchestrator
+│   ├── benchmark.py          # Benchmark system
+│   ├── core.py               # Auto-tuner API
+│   └── cli.py                # CLI interface
 ├── docs/                     # Globale Dokumentation
 │   ├── PYTHON_SDK_GUIDE.md   # Python API Guide
+│   ├── SCS_CORE_DESIGN.md    # SCS Architecture
+│   ├── SCS_BENCHMARK_SCHEMA.md # Benchmark JSON Schema
+│   ├── SCS_USAGE_GUIDE.md    # SCS Workflows
 │   ├── QUANTENINFORMATIONSVERARBEITUNG_DOKUMENTATION.md
 │   ├── VQA_IMPLEMENTATION_GUIDE.md (aktualisiert für Rust)
 │   └── BENCHMARK_*.md
+├── CHANGELOG.md              # Version history
+├── RELEASE_PLAN.md           # Packaging strategy
 └── .github/workflows/        # CI/CD Pipelines
 ```
 
