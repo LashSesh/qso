@@ -23,24 +23,67 @@ from .operators import DoubleKickOperator, UpdateKick, StabilizationKick
 from .por import ProofOfResonance, PoRCriteria
 from .cri import ResonanceImpulse, ResonanceImpulseConfig, GlobalCalibrationState
 from .calibrator import SeraphicCalibrator, CalibratorConfig, CalibrationHistory
+from .benchmark import (
+    BenchmarkRecord,
+    BenchmarkValidationError,
+    load_benchmark,
+    load_benchmark_batch,
+    load_benchmarks,
+    write_benchmark,
+    validate_benchmark,
+    generate_config_id,
+    filter_benchmarks,
+    aggregate_benchmarks,
+)
+from .core import (
+    AutoTuner,
+    NewConfigProposal,
+    create_auto_tuner,
+    quick_tune,
+    load_and_compute_performance,
+)
 
 __all__ = [
+    # Config
     "Configuration",
     "ConfigurationSpace",
+    # Performance
     "PerformanceTriplet",
     "compute_performance_triplet",
     "BenchmarkLoader",
+    # Field
     "MandorlaField",
     "SeraphicFeedback",
+    # Operators
     "DoubleKickOperator",
     "UpdateKick",
     "StabilizationKick",
+    # PoR
     "ProofOfResonance",
     "PoRCriteria",
+    # CRI
     "ResonanceImpulse",
     "ResonanceImpulseConfig",
     "GlobalCalibrationState",
+    # Calibrator
     "SeraphicCalibrator",
     "CalibratorConfig",
     "CalibrationHistory",
+    # Benchmark
+    "BenchmarkRecord",
+    "BenchmarkValidationError",
+    "load_benchmark",
+    "load_benchmark_batch",
+    "load_benchmarks",
+    "write_benchmark",
+    "validate_benchmark",
+    "generate_config_id",
+    "filter_benchmarks",
+    "aggregate_benchmarks",
+    # Auto-Tuner API
+    "AutoTuner",
+    "NewConfigProposal",
+    "create_auto_tuner",
+    "quick_tune",
+    "load_and_compute_performance",
 ]
