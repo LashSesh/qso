@@ -1,0 +1,60 @@
+{
+  "metadata": {
+    "timestamp": "2025-11-12T22:57:09.465841071Z",
+    "version": "0.1.0",
+    "commit_hash": "unknown",
+    "system_info": "Metatron QSO QAOA Benchmarks - MaxCut Problems"
+  },
+  "triangle_maxcut": {
+    "problem_name": "Triangle MaxCut",
+    "problem_size": 3,
+    "depth": 3,
+    "optimal_cost": -4.930380657631324e-32,
+    "approximation_ratio": 1.0,
+    "mean_sampled_cost": -0.22,
+    "std_dev_cost": 0.41424630354416014,
+    "iterations": 1,
+    "quantum_evaluations": 1,
+    "converged": true,
+    "execution_time_ms": 0.21343800000000002
+  },
+  "square_maxcut": {
+    "problem_name": "Square MaxCut",
+    "problem_size": 4,
+    "depth": 3,
+    "optimal_cost": -1.232595164407831e-32,
+    "approximation_ratio": 1.0,
+    "mean_sampled_cost": -0.26,
+    "std_dev_cost": 0.43863424398922596,
+    "iterations": 1,
+    "quantum_evaluations": 1,
+    "converged": true,
+    "execution_time_ms": 0.142857
+  },
+  "pentagram_maxcut": {
+    "problem_name": "Pentagram MaxCut",
+    "problem_size": 5,
+    "depth": 3,
+    "optimal_cost": -2.711709361697228e-31,
+    "approximation_ratio": 1.0,
+    "mean_sampled_cost": -0.51,
+    "std_dev_cost": 0.49989998999799945,
+    "iterations": 1,
+    "quantum_evaluations": 1,
+    "converged": true,
+    "execution_time_ms": 0.137246
+  },
+  "performance_metrics": {
+    "total_execution_time_ms": 0.5118250000000001,
+    "avg_iteration_time_ms": 0.17060833333333336,
+    "total_quantum_evaluations": 3,
+    "evaluations_per_second": 5861.378400820592
+  },
+  "quality_metrics": {
+    "best_approximation_ratio": 1.0,
+    "worst_approximation_ratio": 1.0,
+    "avg_approximation_ratio": 1.0,
+    "ratio_variance": 0.0,
+    "convergence_rate": 1.0
+  }
+}

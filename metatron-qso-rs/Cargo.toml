@@ -1,0 +1,63 @@
+[package]
+name = "metatron-qso-rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+nalgebra = { version = "0.32", features = ["std"] }
+num-complex = { version = "0.4", features = ["serde"] }
+petgraph = "0.6"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rayon = "1.10"
+thiserror = "1.0"
+approx = "0.5"
+rand = { version = "0.8", features = ["std", "small_rng"] }
+rand_distr = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+# VQA optimization dependencies
+log = "0.4"
+
+[dev-dependencies]
+proptest = "1.4"
+criterion = "0.5"
+
+[lib]
+name = "metatron_qso"
+path = "src/lib.rs"
+
+[[bin]]
+name = "quantum_walk_bench"
+path = "src/bin/quantum_walk_bench.rs"
+
+[[bin]]
+name = "quantum_walk_bench_compare"
+path = "src/bin/quantum_walk_bench_compare.rs"
+
+[[bin]]
+name = "vqe_bench"
+path = "src/bin/vqe_bench.rs"
+
+[[bin]]
+name = "qaoa_bench"
+path = "src/bin/qaoa_bench.rs"
+
+[[bin]]
+name = "vqc_bench"
+path = "src/bin/vqc_bench.rs"
+
+[[bin]]
+name = "integration_bench"
+path = "src/bin/integration_bench.rs"
+
+[[bin]]
+name = "cross_system_bench"
+path = "src/bin/cross_system_bench.rs"
+
+[[bin]]
+name = "benchmark_compare"
+path = "src/bin/benchmark_compare.rs"
+
+[[example]]
+name = "vqa_demo"
+path = "examples/vqa_demo.rs"

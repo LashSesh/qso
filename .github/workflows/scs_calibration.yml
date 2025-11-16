@@ -1,0 +1,79 @@
+name: SCS Calibration
+
+on:
+  # Run SCS calibration after benchmark workflows
+  workflow_run:
+    workflows: ["Comprehensive Benchmarks", "Quantum Benchmarks"]
+    types:
+      - completed
+  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      num_steps:
+        description: 'Number of calibration steps'
+        required: false
+        default: '3'
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  calibrate:
+    runs-on: ubuntu-latest
+    # Only run if SCS is enabled (opt-in)
+    if: github.event_name == 'workflow_dispatch' || vars.SCS_ENABLED == 'true'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install SCS dependencies
+        run: |
+          pip install -r requirements-scs.txt
+
+      - name: Check if SCS state exists
+        id: check_state
+        run: |
+          if [ -f scs_state.json ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Initialize SCS (if needed)
+        if: steps.check_state.outputs.exists == 'false'
+        run: |
+          python -m scs.cli init --benchmark-dir metatron-qso-rs/ci
+
+      - name: Run SCS calibration step
+        run: |
+          STEPS=${{ github.event.inputs.num_steps || '3' }}
+          python -m scs.cli step -n "$STEPS" --benchmark-dir metatron-qso-rs/ci
+
+      - name: Show SCS status
+        run: |
+          python -m scs.cli status --benchmark-dir metatron-qso-rs/ci
+
+      - name: Upload SCS artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: scs-calibration-results
+          path: |
+            scs_state.json
+            scs_history.json
+            scs_best_config.json
+
+      - name: Commit SCS state (optional)
+        if: vars.SCS_COMMIT_STATE == 'true'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add scs_state.json scs_history.json scs_best_config.json
+          git diff --cached --quiet || git commit -m "Update SCS calibration state [skip ci]"
+          git push

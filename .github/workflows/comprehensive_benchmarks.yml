@@ -1,0 +1,449 @@
+name: Comprehensive Benchmark Suite
+
+on:
+  push:
+    branches: [main, develop, claude/**]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    - cron: '0 2 * * *'  # Daily at 2 AM UTC
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  quantum-walk-benchmark:
+    name: Quantum Walk Benchmarks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: metatron-qso-rs
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            metatron-qso-rs/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build quantum walk benchmark
+        run: cargo build --release --bin quantum_walk_bench --bin quantum_walk_bench_compare
+
+      - name: Run quantum walk benchmarks
+        run: cargo run --release --bin quantum_walk_bench target/quantum_walk_bench.json
+
+      - name: Compare with baseline
+        run: cargo run --release --bin quantum_walk_bench_compare ci/quantum_walk_baseline.json target/quantum_walk_bench.json
+
+      - name: Upload quantum walk results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quantum-walk-benchmark
+          path: metatron-qso-rs/target/quantum_walk_bench.json
+          retention-days: 30
+
+  vqe-benchmark:
+    name: VQE Benchmarks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: metatron-qso-rs
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            metatron-qso-rs/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build VQE benchmark
+        run: cargo build --release --bin vqe_bench --bin benchmark_compare
+
+      - name: Run VQE benchmarks
+        run: cargo run --release --bin vqe_bench target/vqe_bench.json
+
+      - name: Display VQE results
+        run: |
+          echo "=== VQE Benchmark Results ==="
+          cat target/vqe_bench.json | jq .
+
+      - name: Compare with baseline
+        run: cargo run --release --bin benchmark_compare ci/vqe_baseline.json target/vqe_bench.json
+
+      - name: Upload VQE results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vqe-benchmark
+          path: metatron-qso-rs/target/vqe_bench.json
+          retention-days: 30
+
+  qaoa-benchmark:
+    name: QAOA Benchmarks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: metatron-qso-rs
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            metatron-qso-rs/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build QAOA benchmark
+        run: cargo build --release --bin qaoa_bench --bin benchmark_compare
+
+      - name: Run QAOA benchmarks
+        run: cargo run --release --bin qaoa_bench target/qaoa_bench.json
+
+      - name: Display QAOA results
+        run: |
+          echo "=== QAOA Benchmark Results ==="
+          cat target/qaoa_bench.json | jq .
+
+      - name: Compare with baseline
+        run: cargo run --release --bin benchmark_compare ci/qaoa_baseline.json target/qaoa_bench.json
+
+      - name: Upload QAOA results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qaoa-benchmark
+          path: metatron-qso-rs/target/qaoa_bench.json
+          retention-days: 30
+
+  vqc-benchmark:
+    name: VQC Benchmarks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: metatron-qso-rs
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            metatron-qso-rs/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build VQC benchmark
+        run: cargo build --release --bin vqc_bench --bin benchmark_compare
+
+      - name: Run VQC benchmarks
+        run: cargo run --release --bin vqc_bench target/vqc_bench.json
+
+      - name: Display VQC results
+        run: |
+          echo "=== VQC Benchmark Results ==="
+          cat target/vqc_bench.json | jq .
+
+      - name: Compare with baseline
+        run: cargo run --release --bin benchmark_compare ci/vqc_baseline.json target/vqc_bench.json
+
+      - name: Upload VQC results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vqc-benchmark
+          path: metatron-qso-rs/target/vqc_bench.json
+          retention-days: 30
+
+  integration-benchmark:
+    name: Integration Benchmarks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: metatron-qso-rs
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            metatron-qso-rs/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build Integration benchmark
+        run: cargo build --release --bin integration_bench --bin benchmark_compare
+
+      - name: Run Integration benchmarks
+        run: cargo run --release --bin integration_bench target/integration_bench.json
+
+      - name: Display Integration results
+        run: |
+          echo "=== Integration Benchmark Results ==="
+          cat target/integration_bench.json | jq .
+
+      - name: Compare with baseline
+        run: cargo run --release --bin benchmark_compare ci/integration_baseline.json target/integration_bench.json
+
+      - name: Upload Integration results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: integration-benchmark
+          path: metatron-qso-rs/target/integration_bench.json
+          retention-days: 30
+
+  cross-system-benchmark:
+    name: Cross-System Comparison
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: metatron-qso-rs
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            metatron-qso-rs/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build Cross-System benchmark
+        run: cargo build --release --bin cross_system_bench --bin benchmark_compare
+
+      - name: Run Cross-System benchmarks
+        run: cargo run --release --bin cross_system_bench target/cross_system_bench.json
+
+      - name: Display Cross-System results
+        run: |
+          echo "=== Cross-System Benchmark Results ==="
+          cat target/cross_system_bench.json | jq .
+
+      - name: Compare with baseline
+        run: cargo run --release --bin benchmark_compare ci/cross_system_baseline.json target/cross_system_bench.json
+
+      - name: Upload Cross-System results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cross-system-benchmark
+          path: metatron-qso-rs/target/cross_system_bench.json
+          retention-days: 30
+
+  advanced-algorithms-benchmark:
+    name: Advanced Algorithms Benchmarks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: metatron-qso-rs
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            metatron-qso-rs/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build Advanced Algorithms benchmark
+        run: cargo build --release --bin advanced_algorithms_bench --bin benchmark_compare
+
+      - name: Run Advanced Algorithms benchmarks
+        run: cargo run --release --bin advanced_algorithms_bench target/advanced_algorithms_bench.json
+
+      - name: Display Advanced Algorithms results
+        run: |
+          echo "=== Advanced Algorithms Benchmark Results ==="
+          cat target/advanced_algorithms_bench.json | jq .
+
+      - name: Compare with baseline
+        run: cargo run --release --bin benchmark_compare ci/advanced_algorithms_baseline.json target/advanced_algorithms_bench.json
+
+      - name: Upload Advanced Algorithms results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: advanced-algorithms-benchmark
+          path: metatron-qso-rs/target/advanced_algorithms_bench.json
+          retention-days: 30
+
+  comment-pr-results:
+    name: Comment PR with Results
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    needs: [quantum-walk-benchmark, vqe-benchmark, qaoa-benchmark, vqc-benchmark, integration-benchmark, cross-system-benchmark, advanced-algorithms-benchmark]
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: benchmarks
+
+      - name: Comment PR with results
+        uses: actions/github-script@v7
+        continue-on-error: true
+        with:
+          script: |
+            const fs = require('fs');
+            
+            // Load all benchmark results
+            const qwalk = JSON.parse(fs.readFileSync('benchmarks/quantum-walk-benchmark/quantum_walk_bench.json', 'utf8'));
+            const vqe = JSON.parse(fs.readFileSync('benchmarks/vqe-benchmark/vqe_bench.json', 'utf8'));
+            const qaoa = JSON.parse(fs.readFileSync('benchmarks/qaoa-benchmark/qaoa_bench.json', 'utf8'));
+            const vqc = JSON.parse(fs.readFileSync('benchmarks/vqc-benchmark/vqc_bench.json', 'utf8'));
+            const integration = JSON.parse(fs.readFileSync('benchmarks/integration-benchmark/integration_bench.json', 'utf8'));
+            const crossSystem = JSON.parse(fs.readFileSync('benchmarks/cross-system-benchmark/cross_system_bench.json', 'utf8'));
+            const advanced = JSON.parse(fs.readFileSync('benchmarks/advanced-algorithms-benchmark/advanced_algorithms_bench.json', 'utf8'));
+            
+            const comment = `## 🔬 Comprehensive Benchmark Results
+            
+            ### Quantum Walk
+            - **Speedup Factor:** ${qwalk.hitting_time.speedup_factor.toFixed(2)}x
+            - **Quantum Avg Steps:** ${qwalk.hitting_time.quantum_average_steps.toFixed(3)}
+            - **Classical Avg Steps:** ${qwalk.hitting_time.classical_average_steps.toFixed(3)}
+            
+            ### VQE (Variational Quantum Eigensolver)
+            - **Best Ground Energy:** ${vqe.quality_metrics.best_ground_energy.toFixed(6)}
+            - **Convergence Rate:** ${(vqe.quality_metrics.convergence_rate * 100).toFixed(1)}%
+            - **Evaluations/sec:** ${vqe.performance_metrics.evaluations_per_second.toFixed(2)}
+            
+            ### QAOA (Quantum Approximate Optimization)
+            - **Best Approx Ratio:** ${qaoa.quality_metrics.best_approximation_ratio.toFixed(4)}
+            - **Avg Approx Ratio:** ${qaoa.quality_metrics.avg_approximation_ratio.toFixed(4)}
+            - **Convergence Rate:** ${(qaoa.quality_metrics.convergence_rate * 100).toFixed(1)}%
+            
+            ### VQC (Variational Quantum Classifier)
+            - **Avg Training Accuracy:** ${(vqc.quality_metrics.avg_training_accuracy * 100).toFixed(2)}%
+            - **Avg Test Accuracy:** ${(vqc.quality_metrics.avg_test_accuracy * 100).toFixed(2)}%
+            - **Convergence Rate:** ${(vqc.quality_metrics.convergence_rate * 100).toFixed(1)}%
+            
+            ### Integration Tests
+            - **Compatibility Score:** ${(integration.cross_module_metrics.overall_compatibility_score * 100).toFixed(1)}%
+            - **Integration Success Rate:** ${(integration.cross_module_metrics.integration_success_rate * 100).toFixed(1)}%
+            - **Total Time:** ${integration.cross_module_metrics.total_execution_time_ms.toFixed(2)}ms
+            
+            ### Cross-System Comparison
+            - **Metatron QSO Rank:** #${crossSystem.comparison_metrics.metatron_rank} out of 5
+            - **Systems Outperformed:** ${crossSystem.comparison_metrics.systems_outperformed}/4
+            - **Performance Advantage:** ${crossSystem.comparison_metrics.performance_advantage > 0 ? '+' : ''}${crossSystem.comparison_metrics.performance_advantage.toFixed(2)}%
+            - **Quality Advantage:** ${crossSystem.comparison_metrics.quality_advantage > 0 ? '+' : ''}${crossSystem.comparison_metrics.quality_advantage.toFixed(2)}%
+            - **Speed Advantage:** ${crossSystem.comparison_metrics.speed_advantage > 0 ? '+' : ''}${crossSystem.comparison_metrics.speed_advantage.toFixed(2)}%
+
+            ### Advanced Algorithms (Metatron-Specific)
+            - **Grover Success Prob:** ${(advanced.grover_search.success_probability * 100).toFixed(2)}%
+            - **Grover Speedup:** ${advanced.grover_search.speedup.toFixed(2)}×
+            - **Multi-Target Success:** ${(advanced.multi_target_grover.success_probability * 100).toFixed(2)}%
+            - **Boson Interference:** ${(advanced.boson_sampling.interference_visibility * 100).toFixed(2)}%
+            - **QML Test Accuracy:** ${(advanced.quantum_ml.test_accuracy * 100).toFixed(2)}%
+            - **Total Time:** ${advanced.performance_metrics.total_execution_time_ms.toFixed(2)}ms
+
+            ✅ All benchmarks completed successfully!`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });

@@ -1,0 +1,50 @@
+[package]
+name = "metatron_telemetry"
+version = "0.1.0"
+edition = "2021"
+authors = ["Q⊗DASH Team"]
+description = "Telemetry and control HTTP API for Q⊗DASH"
+license = "MIT"
+
+[[bin]]
+name = "metatron_telemetry"
+path = "src/main.rs"
+
+[dependencies]
+# Web framework
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["fs", "cors", "trace"] }
+
+# Async runtime
+tokio = { workspace = true, features = ["full"] }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+# Time
+chrono = { workspace = true }
+
+# UUID for job IDs
+uuid = { workspace = true, features = ["v4", "serde"] }
+
+# Random
+rand = { workspace = true }
+
+# Config
+figment = { version = "0.10", features = ["toml", "env"] }
+
+# Integration with bridge
+metatron_dionice_bridge = { path = "../metatron_dionice_bridge" }
+
+# Backend abstraction
+metatron_backend = { path = "../metatron_backend" }

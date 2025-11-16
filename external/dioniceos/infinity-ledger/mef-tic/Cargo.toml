@@ -1,0 +1,15 @@
+[package]
+name = "mef-tic"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+ndarray = { workspace = true }
+sha2 = { workspace = true }
+chrono = { workspace = true }
+anyhow = { workspace = true }

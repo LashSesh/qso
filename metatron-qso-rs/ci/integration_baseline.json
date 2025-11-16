@@ -1,0 +1,33 @@
+{
+  "metadata": {
+    "timestamp": "2025-11-12T22:57:34.043425754Z",
+    "version": "0.1.0",
+    "commit_hash": "unknown",
+    "system_info": "Metatron QSO Integration Benchmarks - Cross-Module Compatibility"
+  },
+  "vqe_integration": {
+    "metatron_hamiltonian_compatibility": true,
+    "dtl_state_integration": true,
+    "execution_time_ms": 33.588558,
+    "ground_energy": -8.842584450283073,
+    "state_fidelity": 0.95
+  },
+  "qaoa_integration": {
+    "graph_integration": true,
+    "custom_hamiltonian_support": true,
+    "execution_time_ms": 0.061023999999999995,
+    "approximation_ratio": 1.0
+  },
+  "quantum_walk_integration": {
+    "metatron_graph_compatibility": true,
+    "execution_time_ms": 1.042424,
+    "speedup_factor": 14.418774329970395,
+    "mixing_time_convergence": false
+  },
+  "cross_module_metrics": {
+    "total_execution_time_ms": 34.724558,
+    "overall_compatibility_score": 1.0,
+    "integration_success_rate": 1.0,
+    "avg_performance_overhead": 11.564002
+  }
+}

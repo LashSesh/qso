@@ -1,0 +1,130 @@
+name: Quantum Walk Benchmarks
+
+on:
+  push:
+    branches: [main, develop, claude/**]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    - cron: '0 2 * * *'  # Daily at 2 AM UTC
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: metatron-qso-rs
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            metatron-qso-rs/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build benchmark binaries
+        run: |
+          cargo build --release --bin quantum_walk_bench --bin quantum_walk_bench_compare
+
+      - name: Run quantum walk benchmarks
+        run: |
+          cargo run --release --bin quantum_walk_bench target/quantum_walk_bench.json
+
+      - name: Display benchmark results
+        run: |
+          echo "=== Benchmark Results ==="
+          cat target/quantum_walk_bench.json | jq .
+
+      - name: Validate JSON outputs
+        run: |
+          set -euo pipefail
+          echo "Validating ci/quantum_walk_baseline.json"
+          if command -v jq >/dev/null 2>&1; then
+            jq -e . ci/quantum_walk_baseline.json >/dev/null
+          else
+            python - <<'PY'
+          import json,sys
+          try:
+            json.load(open('ci/quantum_walk_baseline.json'))
+          except Exception as e:
+            print('ci/quantum_walk_baseline.json parse error:', e)
+            sys.exit(1)
+          PY
+          fi
+          echo "Validating target/quantum_walk_bench.json"
+          if command -v jq >/dev/null 2>&1; then
+            jq -e . target/quantum_walk_bench.json >/dev/null
+          else
+            python - <<'PY'
+          import json,sys
+          try:
+            json.load(open('target/quantum_walk_bench.json'))
+          except Exception as e:
+            print('target/quantum_walk_bench.json parse error:', e)
+            sys.exit(1)
+          PY
+          fi
+
+      - name: Compare with baseline
+        run: |
+          cargo run --release --bin quantum_walk_bench_compare ci/quantum_walk_baseline.json target/quantum_walk_bench.json
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-results
+          path: metatron-qso-rs/target/quantum_walk_bench.json
+          retention-days: 30
+
+      - name: Upload comparison report
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: comparison-failure-report
+          path: metatron-qso-rs/target/quantum_walk_bench.json
+          retention-days: 90
+
+      - name: Comment PR with results
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        continue-on-error: true
+        with:
+          script: |
+            const fs = require('fs');
+            try {
+              const results = JSON.parse(fs.readFileSync('metatron-qso-rs/target/quantum_walk_bench.json', 'utf8'));
+              const comment = `## 🔬 Quantum Walk Benchmark Results
+
+              **Mixing Time:** ${results.mixing_time.mixing_time || 'Not converged'}
+              **Quantum Average Steps:** ${results.hitting_time.quantum_average_steps.toFixed(3)}
+              **Classical Average Steps:** ${results.hitting_time.classical_average_steps.toFixed(3)}
+              **Speedup Factor:** ${results.hitting_time.speedup_factor.toFixed(2)}x
+              **Mean Success Probability:** ${results.hitting_time.mean_success_probability.toFixed(3)}
+
+              ✅ Benchmarks completed successfully!`;
+
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: comment
+              });
+            } catch (error) {
+              console.log('Could not post comment:', error);
+            }

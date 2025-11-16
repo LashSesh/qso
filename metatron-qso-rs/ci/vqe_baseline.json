@@ -1,0 +1,143 @@
+{
+  "metadata": {
+    "timestamp": "2025-11-13T05:14:15.825260897Z",
+    "version": "0.1.0",
+    "commit_hash": "unknown",
+    "system_info": "Metatron QSO VQE Benchmarks - 13D Hilbert Space - 8 configurations"
+  },
+  "results": [
+    {
+      "ansatz_type": "HardwareEfficient",
+      "ansatz_depth": 2,
+      "optimizer": "Adam",
+      "ground_energy": -12.967302054577694,
+      "classical_ground": -13.000000000000023,
+      "approximation_error": 0.03269794542232951,
+      "iterations": 61,
+      "quantum_evaluations": 6405,
+      "converged": true,
+      "execution_time_ms": 1036.693562,
+      "final_gradient_norm": 0.47136217596945235,
+      "quality_score": 0.9974847734290516,
+      "num_random_starts": 1
+    },
+    {
+      "ansatz_type": "EfficientSU2",
+      "ansatz_depth": 2,
+      "optimizer": "Adam",
+      "ground_energy": -12.976724961768552,
+      "classical_ground": -13.000000000000023,
+      "approximation_error": 0.023275038231471257,
+      "iterations": 61,
+      "quantum_evaluations": 9577,
+      "converged": true,
+      "execution_time_ms": 953.63744,
+      "final_gradient_norm": 1.1230107876163393,
+      "quality_score": 0.998209612443733,
+      "num_random_starts": 1
+    },
+    {
+      "ansatz_type": "Metatron",
+      "ansatz_depth": 1,
+      "optimizer": "Adam",
+      "ground_energy": -12.998768560342132,
+      "classical_ground": -13.000000000000023,
+      "approximation_error": 0.0012314396578911868,
+      "iterations": 93,
+      "quantum_evaluations": 4929,
+      "converged": true,
+      "execution_time_ms": 382.70897199999996,
+      "final_gradient_norm": 0.25775508230164373,
+      "quality_score": 0.9999052738724699,
+      "num_random_starts": 1
+    },
+    {
+      "ansatz_type": "Metatron",
+      "ansatz_depth": 2,
+      "optimizer": "Adam",
+      "ground_energy": -11.826911667215722,
+      "classical_ground": -13.000000000000023,
+      "approximation_error": 1.1730883327843014,
+      "iterations": 25,
+      "quantum_evaluations": 2625,
+      "converged": true,
+      "execution_time_ms": 299.43436299999996,
+      "final_gradient_norm": 4.358252629389392,
+      "quality_score": 0.9097624359396693,
+      "num_random_starts": 1
+    },
+    {
+      "ansatz_type": "Metatron",
+      "ansatz_depth": 3,
+      "optimizer": "Adam",
+      "ground_energy": -12.999208400728339,
+      "classical_ground": -13.000000000000023,
+      "approximation_error": 0.0007915992716842624,
+      "iterations": 58,
+      "quantum_evaluations": 9106,
+      "converged": true,
+      "execution_time_ms": 1299.609159,
+      "final_gradient_norm": 1.9402261794830047,
+      "quality_score": 0.999939107748332,
+      "num_random_starts": 1
+    },
+    {
+      "ansatz_type": "Metatron",
+      "ansatz_depth": 2,
+      "optimizer": "Adam",
+      "ground_energy": -11.826911667215722,
+      "classical_ground": -13.000000000000023,
+      "approximation_error": 1.1730883327843014,
+      "iterations": 25,
+      "quantum_evaluations": 7875,
+      "converged": true,
+      "execution_time_ms": 346.91753800000004,
+      "final_gradient_norm": 4.358252629389392,
+      "quality_score": 0.9097624359396693,
+      "num_random_starts": 3
+    },
+    {
+      "ansatz_type": "Metatron",
+      "ansatz_depth": 2,
+      "optimizer": "LBFGS",
+      "ground_energy": -6.469031877704302e-7,
+      "classical_ground": -13.000000000000023,
+      "approximation_error": 12.999999353096836,
+      "iterations": 2,
+      "quantum_evaluations": 210,
+      "converged": true,
+      "execution_time_ms": 25.181847,
+      "final_gradient_norm": 0.00014879774436147084,
+      "quality_score": 4.976178358262473e-8,
+      "num_random_starts": 1
+    },
+    {
+      "ansatz_type": "Metatron",
+      "ansatz_depth": 2,
+      "optimizer": "LBFGS",
+      "ground_energy": -6.469031877704302e-7,
+      "classical_ground": -13.000000000000023,
+      "approximation_error": 12.999999353096836,
+      "iterations": 2,
+      "quantum_evaluations": 630,
+      "converged": true,
+      "execution_time_ms": 29.07838,
+      "final_gradient_norm": 0.00014879774436147084,
+      "quality_score": 4.976178358262473e-8,
+      "num_random_starts": 3
+    }
+  ],
+  "performance_metrics": {
+    "total_execution_time_ms": 4374.702605,
+    "avg_iteration_time_ms": 13.378295428134559,
+    "total_quantum_evaluations": 41357,
+    "evaluations_per_second": 9453.671194181667
+  },
+  "quality_metrics": {
+    "best_ground_energy": -12.999208400728339,
+    "worst_ground_energy": -6.469031877704302e-7,
+    "avg_ground_energy": -9.449478575706818,
+    "energy_variance": 29.988029098157213,
+    "convergence_rate": 1.0
+  }
+}

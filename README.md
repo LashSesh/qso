@@ -1,0 +1,316 @@
+# Q⊗DASH 
+# (Metatron VM) 
+**Quantum State Operator Framework**
+
+[![Rust](https://img.shields.io/badge/rust-1.85.0-orange.svg)](https://www.rust-lang.org/)
+[![Comprehensive Benchmark Suite](https://github.com/LashSesh/qdash/actions/workflows/comprehensive_benchmarks.yml/badge.svg)](https://github.com/LashSesh/qdash/actions/workflows/comprehensive_benchmarks.yml)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+**Hochmodernes Quantencomputing-Framework in pure Rust**
+
+QDash implementiert den Metatron Quantum State Operator (QSO) - ein 13-dimensionales Quantensystem basierend auf der Heiligen Geometrie des Metatron-Würfels mit dynamischer tripolarer Logik (DTL).
+
+## 🌟 Kernfeatures
+
+### Quantenalgorithmen
+- ✅ **Variational Quantum Eigensolver (VQE)** - Grundzustandsberechnung
+- ✅ **QAOA** - Kombinatorische Optimierung (MaxCut, Graph Coloring)
+- ✅ **VQC** - Variational Quantum Classifier (ML)
+- ✅ **Quantum Walks** - CTQW, Krylov-Methoden, Scattering-Analyse
+
+### Metatron-Geometrie (13 Knoten)
+- **1 Zentralknoten** + **6 Hexagon-Knoten** + **6 Würfel-Knoten**
+- **78 Kanten** mit vollständiger Konnektivität
+- Einbettung aller 5 Platonischen Körper
+- Symmetriegruppe G_M für fehlerresistente Operationen
+
+### Dynamic Tripolar Logic (DTL)
+- **58,5% Informationsvorteil** über binäre Systeme
+- Zustände: L+ (aktiv), L- (inaktiv), Ld (dynamisch/unbestimmt)
+- Kuramoto-Synchronisationsnetzwerke
+- Resonator-Dynamik
+
+### Performance & CI/CD
+- **6 umfassende Benchmark-Suites** mit automatischer Regression-Detection
+- Baseline-Tracking für alle Algorithmen
+- Parallele CI/CD-Pipeline mit GitHub Actions
+- Tägliche Performance-Metriken
+
+## 🚀 Quick Start
+
+### Installation
+
+```bash
+# Repository klonen
+git clone https://github.com/LashSesh/qdash.git
+cd qdash/metatron-qso-rs
+
+# Build & Test
+cargo build --release
+cargo test --lib
+
+# Benchmarks ausführen
+cargo run --release --bin quantum_walk_bench
+cargo run --release --bin vqe_bench
+```
+
+### Ihr erstes Quantenprogramm
+
+```rust
+use metatron_qso_rs::prelude::*;
+use nalgebra::DVector;
+
+fn main() -> Result<()> {
+    // Metatron QSO initialisieren
+    let params = QSOParameters::default();
+    let qso = QSO::new(params)?;
+
+    // Quantum Walk von Zentrumsknoten starten
+    let initial_state = QuantumState::basis_state(0); // Node 0 = Zentrum
+    let time = 1.0;
+    let evolved = qso.evolve_state(&initial_state, time)?;
+
+    // Wahrscheinlichkeitsverteilung ausgeben
+    let probs = evolved.probabilities();
+    println!("Probability distribution after t=1.0:");
+    for (node, prob) in probs.iter().enumerate() {
+        println!("  Node {}: {:.4}", node, prob);
+    }
+
+    Ok(())
+}
+```
+
+### VQE Grundzustandsberechnung
+
+```rust
+use metatron_qso_rs::prelude::*;
+use metatron_qso_rs::vqa::{VQE, AnsatzType};
+
+fn main() -> Result<()> {
+    let qso = QSO::new(QSOParameters::default())?;
+
+    // VQE konfigurieren
+    let vqe = VQE::builder()
+        .hamiltonian(qso.hamiltonian().clone())
+        .ansatz_type(AnsatzType::HardwareEfficient)
+        .depth(2)
+        .optimizer_name("ADAM")
+        .max_iterations(1000)
+        .build()?;
+
+    // Optimierung starten
+    let result = vqe.run()?;
+
+    println!("Ground State Energy: {:.10}", result.ground_energy);
+    println!("Converged in {} iterations", result.iterations);
+
+    Ok(())
+}
+```
+
+### QAOA für MaxCut
+
+```rust
+use metatron_qso_rs::vqa::{QAOA, MaxCutProblem};
+
+fn main() -> Result<()> {
+    // MaxCut Problem auf Metatron-Graph definieren
+    let graph = MetatronGraph::new();
+    let problem = MaxCutProblem::from_graph(&graph);
+
+    // QAOA mit depth=3
+    let qaoa = QAOA::new(problem.hamiltonian(), 3);
+    let result = qaoa.run()?;
+
+    println!("Best cut value: {:.2}", result.best_value);
+    println!("Approximation ratio: {:.4}", result.approximation_ratio);
+
+    Ok(())
+}
+```
+
+## 📊 Architektur
+
+```
+qdash/
+├── metatron-qso-rs/          # Hauptimplementierung in Rust
+│   ├── src/
+│   │   ├── lib.rs            # Library entry point
+│   │   ├── qso.rs            # Quantum State Operator (Haupt-API)
+│   │   ├── graph/            # Metatron-Geometrie
+│   │   ├── quantum/          # Quantenzustände & Operatoren
+│   │   ├── dtl/              # Dynamic Tripolar Logic
+│   │   ├── quantum_walk/     # Quantum Walk Algorithmen
+│   │   └── vqa/              # Variational Quantum Algorithms
+│   ├── bins/                 # 8 Benchmark-Executables
+│   ├── ci/                   # Baseline-Daten für CI/CD
+│   └── docs/                 # Detaillierte Dokumentation
+├── docs/                     # Globale Dokumentation
+│   ├── QUANTENINFORMATIONSVERARBEITUNG_DOKUMENTATION.md
+│   ├── VQA_IMPLEMENTATION_GUIDE.md (aktualisiert für Rust)
+│   └── BENCHMARK_*.md
+└── .github/workflows/        # CI/CD Pipelines
+```
+
+## 📖 Dokumentation
+
+### Deutsch
+- [Quanteninformationsverarbeitung Dokumentation](QUANTENINFORMATIONSVERARBEITUNG_DOKUMENTATION.md)
+- [VQA Implementierungsleitfaden](VQA_IMPLEMENTATION_GUIDE.md)
+- [Projekt-Roadmap](PROJECT_ROADMAP.md)
+
+### Englisch
+- [Architecture Overview](metatron-qso-rs/docs/ARCHITECTURE.md)
+- [Benchmark Suite Documentation](BENCHMARK_SUITE_DOCUMENTATION.md)
+- [CI/CD Upgrade Summary](CI_BENCHMARK_UPGRADE_SUMMARY.md)
+
+### API-Dokumentation
+```bash
+# Rustdoc generieren und öffnen
+cargo doc --open
+```
+
+## 🧪 Testen & Benchmarking
+
+```bash
+# Alle Unit-Tests
+cargo test --lib
+
+# Spezifischen Benchmark
+cargo run --release --bin vqe_bench
+cargo run --release --bin qaoa_bench
+cargo run --release --bin vqc_bench
+cargo run --release --bin quantum_walk_bench
+
+# Integration-Tests
+cargo run --release --bin integration_bench
+
+# Cross-Framework Vergleich
+cargo run --release --bin cross_system_bench
+```
+
+## 🔬 Wissenschaftlicher Hintergrund
+
+### Informationstheoretischer Vorteil
+
+```
+Metatron-System (13 Knoten):
+├─ Binär:     13,0 Bit (klassisch)
+├─ Tripolar:  20,6 Bit (+58,5%)
+└─ Mit Phase: 46,6 Bit (+258% über binär)
+```
+
+### Quantenalgorithmen auf Metatron-Graph
+
+| Algorithmus | Komplexität | Speedup vs. Klassisch |
+|-------------|-------------|----------------------|
+| Quantum Walk Search | O(√N) | ~3.6× |
+| VQE Ground State | O(poly(n)) | Exponentiell |
+| QAOA MaxCut | O(p·M) | >0.75 approximation |
+| Boson Sampling | #P-hard | Klassisch intraktabel |
+
+### Graph-Eigenschaften
+
+- **Knoten:** 13 (1 Zentrum + 6 Hexagon + 6 Würfel)
+- **Kanten:** 78
+- **Durchschnittsgrad:** 12
+- **Algebraische Konnektivität:** λ₁ > 0 (hoch)
+- **Code-Distanz:** d ≥ 6 (für topologische Fehlerkorrektur)
+
+## 🛠️ Entwicklung
+
+### Voraussetzungen
+- Rust 1.85.0+ (Edition 2024)
+- Cargo
+- Optional: Just (für Task-Automatisierung)
+
+### Projekt aufbauen
+```bash
+cd metatron-qso-rs
+cargo build --release
+```
+
+### Tests ausführen
+```bash
+cargo test --lib          # Unit-Tests
+cargo test --bins         # Binary-Tests
+```
+
+### Formatierung & Linting
+```bash
+cargo fmt                 # Code formatieren
+cargo clippy              # Linter
+```
+
+## 📈 Performance-Baselines
+
+| Benchmark | Operationen/Sek | Konvergenz |
+|-----------|----------------|------------|
+| Quantum Walk | 31,941 | 100% |
+| VQE (HardwareEfficient) | ~50 iters | E₀ = -12.9997 |
+| QAOA (depth=3) | ~100 iters | ratio = 1.0 |
+| VQC (binary) | ~200 epochs | acc = 50-90% |
+
+## 🎯 Roadmap
+
+### ✅ Phase 1: Core Implementation (Abgeschlossen)
+- [x] Metatron-Geometrie (13 Knoten, 78 Kanten)
+- [x] Quantum State & Operator Primitives
+- [x] DTL System
+- [x] Quantum Walks (CTQW, Krylov, Scattering)
+
+### ✅ Phase 2: Variational Algorithms (Abgeschlossen)
+- [x] VQE mit 3 Ansatz-Typen
+- [x] QAOA für kombinatorische Optimierung
+- [x] VQC für Klassifikation
+- [x] Parameter Shift Rule Gradienten
+
+### ✅ Phase 3: Benchmarking & CI/CD (Abgeschlossen)
+- [x] 6 umfassende Benchmark-Suites
+- [x] Automatische Baseline-Vergleiche
+- [x] GitHub Actions Integration
+- [x] Performance Regression Detection
+
+### 🚧 Phase 4: Advanced Features (In Arbeit)
+- [ ] Metatron-spezifische Grover-Search-Variante
+- [ ] Boson-Sampling mit Platonic-Solid-Interferenz
+- [ ] Quantum Machine Learning auf Graph-Struktur
+- [ ] Symmetrie-geschützte Quantencodes (G_M)
+- [ ] GPU-Beschleunigung
+- [ ] Visualisierungstools
+
+### 🔮 Phase 5: Hardware-Integration (Geplant)
+- [ ] IBM Qiskit Backend
+- [ ] AWS Braket Integration
+- [ ] IonQ/Rigetti Support
+- [ ] Photonisches Chip-Design
+
+## 🤝 Contributing
+
+Beiträge sind willkommen! Bitte beachten Sie:
+
+1. Fork des Repositories
+2. Feature-Branch erstellen (`git checkout -b feature/amazing-feature`)
+3. Tests hinzufügen (`cargo test`)
+4. Committen (`git commit -m 'Add amazing feature'`)
+5. Push zum Branch (`git push origin feature/amazing-feature`)
+6. Pull Request öffnen
+
+## 📝 Lizenz
+
+Dieses Projekt ist unter der MIT-Lizenz lizenziert. Siehe [LICENSE](LICENSE) für Details.
+
+## 🙏 Danksagungen
+
+- **Heilige Geometrie:** Metatron's Cube als fundamentale Struktur
+- **Quanteninformatik:** VQE/QAOA/VQC Forschung
+- **Rust Community:** nalgebra, petgraph, rayon
+
+## 📧 Kontakt
+
+Bei Fragen oder Anregungen öffnen Sie bitte ein [GitHub Issue](https://github.com/LashSesh/qdash/issues).
+
+---
+
+**Made with ❤️ in Rust** | **Powered by Quantum Geometry** | **© 2025 QDash Project**

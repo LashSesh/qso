@@ -1,0 +1,640 @@
+name: Rust CI/CD
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - 'copilot/**'
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+env:
+  RUST_BACKTRACE: 1
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Code quality checks
+  lint:
+    name: Lint and Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  # Build and test
+  build-and-test:
+    name: Build and Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        rust: [stable]
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+      
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Build workspace
+        run: |
+          echo "=== Building Workspace ==="
+          cargo build --workspace --verbose --all-features
+          echo "✓ Build completed"
+      
+      - name: Run unit tests
+        run: |
+          echo "=== Running Unit Tests ==="
+          cargo test --workspace --lib --verbose --all-features -- --nocapture
+          echo "✓ Unit tests passed"
+      
+      - name: Run integration tests
+        run: |
+          echo "=== Running Integration Tests ==="
+          cargo test --workspace --test '*' --verbose --all-features -- --nocapture
+          echo "✓ Integration tests passed"
+      
+      - name: Build documentation
+        run: |
+          echo "=== Building Documentation ==="
+          cargo doc --workspace --no-deps --verbose --all-features
+          echo "✓ Documentation built"
+      
+      - name: Test coverage report
+        run: |
+          echo "=== Test Summary ==="
+          echo "Build: ✓"
+          echo "Unit Tests: ✓"
+          echo "Integration Tests: ✓"
+          echo "Documentation: ✓"
+      
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}-${{ matrix.rust }}
+          path: target/debug/
+
+  # Test optimization features
+  test-optimization:
+    name: Test Optimization Features
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Build mef-memory with optimization features
+        run: |
+          echo "=== Testing Optimization Features ==="
+          cargo build --package mef-memory --features optimization --verbose
+          echo "✓ Optimization build successful"
+      
+      - name: Test individual optimization features
+        run: |
+          echo "=== Testing Individual Features ==="
+          
+          cargo test --package mef-memory --features stability-filter --verbose
+          echo "✓ Stability filter tests passed"
+          
+          cargo test --package mef-memory --features ophan-sharding --verbose
+          echo "✓ O.P.H.A.N. sharding tests passed"
+          
+          cargo test --package mef-memory --features adaptive-routing --verbose
+          echo "✓ Adaptive routing tests passed"
+          
+          cargo test --package mef-memory --features mandorla --verbose
+          echo "✓ Mandorla tests passed"
+      
+      - name: Test all optimization features together
+        run: |
+          echo "=== Testing All Features Together ==="
+          cargo test --package mef-memory --features optimization --verbose
+          echo "✓ All optimization tests passed"
+      
+      - name: Build benchmarks with optimization
+        run: |
+          echo "=== Building Optimization Benchmarks ==="
+          cargo build --package mef-benchmarks --features optimization --release
+          echo "✓ Optimization benchmarks built successfully"
+
+  # Integration tests with services
+  integration-test:
+    name: Integration Tests with Services
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Build mef-api
+        run: cargo build --package mef-api --bin mef-api
+      
+      - name: Run API server in background
+        run: |
+          cargo run --package mef-api --bin mef-api &
+          API_PID=$!
+          echo "API_PID=$API_PID" >> $GITHUB_ENV
+          
+          # Wait for API to be ready
+          for i in {1..30}; do
+            if curl -f http://localhost:8080/healthz 2>/dev/null; then
+              echo "API is ready"
+              break
+            fi
+            echo "Waiting for API to start... ($i/30)"
+            sleep 2
+          done
+      
+      - name: Run integration tests
+        run: cargo test --workspace --test integration_* --verbose
+      
+      - name: Stop API server
+        if: always()
+        run: kill $API_PID || true
+
+  # Performance benchmarks
+  benchmark:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Run criterion benchmarks
+        run: |
+          # Build and run criterion benchmarks
+          cargo build --package mef-benchmarks --release
+          cargo bench --package mef-benchmarks
+          
+          # Also test with optimization features
+          echo "=== Building with optimization features ==="
+          cargo build --package mef-benchmarks --release --features optimization
+          echo "✓ Optimization features build successful"
+      
+      - name: Upload criterion results
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-results
+          path: target/criterion/
+
+  # Cross-database benchmarks with services
+  cross-db-benchmark:
+    name: Cross-Database Benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-release-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Install jq for JSON processing
+        run: sudo apt-get update && sudo apt-get install -y jq
+      
+      - name: Build MEF API and cross-db-bench binary
+        run: |
+          cargo build --package mef-api --bin mef-api --release
+          cargo build --package mef-bench --bin cross-db-bench --release
+      
+      - name: Verify binary builds
+        run: |
+          ls -lh target/release/mef-api
+          ls -lh target/release/cross-db-bench
+          file target/release/mef-api
+          file target/release/cross-db-bench
+      
+      - name: Start MEF API server
+        run: |
+          # Start API in background with output logging
+          ./target/release/mef-api > mef-api.log 2>&1 &
+          API_PID=$!
+          echo "API_PID=$API_PID" >> $GITHUB_ENV
+          echo "Started MEF API with PID: $API_PID"
+          
+          # Wait for API to be ready with retry logic
+          MAX_RETRIES=30
+          RETRY_DELAY=2
+          for i in $(seq 1 $MAX_RETRIES); do
+            if curl -f http://localhost:8000/healthz 2>/dev/null; then
+              echo "✓ MEF API is ready (attempt $i/$MAX_RETRIES)"
+              
+              # Verify API is responding correctly
+              HEALTH_RESPONSE=$(curl -s http://localhost:8000/healthz)
+              echo "Health check response: $HEALTH_RESPONSE"
+              break
+            fi
+            
+            if [ $i -eq $MAX_RETRIES ]; then
+              echo "✗ Failed to start MEF API after $MAX_RETRIES attempts"
+              echo "=== MEF API Log ==="
+              cat mef-api.log || echo "No log file found"
+              exit 1
+            fi
+            
+            echo "Waiting for MEF API to start... ($i/$MAX_RETRIES)"
+            sleep $RETRY_DELAY
+          done
+      
+      - name: Start benchmark services (Qdrant)
+        run: |
+          # Start Qdrant service from docker-compose
+          echo "Starting Qdrant service..."
+          docker compose -f docker-compose.bench.yml up -d qdrant
+          
+          # Wait for Qdrant to be ready with retry logic
+          echo "Waiting for Qdrant to be ready..."
+          MAX_RETRIES=30
+          RETRY_DELAY=2
+          for i in $(seq 1 $MAX_RETRIES); do
+            if curl -f http://localhost:6333/healthz 2>/dev/null; then
+              echo "✓ Qdrant is ready (attempt $i/$MAX_RETRIES)"
+              
+              # Verify Qdrant is responding correctly
+              HEALTH_RESPONSE=$(curl -s http://localhost:6333/healthz)
+              echo "Qdrant health check response: $HEALTH_RESPONSE"
+              
+              # Check collections endpoint
+              COLLECTIONS=$(curl -s http://localhost:6333/collections)
+              echo "Qdrant collections: $COLLECTIONS"
+              break
+            fi
+            
+            if [ $i -eq $MAX_RETRIES ]; then
+              echo "✗ Failed to start Qdrant after $MAX_RETRIES attempts"
+              echo "=== Docker logs ==="
+              docker compose -f docker-compose.bench.yml logs qdrant || echo "No logs available"
+              exit 1
+            fi
+            
+            echo "Waiting for Qdrant... ($i/$MAX_RETRIES)"
+            sleep $RETRY_DELAY
+          done
+          
+          # Note: Milvus excluded due to API compatibility issues with v1/vector endpoints
+          # Requires further investigation and potential driver updates
+      
+      - name: Verify services are ready
+        run: |
+          echo "=== Service Health Checks ==="
+          echo "MEF API:"
+          curl -f http://localhost:8000/healthz || exit 1
+          echo -e "\nQdrant:"
+          curl -f http://localhost:6333/healthz || exit 1
+          echo -e "\n=== All services ready ==="
+      
+      - name: Run cross-database benchmarks
+        env:
+          BENCH_NUM_VECTORS: 50000
+          BENCH_NUM_QUERIES: 50
+          BENCH_DIMENSION: 128
+          BENCH_K: 10
+          BENCH_METRIC: cosine
+          BENCH_BATCH_SIZE: 5000
+          BENCH_OUTPUT: benchmark-results/cross_db_results.json
+          MEF_BASE_URL: http://localhost:8000
+          QDRANT_URL: http://localhost:6333
+        run: |
+          mkdir -p benchmark-results
+          
+          echo "=== Starting Cross-Database Benchmarks ==="
+          echo "Configuration:"
+          echo "  Vectors: $BENCH_NUM_VECTORS"
+          echo "  Queries: $BENCH_NUM_QUERIES"
+          echo "  Dimension: $BENCH_DIMENSION"
+          echo "  K: $BENCH_K"
+          echo "  Metric: $BENCH_METRIC"
+          echo "  Batch Size: $BENCH_BATCH_SIZE"
+          echo ""
+          
+          # Run benchmarks with FAISS (baseline), MEF (Infinity Ledger), and Qdrant
+          # Note: Milvus excluded due to API compatibility issues requiring investigation
+          set +e  # Don't exit on error, capture exit code
+          ./target/release/cross-db-bench faiss mef qdrant | tee benchmark-results/cross_db_output.txt
+          BENCH_EXIT_CODE=$?
+          set -e
+          
+          echo "Benchmark exit code: $BENCH_EXIT_CODE"
+          
+          if [ $BENCH_EXIT_CODE -ne 0 ]; then
+            echo "⚠️ Benchmark failed with exit code $BENCH_EXIT_CODE"
+            # Still continue to show results
+          else
+            echo "✓ Benchmark completed successfully"
+          fi
+      
+      - name: Display benchmark results
+        if: always()
+        run: |
+          echo "=== Benchmark Output ==="
+          if [ -f benchmark-results/cross_db_output.txt ]; then
+            cat benchmark-results/cross_db_output.txt
+          else
+            echo "No benchmark output file found"
+          fi
+          
+          echo -e "\n=== Benchmark Results JSON ==="
+          if [ -f benchmark-results/cross_db_results.json ]; then
+            cat benchmark-results/cross_db_results.json | jq . || cat benchmark-results/cross_db_results.json
+          else
+            echo "No benchmark results JSON found"
+          fi
+      
+      - name: Analyze benchmark results
+        if: always()
+        run: |
+          if [ ! -f benchmark-results/cross_db_results.json ]; then
+            echo "No results file to analyze"
+            exit 0
+          fi
+          
+          echo "=== Benchmark Analysis ==="
+          
+          # Extract key metrics
+          TOTAL_DRIVERS=$(jq -r '.summary.total_drivers_tested' benchmark-results/cross_db_results.json || echo "N/A")
+          SUCCESSFUL=$(jq -r '.summary.successful_drivers' benchmark-results/cross_db_results.json || echo "N/A")
+          FAILED=$(jq -r '.summary.failed_drivers' benchmark-results/cross_db_results.json || echo "N/A")
+          
+          echo "Total drivers tested: $TOTAL_DRIVERS"
+          echo "Successful: $SUCCESSFUL"
+          echo "Failed: $FAILED"
+          
+          if [ "$FAILED" != "0" ] && [ "$FAILED" != "N/A" ]; then
+            echo "⚠️ Warning: Some benchmarks failed"
+            
+            # Show which drivers failed
+            echo "Failed drivers:"
+            jq -r '.results[] | select(.status != "success") | "\(.driver_name): \(.error_message // "Unknown error")"' benchmark-results/cross_db_results.json || echo "Could not parse failed drivers"
+          fi
+      
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cross-db-benchmark-results
+          path: benchmark-results/
+      
+      - name: Upload service logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: service-logs
+          path: |
+            mef-api.log
+            docker-compose-logs.txt
+      
+      - name: Collect service logs
+        if: always()
+        run: |
+          echo "=== MEF API Logs ==="
+          cat mef-api.log || echo "No MEF API log found"
+          
+          echo -e "\n=== Docker Compose Logs ==="
+          docker compose -f docker-compose.bench.yml logs > docker-compose-logs.txt 2>&1 || echo "No docker logs available"
+          cat docker-compose-logs.txt || echo "No docker logs file"
+      
+      - name: Stop benchmark services
+        if: always()
+        run: |
+          echo "=== Stopping Services ==="
+          
+          # Stop MEF API
+          if [ ! -z "$API_PID" ]; then
+            echo "Stopping MEF API (PID: $API_PID)"
+            kill $API_PID || true
+            sleep 2
+            kill -9 $API_PID 2>/dev/null || true
+          fi
+          
+          # Stop Docker services
+          echo "Stopping Docker services"
+          docker compose -f docker-compose.bench.yml down -v || true
+          
+          echo "✓ Cleanup complete"
+
+
+  # Security audit
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      
+      - name: Run security audit
+        run: |
+          echo "=== Running Security Audit ==="
+          cargo audit --json > audit-results.json || true
+          
+          # Display results
+          echo "=== Audit Results ==="
+          cargo audit || true
+          
+          # Check for critical vulnerabilities
+          CRITICAL_COUNT=$(cat audit-results.json | jq '.vulnerabilities.found | length' || echo "0")
+          echo "Found $CRITICAL_COUNT vulnerabilities"
+          
+          if [ "$CRITICAL_COUNT" != "0" ]; then
+            echo "⚠️ Security vulnerabilities detected!"
+            cat audit-results.json | jq '.vulnerabilities.list[] | {id: .advisory.id, severity: .advisory.severity, package: .package}'
+          fi
+      
+      - name: Upload audit results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-audit-results
+          path: audit-results.json
+
+  # Build release artifacts
+  build-release:
+    name: Build Release Artifacts
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    needs: [lint, build-and-test, integration-test]
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-release-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Build release binaries
+        run: |
+          cargo build --release --package mef-api --bin mef-api
+          cargo build --release --package mef-cli --bin mef
+      
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-binaries
+          path: |
+            target/release/mef-api
+            target/release/mef
+
+  # Docker build and push
+  docker-build:
+    name: Docker Build and Push
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    needs: [build-release]
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/mef-api
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

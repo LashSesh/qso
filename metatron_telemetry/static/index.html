@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Q⊗DASH - Metatron VM Dashboard</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Q⊗DASH - Metatron VM</h1>
+            <p class="subtitle">Quantum-Hybrid Calibration System with Seraphic Calibration Shell</p>
+        </header>
+
+        <div class="grid">
+            <!-- Top Left: System Status -->
+            <section class="panel status-panel">
+                <h2>System Status</h2>
+                <div class="status-grid">
+                    <div class="status-item">
+                        <span class="label">Algorithm:</span>
+                        <span id="algorithm" class="value">-</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="label">Mode:</span>
+                        <span id="mode" class="value">-</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="label">ψ (Quality):</span>
+                        <span id="psi" class="value metric">-</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="label">ρ (Stability):</span>
+                        <span id="rho" class="value metric">-</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="label">ω (Efficiency):</span>
+                        <span id="omega" class="value metric">-</span>
+                    </div>
+                </div>
+
+                <div class="health-section">
+                    <h3>Backend Health</h3>
+                    <div class="health-indicators">
+                        <div class="health-item">
+                            <span class="health-dot" id="scs-health"></span>
+                            <span>SCS</span>
+                        </div>
+                        <div class="health-item">
+                            <span class="health-dot" id="dionice-health"></span>
+                            <span>dioniceOS</span>
+                        </div>
+                        <div class="health-item">
+                            <span class="health-dot" id="qdash-health"></span>
+                            <span>Q⊗DASH</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="backend-section">
+                    <h3>Quantum Backend</h3>
+                    <div class="backend-info">
+                        <div class="backend-badge" id="backend-badge">
+                            <span class="backend-type" id="backend-type">SIMULATOR</span>
+                            <span class="backend-name" id="backend-name">local_sim</span>
+                        </div>
+                        <div class="backend-details">
+                            <span id="backend-qubits">13 qubits</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="last-update">
+                    Last update: <span id="last-update">-</span>
+                </div>
+            </section>
+
+            <!-- Top Right: Recent Jobs -->
+            <section class="panel jobs-panel">
+                <h2>Recent Jobs</h2>
+                <div class="jobs-list" id="jobs-list">
+                    <p class="loading">Loading jobs...</p>
+                </div>
+            </section>
+
+            <!-- Bottom Left: Metrics History Chart -->
+            <section class="panel chart-panel">
+                <h2>Metrics History</h2>
+                <div class="chart-container">
+                    <canvas id="metricsChart"></canvas>
+                </div>
+            </section>
+
+            <!-- Bottom Right: Controls -->
+            <section class="panel controls-panel">
+                <h2>Control Actions</h2>
+
+                <div class="control-group">
+                    <h3>Start Calibration Run</h3>
+                    <div class="button-group">
+                        <button id="start-calibration" class="btn btn-primary">
+                            <span class="btn-icon">▶</span>
+                            Start Calibration
+                        </button>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <h3>Quick Actions</h3>
+                    <div class="button-group">
+                        <button id="refresh-all" class="btn btn-secondary">
+                            <span class="btn-icon">🔄</span>
+                            Refresh All
+                        </button>
+                    </div>
+                </div>
+
+                <div id="control-message" class="control-message"></div>
+
+                <div class="info-box">
+                    <h4>System Info</h4>
+                    <p><strong>dioniceOS Backend:</strong> Integrated</p>
+                    <p><strong>Seraphic Calibration:</strong> Active</p>
+                    <p><strong>4D-Trichter:</strong> Funnel + Hyperbion + HDAG</p>
+                </div>
+            </section>
+        </div>
+
+        <footer>
+            <p>Q⊗DASH Metatron VM Dashboard | dioniceOS Backend Integration | Auto-refresh: 5s</p>
+        </footer>
+    </div>
+
+    <script src="/js/app.js"></script>
+</body>
+</html>
