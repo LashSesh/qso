@@ -20,14 +20,26 @@ from ._metatron_qso_internal import (
     run_quantum_walk,
     solve_maxcut_qaoa,
     run_vqe,
+    # High-level toolkits
+    quantum_walk_centrality,
+    quantum_walk_anomaly_score,
+    quantum_walk_connectivity,
+    solve_maxcut_qaoa_advanced,
     __version__,
     __doc__ as _internal_doc,
 )
 
 __all__ = [
     "MetatronGraph",
+    # Core functions
     "run_quantum_walk",
     "solve_maxcut_qaoa",
     "run_vqe",
+    # Quantum Walk Toolkit
+    "quantum_walk_centrality",
+    "quantum_walk_anomaly_score",
+    "quantum_walk_connectivity",
+    # QAOA Optimizer
+    "solve_maxcut_qaoa_advanced",
     "__version__",
 ]

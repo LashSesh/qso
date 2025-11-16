@@ -334,13 +334,186 @@ fn run_vqe(
     })
 }
 
+/// Compute quantum walk centrality for nodes
+///
+/// Returns a centrality score for each node based on quantum walk dynamics.
+/// Higher scores indicate more "central" or influential nodes.
+///
+/// # Arguments
+/// * `graph` - The graph to analyze
+/// * `t_max` - Maximum evolution time (default: 10.0)
+/// * `dt` - Time step (default: 0.1)
+/// * `samples` - Number of samples for averaging (default: 128)
+///
+/// # Returns
+/// List of centrality scores (one per node, normalized to [0, 1])
+#[pyfunction]
+#[pyo3(signature = (graph, t_max=10.0, dt=0.1, samples=128))]
+fn quantum_walk_centrality(
+    graph: &PyMetatronGraph,
+    t_max: f64,
+    dt: f64,
+    samples: usize,
+) -> PyResult<Vec<f64>> {
+    let params = core::quantum_walk_toolkit::QuantumWalkParams {
+        t_max,
+        dt,
+        samples,
+    };
+
+    let centrality = core::quantum_walk_toolkit::quantum_walk_centrality(&graph.inner, &params);
+    Ok(centrality)
+}
+
+/// Compute anomaly scores comparing base graph to current graph
+///
+/// Detects structural changes using quantum walk dynamics.
+///
+/// # Arguments
+/// * `base_graph` - Baseline/reference graph
+/// * `current_graph` - Current graph to analyze
+/// * `t_max` - Maximum evolution time (default: 10.0)
+/// * `dt` - Time step (default: 0.1)
+/// * `samples` - Number of samples (default: 128)
+///
+/// # Returns
+/// List of anomaly scores per node (higher = more anomalous)
+#[pyfunction]
+#[pyo3(signature = (base_graph, current_graph, t_max=10.0, dt=0.1, samples=128))]
+fn quantum_walk_anomaly_score(
+    base_graph: &PyMetatronGraph,
+    current_graph: &PyMetatronGraph,
+    t_max: f64,
+    dt: f64,
+    samples: usize,
+) -> PyResult<Vec<f64>> {
+    let params = core::quantum_walk_toolkit::QuantumWalkParams {
+        t_max,
+        dt,
+        samples,
+    };
+
+    let anomaly = core::quantum_walk_toolkit::quantum_walk_anomaly_score(
+        &base_graph.inner,
+        &current_graph.inner,
+        &params,
+    );
+    Ok(anomaly)
+}
+
+/// Analyze connectivity using quantum walks
+///
+/// Computes connectivity metrics from specified source nodes.
+///
+/// # Arguments
+/// * `graph` - The graph to analyze
+/// * `source_nodes` - Starting nodes for quantum walk
+/// * `t_max` - Maximum evolution time (default: 10.0)
+/// * `dt` - Time step (default: 0.1)
+/// * `samples` - Number of samples (default: 128)
+///
+/// # Returns
+/// Dictionary with connectivity metrics:
+///   - 'mixing_time': Time to reach near-uniform distribution
+///   - 'hitting_probabilities': Final probabilities for each node
+///   - 'distribution_variance': Variance in probability distribution
+///   - 'effective_diameter': Effective graph diameter
+#[pyfunction]
+#[pyo3(signature = (graph, source_nodes, t_max=10.0, dt=0.1, samples=128))]
+fn quantum_walk_connectivity(
+    graph: &PyMetatronGraph,
+    source_nodes: Vec<usize>,
+    t_max: f64,
+    dt: f64,
+    samples: usize,
+) -> PyResult<PyObject> {
+    let params = core::quantum_walk_toolkit::QuantumWalkParams {
+        t_max,
+        dt,
+        samples,
+    };
+
+    let metrics = core::quantum_walk_toolkit::quantum_walk_connectivity(
+        &graph.inner,
+        &source_nodes,
+        &params,
+    );
+
+    Python::with_gil(|py| {
+        let result = PyDict::new_bound(py);
+        result.set_item("mixing_time", metrics.mixing_time)?;
+        result.set_item(
+            "hitting_probabilities",
+            metrics.hitting_probabilities.to_object(py),
+        )?;
+        result.set_item("distribution_variance", metrics.distribution_variance)?;
+        result.set_item("effective_diameter", metrics.effective_diameter)?;
+        Ok(result.to_object(py))
+    })
+}
+
+/// Advanced MaxCut solver with full control
+///
+/// Solves the MaxCut problem using QAOA with advanced options.
+///
+/// # Arguments
+/// * `graph` - The graph to partition
+/// * `depth` - QAOA circuit depth (default: 3)
+/// * `max_iters` - Maximum optimization iterations (default: 100)
+/// * `seed` - Optional random seed for reproducibility
+///
+/// # Returns
+/// Dictionary with:
+///   - 'cut_value': Number of edges cut
+///   - 'assignment': Binary node assignment (list of bool)
+///   - 'approximation_ratio': Quality metric
+///   - 'meta': Metadata (iterations, partition sizes, etc.)
+#[pyfunction]
+#[pyo3(signature = (graph, depth=3, max_iters=100, seed=None))]
+fn solve_maxcut_qaoa_advanced(
+    graph: &PyMetatronGraph,
+    depth: usize,
+    max_iters: usize,
+    seed: Option<u64>,
+) -> PyResult<PyObject> {
+    let solution = core::optimizer::solve_maxcut_advanced(&graph.inner, depth, max_iters, seed);
+
+    Python::with_gil(|py| {
+        let result = PyDict::new_bound(py);
+        result.set_item("cut_value", solution.cut_value)?;
+        result.set_item(
+            "assignment",
+            solution.assignment.to_object(py),
+        )?;
+        result.set_item("approximation_ratio", solution.approximation_ratio)?;
+
+        let meta = PyDict::new_bound(py);
+        meta.set_item("iterations", solution.meta.iterations)?;
+        meta.set_item("final_cost", solution.meta.final_cost)?;
+        meta.set_item("depth", solution.meta.depth)?;
+        meta.set_item("converged", solution.meta.converged)?;
+        meta.set_item("partition_sizes", solution.meta.partition_sizes)?;
+        result.set_item("meta", meta)?;
+
+        Ok(result.to_object(py))
+    })
+}
+
 /// Python module initialization
 #[pymodule]
 fn _metatron_qso_internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyMetatronGraph>()?;
+
+    // Core functions
     m.add_function(wrap_pyfunction!(run_quantum_walk, m)?)?;
     m.add_function(wrap_pyfunction!(solve_maxcut_qaoa, m)?)?;
     m.add_function(wrap_pyfunction!(run_vqe, m)?)?;
+
+    // High-level toolkits
+    m.add_function(wrap_pyfunction!(quantum_walk_centrality, m)?)?;
+    m.add_function(wrap_pyfunction!(quantum_walk_anomaly_score, m)?)?;
+    m.add_function(wrap_pyfunction!(quantum_walk_connectivity, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_maxcut_qaoa_advanced, m)?)?;
 
     // Module metadata
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
