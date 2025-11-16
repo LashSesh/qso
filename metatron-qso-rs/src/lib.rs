@@ -126,6 +126,10 @@ pub mod symmetry_codes;
 #[cfg(feature = "advanced")]
 pub mod advanced_algorithms;
 
+// High-level toolkits
+pub mod quantum_walk_toolkit;
+pub mod optimizer;
+
 // Core re-exports (always available)
 pub use crate::graph::metatron::MetatronGraph;
 pub use crate::hamiltonian::{MetatronHamiltonian, SpectrumInfo};

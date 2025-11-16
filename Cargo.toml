@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "metatron-qso-rs",
+    "metatron_qso_py",
     "metatron_dionice_bridge",
     "metatron_telemetry",
     "metatron_backend",

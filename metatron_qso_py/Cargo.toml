@@ -1,0 +1,31 @@
+[package]
+name = "metatron_qso_py"
+version = "0.1.0"
+edition = "2021"
+authors = ["Q⊗DASH Team"]
+description = "Python bindings for Metatron Quantum State Operator"
+license = "MIT"
+repository = "https://github.com/LashSesh/qdash"
+readme = "README.md"
+
+[lib]
+name = "_metatron_qso_internal"
+crate-type = ["cdylib"]
+
+[dependencies]
+# PyO3 for Python bindings
+pyo3 = { version = "0.21", features = ["extension-module"] }
+
+# Core Metatron library
+metatron-qso-rs = { path = "../metatron-qso-rs", features = ["walks", "vqa", "dtl"] }
+
+# Additional dependencies
+nalgebra = "0.32"
+num-complex = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 16
