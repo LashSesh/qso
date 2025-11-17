@@ -36,12 +36,14 @@
 //! println!("Best point: {:?}", best);
 //! ```
 
+pub mod search;
 pub mod signature;
 pub mod spiral;
-pub mod search;
 pub mod strategy;
 
+pub use search::{TritonSearch, TritonStepResult};
 pub use signature::SpectralSignature;
 pub use spiral::TritonSpiral;
-pub use search::{TritonSearch, TritonStepResult};
-pub use strategy::{CalibrationSearchStrategy, TritonSearchStrategy, CalibrationProposal, CalibrationResult};
+pub use strategy::{
+    CalibrationProposal, CalibrationResult, CalibrationSearchStrategy, TritonSearchStrategy,
+};

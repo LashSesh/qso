@@ -187,18 +187,22 @@ fn main() -> Result<(), Box<dyn Error>> {
     let total_time = overall_start.elapsed().as_secs_f64() * 1000.0;
 
     // Calculate cross-module metrics
-    let compatibility_checks = [vqe_bench.metatron_hamiltonian_compatibility,
+    let compatibility_checks = [
+        vqe_bench.metatron_hamiltonian_compatibility,
         vqe_bench.dtl_state_integration,
         qaoa_bench.graph_integration,
         qaoa_bench.custom_hamiltonian_support,
-        qwalk_bench.metatron_graph_compatibility];
+        qwalk_bench.metatron_graph_compatibility,
+    ];
 
     let compatibility_score = compatibility_checks.iter().filter(|&&x| x).count() as f64
         / compatibility_checks.len() as f64;
 
-    let integration_success_rate = [vqe_bench.state_fidelity > 0.9,
+    let integration_success_rate = [
+        vqe_bench.state_fidelity > 0.9,
         qaoa_bench.approximation_ratio > 0.5,
-        qwalk_bench.speedup_factor > 1.0]
+        qwalk_bench.speedup_factor > 1.0,
+    ]
     .iter()
     .filter(|&&x| x)
     .count() as f64
@@ -254,13 +258,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     if args.len() > 1 {
         // Write to specified file
         let output_path = &args[1];
-        
+
         // Create parent directory if it doesn't exist
         if let Some(parent) = Path::new(output_path).parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create parent directory for '{}': {}", output_path, e))?;
+            fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "Failed to create parent directory for '{}': {}",
+                    output_path, e
+                )
+            })?;
         }
-        
+
         let file = File::create(output_path)
             .map_err(|e| format!("Failed to create output file '{}': {}", output_path, e))?;
         let mut writer = BufWriter::new(file);

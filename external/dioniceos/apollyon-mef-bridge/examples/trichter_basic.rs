@@ -3,9 +3,7 @@
 //! Demonstrates the complete 4D-Trichter workflow with morphodynamic
 //! pattern compression.
 
-use apollyon_mef_bridge::{
-    coupling_tick, FunnelGraph, HDAGField, Hyperbion, Policy, State4D,
-};
+use apollyon_mef_bridge::{coupling_tick, FunnelGraph, HDAGField, Hyperbion, Policy, State4D};
 
 fn main() {
     println!("=== 4D-Trichter (Gabriel) Example ===\n");
@@ -51,15 +49,27 @@ fn main() {
         );
 
         println!("Tick {}:", t);
-        println!("  Funnel: {} nodes, {} edges", funnel.node_count(), funnel.edge_count());
-        println!("  HDAG: {} tensors, {} transitions", hdag.tensor_count(), hdag.transition_count());
+        println!(
+            "  Funnel: {} nodes, {} edges",
+            funnel.node_count(),
+            funnel.edge_count()
+        );
+        println!(
+            "  HDAG: {} tensors, {} transitions",
+            hdag.tensor_count(),
+            hdag.transition_count()
+        );
         println!("  Density: {:.2}", funnel.density());
-        println!("  Changes: +{} nodes, -{} merged, -{} edges pruned",
-                 result.nodes_created, result.nodes_merged, result.edges_pruned);
+        println!(
+            "  Changes: +{} nodes, -{} merged, -{} edges pruned",
+            result.nodes_created, result.nodes_merged, result.edges_pruned
+        );
 
         if let Some(hash) = result.commit_hash {
-            println!("  Proof hash: {:02x}{:02x}...{:02x}{:02x}",
-                     hash.0[0], hash.0[1], hash.0[30], hash.0[31]);
+            println!(
+                "  Proof hash: {:02x}{:02x}...{:02x}{:02x}",
+                hash.0[0], hash.0[1], hash.0[30], hash.0[31]
+            );
         }
 
         // Use output as next input
@@ -102,8 +112,10 @@ fn demonstrate_policy_differences() {
     let hyperbion = Hyperbion::new();
 
     println!("\nExplore Policy:");
-    println!("  alpha_hebb={:.2}, decay={:.3}, theta_prune={:.3}",
-             policy_explore.alpha_hebb, policy_explore.decay, policy_explore.theta_prune);
+    println!(
+        "  alpha_hebb={:.2}, decay={:.3}, theta_prune={:.3}",
+        policy_explore.alpha_hebb, policy_explore.decay, policy_explore.theta_prune
+    );
 
     let mut states = initial.clone();
     for t in 0..5 {
@@ -120,8 +132,11 @@ fn demonstrate_policy_differences() {
             states = result.states_4d_next;
         }
     }
-    println!("  After 5 ticks: {} nodes, {} edges",
-             funnel_explore.node_count(), funnel_explore.edge_count());
+    println!(
+        "  After 5 ticks: {} nodes, {} edges",
+        funnel_explore.node_count(),
+        funnel_explore.edge_count()
+    );
 
     // Exploit policy
     let mut funnel_exploit = FunnelGraph::new();
@@ -129,8 +144,10 @@ fn demonstrate_policy_differences() {
     let policy_exploit = Policy::Exploit.params();
 
     println!("\nExploit Policy:");
-    println!("  alpha_hebb={:.2}, decay={:.3}, theta_prune={:.3}",
-             policy_exploit.alpha_hebb, policy_exploit.decay, policy_exploit.theta_prune);
+    println!(
+        "  alpha_hebb={:.2}, decay={:.3}, theta_prune={:.3}",
+        policy_exploit.alpha_hebb, policy_exploit.decay, policy_exploit.theta_prune
+    );
 
     let mut states = initial.clone();
     for t in 0..5 {
@@ -147,8 +164,11 @@ fn demonstrate_policy_differences() {
             states = result.states_4d_next;
         }
     }
-    println!("  After 5 ticks: {} nodes, {} edges",
-             funnel_exploit.node_count(), funnel_exploit.edge_count());
+    println!(
+        "  After 5 ticks: {} nodes, {} edges",
+        funnel_exploit.node_count(),
+        funnel_exploit.edge_count()
+    );
 
     // Homeostasis policy
     let mut funnel_homeo = FunnelGraph::new();
@@ -156,8 +176,10 @@ fn demonstrate_policy_differences() {
     let policy_homeo = Policy::Homeostasis.params_with_density(10.0);
 
     println!("\nHomeostasis Policy (target density=10.0):");
-    println!("  alpha_hebb={:.2}, decay={:.3}, theta_prune={:.3}",
-             policy_homeo.alpha_hebb, policy_homeo.decay, policy_homeo.theta_prune);
+    println!(
+        "  alpha_hebb={:.2}, decay={:.3}, theta_prune={:.3}",
+        policy_homeo.alpha_hebb, policy_homeo.decay, policy_homeo.theta_prune
+    );
 
     let mut states = initial.clone();
     for t in 0..5 {
@@ -174,6 +196,9 @@ fn demonstrate_policy_differences() {
             states = result.states_4d_next;
         }
     }
-    println!("  After 5 ticks: {} nodes, {} edges",
-             funnel_homeo.node_count(), funnel_homeo.edge_count());
+    println!(
+        "  After 5 ticks: {} nodes, {} edges",
+        funnel_homeo.node_count(),
+        funnel_homeo.edge_count()
+    );
 }

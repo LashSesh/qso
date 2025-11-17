@@ -92,12 +92,13 @@ impl HDAGField {
 
         // Update phase gradients based on tensor differences
         for transition in self.transitions.iter_mut() {
-            if let (Some(from_t), Some(to_t)) = 
-                (self.tensors.get(&transition.from), self.tensors.get(&transition.to)) {
-                
+            if let (Some(from_t), Some(to_t)) = (
+                self.tensors.get(&transition.from),
+                self.tensors.get(&transition.to),
+            ) {
                 // Phase gradient is difference in omega
                 transition.phase_gradient = to_t.tensor.omega - from_t.tensor.omega;
-                
+
                 // Coherence based on resonance alignment
                 let res_diff = (to_t.resonance - from_t.resonance).abs();
                 transition.coherence = (-res_diff).exp();
@@ -111,7 +112,7 @@ impl HDAGField {
     /// Apply morphodynamic damping to transitions
     fn apply_morphodynamic_damping(&mut self, mu: f64) {
         let damping_factor = (-mu.abs() * 0.1).exp();
-        
+
         for transition in self.transitions.iter_mut() {
             transition.coherence *= damping_factor;
         }
@@ -198,7 +199,7 @@ mod tests {
         let mut hdag = HDAGField::new();
         let tensor = State5D::new(1.0, 2.0, 3.0, 4.0, 5.0);
         let id = hdag.add_tensor(tensor);
-        
+
         assert_eq!(id, 0);
         assert_eq!(hdag.tensor_count(), 1);
     }
@@ -208,7 +209,7 @@ mod tests {
         let mut hdag = HDAGField::new();
         let id1 = hdag.add_tensor(State5D::zero());
         let id2 = hdag.add_tensor(State5D::zero());
-        
+
         assert_eq!(id1, 0);
         assert_eq!(id2, 1);
         assert_eq!(hdag.tensor_count(), 2);
@@ -219,7 +220,7 @@ mod tests {
         let mut hdag = HDAGField::new();
         let id1 = hdag.add_tensor(State5D::zero());
         let id2 = hdag.add_tensor(State5D::zero());
-        
+
         hdag.add_transition(id1, id2);
         assert_eq!(hdag.transition_count(), 1);
     }
@@ -229,10 +230,10 @@ mod tests {
         let mut hdag = HDAGField::new();
         let tensor = State5D::new(0.0, 0.0, 0.0, 0.0, 10.0);
         hdag.add_tensor(tensor);
-        
+
         let fields = HyperbionFields::new(5.0, 0.1);
         hdag.relax(fields);
-        
+
         // Resonance should be updated
         let t = hdag.tensors.get(&0).unwrap();
         assert!(t.resonance != 0.0);
@@ -243,7 +244,7 @@ mod tests {
         let hdag = HDAGField::new();
         let position = State5D::zero();
         let gradient = hdag.gradient(position);
-        
+
         assert_eq!(gradient, State5D::zero());
     }
 
@@ -252,13 +253,13 @@ mod tests {
         let mut hdag = HDAGField::new();
         let tensor = State5D::new(10.0, 0.0, 0.0, 0.0, 0.0);
         let id = hdag.add_tensor(tensor);
-        
+
         // Set some resonance
         hdag.tensors.get_mut(&id).unwrap().resonance = 1.0;
-        
+
         let position = State5D::zero();
         let gradient = hdag.gradient(position);
-        
+
         // Gradient should point toward the tensor
         assert!(gradient.x > 0.0);
     }
@@ -269,14 +270,14 @@ mod tests {
         let id1 = hdag.add_tensor(State5D::zero());
         let id2 = hdag.add_tensor(State5D::new(1.0, 0.0, 0.0, 0.0, 0.0));
         hdag.add_transition(id1, id2);
-        
+
         // Set initial coherence
         hdag.transitions[0].coherence = 0.5;
-        
+
         // Apply strong damping
         let fields = HyperbionFields::new(0.0, 10.0);
         hdag.relax(fields);
-        
+
         // Coherence should decrease
         assert!(hdag.transitions.first().map(|t| t.coherence).unwrap_or(1.0) < 0.5);
     }

@@ -17,7 +17,7 @@ pub mod mandorla_refiner;
 
 // Re-exports
 #[cfg(feature = "stability-filter")]
-pub use stability_filter::{FilteredBackend, FilterStats, StabilityFilter, StabilityFilterConfig};
+pub use stability_filter::{FilterStats, FilteredBackend, StabilityFilter, StabilityFilterConfig};
 
 #[cfg(feature = "ophan-sharding")]
 pub use ophan_backend::OphanBackend;

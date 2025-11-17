@@ -27,8 +27,8 @@ impl<B: MemoryBackend + Clone> OphanBackend<B> {
 
     /// Compute shard assignment via hash
     fn compute_shard(&self, vector: &[f64]) -> usize {
-        use std::hash::{Hash, Hasher};
         use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
 
         let mut hasher = DefaultHasher::new();
         for v in vector {
@@ -58,7 +58,8 @@ impl<B: MemoryBackend + Clone + Send + Sync> MemoryBackend for OphanBackend<B> {
 
     fn search(&self, query: &[f64], k: usize) -> crate::Result<Vec<SearchResult>> {
         // Parallel search across all 4 shards
-        let results: Vec<Vec<SearchResult>> = self.shards
+        let results: Vec<Vec<SearchResult>> = self
+            .shards
             .iter()
             .map(|shard| {
                 let shard = shard.read().unwrap();
@@ -88,9 +89,7 @@ impl<B: MemoryBackend + Clone + Send + Sync> MemoryBackend for OphanBackend<B> {
     }
 
     fn count(&self) -> usize {
-        self.shards.iter()
-            .map(|s| s.read().unwrap().count())
-            .sum()
+        self.shards.iter().map(|s| s.read().unwrap().count()).sum()
     }
 }
 
@@ -101,15 +100,10 @@ struct CentralAggregator;
 impl CentralAggregator {
     fn aggregate(&self, shard_results: Vec<Vec<SearchResult>>, k: usize) -> Vec<SearchResult> {
         // Flatten all results
-        let mut all_results: Vec<SearchResult> = shard_results
-            .into_iter()
-            .flatten()
-            .collect();
+        let mut all_results: Vec<SearchResult> = shard_results.into_iter().flatten().collect();
 
         // Sort by distance (ascending) using total_cmp to handle NaN
-        all_results.sort_by(|a, b| {
-            a.distance.total_cmp(&b.distance)
-        });
+        all_results.sort_by(|a, b| a.distance.total_cmp(&b.distance));
 
         // Take top-k
         all_results.truncate(k);
@@ -137,12 +131,8 @@ mod tests {
 
         // Store multiple items
         for i in 0..10 {
-            let item = MemoryItem::new(
-                format!("item_{}", i),
-                vec![val; 8],
-                spectral,
-                None,
-            ).unwrap();
+            let item =
+                MemoryItem::new(format!("item_{}", i), vec![val; 8], spectral, None).unwrap();
             backend.store(item).unwrap();
         }
 
@@ -164,7 +154,8 @@ mod tests {
                 omega: 0.1,
             },
             None,
-        ).unwrap();
+        )
+        .unwrap();
 
         backend.store(item).unwrap();
 
@@ -192,23 +183,18 @@ mod tests {
             let norm = vector.iter().map(|x| x * x).sum::<f64>().sqrt();
             vector.iter_mut().for_each(|x| *x /= norm);
 
-            let item = MemoryItem::new(
-                format!("item_{}", i),
-                vector,
-                spectral,
-                None,
-            ).unwrap();
+            let item = MemoryItem::new(format!("item_{}", i), vector, spectral, None).unwrap();
             backend.store(item).unwrap();
         }
 
         // Search
         let query = vec![val; 8];
         let results = backend.search(&query, 5).unwrap();
-        
+
         assert_eq!(results.len(), 5);
         // Results should be sorted by distance
         for i in 1..results.len() {
-            assert!(results[i-1].distance <= results[i].distance);
+            assert!(results[i - 1].distance <= results[i].distance);
         }
     }
 
@@ -227,7 +213,8 @@ mod tests {
                 omega: 0.1,
             },
             None,
-        ).unwrap();
+        )
+        .unwrap();
 
         backend.store(item).unwrap();
         assert_eq!(backend.count(), 1);
@@ -249,17 +236,13 @@ mod tests {
         };
 
         for i in 0..10 {
-            let item = MemoryItem::new(
-                format!("item_{}", i),
-                vec![val; 8],
-                spectral,
-                None,
-            ).unwrap();
+            let item =
+                MemoryItem::new(format!("item_{}", i), vec![val; 8], spectral, None).unwrap();
             backend.store(item).unwrap();
         }
 
         assert_eq!(backend.count(), 10);
-        
+
         backend.clear().unwrap();
         assert_eq!(backend.count(), 0);
     }

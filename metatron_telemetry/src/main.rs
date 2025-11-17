@@ -55,9 +55,9 @@ async fn init_demo_data(state: &AppState) {
 
         state
             .update_status(
-                0.75 + progress * 0.15,  // psi: 0.75 -> 0.90
-                0.80 + progress * 0.10,  // rho: 0.80 -> 0.90
-                0.70 + progress * 0.15,  // omega: 0.70 -> 0.85
+                0.75 + progress * 0.15, // psi: 0.75 -> 0.90
+                0.80 + progress * 0.10, // rho: 0.80 -> 0.90
+                0.70 + progress * 0.15, // omega: 0.70 -> 0.85
                 "VQE".to_string(),
             )
             .await;

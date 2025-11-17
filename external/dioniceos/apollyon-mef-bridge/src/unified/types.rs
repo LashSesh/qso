@@ -40,8 +40,8 @@ impl GateConfig {
     /// Create a strict gate configuration (harder to FIRE)
     pub fn strict() -> Self {
         Self {
-            epsilon: 0.05,          // Tighter path invariance
-            phi_threshold: 0.7,     // Higher alignment required
+            epsilon: 0.05,           // Tighter path invariance
+            phi_threshold: 0.7,      // Higher alignment required
             resonance_strength: 0.9, // Stronger resonance
         }
     }
@@ -49,8 +49,8 @@ impl GateConfig {
     /// Create a relaxed gate configuration (easier to FIRE)
     pub fn relaxed() -> Self {
         Self {
-            epsilon: 0.2,           // Looser path invariance
-            phi_threshold: 0.3,     // Lower alignment required
+            epsilon: 0.2,            // Looser path invariance
+            phi_threshold: 0.3,      // Lower alignment required
             resonance_strength: 0.6, // Weaker resonance
         }
     }

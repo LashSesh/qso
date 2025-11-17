@@ -7,14 +7,16 @@
 //! no changes to the base systems.
 
 pub mod interlock;
-pub mod tick;
 pub mod metrics;
 pub mod shadow;
+pub mod tick;
 
-pub use interlock::{InterlockAdapter, InterlockConfig, ExtendedCommitData, CommitData, SimpleProofOfResonance};
-pub use tick::{tick_5d_cube, TickResult};
+pub use interlock::{
+    CommitData, ExtendedCommitData, InterlockAdapter, InterlockConfig, SimpleProofOfResonance,
+};
 pub use metrics::{MetricsCollector, MetricsFormat, TickMetrics};
-pub use shadow::{ShadowMode, ActivationCriteria, ShadowController};
+pub use shadow::{ActivationCriteria, ShadowController, ShadowMode};
+pub use tick::{tick_5d_cube, TickResult};
 
 /// Version of the 5D Cube overlay
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

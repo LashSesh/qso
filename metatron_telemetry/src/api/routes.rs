@@ -20,7 +20,10 @@ pub fn create_router(state: AppState, static_dir: &str) -> Router {
         .route("/jobs", get(handlers::get_jobs))
         .route("/jobs/:id", get(handlers::get_job))
         .route("/history", get(handlers::get_history))
-        .route("/control/start_calibration", post(handlers::start_calibration))
+        .route(
+            "/control/start_calibration",
+            post(handlers::start_calibration),
+        )
         .route("/health", get(handlers::health_check))
         .with_state(state);
 

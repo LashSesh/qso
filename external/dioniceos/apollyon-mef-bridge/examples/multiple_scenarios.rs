@@ -29,20 +29,14 @@ fn main() {
         (
             "Strong Damping",
             State5D::new(2.0, 1.5, 1.0, 0.8, 0.5),
-            SystemParameters::new(
-                [-0.5, -0.5, -0.5, -0.5, -0.5],
-                [0.0, 0.0, 0.0, 0.0, 0.0],
-            ),
+            SystemParameters::new([-0.5, -0.5, -0.5, -0.5, -0.5], [0.0, 0.0, 0.0, 0.0, 0.0]),
             1.0,
         ),
         // Scenario 3: Mixed dynamics (some positive, some negative rates)
         (
             "Mixed Dynamics",
             State5D::new(1.0, 1.0, 1.0, 1.0, 1.0),
-            SystemParameters::new(
-                [-0.2, 0.1, -0.15, 0.05, -0.1],
-                [0.0, 0.0, 0.0, 0.0, 0.0],
-            ),
+            SystemParameters::new([-0.2, 0.1, -0.15, 0.05, -0.1], [0.0, 0.0, 0.0, 0.0, 0.0]),
             1.5,
         ),
         // Scenario 4: Very small state, very weak dynamics
@@ -73,9 +67,14 @@ fn main() {
             seed_path: format!("MEF/scenarios/{:04}", idx + 1),
         };
 
-        println!("Initial state: [{:.3}, {:.3}, {:.3}, {:.3}, {:.3}]",
-            initial_state.get(0), initial_state.get(1), initial_state.get(2),
-            initial_state.get(3), initial_state.get(4));
+        println!(
+            "Initial state: [{:.3}, {:.3}, {:.3}, {:.3}, {:.3}]",
+            initial_state.get(0),
+            initial_state.get(1),
+            initial_state.get(2),
+            initial_state.get(3),
+            initial_state.get(4)
+        );
         println!("Integration time: {:.1}s\n", t_final);
 
         match engine.process(input) {
@@ -84,12 +83,20 @@ fn main() {
 
                 println!("Results:");
                 println!("  Trajectory: {} states", output.trajectory.len());
-                println!("  Final state: [{:.3}, {:.3}, {:.3}, {:.3}, {:.3}]",
-                    final_state.get(0), final_state.get(1), final_state.get(2),
-                    final_state.get(3), final_state.get(4));
+                println!(
+                    "  Final state: [{:.3}, {:.3}, {:.3}, {:.3}, {:.3}]",
+                    final_state.get(0),
+                    final_state.get(1),
+                    final_state.get(2),
+                    final_state.get(3),
+                    final_state.get(4)
+                );
 
                 // Compute state change
-                let initial_norm = (0..5).map(|i| initial_state.get(i).powi(2)).sum::<f64>().sqrt();
+                let initial_norm = (0..5)
+                    .map(|i| initial_state.get(i).powi(2))
+                    .sum::<f64>()
+                    .sqrt();
                 let final_norm = final_state.norm();
                 let norm_change = final_norm - initial_norm;
 
@@ -169,10 +176,16 @@ fn main() {
     }
 
     println!("Processed {} scenarios", scenarios.len());
-    println!("  🔥 FIRE: {} ({:.1}%)", fire_count, 
-        100.0 * fire_count as f64 / scenarios.len() as f64);
-    println!("  ⏸️  HOLD: {} ({:.1}%)", hold_count,
-        100.0 * hold_count as f64 / scenarios.len() as f64);
+    println!(
+        "  🔥 FIRE: {} ({:.1}%)",
+        fire_count,
+        100.0 * fire_count as f64 / scenarios.len() as f64
+    );
+    println!(
+        "  ⏸️  HOLD: {} ({:.1}%)",
+        hold_count,
+        100.0 * hold_count as f64 / scenarios.len() as f64
+    );
 
     println!("\n=== Demo Complete! ===");
 }

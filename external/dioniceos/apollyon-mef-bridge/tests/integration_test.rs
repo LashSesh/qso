@@ -3,7 +3,7 @@
 //! Tests the end-to-end flow from APOLLYON 5D integration through
 //! MEF knowledge derivation and gate evaluation.
 
-use apollyon_mef_bridge::{UnifiedCognitiveEngine, CognitiveInput};
+use apollyon_mef_bridge::{CognitiveInput, UnifiedCognitiveEngine};
 use core_5d::{State5D, SystemParameters};
 
 #[test]
@@ -28,8 +28,14 @@ fn test_complete_pipeline_execution() {
     let output = result.unwrap();
 
     // Verify trajectory
-    assert!(!output.trajectory.is_empty(), "Trajectory should not be empty");
-    assert!(output.trajectory.len() > 10, "Trajectory should have multiple states");
+    assert!(
+        !output.trajectory.is_empty(),
+        "Trajectory should not be empty"
+    );
+    assert!(
+        output.trajectory.len() > 10,
+        "Trajectory should have multiple states"
+    );
 
     // Verify spectral signature
     assert!(output.spectral_signature.psi.is_finite());
@@ -67,7 +73,7 @@ fn test_pipeline_with_different_parameters() {
     // Test with custom system parameters
     let params = SystemParameters::new(
         [-0.1, -0.2, 0.15, 0.0, -0.05], // intrinsic rates
-        [0.0, 0.0, 0.0, 0.0, 0.0],       // no external forcing
+        [0.0, 0.0, 0.0, 0.0, 0.0],      // no external forcing
     );
 
     let input = CognitiveInput {

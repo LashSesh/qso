@@ -14,9 +14,9 @@
 //! - Circuit design
 
 use crate::graph::metatron::MetatronGraph;
-use crate::vqa::optimizer::OptimizerType;
-use crate::vqa::qaoa::{create_maxcut_hamiltonian, QAOABuilder, QAOA};
 use crate::quantum::METATRON_DIMENSION;
+use crate::vqa::optimizer::OptimizerType;
+use crate::vqa::qaoa::{QAOA, QAOABuilder, create_maxcut_hamiltonian};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 

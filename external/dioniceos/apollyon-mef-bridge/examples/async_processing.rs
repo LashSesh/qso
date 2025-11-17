@@ -119,8 +119,10 @@ async fn example_parallel_batch() {
 
         println!("     ✓ Completed in {:?}", duration);
         println!("     - Successes: {}", batch_result.success_count());
-        println!("     - Throughput: {:.1} items/sec",
-                 batch_result.total_count() as f64 / duration.as_secs_f64());
+        println!(
+            "     - Throughput: {:.1} items/sec",
+            batch_result.total_count() as f64 / duration.as_secs_f64()
+        );
     }
 }
 
@@ -149,23 +151,25 @@ async fn example_performance_comparison() {
 
     println!("     - Time: {:?}", seq_duration);
     println!("     - Success rate: {:.1}%", seq_result.success_rate());
-    println!("     - Throughput: {:.1} items/sec",
-             seq_result.total_count() as f64 / seq_duration.as_secs_f64());
+    println!(
+        "     - Throughput: {:.1} items/sec",
+        seq_result.total_count() as f64 / seq_duration.as_secs_f64()
+    );
     println!();
 
     // Parallel
     println!("   Parallel processing (4 workers):");
     let par_engine = AsyncUnifiedCognitiveEngine::new();
     let start = Instant::now();
-    let par_result = par_engine
-        .process_batch_parallel(inputs, Some(4))
-        .await;
+    let par_result = par_engine.process_batch_parallel(inputs, Some(4)).await;
     let par_duration = start.elapsed();
 
     println!("     - Time: {:?}", par_duration);
     println!("     - Success rate: {:.1}%", par_result.success_rate());
-    println!("     - Throughput: {:.1} items/sec",
-             par_result.total_count() as f64 / par_duration.as_secs_f64());
+    println!(
+        "     - Throughput: {:.1} items/sec",
+        par_result.total_count() as f64 / par_duration.as_secs_f64()
+    );
     println!();
 
     // Speedup

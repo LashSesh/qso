@@ -50,7 +50,7 @@ impl MandorlaRefiner {
         }
 
         let dim = items[0].vector.len();
-        
+
         let mut min_vec = vec![f64::INFINITY; dim];
         let mut max_vec = vec![f64::NEG_INFINITY; dim];
         let mut mean_vec = vec![0.0; dim];
@@ -77,7 +77,7 @@ impl MandorlaRefiner {
     /// Refine query to intersection with index space
     pub fn refine_query(&self, query: &[f64]) -> Option<Vec<f64>> {
         if self.index_stats.mean_vector.is_empty() {
-            return Some(query.to_vec());  // No stats yet
+            return Some(query.to_vec()); // No stats yet
         }
 
         // Compute overlap score between query and index coverage
@@ -94,13 +94,17 @@ impl MandorlaRefiner {
 
     fn compute_overlap(&self, query: &[f64]) -> f64 {
         // Compute cosine similarity with index mean
-        let dot: f64 = query.iter()
+        let dot: f64 = query
+            .iter()
             .zip(&self.index_stats.mean_vector)
             .map(|(q, m)| q * m)
             .sum();
 
         let query_norm: f64 = query.iter().map(|v| v * v).sum::<f64>().sqrt();
-        let mean_norm: f64 = self.index_stats.mean_vector.iter()
+        let mean_norm: f64 = self
+            .index_stats
+            .mean_vector
+            .iter()
             .map(|v| v * v)
             .sum::<f64>()
             .sqrt();
@@ -114,7 +118,8 @@ impl MandorlaRefiner {
 
     fn project_into_coverage(&self, query: &[f64]) -> Vec<f64> {
         // Project query into index bounding box
-        query.iter()
+        query
+            .iter()
             .zip(&self.index_stats.min_vector)
             .zip(&self.index_stats.max_vector)
             .map(|((q, min), max)| q.clamp(*min, *max))
@@ -156,9 +161,11 @@ impl<B: MemoryBackend> MemoryBackend for MandorlaBackend<B> {
 
     fn search(&self, query: &[f64], k: usize) -> crate::Result<Vec<SearchResult>> {
         // Refine query before search
-        let refined_query = self.refiner.refine_query(query)
+        let refined_query = self
+            .refiner
+            .refine_query(query)
             .unwrap_or_else(|| query.to_vec());
-        
+
         self.inner.search(&refined_query, k)
     }
 
@@ -184,10 +191,10 @@ mod tests {
     #[test]
     fn test_mandorla_refiner_no_stats() {
         let refiner = MandorlaRefiner::new(MandorlaConfig::default());
-        
+
         let query = vec![0.5; 8];
         let refined = refiner.refine_query(&query);
-        
+
         assert!(refined.is_some());
         assert_eq!(refined.unwrap(), query);
     }
@@ -195,7 +202,7 @@ mod tests {
     #[test]
     fn test_update_stats() {
         let mut refiner = MandorlaRefiner::new(MandorlaConfig::default());
-        
+
         let val = 1.0 / (8.0_f64).sqrt();
         let spectral = SpectralSignature {
             psi: 0.9,
@@ -203,14 +210,9 @@ mod tests {
             omega: 0.1,
         };
 
-        let items: Vec<_> = (0..10).map(|i| {
-            MemoryItem::new(
-                format!("item_{}", i),
-                vec![val; 8],
-                spectral,
-                None,
-            ).unwrap()
-        }).collect();
+        let items: Vec<_> = (0..10)
+            .map(|i| MemoryItem::new(format!("item_{}", i), vec![val; 8], spectral, None).unwrap())
+            .collect();
 
         refiner.update_stats(&items);
 
@@ -222,7 +224,7 @@ mod tests {
     #[test]
     fn test_compute_overlap() {
         let mut refiner = MandorlaRefiner::new(MandorlaConfig::default());
-        
+
         let val = 1.0 / (8.0_f64).sqrt();
         let spectral = SpectralSignature {
             psi: 0.9,
@@ -230,14 +232,9 @@ mod tests {
             omega: 0.1,
         };
 
-        let items: Vec<_> = (0..10).map(|i| {
-            MemoryItem::new(
-                format!("item_{}", i),
-                vec![val; 8],
-                spectral,
-                None,
-            ).unwrap()
-        }).collect();
+        let items: Vec<_> = (0..10)
+            .map(|i| MemoryItem::new(format!("item_{}", i), vec![val; 8], spectral, None).unwrap())
+            .collect();
 
         refiner.update_stats(&items);
 
@@ -250,7 +247,7 @@ mod tests {
     #[test]
     fn test_project_into_coverage() {
         let mut refiner = MandorlaRefiner::new(MandorlaConfig::default());
-        
+
         let val = 1.0 / (8.0_f64).sqrt();
         let spectral = SpectralSignature {
             psi: 0.9,
@@ -258,14 +255,9 @@ mod tests {
             omega: 0.1,
         };
 
-        let items: Vec<_> = (0..10).map(|i| {
-            MemoryItem::new(
-                format!("item_{}", i),
-                vec![val; 8],
-                spectral,
-                None,
-            ).unwrap()
-        }).collect();
+        let items: Vec<_> = (0..10)
+            .map(|i| MemoryItem::new(format!("item_{}", i), vec![val; 8], spectral, None).unwrap())
+            .collect();
 
         refiner.update_stats(&items);
 
@@ -295,12 +287,8 @@ mod tests {
 
         // Store items
         for i in 0..10 {
-            let item = MemoryItem::new(
-                format!("item_{}", i),
-                vec![val; 8],
-                spectral,
-                None,
-            ).unwrap();
+            let item =
+                MemoryItem::new(format!("item_{}", i), vec![val; 8], spectral, None).unwrap();
             mandorla.store(item).unwrap();
         }
 
@@ -328,7 +316,8 @@ mod tests {
                 omega: 0.1,
             },
             None,
-        ).unwrap();
+        )
+        .unwrap();
 
         mandorla.store(item).unwrap();
 
@@ -353,7 +342,8 @@ mod tests {
                 omega: 0.1,
             },
             None,
-        ).unwrap();
+        )
+        .unwrap();
 
         mandorla.store(item).unwrap();
         assert_eq!(mandorla.count(), 1);
@@ -376,17 +366,13 @@ mod tests {
         };
 
         for i in 0..10 {
-            let item = MemoryItem::new(
-                format!("item_{}", i),
-                vec![val; 8],
-                spectral,
-                None,
-            ).unwrap();
+            let item =
+                MemoryItem::new(format!("item_{}", i), vec![val; 8], spectral, None).unwrap();
             mandorla.store(item).unwrap();
         }
 
         assert_eq!(mandorla.count(), 10);
-        
+
         mandorla.clear().unwrap();
         assert_eq!(mandorla.count(), 0);
     }

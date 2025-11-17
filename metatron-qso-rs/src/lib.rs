@@ -127,15 +127,15 @@ pub mod symmetry_codes;
 pub mod advanced_algorithms;
 
 // High-level toolkits
-pub mod quantum_walk_toolkit;
 pub mod optimizer;
+pub mod quantum_walk_toolkit;
 
 // Core re-exports (always available)
 pub use crate::graph::metatron::MetatronGraph;
 pub use crate::hamiltonian::{MetatronHamiltonian, SpectrumInfo};
 pub use crate::params::QSOParameters;
 pub use crate::qso::QuantumStateOperator;
-pub use crate::quantum::{operator::QuantumOperator, state::QuantumState, METATRON_DIMENSION};
+pub use crate::quantum::{METATRON_DIMENSION, operator::QuantumOperator, state::QuantumState};
 
 // Feature-gated re-exports
 #[cfg(feature = "dtl")]
@@ -153,9 +153,7 @@ pub mod prelude {
     pub use crate::hamiltonian::{MetatronHamiltonian, SpectrumInfo};
     pub use crate::params::QSOParameters;
     pub use crate::qso::QuantumStateOperator;
-    pub use crate::quantum::{
-        operator::QuantumOperator, state::QuantumState, METATRON_DIMENSION,
-    };
+    pub use crate::quantum::{METATRON_DIMENSION, operator::QuantumOperator, state::QuantumState};
 
     // DTL (feature: dtl)
     #[cfg(feature = "dtl")]
@@ -166,10 +164,10 @@ pub mod prelude {
     // Quantum Walks (feature: walks)
     #[cfg(feature = "walks")]
     pub use crate::quantum_walk::{
+        BenchmarkMetadata, QuantumWalkBenchmarkSuite, QuantumWalkBenchmarker,
         continuous::{ContinuousTimeQuantumWalk, SpectralPropagator},
         krylov::{KrylovEvolution, KrylovProjection, LanczosResult},
         scattering::{DensityOfStates, ScatteringAnalysis, ScatteringChannel},
-        BenchmarkMetadata, QuantumWalkBenchmarkSuite, QuantumWalkBenchmarker,
     };
 
     // VQA (feature: vqa)
@@ -178,9 +176,9 @@ pub mod prelude {
         ansatz::{Ansatz, AnsatzType, EfficientSU2Ansatz, HardwareEfficientAnsatz, MetatronAnsatz},
         cost_function::{CostFunction, GradientMethod},
         optimizer::{OptimizationResult, Optimizer, OptimizerConfig, OptimizerType},
-        qaoa::{QAOABuilder, QAOAConfig, QAOAResult, QAOA},
-        vqc::{VQCBuilder, VQCConfig, VQCResult, VQC},
-        vqe::{VQEBuilder, VQEConfig, VQEResult, VQE},
+        qaoa::{QAOA, QAOABuilder, QAOAConfig, QAOAResult},
+        vqc::{VQC, VQCBuilder, VQCConfig, VQCResult},
+        vqe::{VQE, VQEBuilder, VQEConfig, VQEResult},
     };
 
     // Symmetry Codes (feature: codes)

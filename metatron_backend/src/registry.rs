@@ -74,7 +74,11 @@ impl BackendRegistry {
             name,
             caps.provider,
             caps.num_qubits,
-            if caps.is_simulator { "simulator" } else { "QPU" }
+            if caps.is_simulator {
+                "simulator"
+            } else {
+                "QPU"
+            }
         );
 
         if self.backends.contains_key(&name) {
@@ -103,10 +107,7 @@ impl BackendRegistry {
 
     /// List all registered backends
     pub fn list_backends(&self) -> Vec<BackendCapabilities> {
-        self.backends
-            .values()
-            .map(|b| b.info())
-            .collect()
+        self.backends.values().map(|b| b.info()).collect()
     }
 
     /// Select the best backend for a given circuit
@@ -150,12 +151,7 @@ impl BackendRegistry {
                 caps.is_simulator && caps.available && b.can_run(num_qubits)
             })
             .min_by_key(|b| b.info().num_qubits) // Prefer smallest that fits
-            .ok_or_else(|| {
-                anyhow!(
-                    "No available simulator found for {} qubits",
-                    num_qubits
-                )
-            })
+            .ok_or_else(|| anyhow!("No available simulator found for {} qubits", num_qubits))
     }
 
     /// Find the best QPU for a given qubit count
@@ -236,7 +232,10 @@ mod tests {
         assert_eq!(registry.mode(), &BackendMode::QpuEnabledAuto);
 
         registry.set_mode(BackendMode::ForceProvider("ibm".to_string()));
-        assert_eq!(registry.mode(), &BackendMode::ForceProvider("ibm".to_string()));
+        assert_eq!(
+            registry.mode(),
+            &BackendMode::ForceProvider("ibm".to_string())
+        );
     }
 
     #[test]

@@ -46,7 +46,7 @@ mod tests {
     fn test_lift_basic() {
         let s4 = State4D::new(1.0, 2.0, 3.0, 4.0);
         let s5 = lift(s4, 5.0);
-        
+
         assert_eq!(s5.x, 1.0);
         assert_eq!(s5.y, 2.0);
         assert_eq!(s5.z, 3.0);
@@ -58,7 +58,7 @@ mod tests {
     fn test_proj_4d_basic() {
         let gradient = State5D::new(1.0, 2.0, 3.0, 4.0, 5.0);
         let guide = proj_4d(gradient);
-        
+
         assert_eq!(guide.vx, 1.0);
         assert_eq!(guide.vy, 2.0);
         assert_eq!(guide.vz, 3.0);
@@ -70,7 +70,7 @@ mod tests {
         let s4_orig = State4D::new(1.5, -2.3, 3.7, 0.5);
         let s5 = lift(s4_orig, 100.0);
         let s4_back = project_state(s5);
-        
+
         assert_eq!(s4_orig, s4_back);
     }
 

@@ -242,7 +242,11 @@ where
     ///
     /// # Returns
     /// Final best point and signature
-    pub fn run(&mut self, convergence_threshold: f64, patience: usize) -> (Vec<f64>, SpectralSignature) {
+    pub fn run(
+        &mut self,
+        convergence_threshold: f64,
+        patience: usize,
+    ) -> (Vec<f64>, SpectralSignature) {
         let mut no_improvement_count = 0;
         let mut prev_best_resonance = 0.0;
 
@@ -388,11 +392,19 @@ mod tests {
 
         // Should find a point close to [0.5, 0.5, 0.5]
         for &val in &best_point {
-            assert!((val - 0.5).abs() < 0.2, "Point {} far from optimum 0.5", val);
+            assert!(
+                (val - 0.5).abs() < 0.2,
+                "Point {} far from optimum 0.5",
+                val
+            );
         }
 
         // Resonance should be high (close to 1.0)
-        assert!(best_sig.resonance() > 0.5, "Resonance too low: {}", best_sig.resonance());
+        assert!(
+            best_sig.resonance() > 0.5,
+            "Resonance too low: {}",
+            best_sig.resonance()
+        );
     }
 
     #[test]

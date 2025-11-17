@@ -48,24 +48,24 @@ impl StabilityFilter {
     pub fn should_index(&mut self, item: &MemoryItem) -> bool {
         // 1. Compute coherence (κ)
         let coherence = self.compute_coherence(item);
-        
+
         // 2. Compute fluctuation if history available
         let fluctuation = if self.history.len() >= 2 {
             self.compute_fluctuation(item)
         } else {
             0.0
         };
-        
+
         // 3. Update history
         self.history.push_back(item.clone());
         if self.history.len() > self.config.window_size {
             self.history.pop_front();
         }
-        
+
         // 4. PoR decision
-        let por_valid = coherence >= self.config.coherence_threshold 
-                     && fluctuation <= self.config.max_fluctuation;
-        
+        let por_valid = coherence >= self.config.coherence_threshold
+            && fluctuation <= self.config.max_fluctuation;
+
         por_valid
     }
 
@@ -75,12 +75,12 @@ impl StabilityFilter {
         let psi = item.spectral.psi;
         let rho = item.spectral.rho;
         let omega = item.spectral.omega;
-        
+
         // Coherence formula: κ = |ψ·ρ·e^(iω)|
         // Simplified: κ = sqrt(ψ² + ρ²) * cos(omega)
         let magnitude = (psi.powi(2) + rho.powi(2)).sqrt();
         let phase_factor = omega.cos();
-        
+
         (magnitude * phase_factor).abs()
     }
 
@@ -91,18 +91,19 @@ impl StabilityFilter {
         }
 
         // Compute variance of coherence values in window
-        let mut coherences: Vec<f64> = self.history.iter()
+        let mut coherences: Vec<f64> = self
+            .history
+            .iter()
             .map(|item| self.compute_coherence(item))
             .collect();
-        
+
         // Add current item's coherence
         coherences.push(self.compute_coherence(current));
-        
+
         let mean = coherences.iter().sum::<f64>() / coherences.len() as f64;
-        let variance = coherences.iter()
-            .map(|c| (c - mean).powi(2))
-            .sum::<f64>() / coherences.len() as f64;
-        
+        let variance =
+            coherences.iter().map(|c| (c - mean).powi(2)).sum::<f64>() / coherences.len() as f64;
+
         variance.sqrt()
     }
 }
@@ -183,7 +184,7 @@ mod tests {
     #[test]
     fn test_stability_filter_accepts_stable() {
         let mut filter = StabilityFilter::new(StabilityFilterConfig::default());
-        
+
         let val = 1.0 / (8.0_f64).sqrt();
         let stable_item = MemoryItem::new(
             "test1".to_string(),
@@ -194,7 +195,8 @@ mod tests {
                 omega: 0.1,
             },
             None,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert!(filter.should_index(&stable_item));
     }
@@ -202,18 +204,19 @@ mod tests {
     #[test]
     fn test_stability_filter_rejects_unstable() {
         let mut filter = StabilityFilter::new(StabilityFilterConfig::default());
-        
+
         let val = 1.0 / (8.0_f64).sqrt();
         let unstable_item = MemoryItem::new(
             "test2".to_string(),
             vec![val; 8],
             SpectralSignature {
-                psi: 0.2,  // Low coherence
+                psi: 0.2, // Low coherence
                 rho: 0.3,
                 omega: 0.8,
             },
             None,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert!(!filter.should_index(&unstable_item));
     }
@@ -225,7 +228,7 @@ mod tests {
         let mut backend = FilteredBackend::new(inner, filter);
 
         let val = 1.0 / (8.0_f64).sqrt();
-        
+
         // Store stable item
         let stable_item = MemoryItem::new(
             "stable".to_string(),
@@ -236,7 +239,8 @@ mod tests {
                 omega: 0.1,
             },
             None,
-        ).unwrap();
+        )
+        .unwrap();
         backend.store(stable_item).unwrap();
 
         // Store unstable item
@@ -249,7 +253,8 @@ mod tests {
                 omega: 0.8,
             },
             None,
-        ).unwrap();
+        )
+        .unwrap();
         backend.store(unstable_item).unwrap();
 
         // Check stats
@@ -267,7 +272,7 @@ mod tests {
     #[test]
     fn test_coherence_calculation() {
         let filter = StabilityFilter::new(StabilityFilterConfig::default());
-        
+
         let val = 1.0 / (8.0_f64).sqrt();
         let item = MemoryItem::new(
             "test".to_string(),
@@ -275,10 +280,11 @@ mod tests {
             SpectralSignature {
                 psi: 0.9,
                 rho: 0.9,
-                omega: 0.0,  // cos(0) = 1
+                omega: 0.0, // cos(0) = 1
             },
             None,
-        ).unwrap();
+        )
+        .unwrap();
 
         let coherence = filter.compute_coherence(&item);
         // sqrt(0.9^2 + 0.9^2) * cos(0) = sqrt(1.62) * 1 ≈ 1.273
@@ -288,9 +294,9 @@ mod tests {
     #[test]
     fn test_fluctuation_calculation() {
         let mut filter = StabilityFilter::new(StabilityFilterConfig::default());
-        
+
         let val = 1.0 / (8.0_f64).sqrt();
-        
+
         // Add items with varying coherence
         for i in 0..3 {
             let psi = 0.8 + (i as f64) * 0.05;
@@ -303,7 +309,8 @@ mod tests {
                     omega: 0.0,
                 },
                 None,
-            ).unwrap();
+            )
+            .unwrap();
             filter.history.push_back(item);
         }
 
@@ -316,7 +323,8 @@ mod tests {
                 omega: 0.0,
             },
             None,
-        ).unwrap();
+        )
+        .unwrap();
 
         let fluctuation = filter.compute_fluctuation(&current);
         // Should have some variance

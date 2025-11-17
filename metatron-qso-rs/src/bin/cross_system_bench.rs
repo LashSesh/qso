@@ -407,7 +407,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         timestamp: chrono::Utc::now(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         commit_hash: option_env!("GIT_HASH").unwrap_or("unknown").to_string(),
-        system_info: "Cross-System Comparison: Metatron QSO vs. Qiskit, Cirq, PennyLane, ProjectQ".to_string(),
+        system_info: "Cross-System Comparison: Metatron QSO vs. Qiskit, Cirq, PennyLane, ProjectQ"
+            .to_string(),
     };
 
     let suite = CrossSystemBenchmarkSuite {
@@ -459,13 +460,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     if args.len() > 1 {
         // Write to specified file
         let output_path = &args[1];
-        
+
         // Create parent directory if it doesn't exist
         if let Some(parent) = Path::new(output_path).parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create parent directory for '{}': {}", output_path, e))?;
+            fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "Failed to create parent directory for '{}': {}",
+                    output_path, e
+                )
+            })?;
         }
-        
+
         let file = File::create(output_path)
             .map_err(|e| format!("Failed to create output file '{}': {}", output_path, e))?;
         let mut writer = BufWriter::new(file);

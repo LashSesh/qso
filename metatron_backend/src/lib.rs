@@ -28,30 +28,25 @@
 //! println!("Counts: {:?}", result.counts);
 //! ```
 
-pub mod circuit;
 pub mod backends;
+pub mod circuit;
 pub mod registry;
 
-pub use circuit::{MetatronCircuit, MeasurementResult, Gate, GateType};
-pub use backends::{
-    QuantumBackend, BackendCapabilities,
-    local::LocalSimulatorBackend,
-};
+pub use backends::{local::LocalSimulatorBackend, BackendCapabilities, QuantumBackend};
+pub use circuit::{Gate, GateType, MeasurementResult, MetatronCircuit};
 
 #[cfg(feature = "ibm")]
-pub use backends::ibm::{IbmQuantumBackend, IbmConfig, IbmMode};
+pub use backends::ibm::{IbmConfig, IbmMode, IbmQuantumBackend};
 
-pub use registry::{BackendRegistry, BackendMode};
+pub use registry::{BackendMode, BackendRegistry};
 
 /// Re-export commonly used types
 pub mod prelude {
     pub use crate::{
-        QuantumBackend, BackendCapabilities,
-        MetatronCircuit, MeasurementResult,
-        LocalSimulatorBackend,
-        BackendRegistry, BackendMode,
+        BackendCapabilities, BackendMode, BackendRegistry, LocalSimulatorBackend,
+        MeasurementResult, MetatronCircuit, QuantumBackend,
     };
 
     #[cfg(feature = "ibm")]
-    pub use crate::{IbmQuantumBackend, IbmConfig, IbmMode};
+    pub use crate::{IbmConfig, IbmMode, IbmQuantumBackend};
 }

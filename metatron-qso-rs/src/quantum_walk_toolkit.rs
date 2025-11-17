@@ -169,10 +169,7 @@ pub fn quantum_walk_connectivity(
 
     // Create initial state (uniform over source nodes)
     let mut amplitudes = vec![num_complex::Complex64::new(0.0, 0.0); n];
-    let amplitude = num_complex::Complex64::new(
-        1.0 / (source_nodes.len() as f64).sqrt(),
-        0.0,
-    );
+    let amplitude = num_complex::Complex64::new(1.0 / (source_nodes.len() as f64).sqrt(), 0.0);
     for &node in source_nodes {
         amplitudes[node] = amplitude;
     }

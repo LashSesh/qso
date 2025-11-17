@@ -62,37 +62,37 @@ impl<B: MemoryBackend> AdaptiveRouter<B> {
     /// Route query to optimal strategy
     fn route_search(&self, query: &[f64], k: usize) -> crate::Result<Vec<SearchResult>> {
         let strategy = self.select_strategy(query, k);
-        
+
         match strategy {
             SearchStrategy::Exact => {
                 // Use backend's native search (already brute-force in InMemory)
                 self.backend.search(query, k)
-            },
+            }
             SearchStrategy::Approximate => {
                 // For future FAISS/HNSW backends
                 self.backend.search(query, k)
-            },
+            }
             SearchStrategy::Hybrid => {
                 // Blend: exact for small k, approx for remainder
                 let exact_k = self.config.small_k_threshold;
                 let mut results = self.backend.search(query, exact_k)?;
-                
+
                 if k > exact_k {
                     let approx_results = self.backend.search(query, k)?;
                     // Merge results, avoiding duplicates
-                    let existing_ids: std::collections::HashSet<_> = 
+                    let existing_ids: std::collections::HashSet<_> =
                         results.iter().map(|r| r.item.id.clone()).collect();
-                    
+
                     for result in approx_results {
                         if !existing_ids.contains(&result.item.id) && results.len() < k {
                             results.push(result);
                         }
                     }
-                    
+
                     results.sort_by(|a, b| a.distance.total_cmp(&b.distance));
                     results.truncate(k);
                 }
-                
+
                 Ok(results)
             }
         }
@@ -104,11 +104,11 @@ impl<B: MemoryBackend> AdaptiveRouter<B> {
 
         // Decision tree based on query profile
         if k < self.config.small_k_threshold {
-            SearchStrategy::Exact  // Small k: brute force is faster
+            SearchStrategy::Exact // Small k: brute force is faster
         } else if k > self.config.large_k_threshold || dim > self.config.high_dim_threshold {
-            SearchStrategy::Approximate  // Large k or high dim: use approximation
+            SearchStrategy::Approximate // Large k or high dim: use approximation
         } else {
-            SearchStrategy::Hybrid  // Middle ground: blend strategies
+            SearchStrategy::Hybrid // Middle ground: blend strategies
         }
     }
 }
@@ -159,11 +159,17 @@ mod tests {
         assert_eq!(router.select_strategy(&query, 50), SearchStrategy::Hybrid);
 
         // Large k -> Approximate
-        assert_eq!(router.select_strategy(&query, 150), SearchStrategy::Approximate);
+        assert_eq!(
+            router.select_strategy(&query, 150),
+            SearchStrategy::Approximate
+        );
 
         // High dimension -> Approximate
         let high_dim_query = vec![0.0; 200];
-        assert_eq!(router.select_strategy(&high_dim_query, 20), SearchStrategy::Approximate);
+        assert_eq!(
+            router.select_strategy(&high_dim_query, 20),
+            SearchStrategy::Approximate
+        );
     }
 
     #[test]
@@ -180,12 +186,8 @@ mod tests {
 
         // Store items
         for i in 0..20 {
-            let item = MemoryItem::new(
-                format!("item_{}", i),
-                vec![val; 8],
-                spectral,
-                None,
-            ).unwrap();
+            let item =
+                MemoryItem::new(format!("item_{}", i), vec![val; 8], spectral, None).unwrap();
             router.store(item).unwrap();
         }
 
@@ -212,7 +214,8 @@ mod tests {
                 omega: 0.1,
             },
             None,
-        ).unwrap();
+        )
+        .unwrap();
 
         router.store(item).unwrap();
 
@@ -236,7 +239,8 @@ mod tests {
                 omega: 0.1,
             },
             None,
-        ).unwrap();
+        )
+        .unwrap();
 
         router.store(item).unwrap();
         assert_eq!(router.count(), 1);
@@ -258,17 +262,13 @@ mod tests {
         };
 
         for i in 0..10 {
-            let item = MemoryItem::new(
-                format!("item_{}", i),
-                vec![val; 8],
-                spectral,
-                None,
-            ).unwrap();
+            let item =
+                MemoryItem::new(format!("item_{}", i), vec![val; 8], spectral, None).unwrap();
             router.store(item).unwrap();
         }
 
         assert_eq!(router.count(), 10);
-        
+
         router.clear().unwrap();
         assert_eq!(router.count(), 0);
     }
@@ -292,6 +292,9 @@ mod tests {
         assert_eq!(router.select_strategy(&query, 25), SearchStrategy::Hybrid);
 
         // k > 50 -> Approximate
-        assert_eq!(router.select_strategy(&query, 100), SearchStrategy::Approximate);
+        assert_eq!(
+            router.select_strategy(&query, 100),
+            SearchStrategy::Approximate
+        );
     }
 }

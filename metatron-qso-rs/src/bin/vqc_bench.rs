@@ -256,13 +256,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     if args.len() > 1 {
         // Write to specified file
         let output_path = &args[1];
-        
+
         // Create parent directory if it doesn't exist
         if let Some(parent) = Path::new(output_path).parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create parent directory for '{}': {}", output_path, e))?;
+            fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "Failed to create parent directory for '{}': {}",
+                    output_path, e
+                )
+            })?;
         }
-        
+
         let file = File::create(output_path)
             .map_err(|e| format!("Failed to create output file '{}': {}", output_path, e))?;
         let mut writer = BufWriter::new(file);

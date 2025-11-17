@@ -168,8 +168,7 @@ mod tests {
                 rho: 0.7,
                 omega: 2.1,
             },
-            route: RouteSpec::new("ROUTE-001".to_string(), vec![0, 1, 2, 3, 4, 5, 6], 0.8)
-                .unwrap(),
+            route: RouteSpec::new("ROUTE-001".to_string(), vec![0, 1, 2, 3, 4, 5, 6], 0.8).unwrap(),
             proof: Default::default(),
             gate_decision: GateDecision::FIRE,
             knowledge: Some(knowledge),

@@ -87,12 +87,7 @@ impl DTLResonator {
     /// Convert the dynamical trajectory to a DTLState by sampling the integrated phases.
     pub fn to_dtl_state(&mut self, t_span: (f64, f64), dt: f64) -> DTLState {
         let (times, phases) = self.integrate(t_span, dt);
-        let samples = Arc::new(
-            times
-                .into_iter()
-                .zip(phases)
-                .collect::<Vec<_>>(),
-        );
+        let samples = Arc::new(times.into_iter().zip(phases).collect::<Vec<_>>());
 
         DTLState::ld_from_phase(move |t| {
             let samples = &samples;

@@ -40,10 +40,7 @@ pub async fn get_jobs(
 }
 
 /// GET /jobs/:id - Get specific job
-pub async fn get_job(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> impl IntoResponse {
+pub async fn get_job(State(state): State<AppState>, Path(id): Path<Uuid>) -> impl IntoResponse {
     match state.get_job(id).await {
         Some(job) => (StatusCode::OK, Json(job)).into_response(),
         None => (StatusCode::NOT_FOUND, "Job not found").into_response(),
@@ -125,9 +122,7 @@ pub async fn start_calibration(
 /// Simulate a calibration run (placeholder for actual integration)
 async fn simulate_calibration_run(state: AppState, job_id: Uuid) {
     // Update to running
-    state
-        .update_job(job_id, JobStatus::Running, None)
-        .await;
+    state.update_job(job_id, JobStatus::Running, None).await;
 
     // Simulate work
     tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;

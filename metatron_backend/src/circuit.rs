@@ -183,7 +183,10 @@ impl MetatronCircuit {
 
     /// Count number of specific gate type
     pub fn count_gates(&self, gate_type: &GateType) -> usize {
-        self.gates.iter().filter(|g| &g.gate_type == gate_type).count()
+        self.gates
+            .iter()
+            .filter(|g| &g.gate_type == gate_type)
+            .count()
     }
 }
 
@@ -246,10 +249,7 @@ mod tests {
 
     #[test]
     fn test_circuit_builder() {
-        let circuit = MetatronCircuit::new(2)
-            .h(0)
-            .cnot(0, 1)
-            .measure_all();
+        let circuit = MetatronCircuit::new(2).h(0).cnot(0, 1).measure_all();
 
         assert_eq!(circuit.num_qubits, 2);
         assert_eq!(circuit.gates.len(), 4); // H + CNOT + 2 measurements

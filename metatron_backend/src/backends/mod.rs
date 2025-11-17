@@ -5,7 +5,7 @@ pub mod local;
 #[cfg(feature = "ibm")]
 pub mod ibm;
 
-use crate::circuit::{MetatronCircuit, MeasurementResult};
+use crate::circuit::{MeasurementResult, MetatronCircuit};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
@@ -89,7 +89,11 @@ pub trait QuantumBackend: Send + Sync {
             caps.name,
             caps.provider,
             caps.num_qubits,
-            if caps.is_simulator { "simulator" } else { "QPU" }
+            if caps.is_simulator {
+                "simulator"
+            } else {
+                "QPU"
+            }
         )
     }
 }

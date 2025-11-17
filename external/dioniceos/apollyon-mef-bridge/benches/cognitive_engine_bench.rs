@@ -74,10 +74,7 @@ fn bench_gate_configurations(c: &mut Criterion) {
         ("default", GateConfig::default()),
         ("strict", GateConfig::strict()),
         ("relaxed", GateConfig::relaxed()),
-        (
-            "custom",
-            GateConfig::new(0.15, 0.6, 0.85),
-        ),
+        ("custom", GateConfig::new(0.15, 0.6, 0.85)),
     ];
 
     for (name, config) in configs {
@@ -122,10 +119,10 @@ fn bench_trajectory_sizes(c: &mut Criterion) {
     // Benchmark different trajectory lengths (controlled by t_final and dt)
     // dt is fixed at 0.01 in the engine, so trajectory length ≈ t_final / 0.01
     for (name, t_final) in [
-        ("small", 0.1),   // ~10 states
-        ("medium", 0.5),  // ~50 states
-        ("large", 1.0),   // ~100 states
-        ("xlarge", 2.0),  // ~200 states
+        ("small", 0.1),  // ~10 states
+        ("medium", 0.5), // ~50 states
+        ("large", 1.0),  // ~100 states
+        ("xlarge", 2.0), // ~200 states
     ]
     .iter()
     {

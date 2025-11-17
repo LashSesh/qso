@@ -44,7 +44,7 @@ pub mod python;
 
 use anyhow::{Context, Result};
 use apollyon_mef_bridge::trichter::{
-    coupling_tick, TickResult, FunnelGraph, HDAGField, Hyperbion, Policy, State4D,
+    coupling_tick, FunnelGraph, HDAGField, Hyperbion, Policy, State4D, TickResult,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -151,7 +151,8 @@ impl DioniceKernel {
         self.time_step += 1.0;
 
         // Analyze the evolution to generate suggestions (borrow before extracting next_states)
-        let suggestion = self.analyze_evolution(&current_states, &tick_result.states_4d_next, &tick_result)?;
+        let suggestion =
+            self.analyze_evolution(&current_states, &tick_result.states_4d_next, &tick_result)?;
 
         // Extract next states after analysis
         let next_states = tick_result.states_4d_next;
@@ -231,15 +232,23 @@ impl DioniceKernel {
         if delta_x.abs() > 0.1 {
             config_updates.insert("suggested_stability_target".to_string(), json!(new_rho));
             if delta_x > 0.0 {
-                notes.push("Increase stability: Consider more random starts or larger ensemble".to_string());
+                notes.push(
+                    "Increase stability: Consider more random starts or larger ensemble"
+                        .to_string(),
+                );
             } else {
-                notes.push("Decrease emphasis on stability: Optimize for quality/efficiency".to_string());
+                notes.push(
+                    "Decrease emphasis on stability: Optimize for quality/efficiency".to_string(),
+                );
             }
         }
 
         // Quality (ψ-coordinate / psi)
         if delta_psi > 0.0 {
-            notes.push(format!("Quality improvement detected: Δψ = {:.4}", delta_psi));
+            notes.push(format!(
+                "Quality improvement detected: Δψ = {:.4}",
+                delta_psi
+            ));
             config_updates.insert("quality_direction".to_string(), json!("improving"));
         } else if delta_psi < -0.05 {
             notes.push("Quality degradation: Consider reverting recent changes".to_string());
@@ -258,16 +267,25 @@ impl DioniceKernel {
         // Algorithm family (y-coordinate)
         if regime_change {
             let new_algo = Self::decode_algorithm(nxt.y);
-            notes.push(format!("Regime change suggested: Consider switching to {}", new_algo));
+            notes.push(format!(
+                "Regime change suggested: Consider switching to {}",
+                new_algo
+            ));
             config_updates.insert("suggested_algorithm".to_string(), json!(new_algo));
         }
 
         // Funnel dynamics insights
         if tick_result.nodes_created > 0 {
-            notes.push(format!("Exploration: {} new patterns discovered", tick_result.nodes_created));
+            notes.push(format!(
+                "Exploration: {} new patterns discovered",
+                tick_result.nodes_created
+            ));
         }
         if tick_result.nodes_merged > 0 {
-            notes.push(format!("Consolidation: {} patterns merged", tick_result.nodes_merged));
+            notes.push(format!(
+                "Consolidation: {} patterns merged",
+                tick_result.nodes_merged
+            ));
         }
 
         // Compute resonance score from HDAG field

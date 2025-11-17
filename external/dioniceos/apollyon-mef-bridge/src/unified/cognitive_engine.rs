@@ -180,9 +180,7 @@ impl UnifiedCognitiveEngine {
         let spectral_signature = self.analyze_spectrum(&trajectory)?;
 
         // Phase 3: Bridge - State Conversion
-        let final_state = trajectory
-            .last()
-            .ok_or(CognitiveError::EmptyTrajectory)?;
+        let final_state = trajectory.last().ok_or(CognitiveError::EmptyTrajectory)?;
         let _mef_spiral = StateAdapter::apollyon_to_mef(final_state);
 
         // Phase 4: MEF - Route Selection (APOLLYON-enhanced)
@@ -246,16 +244,18 @@ impl UnifiedCognitiveEngine {
     }
 
     /// Integrate 5D dynamics from initial state
-    fn integrate_5d(&self, input: &CognitiveInput) -> Result<Vec<core_5d::State5D>, CognitiveError> {
+    fn integrate_5d(
+        &self,
+        input: &CognitiveInput,
+    ) -> Result<Vec<core_5d::State5D>, CognitiveError> {
         // Create coupling matrix (identity for now)
         let coupling = core_5d::CouplingMatrix::identity();
-        
+
         // Create vector field from parameters
         let field = VectorField::new(coupling, input.parameters.clone());
 
         // Configure time integration
-        let time_config =
-            core_5d::integration::TimeConfig::new(0.01, 0.0, input.t_final);
+        let time_config = core_5d::integration::TimeConfig::new(0.01, 0.0, input.t_final);
 
         // Create integrator
         let integrator = Integrator::new(field, time_config);
@@ -347,10 +347,7 @@ impl UnifiedCognitiveEngine {
     }
 
     /// Compute Proof-of-Resonance from trajectory
-    fn compute_proof_of_resonance(
-        &self,
-        trajectory: &[core_5d::State5D],
-    ) -> ProofOfResonanceData {
+    fn compute_proof_of_resonance(&self, trajectory: &[core_5d::State5D]) -> ProofOfResonanceData {
         if trajectory.len() < 2 {
             return ProofOfResonanceData::default();
         }
@@ -521,12 +518,9 @@ mod tests {
             seed_path: "MEF/test/stage/0001".to_string(),
         };
 
-        let route = mef_schemas::RouteSpec::new(
-            "ROUTE-001".to_string(),
-            vec![0, 1, 2, 3, 4, 5, 6],
-            0.75,
-        )
-        .unwrap();
+        let route =
+            mef_schemas::RouteSpec::new("ROUTE-001".to_string(), vec![0, 1, 2, 3, 4, 5, 6], 0.75)
+                .unwrap();
 
         let spectral = SpectralSignature {
             psi: 0.5,

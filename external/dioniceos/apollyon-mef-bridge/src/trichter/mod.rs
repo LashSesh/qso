@@ -11,18 +11,18 @@
 //! - **HDAG**: Hyperdimensional acyclic resonance grid (5D tensors)
 //! - **Policies**: Explore, Exploit, Homeostasis modes
 
-pub mod types;
-pub mod lift;
-pub mod hyperbion;
-pub mod hdag;
 pub mod funnel;
+pub mod hdag;
+pub mod hyperbion;
+pub mod lift;
 pub mod policies;
 pub mod tick;
+pub mod types;
 
-pub use types::*;
-pub use lift::{lift, proj_4d};
-pub use hyperbion::Hyperbion;
-pub use hdag::HDAGField;
 pub use funnel::FunnelGraph;
+pub use hdag::HDAGField;
+pub use hyperbion::Hyperbion;
+pub use lift::{lift, proj_4d};
 pub use policies::{Policy, PolicyParams};
 pub use tick::{coupling_tick, TickResult};
+pub use types::*;
