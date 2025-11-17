@@ -881,4 +881,4 @@ Dieses Projekt ist unter der **MIT-Lizenz** lizenziert. Siehe [LICENSE](LICENSE)
 
 ---
 
-**Made with ❤️ in Rust** | **Powered by Quantum Geometry** | **© 2025 Q⊗DASH Project**
+**Made with ❤️ in Rust** | **Powered by Quantum Geometry** | **© 2025 Sebastian Klemm (Aion-Chronos)**
