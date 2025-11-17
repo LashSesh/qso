@@ -142,13 +142,13 @@ impl QaoaMaxCutSolver {
     ///
     /// # Returns
     /// A `MaxCutSolution` containing the partition and quality metrics
-    pub fn run(mut self) -> MaxCutSolution {
+    pub fn run(self) -> MaxCutSolution {
         // Rebuild QAOA with current parameters
         // (In a full implementation, we'd use the seed here)
         let result = self.qaoa.run();
 
         // Sample to get binary assignment
-        let (mean_cost, _std_dev, samples) = self.qaoa.analyze_samples(&result.optimal_state, 100);
+        let (_mean_cost, _std_dev, samples) = self.qaoa.analyze_samples(&result.optimal_state, 100);
 
         // Find best sample
         let best_sample_idx = samples
