@@ -6,7 +6,6 @@
 use apollyon_mef_bridge::storage::{LedgerStorage, MemoryStorage, StorageBackend};
 use apollyon_mef_bridge::unified::{CognitiveInput, UnifiedCognitiveEngine};
 use core_5d::{State5D, SystemParameters};
-use std::path::Path;
 use tempfile::TempDir;
 
 #[tokio::main]

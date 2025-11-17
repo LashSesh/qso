@@ -8,6 +8,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 /// Golden ratio φ = (1 + √5) / 2
+#[allow(dead_code)]
 const GOLDEN_RATIO: f64 = 1.618033988749895;
 
 /// Golden angle in radians: 2π / φ²

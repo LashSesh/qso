@@ -66,6 +66,7 @@ pub async fn get_history(
 #[derive(Debug, Deserialize)]
 pub struct StartCalibrationRequest {
     #[serde(default)]
+    #[allow(dead_code)]
     algorithm: Option<String>,
     #[serde(default)]
     mode: Option<String>,

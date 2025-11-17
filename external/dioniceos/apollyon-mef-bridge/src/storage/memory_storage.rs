@@ -148,7 +148,7 @@ impl Clone for CognitiveOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core_5d::{State5D, SystemParameters};
+    use core_5d::State5D;
     use mef_schemas::{GateDecision, KnowledgeObject, RouteSpec, SpectralSignature};
 
     fn create_test_output() -> CognitiveOutput {
