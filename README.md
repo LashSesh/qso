@@ -60,6 +60,20 @@ The project is organized as a Cargo workspace with 24 crates:
 
 ## 🚀 Quick Start
 
+### Prerequisites
+
+**For Windows users**: Before building, you need to install additional tools:
+- **CMake** (required for cryptographic dependencies)
+- **NASM** (recommended for performance)
+- **Visual Studio Build Tools 2022** with C++ workload
+
+📖 **See [docs/WINDOWS_SETUP.md](docs/WINDOWS_SETUP.md) for detailed Windows installation instructions**
+
+**For Linux/macOS users**:
+- Rust 1.85.0+
+- Standard build tools (gcc/clang)
+- CMake (usually available via package manager: `apt install cmake` / `brew install cmake`)
+
 ### Installation
 
 ```bash
@@ -641,9 +655,10 @@ cargo run --release --bin benchmark_compare
 
 ### Setup Guides (docs/)
 
+- **[docs/WINDOWS_SETUP.md](docs/WINDOWS_SETUP.md)** - **Windows 10/11 setup guide** (EN) 🔥
+- **[docs/WINDOWS_SETUP_DEUTSCH.md](docs/WINDOWS_SETUP_DEUTSCH.md)** - Windows setup (DE)
 - **[docs/BILDANLEITUNG.md](docs/BILDANLEITUNG.md)** - Image guide (DE)
 - **[docs/SCHNELLANLEITUNG.md](docs/SCHNELLANLEITUNG.md)** - Quick guide (DE)
-- **[docs/WINDOWS_SETUP_DEUTSCH.md](docs/WINDOWS_SETUP_DEUTSCH.md)** - Windows setup (DE)
 
 ### API Documentation
 
