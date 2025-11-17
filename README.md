@@ -6,7 +6,7 @@
 
 **Enterprise-grade Quantum Computing Framework mit 13-dimensionaler Metatron-Geometrie**
 
-Q⊗DASH (Quantum State Operator Dashboard) ist ein hochmodernes Quantencomputing-Framework in Pure Rust, das auf der Heiligen Geometrie des Metatron-Würfels basiert. Das System implementiert einen vollständigen Stack von Quantenalgorithmen, variationalen Verfahren, dynamischer tripolarer Logik und automatischer Kalibrierung durch die Seraphic Calibration Shell.
+Q⊗DASH (MetatronQSO - Quantum State Operator) ist ein hochmodernes Quantencomputing-Framework in Pure Rust, das auf der Heiligen Geometrie des Metatron-Würfels basiert. Das System implementiert einen vollständigen Stack von Quantenalgorithmen, variationalen Verfahren, dynamischer tripolarer Logik und automatischer Kalibrierung durch die Seraphic Calibration Shell.
 
 ## 🌟 Highlights
 
