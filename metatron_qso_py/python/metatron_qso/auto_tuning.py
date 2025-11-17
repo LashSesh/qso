@@ -6,17 +6,14 @@ Quantum Walk and QAOA algorithms.
 """
 
 from typing import Dict, Any, Optional, Tuple, List
-import os
 import sys
 from pathlib import Path
 
 # Import core functions from Rust bindings
 from ._metatron_qso_internal import (
-    MetatronGraph,
     run_quantum_walk,
     solve_maxcut_qaoa,
     run_vqe,
-    solve_maxcut_qaoa_advanced,
 )
 
 # Try to import SCS (optional dependency)
@@ -32,6 +29,7 @@ try:
         write_benchmark,
         NewConfigProposal,
     )
+
     SCS_AVAILABLE = True
 except ImportError:
     SCS_AVAILABLE = False
@@ -249,7 +247,9 @@ def run_vqe_with_tuning(
     return result, proposal
 
 
-def _compute_qw_metrics(result: Dict[str, Any], t_max: float, dt: float) -> Dict[str, float]:
+def _compute_qw_metrics(
+    result: Dict[str, Any], t_max: float, dt: float
+) -> Dict[str, float]:
     """
     Compute performance metrics (ψ, ρ, ω) from quantum walk result.
 
@@ -262,9 +262,10 @@ def _compute_qw_metrics(result: Dict[str, Any], t_max: float, dt: float) -> Dict
         Metrics dictionary {psi, rho, omega}
     """
     # Quality (ψ): Spreading quality based on entropy
-    final_state = result.get('final_state', [])
+    final_state = result.get("final_state", [])
     if final_state:
         import math
+
         # Compute entropy
         entropy = -sum(p * math.log(p) if p > 1e-10 else 0 for p in final_state)
         max_entropy = math.log(len(final_state))
@@ -276,7 +277,7 @@ def _compute_qw_metrics(result: Dict[str, Any], t_max: float, dt: float) -> Dict
     rho = 0.90
 
     # Efficiency (ω): Based on computation speed
-    wallclock = result.get('meta', {}).get('wallclock_time_ms', 1000)
+    wallclock = result.get("meta", {}).get("wallclock_time_ms", 1000)
     expected_time = 200  # ms for reference
     omega = min(1.0, expected_time / max(wallclock, 1))
 
@@ -294,12 +295,12 @@ def _compute_qaoa_metrics(result: Dict[str, Any]) -> Dict[str, float]:
         Metrics dictionary {psi, rho, omega}
     """
     # Quality (ψ): Approximation ratio
-    psi = result.get('approximation_ratio', 0.8)
+    psi = result.get("approximation_ratio", 0.8)
 
     # Stability (ρ): Assume good stability if converged
-    meta = result.get('meta', {})
-    iterations = meta.get('iterations', 100)
-    max_iters = meta.get('max_iterations', 100)
+    meta = result.get("meta", {})
+    iterations = meta.get("iterations", 100)
+    max_iters = meta.get("max_iterations", 100)
 
     if iterations < max_iters:
         rho = 0.85  # Converged early → stable
@@ -324,16 +325,16 @@ def _compute_vqe_metrics(result: Dict[str, Any]) -> Dict[str, float]:
         Metrics dictionary {psi, rho, omega}
     """
     # Quality (ψ): Based on quality score
-    psi = result.get('quality_score', 0.8)
+    psi = result.get("quality_score", 0.8)
 
     # Stability (ρ): Based on convergence
-    meta = result.get('meta', {})
-    converged = meta.get('converged', False)
+    meta = result.get("meta", {})
+    converged = meta.get("converged", False)
     rho = 0.85 if converged else 0.65
 
     # Efficiency (ω): Based on iteration count
-    iterations = meta.get('iterations', 100)
-    max_iters = meta.get('max_iterations', 150)
+    iterations = meta.get("iterations", 100)
+    max_iters = meta.get("max_iterations", 150)
     omega = 1.0 - min(1.0, iterations / max_iters)
     omega = max(0.3, omega)
 

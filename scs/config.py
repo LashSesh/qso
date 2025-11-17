@@ -53,7 +53,7 @@ class Configuration:
         return json.dumps(self.to_dict(), indent=2)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Configuration':
+    def from_dict(cls, data: Dict[str, Any]) -> "Configuration":
         """Create configuration from dictionary."""
         # Filter out keys not in dataclass fields
         valid_keys = {f.name for f in cls.__dataclass_fields__.values()}
@@ -61,26 +61,26 @@ class Configuration:
         return cls(**filtered)
 
     @classmethod
-    def from_json(cls, json_str: str) -> 'Configuration':
+    def from_json(cls, json_str: str) -> "Configuration":
         """Deserialize configuration from JSON."""
         return cls.from_dict(json.loads(json_str))
 
     @classmethod
-    def from_file(cls, path: str) -> 'Configuration':
+    def from_file(cls, path: str) -> "Configuration":
         """Load configuration from file."""
-        with open(path, 'r') as f:
+        with open(path, "r") as f:
             return cls.from_json(f.read())
 
     def to_file(self, path: str) -> None:
         """Save configuration to file."""
-        with open(path, 'w') as f:
+        with open(path, "w") as f:
             f.write(self.to_json())
 
-    def copy(self) -> 'Configuration':
+    def copy(self) -> "Configuration":
         """Create a deep copy of the configuration."""
         return copy.deepcopy(self)
 
-    def distance(self, other: 'Configuration') -> float:
+    def distance(self, other: "Configuration") -> float:
         """
         Compute a distance metric between two configurations.
 
@@ -134,7 +134,7 @@ class ConfigurationSpace:
             learning_rate=0.01,
             max_iterations=100,
             num_random_starts=1,
-            name="default"
+            name="default",
         )
 
     def is_valid(self, config: Configuration) -> bool:
@@ -160,8 +160,9 @@ class ConfigurationSpace:
         self.current = config
         self.history.append(config.copy())
 
-    def generate_neighbors(self, config: Configuration,
-                          num_neighbors: int = 5) -> List[Configuration]:
+    def generate_neighbors(
+        self, config: Configuration, num_neighbors: int = 5
+    ) -> List[Configuration]:
         """
         Generate neighboring configurations in configuration space.
 
@@ -174,26 +175,41 @@ class ConfigurationSpace:
 
             # Randomly perturb one parameter
             import random
-            param_choice = random.choice([
-                'ansatz_depth', 'learning_rate', 'max_iterations',
-                'num_random_starts', 'optimizer', 'ansatz_type'
-            ])
 
-            if param_choice == 'ansatz_depth':
-                neighbor.ansatz_depth = max(1, min(10,
-                    config.ansatz_depth + random.choice([-1, 0, 1])))
-            elif param_choice == 'learning_rate':
-                neighbor.learning_rate = max(0.001, min(0.1,
-                    config.learning_rate * random.uniform(0.8, 1.2)))
-            elif param_choice == 'max_iterations':
-                neighbor.max_iterations = max(10, min(500,
-                    config.max_iterations + random.choice([-20, -10, 0, 10, 20])))
-            elif param_choice == 'num_random_starts':
-                neighbor.num_random_starts = max(1, min(5,
-                    config.num_random_starts + random.choice([-1, 0, 1])))
-            elif param_choice == 'optimizer':
+            param_choice = random.choice(
+                [
+                    "ansatz_depth",
+                    "learning_rate",
+                    "max_iterations",
+                    "num_random_starts",
+                    "optimizer",
+                    "ansatz_type",
+                ]
+            )
+
+            if param_choice == "ansatz_depth":
+                neighbor.ansatz_depth = max(
+                    1, min(10, config.ansatz_depth + random.choice([-1, 0, 1]))
+                )
+            elif param_choice == "learning_rate":
+                neighbor.learning_rate = max(
+                    0.001, min(0.1, config.learning_rate * random.uniform(0.8, 1.2))
+                )
+            elif param_choice == "max_iterations":
+                neighbor.max_iterations = max(
+                    10,
+                    min(
+                        500,
+                        config.max_iterations + random.choice([-20, -10, 0, 10, 20]),
+                    ),
+                )
+            elif param_choice == "num_random_starts":
+                neighbor.num_random_starts = max(
+                    1, min(5, config.num_random_starts + random.choice([-1, 0, 1]))
+                )
+            elif param_choice == "optimizer":
                 neighbor.optimizer = random.choice(self.OPTIMIZERS)
-            elif param_choice == 'ansatz_type':
+            elif param_choice == "ansatz_type":
                 neighbor.ansatz_type = random.choice(self.ANSATZ_TYPES)
 
             if self.is_valid(neighbor):

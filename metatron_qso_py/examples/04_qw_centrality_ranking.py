@@ -14,6 +14,7 @@ Use Cases:
 
 import metatron_qso
 
+
 def main():
     print("=" * 60)
     print("Quantum Walk Centrality - Node Ranking")
@@ -33,8 +34,8 @@ def main():
     centrality = metatron_qso.quantum_walk_centrality(
         graph,
         t_max=10.0,  # Evolution time
-        dt=0.1,      # Time step
-        samples=128  # Number of samples for averaging
+        dt=0.1,  # Time step
+        samples=128,  # Number of samples for averaging
     )
 
     print("Centrality Scores (normalized to [0, 1]):")
@@ -85,8 +86,11 @@ def main():
     print("Top 5 Most Central Nodes:")
     print("-" * 60)
     for rank, (node_id, score) in enumerate(node_scores[:5], 1):
-        node_type = "Central" if node_id == 0 else \
-                   ("Hexagon" if node_id in hexagon_nodes else "Cube")
+        node_type = (
+            "Central"
+            if node_id == 0
+            else ("Hexagon" if node_id in hexagon_nodes else "Cube")
+        )
         print(f"  {rank}. Node {node_id:2d} ({node_type:8s}): {score:.6f}")
 
     print()

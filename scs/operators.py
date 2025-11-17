@@ -8,7 +8,6 @@ towards fixpoint attractors through:
 """
 
 from typing import Optional, Tuple
-import numpy as np
 
 from .config import Configuration, ConfigurationSpace
 from .performance import PerformanceTriplet
@@ -38,7 +37,7 @@ class UpdateKick:
         config: Configuration,
         current_performance: PerformanceTriplet,
         config_space: ConfigurationSpace,
-        field: Optional[MandorlaField] = None
+        field: Optional[MandorlaField] = None,
     ) -> Configuration:
         """
         Apply update kick to improve quality.
@@ -66,7 +65,9 @@ class UpdateKick:
         for neighbor in neighbors:
             # Heuristic score: prefer changes that might increase quality
             # For now, use a simple heuristic based on configuration parameters
-            score = self._estimate_quality_improvement(config, neighbor, current_performance)
+            score = self._estimate_quality_improvement(
+                config, neighbor, current_performance
+            )
 
             if score > best_score:
                 best_score = score
@@ -78,7 +79,7 @@ class UpdateKick:
         self,
         current: Configuration,
         candidate: Configuration,
-        current_perf: PerformanceTriplet
+        current_perf: PerformanceTriplet,
     ) -> float:
         """
         Estimate quality improvement heuristically.
@@ -131,7 +132,7 @@ class StabilizationKick:
         config: Configuration,
         current_performance: PerformanceTriplet,
         config_space: ConfigurationSpace,
-        field: Optional[MandorlaField] = None
+        field: Optional[MandorlaField] = None,
     ) -> Configuration:
         """
         Apply stabilization kick to improve stability and efficiency.
@@ -170,7 +171,7 @@ class StabilizationKick:
         self,
         current: Configuration,
         candidate: Configuration,
-        current_perf: PerformanceTriplet
+        current_perf: PerformanceTriplet,
     ) -> float:
         """
         Estimate stability and efficiency improvement heuristically.
@@ -208,11 +209,7 @@ class DoubleKickOperator:
     locally contractive dynamics towards fixpoint attractors.
     """
 
-    def __init__(
-        self,
-        update_step: float = 0.3,
-        stabilization_step: float = 0.2
-    ):
+    def __init__(self, update_step: float = 0.3, stabilization_step: float = 0.2):
         """
         Initialize double-kick operator.
 
@@ -228,7 +225,7 @@ class DoubleKickOperator:
         config: Configuration,
         current_performance: PerformanceTriplet,
         config_space: ConfigurationSpace,
-        field: Optional[MandorlaField] = None
+        field: Optional[MandorlaField] = None,
     ) -> Configuration:
         """
         Apply T = Φ_V ∘ Φ_U to configuration.
@@ -260,7 +257,7 @@ class DoubleKickOperator:
         performance: PerformanceTriplet,
         config_space: ConfigurationSpace,
         field: Optional[MandorlaField] = None,
-        num_iterations: int = 5
+        num_iterations: int = 5,
     ) -> Tuple[Configuration, float]:
         """
         Iterate T multiple times to approach fixpoint.
@@ -310,7 +307,7 @@ class DoubleKickOperator:
 
         # Check if distances are decreasing (contraction)
         for i in range(1, len(distances)):
-            if distances[i] >= distances[i-1]:
+            if distances[i] >= distances[i - 1]:
                 return False
 
         return True

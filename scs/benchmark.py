@@ -30,31 +30,32 @@ class BenchmarkRecord:
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
-            'system': self.system,
-            'config_id': self.config_id,
-            'timestamp': self.timestamp,
-            'config': self.config,
-            'metrics': self.metrics,
-            'raw_results': self.raw_results or {},
-            'aux': self.aux or {},
+            "system": self.system,
+            "config_id": self.config_id,
+            "timestamp": self.timestamp,
+            "config": self.config,
+            "metrics": self.metrics,
+            "raw_results": self.raw_results or {},
+            "aux": self.aux or {},
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'BenchmarkRecord':
+    def from_dict(cls, data: Dict[str, Any]) -> "BenchmarkRecord":
         """Create from dictionary."""
         return cls(
-            system=data['system'],
-            config_id=data['config_id'],
-            timestamp=data['timestamp'],
-            config=data['config'],
-            metrics=data['metrics'],
-            raw_results=data.get('raw_results'),
-            aux=data.get('aux'),
+            system=data["system"],
+            config_id=data["config_id"],
+            timestamp=data["timestamp"],
+            config=data["config"],
+            metrics=data["metrics"],
+            raw_results=data.get("raw_results"),
+            aux=data.get("aux"),
         )
 
 
 class BenchmarkValidationError(Exception):
     """Raised when benchmark validation fails."""
+
     pass
 
 
@@ -75,7 +76,7 @@ def validate_benchmark(record: Dict[str, Any], strict: bool = True) -> bool:
     errors = []
 
     # Required fields
-    required_fields = ['system', 'config_id', 'timestamp', 'config', 'metrics']
+    required_fields = ["system", "config_id", "timestamp", "config", "metrics"]
     for field in required_fields:
         if field not in record:
             errors.append(f"Missing required field: {field}")
@@ -86,58 +87,64 @@ def validate_benchmark(record: Dict[str, Any], strict: bool = True) -> bool:
         return False
 
     # Type validation
-    if not isinstance(record['system'], str) or not record['system']:
+    if not isinstance(record["system"], str) or not record["system"]:
         errors.append("'system' must be non-empty string")
 
-    if not isinstance(record['config_id'], str) or not record['config_id']:
+    if not isinstance(record["config_id"], str) or not record["config_id"]:
         errors.append("'config_id' must be non-empty string")
 
-    if not isinstance(record['timestamp'], (str, int, float)):
+    if not isinstance(record["timestamp"], (str, int, float)):
         errors.append("'timestamp' must be string or number")
 
-    if not isinstance(record['config'], dict):
+    if not isinstance(record["config"], dict):
         errors.append("'config' must be object/dict")
-    elif 'algorithm' not in record['config']:
+    elif "algorithm" not in record["config"]:
         errors.append("'config' must contain 'algorithm' field")
 
     # Metrics validation
-    if not isinstance(record['metrics'], dict):
+    if not isinstance(record["metrics"], dict):
         errors.append("'metrics' must be object/dict")
     else:
-        required_metrics = ['psi', 'rho', 'omega']
+        required_metrics = ["psi", "rho", "omega"]
         for metric in required_metrics:
-            if metric not in record['metrics']:
+            if metric not in record["metrics"]:
                 errors.append(f"'metrics' missing required field: {metric}")
             else:
-                value = record['metrics'][metric]
+                value = record["metrics"][metric]
                 if not isinstance(value, (int, float)):
                     errors.append(f"'metrics.{metric}' must be number")
                 elif not 0.0 <= value <= 1.0:
-                    errors.append(f"'metrics.{metric}' must be in range [0, 1], got {value}")
+                    errors.append(
+                        f"'metrics.{metric}' must be in range [0, 1], got {value}"
+                    )
 
     # Optional fields type validation
-    if 'raw_results' in record and not isinstance(record['raw_results'], dict):
+    if "raw_results" in record and not isinstance(record["raw_results"], dict):
         errors.append("'raw_results' must be object/dict if present")
 
-    if 'aux' in record and not isinstance(record['aux'], dict):
+    if "aux" in record and not isinstance(record["aux"], dict):
         errors.append("'aux' must be object/dict if present")
 
     # Config parameter validation (if present)
-    config = record.get('config', {})
-    if 'ansatz_depth' in config:
-        depth = config['ansatz_depth']
+    config = record.get("config", {})
+    if "ansatz_depth" in config:
+        depth = config["ansatz_depth"]
         if not isinstance(depth, int) or not 1 <= depth <= 10:
-            errors.append(f"'config.ansatz_depth' must be integer in [1, 10], got {depth}")
+            errors.append(
+                f"'config.ansatz_depth' must be integer in [1, 10], got {depth}"
+            )
 
-    if 'learning_rate' in config:
-        lr = config['learning_rate']
+    if "learning_rate" in config:
+        lr = config["learning_rate"]
         if not isinstance(lr, (int, float)) or not 0.0 < lr <= 1.0:
             errors.append(f"'config.learning_rate' must be in (0, 1], got {lr}")
 
-    if 'max_iterations' in config:
-        max_iter = config['max_iterations']
+    if "max_iterations" in config:
+        max_iter = config["max_iterations"]
         if not isinstance(max_iter, int) or max_iter < 1:
-            errors.append(f"'config.max_iterations' must be positive integer, got {max_iter}")
+            errors.append(
+                f"'config.max_iterations' must be positive integer, got {max_iter}"
+            )
 
     if errors:
         if strict:
@@ -162,7 +169,7 @@ def load_benchmark(path: Union[str, Path]) -> BenchmarkRecord:
         FileNotFoundError: If file doesn't exist
         json.JSONDecodeError: If JSON is malformed
     """
-    with open(path, 'r') as f:
+    with open(path, "r") as f:
         data = json.load(f)
 
     # Validate
@@ -185,14 +192,14 @@ def load_benchmark_batch(path: Union[str, Path]) -> List[BenchmarkRecord]:
     Raises:
         BenchmarkValidationError: If validation fails
     """
-    with open(path, 'r') as f:
+    with open(path, "r") as f:
         data = json.load(f)
 
-    if 'benchmarks' not in data:
+    if "benchmarks" not in data:
         raise BenchmarkValidationError("Batch file must contain 'benchmarks' array")
 
     records = []
-    for i, benchmark in enumerate(data['benchmarks']):
+    for i, benchmark in enumerate(data["benchmarks"]):
         try:
             validate_benchmark(benchmark, strict=True)
             records.append(BenchmarkRecord.from_dict(benchmark))
@@ -226,7 +233,7 @@ def load_benchmarks(path_or_pattern: Union[str, Path]) -> List[BenchmarkRecord]:
         pattern = str(Path(path_str) / "**/*.json")
         files = glob.glob(pattern, recursive=True)
     # If it contains glob characters, use glob
-    elif '*' in path_str or '?' in path_str:
+    elif "*" in path_str or "?" in path_str:
         files = glob.glob(path_str, recursive=True)
     # Otherwise, treat as single file
     else:
@@ -282,13 +289,13 @@ def write_benchmark(
 
     # Create benchmark record
     benchmark = {
-        'system': system,
-        'config_id': config_id,
-        'timestamp': datetime.now().isoformat(),
-        'config': config,
-        'metrics': metrics,
-        'raw_results': raw_results or {},
-        'aux': aux or {},
+        "system": system,
+        "config_id": config_id,
+        "timestamp": datetime.now().isoformat(),
+        "config": config,
+        "metrics": metrics,
+        "raw_results": raw_results or {},
+        "aux": aux or {},
     }
 
     # Validate before writing
@@ -296,14 +303,14 @@ def write_benchmark(
 
     # Generate output path if not provided
     if output_path is None:
-        timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = f"benchmarks/{system}_{timestamp_str}_{config_id}.json"
 
     # Ensure directory exists
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
     # Write to file
-    with open(output_path, 'w') as f:
+    with open(output_path, "w") as f:
         json.dump(benchmark, f, indent=2)
 
     return str(output_path)
@@ -327,35 +334,35 @@ def generate_config_id(config: Dict[str, Any], max_length: int = 64) -> str:
     parts = []
 
     # Algorithm (lowercase)
-    if 'algorithm' in config:
-        parts.append(config['algorithm'].lower())
+    if "algorithm" in config:
+        parts.append(config["algorithm"].lower())
 
     # Ansatz type (lowercase)
-    if 'ansatz_type' in config:
-        ansatz = config['ansatz_type'].lower().replace('efficient', 'eff')
+    if "ansatz_type" in config:
+        ansatz = config["ansatz_type"].lower().replace("efficient", "eff")
         parts.append(ansatz)
 
     # Ansatz depth
-    if 'ansatz_depth' in config:
+    if "ansatz_depth" in config:
         parts.append(f"d{config['ansatz_depth']}")
 
     # Optimizer (lowercase)
-    if 'optimizer' in config:
-        opt = config['optimizer'].lower()
+    if "optimizer" in config:
+        opt = config["optimizer"].lower()
         parts.append(opt)
 
     # Learning rate (formatted)
-    if 'learning_rate' in config:
-        lr = config['learning_rate']
-        lr_str = f"lr{lr:.0e}".replace('-0', '').replace('e', '')
+    if "learning_rate" in config:
+        lr = config["learning_rate"]
+        lr_str = f"lr{lr:.0e}".replace("-0", "").replace("e", "")
         parts.append(lr_str)
 
     # QAOA depth
-    if 'depth' in config and config.get('algorithm') == 'QAOA':
+    if "depth" in config and config.get("algorithm") == "QAOA":
         parts.append(f"p{config['depth']}")
 
     # Join parts
-    config_id = '_'.join(parts)
+    config_id = "_".join(parts)
 
     # Truncate if too long
     if len(config_id) > max_length:
@@ -364,6 +371,7 @@ def generate_config_id(config: Dict[str, Any], max_length: int = 64) -> str:
     # If empty, use hash
     if not config_id:
         import hashlib
+
         config_str = json.dumps(config, sort_keys=True)
         config_hash = hashlib.md5(config_str.encode()).hexdigest()[:8]
         config_id = f"config_{config_hash}"
@@ -399,16 +407,16 @@ def filter_benchmarks(
         filtered = [r for r in filtered if r.system == system]
 
     if algorithm is not None:
-        filtered = [r for r in filtered if r.config.get('algorithm') == algorithm]
+        filtered = [r for r in filtered if r.config.get("algorithm") == algorithm]
 
     if min_psi is not None:
-        filtered = [r for r in filtered if r.metrics['psi'] >= min_psi]
+        filtered = [r for r in filtered if r.metrics["psi"] >= min_psi]
 
     if min_rho is not None:
-        filtered = [r for r in filtered if r.metrics['rho'] >= min_rho]
+        filtered = [r for r in filtered if r.metrics["rho"] >= min_rho]
 
     if min_omega is not None:
-        filtered = [r for r in filtered if r.metrics['omega'] >= min_omega]
+        filtered = [r for r in filtered if r.metrics["omega"] >= min_omega]
 
     return filtered
 
@@ -428,31 +436,31 @@ def aggregate_benchmarks(records: List[BenchmarkRecord]) -> Dict[str, Any]:
 
     import numpy as np
 
-    psi_values = [r.metrics['psi'] for r in records]
-    rho_values = [r.metrics['rho'] for r in records]
-    omega_values = [r.metrics['omega'] for r in records]
+    psi_values = [r.metrics["psi"] for r in records]
+    rho_values = [r.metrics["rho"] for r in records]
+    omega_values = [r.metrics["omega"] for r in records]
 
     return {
-        'count': len(records),
-        'systems': list(set(r.system for r in records)),
-        'metrics': {
-            'psi': {
-                'mean': np.mean(psi_values),
-                'std': np.std(psi_values),
-                'min': np.min(psi_values),
-                'max': np.max(psi_values),
+        "count": len(records),
+        "systems": list(set(r.system for r in records)),
+        "metrics": {
+            "psi": {
+                "mean": np.mean(psi_values),
+                "std": np.std(psi_values),
+                "min": np.min(psi_values),
+                "max": np.max(psi_values),
             },
-            'rho': {
-                'mean': np.mean(rho_values),
-                'std': np.std(rho_values),
-                'min': np.min(rho_values),
-                'max': np.max(rho_values),
+            "rho": {
+                "mean": np.mean(rho_values),
+                "std": np.std(rho_values),
+                "min": np.min(rho_values),
+                "max": np.max(rho_values),
             },
-            'omega': {
-                'mean': np.mean(omega_values),
-                'std': np.std(omega_values),
-                'min': np.min(omega_values),
-                'max': np.max(omega_values),
+            "omega": {
+                "mean": np.mean(omega_values),
+                "std": np.std(omega_values),
+                "min": np.min(omega_values),
+                "max": np.max(omega_values),
             },
         },
     }

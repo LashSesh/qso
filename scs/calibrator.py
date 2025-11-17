@@ -11,7 +11,6 @@ Implements the 5-step calibration loop:
 
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List
-from pathlib import Path
 import json
 import time
 
@@ -19,7 +18,7 @@ from .config import Configuration, ConfigurationSpace
 from .performance import (
     PerformanceTriplet,
     BenchmarkLoader,
-    compute_performance_triplet
+    compute_performance_triplet,
 )
 from .field import MandorlaField, SeraphicFeedback
 from .operators import DoubleKickOperator
@@ -40,31 +39,33 @@ class CalibrationHistory:
         performance: PerformanceTriplet,
         j_t: float,
         por_result: bool,
-        cri_triggered: bool
+        cri_triggered: bool,
     ) -> None:
         """Add a calibration step to history."""
-        self.steps.append({
-            'step': step,
-            'config': config.to_dict(),
-            'performance': performance.to_dict(),
-            'j_t': j_t,
-            'por_accepted': por_result,
-            'cri_triggered': cri_triggered,
-            'timestamp': time.time(),
-        })
+        self.steps.append(
+            {
+                "step": step,
+                "config": config.to_dict(),
+                "performance": performance.to_dict(),
+                "j_t": j_t,
+                "por_accepted": por_result,
+                "cri_triggered": cri_triggered,
+                "timestamp": time.time(),
+            }
+        )
 
     def save(self, path: str) -> None:
         """Save history to JSON file."""
-        with open(path, 'w') as f:
-            json.dump({'history': self.steps}, f, indent=2)
+        with open(path, "w") as f:
+            json.dump({"history": self.steps}, f, indent=2)
 
     @classmethod
-    def load(cls, path: str) -> 'CalibrationHistory':
+    def load(cls, path: str) -> "CalibrationHistory":
         """Load history from JSON file."""
-        with open(path, 'r') as f:
+        with open(path, "r") as f:
             data = json.load(f)
         history = cls()
-        history.steps = data['history']
+        history.steps = data["history"]
         return history
 
 
@@ -116,7 +117,7 @@ class SeraphicCalibrator:
         self.feedback = SeraphicFeedback(field_dimension=self.config.field_dimension)
         self.double_kick = DoubleKickOperator(
             update_step=self.config.update_kick_step,
-            stabilization_step=self.config.stabilization_kick_step
+            stabilization_step=self.config.stabilization_kick_step,
         )
         self.por = ProofOfResonance(criteria=self.config.por_criteria)
         self.cri = ResonanceImpulse(config=self.config.cri_config)
@@ -165,36 +166,32 @@ class SeraphicCalibrator:
             Dictionary with step results and diagnostics
         """
         if not self.config.enabled:
-            return {'enabled': False, 'message': 'SCS is disabled'}
+            return {"enabled": False, "message": "SCS is disabled"}
 
         if self.current_config is None:
             raise RuntimeError("Calibrator not initialized. Call initialize() first.")
 
         self.step_count += 1
-        step_result = {'step': self.step_count}
+        step_result = {"step": self.step_count}
 
         # Step 1: Benchmark (load existing benchmarks)
         benchmarks = self.benchmark_loader.load_all_benchmarks()
-        step_result['benchmarks_loaded'] = list(benchmarks.keys())
+        step_result["benchmarks_loaded"] = list(benchmarks.keys())
 
         # Step 2: Seraphic feedback
         injection = self.feedback.encode_from_benchmarks(benchmarks)
         self.field.update(injection)
         self.field.update_submodules(
-            self.current_performance,
-            self.current_config.algorithm
+            self.current_performance, self.current_config.algorithm
         )
-        step_result['field_updated'] = True
+        step_result["field_updated"] = True
 
         # Step 3: Double-kick update
         candidate_config = self.double_kick.apply(
-            self.current_config,
-            self.current_performance,
-            self.config_space,
-            self.field
+            self.current_config, self.current_performance, self.config_space, self.field
         )
-        step_result['candidate_generated'] = True
-        step_result['candidate_config'] = candidate_config.to_dict()
+        step_result["candidate_generated"] = True
+        step_result["candidate_config"] = candidate_config.to_dict()
 
         # Step 4: Proof-of-Resonance
         # In practice, we'd benchmark the candidate. For now, estimate performance.
@@ -209,7 +206,7 @@ class SeraphicCalibrator:
             candidate_config,
             candidate_performance,
             self.field,
-            candidate_injection
+            candidate_injection,
         )
 
         por_detailed = self.por.detailed_check(
@@ -218,39 +215,37 @@ class SeraphicCalibrator:
             candidate_config,
             candidate_performance,
             self.field,
-            candidate_injection
+            candidate_injection,
         )
 
-        step_result['por_result'] = por_result
-        step_result['por_detailed'] = por_detailed
+        step_result["por_result"] = por_result
+        step_result["por_detailed"] = por_detailed
 
         # Accept or reject candidate
         if por_result:
             self.current_config = candidate_config
             self.current_performance = candidate_performance
             self.config_space.set_current(candidate_config)
-            step_result['accepted'] = True
+            step_result["accepted"] = True
         else:
-            step_result['accepted'] = False
+            step_result["accepted"] = False
 
         # Step 5: CRI-check
         j_t = self.cri.update(self.current_performance)
-        step_result['j_t'] = j_t
+        step_result["j_t"] = j_t
 
         cri_triggered = False
         if self.cri.should_trigger(self.field):
             new_regime_config = self.cri.apply_impulse(
-                self.current_config,
-                self.config_space,
-                self.field
+                self.current_config, self.config_space, self.field
             )
             self.current_config = new_regime_config
             self.config_space.set_current(new_regime_config)
             cri_triggered = True
-            step_result['cri_triggered'] = True
-            step_result['new_regime_config'] = new_regime_config.to_dict()
+            step_result["cri_triggered"] = True
+            step_result["new_regime_config"] = new_regime_config.to_dict()
         else:
-            step_result['cri_triggered'] = False
+            step_result["cri_triggered"] = False
 
         # Record step in history
         self.history.add_step(
@@ -259,19 +254,17 @@ class SeraphicCalibrator:
             self.current_performance,
             j_t,
             por_result,
-            cri_triggered
+            cri_triggered,
         )
 
         # Add diagnostics
-        step_result['current_performance'] = self.current_performance.to_dict()
-        step_result['cri_diagnostics'] = self.cri.get_diagnostics()
+        step_result["current_performance"] = self.current_performance.to_dict()
+        step_result["cri_diagnostics"] = self.cri.get_diagnostics()
 
         return step_result
 
     def _estimate_candidate_performance(
-        self,
-        config: Configuration,
-        benchmarks: Dict[str, Any]
+        self, config: Configuration, benchmarks: Dict[str, Any]
     ) -> PerformanceTriplet:
         """
         Estimate performance of candidate configuration.
@@ -316,14 +309,18 @@ class SeraphicCalibrator:
             path = self.config.state_file
 
         state = {
-            'step_count': self.step_count,
-            'current_config': self.current_config.to_dict() if self.current_config else None,
-            'current_performance': self.current_performance.to_dict() if self.current_performance else None,
-            'field': self.field.to_dict(),
-            'cri_diagnostics': self.cri.get_diagnostics(),
+            "step_count": self.step_count,
+            "current_config": self.current_config.to_dict()
+            if self.current_config
+            else None,
+            "current_performance": self.current_performance.to_dict()
+            if self.current_performance
+            else None,
+            "field": self.field.to_dict(),
+            "cri_diagnostics": self.cri.get_diagnostics(),
         }
 
-        with open(path, 'w') as f:
+        with open(path, "w") as f:
             json.dump(state, f, indent=2)
 
     def load_state(self, path: Optional[str] = None) -> None:
@@ -336,20 +333,18 @@ class SeraphicCalibrator:
         if path is None:
             path = self.config.state_file
 
-        with open(path, 'r') as f:
+        with open(path, "r") as f:
             state = json.load(f)
 
-        self.step_count = state['step_count']
-        if state['current_config']:
-            self.current_config = Configuration.from_dict(state['current_config'])
-        if state['current_performance']:
-            perf_data = state['current_performance']
+        self.step_count = state["step_count"]
+        if state["current_config"]:
+            self.current_config = Configuration.from_dict(state["current_config"])
+        if state["current_performance"]:
+            perf_data = state["current_performance"]
             self.current_performance = PerformanceTriplet(
-                psi=perf_data['psi'],
-                rho=perf_data['rho'],
-                omega=perf_data['omega']
+                psi=perf_data["psi"], rho=perf_data["rho"], omega=perf_data["omega"]
             )
-        self.field = MandorlaField.from_dict(state['field'])
+        self.field = MandorlaField.from_dict(state["field"])
 
     def save_history(self, path: Optional[str] = None) -> None:
         """Save calibration history."""

@@ -39,7 +39,7 @@ class GlobalCalibrationState:
 
         # Keep only recent window
         if len(self.history) > self.window_size * 2:
-            self.history = self.history[-self.window_size * 2:]
+            self.history = self.history[-self.window_size * 2 :]
 
         return j_t
 
@@ -57,7 +57,7 @@ class GlobalCalibrationState:
         if len(self.history) < self.window_size:
             return False
 
-        recent = self.history[-self.window_size:]
+        recent = self.history[-self.window_size :]
         variance = np.var(recent)
 
         # Low variance indicates stagnation
@@ -66,7 +66,7 @@ class GlobalCalibrationState:
 
         # Also check if trend is improving
         if len(self.history) >= self.window_size * 2:
-            older = self.history[-self.window_size * 2:-self.window_size]
+            older = self.history[-self.window_size * 2 : -self.window_size]
             recent_mean = np.mean(recent)
             older_mean = np.mean(older)
 
@@ -85,8 +85,8 @@ class GlobalCalibrationState:
         if len(self.history) < self.window_size * 2:
             return False
 
-        recent = self.history[-self.window_size:]
-        older = self.history[-self.window_size * 2:-self.window_size]
+        recent = self.history[-self.window_size :]
+        older = self.history[-self.window_size * 2 : -self.window_size]
 
         recent_mean = np.mean(recent)
         older_mean = np.mean(older)
@@ -162,10 +162,9 @@ class ResonanceImpulse:
             return False
 
         # Check for stagnation or degradation
-        is_stuck = (
-            self.global_state.is_stagnating(self.config.stagnation_threshold) or
-            self.global_state.is_degrading(self.config.degradation_threshold)
-        )
+        is_stuck = self.global_state.is_stagnating(
+            self.config.stagnation_threshold
+        ) or self.global_state.is_degrading(self.config.degradation_threshold)
 
         if not is_stuck:
             return False
@@ -182,7 +181,7 @@ class ResonanceImpulse:
         self,
         current_config: Configuration,
         config_space: ConfigurationSpace,
-        field: MandorlaField
+        field: MandorlaField,
     ) -> Configuration:
         """
         Apply resonance impulse to transition to new regime.
@@ -208,7 +207,7 @@ class ResonanceImpulse:
         self,
         current: Configuration,
         config_space: ConfigurationSpace,
-        field: MandorlaField
+        field: MandorlaField,
     ) -> Configuration:
         """
         Select alternative configuration regime based on field resonance.
@@ -249,9 +248,7 @@ class ResonanceImpulse:
             "GradientDescent": "Adam",
             "COBYLA": "Adam",
         }
-        new_config.optimizer = optimizer_alternatives.get(
-            current.optimizer, "Adam"
-        )
+        new_config.optimizer = optimizer_alternatives.get(current.optimizer, "Adam")
 
         # Adjust hyperparameters for new regime
         if new_config.optimizer == "Adam":
@@ -276,10 +273,10 @@ class ResonanceImpulse:
             Dictionary with diagnostic data
         """
         return {
-            'steps_since_impulse': self.steps_since_last_impulse,
-            'current_j_t': self.global_state.current_value(),
-            'is_stagnating': self.global_state.is_stagnating(),
-            'is_degrading': self.global_state.is_degrading(),
-            'history_length': len(self.global_state.history),
-            'j_t_history': self.global_state.history[-10:],  # Last 10 values
+            "steps_since_impulse": self.steps_since_last_impulse,
+            "current_j_t": self.global_state.current_value(),
+            "is_stagnating": self.global_state.is_stagnating(),
+            "is_degrading": self.global_state.is_degrading(),
+            "history_length": len(self.global_state.history),
+            "j_t_history": self.global_state.history[-10:],  # Last 10 values
         }
