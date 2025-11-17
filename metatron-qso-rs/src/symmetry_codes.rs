@@ -135,7 +135,7 @@ impl MetatronCode {
             // Logical Z: phase on cube nodes (octahedral symmetric)
             let mut z_matrix = SMatrix::<Complex, 13, 13>::zeros();
             for i in 0..METATRON_DIMENSION {
-                if i >= 7 && i <= 12 {
+                if (7..=12).contains(&i) {
                     // Cube nodes
                     z_matrix[(i, i)] = Complex::new(-1.0, 0.0);
                 } else {

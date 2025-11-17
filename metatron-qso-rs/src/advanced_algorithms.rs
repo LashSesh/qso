@@ -761,7 +761,7 @@ impl MetatronGraphML {
         params: &[f64],
     ) -> Result<QuantumState> {
         // Simplified: apply phase rotations
-        let mut new_amplitudes = state.amplitudes().clone();
+        let mut new_amplitudes = *state.amplitudes();
 
         for (i, amp) in new_amplitudes.iter_mut().enumerate() {
             let param_idx = i % params.len();

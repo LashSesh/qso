@@ -18,12 +18,12 @@ pub enum Policy {
 /// Policy parameters controlling Funnel dynamics
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct PolicyParams {
-    pub alpha_hebb: f64,  // Hebbian learning rate
-    pub decay: f64,       // Weight decay rate
-    pub theta_split: f64, // Split threshold for mass
-    pub theta_merge: f64, // Merge threshold for mass
-    pub theta_prune: f64, // Prune threshold for weights
-    pub phase_lock_strict: bool, // Strict phase locking
+    pub alpha_hebb: f64,             // Hebbian learning rate
+    pub decay: f64,                  // Weight decay rate
+    pub theta_split: f64,            // Split threshold for mass
+    pub theta_merge: f64,            // Merge threshold for mass
+    pub theta_prune: f64,            // Prune threshold for weights
+    pub phase_lock_strict: bool,     // Strict phase locking
     pub target_density: Option<f64>, // Target density for Homeostasis
 }
 
@@ -210,7 +210,7 @@ mod tests {
     #[test]
     fn test_clamping() {
         let mut params = PolicyParams::homeostasis(1.0);
-        
+
         // Force extreme adaptation
         for _ in 0..100 {
             params.adapt_to_density(0.1);

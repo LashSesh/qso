@@ -184,9 +184,7 @@ impl IbmQuantumBackend {
         );
 
         if config.mode == IbmMode::Enabled {
-            tracing::warn!(
-                "IBM backend is in ENABLED mode - will consume QPU time!"
-            );
+            tracing::warn!("IBM backend is in ENABLED mode - will consume QPU time!");
         }
 
         Ok(Self { config })
@@ -312,13 +310,9 @@ impl QuantumBackend for IbmQuantumBackend {
                 );
             }
 
-            IbmMode::DryRun => {
-                self.execute_dry_run(circuit, shots)?
-            }
+            IbmMode::DryRun => self.execute_dry_run(circuit, shots)?,
 
-            IbmMode::Enabled => {
-                self.execute_real(circuit, shots)?
-            }
+            IbmMode::Enabled => self.execute_real(circuit, shots)?,
         };
 
         let execution_time = start.elapsed().as_millis() as f64;

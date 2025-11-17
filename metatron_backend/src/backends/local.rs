@@ -58,7 +58,12 @@ impl LocalSimulatorBackend {
     /// Sample from the final state vector
     ///
     /// Performs non-destructive sampling by measuring clones of the state
-    fn sample_state(&self, state: &QuantumState, shots: u32, num_qubits: usize) -> Result<HashMap<String, u64>> {
+    fn sample_state(
+        &self,
+        state: &QuantumState,
+        shots: u32,
+        num_qubits: usize,
+    ) -> Result<HashMap<String, u64>> {
         let mut counts = HashMap::new();
         let mut rng = rand::thread_rng();
 

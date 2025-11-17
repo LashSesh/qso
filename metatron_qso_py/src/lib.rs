@@ -2,14 +2,14 @@
 //!
 //! This module provides a Python-friendly API for the Metatron QSO quantum computing framework.
 
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::exceptions::{PyValueError, PyRuntimeError};
 use pyo3::types::PyDict;
 use std::sync::Arc;
 
 // Import from the Rust core library with explicit path to avoid module conflicts
-use metatron_qso as core;
 use core::prelude::*;
+use metatron_qso as core;
 
 /// Python wrapper for MetatronGraph
 ///
@@ -43,7 +43,7 @@ impl PyMetatronGraph {
         // In a full implementation, this would validate and construct from adjacency
         if adjacency.len() != 13 {
             return Err(PyValueError::new_err(
-                "Metatron graph must have exactly 13 nodes"
+                "Metatron graph must have exactly 13 nodes",
             ));
         }
         Ok(PyMetatronGraph {
@@ -133,10 +133,7 @@ fn run_quantum_walk(
     // Create initial state (uniform over source nodes)
     let n = graph.inner.nodes().len();
     let mut amplitudes = vec![num_complex::Complex64::new(0.0, 0.0); n];
-    let amplitude = num_complex::Complex64::new(
-        1.0 / (source_nodes.len() as f64).sqrt(),
-        0.0
-    );
+    let amplitude = num_complex::Complex64::new(1.0 / (source_nodes.len() as f64).sqrt(), 0.0);
     for &node in &source_nodes {
         if node >= n {
             return Err(PyValueError::new_err(format!(
@@ -180,10 +177,7 @@ fn run_quantum_walk(
         let result = PyDict::new_bound(py);
         result.set_item("times", times.to_object(py))?;
         result.set_item("probabilities", probabilities.to_object(py))?;
-        result.set_item(
-            "final_state",
-            probabilities.last().unwrap().to_object(py)
-        )?;
+        result.set_item("final_state", probabilities.last().unwrap().to_object(py))?;
         Ok(result.to_object(py))
     })
 }
@@ -241,12 +235,12 @@ fn solve_maxcut_qaoa(
     // Return as Python dict
     Python::with_gil(|py| {
         let result_dict = PyDict::new_bound(py);
-        result_dict.set_item("cut_value", -result.optimal_cost)?;  // Negate because we minimize
+        result_dict.set_item("cut_value", -result.optimal_cost)?; // Negate because we minimize
         result_dict.set_item("approximation_ratio", result.approximation_ratio)?;
 
         let meta = PyDict::new_bound(py);
         meta.set_item("iterations", result.optimization_result.iterations)?;
-        meta.set_item("mean_cost", -mean_cost)?;  // Negate for MaxCut
+        meta.set_item("mean_cost", -mean_cost)?; // Negate for MaxCut
         meta.set_item("std_dev", std_dev)?;
         meta.set_item("depth", depth)?;
         result_dict.set_item("meta", meta)?;
@@ -295,9 +289,11 @@ fn run_vqe(
         "hardware_efficient" => AnsatzType::HardwareEfficient,
         "metatron" => AnsatzType::Metatron,
         "efficient_su2" => AnsatzType::EfficientSU2,
-        _ => return Err(PyValueError::new_err(
-            "ansatz_type must be 'hardware_efficient', 'metatron', or 'efficient_su2'"
-        )),
+        _ => {
+            return Err(PyValueError::new_err(
+                "ansatz_type must be 'hardware_efficient', 'metatron', or 'efficient_su2'",
+            ))
+        }
     };
 
     // Create Hamiltonian
@@ -327,7 +323,11 @@ fn run_vqe(
         result_dict.set_item("iterations", result.optimization_result.iterations)?;
         result_dict.set_item(
             "final_state",
-            result.ground_state_wavefunction.probabilities().to_vec().to_object(py)
+            result
+                .ground_state_wavefunction
+                .probabilities()
+                .to_vec()
+                .to_object(py),
         )?;
 
         Ok(result_dict.to_object(py))
@@ -355,11 +355,7 @@ fn quantum_walk_centrality(
     dt: f64,
     samples: usize,
 ) -> PyResult<Vec<f64>> {
-    let params = core::quantum_walk_toolkit::QuantumWalkParams {
-        t_max,
-        dt,
-        samples,
-    };
+    let params = core::quantum_walk_toolkit::QuantumWalkParams { t_max, dt, samples };
 
     let centrality = core::quantum_walk_toolkit::quantum_walk_centrality(&graph.inner, &params);
     Ok(centrality)
@@ -387,11 +383,7 @@ fn quantum_walk_anomaly_score(
     dt: f64,
     samples: usize,
 ) -> PyResult<Vec<f64>> {
-    let params = core::quantum_walk_toolkit::QuantumWalkParams {
-        t_max,
-        dt,
-        samples,
-    };
+    let params = core::quantum_walk_toolkit::QuantumWalkParams { t_max, dt, samples };
 
     let anomaly = core::quantum_walk_toolkit::quantum_walk_anomaly_score(
         &base_graph.inner,
@@ -427,17 +419,10 @@ fn quantum_walk_connectivity(
     dt: f64,
     samples: usize,
 ) -> PyResult<PyObject> {
-    let params = core::quantum_walk_toolkit::QuantumWalkParams {
-        t_max,
-        dt,
-        samples,
-    };
+    let params = core::quantum_walk_toolkit::QuantumWalkParams { t_max, dt, samples };
 
-    let metrics = core::quantum_walk_toolkit::quantum_walk_connectivity(
-        &graph.inner,
-        &source_nodes,
-        &params,
-    );
+    let metrics =
+        core::quantum_walk_toolkit::quantum_walk_connectivity(&graph.inner, &source_nodes, &params);
 
     Python::with_gil(|py| {
         let result = PyDict::new_bound(py);
@@ -481,10 +466,7 @@ fn solve_maxcut_qaoa_advanced(
     Python::with_gil(|py| {
         let result = PyDict::new_bound(py);
         result.set_item("cut_value", solution.cut_value)?;
-        result.set_item(
-            "assignment",
-            solution.assignment.to_object(py),
-        )?;
+        result.set_item("assignment", solution.assignment.to_object(py))?;
         result.set_item("approximation_ratio", solution.approximation_ratio)?;
 
         let meta = PyDict::new_bound(py);
@@ -517,7 +499,10 @@ fn _metatron_qso_internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Module metadata
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
-    m.add("__doc__", "Metatron Quantum State Operator - High-performance quantum computing in Python")?;
+    m.add(
+        "__doc__",
+        "Metatron Quantum State Operator - High-performance quantum computing in Python",
+    )?;
 
     Ok(())
 }

@@ -242,7 +242,7 @@ impl QAOACostFunction {
         // For simplicity: exp(-iHt) ≈ I - iHt (first order)
         // For production: use proper matrix exponential
         let matrix = hamiltonian.matrix();
-        let mut evolved = matrix.clone();
+        let mut evolved = *matrix;
 
         for i in 0..evolved.nrows() {
             for j in 0..evolved.ncols() {

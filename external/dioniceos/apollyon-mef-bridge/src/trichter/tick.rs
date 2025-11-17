@@ -50,10 +50,7 @@ pub fn coupling_tick(
     let initial_edges = funnel.edge_count();
 
     // Step 1: Lift 4D states to 5D
-    let states_5d: Vec<State5D> = states_4d
-        .iter()
-        .map(|s4d| lift(*s4d, t))
-        .collect();
+    let states_5d: Vec<State5D> = states_4d.iter().map(|s4d| lift(*s4d, t)).collect();
 
     // Step 2: Hyperbion absorption - compute (Φ, μ)
     let fields = hyperbion.absorption(&states_5d);
@@ -100,17 +97,17 @@ pub fn coupling_tick(
         .nodes
         .values()
         .take(states_4d.len())
-        .map(|node| State4D::new(
-            node.state.x,
-            node.state.y,
-            node.state.z,
-            node.state.psi,
-        ))
+        .map(|node| State4D::new(node.state.x, node.state.y, node.state.z, node.state.psi))
         .collect();
 
     // Step 7: Optional proof computation
     let commit_hash = if compute_proofs {
-        Some(compute_commit_hash(states_4d, &states_4d_next, params, &fields))
+        Some(compute_commit_hash(
+            states_4d,
+            &states_4d_next,
+            params,
+            &fields,
+        ))
     } else {
         None
     };
@@ -141,7 +138,7 @@ fn compute_commit_hash(
 
     // Serialize all components
     let mut data = Vec::new();
-    
+
     if let Ok(json) = serde_json::to_vec(states_prev) {
         data.extend_from_slice(&json);
     }
@@ -262,7 +259,7 @@ mod tests {
                 &mut funnel,
                 false,
             );
-            
+
             // Use output as next input
             if !result.states_4d_next.is_empty() {
                 states = result.states_4d_next;

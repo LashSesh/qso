@@ -1,7 +1,8 @@
 use std::env;
 use std::error::Error;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
+use std::path::Path;
 use std::time::Instant;
 
 use metatron_qso::advanced_algorithms::{
@@ -85,7 +86,7 @@ fn benchmark_grover_search() -> Result<GroverSearchBenchmarkResult, Box<dyn Erro
     let start = Instant::now();
     let result = grover
         .search(target_node, oracle_strength)
-        .map_err(|e| Box::<dyn Error>::from(e))?;
+        .map_err(Box::<dyn Error>::from)?;
     let execution_time = start.elapsed().as_secs_f64() * 1000.0;
 
     println!(
@@ -115,7 +116,7 @@ fn benchmark_multi_target_grover() -> Result<MultiTargetGroverBenchmarkResult, B
     let start = Instant::now();
     let result = grover
         .multi_target_search(&targets, oracle_strength)
-        .map_err(|e| Box::<dyn Error>::from(e))?;
+        .map_err(Box::<dyn Error>::from)?;
     let execution_time = start.elapsed().as_secs_f64() * 1000.0;
 
     println!(
@@ -147,7 +148,7 @@ fn benchmark_boson_sampling() -> Result<BosonSamplingBenchmarkResult, Box<dyn Er
     let input_mode = 0; // Center node
     let _samples = sampler
         .batch_sample_single_photon(input_mode, time, num_single_photon)
-        .map_err(|e| Box::<dyn Error>::from(e))?;
+        .map_err(Box::<dyn Error>::from)?;
 
     let execution_time = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -220,13 +221,13 @@ fn benchmark_quantum_ml() -> Result<QuantumMLBenchmarkResult, Box<dyn Error>> {
             learning_rate,
             epochs,
         )
-        .map_err(|e| Box::<dyn Error>::from(e))?;
+        .map_err(Box::<dyn Error>::from)?;
     let execution_time = start.elapsed().as_secs_f64() * 1000.0;
 
     // Evaluate on test data
     let mut correct = 0;
     for (graph, &true_label) in test_graphs.iter().zip(test_labels.iter()) {
-        let pred_label = qgnn.predict(graph).map_err(|e| Box::<dyn Error>::from(e))?;
+        let pred_label = qgnn.predict(graph).map_err(Box::<dyn Error>::from)?;
         if pred_label == true_label {
             correct += 1;
         }
@@ -290,7 +291,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         timestamp: chrono::Utc::now(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         commit_hash: option_env!("GIT_HASH").unwrap_or("unknown").to_string(),
-        system_info: format!("Metatron Advanced Algorithms - Grover, Boson Sampling, QML"),
+        system_info: "Metatron Advanced Algorithms - Grover, Boson Sampling, QML".to_string(),
     };
 
     let suite = AdvancedAlgorithmsBenchmarkSuite {
@@ -341,6 +342,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     if args.len() > 1 {
         // Write to specified file
         let output_path = &args[1];
+
+        // Create parent directory if it doesn't exist
+        if let Some(parent) = Path::new(output_path).parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "Failed to create parent directory for '{}': {}",
+                    output_path, e
+                )
+            })?;
+        }
+
         let file = File::create(output_path)
             .map_err(|e| format!("Failed to create output file '{}': {}", output_path, e))?;
         let mut writer = BufWriter::new(file);

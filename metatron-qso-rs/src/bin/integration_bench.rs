@@ -1,7 +1,8 @@
 use std::env;
 use std::error::Error;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
+use std::path::Path;
 use std::time::Instant;
 
 use metatron_qso::prelude::*;
@@ -186,7 +187,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let total_time = overall_start.elapsed().as_secs_f64() * 1000.0;
 
     // Calculate cross-module metrics
-    let compatibility_checks = vec![
+    let compatibility_checks = [
         vqe_bench.metatron_hamiltonian_compatibility,
         vqe_bench.dtl_state_integration,
         qaoa_bench.graph_integration,
@@ -197,7 +198,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let compatibility_score = compatibility_checks.iter().filter(|&&x| x).count() as f64
         / compatibility_checks.len() as f64;
 
-    let integration_success_rate = vec![
+    let integration_success_rate = [
         vqe_bench.state_fidelity > 0.9,
         qaoa_bench.approximation_ratio > 0.5,
         qwalk_bench.speedup_factor > 1.0,
@@ -223,7 +224,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         timestamp: chrono::Utc::now(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         commit_hash: option_env!("GIT_HASH").unwrap_or("unknown").to_string(),
-        system_info: format!("Metatron QSO Integration Benchmarks - Cross-Module Compatibility"),
+        system_info: "Metatron QSO Integration Benchmarks - Cross-Module Compatibility".to_string(),
     };
 
     let suite = IntegrationBenchmarkSuite {
@@ -257,6 +258,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     if args.len() > 1 {
         // Write to specified file
         let output_path = &args[1];
+
+        // Create parent directory if it doesn't exist
+        if let Some(parent) = Path::new(output_path).parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "Failed to create parent directory for '{}': {}",
+                    output_path, e
+                )
+            })?;
+        }
+
         let file = File::create(output_path)
             .map_err(|e| format!("Failed to create output file '{}': {}", output_path, e))?;
         let mut writer = BufWriter::new(file);

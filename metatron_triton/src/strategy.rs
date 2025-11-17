@@ -152,7 +152,10 @@ impl ParameterMapping {
 
     /// Create a logarithmic parameter mapping
     pub fn logarithmic(name: impl Into<String>, min: f64, max: f64) -> Self {
-        assert!(min > 0.0 && max > 0.0, "Logarithmic mapping requires positive bounds");
+        assert!(
+            min > 0.0 && max > 0.0,
+            "Logarithmic mapping requires positive bounds"
+        );
         Self {
             name: name.into(),
             min,
@@ -376,8 +379,14 @@ impl CalibrationSearchStrategy for TritonSearchStrategy {
         let improvement_rate = self.search.average_improvement_rate(10);
 
         let mut extra = HashMap::new();
-        extra.insert("no_improvement_count".to_string(), self.no_improvement_count as f64);
-        extra.insert("convergence_patience".to_string(), self.convergence_patience as f64);
+        extra.insert(
+            "no_improvement_count".to_string(),
+            self.no_improvement_count as f64,
+        );
+        extra.insert(
+            "convergence_patience".to_string(),
+            self.convergence_patience as f64,
+        );
 
         SearchStatistics {
             step: self.search.current_step(),

@@ -16,6 +16,12 @@ pub struct SymmetryGroup {
     permutations: Vec<[usize; METATRON_DIMENSION]>,
 }
 
+impl Default for SymmetryGroup {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SymmetryGroup {
     pub fn new() -> Self {
         let identity = identity_permutation();
@@ -68,8 +74,8 @@ impl SymmetryGroup {
 
 fn identity_permutation() -> [usize; METATRON_DIMENSION] {
     let mut perm = [0usize; METATRON_DIMENSION];
-    for i in 0..METATRON_DIMENSION {
-        perm[i] = i;
+    for (i, item) in perm.iter_mut().enumerate().take(METATRON_DIMENSION) {
+        *item = i;
     }
     perm
 }

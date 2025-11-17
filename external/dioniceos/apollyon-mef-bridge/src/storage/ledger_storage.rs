@@ -53,10 +53,9 @@ impl LedgerStorage {
     /// This prepares the output for storage in the MEF Ledger
     fn prepare_for_ledger(&self, output: &CognitiveOutput) -> StorageResult<serde_json::Value> {
         // Extract knowledge object
-        let knowledge = output
-            .knowledge
-            .as_ref()
-            .ok_or_else(|| StorageError::InvalidData("No knowledge object in output".to_string()))?;
+        let knowledge = output.knowledge.as_ref().ok_or_else(|| {
+            StorageError::InvalidData("No knowledge object in output".to_string())
+        })?;
 
         // Create ledger entry
         let entry = serde_json::json!({
@@ -129,9 +128,7 @@ impl StorageBackend for LedgerStorage {
         // Update stats
         if let Ok(mut stats) = self.stats.lock() {
             stats.total_items += 1;
-            stats.total_size_bytes += std::fs::metadata(&block_file)
-                .map(|m| m.len())
-                .unwrap_or(0);
+            stats.total_size_bytes += std::fs::metadata(&block_file).map(|m| m.len()).unwrap_or(0);
             stats.successful_writes += 1;
         }
 
@@ -204,8 +201,7 @@ mod tests {
                 rho: 0.7,
                 omega: 2.1,
             },
-            route: RouteSpec::new("ROUTE-001".to_string(), vec![0, 1, 2, 3, 4, 5, 6], 0.8)
-                .unwrap(),
+            route: RouteSpec::new("ROUTE-001".to_string(), vec![0, 1, 2, 3, 4, 5, 6], 0.8).unwrap(),
             proof: Default::default(),
             gate_decision,
             knowledge: Some(knowledge),

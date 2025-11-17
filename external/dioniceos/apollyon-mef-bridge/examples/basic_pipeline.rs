@@ -27,14 +27,19 @@ fn main() {
     // Define initial 5D state
     let initial_state = State5D::new(1.0, 0.5, 0.3, 0.2, 0.1);
     println!("Initial 5D State:");
-    println!("  x={:.3}, y={:.3}, z={:.3}, ψ={:.3}, ω={:.3}\n",
-        initial_state.get(0), initial_state.get(1), initial_state.get(2),
-        initial_state.get(3), initial_state.get(4));
+    println!(
+        "  x={:.3}, y={:.3}, z={:.3}, ψ={:.3}, ω={:.3}\n",
+        initial_state.get(0),
+        initial_state.get(1),
+        initial_state.get(2),
+        initial_state.get(3),
+        initial_state.get(4)
+    );
 
     // Define system parameters (weak coupling)
     let parameters = SystemParameters::new(
         [-0.1, -0.15, 0.1, 0.0, -0.05], // intrinsic rates
-        [0.0, 0.0, 0.0, 0.0, 0.0],       // no external forcing
+        [0.0, 0.0, 0.0, 0.0, 0.0],      // no external forcing
     );
 
     // Create cognitive input
@@ -66,16 +71,30 @@ fn main() {
             println!("Trajectory length: {} states", output.trajectory.len());
             let final_state = output.trajectory.last().unwrap();
             println!("Final 5D state:");
-            println!("  x={:.6}, y={:.6}, z={:.6}, ψ={:.6}, ω={:.6}\n",
-                final_state.get(0), final_state.get(1), final_state.get(2),
-                final_state.get(3), final_state.get(4));
+            println!(
+                "  x={:.6}, y={:.6}, z={:.6}, ψ={:.6}, ω={:.6}\n",
+                final_state.get(0),
+                final_state.get(1),
+                final_state.get(2),
+                final_state.get(3),
+                final_state.get(4)
+            );
 
             // Display spectral analysis results
             println!("=== Spectral Analysis ===");
             println!("Spectral Signature:");
-            println!("  ψ (psi):   {:.6} - Phase alignment", output.spectral_signature.psi);
-            println!("  ρ (rho):   {:.6} - Resonance (1-entropy)", output.spectral_signature.rho);
-            println!("  ω (omega): {:.6} - Oscillation frequency\n", output.spectral_signature.omega);
+            println!(
+                "  ψ (psi):   {:.6} - Phase alignment",
+                output.spectral_signature.psi
+            );
+            println!(
+                "  ρ (rho):   {:.6} - Resonance (1-entropy)",
+                output.spectral_signature.rho
+            );
+            println!(
+                "  ω (omega): {:.6} - Oscillation frequency\n",
+                output.spectral_signature.omega
+            );
 
             // Display route selection results
             println!("=== MEF Route Selection ===");
@@ -127,15 +146,21 @@ fn main() {
                 println!("TIC ID:    {}", knowledge.tic_id);
                 println!("Route ID:  {}", knowledge.route_id);
                 println!("Seed Path: {}", knowledge.seed_path);
-                println!("Payload:   {} bytes\n", 
-                    knowledge.payload.as_ref()
+                println!(
+                    "Payload:   {} bytes\n",
+                    knowledge
+                        .payload
+                        .as_ref()
                         .map(|p| serde_json::to_string(p).unwrap().len())
                         .unwrap_or(0)
                 );
             }
 
             println!("=== Pipeline Summary ===");
-            println!("✓ 5D Integration: {} states computed", output.trajectory.len());
+            println!(
+                "✓ 5D Integration: {} states computed",
+                output.trajectory.len()
+            );
             println!("✓ Spectral Analysis: Signature extracted");
             println!("✓ State Conversion: 5D → Spiral coordinates");
             println!("✓ Route Selection: S7 route determined");

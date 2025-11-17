@@ -31,7 +31,7 @@ pub use operations::{
 
 // Re-export optimization components when features are enabled
 #[cfg(feature = "stability-filter")]
-pub use backends_opt::{FilteredBackend, FilterStats, StabilityFilter, StabilityFilterConfig};
+pub use backends_opt::{FilterStats, FilteredBackend, StabilityFilter, StabilityFilterConfig};
 
 #[cfg(feature = "ophan-sharding")]
 pub use backends_opt::OphanBackend;

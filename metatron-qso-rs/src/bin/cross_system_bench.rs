@@ -1,7 +1,8 @@
 use std::env;
 use std::error::Error;
-use std::fs::{File, read_to_string};
+use std::fs::{self, File, read_to_string};
 use std::io::{self, BufWriter, Write};
+use std::path::Path;
 use std::time::Instant;
 
 use metatron_qso::prelude::*;
@@ -252,6 +253,7 @@ fn benchmark_metatron_system() -> SystemBenchmark {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn create_baseline_benchmark(
     name: &str,
     vqe_convergence: f64,
@@ -344,7 +346,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
 
     // Calculate comparison metrics
-    let systems = vec![&metatron, &qiskit, &cirq, &pennylane, &projectq];
+    let systems = [&metatron, &qiskit, &cirq, &pennylane, &projectq];
     let mut scores: Vec<(usize, f64)> = systems
         .iter()
         .enumerate()
@@ -405,9 +407,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         timestamp: chrono::Utc::now(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         commit_hash: option_env!("GIT_HASH").unwrap_or("unknown").to_string(),
-        system_info: format!(
-            "Cross-System Comparison: Metatron QSO vs. Qiskit, Cirq, PennyLane, ProjectQ"
-        ),
+        system_info: "Cross-System Comparison: Metatron QSO vs. Qiskit, Cirq, PennyLane, ProjectQ"
+            .to_string(),
     };
 
     let suite = CrossSystemBenchmarkSuite {
@@ -459,6 +460,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     if args.len() > 1 {
         // Write to specified file
         let output_path = &args[1];
+
+        // Create parent directory if it doesn't exist
+        if let Some(parent) = Path::new(output_path).parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "Failed to create parent directory for '{}': {}",
+                    output_path, e
+                )
+            })?;
+        }
+
         let file = File::create(output_path)
             .map_err(|e| format!("Failed to create output file '{}': {}", output_path, e))?;
         let mut writer = BufWriter::new(file);

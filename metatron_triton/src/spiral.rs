@@ -4,8 +4,8 @@
 //! The spiral expands and contracts based on the quality of recent explorations,
 //! creating an adaptive search pattern that balances exploration and exploitation.
 
-use rand::{Rng, SeedableRng};
 use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 
 /// Golden ratio φ = (1 + √5) / 2
 const GOLDEN_RATIO: f64 = 1.618033988749895;
@@ -146,7 +146,11 @@ impl TritonSpiral {
     ///
     /// The gradient is typically computed as (new_signature - old_signature) / param_delta
     pub fn update_momentum(&mut self, gradient: &[f64], reward: f64) {
-        assert_eq!(gradient.len(), self.dimension, "Gradient dimension mismatch");
+        assert_eq!(
+            gradient.len(),
+            self.dimension,
+            "Gradient dimension mismatch"
+        );
 
         // Normalize gradient
         let grad_norm = gradient.iter().map(|g| g * g).sum::<f64>().sqrt();
@@ -172,7 +176,11 @@ impl TritonSpiral {
 
     /// Update position (typically to the best point found so far)
     pub fn update_position(&mut self, new_position: &[f64]) {
-        assert_eq!(new_position.len(), self.dimension, "Position dimension mismatch");
+        assert_eq!(
+            new_position.len(),
+            self.dimension,
+            "Position dimension mismatch"
+        );
         self.position.copy_from_slice(new_position);
     }
 
@@ -230,7 +238,11 @@ mod tests {
         for _ in 0..100 {
             let point = spiral.next_point();
             for &val in &point {
-                assert!(val >= 0.0 && val <= 1.0, "Point value {} out of bounds", val);
+                assert!(
+                    val >= 0.0 && val <= 1.0,
+                    "Point value {} out of bounds",
+                    val
+                );
             }
         }
     }
@@ -288,15 +300,24 @@ mod tests {
         // Check that all points are within bounds
         for point in &points {
             for &val in point {
-                assert!(val >= 0.0 && val <= 1.0, "Point value {} out of bounds", val);
+                assert!(
+                    val >= 0.0 && val <= 1.0,
+                    "Point value {} out of bounds",
+                    val
+                );
             }
         }
 
         // Check that at least some points are different (not all the same)
         let first = &points[0];
         let has_variation = points.iter().any(|p| {
-            p.iter().zip(first.iter()).any(|(a, b)| (a - b).abs() > 1e-6)
+            p.iter()
+                .zip(first.iter())
+                .any(|(a, b)| (a - b).abs() > 1e-6)
         });
-        assert!(has_variation, "All points are identical - spiral not working");
+        assert!(
+            has_variation,
+            "All points are identical - spiral not working"
+        );
     }
 }

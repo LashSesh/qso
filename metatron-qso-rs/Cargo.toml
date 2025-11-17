@@ -66,17 +66,14 @@ path = "src/bin/cross_system_bench.rs"
 name = "benchmark_compare"
 path = "src/bin/benchmark_compare.rs"
 
+[[bin]]
+name = "advanced_algorithms_bench"
+path = "src/bin/advanced_algorithms_bench.rs"
+required-features = ["advanced"]
+
 [[example]]
 name = "vqa_demo"
 path = "examples/vqa_demo.rs"
-
-[[example]]
-name = "quantum_walk_basic"
-path = "examples/quantum_walk_basic.rs"
-
-[[example]]
-name = "qaoa_maxcut_basic"
-path = "examples/qaoa_maxcut_basic.rs"
 
 [features]
 default = ["walks", "vqa", "dtl"]

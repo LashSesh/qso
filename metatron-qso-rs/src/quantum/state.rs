@@ -166,7 +166,7 @@ impl QuantumState {
 
     /// Apply a quantum operator to this state.
     pub fn apply(&self, operator: &crate::quantum::operator::QuantumOperator) -> Self {
-        let new_vec = operator.matrix() * self.amplitudes.clone();
+        let new_vec = operator.matrix() * self.amplitudes;
         Self {
             amplitudes: new_vec,
         }
@@ -177,7 +177,7 @@ impl QuantumState {
         &self,
         operator: &crate::quantum::operator::QuantumOperator,
     ) -> Complex64 {
-        let temp = operator.matrix() * self.amplitudes.clone();
+        let temp = operator.matrix() * self.amplitudes;
         self.amplitudes.dotc(&temp)
     }
 

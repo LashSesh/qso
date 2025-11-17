@@ -41,7 +41,13 @@ pub struct State5D {
 
 impl State5D {
     pub fn new(x: f64, y: f64, z: f64, psi: f64, omega: f64) -> Self {
-        Self { x, y, z, psi, omega }
+        Self {
+            x,
+            y,
+            z,
+            psi,
+            omega,
+        }
     }
 
     pub fn zero() -> Self {
@@ -57,8 +63,8 @@ impl State5D {
     }
 
     pub fn norm(&self) -> f64 {
-        (self.x.powi(2) + self.y.powi(2) + self.z.powi(2) + 
-         self.psi.powi(2) + self.omega.powi(2)).sqrt()
+        (self.x.powi(2) + self.y.powi(2) + self.z.powi(2) + self.psi.powi(2) + self.omega.powi(2))
+            .sqrt()
     }
 }
 
@@ -86,9 +92,9 @@ impl GuidanceVector {
 pub struct FunnelNode {
     pub id: usize,
     pub state: State5D,
-    pub mass: f64,        // accumulated evidence
-    pub variance: f64,    // local uncertainty
-    pub t_born: f64,      // creation time
+    pub mass: f64,     // accumulated evidence
+    pub variance: f64, // local uncertainty
+    pub t_born: f64,   // creation time
 }
 
 impl FunnelNode {
@@ -128,8 +134,8 @@ impl FunnelEdge {
 /// Resonance and morphodynamic fields from Hyperbion layer
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct HyperbionFields {
-    pub phi: f64,  // Phase/Resonance field Φ(x,t)
-    pub mu: f64,   // Morphodynamic growth/damping field μ(x,t)
+    pub phi: f64, // Phase/Resonance field Φ(x,t)
+    pub mu: f64,  // Morphodynamic growth/damping field μ(x,t)
 }
 
 impl HyperbionFields {

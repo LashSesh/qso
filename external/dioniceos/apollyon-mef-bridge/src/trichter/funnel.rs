@@ -31,7 +31,8 @@ impl FunnelGraph {
     pub fn add_node(&mut self, state: State5D) -> usize {
         let id = self.next_id;
         self.next_id += 1;
-        self.nodes.insert(id, FunnelNode::new(id, state, self.current_time));
+        self.nodes
+            .insert(id, FunnelNode::new(id, state, self.current_time));
         id
     }
 
@@ -71,9 +72,9 @@ impl FunnelGraph {
     /// w_ij(t+1) = w_ij(t) + α_hebb·phase_lock(i,j)·co_use(i,j) - decay·Δt
     fn update_weights(&mut self, params: &PolicyParams) {
         for edge in self.edges.iter_mut() {
-            if let (Some(from_node), Some(to_node)) = 
-                (self.nodes.get(&edge.from), self.nodes.get(&edge.to)) {
-                
+            if let (Some(from_node), Some(to_node)) =
+                (self.nodes.get(&edge.from), self.nodes.get(&edge.to))
+            {
                 // Compute phase lock based on omega coherence
                 let phase_diff = (from_node.state.omega - to_node.state.omega).abs();
                 edge.phase_lock = (-phase_diff).exp();
@@ -83,10 +84,10 @@ impl FunnelGraph {
 
                 // Hebbian update
                 let hebb_update = params.alpha_hebb * edge.phase_lock * co_use;
-                
+
                 // Apply update with decay
                 edge.weight += hebb_update - params.decay;
-                
+
                 // Clamp to non-negative
                 edge.weight = edge.weight.max(0.0);
             }
@@ -109,7 +110,7 @@ impl FunnelGraph {
             // Create two new nodes with perturbed positions
             let mut state_a = state;
             let mut state_b = state;
-            
+
             state_a.x += variance * 0.1;
             state_b.x -= variance * 0.1;
 
@@ -127,7 +128,9 @@ impl FunnelGraph {
             }
 
             // Transfer edges
-            let edges_to_copy: Vec<_> = self.edges.iter()
+            let edges_to_copy: Vec<_> = self
+                .edges
+                .iter()
                 .filter(|e| e.from == node_id || e.to == node_id)
                 .cloned()
                 .collect();
@@ -166,9 +169,9 @@ impl FunnelGraph {
                 }
 
                 // Clone data we need before borrowing mutably
-                let merge_data = if let (Some(node_i), Some(node_j)) = 
-                    (self.nodes.get(&id_i), self.nodes.get(&id_j)) {
-                    
+                let merge_data = if let (Some(node_i), Some(node_j)) =
+                    (self.nodes.get(&id_i), self.nodes.get(&id_j))
+                {
                     if node_i.mass < params.theta_merge && node_j.mass < params.theta_merge {
                         let dx = node_i.state.x - node_j.state.x;
                         let dy = node_i.state.y - node_j.state.y;
@@ -177,9 +180,14 @@ impl FunnelGraph {
 
                         if dist_sq < 1.0 {
                             Some((
-                                node_i.state.x, node_i.state.y, node_i.state.z,
-                                node_j.state.x, node_j.state.y, node_j.state.z,
-                                node_i.mass, node_j.mass,
+                                node_i.state.x,
+                                node_i.state.y,
+                                node_i.state.z,
+                                node_j.state.x,
+                                node_j.state.y,
+                                node_j.state.z,
+                                node_i.mass,
+                                node_j.mass,
                             ))
                         } else {
                             None
@@ -195,7 +203,7 @@ impl FunnelGraph {
                     // Merge j into i
                     if let Some(node_i_mut) = self.nodes.get_mut(&id_i) {
                         let total_mass = mass_i + mass_j;
-                        
+
                         // Weighted average of positions
                         node_i_mut.state.x = (xi * mass_i + xj * mass_j) / total_mass;
                         node_i_mut.state.y = (yi * mass_i + yj * mass_j) / total_mass;
@@ -271,7 +279,7 @@ mod tests {
         let mut funnel = FunnelGraph::new();
         let state = State5D::zero();
         let id = funnel.add_node(state);
-        
+
         assert_eq!(id, 0);
         assert_eq!(funnel.node_count(), 1);
     }
@@ -281,7 +289,7 @@ mod tests {
         let mut funnel = FunnelGraph::new();
         let id1 = funnel.add_node(State5D::zero());
         let id2 = funnel.add_node(State5D::zero());
-        
+
         funnel.add_edge(id1, id2);
         assert_eq!(funnel.edge_count(), 1);
     }
@@ -291,12 +299,12 @@ mod tests {
         let mut funnel = FunnelGraph::new();
         let state = State5D::zero();
         funnel.add_node(state);
-        
+
         let guidance = GuidanceVector::new(1.0, 0.0, 0.0, 0.0);
         let params = PolicyParams::explore();
-        
+
         funnel.advect(guidance, 1.0, &params);
-        
+
         let node = funnel.nodes.get(&0).unwrap();
         assert_eq!(node.state.x, 1.0);
     }
@@ -306,13 +314,13 @@ mod tests {
         let mut funnel = FunnelGraph::new();
         let id1 = funnel.add_node(State5D::zero());
         let id2 = funnel.add_node(State5D::zero());
-        
+
         funnel.add_edge(id1, id2);
         funnel.edges[0].weight = 0.001;
-        
+
         let params = PolicyParams::exploit(); // Has higher prune threshold
         funnel.prune_edges(&params);
-        
+
         assert_eq!(funnel.edge_count(), 0);
     }
 }

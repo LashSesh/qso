@@ -83,7 +83,7 @@ impl Hyperbion {
 
         // Compute variance in spatial coordinates (x, y, z)
         let n = states.len() as f64;
-        
+
         let mean_x = states.iter().map(|s| s.x).sum::<f64>() / n;
         let mean_y = states.iter().map(|s| s.y).sum::<f64>() / n;
         let mean_z = states.iter().map(|s| s.z).sum::<f64>() / n;
@@ -139,7 +139,7 @@ mod tests {
         let h = Hyperbion::new();
         let state = State5D::new(1.0, 2.0, 3.0, 0.5, 10.0);
         let fields = h.absorption(&[state]);
-        
+
         // With single state, phi should be omega, mu should be 0
         assert_eq!(fields.phi, 10.0);
         assert_eq!(fields.mu, 0.0);
@@ -153,7 +153,7 @@ mod tests {
             State5D::new(0.0, 0.0, 0.0, 1.0, 20.0),
         ];
         let fields = h.absorption(&states);
-        
+
         // Average omega with equal weights
         assert!((fields.phi - 15.0).abs() < 1e-10);
     }
@@ -166,7 +166,7 @@ mod tests {
             State5D::new(2.0, 0.0, 0.0, 1.0, 0.0),
         ];
         let fields = h.absorption(&states);
-        
+
         // Variance in x dimension
         assert!(fields.mu > 0.0);
     }
@@ -176,7 +176,7 @@ mod tests {
         let h = Hyperbion::with_params(2.0, 3.0);
         let fields = HyperbionFields::new(5.0, 7.0);
         let result = h.evaluate(fields);
-        
+
         // H = 2.0*5.0 + 3.0*7.0 = 10 + 21 = 31
         assert_eq!(result, 31.0);
     }

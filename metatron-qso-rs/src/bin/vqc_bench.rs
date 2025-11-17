@@ -1,7 +1,8 @@
 use std::env;
 use std::error::Error;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
+use std::path::Path;
 use std::time::Instant;
 
 use metatron_qso::prelude::*;
@@ -182,8 +183,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     // Calculate quality metrics
-    let train_accuracies = vec![binary.training_accuracy, linear.training_accuracy];
-    let test_accuracies = vec![binary.test_accuracy, linear.test_accuracy];
+    let train_accuracies = [binary.training_accuracy, linear.training_accuracy];
+    let test_accuracies = [binary.test_accuracy, linear.test_accuracy];
 
     let best_train_acc = train_accuracies
         .iter()
@@ -196,7 +197,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let avg_train_acc = train_accuracies.iter().sum::<f64>() / train_accuracies.len() as f64;
     let avg_test_acc = test_accuracies.iter().sum::<f64>() / test_accuracies.len() as f64;
 
-    let convergence_rate = vec![binary.converged as u32, linear.converged as u32]
+    let convergence_rate = [binary.converged as u32, linear.converged as u32]
         .iter()
         .sum::<u32>() as f64
         / 2.0;
@@ -213,7 +214,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         timestamp: chrono::Utc::now(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         commit_hash: option_env!("GIT_HASH").unwrap_or("unknown").to_string(),
-        system_info: format!("Metatron QSO VQC Benchmarks - Classification Tasks"),
+        system_info: "Metatron QSO VQC Benchmarks - Classification Tasks".to_string(),
     };
 
     let suite = VQCBenchmarkSuite {
@@ -255,6 +256,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     if args.len() > 1 {
         // Write to specified file
         let output_path = &args[1];
+
+        // Create parent directory if it doesn't exist
+        if let Some(parent) = Path::new(output_path).parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "Failed to create parent directory for '{}': {}",
+                    output_path, e
+                )
+            })?;
+        }
+
         let file = File::create(output_path)
             .map_err(|e| format!("Failed to create output file '{}': {}", output_path, e))?;
         let mut writer = BufWriter::new(file);

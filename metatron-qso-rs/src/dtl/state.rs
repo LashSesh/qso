@@ -143,7 +143,7 @@ mod tests {
     fn oscillatory_state_clamps_values() {
         let state = DTLState::ld_oscillatory(1.0, 0.0, 2.0, 0.5);
         let value = state.evaluate(0.25);
-        assert!(value >= 0.0 && value <= 1.0);
+        assert!((0.0..=1.0).contains(&value));
     }
 
     #[test]

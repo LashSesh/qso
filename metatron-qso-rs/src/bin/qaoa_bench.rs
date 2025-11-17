@@ -1,7 +1,8 @@
 use std::env;
 use std::error::Error;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
+use std::path::Path;
 use std::time::Instant;
 
 use metatron_qso::prelude::*;
@@ -145,7 +146,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     // Calculate quality metrics
-    let ratios = vec![
+    let ratios = [
         triangle.approximation_ratio,
         square.approximation_ratio,
         pentagram.approximation_ratio,
@@ -157,7 +158,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let ratio_variance =
         ratios.iter().map(|r| (r - avg_ratio).powi(2)).sum::<f64>() / ratios.len() as f64;
 
-    let convergence_rate = vec![
+    let convergence_rate = [
         triangle.converged as u32,
         square.converged as u32,
         pentagram.converged as u32,
@@ -178,7 +179,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         timestamp: chrono::Utc::now(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         commit_hash: option_env!("GIT_HASH").unwrap_or("unknown").to_string(),
-        system_info: format!("Metatron QSO QAOA Benchmarks - MaxCut Problems"),
+        system_info: "Metatron QSO QAOA Benchmarks - MaxCut Problems".to_string(),
     };
 
     let suite = QAOABenchmarkSuite {
@@ -221,6 +222,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     if args.len() > 1 {
         // Write to specified file
         let output_path = &args[1];
+
+        // Create parent directory if it doesn't exist
+        if let Some(parent) = Path::new(output_path).parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "Failed to create parent directory for '{}': {}",
+                    output_path, e
+                )
+            })?;
+        }
+
         let file = File::create(output_path)
             .map_err(|e| format!("Failed to create output file '{}': {}", output_path, e))?;
         let mut writer = BufWriter::new(file);

@@ -492,6 +492,7 @@ fn compare_advanced_algorithms_benchmarks(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compare_metric(
     baseline: &Value,
     current: &Value,
