@@ -276,7 +276,7 @@ mod tests {
         let mut cell = GabrielCell::new(2.0, 1.0, 1.0, 0.1);
         let target = 1.0;
 
-        let initial_output = cell.output;
+        let _initial_output = cell.output;
         cell.feedback(target);
 
         // Error = 1.0 - 2.0 = -1.0
@@ -378,7 +378,7 @@ mod tests {
         couple_cells(&mut cells, 0, 1);
         couple_cells(&mut cells, 0, 2);
 
-        let avg_neighbor_output = (cells[1].output + cells[2].output) / 2.0;
+        let _avg_neighbor_output = (cells[1].output + cells[2].output) / 2.0;
 
         neighbor_feedback(&mut cells, 0);
 

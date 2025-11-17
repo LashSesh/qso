@@ -386,7 +386,7 @@ mod tests {
         field.add_input(array![1.0, 2.0, 3.0, 4.0]);
         field.add_input(array![1.1, 2.1, 3.1, 4.1]);
 
-        let triggered = field.decision_trigger();
+        let _triggered = field.decision_trigger();
         // current_theta should be α·Entropy + β·Variance
         let expected_theta = 0.5 * field.calc_entropy() + 0.5 * field.calc_variance();
         assert!((field.current_theta - expected_theta).abs() < 1e-10);

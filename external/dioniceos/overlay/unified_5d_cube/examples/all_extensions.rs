@@ -4,7 +4,6 @@
 
 use apollyon_mef_bridge::trichter::Policy;
 use core_5d::State5D;
-use std::path::PathBuf;
 use tempfile::TempDir;
 use unified_5d_cube::{tick_5d_cube, InterlockAdapter, InterlockConfig};
 

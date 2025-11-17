@@ -22,17 +22,21 @@
 //! // Create the Metatron graph
 //! let graph = MetatronGraph::new();
 //!
+//! // Create the Hamiltonian
+//! let params = QSOParameters::default();
+//! let hamiltonian = MetatronHamiltonian::new(&graph, &params);
+//!
 //! // Initialize quantum state on central node
-//! let initial_state = QuantumState::basis_state(0);
+//! let initial_state = QuantumState::basis_state(0)?;
 //!
 //! // Run quantum walk
-//! let qw = ContinuousTimeQuantumWalk::new(graph);
-//! let evolved = qw.evolve(&initial_state, 1.0)?;
+//! let qw = ContinuousTimeQuantumWalk::new(&hamiltonian);
+//! let evolved = qw.evolve(&initial_state, 1.0);
 //!
 //! // Check probability distribution
 //! let probs = evolved.probabilities();
 //! println!("Probability at node 0: {:.4}", probs[0]);
-//! # Ok::<(), String>(())
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
 //! ## Architecture

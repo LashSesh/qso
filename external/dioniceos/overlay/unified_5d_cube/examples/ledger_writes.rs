@@ -3,7 +3,6 @@
 //! Run with: cargo run --example ledger_writes
 
 use core_5d::State5D;
-use std::path::PathBuf;
 use tempfile::TempDir;
 use unified_5d_cube::{tick_5d_cube, InterlockAdapter, InterlockConfig};
 
