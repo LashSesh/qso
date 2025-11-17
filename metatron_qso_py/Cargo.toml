@@ -14,7 +14,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 # PyO3 for Python bindings
-pyo3 = { version = "0.21", features = ["extension-module"] }
+pyo3 = { version = "0.27", features = ["extension-module"] }
 
 # Core Metatron library
 metatron-qso-rs = { path = "../metatron-qso-rs", features = ["walks", "vqa", "dtl"] }

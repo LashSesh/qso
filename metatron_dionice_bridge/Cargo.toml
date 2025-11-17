@@ -31,7 +31,7 @@ bridge = { path = "../external/dioniceos/apollyon_5d/bridge" }
 apollyon-mef-bridge = { path = "../external/dioniceos/apollyon-mef-bridge" }
 
 # Python bindings (optional)
-pyo3 = { version = "0.21", features = ["extension-module"], optional = true }
+pyo3 = { version = "0.27", features = ["extension-module"], optional = true }
 
 [dev-dependencies]
 approx = { workspace = true }
