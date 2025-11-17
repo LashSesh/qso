@@ -8,6 +8,7 @@ on the Metatron Cube graph using the Python SDK.
 
 import metatron_qso
 
+
 def main():
     print("=" * 60)
     print("Metatron QSO - Quantum Walk Demo")
@@ -30,10 +31,7 @@ def main():
     print()
 
     result = metatron_qso.run_quantum_walk(
-        graph=graph,
-        source_nodes=[0],
-        t_max=5.0,
-        dt=0.1
+        graph=graph, source_nodes=[0], t_max=5.0, dt=0.1
     )
 
     # Display results
@@ -45,10 +43,11 @@ def main():
     times_to_show = [0.0, 1.0, 2.5, 5.0]
     for t in times_to_show:
         # Find closest time index
-        idx = min(range(len(result['times'])),
-                 key=lambda i: abs(result['times'][i] - t))
-        actual_t = result['times'][idx]
-        probs = result['probabilities'][idx]
+        idx = min(
+            range(len(result["times"])), key=lambda i: abs(result["times"][i] - t)
+        )
+        actual_t = result["times"][idx]
+        probs = result["probabilities"][idx]
 
         print(f"Time t = {actual_t:.2f}:")
         # Show probabilities for central node and first few neighbors
@@ -59,19 +58,24 @@ def main():
         print()
 
     # Final state analysis
-    final_probs = result['final_state']
+    final_probs = result["final_state"]
     print("Final State Analysis (t = 5.0):")
     print(f"  Total probability: {sum(final_probs):.6f} (should be 1.0)")
-    print(f"  Max probability: {max(final_probs):.6f} at node {final_probs.index(max(final_probs))}")
-    print(f"  Min probability: {min(final_probs):.6f} at node {final_probs.index(min(final_probs))}")
+    print(
+        f"  Max probability: {max(final_probs):.6f} at node {final_probs.index(max(final_probs))}"
+    )
+    print(
+        f"  Min probability: {min(final_probs):.6f} at node {final_probs.index(min(final_probs))}"
+    )
     print()
 
     # Calculate and display entropy (measure of spreading)
     import math
+
     entropy = -sum(p * math.log(p) if p > 0 else 0 for p in final_probs)
     max_entropy = math.log(graph.num_nodes())
     print(f"  Entropy: {entropy:.4f} / {max_entropy:.4f} (max)")
-    print(f"  Spreading: {(entropy/max_entropy)*100:.2f}%")
+    print(f"  Spreading: {(entropy / max_entropy) * 100:.2f}%")
     print()
 
     print("=" * 60)

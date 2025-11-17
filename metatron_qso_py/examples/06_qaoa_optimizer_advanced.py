@@ -14,6 +14,7 @@ Use Cases:
 
 import metatron_qso
 
+
 def main():
     print("=" * 60)
     print("Advanced QAOA MaxCut Optimizer")
@@ -50,7 +51,7 @@ def main():
             graph,
             depth=config["depth"],
             max_iters=config["max_iters"],
-            seed=config["seed"]
+            seed=config["seed"],
         )
 
         results.append((config["name"], result))
@@ -65,7 +66,7 @@ def main():
         print(f"  Final cost:          {result['meta']['final_cost']:.6f}")
 
         # Show partition
-        assignment = result['assignment']
+        assignment = result["assignment"]
         set_0 = [i for i, val in enumerate(assignment) if not val]
         set_1 = [i for i, val in enumerate(assignment) if val]
 
@@ -79,21 +80,31 @@ def main():
     print("Configuration Comparison:")
     print("=" * 60)
     print()
-    print(f"{'Config':<20} {'Cut Value':<12} {'Approx Ratio':<15} {'Iterations':<12} {'Quality':<10}")
+    print(
+        f"{'Config':<20} {'Cut Value':<12} {'Approx Ratio':<15} {'Iterations':<12} {'Quality':<10}"
+    )
     print("-" * 75)
 
     for name, result in results:
-        quality = "EXCELLENT" if result['approximation_ratio'] > 0.95 else \
-                 "GOOD" if result['approximation_ratio'] > 0.8 else \
-                 "FAIR" if result['approximation_ratio'] > 0.6 else "POOR"
+        quality = (
+            "EXCELLENT"
+            if result["approximation_ratio"] > 0.95
+            else "GOOD"
+            if result["approximation_ratio"] > 0.8
+            else "FAIR"
+            if result["approximation_ratio"] > 0.6
+            else "POOR"
+        )
 
-        print(f"{name:<20} {result['cut_value']:<12.4f} {result['approximation_ratio']:<15.4f} "
-              f"{result['meta']['iterations']:<12} {quality:<10}")
+        print(
+            f"{name:<20} {result['cut_value']:<12.4f} {result['approximation_ratio']:<15.4f} "
+            f"{result['meta']['iterations']:<12} {quality:<10}"
+        )
 
     print()
 
     # Best result
-    best_result = max(results, key=lambda x: x[1]['cut_value'])
+    best_result = max(results, key=lambda x: x[1]["cut_value"])
     print(f"Best Result: {best_result[0]}")
     print(f"  Cut value: {best_result[1]['cut_value']:.4f}")
     print(f"  Approximation ratio: {best_result[1]['approximation_ratio']:.4f}")
@@ -106,15 +117,19 @@ def main():
     print()
 
     # Run twice with same seed
-    result1 = metatron_qso.solve_maxcut_qaoa_advanced(graph, depth=2, max_iters=100, seed=123)
-    result2 = metatron_qso.solve_maxcut_qaoa_advanced(graph, depth=2, max_iters=100, seed=123)
+    result1 = metatron_qso.solve_maxcut_qaoa_advanced(
+        graph, depth=2, max_iters=100, seed=123
+    )
+    result2 = metatron_qso.solve_maxcut_qaoa_advanced(
+        graph, depth=2, max_iters=100, seed=123
+    )
 
     print(f"Run 1 - Cut value: {result1['cut_value']:.6f}")
     print(f"Run 2 - Cut value: {result2['cut_value']:.6f}")
     print(f"Difference: {abs(result1['cut_value'] - result2['cut_value']):.10f}")
     print()
 
-    if abs(result1['cut_value'] - result2['cut_value']) < 1e-6:
+    if abs(result1["cut_value"] - result2["cut_value"]) < 1e-6:
         print("✓ Results are deterministic (same seed produces same result)")
     else:
         print("Note: Small numerical variations may occur due to optimization")

@@ -17,7 +17,11 @@ __version__ = "0.1.0"
 __author__ = "Sebastian Klemm"
 
 from .config import Configuration, ConfigurationSpace
-from .performance import PerformanceTriplet, compute_performance_triplet, BenchmarkLoader
+from .performance import (
+    PerformanceTriplet,
+    compute_performance_triplet,
+    BenchmarkLoader,
+)
 from .field import MandorlaField, SeraphicFeedback
 from .operators import DoubleKickOperator, UpdateKick, StabilizationKick
 from .por import ProofOfResonance, PoRCriteria

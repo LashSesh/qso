@@ -15,6 +15,7 @@ Use Cases:
 
 import metatron_qso
 
+
 def main():
     print("=" * 60)
     print("Quantum Walk Anomaly Detection")
@@ -45,11 +46,7 @@ def main():
     print()
 
     anomaly_scores = metatron_qso.quantum_walk_anomaly_score(
-        base_graph,
-        current_graph,
-        t_max=10.0,
-        dt=0.1,
-        samples=128
+        base_graph, current_graph, t_max=10.0, dt=0.1, samples=128
     )
 
     # Display results
@@ -90,7 +87,9 @@ def main():
         print("-" * 60)
         anomalous_nodes.sort(key=lambda x: x[1], reverse=True)
         for rank, (node_id, score) in enumerate(anomalous_nodes, 1):
-            severity = "HIGH" if score > 0.1 else "MEDIUM" if score > threshold else "LOW"
+            severity = (
+                "HIGH" if score > 0.1 else "MEDIUM" if score > threshold else "LOW"
+            )
             print(f"  {rank}. Node {node_id}: score={score:.6f}, severity={severity}")
     else:
         print("✓ No significant anomalies detected")

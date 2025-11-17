@@ -60,7 +60,7 @@ class ProofOfResonance:
         candidate_config: Configuration,
         candidate_performance: PerformanceTriplet,
         field: Optional[MandorlaField] = None,
-        candidate_injection: Optional[np.ndarray] = None
+        candidate_injection: Optional[np.ndarray] = None,
     ) -> bool:
         """
         Check if candidate configuration passes PoR test.
@@ -96,9 +96,7 @@ class ProofOfResonance:
         return True
 
     def _check_quality(
-        self,
-        current: PerformanceTriplet,
-        candidate: PerformanceTriplet
+        self, current: PerformanceTriplet, candidate: PerformanceTriplet
     ) -> bool:
         """
         Check quality non-decrease: ψ(c') ≥ ψ(c) + δ
@@ -106,9 +104,7 @@ class ProofOfResonance:
         return candidate.psi >= current.psi + self.criteria.min_quality_delta
 
     def _check_stability(
-        self,
-        current: PerformanceTriplet,
-        candidate: PerformanceTriplet
+        self, current: PerformanceTriplet, candidate: PerformanceTriplet
     ) -> bool:
         """
         Check stability consistency: ρ(c') ≥ ρ(c) - tolerance
@@ -122,9 +118,7 @@ class ProofOfResonance:
         return candidate.omega >= self.criteria.min_efficiency
 
     def _check_field_resonance(
-        self,
-        field: MandorlaField,
-        injection: np.ndarray
+        self, field: MandorlaField, injection: np.ndarray
     ) -> bool:
         """
         Check field-level resonance: M(t) · I(c') > threshold
@@ -139,7 +133,7 @@ class ProofOfResonance:
         candidate_config: Configuration,
         candidate_performance: PerformanceTriplet,
         field: Optional[MandorlaField] = None,
-        candidate_injection: Optional[np.ndarray] = None
+        candidate_injection: Optional[np.ndarray] = None,
     ) -> dict:
         """
         Perform detailed PoR check and return results for each criterion.
@@ -151,49 +145,53 @@ class ProofOfResonance:
 
         # Quality check
         quality_pass = self._check_quality(current_performance, candidate_performance)
-        results['quality'] = {
-            'pass': quality_pass,
-            'current': current_performance.psi,
-            'candidate': candidate_performance.psi,
-            'delta': candidate_performance.psi - current_performance.psi,
+        results["quality"] = {
+            "pass": quality_pass,
+            "current": current_performance.psi,
+            "candidate": candidate_performance.psi,
+            "delta": candidate_performance.psi - current_performance.psi,
         }
 
         # Stability check
-        stability_pass = self._check_stability(current_performance, candidate_performance)
-        results['stability'] = {
-            'pass': stability_pass,
-            'current': current_performance.rho,
-            'candidate': candidate_performance.rho,
-            'delta': candidate_performance.rho - current_performance.rho,
-            'tolerance': self.criteria.stability_tolerance,
+        stability_pass = self._check_stability(
+            current_performance, candidate_performance
+        )
+        results["stability"] = {
+            "pass": stability_pass,
+            "current": current_performance.rho,
+            "candidate": candidate_performance.rho,
+            "delta": candidate_performance.rho - current_performance.rho,
+            "tolerance": self.criteria.stability_tolerance,
         }
 
         # Efficiency check
         efficiency_pass = self._check_efficiency(candidate_performance)
-        results['efficiency'] = {
-            'pass': efficiency_pass,
-            'candidate': candidate_performance.omega,
-            'min_threshold': self.criteria.min_efficiency,
+        results["efficiency"] = {
+            "pass": efficiency_pass,
+            "candidate": candidate_performance.omega,
+            "min_threshold": self.criteria.min_efficiency,
         }
 
         # Field resonance check
         if field is not None and candidate_injection is not None:
             resonance = field.resonance_with(candidate_injection)
             resonance_pass = self._check_field_resonance(field, candidate_injection)
-            results['field_resonance'] = {
-                'pass': resonance_pass,
-                'resonance': resonance,
-                'min_threshold': self.criteria.min_field_resonance,
+            results["field_resonance"] = {
+                "pass": resonance_pass,
+                "resonance": resonance,
+                "min_threshold": self.criteria.min_field_resonance,
             }
         else:
-            results['field_resonance'] = {'pass': True, 'resonance': None}
+            results["field_resonance"] = {"pass": True, "resonance": None}
 
         # Overall result
-        results['overall'] = all([
-            quality_pass,
-            stability_pass,
-            efficiency_pass,
-            results['field_resonance']['pass']
-        ])
+        results["overall"] = all(
+            [
+                quality_pass,
+                stability_pass,
+                efficiency_pass,
+                results["field_resonance"]["pass"],
+            ]
+        )
 
         return results

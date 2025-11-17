@@ -8,6 +8,7 @@ on the Metatron Cube graph using QAOA (Quantum Approximate Optimization Algorith
 
 import metatron_qso
 
+
 def main():
     print("=" * 60)
     print("Metatron QSO - QAOA MaxCut Demo")
@@ -32,14 +33,10 @@ def main():
     for depth in depths:
         print(f"Running QAOA with depth p={depth}...")
         print(f"  Circuit depth: {depth}")
-        print(f"  Max iterations: 100")
+        print("  Max iterations: 100")
         print()
 
-        result = metatron_qso.solve_maxcut_qaoa(
-            graph=graph,
-            depth=depth,
-            max_iters=100
-        )
+        result = metatron_qso.solve_maxcut_qaoa(graph=graph, depth=depth, max_iters=100)
 
         # Display results
         print(f"Results (depth p={depth}):")
@@ -49,21 +46,21 @@ def main():
         print()
 
         # Show the partition
-        assignment = result['assignment']
+        assignment = result["assignment"]
         set_0 = [i for i, val in enumerate(assignment) if val == 0]
         set_1 = [i for i, val in enumerate(assignment) if val == 1]
 
-        print(f"  Partition:")
+        print("  Partition:")
         print(f"    Set 0: {set_0}")
         print(f"    Set 1: {set_1}")
         print()
 
         # Quality assessment
-        if result['approximation_ratio'] > 0.95:
+        if result["approximation_ratio"] > 0.95:
             quality = "EXCELLENT"
-        elif result['approximation_ratio'] > 0.8:
+        elif result["approximation_ratio"] > 0.8:
             quality = "GOOD"
-        elif result['approximation_ratio'] > 0.6:
+        elif result["approximation_ratio"] > 0.6:
             quality = "FAIR"
         else:
             quality = "POOR"

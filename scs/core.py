@@ -13,10 +13,8 @@ from .performance import PerformanceTriplet, compute_performance_triplet
 from .field import MandorlaField
 from .calibrator import SeraphicCalibrator, CalibratorConfig
 from .benchmark import (
-    BenchmarkRecord,
     load_benchmarks,
     write_benchmark,
-    validate_benchmark,
 )
 
 
@@ -88,7 +86,9 @@ class AutoTuner:
         self.calibrator = SeraphicCalibrator(config)
         self._initialized = False
 
-    def initialize(self, initial_config: Optional[Configuration] = None) -> Configuration:
+    def initialize(
+        self, initial_config: Optional[Configuration] = None
+    ) -> Configuration:
         """
         Initialize the auto-tuner with a starting configuration.
 
@@ -194,11 +194,13 @@ class AutoTuner:
 
         # Extract proposal information
         current_perf = self.calibrator.current_performance
-        estimated_perf_dict = step_result.get('current_performance', current_perf.to_dict())
+        estimated_perf_dict = step_result.get(
+            "current_performance", current_perf.to_dict()
+        )
         estimated_perf = PerformanceTriplet(
-            psi=estimated_perf_dict['psi'],
-            rho=estimated_perf_dict['rho'],
-            omega=estimated_perf_dict['omega'],
+            psi=estimated_perf_dict["psi"],
+            rho=estimated_perf_dict["rho"],
+            omega=estimated_perf_dict["omega"],
         )
 
         # Compute delta
@@ -209,13 +211,13 @@ class AutoTuner:
             config=self.calibrator.current_config.copy(),
             current_performance=current_perf,
             estimated_performance=estimated_perf,
-            por_accepted=step_result.get('accepted', False),
-            cri_triggered=step_result.get('cri_triggered', False),
+            por_accepted=step_result.get("accepted", False),
+            cri_triggered=step_result.get("cri_triggered", False),
             delta_phi=delta_phi,
-            step=step_result['step'],
-            j_t=step_result['j_t'],
-            por_details=step_result.get('por_detailed'),
-            cri_diagnostics=step_result.get('cri_diagnostics'),
+            step=step_result["step"],
+            j_t=step_result["j_t"],
+            por_details=step_result.get("por_detailed"),
+            cri_diagnostics=step_result.get("cri_diagnostics"),
         )
 
         # Save updated state
@@ -320,6 +322,7 @@ class AutoTuner:
 
 # Convenience functions
 
+
 def create_auto_tuner(
     benchmark_dir: str = "benchmarks",
     enabled: bool = True,
@@ -393,11 +396,11 @@ def load_and_compute_performance(
         system_key = record.system
         if system_key not in benchmarks:
             benchmarks[system_key] = {
-                'metrics': record.metrics,
-                'config': record.config,
-                'results': [],
+                "metrics": record.metrics,
+                "config": record.config,
+                "results": [],
             }
-        benchmarks[system_key]['results'].append(record.raw_results or {})
+        benchmarks[system_key]["results"].append(record.raw_results or {})
 
     # Compute aggregate performance
     return compute_performance_triplet(benchmarks)

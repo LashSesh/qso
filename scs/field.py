@@ -9,7 +9,6 @@ from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional
 import numpy as np
 import json
-from pathlib import Path
 
 from .performance import PerformanceTriplet
 
@@ -39,7 +38,9 @@ class MandorlaField:
         if len(self.field_state) != self.dimension:
             self.field_state = np.zeros(self.dimension)
         if not self.submodule_states:
-            self.submodule_states = [np.zeros(self.dimension) for _ in self.beta_weights]
+            self.submodule_states = [
+                np.zeros(self.dimension) for _ in self.beta_weights
+            ]
 
     def update(self, injection: np.ndarray) -> None:
         """
@@ -51,7 +52,9 @@ class MandorlaField:
             injection: Feedback vector Iₜ from seraphic encoder
         """
         if len(injection) != self.dimension:
-            raise ValueError(f"Injection dimension {len(injection)} != field dimension {self.dimension}")
+            raise ValueError(
+                f"Injection dimension {len(injection)} != field dimension {self.dimension}"
+            )
 
         # Combine: α M(t) + Σᵢ βᵢ Gᵢ(t) + γ Iₜ
         new_state = self.alpha * self.field_state
@@ -70,7 +73,9 @@ class MandorlaField:
         else:
             self.field_state = new_state
 
-    def update_submodules(self, performance: PerformanceTriplet, algorithm: str) -> None:
+    def update_submodules(
+        self, performance: PerformanceTriplet, algorithm: str
+    ) -> None:
         """
         Update resonant submodule states Gᵢ(t) based on algorithm performance.
 
@@ -78,12 +83,12 @@ class MandorlaField:
         """
         # Map algorithms to submodule indices
         algorithm_map = {
-            'VQE': 0,
-            'QAOA': 1,
-            'QuantumWalk': 2,
-            'Grover': 0,
-            'Boson': 1,
-            'VQC': 2,
+            "VQE": 0,
+            "QAOA": 1,
+            "QuantumWalk": 2,
+            "Grover": 0,
+            "Boson": 1,
+            "VQC": 2,
         }
 
         idx = algorithm_map.get(algorithm, 0) % len(self.submodule_states)
@@ -112,7 +117,7 @@ class MandorlaField:
             Correlation in [-1, 1], where positive indicates resonance
         """
         if len(injection) != self.dimension:
-            raise ValueError(f"Injection dimension mismatch")
+            raise ValueError("Injection dimension mismatch")
 
         # Normalize both vectors
         field_norm = self.field_state / (np.linalg.norm(self.field_state) + 1e-10)
@@ -125,34 +130,34 @@ class MandorlaField:
     def to_dict(self) -> Dict[str, Any]:
         """Serialize field state to dictionary."""
         return {
-            'dimension': self.dimension,
-            'field_state': self.field_state.tolist(),
-            'alpha': self.alpha,
-            'gamma': self.gamma,
-            'beta_weights': self.beta_weights,
-            'submodule_states': [s.tolist() for s in self.submodule_states],
+            "dimension": self.dimension,
+            "field_state": self.field_state.tolist(),
+            "alpha": self.alpha,
+            "gamma": self.gamma,
+            "beta_weights": self.beta_weights,
+            "submodule_states": [s.tolist() for s in self.submodule_states],
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'MandorlaField':
+    def from_dict(cls, data: Dict[str, Any]) -> "MandorlaField":
         """Deserialize field from dictionary."""
-        field = cls(dimension=data['dimension'])
-        field.field_state = np.array(data['field_state'])
-        field.alpha = data['alpha']
-        field.gamma = data['gamma']
-        field.beta_weights = data['beta_weights']
-        field.submodule_states = [np.array(s) for s in data['submodule_states']]
+        field = cls(dimension=data["dimension"])
+        field.field_state = np.array(data["field_state"])
+        field.alpha = data["alpha"]
+        field.gamma = data["gamma"]
+        field.beta_weights = data["beta_weights"]
+        field.submodule_states = [np.array(s) for s in data["submodule_states"]]
         return field
 
     def save(self, path: str) -> None:
         """Save field state to file."""
-        with open(path, 'w') as f:
+        with open(path, "w") as f:
             json.dump(self.to_dict(), f, indent=2)
 
     @classmethod
-    def load(cls, path: str) -> 'MandorlaField':
+    def load(cls, path: str) -> "MandorlaField":
         """Load field state from file."""
-        with open(path, 'r') as f:
+        with open(path, "r") as f:
             return cls.from_dict(json.load(f))
 
 
@@ -167,8 +172,11 @@ class SeraphicFeedback:
         """Initialize seraphic feedback encoder."""
         self.field_dimension = field_dimension
 
-    def encode(self, performance: PerformanceTriplet,
-               benchmarks: Optional[Dict[str, Any]] = None) -> np.ndarray:
+    def encode(
+        self,
+        performance: PerformanceTriplet,
+        benchmarks: Optional[Dict[str, Any]] = None,
+    ) -> np.ndarray:
         """
         Encode performance triplet into field injection vector.
 
@@ -204,14 +212,16 @@ class SeraphicFeedback:
         for i in range(9, self.field_dimension):
             phase = 2 * np.pi * i / self.field_dimension
             injection[i] = (
-                0.4 * np.sin(phase) * performance.psi +
-                0.3 * np.cos(phase) * performance.rho +
-                0.3 * np.sin(2 * phase) * performance.omega
+                0.4 * np.sin(phase) * performance.psi
+                + 0.3 * np.cos(phase) * performance.rho
+                + 0.3 * np.sin(2 * phase) * performance.omega
             )
 
         return injection
 
-    def encode_from_benchmarks(self, benchmarks: Dict[str, Dict[str, Any]]) -> np.ndarray:
+    def encode_from_benchmarks(
+        self, benchmarks: Dict[str, Dict[str, Any]]
+    ) -> np.ndarray:
         """
         Encode benchmark results directly into injection vector.
 

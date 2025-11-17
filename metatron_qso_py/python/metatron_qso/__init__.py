@@ -26,7 +26,6 @@ from ._metatron_qso_internal import (
     quantum_walk_connectivity,
     solve_maxcut_qaoa_advanced,
     __version__,
-    __doc__ as _internal_doc,
 )
 
 # Import auto-tuning integration (optional SCS support)
