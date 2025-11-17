@@ -48,6 +48,12 @@ pub struct MetatronGraph {
     edges: Vec<(usize, usize)>,
 }
 
+impl Default for MetatronGraph {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MetatronGraph {
     /// Build the canonical Metatron Cube with 13 nodes and 78 edges.
     pub fn new() -> Self {
@@ -287,9 +293,9 @@ impl MetatronGraph {
         // Reflections: flip across various axes
         for flip_axis in 0..n {
             let mut reflected = vec![0; n];
-            for i in 0..n {
+            for (i, item) in reflected.iter_mut().enumerate().take(n) {
                 let offset = (flip_axis as i32 - i as i32).rem_euclid(n as i32) as usize;
-                reflected[i] = nodes[(flip_axis + offset) % n];
+                *item = nodes[(flip_axis + offset) % n];
             }
             perms.push(reflected);
         }

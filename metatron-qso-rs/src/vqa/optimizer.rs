@@ -202,6 +202,7 @@ impl Optimizer {
     }
 
     /// Nelder-Mead Simplex Optimizer (gradient-free)
+    #[allow(clippy::needless_range_loop)]
     fn optimize_nelder_mead(
         &self,
         cost_function: Arc<dyn CostFunction>,
@@ -339,6 +340,7 @@ impl Optimizer {
     }
 
     /// L-BFGS Optimizer (Limited-memory Broyden-Fletcher-Goldfarb-Shanno)
+    #[allow(clippy::needless_range_loop)]
     fn optimize_lbfgs(
         &self,
         cost_function: Arc<dyn CostFunction>,

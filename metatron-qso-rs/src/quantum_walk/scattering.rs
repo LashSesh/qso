@@ -69,7 +69,7 @@ fn density_of_states(
 fn build_coupling_matrix(channels: &[ScatteringChannel]) -> OperatorMatrix {
     let mut matrix = OperatorMatrix::zeros();
     for channel in channels {
-        let projector = channel.vector.clone() * channel.vector.adjoint();
+        let projector = channel.vector * channel.vector.adjoint();
         matrix += projector * Complex64::new(channel.coupling, 0.0);
     }
     matrix
@@ -78,7 +78,7 @@ fn build_coupling_matrix(channels: &[ScatteringChannel]) -> OperatorMatrix {
 fn resolve_resolvent(hamiltonian: &MetatronHamiltonian, energy: f64, eta: f64) -> OperatorMatrix {
     let mut resolvent = OperatorMatrix::identity() * Complex64::new(energy, eta)
         - hamiltonian.as_complex_operator();
-    if let Some(inverse) = resolvent.clone().try_inverse() {
+    if let Some(inverse) = resolvent.try_inverse() {
         return inverse;
     }
     for idx in 0..METATRON_DIMENSION {
@@ -86,7 +86,7 @@ fn resolve_resolvent(hamiltonian: &MetatronHamiltonian, energy: f64, eta: f64) -
     }
     resolvent
         .try_inverse()
-        .unwrap_or_else(|| OperatorMatrix::identity())
+        .unwrap_or_else(OperatorMatrix::identity)
 }
 
 /// Compute the scattering matrix `S(E)` for a set of coupling channels.
@@ -102,7 +102,7 @@ pub fn scattering_matrix(
     let resolvent = resolve_resolvent(hamiltonian, energy, eta);
 
     let prefactor = Complex64::new(0.0, 2.0 * PI * density.value);
-    let kernel = coupling.clone() * resolvent * coupling;
+    let kernel = coupling * resolvent * coupling;
     let scattering = OperatorMatrix::identity() - kernel * prefactor;
 
     ScatteringAnalysis::new(energy, eta, density, scattering)

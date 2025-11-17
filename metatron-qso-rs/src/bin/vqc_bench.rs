@@ -183,8 +183,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     // Calculate quality metrics
-    let train_accuracies = vec![binary.training_accuracy, linear.training_accuracy];
-    let test_accuracies = vec![binary.test_accuracy, linear.test_accuracy];
+    let train_accuracies = [binary.training_accuracy, linear.training_accuracy];
+    let test_accuracies = [binary.test_accuracy, linear.test_accuracy];
 
     let best_train_acc = train_accuracies
         .iter()
@@ -197,7 +197,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let avg_train_acc = train_accuracies.iter().sum::<f64>() / train_accuracies.len() as f64;
     let avg_test_acc = test_accuracies.iter().sum::<f64>() / test_accuracies.len() as f64;
 
-    let convergence_rate = vec![binary.converged as u32, linear.converged as u32]
+    let convergence_rate = [binary.converged as u32, linear.converged as u32]
         .iter()
         .sum::<u32>() as f64
         / 2.0;
@@ -214,7 +214,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         timestamp: chrono::Utc::now(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         commit_hash: option_env!("GIT_HASH").unwrap_or("unknown").to_string(),
-        system_info: format!("Metatron QSO VQC Benchmarks - Classification Tasks"),
+        system_info: "Metatron QSO VQC Benchmarks - Classification Tasks".to_string(),
     };
 
     let suite = VQCBenchmarkSuite {

@@ -146,11 +146,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     // Calculate quality metrics
-    let ratios = vec![
-        triangle.approximation_ratio,
+    let ratios = [triangle.approximation_ratio,
         square.approximation_ratio,
-        pentagram.approximation_ratio,
-    ];
+        pentagram.approximation_ratio];
 
     let best_ratio = ratios.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
     let worst_ratio = ratios.iter().cloned().fold(f64::INFINITY, f64::min);
@@ -158,11 +156,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let ratio_variance =
         ratios.iter().map(|r| (r - avg_ratio).powi(2)).sum::<f64>() / ratios.len() as f64;
 
-    let convergence_rate = vec![
-        triangle.converged as u32,
+    let convergence_rate = [triangle.converged as u32,
         square.converged as u32,
-        pentagram.converged as u32,
-    ]
+        pentagram.converged as u32]
     .iter()
     .sum::<u32>() as f64
         / 3.0;
@@ -179,7 +175,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         timestamp: chrono::Utc::now(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         commit_hash: option_env!("GIT_HASH").unwrap_or("unknown").to_string(),
-        system_info: format!("Metatron QSO QAOA Benchmarks - MaxCut Problems"),
+        system_info: "Metatron QSO QAOA Benchmarks - MaxCut Problems".to_string(),
     };
 
     let suite = QAOABenchmarkSuite {

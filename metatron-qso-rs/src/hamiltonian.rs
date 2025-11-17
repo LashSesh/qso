@@ -148,14 +148,14 @@ impl MetatronHamiltonian {
         self.eigenvalues.get(index).map(|&energy| {
             (
                 energy,
-                QuantumState::from_vector(self.eigenvectors[index].clone(), false),
+                QuantumState::from_vector(self.eigenvectors[index], false),
             )
         })
     }
 
     /// Ground-state wavefunction.
     pub fn ground_state(&self) -> QuantumState {
-        QuantumState::from_vector(self.eigenvectors[0].clone(), false)
+        QuantumState::from_vector(self.eigenvectors[0], false)
     }
 
     /// Time-evolution operator U(t) = exp(-iHt).
@@ -163,7 +163,7 @@ impl MetatronHamiltonian {
         let mut matrix = OperatorMatrix::zeros();
         for (energy, eigenvector) in self.eigenvalues.iter().zip(self.eigenvectors.iter()) {
             let phase = Complex64::from_polar(1.0, -energy * time);
-            let projector = eigenvector.clone() * eigenvector.adjoint();
+            let projector = *eigenvector * eigenvector.adjoint();
             matrix += projector * phase;
         }
         QuantumOperator::from_matrix(matrix)

@@ -55,27 +55,27 @@ pub fn lanczos_tridiagonalisation(
     let mut alpha = Vec::new();
     let mut beta = Vec::new();
 
-    let mut current = initial.amplitudes().clone();
+    let mut current = *initial.amplitudes();
     let norm = current.norm();
     if norm > 0.0 {
         current *= Complex64::new(1.0 / norm, 0.0);
     } else {
         current[0] = Complex64::new(1.0, 0.0);
     }
-    basis.push(current.clone());
+    basis.push(current);
 
     let mut previous = StateVector::zeros();
     let mut previous_beta = 0.0;
     let h = hamiltonian.as_complex_operator();
 
     for iteration in 0..dimension {
-        let mut w = h.clone() * current.clone();
+        let mut w = h * current;
         if iteration > 0 {
-            w -= previous.clone() * Complex64::new(previous_beta, 0.0);
+            w -= previous * Complex64::new(previous_beta, 0.0);
         }
 
         let alpha_value = current.dotc(&w).re;
-        w -= current.clone() * Complex64::new(alpha_value, 0.0);
+        w -= current * Complex64::new(alpha_value, 0.0);
         alpha.push(alpha_value);
 
         if iteration + 1 >= dimension {
@@ -90,7 +90,7 @@ pub fn lanczos_tridiagonalisation(
         beta.push(beta_value);
         previous = current;
         current = w * Complex64::new(1.0 / beta_value, 0.0);
-        basis.push(current.clone());
+        basis.push(current);
         previous_beta = beta_value;
     }
 
@@ -130,7 +130,7 @@ impl KrylovProjection {
 
         let mut vector = StateVector::zeros();
         for (coeff, basis_vector) in rotated.iter().zip(self.lanczos.basis.iter()) {
-            vector += basis_vector.clone() * *coeff;
+            vector += *basis_vector * *coeff;
         }
 
         let state = QuantumState::from_vector(vector, true);

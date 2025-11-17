@@ -90,7 +90,7 @@ impl DTLResonator {
         let samples = Arc::new(
             times
                 .into_iter()
-                .zip(phases.into_iter())
+                .zip(phases)
                 .collect::<Vec<_>>(),
         );
 

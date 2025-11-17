@@ -244,7 +244,7 @@ mod tests {
 
         // All scores should be in [0, 1]
         for &score in &centrality {
-            assert!(score >= 0.0 && score <= 1.0);
+            assert!((0.0..=1.0).contains(&score));
         }
 
         // Central node (0) should have high centrality

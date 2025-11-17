@@ -187,22 +187,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     let total_time = overall_start.elapsed().as_secs_f64() * 1000.0;
 
     // Calculate cross-module metrics
-    let compatibility_checks = vec![
-        vqe_bench.metatron_hamiltonian_compatibility,
+    let compatibility_checks = [vqe_bench.metatron_hamiltonian_compatibility,
         vqe_bench.dtl_state_integration,
         qaoa_bench.graph_integration,
         qaoa_bench.custom_hamiltonian_support,
-        qwalk_bench.metatron_graph_compatibility,
-    ];
+        qwalk_bench.metatron_graph_compatibility];
 
     let compatibility_score = compatibility_checks.iter().filter(|&&x| x).count() as f64
         / compatibility_checks.len() as f64;
 
-    let integration_success_rate = vec![
-        vqe_bench.state_fidelity > 0.9,
+    let integration_success_rate = [vqe_bench.state_fidelity > 0.9,
         qaoa_bench.approximation_ratio > 0.5,
-        qwalk_bench.speedup_factor > 1.0,
-    ]
+        qwalk_bench.speedup_factor > 1.0]
     .iter()
     .filter(|&&x| x)
     .count() as f64
@@ -224,7 +220,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         timestamp: chrono::Utc::now(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         commit_hash: option_env!("GIT_HASH").unwrap_or("unknown").to_string(),
-        system_info: format!("Metatron QSO Integration Benchmarks - Cross-Module Compatibility"),
+        system_info: "Metatron QSO Integration Benchmarks - Cross-Module Compatibility".to_string(),
     };
 
     let suite = IntegrationBenchmarkSuite {

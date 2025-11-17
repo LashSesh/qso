@@ -70,14 +70,6 @@ path = "src/bin/benchmark_compare.rs"
 name = "vqa_demo"
 path = "examples/vqa_demo.rs"
 
-[[example]]
-name = "quantum_walk_basic"
-path = "examples/quantum_walk_basic.rs"
-
-[[example]]
-name = "qaoa_maxcut_basic"
-path = "examples/qaoa_maxcut_basic.rs"
-
 [features]
 default = ["walks", "vqa", "dtl"]
 walks = []

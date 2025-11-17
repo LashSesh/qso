@@ -253,6 +253,7 @@ fn benchmark_metatron_system() -> SystemBenchmark {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn create_baseline_benchmark(
     name: &str,
     vqe_convergence: f64,
@@ -345,7 +346,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
 
     // Calculate comparison metrics
-    let systems = vec![&metatron, &qiskit, &cirq, &pennylane, &projectq];
+    let systems = [&metatron, &qiskit, &cirq, &pennylane, &projectq];
     let mut scores: Vec<(usize, f64)> = systems
         .iter()
         .enumerate()
@@ -406,9 +407,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         timestamp: chrono::Utc::now(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         commit_hash: option_env!("GIT_HASH").unwrap_or("unknown").to_string(),
-        system_info: format!(
-            "Cross-System Comparison: Metatron QSO vs. Qiskit, Cirq, PennyLane, ProjectQ"
-        ),
+        system_info: "Cross-System Comparison: Metatron QSO vs. Qiskit, Cirq, PennyLane, ProjectQ".to_string(),
     };
 
     let suite = CrossSystemBenchmarkSuite {

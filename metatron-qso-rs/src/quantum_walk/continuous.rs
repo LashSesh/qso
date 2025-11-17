@@ -61,7 +61,7 @@ impl<'a> SpectralPropagator<'a> {
             .zip(self.overlaps.iter())
         {
             let phase = Complex64::from_polar(1.0, -energy * time);
-            let contribution = eigenvector.clone() * (*overlap * phase);
+            let contribution = *eigenvector * (*overlap * phase);
             vector += contribution;
         }
         QuantumState::from_vector(vector, false)

@@ -114,6 +114,7 @@ impl<'a> QuantumWalkBenchmarker<'a> {
     }
 
     /// Evaluate quantum and classical hitting time statistics across all node pairs.
+    #[allow(clippy::needless_range_loop)]
     pub fn hitting_time_benchmark(&self, dt: f64, steps: usize) -> HittingTimeBenchmark {
         let classical_matrix = classical_hitting_times(&self.adjacency);
         let mut quantum_results = Vec::new();
@@ -275,10 +276,11 @@ pub struct QuantumWalkBenchmarkSuite {
     pub hitting_time: HittingTimeBenchmark,
 }
 
+#[allow(clippy::needless_range_loop)]
 fn classical_hitting_times(adjacency: &AdjacencyMatrix) -> ClassicalHittingMatrix {
     let mut matrix = [[0.0; METATRON_DIMENSION]; METATRON_DIMENSION];
     let degrees: Vec<f64> = (0..METATRON_DIMENSION)
-        .map(|i| adjacency.row(i).iter().map(|val| *val).sum::<f64>())
+        .map(|i| adjacency.row(i).iter().copied().sum::<f64>())
         .collect();
 
     let mut transition = vec![vec![0.0; METATRON_DIMENSION]; METATRON_DIMENSION];
@@ -348,7 +350,7 @@ mod tests {
         let qso = QuantumStateOperator::new(params);
         let benchmarker = QuantumWalkBenchmarker::new(&qso);
         let report = benchmarker.hitting_time_benchmark(0.25, 12);
-        assert!(report.quantum_results.len() > 0);
+        assert!(!report.quantum_results.is_empty());
         assert!(report.speedup_factor.is_finite());
     }
 }
