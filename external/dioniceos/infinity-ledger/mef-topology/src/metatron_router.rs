@@ -1183,10 +1183,7 @@ mod tests {
         );
         assert_eq!(metrics.get("c6_subgroup").unwrap().as_i64().unwrap(), 6);
         assert_eq!(metrics.get("d6_subgroup").unwrap().as_i64().unwrap(), 12);
-        assert_eq!(
-            metrics.get("cache_enabled").unwrap().as_bool().unwrap(),
-            true
-        );
+        assert!(metrics.get("cache_enabled").unwrap().as_bool().unwrap());
     }
 
     #[test]
@@ -1273,7 +1270,7 @@ mod tests {
         let candidates = router.select_candidate_permutations(&input, 10);
 
         assert!(candidates.len() <= 10);
-        assert!(candidates.len() > 0);
+        assert!(!candidates.is_empty());
 
         // All candidates should be 13 elements
         for perm in &candidates {

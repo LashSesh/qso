@@ -102,6 +102,7 @@ impl CouplingMatrix {
     /// Create an identity coupling matrix
     pub fn identity() -> Self {
         let mut strengths = [[0.0; 5]; 5];
+        #[allow(clippy::needless_range_loop)]
         for i in 0..5 {
             strengths[i][i] = 1.0;
         }

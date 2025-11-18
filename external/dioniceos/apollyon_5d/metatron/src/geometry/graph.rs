@@ -13,9 +13,15 @@ pub struct MetatronCubeGraph {
     adjacency: Vec<Vec<f64>>,
 }
 
+impl Default for MetatronCubeGraph {
+    fn default() -> Self {
+        Self::with_edges(None, None)
+    }
+}
+
 impl MetatronCubeGraph {
     pub fn new() -> Self {
-        Self::with_edges(None, None)
+        Self::default()
     }
 
     pub fn with_edges(nodes: Option<Vec<Node>>, edges: Option<Vec<(usize, usize)>>) -> Self {
@@ -158,6 +164,7 @@ impl MetatronCubeGraph {
         })
     }
 
+    #[allow(clippy::needless_range_loop)]
     pub fn apply_permutation_matrix(&self, matrix: &[Vec<f64>]) -> EngineResult<Self> {
         let n = self.nodes.len();
         if matrix.len() != n || matrix.iter().any(|row| row.len() != n) {

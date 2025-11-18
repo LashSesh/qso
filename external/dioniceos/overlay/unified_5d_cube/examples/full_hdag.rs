@@ -7,9 +7,11 @@ use unified_5d_cube::{tick_5d_cube, InterlockAdapter, InterlockConfig};
 
 fn main() {
     // Enable full HDAG relaxation
-    let mut config = InterlockConfig::default();
-    config.enable_full_hdag = true;
-    config.enable_logging = true;
+    let config = InterlockConfig {
+        enable_full_hdag: true,
+        enable_logging: true,
+        ..Default::default()
+    };
 
     println!("=== Full HDAG Relaxation Example ===\n");
     println!("Configuration:");

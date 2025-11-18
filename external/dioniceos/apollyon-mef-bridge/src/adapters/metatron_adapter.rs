@@ -169,7 +169,7 @@ mod tests {
     #[test]
     fn test_bridge_creation() {
         let _bridge = MetatronBridge::new();
-        assert!(true); // Bridge created successfully
+        // Bridge created successfully
     }
 
     #[test]
@@ -252,7 +252,7 @@ mod tests {
         assert!(route.mesh_score.is_finite());
 
         // Verify permutation is valid (all indices 0-6 present once)
-        let mut seen = vec![false; 7];
+        let mut seen = [false; 7];
         for &idx in &route.permutation {
             assert!(idx < 7);
             assert!(!seen[idx], "Duplicate index in permutation");

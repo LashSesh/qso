@@ -16,20 +16,20 @@ fn main() {
     println!("Storage path: {:?}\n", storage_path);
 
     // Enable ALL extensions
-    let mut config = InterlockConfig::default();
-    config.enable_full_hdag = true;
-    config.enable_funnel_ops = true;
-    config.enable_ledger_writes = true;
-    config.enable_8d_vectors = true;
-    config.enable_metatron_routing = true;
-    config.funnel_policy = Policy::Homeostasis;
-    config.ledger_path = Some(storage_path.clone());
-    config.shadow_mode = false; // Enable actual operations
-    config.enable_logging = true;
-
-    // Lower thresholds for demonstration
-    config.gate_phi_threshold = 0.4;
-    config.gate_delta_pi_max = 0.3;
+    let config = InterlockConfig {
+        enable_full_hdag: true,
+        enable_funnel_ops: true,
+        enable_ledger_writes: true,
+        enable_8d_vectors: true,
+        enable_metatron_routing: true,
+        funnel_policy: Policy::Homeostasis,
+        ledger_path: Some(storage_path.clone()),
+        shadow_mode: false, // Enable actual operations
+        enable_logging: true,
+        gate_phi_threshold: 0.4,
+        gate_delta_pi_max: 0.3,
+        ..Default::default()
+    };
 
     println!("Configuration:");
     println!("  ✓ Full HDAG relaxation: {}", config.enable_full_hdag);

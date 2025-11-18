@@ -15,15 +15,15 @@ fn main() {
     println!("Ledger path: {:?}\n", ledger_path);
 
     // Enable ledger writes (but keep shadow mode for safety)
-    let mut config = InterlockConfig::default();
-    config.enable_ledger_writes = true;
-    config.ledger_path = Some(ledger_path.clone());
-    config.shadow_mode = false; // Enable actual writes
-    config.enable_logging = true;
-
-    // Lower thresholds to get some FIRE decisions
-    config.gate_phi_threshold = 0.3;
-    config.gate_delta_pi_max = 0.5;
+    let config = InterlockConfig {
+        enable_ledger_writes: true,
+        ledger_path: Some(ledger_path.clone()),
+        shadow_mode: false, // Enable actual writes
+        enable_logging: true,
+        gate_phi_threshold: 0.3,
+        gate_delta_pi_max: 0.5,
+        ..Default::default()
+    };
 
     println!("Configuration:");
     println!("  - Ledger Writes: {}", config.enable_ledger_writes);

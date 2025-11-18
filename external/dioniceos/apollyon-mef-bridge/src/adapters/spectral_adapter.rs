@@ -46,7 +46,7 @@ impl SpectralAdapter {
 
         // Resonance from inverse entropy (clamped to [0,1])
         // Higher entropy = lower resonance
-        let clamped_entropy = entropy.min(1.0).max(0.0);
+        let clamped_entropy = entropy.clamp(0.0, 1.0);
         let rho = 1.0 - clamped_entropy;
 
         // Oscillation frequency (use as-is)
@@ -76,7 +76,7 @@ impl SpectralAdapter {
 
         // Low variance = high resonance
         // Use exponential decay: rho = exp(-variance)
-        let rho = (-variance).exp().min(1.0).max(0.0);
+        let rho = (-variance).exp().clamp(0.0, 1.0);
 
         // Oscillation frequency = oscillations per unit time
         let omega = if trajectory_length > 0.0 {

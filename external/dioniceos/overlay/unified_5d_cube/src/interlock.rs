@@ -221,6 +221,7 @@ impl InterlockAdapter {
             // Normalize by count if we have gradients
             if gradient_count > 0 {
                 let scale = 1.0 / (gradient_count as f64);
+                #[allow(clippy::needless_range_loop)]
                 for i in 0..5 {
                     guidance[i] *= scale;
                 }

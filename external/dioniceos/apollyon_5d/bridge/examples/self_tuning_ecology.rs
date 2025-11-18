@@ -95,8 +95,8 @@ fn main() {
             let adjustments = tuner.suggest_adjustments(sim.observer(), &params);
 
             // Apply adjustments to parameters
-            for i in 0..5 {
-                params.intrinsic_rates[i] += adjustments[i];
+            for (rate, &adjustment) in params.intrinsic_rates.iter_mut().zip(&adjustments) {
+                *rate += adjustment;
             }
 
             // Update vector field with new parameters

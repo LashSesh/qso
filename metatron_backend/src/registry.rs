@@ -11,11 +11,12 @@ use std::collections::HashMap;
 /// Backend execution mode
 ///
 /// Controls which backends are eligible for circuit execution.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum BackendMode {
     /// Only use simulators (SAFE DEFAULT)
     ///
     /// This is the default mode. No QPU backends will be used.
+    #[default]
     SimulationOnly,
 
     /// Prefer simulators, but allow QPUs if explicitly enabled
@@ -28,12 +29,6 @@ pub enum BackendMode {
     /// Only backends from the specified provider will be considered.
     /// Example: "local", "ibm", "azure"
     ForceProvider(String),
-}
-
-impl Default for BackendMode {
-    fn default() -> Self {
-        Self::SimulationOnly
-    }
 }
 
 /// Registry of available quantum backends

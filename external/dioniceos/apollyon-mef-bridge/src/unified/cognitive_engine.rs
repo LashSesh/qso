@@ -285,8 +285,8 @@ impl UnifiedCognitiveEngine {
         // Compute centroids (use mean of each component)
         let mut centroids = vec![0.0; 5];
         for state in trajectory {
-            for i in 0..5 {
-                centroids[i] += state.get(i);
+            for (i, centroid) in centroids.iter_mut().enumerate() {
+                *centroid += state.get(i);
             }
         }
         let n = trajectory.len() as f64;

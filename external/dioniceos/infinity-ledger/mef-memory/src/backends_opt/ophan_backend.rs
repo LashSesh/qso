@@ -21,7 +21,7 @@ impl<B: MemoryBackend + Clone> OphanBackend<B> {
 
         Self {
             shards,
-            konus: CentralAggregator::default(),
+            konus: CentralAggregator,
         }
     }
 
@@ -274,7 +274,7 @@ mod tests {
 
     #[test]
     fn test_konus_aggregation() {
-        let konus = CentralAggregator::default();
+        let konus = CentralAggregator;
 
         let val = 1.0 / (8.0_f64).sqrt();
         let spectral = SpectralSignature {

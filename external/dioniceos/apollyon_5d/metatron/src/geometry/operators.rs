@@ -12,6 +12,7 @@ pub fn permutation_to_matrix(sigma: &[usize]) -> Vec<Vec<f64>> {
     for (src, &tgt) in sigma.iter().enumerate() {
         matrix[src][tgt - 1] = 1.0;
     }
+    #[allow(clippy::needless_range_loop)]
     for idx in sigma.len()..size {
         matrix[idx][idx] = 1.0;
     }
@@ -23,6 +24,7 @@ pub fn permutation_matrix(sigma: &[usize], size: usize) -> Vec<Vec<f64>> {
     for (row, &target) in sigma.iter().enumerate() {
         matrix[row][target - 1] = 1.0;
     }
+    #[allow(clippy::needless_range_loop)]
     for idx in sigma.len()..size {
         matrix[idx][idx] = 1.0;
     }
@@ -63,7 +65,7 @@ pub fn permute_node_labels(nodes: &[Node], sigma: &[usize]) -> Vec<Node> {
 
 pub fn hexagon_rotation(k: i32) -> Vec<usize> {
     let mut mapping = vec![1];
-    let shift = ((k % 6) + 6) % 6;
+    let shift = k.rem_euclid(6);
     for i in 0..6 {
         let new_index = 2 + ((i + shift as usize) % 6);
         mapping.push(new_index);
@@ -181,6 +183,7 @@ pub fn generate_alternating_group(
     let mut subset_vec = subset.to_vec();
     subset_vec.sort();
     let mut result = Vec::new();
+    #[allow(clippy::needless_range_loop)]
     for perm in permutations_list(&subset_vec)
         .into_iter()
         .filter(|p| is_even_permutation(p))

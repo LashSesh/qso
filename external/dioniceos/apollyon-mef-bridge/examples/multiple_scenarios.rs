@@ -14,7 +14,7 @@ fn main() {
     let mut engine = UnifiedCognitiveEngine::new();
 
     // Define multiple scenarios with different characteristics
-    let scenarios = vec![
+    let scenarios = [
         // Scenario 1: Small initial state, weak damping
         (
             "Weak Damping",

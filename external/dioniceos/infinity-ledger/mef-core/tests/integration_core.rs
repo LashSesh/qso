@@ -58,7 +58,7 @@ fn test_spiral_ledger_integration() -> Result<()> {
 
     // Verify the block was created correctly
     assert_eq!(block.index, 0);
-    assert!(block.hash.len() > 0);
+    assert!(!block.hash.is_empty());
 
     // Verify chain integrity
     let valid = ledger.verify_chain_integrity(0)?;
@@ -108,7 +108,7 @@ fn test_multiple_blocks_chain_integrity() -> Result<()> {
         });
 
         let block = ledger.append_block(&tic, &snapshot)?;
-        assert_eq!(block.index, i as i32);
+        assert_eq!(block.index, i as usize as i32);
     }
 
     // Verify chain integrity for all blocks

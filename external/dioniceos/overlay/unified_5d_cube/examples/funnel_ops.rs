@@ -8,10 +8,12 @@ use unified_5d_cube::{tick_5d_cube, InterlockAdapter, InterlockConfig};
 
 fn main() {
     // Enable full Funnel operations
-    let mut config = InterlockConfig::default();
-    config.enable_funnel_ops = true;
-    config.funnel_policy = Policy::Explore; // High hebbian, preserves diversity
-    config.enable_logging = true;
+    let config = InterlockConfig {
+        enable_funnel_ops: true,
+        funnel_policy: Policy::Explore, // High hebbian, preserves diversity
+        enable_logging: true,
+        ..Default::default()
+    };
 
     println!("=== Funnel Operations Example ===\n");
     println!("Configuration:");

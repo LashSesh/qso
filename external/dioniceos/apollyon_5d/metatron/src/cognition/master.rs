@@ -112,6 +112,29 @@ impl Default for MasterAgent {
     }
 }
 
+fn describe_value(value: &SeraphicValue) -> String {
+    match value {
+        SeraphicValue::Text(text) => text.clone(),
+        SeraphicValue::Number(num) => format!("{num:.3}"),
+        SeraphicValue::Sequence(seq) => {
+            if seq.is_empty() {
+                "[]".to_string()
+            } else {
+                let preview: Vec<String> = seq.iter().take(6).map(|v| format!("{v:.3}")).collect();
+                format!(
+                    "[{}{}]",
+                    preview.join(","),
+                    if seq.len() > preview.len() {
+                        ", ..."
+                    } else {
+                        ""
+                    }
+                )
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,28 +156,5 @@ mod tests {
             ])
             .unwrap();
         assert_eq!(result.spiral_points.len(), 3);
-    }
-}
-
-fn describe_value(value: &SeraphicValue) -> String {
-    match value {
-        SeraphicValue::Text(text) => text.clone(),
-        SeraphicValue::Number(num) => format!("{num:.3}"),
-        SeraphicValue::Sequence(seq) => {
-            if seq.is_empty() {
-                "[]".to_string()
-            } else {
-                let preview: Vec<String> = seq.iter().take(6).map(|v| format!("{v:.3}")).collect();
-                format!(
-                    "[{}{}]",
-                    preview.join(","),
-                    if seq.len() > preview.len() {
-                        ", ..."
-                    } else {
-                        ""
-                    }
-                )
-            }
-        }
     }
 }

@@ -267,8 +267,8 @@ mod tests {
         let result = run_ensemble(&config, &vf, &tc);
 
         assert_eq!(result.trajectories.len(), 10);
-        assert!(result.mean_trajectory.len() > 0);
-        assert!(result.std_trajectory.len() > 0);
+        assert!(!result.mean_trajectory.is_empty());
+        assert!(!result.std_trajectory.is_empty());
     }
 
     #[test]
@@ -293,7 +293,7 @@ mod tests {
 
         assert_eq!(results.len(), 5);
         for traj in results {
-            assert!(traj.len() > 0);
+            assert!(!traj.is_empty());
         }
     }
 }

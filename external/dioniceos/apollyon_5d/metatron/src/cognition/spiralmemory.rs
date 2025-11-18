@@ -14,13 +14,14 @@ impl SpiralMemory {
         }
     }
 
-    pub fn default() -> Self {
+    pub fn with_default_decay() -> Self {
         Self::new(0.1)
     }
 
     pub fn embed(&self, sequence: &str) -> Vec<f64> {
         let base: Vec<f64> = sequence.chars().map(|c| c as u32 as f64).collect();
         let mut vec = vec![0.0; 5];
+        #[allow(clippy::needless_range_loop)]
         for i in 0..5 {
             let mut acc = 0.0;
             for (idx, value) in base.iter().enumerate() {

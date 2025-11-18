@@ -56,7 +56,7 @@ fn hmac_sha256(key: &[u8], message: &[u8]) -> Vec<u8> {
     // Compute outer hash
     let mut outer_hasher = Sha256::new();
     outer_hasher.update(&outer_key);
-    outer_hasher.update(&inner_hash);
+    outer_hasher.update(inner_hash);
     let outer_hash = outer_hasher.finalize();
 
     outer_hash.to_vec()

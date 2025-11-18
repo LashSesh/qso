@@ -209,7 +209,7 @@ mod tests {
         let trajectory = sim.integrate_adaptive(initial);
 
         assert!(trajectory.len() > 1);
-        assert!(sim.observer().history().len() > 0);
+        assert!(!sim.observer().history().is_empty());
     }
 
     #[test]
@@ -225,7 +225,7 @@ mod tests {
 
         let initial = State5D::new(1.0, 0.0, 0.0, 0.0, 0.0);
         let _ = sim.integrate(initial);
-        assert!(sim.observer().history().len() > 0);
+        assert!(!sim.observer().history().is_empty());
 
         sim.reset();
         assert_eq!(sim.observer().history().len(), 0);

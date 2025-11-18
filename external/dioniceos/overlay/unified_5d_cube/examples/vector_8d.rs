@@ -7,9 +7,11 @@ use unified_5d_cube::{tick_5d_cube, InterlockAdapter, InterlockConfig};
 
 fn main() {
     // Enable 8D vector derivation
-    let mut config = InterlockConfig::default();
-    config.enable_8d_vectors = true;
-    config.enable_logging = true;
+    let config = InterlockConfig {
+        enable_8d_vectors: true,
+        enable_logging: true,
+        ..Default::default()
+    };
 
     println!("=== 8D Vector Pipeline Example ===\n");
     println!("Configuration:");
@@ -19,7 +21,7 @@ fn main() {
     let mut adapter = InterlockAdapter::new(config);
 
     // Run ticks with various states
-    let test_states = vec![
+    let test_states = [
         State5D::from_array([1.0, 0.0, 0.0, 0.5, 0.3]),
         State5D::from_array([0.8, 0.6, 0.0, 0.7, 0.4]),
         State5D::from_array([0.5, 0.5, 0.5, 0.8, 0.5]),

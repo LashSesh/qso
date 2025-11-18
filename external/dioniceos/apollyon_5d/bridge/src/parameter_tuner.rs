@@ -67,6 +67,7 @@ impl ParameterTuner {
         let mut adjustments = [0.0; 5];
 
         // Use oscillator signal to modulate adjustments
+        #[allow(clippy::needless_range_loop)]
         for i in 0..5.min(outcome.oscillator_signal.len()) {
             let signal = outcome.oscillator_signal[i];
 
@@ -90,6 +91,7 @@ impl ParameterTuner {
         let has_adjustment = adjustments.iter().any(|&a| a.abs() > 0.001);
 
         if has_adjustment {
+            #[allow(clippy::needless_range_loop)]
             for i in 0..5 {
                 params.intrinsic_rates[i] += adjustments[i];
             }
@@ -104,6 +106,7 @@ impl ParameterTuner {
     }
 
     /// Get QDASH decision threshold
+    #[allow(clippy::misnamed_getters)]
     pub fn threshold(&self) -> f64 {
         self.qdash.mandorla.current_theta
     }

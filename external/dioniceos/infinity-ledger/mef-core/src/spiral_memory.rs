@@ -413,7 +413,7 @@ mod tests {
 
         assert_eq!(points.len(), 3);
         assert!(psi_val > 0.0);
-        assert!(sm.history.len() > 0);
+        assert!(!sm.history.is_empty());
         assert_eq!(sm.memory.len(), 1);
     }
 
@@ -435,8 +435,8 @@ mod tests {
         let elements = vec!["TEST".to_string(), "DATA".to_string()];
         sm.step(&elements, 5);
 
-        assert!(sm.memory.len() > 0);
-        assert!(sm.history.len() > 0);
+        assert!(!sm.memory.is_empty());
+        assert!(!sm.history.is_empty());
 
         sm.clear();
         assert_eq!(sm.memory.len(), 0);

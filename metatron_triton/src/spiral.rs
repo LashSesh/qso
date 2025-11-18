@@ -162,12 +162,11 @@ impl TritonSpiral {
         };
 
         // Update momentum with decay and new gradient
-        for i in 0..self.dimension {
-            self.momentum[i] = self.momentum_decay * self.momentum[i]
-                + self.learning_rate * reward * normalized_gradient[i];
+        for (momentum, &grad) in self.momentum.iter_mut().zip(&normalized_gradient) {
+            *momentum = self.momentum_decay * *momentum + self.learning_rate * reward * grad;
 
             // Clamp momentum to prevent divergence
-            self.momentum[i] = self.momentum[i].clamp(-0.5, 0.5);
+            *momentum = momentum.clamp(-0.5, 0.5);
         }
 
         // Adapt radius based on reward
@@ -240,7 +239,7 @@ mod tests {
             let point = spiral.next_point();
             for &val in &point {
                 assert!(
-                    val >= 0.0 && val <= 1.0,
+                    (0.0..=1.0).contains(&val),
                     "Point value {} out of bounds",
                     val
                 );
@@ -276,7 +275,7 @@ mod tests {
         for _ in 0..10 {
             spiral.next_point();
         }
-        spiral.update_momentum(&vec![1.0, 1.0, 1.0], 0.9);
+        spiral.update_momentum(&[1.0, 1.0, 1.0], 0.9);
 
         // Reset
         spiral.reset();
@@ -302,7 +301,7 @@ mod tests {
         for point in &points {
             for &val in point {
                 assert!(
-                    val >= 0.0 && val <= 1.0,
+                    (0.0..=1.0).contains(&val),
                     "Point value {} out of bounds",
                     val
                 );

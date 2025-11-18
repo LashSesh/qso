@@ -22,7 +22,7 @@ impl MandorlaField {
         }
     }
 
-    pub fn default() -> Self {
+    pub fn default_config() -> Self {
         Self::new(0.985, 0.5, 0.5)
     }
 

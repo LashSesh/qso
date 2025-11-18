@@ -30,7 +30,7 @@ impl Trajectory {
         let mut writer = csv::Writer::from_writer(file);
 
         // Write header
-        writer.write_record(&[
+        writer.write_record([
             "time", "sigma_1", "sigma_2", "sigma_3", "sigma_4", "sigma_5",
         ])?;
 

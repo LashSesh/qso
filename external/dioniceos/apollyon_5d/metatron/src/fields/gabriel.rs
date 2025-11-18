@@ -47,10 +47,10 @@ impl GabrielCell {
     pub fn couple_pair(a: &mut GabrielCell, b: &mut GabrielCell) {
         let pa: *mut GabrielCell = a;
         let pb: *mut GabrielCell = b;
-        if !a.neighbors.iter().any(|&ptr| ptr == pb) {
+        if !a.neighbors.contains(&pb) {
             a.neighbors.push(pb);
         }
-        if !b.neighbors.iter().any(|&ptr| ptr == pa) {
+        if !b.neighbors.contains(&pa) {
             b.neighbors.push(pa);
         }
     }

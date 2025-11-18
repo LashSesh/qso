@@ -328,7 +328,7 @@ mod tests {
         agent.update_internal_state(&points);
 
         // Should have added inputs to mandorla
-        assert!(agent.mandorla.inputs.len() > 0);
+        assert!(!agent.mandorla.inputs.is_empty());
     }
 
     #[test]
@@ -352,7 +352,7 @@ mod tests {
 
         // Check that cells have neighbors (coupling)
         // First cell should have second as neighbor
-        assert!(agent.cells[0].neighbors.len() > 0);
+        assert!(!agent.cells[0].neighbors.is_empty());
     }
 
     #[test]
@@ -376,7 +376,7 @@ mod tests {
 
         let result = agent.decision_cycle(&input, 3, 1.0);
 
-        assert!(result.spiral_points.len() > 0);
+        assert!(!result.spiral_points.is_empty());
         assert_eq!(result.spiral_points[0].len(), 5); // 5D points
     }
 

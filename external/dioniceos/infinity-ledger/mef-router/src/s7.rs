@@ -32,7 +32,7 @@ pub fn generate_permutations() -> Vec<Vec<u8>> {
         } else {
             for i in 0..k {
                 heaps_algorithm(k - 1, arr, output);
-                if k % 2 == 0 {
+                if k.is_multiple_of(2) {
                     arr.swap(i, k - 1);
                 } else {
                     arr.swap(0, k - 1);
