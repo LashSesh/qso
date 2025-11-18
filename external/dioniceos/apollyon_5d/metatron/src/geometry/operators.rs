@@ -37,9 +37,9 @@ pub fn apply_permutation_to_adjacency(adjacency: &[Vec<f64>], p: &[Vec<f64>]) ->
     for i in 0..n {
         for j in 0..n {
             let mut sum = 0.0;
-            for k in 0..n {
-                for l in 0..n {
-                    sum += p[i][k] * adjacency[k][l] * p[j][l];
+            for (k, adj_row) in adjacency.iter().enumerate() {
+                for (l, &adj_val) in adj_row.iter().enumerate() {
+                    sum += p[i][k] * adj_val * p[j][l];
                 }
             }
             result[i][j] = sum;
