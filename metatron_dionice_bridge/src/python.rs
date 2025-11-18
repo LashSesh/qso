@@ -106,16 +106,14 @@ pub struct PyDioniceResult {
 #[pymethods]
 impl PyDioniceResult {
     /// Get configuration updates as dict
-    fn get_config(&self) -> PyResult<PyObject> {
-        Python::with_gil(|py| {
-            let config_str = serde_json::to_string(&self.new_config)
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    fn get_config(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let config_str = serde_json::to_string(&self.new_config)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
 
-            let json_module = py.import("json")?;
-            let config_dict = json_module.call_method1("loads", (config_str,))?;
+        let json_module = py.import("json")?;
+        let config_dict = json_module.call_method1("loads", (config_str,))?;
 
-            Ok(config_dict.to_object(py))
-        })
+        Ok(config_dict.clone().unbind())
     }
 
     fn __repr__(&self) -> String {
@@ -139,7 +137,7 @@ impl From<QDashCalibrationSuggestion> for PyDioniceResult {
 
 /// Python module definition
 #[pymodule]
-fn metatron_dionice_bridge(_py: Python, m: &PyModule) -> PyResult<()> {
+fn metatron_dionice_bridge(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDioniceKernel>()?;
     m.add_class::<PyDioniceResult>()?;
 

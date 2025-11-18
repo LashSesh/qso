@@ -26,15 +26,17 @@ pub struct ServerConfig {
 
 impl Config {
     /// Load configuration from file and environment
-    pub fn load() -> Result<Self, figment::Error> {
+    pub fn load() -> Result<Self, Box<figment::Error>> {
         Figment::new()
             .merge(Toml::file("metatron_telemetry.toml").nested())
             .merge(Env::prefixed("METATRON_").split("__"))
             .extract()
+            .map_err(Box::new)
     }
+}
 
-    /// Create default configuration
-    pub fn default() -> Self {
+impl Default for Config {
+    fn default() -> Self {
         Self {
             server: ServerConfig {
                 host: "127.0.0.1".to_string(),
