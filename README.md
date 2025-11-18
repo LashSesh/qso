@@ -656,8 +656,6 @@ cargo run --release --bin benchmark_compare
 ### Setup Guides (docs/)
 
 - **[docs/WINDOWS_SETUP.md](docs/WINDOWS_SETUP.md)** - **Windows 10/11 setup guide** (EN) 🔥
-- **[docs/WINDOWS_SETUP_DEUTSCH.md](docs/WINDOWS_SETUP_DEUTSCH.md)** - Windows setup (DE)
-- **[docs/BILDANLEITUNG.md](docs/BILDANLEITUNG.md)** - Image guide (DE)
 - **[docs/SCHNELLANLEITUNG.md](docs/SCHNELLANLEITUNG.md)** - Quick guide (DE)
 
 ### API Documentation
