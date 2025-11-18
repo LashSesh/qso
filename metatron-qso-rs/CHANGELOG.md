@@ -196,9 +196,9 @@ This is the first production-ready release of the Metatron Quantum State Operato
 
 ## Links
 
-- **Repository**: https://github.com/LashSesh/qdash
+- **Repository**: https://github.com/LashSesh/qso
 - **Documentation**: https://docs.rs/metatron-qso-rs
-- **Issues**: https://github.com/LashSesh/qdash/issues
+- **Issues**: https://github.com/LashSesh/qso/issues
 
 ---
 

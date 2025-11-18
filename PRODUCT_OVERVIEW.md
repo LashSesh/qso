@@ -364,7 +364,7 @@ MIT License — See `LICENSE` for details
 
 ## Contact
 
-For questions or contributions: [GitHub Issues](https://github.com/LashSesh/qdash/issues)
+For questions or contributions: [GitHub Issues](https://github.com/LashSesh/qso/issues)
 
 ---
 
