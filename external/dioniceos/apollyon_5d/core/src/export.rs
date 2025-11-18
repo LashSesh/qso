@@ -96,13 +96,13 @@ mod tests {
         ];
 
         let traj = Trajectory::from_pairs(pairs);
-        let path = "/tmp/test_trajectory.csv";
+        let path = std::env::temp_dir().join("test_trajectory.csv");
 
-        traj.export_csv(path).unwrap();
-        assert!(Path::new(path).exists());
+        traj.export_csv(&path).unwrap();
+        assert!(path.exists());
 
         // Clean up
-        fs::remove_file(path).ok();
+        fs::remove_file(&path).ok();
     }
 
     #[test]
@@ -113,12 +113,12 @@ mod tests {
         ];
 
         let traj = Trajectory::from_pairs(pairs);
-        let path = "/tmp/test_trajectory.json";
+        let path = std::env::temp_dir().join("test_trajectory.json");
 
-        traj.export_json(path).unwrap();
-        assert!(Path::new(path).exists());
+        traj.export_json(&path).unwrap();
+        assert!(path.exists());
 
         // Clean up
-        fs::remove_file(path).ok();
+        fs::remove_file(&path).ok();
     }
 }
