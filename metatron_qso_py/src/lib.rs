@@ -173,8 +173,8 @@ fn run_quantum_walk(
     }
 
     // Return as Python dict
-    Python::with_gil(|py| {
-        let result = PyDict::new_bound(py);
+    Python::attach(|py| {
+        let result = PyDict::new(py);
         result.set_item("times", times.into_pyobject(py)?)?;
         result.set_item("probabilities", probabilities.into_pyobject(py)?)?;
         result.set_item("final_state", probabilities.last().unwrap().into_pyobject(py)?)?;
@@ -233,12 +233,12 @@ fn solve_maxcut_qaoa(
     let (mean_cost, std_dev, _costs) = qaoa.analyze_samples(&result.optimal_state, 100);
 
     // Return as Python dict
-    Python::with_gil(|py| {
-        let result_dict = PyDict::new_bound(py);
+    Python::attach(|py| {
+        let result_dict = PyDict::new(py);
         result_dict.set_item("cut_value", -result.optimal_cost)?; // Negate because we minimize
         result_dict.set_item("approximation_ratio", result.approximation_ratio)?;
 
-        let meta = PyDict::new_bound(py);
+        let meta = PyDict::new(py);
         meta.set_item("iterations", result.optimization_result.iterations)?;
         meta.set_item("mean_cost", -mean_cost)?; // Negate for MaxCut
         meta.set_item("std_dev", std_dev)?;
@@ -315,8 +315,8 @@ fn run_vqe(
     let result = vqe.run();
 
     // Return as Python dict
-    Python::with_gil(|py| {
-        let result_dict = PyDict::new_bound(py);
+    Python::attach(|py| {
+        let result_dict = PyDict::new(py);
         result_dict.set_item("ground_state_energy", result.ground_state_energy)?;
         result_dict.set_item("classical_ground_energy", result.classical_ground_energy)?;
         result_dict.set_item("error", result.approximation_error)?;
@@ -424,8 +424,8 @@ fn quantum_walk_connectivity(
     let metrics =
         core::quantum_walk_toolkit::quantum_walk_connectivity(&graph.inner, &source_nodes, &params);
 
-    Python::with_gil(|py| {
-        let result = PyDict::new_bound(py);
+    Python::attach(|py| {
+        let result = PyDict::new(py);
         result.set_item("mixing_time", metrics.mixing_time)?;
         result.set_item(
             "hitting_probabilities",
@@ -463,13 +463,13 @@ fn solve_maxcut_qaoa_advanced(
 ) -> PyResult<Py<PyAny>> {
     let solution = core::optimizer::solve_maxcut_advanced(&graph.inner, depth, max_iters, seed);
 
-    Python::with_gil(|py| {
-        let result = PyDict::new_bound(py);
+    Python::attach(|py| {
+        let result = PyDict::new(py);
         result.set_item("cut_value", solution.cut_value)?;
         result.set_item("assignment", solution.assignment.into_pyobject(py)?)?;
         result.set_item("approximation_ratio", solution.approximation_ratio)?;
 
-        let meta = PyDict::new_bound(py);
+        let meta = PyDict::new(py);
         meta.set_item("iterations", solution.meta.iterations)?;
         meta.set_item("final_cost", solution.meta.final_cost)?;
         meta.set_item("depth", solution.meta.depth)?;
