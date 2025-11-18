@@ -13,7 +13,7 @@ use tokio::task;
 /// allowing for concurrent processing and integration with async runtimes.
 ///
 /// # Examples
-/// ```ignore
+/// ```text
 /// use tokio;
 ///
 /// #[tokio::main]
@@ -88,7 +88,7 @@ impl AsyncUnifiedCognitiveEngine {
     /// Each input is processed independently on a blocking task.
     ///
     /// # Examples
-    /// ```ignore
+    /// ```text
     /// let inputs = vec![input1, input2, input3];
     /// let result = engine.process_batch_parallel(inputs, None).await;
     /// println!("Success rate: {:.1}%", result.success_rate());

@@ -88,7 +88,7 @@ impl UnifiedCognitiveEngine {
     /// * `resonance_field` - Custom resonance field implementation
     ///
     /// # Examples
-    /// ```ignore
+    /// ```text
     /// use bridge::OscillatoryResonanceField;
     ///
     /// let field = Box::new(OscillatoryResonanceField::new(0.2, 1.0, 0.0));
@@ -222,7 +222,7 @@ impl UnifiedCognitiveEngine {
     /// so failures do not affect other inputs in the batch.
     ///
     /// # Examples
-    /// ```ignore
+    /// ```text
     /// let inputs = vec![input1, input2, input3];
     /// let batch_result = engine.process_batch(inputs);
     /// println!("Success rate: {:.1}%", batch_result.success_rate());

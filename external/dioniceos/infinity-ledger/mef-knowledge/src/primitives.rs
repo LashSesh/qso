@@ -25,7 +25,7 @@ use std::collections::BTreeMap;
 ///
 /// ## Example
 ///
-/// ```rust,ignore
+/// ```
 /// use mef_knowledge::canonical_json;
 /// use serde_json::json;
 ///
