@@ -98,7 +98,7 @@ pub struct KnowledgeObject {
     pub route: RouteReference,
 
     /// Hierarchical seed derivation path
-    /// Format: "MEF/<domain>/<stage>/<index>"
+    /// Format: "MEF/`<domain>`/`<stage>`/`<index>`"
     pub seed_path: String,
 
     /// Knowledge context and relationships
