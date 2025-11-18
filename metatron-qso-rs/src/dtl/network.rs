@@ -81,7 +81,7 @@ impl DTLResonatorNetwork {
         (times, history)
     }
 
-    /// Kuramoto order parameter r ∈ [0,1].
+    /// Kuramoto order parameter r ∈ \[0,1\].
     pub fn order_parameter(&self, phases: &[f64; crate::quantum::METATRON_DIMENSION]) -> f64 {
         let sum: Complex64 = phases
             .iter()
@@ -90,7 +90,7 @@ impl DTLResonatorNetwork {
         (sum / (crate::quantum::METATRON_DIMENSION as f64)).norm()
     }
 
-    /// Convert instantaneous phases to DTL amplitude values in [0,1].
+    /// Convert instantaneous phases to DTL amplitude values in \[0,1\].
     pub fn phases_to_dtl(
         &self,
         phases: &[f64; crate::quantum::METATRON_DIMENSION],

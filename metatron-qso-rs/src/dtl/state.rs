@@ -75,7 +75,7 @@ impl DTLState {
         })
     }
 
-    /// Create LD state from an arbitrary trajectory x: ℝ → [0,1].
+    /// Create LD state from an arbitrary trajectory x: ℝ → \[0,1\].
     pub fn ld_from_function<F>(trajectory: F) -> Self
     where
         F: Fn(f64) -> f64 + Send + Sync + 'static,

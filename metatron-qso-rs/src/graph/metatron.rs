@@ -207,7 +207,7 @@ impl MetatronGraph {
     /// for all edges (u,v), (π(u), π(v)) is also an edge.
     ///
     /// # Returns
-    /// Vector of permutations, where each permutation maps node i → perm[i]
+    /// Vector of permutations, where each permutation maps node `i` → `perm[i]`
     ///
     /// # Algorithm
     /// Uses node type stratification (Center/Hexagon/Cube) to reduce search space,

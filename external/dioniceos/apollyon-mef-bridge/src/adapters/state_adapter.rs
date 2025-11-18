@@ -1,8 +1,8 @@
 //! State Adapter: Bidirectional conversion between APOLLYON State5D and MEF Spiral coordinates
 //!
 //! This adapter provides lossless conversion between the two systems' 5D representations:
-//! - APOLLYON State5D: Uses nalgebra SVector<f64, 5>
-//! - MEF Spiral: Uses Vec<f64> with 5 coordinates
+//! - APOLLYON State5D: Uses nalgebra `SVector<f64, 5>`
+//! - MEF Spiral: Uses `Vec<f64>` with 5 coordinates
 //!
 //! The mapping is 1:1:
 //! - D1 (index 0): x coordinate (spatial)
@@ -17,14 +17,14 @@ use core_5d::State5D;
 pub struct StateAdapter;
 
 impl StateAdapter {
-    /// Convert APOLLYON State5D to MEF Spiral coordinates (Vec<f64>)
+    /// Convert APOLLYON State5D to MEF Spiral coordinates (`Vec<f64>`)
     ///
     /// # Perfect 1:1 Mapping
-    /// - D1 → coords[0] (x)
-    /// - D2 → coords[1] (y)
-    /// - D3 → coords[2] (z)
-    /// - D4 → coords[3] (ψ - semantic weight)
-    /// - D5 → coords[4] (ω - temporal phase)
+    /// - D1 → `coords[0]` (x)
+    /// - D2 → `coords[1]` (y)
+    /// - D3 → `coords[2]` (z)
+    /// - D4 → `coords[3]` (ψ - semantic weight)
+    /// - D5 → `coords[4]` (ω - temporal phase)
     ///
     /// # Example
     /// ```
