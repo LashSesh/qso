@@ -62,14 +62,14 @@ impl Default for Vector8Weights {
 ///
 /// ## Usage
 ///
-/// ```rust,ignore
+/// ```
 /// use mef_knowledge::Vector8Builder;
 ///
 /// let builder = Vector8Builder::default();
 /// let x5 = vec![0.1, 0.2, 0.3, 0.4, 0.5];
 /// let sigma = (0.3, 0.3, 0.4); // (psi, rho, omega)
 ///
-/// let z_hat = builder.build(&x5, sigma)?;
+/// let z_hat = builder.build(&x5, sigma).unwrap();
 /// assert_eq!(z_hat.len(), 8);
 /// ```
 #[derive(Debug, Clone)]
