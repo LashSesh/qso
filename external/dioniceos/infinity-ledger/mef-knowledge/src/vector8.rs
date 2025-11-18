@@ -1,13 +1,22 @@
 //! 8D vector construction from 5D spiral + 3D spectral features
 
 /// Configuration for 8D vector construction
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Vector8Config {
     /// Weights for 5D spiral coordinates
     pub spiral_weights: [f64; 5],
 
     /// Weights for spectral components (ψ, ρ, ω)
     pub spectral_weights: [f64; 3],
+}
+
+impl Default for Vector8Config {
+    fn default() -> Self {
+        Self {
+            spiral_weights: [1.0; 5],
+            spectral_weights: [1.0; 3],
+        }
+    }
 }
 
 /// Builder for 8D normalized vectors
