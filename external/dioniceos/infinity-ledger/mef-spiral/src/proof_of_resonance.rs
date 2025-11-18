@@ -1,7 +1,7 @@
 //! Proof-of-Resonance (PoR) validation system.
 //! Mathematical validation of Spiral snapshot stability.
 //!
-//! FFT(s) → ŝ; r' = g(ŝ) ∈ [0,1]
+//! FFT(s) → ŝ; r' = g(ŝ) ∈ \[0,1\]
 //! Acceptance: |r' - r_snapshot| ≤ δ ∧ λ_gap ≥ λ_min
 
 use serde::{Deserialize, Serialize};

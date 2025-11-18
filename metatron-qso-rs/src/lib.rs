@@ -49,8 +49,8 @@
 //! - [`quantum_walk`] - Quantum walk algorithms (feature: `walks`)
 //! - [`vqa`] - Variational Quantum Algorithms (feature: `vqa`)
 //! - [`dtl`] - Dynamic Tripolar Logic (feature: `dtl`)
-//! - [`symmetry_codes`] - Topological error correction (feature: `codes`)
-//! - [`advanced_algorithms`] - Grover search, Boson sampling (feature: `advanced`)
+//! - `symmetry_codes` - Topological error correction (feature: `codes`)
+//! - `advanced_algorithms` - Grover search, Boson sampling (feature: `advanced`)
 //!
 //! ## Features
 //!

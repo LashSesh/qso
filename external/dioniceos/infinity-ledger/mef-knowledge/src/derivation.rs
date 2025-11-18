@@ -61,7 +61,7 @@ pub struct DeriveRequest {
     pub payload: serde_json::Value,
 
     /// Seed path for deterministic derivation
-    /// Format: "MEF/<domain>/<stage>/<index>"
+    /// Format: `"MEF/<domain>/<stage>/<index>"`
     pub seed_path: String,
 
     /// Optional domain hint
