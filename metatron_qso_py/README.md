@@ -239,7 +239,7 @@ If you use Metatron QSO in your research, please cite:
 ```bibtex
 @software{metatron_qso,
   title = {Metatron Quantum State Operator},
-  author = {Q⊗DASH Team},
+  author = {Sebastian Klemm},
   year = {2024},
   url = {https://github.com/LashSesh/qdash}
 }

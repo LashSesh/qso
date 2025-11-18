@@ -7,7 +7,7 @@ name = "metatron-qso"
 version = "0.1.0"
 description = "Python SDK for Metatron Quantum State Operator - High-performance quantum computing on sacred geometry"
 authors = [
-    {name = "Q⊗DASH Team"}
+    {name = "Sebastian Klemm"}
 ]
 readme = "README.md"
 requires-python = ">=3.8"

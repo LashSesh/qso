@@ -2,7 +2,7 @@
 name = "metatron_qso_py"
 version = "0.1.0"
 edition = "2021"
-authors = ["Q⊗DASH Team"]
+authors = ["Sebastian Klemm"]
 description = "Python bindings for Metatron Quantum State Operator"
 license = "MIT"
 repository = "https://github.com/LashSesh/qdash"
