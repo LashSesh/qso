@@ -224,10 +224,10 @@ async fn example_batch_with_storage() {
     // Store successful outputs
     let mut stored_count = 0;
     for output in &batch_result.successes {
-        if matches!(output.gate_decision, mef_schemas::GateDecision::FIRE) {
-            if storage.store(output).await.is_ok() {
-                stored_count += 1;
-            }
+        if matches!(output.gate_decision, mef_schemas::GateDecision::FIRE)
+            && storage.store(output).await.is_ok()
+        {
+            stored_count += 1;
         }
     }
 

@@ -36,6 +36,7 @@ impl ResonanceTensorField {
         (x * ny * self.shape.2) + (y * self.shape.2) + z
     }
 
+    #[allow(clippy::needless_range_loop)]
     pub fn get_state(&self) -> Vec<Vec<Vec<f64>>> {
         let mut result = vec![vec![vec![0.0; self.shape.2]; self.shape.1]; self.shape.0];
         for x in 0..self.shape.0 {
@@ -73,6 +74,7 @@ impl ResonanceTensorField {
         Ok(self.get_state())
     }
 
+    #[allow(clippy::needless_range_loop)]
     fn flatten_state(&self) -> Vec<f64> {
         let mut flat = Vec::with_capacity(self.phase.len());
         for x in 0..self.shape.0 {

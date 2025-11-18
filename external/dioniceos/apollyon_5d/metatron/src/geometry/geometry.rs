@@ -176,7 +176,7 @@ pub fn find_node<'a>(
             nodes
                 .iter()
                 .find(|n| n.label == lbl)
-                .ok_or_else(|| EngineError::UnknownNodeLabel {
+                .ok_or(EngineError::UnknownNodeLabel {
                     label: lbl.to_string(),
                 })
         }
@@ -184,7 +184,7 @@ pub fn find_node<'a>(
             nodes
                 .iter()
                 .find(|n| n.index == idx)
-                .ok_or_else(|| EngineError::InvalidNodeIndex {
+                .ok_or(EngineError::InvalidNodeIndex {
                     index: idx,
                     len: nodes.len(),
                 })

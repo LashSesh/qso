@@ -1,7 +1,7 @@
 //! 8D vector construction from 5D spiral + 3D spectral features
 
 /// Configuration for 8D vector construction
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Vector8Config {
     /// Weights for 5D spiral coordinates
     pub spiral_weights: [f64; 5],
@@ -10,26 +10,10 @@ pub struct Vector8Config {
     pub spectral_weights: [f64; 3],
 }
 
-impl Default for Vector8Config {
-    fn default() -> Self {
-        Self {
-            spiral_weights: [1.0; 5],
-            spectral_weights: [1.0; 3],
-        }
-    }
-}
-
 /// Builder for 8D normalized vectors
+#[derive(Default)]
 pub struct Vector8Builder {
     config: Vector8Config,
-}
-
-impl Default for Vector8Builder {
-    fn default() -> Self {
-        Self {
-            config: Vector8Config::default(),
-        }
-    }
 }
 
 impl Vector8Builder {
@@ -57,6 +41,7 @@ impl Vector8Builder {
         let mut z = Vec::with_capacity(8);
 
         // Add weighted spiral components
+        #[allow(clippy::needless_range_loop)]
         for i in 0..5 {
             z.push(self.config.spiral_weights[i] * x5[i]);
         }

@@ -85,8 +85,8 @@ impl QLogicEngine {
     pub fn new(num_nodes: usize, semantic_field: Option<SemanticField>) -> Self {
         Self {
             osc_core: QLOGICOscillatorCore::new(num_nodes),
-            grammar: SpectralGrammar::default(),
-            analyzer: EntropyAnalyzer::default(),
+            grammar: SpectralGrammar,
+            analyzer: EntropyAnalyzer,
             semantic_field,
         }
     }

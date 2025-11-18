@@ -136,7 +136,7 @@ impl Clone for CognitiveOutput {
     fn clone(&self) -> Self {
         Self {
             trajectory: self.trajectory.clone(),
-            spectral_signature: self.spectral_signature.clone(),
+            spectral_signature: self.spectral_signature,
             route: self.route.clone(),
             proof: self.proof.clone(),
             gate_decision: self.gate_decision,

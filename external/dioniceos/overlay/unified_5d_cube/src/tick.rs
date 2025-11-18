@@ -74,7 +74,7 @@ pub fn tick_5d_cube(
 
     // Phase 2: Solve/Relax using APOLLYON dynamics (conceptual - state is already solved)
     // In full implementation, would integrate APOLLYON VectorField here
-    let state_relaxed = state_trichter.clone();
+    let state_relaxed = state_trichter;
 
     // Phase 2.5: Metatron routing (if enabled) - select transformation route
     let selected_route = adapter.select_route(&state_relaxed);
@@ -136,7 +136,7 @@ pub fn tick_5d_cube(
     };
 
     TickResult {
-        state_in: state.clone(),
+        state_in: *state,
         state_relaxed,
         guidance,
         gate_decision,
@@ -237,13 +237,15 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let ledger_path = temp_dir.path().join("test_ledger");
 
-        let mut config = InterlockConfig::default();
-        config.enable_full_hdag = true;
-        config.enable_8d_vectors = true;
-        config.enable_ledger_writes = true;
-        config.ledger_path = Some(ledger_path);
-        config.shadow_mode = false;
-        config.gate_phi_threshold = 0.3;
+        let config = InterlockConfig {
+            enable_full_hdag: true,
+            enable_8d_vectors: true,
+            enable_ledger_writes: true,
+            ledger_path: Some(ledger_path),
+            shadow_mode: false,
+            gate_phi_threshold: 0.3,
+            ..Default::default()
+        };
 
         let mut adapter = InterlockAdapter::new(config);
 

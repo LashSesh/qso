@@ -132,7 +132,7 @@ impl ShadowController {
         // Check coherence
         let coherence_ok = metrics
             .last()
-            .map_or(false, |m| m.s_mand >= self.criteria.min_coherence);
+            .is_some_and(|m| m.s_mand >= self.criteria.min_coherence);
 
         delta_f_ok && w2_ok && gate_stable && coherence_ok
     }

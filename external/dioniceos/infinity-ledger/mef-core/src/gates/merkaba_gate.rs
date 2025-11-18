@@ -633,7 +633,7 @@ mod tests {
         };
 
         let phi = gate.compute_phi(&candidate);
-        assert!(phi >= 0.0 && phi <= 1.0);
+        assert!((0.0..=1.0).contains(&phi));
     }
 
     #[test]
@@ -869,7 +869,7 @@ mod tests {
         gate.compute_delta_v(&candidate);
         gate.compute_delta_v(&candidate);
 
-        assert!(gate.state_history.len() > 0);
+        assert!(!gate.state_history.is_empty());
 
         gate.clear_history();
         assert_eq!(gate.state_history.len(), 0);

@@ -96,7 +96,6 @@ impl MetatronCircuit {
     }
 
     /// Builder pattern for gates
-
     pub fn h(mut self, qubit: usize) -> Self {
         self.add_gate(GateType::H, vec![qubit]);
         self

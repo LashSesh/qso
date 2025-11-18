@@ -16,6 +16,7 @@ pub fn test_linear_decoupled() -> bool {
 
     // Set diagonal to negative values (decay rates)
     let lambdas = [1.0, 2.0, 3.0, 4.0, 5.0];
+    #[allow(clippy::needless_range_loop)]
     for i in 0..5 {
         coupling.set(i, i, -lambdas[i], CouplingType::Linear);
     }
@@ -29,6 +30,7 @@ pub fn test_linear_decoupled() -> bool {
 
     // Check against analytical solution
     let mut success = true;
+    #[allow(clippy::needless_range_loop)]
     for i in 0..5 {
         let analytical = (-lambdas[i]).exp();
         let numerical = final_state.get(i);

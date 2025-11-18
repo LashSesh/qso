@@ -63,10 +63,8 @@ impl StabilityFilter {
         }
 
         // 4. PoR decision
-        let por_valid = coherence >= self.config.coherence_threshold
-            && fluctuation <= self.config.max_fluctuation;
-
-        por_valid
+        coherence >= self.config.coherence_threshold
+            && fluctuation <= self.config.max_fluctuation
     }
 
     /// Compute coherence κ(t) from spectral signature

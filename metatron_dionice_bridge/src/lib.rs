@@ -304,7 +304,7 @@ impl DioniceKernel {
     /// Compute resonance quality score from HDAG field
     fn compute_resonance_score(&self, state: &State4D) -> f64 {
         // Use ψ (quality) as primary component, bounded to [0, 1]
-        state.psi.max(0.0).min(1.0)
+        state.psi.clamp(0.0, 1.0)
     }
 
     /// Get current funnel density

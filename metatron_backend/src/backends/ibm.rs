@@ -36,12 +36,13 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 /// IBM Quantum backend execution mode
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum IbmMode {
     /// Backend is disabled - will error on circuit execution
     ///
     /// This is the SAFE DEFAULT. No QPU access possible.
+    #[default]
     Disabled,
 
     /// Dry-run mode - log circuits without executing
@@ -55,12 +56,6 @@ pub enum IbmMode {
     /// **WARNING**: This mode consumes QPU time and may incur costs.
     /// Only use when explicitly authorized.
     Enabled,
-}
-
-impl Default for IbmMode {
-    fn default() -> Self {
-        Self::Disabled
-    }
 }
 
 /// Configuration for IBM Quantum backend

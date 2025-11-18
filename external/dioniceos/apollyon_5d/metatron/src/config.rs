@@ -89,17 +89,8 @@ impl Default for MasterAgentConfig {
 }
 
 /// Configuration for the full post-symbolic engine.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct EngineConfig {
     pub agent: AgentConfig,
     pub master: MasterAgentConfig,
-}
-
-impl Default for EngineConfig {
-    fn default() -> Self {
-        Self {
-            agent: AgentConfig::default(),
-            master: MasterAgentConfig::default(),
-        }
-    }
 }

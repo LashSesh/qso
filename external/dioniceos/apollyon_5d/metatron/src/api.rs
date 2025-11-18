@@ -52,7 +52,7 @@ pub fn export_adjacency_json(graph: &MetatronCubeGraph) -> EngineResult<String> 
 }
 
 pub fn export_group_json(perms: &[Vec<usize>]) -> EngineResult<String> {
-    let data: Vec<Vec<usize>> = perms.iter().map(|p| p.clone()).collect();
+    let data: Vec<Vec<usize>> = perms.to_vec();
     Ok(serde_json::to_string_pretty(&data)?)
 }
 

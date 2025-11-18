@@ -39,7 +39,7 @@ mod tests {
 
     #[test]
     fn entropy_calculation() {
-        let analyzer = EntropyAnalyzer::default();
+        let analyzer = EntropyAnalyzer;
         let uniform = vec![1.0; 4];
         let entropy = analyzer.entropy(&uniform);
         // Uniform distribution should have maximum entropy
@@ -48,15 +48,15 @@ mod tests {
 
     #[test]
     fn normalized_entropy_bounds() {
-        let analyzer = EntropyAnalyzer::default();
+        let analyzer = EntropyAnalyzer;
         let field = vec![1.0, 2.0, 3.0, 4.0];
         let norm_entropy = analyzer.normalized_entropy(&field);
-        assert!(norm_entropy >= 0.0 && norm_entropy <= 1.0);
+        assert!((0.0..=1.0).contains(&norm_entropy));
     }
 
     #[test]
     fn zero_field_entropy() {
-        let analyzer = EntropyAnalyzer::default();
+        let analyzer = EntropyAnalyzer;
         let zero_field = vec![0.0; 5];
         let entropy = analyzer.entropy(&zero_field);
         assert_eq!(entropy, 0.0);

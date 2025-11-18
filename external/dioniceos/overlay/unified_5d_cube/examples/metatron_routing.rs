@@ -15,10 +15,12 @@ fn main() {
     println!("Router path: {:?}\n", router_path);
 
     // Enable Metatron routing
-    let mut config = InterlockConfig::default();
-    config.enable_metatron_routing = true;
-    config.ledger_path = Some(router_path.clone());
-    config.enable_logging = true;
+    let config = InterlockConfig {
+        enable_metatron_routing: true,
+        ledger_path: Some(router_path.clone()),
+        enable_logging: true,
+        ..Default::default()
+    };
 
     println!("Configuration:");
     println!("  - Metatron Routing: {}", config.enable_metatron_routing);

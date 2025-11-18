@@ -266,6 +266,7 @@ mod tests {
         let projected = refiner.project_into_coverage(&query);
 
         // Projected values should be clamped to index bounds
+        #[allow(clippy::needless_range_loop)]
         for i in 0..8 {
             assert!(projected[i] >= refiner.index_stats.min_vector[i]);
             assert!(projected[i] <= refiner.index_stats.max_vector[i]);

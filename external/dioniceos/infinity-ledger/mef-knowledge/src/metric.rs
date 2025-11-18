@@ -122,6 +122,7 @@ impl Vector8Builder {
 
         // Build weighted vector z'
         let mut z_prime = Vec::with_capacity(8);
+        #[allow(clippy::needless_range_loop)]
         for i in 0..5 {
             z_prime.push(self.weights.spatial[i] * x5[i]);
         }

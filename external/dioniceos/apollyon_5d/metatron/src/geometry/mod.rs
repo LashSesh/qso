@@ -1,6 +1,7 @@
 // Geometry module - Metatron Cube structure and operations
 
 pub mod cube;
+#[allow(clippy::module_inception)]
 pub mod geometry;
 pub mod graph;
 pub mod operators;

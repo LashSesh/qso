@@ -118,6 +118,7 @@ where
     }
 
     /// Create a search with custom spiral parameters
+    #[allow(clippy::too_many_arguments)]
     pub fn with_spiral_params(
         dimension: usize,
         seed: u64,
@@ -274,7 +275,7 @@ where
             }
 
             // Periodic logging
-            if self.step % 10 == 0 {
+            if self.step.is_multiple_of(10) {
                 tracing::debug!(
                     "TRITON step {}/{}: resonance = {:.6}, radius = {:.4}",
                     self.step,

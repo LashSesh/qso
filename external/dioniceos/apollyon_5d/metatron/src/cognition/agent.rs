@@ -75,22 +75,6 @@ impl Default for MetatronAgent {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn agent_step() {
-        let mut agent = MetatronAgent::new().unwrap();
-        let res = agent.step(0.0).unwrap();
-        assert_eq!(res.qlogic.field.len(), 13);
-        assert!(matches!(
-            res.monolith,
-            DecisionState::Pending | DecisionState::Excalibration
-        ));
-    }
-}
-
 fn build_semantic_field(
     prototypes: &[PrototypeConfig],
     qlogic_nodes: usize,
@@ -110,4 +94,20 @@ fn build_semantic_field(
         field.add_prototype(&proto.name, &proto.spectrum);
     }
     Ok(Some(field))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_step() {
+        let mut agent = MetatronAgent::new().unwrap();
+        let res = agent.step(0.0).unwrap();
+        assert_eq!(res.qlogic.field.len(), 13);
+        assert!(matches!(
+            res.monolith,
+            DecisionState::Pending | DecisionState::Excalibration
+        ));
+    }
 }

@@ -97,7 +97,7 @@ fn test_pipeline_with_different_initial_states() {
     let mut engine = UnifiedCognitiveEngine::new();
 
     // Test multiple different initial states
-    let initial_states = vec![
+    let initial_states = [
         State5D::new(1.0, 0.0, 0.0, 0.0, 0.0),
         State5D::new(0.0, 1.0, 0.0, 0.0, 0.0),
         State5D::new(0.5, 0.5, 0.5, 0.5, 0.5),
@@ -230,7 +230,8 @@ fn test_proof_of_resonance_validity() {
 
     // Proof should be valid for reasonable trajectories
     // Note: This depends on the trajectory dynamics, so we just check it's computed
-    assert!(output.proof.por_valid || !output.proof.por_valid); // Always true, but documents intent
+    // Verify proof was computed
+    let _ = output.proof.por_valid;
 
     // All components should be finite
     assert!(output.proof.delta_pi.is_finite());

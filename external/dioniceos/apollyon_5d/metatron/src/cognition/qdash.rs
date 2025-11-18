@@ -29,7 +29,7 @@ impl QDASHAgent {
     pub fn new(n_cells: usize, alpha: f64, beta: f64) -> Self {
         let semantic_field = {
             let mut sf = SemanticField::new();
-            sf.add_prototype("baseline", &vec![1.0; 13]);
+            sf.add_prototype("baseline", &[1.0; 13]);
             Some(sf)
         };
         let mut cells = Vec::with_capacity(n_cells);

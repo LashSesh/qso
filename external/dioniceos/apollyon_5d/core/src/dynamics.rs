@@ -109,7 +109,9 @@ impl VectorField {
     pub fn jacobian(&self, state: &State5D) -> [[f64; 5]; 5] {
         let mut jac = [[0.0; 5]; 5];
 
+        #[allow(clippy::needless_range_loop)]
         for i in 0..5 {
+            #[allow(clippy::needless_range_loop)]
             for j in 0..5 {
                 // Diagonal term: ∂(αᵢσᵢ)/∂σⱼ = αᵢ if i==j, else 0
                 let diagonal_term = if i == j {
@@ -212,6 +214,7 @@ mod tests {
         let jac = vf.jacobian(&state);
 
         // For identity coupling (linear), Jacobian should be identity
+        #[allow(clippy::needless_range_loop)]
         for i in 0..5 {
             for j in 0..5 {
                 if i == j {

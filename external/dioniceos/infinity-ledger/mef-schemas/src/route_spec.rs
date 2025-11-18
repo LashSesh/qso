@@ -55,7 +55,7 @@ impl RouteSpec {
         }
 
         // Check all elements are unique and in range [0..7)
-        let mut seen = vec![false; 7];
+        let mut seen = [false; 7];
         for &idx in &permutation {
             if idx >= 7 {
                 return Err(crate::SchemaError::InvalidRoute(format!(
@@ -120,7 +120,7 @@ impl RouteSpec {
             }
             // Validate range [1..8)
             for &val in sigma {
-                if val < 1 || val > 7 {
+                if !(1..=7).contains(&val) {
                     return Err(crate::SchemaError::InvalidRoute(format!(
                         "Sigma values must be in [1..8), got {}",
                         val

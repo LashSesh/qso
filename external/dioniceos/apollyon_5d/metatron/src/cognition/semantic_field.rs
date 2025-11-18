@@ -38,6 +38,12 @@ impl SemanticField {
     }
 }
 
+impl Default for SemanticField {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn norm(values: &[f64]) -> f64 {
     values.iter().map(|v| v * v).sum::<f64>().sqrt()
 }

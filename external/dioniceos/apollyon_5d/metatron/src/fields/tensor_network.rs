@@ -46,7 +46,7 @@ impl TensorNetwork {
         if self.fields.len() < 2 {
             return 0.0;
         }
-        let vectors: Vec<Vec<f64>> = self.fields.iter().map(|f| flatten(f)).collect();
+        let vectors: Vec<Vec<f64>> = self.fields.iter().map(flatten).collect();
         let mut sims = Vec::new();
         for i in 0..vectors.len() {
             for j in (i + 1)..vectors.len() {

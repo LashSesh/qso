@@ -7,6 +7,9 @@ use crate::{SpectralSignature, TritonSearch};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Type alias for the TRITON search evaluator function
+type TritonEvaluator = Box<dyn Fn(&[f64]) -> SpectralSignature + Send>;
+
 /// Calibration parameter proposal
 ///
 /// Represents a suggested configuration for the next calibration run.
@@ -214,7 +217,7 @@ pub struct TritonSearchStrategy {
     mappings: Vec<ParameterMapping>,
 
     /// TRITON search engine
-    search: TritonSearch<Box<dyn Fn(&[f64]) -> SpectralSignature + Send>>,
+    search: TritonSearch<TritonEvaluator>,
 
     /// Last proposed configuration
     last_proposal: Option<CalibrationProposal>,
@@ -245,8 +248,8 @@ impl TritonSearchStrategy {
         let dimension = mappings.len();
 
         // Create a dummy evaluator (will be updated via register_result)
-        let evaluator = Box::new(|_params: &[f64]| SpectralSignature::new(0.5, 0.5, 0.5))
-            as Box<dyn Fn(&[f64]) -> SpectralSignature + Send>;
+        let evaluator: TritonEvaluator =
+            Box::new(|_params: &[f64]| SpectralSignature::new(0.5, 0.5, 0.5));
 
         let search = TritonSearch::new(dimension, seed, max_steps, evaluator);
 
@@ -262,6 +265,7 @@ impl TritonSearchStrategy {
     }
 
     /// Create with custom spiral parameters
+    #[allow(clippy::too_many_arguments)]
     pub fn with_spiral_params(
         mappings: Vec<ParameterMapping>,
         seed: u64,
@@ -275,8 +279,8 @@ impl TritonSearchStrategy {
     ) -> Self {
         let dimension = mappings.len();
 
-        let evaluator = Box::new(|_params: &[f64]| SpectralSignature::new(0.5, 0.5, 0.5))
-            as Box<dyn Fn(&[f64]) -> SpectralSignature + Send>;
+        let evaluator: TritonEvaluator =
+            Box::new(|_params: &[f64]| SpectralSignature::new(0.5, 0.5, 0.5));
 
         let search = TritonSearch::with_spiral_params(
             dimension,

@@ -78,8 +78,8 @@ pub struct SpectralPipeline {
 impl SpectralPipeline {
     pub fn new() -> Self {
         Self {
-            grammar: SpectralGrammar::default(),
-            analyzer: EntropyAnalyzer::default(),
+            grammar: SpectralGrammar,
+            analyzer: EntropyAnalyzer,
         }
     }
 
@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn spectral_grammar_analysis() {
-        let grammar = SpectralGrammar::default();
+        let grammar = SpectralGrammar;
         let field = vec![1.0, 0.0, -1.0, 0.0];
         let spectrum = grammar.analyze(&field);
         assert_eq!(spectrum.len(), 4);

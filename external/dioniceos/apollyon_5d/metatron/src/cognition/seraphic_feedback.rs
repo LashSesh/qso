@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+type FilterFunction = Arc<dyn Fn(&SeraphicValue) -> Vec<f64> + Send + Sync>;
+
 #[derive(Debug, Clone)]
 pub enum SeraphicValue {
     Text(String),
@@ -50,7 +52,7 @@ impl From<&[f64]> for SeraphicValue {
 }
 
 pub struct SeraphicFeedbackModule {
-    filter: Arc<dyn Fn(&SeraphicValue) -> Vec<f64> + Send + Sync>,
+    filter: FilterFunction,
 }
 
 impl std::fmt::Debug for SeraphicFeedbackModule {
@@ -86,6 +88,12 @@ impl SeraphicFeedbackModule {
     }
 }
 
+impl Default for SeraphicFeedbackModule {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn default_filter(value: &SeraphicValue) -> Vec<f64> {
     match value {
         SeraphicValue::Text(text) => {
@@ -94,6 +102,7 @@ fn default_filter(value: &SeraphicValue) -> Vec<f64> {
                 base.push(0.0);
             }
             let mut result = vec![0.0; 5];
+            #[allow(clippy::needless_range_loop)]
             for i in 0..5 {
                 let mut acc = 0.0;
                 for (idx, val) in base.iter().enumerate() {

@@ -46,6 +46,7 @@ impl QuantumState {
             .sum()
     }
 
+    #[allow(clippy::needless_range_loop)]
     pub fn apply(&self, operator: &QuantumOperator) -> QuantumState {
         let mut result = vec![Complex64::new(0.0, 0.0); 13];
         for i in 0..13 {
@@ -91,6 +92,7 @@ impl QuantumOperator {
         Self { matrix }
     }
 
+    #[allow(clippy::needless_range_loop)]
     pub fn compose(&self, other: &QuantumOperator) -> QuantumOperator {
         let mut result = vec![vec![Complex64::new(0.0, 0.0); 13]; 13];
         for i in 0..13 {
@@ -103,6 +105,7 @@ impl QuantumOperator {
         QuantumOperator { matrix: result }
     }
 
+    #[allow(clippy::needless_range_loop)]
     pub fn is_unitary(&self, atol: f64) -> bool {
         for i in 0..13 {
             for j in 0..13 {
