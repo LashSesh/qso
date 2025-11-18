@@ -2,7 +2,7 @@
 name = "metatron_dionice_bridge"
 version = "0.1.0"
 edition = "2021"
-authors = ["Q⊗DASH Team"]
+authors = ["Sebastian Klemm"]
 description = "Bridge connecting Q⊗DASH Seraphic Calibration Shell with dioniceOS backend"
 license = "MIT"
 

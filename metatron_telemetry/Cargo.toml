@@ -2,7 +2,7 @@
 name = "metatron_telemetry"
 version = "0.1.0"
 edition = "2021"
-authors = ["Q⊗DASH Team"]
+authors = ["Sebastian Klemm"]
 description = "Telemetry and control HTTP API for Q⊗DASH"
 license = "MIT"
 
