@@ -540,5 +540,5 @@ python metatron_qso_py/examples/03_vqe_ground_state.py
 ## Support
 
 For issues, questions, or contributions:
-- **GitHub Issues**: [LashSesh/qdash/issues](https://github.com/LashSesh/qso/issues)
+- **GitHub Issues**: [LashSesh/qso/issues](https://github.com/LashSesh/qso/issues)
 - **Documentation**: [Project Docs](https://github.com/LashSesh/qso/tree/main/docs)

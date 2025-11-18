@@ -55,7 +55,7 @@ Welcome to the Q⊗DASH (Metatron VM) development environment! This guide will h
 
 ```bash
 git clone https://github.com/LashSesh/qso.git
-cd qdash
+cd qso
 ```
 
 ### 2. Repository Structure Overview
