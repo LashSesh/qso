@@ -174,11 +174,11 @@ fn run_quantum_walk(
 
     // Return as Python dict
     Python::with_gil(|py| {
-        let result = PyDict::new(py);
-        result.set_item("times", times.into_py(py))?;
-        result.set_item("probabilities", probabilities.into_py(py))?;
-        result.set_item("final_state", probabilities.last().unwrap().into_py(py))?;
-        Ok(result.into_py(py))
+        let result = PyDict::new_bound(py);
+        result.set_item("times", times.into_pyobject(py)?)?;
+        result.set_item("probabilities", probabilities.into_pyobject(py)?)?;
+        result.set_item("final_state", probabilities.last().unwrap().into_pyobject(py)?)?;
+        Ok(result.into_any().unbind())
     })
 }
 
@@ -234,18 +234,18 @@ fn solve_maxcut_qaoa(
 
     // Return as Python dict
     Python::with_gil(|py| {
-        let result_dict = PyDict::new(py);
+        let result_dict = PyDict::new_bound(py);
         result_dict.set_item("cut_value", -result.optimal_cost)?; // Negate because we minimize
         result_dict.set_item("approximation_ratio", result.approximation_ratio)?;
 
-        let meta = PyDict::new(py);
+        let meta = PyDict::new_bound(py);
         meta.set_item("iterations", result.optimization_result.iterations)?;
         meta.set_item("mean_cost", -mean_cost)?; // Negate for MaxCut
         meta.set_item("std_dev", std_dev)?;
         meta.set_item("depth", depth)?;
         result_dict.set_item("meta", meta)?;
 
-        Ok(result_dict.into_py(py))
+        Ok(result_dict.into_any().unbind())
     })
 }
 
@@ -316,7 +316,7 @@ fn run_vqe(
 
     // Return as Python dict
     Python::with_gil(|py| {
-        let result_dict = PyDict::new(py);
+        let result_dict = PyDict::new_bound(py);
         result_dict.set_item("ground_state_energy", result.ground_state_energy)?;
         result_dict.set_item("classical_ground_energy", result.classical_ground_energy)?;
         result_dict.set_item("error", result.approximation_error)?;
@@ -327,10 +327,10 @@ fn run_vqe(
                 .ground_state_wavefunction
                 .probabilities()
                 .to_vec()
-                .into_py(py),
+                .into_pyobject(py)?,
         )?;
 
-        Ok(result_dict.into_py(py))
+        Ok(result_dict.into_any().unbind())
     })
 }
 
@@ -425,15 +425,15 @@ fn quantum_walk_connectivity(
         core::quantum_walk_toolkit::quantum_walk_connectivity(&graph.inner, &source_nodes, &params);
 
     Python::with_gil(|py| {
-        let result = PyDict::new(py);
+        let result = PyDict::new_bound(py);
         result.set_item("mixing_time", metrics.mixing_time)?;
         result.set_item(
             "hitting_probabilities",
-            metrics.hitting_probabilities.into_py(py),
+            metrics.hitting_probabilities.into_pyobject(py)?,
         )?;
         result.set_item("distribution_variance", metrics.distribution_variance)?;
         result.set_item("effective_diameter", metrics.effective_diameter)?;
-        Ok(result.into_py(py))
+        Ok(result.into_any().unbind())
     })
 }
 
@@ -464,12 +464,12 @@ fn solve_maxcut_qaoa_advanced(
     let solution = core::optimizer::solve_maxcut_advanced(&graph.inner, depth, max_iters, seed);
 
     Python::with_gil(|py| {
-        let result = PyDict::new(py);
+        let result = PyDict::new_bound(py);
         result.set_item("cut_value", solution.cut_value)?;
-        result.set_item("assignment", solution.assignment.into_py(py))?;
+        result.set_item("assignment", solution.assignment.into_pyobject(py)?)?;
         result.set_item("approximation_ratio", solution.approximation_ratio)?;
 
-        let meta = PyDict::new(py);
+        let meta = PyDict::new_bound(py);
         meta.set_item("iterations", solution.meta.iterations)?;
         meta.set_item("final_cost", solution.meta.final_cost)?;
         meta.set_item("depth", solution.meta.depth)?;
@@ -477,7 +477,7 @@ fn solve_maxcut_qaoa_advanced(
         meta.set_item("partition_sizes", solution.meta.partition_sizes)?;
         result.set_item("meta", meta)?;
 
-        Ok(result.into_py(py))
+        Ok(result.into_any().unbind())
     })
 }
 
