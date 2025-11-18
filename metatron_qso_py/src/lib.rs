@@ -176,8 +176,10 @@ fn run_quantum_walk(
     Python::attach(|py| {
         let result = PyDict::new(py);
         result.set_item("times", times.into_pyobject(py)?)?;
+        // Extract final state before moving probabilities
+        let final_state = probabilities.last().unwrap().clone();
         result.set_item("probabilities", probabilities.into_pyobject(py)?)?;
-        result.set_item("final_state", probabilities.last().unwrap().into_pyobject(py)?)?;
+        result.set_item("final_state", final_state.into_pyobject(py)?)?;
         Ok(result.into_any().unbind())
     })
 }
