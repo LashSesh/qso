@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["Sebastian Klemm"]
 description = "Python bindings for Metatron Quantum State Operator"
 license = "MIT"
-repository = "https://github.com/LashSesh/qdash"
+repository = "https://github.com/LashSesh/qso"
 readme = "README.md"
 
 [lib]

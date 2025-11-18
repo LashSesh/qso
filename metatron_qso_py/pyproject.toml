@@ -42,10 +42,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/LashSesh/qdash"
-Documentation = "https://github.com/LashSesh/qdash/tree/main/docs"
-Repository = "https://github.com/LashSesh/qdash"
-Issues = "https://github.com/LashSesh/qdash/issues"
+Homepage = "https://github.com/LashSesh/qso"
+Documentation = "https://github.com/LashSesh/qso/tree/main/docs"
+Repository = "https://github.com/LashSesh/qso"
+Issues = "https://github.com/LashSesh/qso/issues"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
