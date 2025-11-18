@@ -251,7 +251,7 @@ Contributions welcome! Please see CONTRIBUTING.md (future addition) for guidelin
 ### 📧 Contact
 
 For questions, feedback, or collaboration:
-- GitHub Issues: https://github.com/LashSesh/qdash/issues
+- GitHub Issues: https://github.com/LashSesh/qso/issues
 - Documentation: See docs/ directory
 
 ---

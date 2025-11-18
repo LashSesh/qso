@@ -96,16 +96,16 @@
 //!
 //! ## Examples
 //!
-//! See the [`examples/`](https://github.com/LashSesh/qdash/tree/main/metatron-qso-rs/examples) directory:
+//! See the [`examples/`](https://github.com/LashSesh/qso/tree/main/metatron-qso-rs/examples) directory:
 //! - `quantum_walk_basic.rs` - Simple quantum walk demo
 //! - `qaoa_maxcut_basic.rs` - MaxCut optimization
 //! - `vqa_demo.rs` - Complete VQA workflow
 //!
 //! ## References
 //!
-//! - [Architecture Documentation](https://github.com/LashSesh/qdash/blob/main/metatron-qso-rs/docs/ARCHITECTURE.md)
-//! - [Developer Guide](https://github.com/LashSesh/qdash/blob/main/metatron-qso-rs/docs/RUST_CORE_GUIDE.md)
-//! - [VQA Implementation](https://github.com/LashSesh/qdash/blob/main/VQA_IMPLEMENTATION_GUIDE.md)
+//! - [Architecture Documentation](https://github.com/LashSesh/qso/blob/main/metatron-qso-rs/docs/ARCHITECTURE.md)
+//! - [Developer Guide](https://github.com/LashSesh/qso/blob/main/metatron-qso-rs/docs/RUST_CORE_GUIDE.md)
+//! - [VQA Implementation](https://github.com/LashSesh/qso/blob/main/VQA_IMPLEMENTATION_GUIDE.md)
 
 // Core modules (always available)
 pub mod graph;

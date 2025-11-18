@@ -537,7 +537,7 @@ See: [CONTRIBUTING.md](../CONTRIBUTING.md) (if available)
 
 - **Documentation**: Run `cargo doc --open` for API docs
 - **Examples**: See `examples/` directory
-- **Issues**: [GitHub Issues](https://github.com/LashSesh/qdash/issues)
+- **Issues**: [GitHub Issues](https://github.com/LashSesh/qso/issues)
 - **Architecture**: See [ARCHITECTURE.md](ARCHITECTURE.md)
 
 ---

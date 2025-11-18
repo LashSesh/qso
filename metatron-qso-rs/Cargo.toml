@@ -2,10 +2,10 @@
 name = "metatron-qso-rs"
 version = "0.1.0"
 edition = "2024"
-authors = ["Q⊗DASH Team"]
+authors = ["Sebastian Klemm"]
 description = "Metatron Quantum State Operator - A quantum computing framework based on 13-dimensional sacred geometry"
 license = "MIT"
-repository = "https://github.com/LashSesh/qdash"
+repository = "https://github.com/LashSesh/qso"
 documentation = "https://docs.rs/metatron-qso-rs"
 readme = "README.md"
 keywords = ["quantum", "computing", "metatron", "vqa", "quantum-walk"]

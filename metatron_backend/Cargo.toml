@@ -2,7 +2,7 @@
 name = "metatron_backend"
 version = "0.1.0"
 edition = "2021"
-authors = ["Q⊗DASH Team"]
+authors = ["Sebastian Klemm"]
 description = "Quantum backend abstraction for Q⊗DASH supporting multiple providers"
 license = "MIT"
 

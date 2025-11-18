@@ -54,7 +54,7 @@ Welcome to the Q⊗DASH (Metatron VM) development environment! This guide will h
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/LashSesh/qdash.git
+git clone https://github.com/LashSesh/qso.git
 cd qdash
 ```
 
@@ -412,7 +412,7 @@ Once your development environment is set up:
 ## Getting Help
 
 - **Documentation:** See [`docs/`](docs/) directory
-- **Issues:** [GitHub Issues](https://github.com/LashSesh/qdash/issues)
+- **Issues:** [GitHub Issues](https://github.com/LashSesh/qso/issues)
 - **Architecture:** [`PRODUCT_OVERVIEW.md`](PRODUCT_OVERVIEW.md)
 - **API Docs:** `cargo doc --open` in `metatron-qso-rs/`
 

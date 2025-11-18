@@ -527,6 +527,6 @@ python -m scs.cli export -o config.json                    # Export
 
 **You're now ready to run quantum algorithms on the Metatron geometry! 🚀**
 
-*For support: [GitHub Issues](https://github.com/LashSesh/qdash/issues)*
+*For support: [GitHub Issues](https://github.com/LashSesh/qso/issues)*
 
 *Last updated: 2025-11-16*

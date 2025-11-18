@@ -229,8 +229,8 @@ MIT License - see [LICENSE](../LICENSE) for details.
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/LashSesh/qdash/issues)
-- **Documentation**: [Project Docs](https://github.com/LashSesh/qdash/tree/main/docs)
+- **Issues**: [GitHub Issues](https://github.com/LashSesh/qso/issues)
+- **Documentation**: [Project Docs](https://github.com/LashSesh/qso/tree/main/docs)
 
 ## Citation
 
@@ -239,8 +239,8 @@ If you use Metatron QSO in your research, please cite:
 ```bibtex
 @software{metatron_qso,
   title = {Metatron Quantum State Operator},
-  author = {Q⊗DASH Team},
+  author = {Sebastian Klemm},
   year = {2024},
-  url = {https://github.com/LashSesh/qdash}
+  url = {https://github.com/LashSesh/qso}
 }
 ```
