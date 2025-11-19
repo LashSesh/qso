@@ -352,10 +352,10 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Build Advanced Algorithms benchmark
-        run: cargo build --release --bin advanced_algorithms_bench --bin benchmark_compare
+        run: cargo build --release --features advanced --bin advanced_algorithms_bench --bin benchmark_compare
 
       - name: Run Advanced Algorithms benchmarks
-        run: cargo run --release --bin advanced_algorithms_bench target/advanced_algorithms_bench.json
+        run: cargo run --release --features advanced --bin advanced_algorithms_bench target/advanced_algorithms_bench.json
 
       - name: Display Advanced Algorithms results
         run: |
