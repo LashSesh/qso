@@ -141,9 +141,12 @@ jobs:
           if grep -q "## \[${VERSION}\]" CHANGELOG.md; then
             NOTES=$(sed -n "/## \[${VERSION}\]/,/## \[/p" CHANGELOG.md | sed '$d')
           else
-            NOTES="Release ${VERSION}
+            NOTES=$(cat <<EOF
+          Release ${VERSION}
 
-See CHANGELOG.md for details."
+          See CHANGELOG.md for details.
+          EOF
+          )
           fi
 
           echo "notes<<EOF" >> $GITHUB_OUTPUT
