@@ -3,6 +3,7 @@
 [![Rust](https://img.shields.io/badge/rust-1.85.0-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Workspace](https://img.shields.io/badge/workspace-24_crates-blue.svg)]()
+[![Quantum Benchmarks](https://github.com/LashSesh/qso/actions/workflows/benchmarks.yml/badge.svg)](https://github.com/LashSesh/qso/actions/workflows/benchmarks.yml)
 
 **Enterprise-grade Quantum Computing Framework with 13-dimensional Metatron Geometry**
 
