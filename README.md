@@ -895,4 +895,4 @@ This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for d
 
 ---
 
-**Made with ❤️ in Rust** | **Powered by Quantum Geometry** | **© 2025 Sebastian Klemm (Aion-Chronos)**
+**Made with ❤️ in Rust** | **Powered by Quantum Geometry** | **© 2025 Sebastian Klemm (Aion-Chronos; "Sol invictus Mithra")**
