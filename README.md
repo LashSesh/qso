@@ -725,50 +725,6 @@ cargo build --release -p metatron-qso-rs --features "walks,vqa,dtl"
 cargo build --release -p metatron_backend --features "ibm"
 ```
 
-## 🎯 Roadmap
-
-### ✅ Phase 1: Core Implementation (Completed)
-- [x] Metatron geometry (13 nodes, 78 edges)
-- [x] Quantum state & operator primitives
-- [x] DTL system (4 modules)
-- [x] Quantum walks (CTQW, Krylov, scattering)
-- [x] Hamiltonian & spectral analysis
-
-### ✅ Phase 2: Variational Algorithms (Completed)
-- [x] VQE with 3 ansatz types
-- [x] QAOA for combinatorial optimization
-- [x] VQC for classification
-- [x] Parameter shift rule gradients
-- [x] 3 optimizers (COBYLA, ADAM, L-BFGS-B)
-
-### ✅ Phase 3: Benchmarking & CI/CD (Completed)
-- [x] 8 comprehensive benchmark suites
-- [x] Automatic baseline comparisons
-- [x] GitHub Actions integration
-- [x] Performance regression detection
-
-### ✅ Phase 4: Advanced Features (Completed)
-- [x] Seraphic Calibration Shell (SCS)
-- [x] DioniceOS 4D-5D integration
-- [x] Backend abstraction layer
-- [x] Telemetry & dashboard
-- [x] TRITON spiral search
-- [x] Python SDK (PyO3)
-- [x] Grover search & boson sampling
-
-### 🚧 Phase 5: Production Ready (In Progress)
-- [ ] GPU acceleration (CUDA/ROCm)
-- [ ] Advanced visualization
-- [ ] IBM Quantum backend (complete)
-- [ ] AWS Braket integration
-- [ ] Advanced error correction
-- [ ] Performance optimizations
-
-### 🔮 Phase 6: Hardware Integration (Planned)
-- [ ] IonQ/Rigetti support
-- [ ] Photonic chip design
-- [ ] Quantum annealer integration
-- [ ] NISQ-device deployment
 
 ## 📊 Architecture Diagram
 
