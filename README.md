@@ -336,7 +336,7 @@ The SCS is a meta-algorithm for automatic calibration of quantum algorithms. It 
 - Guarantees monotonic quality improvement
 - Validates field resonance
 
-**CRI (Calibration Regime Initialization)**:
+**CRI (Calibration Regime Initialization; "Celestial Resonance Impulse")**:
 - Detects stagnation in local optimum
 - Automatically switches to new regime
 - Enables global exploration
