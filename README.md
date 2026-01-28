@@ -1,4 +1,4 @@
-# Q⊗DASH - Metatron Quantum State Operator Framework
+# Q⊗DASH - Metatron Cube Quantum State Operator
 
 [![Rust](https://img.shields.io/badge/rust-1.85.0-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
