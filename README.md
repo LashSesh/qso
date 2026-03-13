@@ -6,7 +6,7 @@
 
 **Enterprise-grade Quantum Computing Framework based on a 13-dimensional Metatron-Graph**
 
-Q⊗DASH (MetatronQSO - Quantum State Operator) is a state-of-the-art quantum computing framework in pure Rust, based on the Sacred Geometry of Metatron's Cube. The system implements a complete stack of quantum algorithms, variational methods, dynamic tripolar logic, and automatic calibration through the Seraphic Calibration Shell.
+Q⊗DASH (Metatron Quantum State Operator; QSO) is a state-of-the-art quantum computing framework in pure Rust, based on the Sacred Geometry of Metatron's Cube. The system implements a complete stack of quantum algorithms, variational methods, dynamic tripolar logic, and automatic calibration through the Seraphic Calibration Shell.
 
 ## 🌟 Highlights
 
