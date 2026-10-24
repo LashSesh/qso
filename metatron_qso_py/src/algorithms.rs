@@ -219,6 +219,9 @@ fn expectation_and_gradient<'py>(
     Ok((value, real_array(py, grad)))
 }
 
+/// Values `(k,)` and gradients `(k, p)` of a batch.
+type ValuesAndGradients<'py> = (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray2<f64>>);
+
 /// Parameter vectors as the rows of a 2-D array.
 fn rows(thetas: &RealMatrixArg<'_>) -> PyResult<Vec<Vec<f64>>> {
     let view = thetas.as_array();
@@ -261,7 +264,7 @@ fn expectation_and_gradient_batch<'py>(
     method: &str,
     step: f64,
     initial_state: Option<&PyStateVector>,
-) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray2<f64>>)> {
+) -> PyResult<ValuesAndGradients<'py>> {
     let thetas = rows(&thetas)?;
     let m = gradient_method(method, step)?;
     let (c, h) = (&circuit.inner, &observable.inner);
