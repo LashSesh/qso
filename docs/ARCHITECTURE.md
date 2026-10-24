@@ -88,8 +88,10 @@ Two alternatives were measured and dropped: fusing gates *inside* a block
 complex matrix once the data is in cache), and gathering a few high qubits
 into each block (qHiPSTER-style blocking, with a greedy scheduler: not
 faster on the 4-core test machine). A random-circuit test over the whole
-gate set compares plans with gate-by-gate simulation, also under Miri with
-8-amplitude blocks.
+gate set (every kind, unitaries on up to three targets, controls, symbolic
+angles, fusible runs) compares plans with gate-by-gate simulation, with
+the production block size on 15 and 16 qubits and with small blocks down
+to 2 amplitudes, also under Miri with 8-amplitude blocks.
 
 ## Multi-controlled gates in OpenQASM (`quantum/decompose.rs`)
 
@@ -131,8 +133,8 @@ most 2¹⁶, always for unweighted graphs), and the cost layer and the
 rotations of the low qubits share one blocked pass.
 
 `expectation_batch` and `expectation_and_gradient_batch` evaluate many
-parameter vectors; below 16 qubits, where one simulation runs on one
-thread, they run in parallel across the vectors.
+parameter vectors; below 16 qubits, where one simulation uses at most two
+threads, they run in parallel across the vectors.
 
 ## Krylov methods (`linalg/krylov.rs`)
 

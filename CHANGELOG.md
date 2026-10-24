@@ -76,7 +76,8 @@ validated result of earlier releases changed.
   runs of single-qubit gates on higher qubits are fused. Layers of H, RZ
   and a CX chain run 3.8× faster at 16 qubits and 1.4–2× faster at 18–24
   qubits; planned and gate-by-gate simulation agree to 1e-12 on random
-  circuits over the whole gate set (also under Miri).
+  circuits over the whole gate set, with controls and symbolic angles
+  (also under Miri).
 - QAOA cost layers use a table of the distinct cut values instead of a
   complex exponential per amplitude, and share a blocked pass with the
   mixer: value and gradient 1.2–1.65× faster.

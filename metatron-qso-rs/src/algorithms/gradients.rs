@@ -107,10 +107,16 @@ pub fn expectation_and_gradient(
     }
 }
 
+/// Check every parameter vector before any simulation runs.
+fn check_rows(circuit: &Circuit, thetas: &[Vec<f64>]) -> Result<()> {
+    thetas.iter().try_for_each(|t| circuit.check_parameters(t))
+}
+
 /// Run `f(k)` for `k in 0..count`: in parallel across `k` when one
-/// simulation of `n_qubits` qubits is too small to use the threads itself,
-/// one after another (each simulation parallel inside) otherwise. Results
-/// do not depend on the number of threads.
+/// simulation of `n_qubits` qubits is too small to use the threads well
+/// (below 16 qubits it uses at most two), one after another (each
+/// simulation parallel inside) otherwise. Results do not depend on the
+/// number of threads.
 fn batch<T, F>(n_qubits: usize, count: usize, f: F) -> Result<Vec<T>>
 where
     T: Send,
@@ -129,14 +135,16 @@ where
 ///
 /// For registers below 16 qubits the evaluations run in parallel, one per
 /// thread, which is much faster than a loop when each evaluation is too
-/// small to parallelise by itself (energy landscapes, grid searches,
-/// batches of classifier inputs).
+/// small to use the threads by itself (energy landscapes, grid searches,
+/// batches of classifier inputs). Every parameter vector is checked before
+/// the first evaluation.
 pub fn expectation_batch(
     circuit: &Circuit,
     observable: &PauliSum,
     thetas: &[Vec<f64>],
     initial: Option<&StateVector>,
 ) -> Result<Vec<f64>> {
+    check_rows(circuit, thetas)?;
     batch(circuit.n_qubits(), thetas.len(), |k| {
         expectation(circuit, observable, &thetas[k], initial)
     })
@@ -151,6 +159,7 @@ pub fn expectation_and_gradient_batch(
     initial: Option<&StateVector>,
     method: GradientMethod,
 ) -> Result<Vec<(f64, Vec<f64>)>> {
+    check_rows(circuit, thetas)?;
     batch(circuit.n_qubits(), thetas.len(), |k| {
         expectation_and_gradient(circuit, observable, &thetas[k], initial, method)
     })

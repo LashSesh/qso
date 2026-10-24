@@ -181,11 +181,21 @@ fn fuse<'a>(circuit: &'a Circuit, theta: &[f64], c: usize) -> Vec<Op<'a>> {
 fn local<'a>(op: &Op<'a>, c: usize) -> Option<Local<'a>> {
     let low = (1usize << c) - 1;
     let (inst, angles) = match op {
-        Op::Fused { qubit, .. } => {
-            return (*qubit < c).then(|| Local::Targets {
+        Op::Fused { qubit, .. } if *qubit < c => {
+            return Some(Local::Targets {
                 op: op.clone(),
                 low_controls: 0,
                 high_controls: 0,
+            });
+        }
+        Op::Fused { qubit, matrix } => {
+            // A fused run of diagonal gates (T·S, RZ·P, …) stays a phase.
+            let zero = C64::new(0.0, 0.0);
+            return (matrix[1] == zero && matrix[2] == zero).then(|| Local::Bit {
+                controls: 0,
+                bit: 1 << qubit,
+                p0: matrix[0],
+                p1: matrix[3],
             });
         }
         Op::Gate(inst, angles) => (*inst, angles.get()),
@@ -382,11 +392,13 @@ pub(crate) fn run(amps: &mut [C64], circuit: &Circuit, theta: &[f64]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::quantum::StateVector;
+    use crate::quantum::{Param, StateVector};
     use crate::rng::Rng;
 
-    /// A random circuit over the whole gate set, with random controls.
-    fn random_circuit(n: usize, gates: usize, rng: &mut Rng) -> Circuit {
+    /// A random circuit over the whole gate set (every kind, unitaries on
+    /// one to three targets, symbolic angles), with random controls, and
+    /// parameters to bind it with.
+    fn random_circuit(n: usize, gates: usize, rng: &mut Rng) -> (Circuit, Vec<f64>) {
         let mut c = Circuit::new(n);
         let pick = |rng: &mut Rng, k: usize| -> Vec<usize> {
             let mut q: Vec<usize> = (0..n).collect();
@@ -394,57 +406,78 @@ mod tests {
             q.truncate(k);
             q
         };
+        let random_unitary = |rng: &mut Rng, k: usize| -> Vec<C64> {
+            let d = 1 << k;
+            let m =
+                crate::linalg::CMatrix::from_fn(d, d, |_, _| C64::new(rng.normal(), rng.normal()));
+            let u = m.qr().q();
+            (0..d * d).map(|i| u[(i / d, i % d)]).collect()
+        };
+        use GateKind::*;
+        let one = [H, X, Y, Z, S, Sdg, T, Tdg, SX, SXdg, RX, RY, RZ, P, U];
+        let two = [Swap, RXX, RYY, RZZ];
         for _ in 0..gates {
             let a = rng.uniform_range(-3.0, 3.0);
-            let kind = if n < 2 { 13 } else { rng.below(14) };
+            // Half of the angles are symbolic: 0.7·p + offset.
+            let angle = |c: &mut Circuit, rng: &mut Rng| -> Param {
+                if rng.uniform() < 0.5 {
+                    (c.new_parameter() * 0.7 + a).into()
+                } else {
+                    a.into()
+                }
+            };
             let controls = if n > 3 && rng.uniform() < 0.3 {
                 1 + rng.below(2) as usize
             } else {
                 0
             };
-            let q = pick(rng, (2 + controls).min(n));
-            let (t, cs) = (q[0], &q[q.len().min(2)..]);
-            match kind {
-                0 => c.controlled(GateKind::H, &[t], cs, &[]).map(|_| ()),
-                1 => c.controlled(GateKind::X, &[t], cs, &[]).map(|_| ()),
-                2 => c.controlled(GateKind::Y, &[t], cs, &[]).map(|_| ()),
-                3 => c.controlled(GateKind::Z, &[t], cs, &[]).map(|_| ()),
-                4 => c.controlled(GateKind::T, &[t], cs, &[]).map(|_| ()),
-                5 => c
-                    .controlled(GateKind::RX, &[t], cs, &[a.into()])
-                    .map(|_| ()),
-                6 => c
-                    .controlled(GateKind::RY, &[t], cs, &[a.into()])
-                    .map(|_| ()),
-                7 => c
-                    .controlled(GateKind::RZ, &[t], cs, &[a.into()])
-                    .map(|_| ()),
-                8 => c.controlled(GateKind::P, &[t], cs, &[a.into()]).map(|_| ()),
-                9 => c
-                    .controlled(
-                        GateKind::U,
-                        &[t],
-                        cs,
-                        &[a.into(), (0.5 * a).into(), 1.1.into()],
-                    )
-                    .map(|_| ()),
-                10 => c
-                    .controlled(GateKind::Swap, &[t, q[1]], cs, &[])
-                    .map(|_| ()),
-                11 => c
-                    .controlled(GateKind::RZZ, &[t, q[1]], cs, &[a.into()])
-                    .map(|_| ()),
-                12 => c
-                    .controlled(GateKind::RXX, &[t, q[1]], cs, &[a.into()])
-                    .map(|_| ()),
+            let choice = if n < 2 { 0 } else { rng.below(4) };
+            match choice {
+                0 | 1 => {
+                    let kind = one[rng.below(one.len() as u64) as usize];
+                    let q = pick(rng, (1 + controls).min(n));
+                    let params: Vec<Param> =
+                        (0..kind.num_params()).map(|_| angle(&mut c, rng)).collect();
+                    c.controlled(kind, &[q[0]], &q[1..], &params).unwrap();
+                }
+                2 => {
+                    let kind = two[rng.below(two.len() as u64) as usize];
+                    let q = pick(rng, (2 + controls).min(n));
+                    let params: Vec<Param> =
+                        (0..kind.num_params()).map(|_| angle(&mut c, rng)).collect();
+                    c.controlled(kind, &[q[0], q[1]], &q[2..], &params).unwrap();
+                }
                 _ => {
-                    c.h(t).rz(t, a).ry(t, 0.3 * a).sx(t);
-                    Ok(())
+                    let k = 1 + rng.below(3.min(n as u64)) as usize;
+                    let q = pick(rng, (k + controls).min(n));
+                    let u = random_unitary(rng, k);
+                    c.unitary(u, &q[..k], &q[k..]).unwrap();
                 }
             }
-            .unwrap();
+            if rng.uniform() < 0.1 {
+                // A run to fuse.
+                let t = rng.below(n as u64) as usize;
+                c.h(t).rz(t, a).t(t).s(t).ry(t, 0.3 * a).sx(t);
+            }
         }
-        c
+        let theta = (0..c.num_parameters())
+            .map(|_| rng.uniform_range(-3.0, 3.0))
+            .collect();
+        (c, theta)
+    }
+
+    fn check(n: usize, block: usize, rng: &mut Rng) {
+        let (circuit, theta) = random_circuit(n, 60, rng);
+        let psi = StateVector::random(n, rng);
+        let mut reference = psi.amplitudes().to_vec();
+        for inst in circuit.instructions() {
+            apply_instruction(&mut reference, inst, &inst.angles(&theta), false, 0);
+        }
+        let mut planned = psi.amplitudes().to_vec();
+        run_with_block(&mut planned, &circuit, &theta, block);
+        for (a, b) in planned.iter().zip(&reference) {
+            assert!((a - b).norm() < 1e-12, "n={n} block={block}");
+        }
     }
 
     #[test]
@@ -452,17 +485,15 @@ mod tests {
         let mut rng = Rng::seed_from_u64(17);
         let max_n = if cfg!(miri) { 5 } else { 9 };
         for n in 1..=max_n {
-            for c in [1, 2, 3, 5, 14] {
-                let circuit = random_circuit(n, 60, &mut rng);
-                let psi = StateVector::random(n, &mut rng);
-                let mut reference = psi.amplitudes().to_vec();
-                for inst in circuit.instructions() {
-                    apply_instruction(&mut reference, inst, &inst.angles(&[]), false, 0);
-                }
-                let mut planned = psi.amplitudes().to_vec();
-                run_with_block(&mut planned, &circuit, &[], c);
-                for (a, b) in planned.iter().zip(&reference) {
-                    assert!((a - b).norm() < 1e-12, "n={n} c={c}");
+            for block in [1, 2, 3, 5, 14] {
+                check(n, block, &mut rng);
+            }
+        }
+        // The production block size on registers just above it.
+        if !cfg!(miri) {
+            for n in [15, 16] {
+                for _ in 0..3 {
+                    check(n, BLOCK_QUBITS, &mut rng);
                 }
             }
         }
@@ -486,6 +517,12 @@ mod tests {
             describe(&fuse(&c, &[], 0)),
             ["fused0", "ry", "x", "x", "fused1"]
         );
+        // A fused diagonal run outside the block remains a block-local phase.
+        let mut d = Circuit::new(3);
+        d.t(2).s(2);
+        let ops = fuse(&d, &[], 1);
+        assert!(matches!(ops[..], [Op::Fused { qubit: 2, .. }]));
+        assert!(matches!(local(&ops[0], 1), Some(Local::Bit { .. })));
         // Qubit 0 inside the block (c = 1): its gates stay separate.
         assert_eq!(
             describe(&fuse(&c, &[], 1)),

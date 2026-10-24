@@ -108,14 +108,17 @@ pub struct MaxCutQaoa {
 /// Distinct values of `cut` and the index of every entry, if there are at
 /// most 2¹⁶ distinct values.
 fn cut_levels(cut: &[f64]) -> Option<(Vec<f64>, Vec<u16>)> {
-    let mut values: Vec<f64> = Vec::new();
-    for &c in cut {
-        if let Err(pos) = values.binary_search_by(|v| v.total_cmp(&c)) {
-            if values.len() == 1 << 16 {
-                return None;
-            }
-            values.insert(pos, c);
-        }
+    let mut values = cut.to_vec();
+    #[cfg(feature = "parallel")]
+    {
+        use rayon::prelude::*;
+        values.par_sort_unstable_by(f64::total_cmp);
+    }
+    #[cfg(not(feature = "parallel"))]
+    values.sort_unstable_by(f64::total_cmp);
+    values.dedup_by(|a, b| a.total_cmp(b).is_eq());
+    if values.len() > 1 << 16 {
+        return None;
     }
     let index = map_collect(cut.len(), |b| {
         values

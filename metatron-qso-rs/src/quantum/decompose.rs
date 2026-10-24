@@ -48,12 +48,10 @@ pub(crate) fn sqrt_unitary(u: &[C64; 4]) -> [C64; 4] {
     let (l1, l2) = ((tr + disc) / 2.0, (tr - disc) / 2.0);
     let s1 = l1.sqrt();
     let mut s2 = l2.sqrt();
+    // With this choice |s₁ + s₂| ≥ √2 for unit-modulus roots, so the
+    // division is safe; for U = λ·I it gives V = s₁·I.
     if (s1 + s2).norm() < (s1 - s2).norm() {
         s2 = -s2;
-    }
-    if (s1 + s2).norm() < 1e-9 {
-        // λ₁ = λ₂: U is a multiple of the identity.
-        return [s1, C64::new(0.0, 0.0), C64::new(0.0, 0.0), s1];
     }
     let p = s1 * s2;
     let d = s1 + s2;
