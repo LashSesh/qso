@@ -133,6 +133,18 @@ def test_generators():
         lambda: q.Graph.from_edges(3, [(0, 1), (0, 1)]),
         lambda: q.Graph.from_edges(3, [(0, 1)], weights=[1.0, 2.0]),
         lambda: q.Graph(3).neighbors(5),
+        # Sizes beyond the generator limits are rejected before anything is
+        # allocated (they used to abort the interpreter or hang).
+        lambda: q.Graph(10**12),
+        lambda: q.Graph.from_edges(10**12, []),
+        lambda: q.Graph.cycle(10**12),
+        lambda: q.Graph.path(2**21),
+        lambda: q.Graph.complete(10**6),
+        lambda: q.Graph.complete_bipartite(10**5, 10**5),
+        lambda: q.Graph.grid(10**6, 10**6),
+        lambda: q.Graph.random_regular(10**6, 40),
+        lambda: q.Graph.erdos_renyi(10**5, 0.0),
+        lambda: q.Graph.from_spec("K:204204"),
     ],
 )
 def test_invalid_graphs_raise_value_error(build):

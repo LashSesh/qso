@@ -625,7 +625,9 @@ impl FromStr for PauliSum {
                 let text: String = chars[start..pos].iter().collect();
                 let value: f64 = text
                     .parse()
-                    .map_err(|_| QsoError::Parse(format!("invalid number '{text}'")))?;
+                    .ok()
+                    .filter(|v: &f64| v.is_finite())
+                    .ok_or_else(|| QsoError::Parse(format!("invalid number '{text}'")))?;
                 coef = Some(value);
                 has_content = true;
                 continue;
@@ -736,6 +738,17 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn non_finite_coefficients_are_rejected() {
+        // Found by the `pauli` fuzz target: the coefficient overflowed to ∞,
+        // which printed as "inf" and could not be parsed back.
+        for bad in ["555555555E555 Z0", "1e309 X1", "2 * 1e400", "-1e999"] {
+            assert!(bad.parse::<PauliSum>().is_err(), "{bad}");
+        }
+        let h: PauliSum = "1e308 Z0 - 5e-324".parse().unwrap();
+        assert_eq!(h.to_string().parse::<PauliSum>().unwrap(), h);
     }
 
     #[test]

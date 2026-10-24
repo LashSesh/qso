@@ -8,6 +8,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 readme = "README.md"
+exclude = ["fuzz"]
 documentation = "https://docs.rs/metatron-qso-rs"
 keywords = ["quantum", "simulator", "qaoa", "vqe", "quantum-walk"]
 categories = ["science", "simulation", "mathematics"]

@@ -16,7 +16,9 @@
 //! `cry`, `rxx`, `rzz`, `id`, `u2`), several quantum registers, register
 //! broadcasting and arithmetic parameter expressions with `pi`.
 //! `measure` and `barrier` are skipped; custom `gate` definitions,
-//! classical control and `reset` are rejected with an error.
+//! classical control and `reset` are rejected with an error, as are programs
+//! beyond [`MAX_QASM_QUBITS`] qubits or [`MAX_QASM_INSTRUCTIONS`] gates and
+//! parameters that are not finite.
 
 use std::f64::consts::PI;
 use std::fmt::Write as _;
@@ -26,6 +28,17 @@ use num_complex::Complex64 as C64;
 use super::circuit::{Circuit, Instruction};
 use super::gates::{GateKind, matrix_1q};
 use crate::error::{QsoError, Result};
+
+/// Largest total size of the quantum registers of an imported program.
+pub const MAX_QASM_QUBITS: usize = 1 << 14;
+
+/// Largest number of gates an imported program may expand to (after
+/// register broadcasting).
+pub const MAX_QASM_INSTRUCTIONS: usize = 1 << 22;
+
+/// Deepest nesting of parentheses and unary operators in a parameter
+/// expression.
+const MAX_EXPR_DEPTH: usize = 64;
 
 fn real(v: f64) -> String {
     let s = format!("{v:?}");
@@ -256,6 +269,7 @@ pub fn to_qasm2(circuit: &Circuit, theta: &[f64], measure_all: bool) -> Result<S
 struct Expr<'a> {
     s: &'a [u8],
     pos: usize,
+    depth: usize,
 }
 
 impl<'a> Expr<'a> {
@@ -263,6 +277,7 @@ impl<'a> Expr<'a> {
         let mut e = Expr {
             s: src.as_bytes(),
             pos: 0,
+            depth: 0,
         };
         let v = e.sum()?;
         e.ws();
@@ -271,7 +286,26 @@ impl<'a> Expr<'a> {
                 "trailing input in expression '{src}'"
             )));
         }
+        if !v.is_finite() {
+            return Err(QsoError::Parse(format!(
+                "expression '{src}' is not a finite number"
+            )));
+        }
         Ok(v)
+    }
+
+    /// Run `f` one nesting level deeper; bounds the recursion so that no
+    /// input can overflow the stack.
+    fn nested(&mut self, f: impl FnOnce(&mut Self) -> Result<f64>) -> Result<f64> {
+        if self.depth == MAX_EXPR_DEPTH {
+            return Err(QsoError::Parse(format!(
+                "expression nested deeper than {MAX_EXPR_DEPTH} levels"
+            )));
+        }
+        self.depth += 1;
+        let v = f(self);
+        self.depth -= 1;
+        v
     }
 
     fn ws(&mut self) {
@@ -311,7 +345,7 @@ impl<'a> Expr<'a> {
         let base = self.atom()?;
         if self.peek() == Some(b'^') {
             self.pos += 1;
-            let exp = self.unary()?;
+            let exp = self.nested(Self::unary)?;
             return Ok(base.powf(exp));
         }
         Ok(base)
@@ -321,11 +355,11 @@ impl<'a> Expr<'a> {
         match self.peek() {
             Some(b'-') => {
                 self.pos += 1;
-                Ok(-self.unary()?)
+                Ok(-self.nested(Self::unary)?)
             }
             Some(b'+') => {
                 self.pos += 1;
-                self.unary()
+                self.nested(Self::unary)
             }
             _ => self.power(),
         }
@@ -335,7 +369,7 @@ impl<'a> Expr<'a> {
         match self.peek() {
             Some(b'(') => {
                 self.pos += 1;
-                let v = self.sum()?;
+                let v = self.nested(Self::sum)?;
                 if self.peek() != Some(b')') {
                     return Err(QsoError::Parse("missing ')' in expression".into()));
                 }
@@ -384,7 +418,7 @@ impl<'a> Expr<'a> {
                 if self.peek() != Some(b'(') {
                     return Err(QsoError::Parse(format!("expected '(' after {name}")));
                 }
-                let arg = self.atom()?;
+                let arg = self.nested(Self::atom)?;
                 Ok(f(arg))
             }
             _ => Err(QsoError::Parse("unexpected end of expression".into())),
@@ -396,6 +430,17 @@ impl<'a> Expr<'a> {
 enum Operand {
     Qubit(usize),
     Register(usize, usize),
+}
+
+/// Split `name[index]` into name and index text; nothing may follow the
+/// closing bracket.
+fn indexed(text: &str) -> Option<(&str, &str)> {
+    let open = text.find('[')?;
+    let close = open + text[open..].find(']')?;
+    text[close + 1..]
+        .trim()
+        .is_empty()
+        .then(|| (text[..open].trim(), text[open + 1..close].trim()))
 }
 
 fn split_top_level(s: &str, sep: char) -> Vec<&str> {
@@ -439,13 +484,10 @@ pub fn from_qasm2(src: &str) -> Result<Circuit> {
 
     let lookup = |registers: &[(String, usize, usize)], operand: &str| -> Result<Operand> {
         let operand = operand.trim();
-        if let Some(open) = operand.find('[') {
-            let name = operand[..open].trim();
-            let close = operand
-                .find(']')
-                .ok_or_else(|| QsoError::Parse(format!("missing ']' in '{operand}'")))?;
-            let idx: usize = operand[open + 1..close]
-                .trim()
+        if operand.contains('[') {
+            let (name, index) = indexed(operand)
+                .ok_or_else(|| QsoError::Parse(format!("malformed operand '{operand}'")))?;
+            let idx: usize = index
                 .parse()
                 .map_err(|_| QsoError::Parse(format!("invalid index in '{operand}'")))?;
             let (_, off, size) = registers
@@ -486,19 +528,25 @@ pub fn from_qasm2(src: &str) -> Result<Circuit> {
             "include" | "creg" | "barrier" | "measure" => {}
             "qreg" => {
                 let decl = stmt["qreg".len()..].trim();
-                let open = decl
-                    .find('[')
+                let (name, size) = indexed(decl)
+                    .filter(|(name, _)| !name.is_empty())
                     .ok_or_else(|| QsoError::Parse(format!("malformed qreg '{stmt}'")))?;
-                let close = decl
-                    .find(']')
-                    .ok_or_else(|| QsoError::Parse(format!("malformed qreg '{stmt}'")))?;
-                let name = decl[..open].trim().to_string();
-                let size: usize = decl[open + 1..close]
-                    .trim()
+                let size: usize = size
                     .parse()
                     .map_err(|_| QsoError::Parse(format!("invalid size in '{stmt}'")))?;
-                registers.push((name, n_qubits, size));
-                n_qubits += size;
+                if registers.iter().any(|(n, _, _)| n == name) {
+                    return Err(QsoError::Parse(format!("register '{name}' declared twice")));
+                }
+                let total = n_qubits
+                    .checked_add(size)
+                    .filter(|&t| t <= MAX_QASM_QUBITS)
+                    .ok_or_else(|| {
+                        QsoError::Parse(format!(
+                            "programs may declare at most {MAX_QASM_QUBITS} qubits"
+                        ))
+                    })?;
+                registers.push((name.to_string(), n_qubits, size));
+                n_qubits = total;
             }
             "reset" | "if" | "opaque" | "gate" => {
                 return Err(QsoError::Parse(format!("'{keyword}' is not supported")));
@@ -575,6 +623,11 @@ pub fn from_qasm2(src: &str) -> Result<Circuit> {
             })
             .max();
         let reps = width.unwrap_or(1);
+        if circuit.instructions().len() + reps > MAX_QASM_INSTRUCTIONS {
+            return Err(QsoError::Parse(format!(
+                "programs may expand to at most {MAX_QASM_INSTRUCTIONS} gates"
+            )));
+        }
         for k in 0..reps {
             let qubits: Vec<usize> = ops
                 .iter()
@@ -809,5 +862,48 @@ mod tests {
         assert!(from_qasm2("qreg q[1]; h q;").is_err());
         assert!(from_qasm2("OPENQASM 2.0; qreg q[1]; gate foo a { h a; }").is_err());
         assert!(from_qasm2("OPENQASM 2.0; qreg q[1]; bogus q[0];").is_err());
+    }
+
+    /// Inputs found by the `qasm` fuzz target (and their relatives): each
+    /// must be rejected with an error, not a panic or a stack overflow.
+    #[test]
+    fn malformed_programs_are_errors() {
+        let header = "OPENQASM 2.0;\n";
+        let deep = format!("{}1{}", "(".repeat(10_000), ")".repeat(10_000));
+        let minus = format!("{}1", "-".repeat(10_000));
+        let sines = format!("{}1{}", "sin(".repeat(10_000), ")".repeat(10_000));
+        for body in [
+            "]\u{6}[".to_string(),
+            "qreg q]3[;".to_string(),
+            "qreg q[2]x;".to_string(),
+            "qreg [2];".to_string(),
+            "qreg q[2]; qreg q[3];".to_string(),
+            "qreg q[2]; h q]0[;".to_string(),
+            "qreg q[2]; h q[0]];".to_string(),
+            format!("qreg a[{}]; qreg b[2];", usize::MAX),
+            format!("qreg q[{}];", MAX_QASM_QUBITS + 1),
+            format!("qreg q[1]; rx({deep}) q[0];"),
+            format!("qreg q[1]; rx({minus}) q[0];"),
+            format!("qreg q[1]; rx({sines}) q[0];"),
+            "qreg q[1]; rx(1/0) q[0];".to_string(),
+            "qreg q[1]; rx(ln(0)) q[0];".to_string(),
+            "qreg q[1]; rx(sqrt(-1)) q[0];".to_string(),
+            "qreg q[1]; rx(1e999) q[0];".to_string(),
+        ] {
+            assert!(from_qasm2(&format!("{header}{body}")).is_err(), "{body:?}");
+        }
+        // Nesting within the limit still evaluates.
+        let ok = format!(
+            "{header}qreg q[1]; rx({}pi{}) q[0];",
+            "(".repeat(60),
+            ")".repeat(60)
+        );
+        assert!(from_qasm2(&ok).is_ok());
+        // Broadcasting is bounded by the instruction limit.
+        let wide = format!(
+            "{header}qreg q[{MAX_QASM_QUBITS}];{}",
+            " h q;".repeat(MAX_QASM_INSTRUCTIONS / MAX_QASM_QUBITS + 1)
+        );
+        assert!(from_qasm2(&wide).is_err());
     }
 }

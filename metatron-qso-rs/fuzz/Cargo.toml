@@ -1,0 +1,45 @@
+[package]
+name = "metatron-qso-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+metatron-qso-rs = { path = "..", default-features = false }
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
+
+# Not part of the main workspace: fuzzing needs a nightly toolchain.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "qasm"
+path = "fuzz_targets/qasm.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pauli"
+path = "fuzz_targets/pauli.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "graph_spec"
+path = "fuzz_targets/graph_spec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "json"
+path = "fuzz_targets/json.rs"
+test = false
+doc = false
+bench = false
