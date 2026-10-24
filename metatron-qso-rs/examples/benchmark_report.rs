@@ -7,7 +7,10 @@
 
 use std::time::Instant;
 
-use metatron_qso::algorithms::gradients::{GradientMethod, expectation_and_gradient};
+use metatron_qso::algorithms::gradients::{
+    GradientMethod, expectation, expectation_and_gradient, expectation_and_gradient_batch,
+    expectation_batch,
+};
 use metatron_qso::algorithms::qaoa::optimize_layerwise;
 use metatron_qso::prelude::*;
 
@@ -52,7 +55,7 @@ fn main() -> Result<()> {
     println!("## Statevector throughput (layer = H + RZ on every qubit, CX chain)\n");
     println!("| qubits | gates/layer | time/layer | ns per gate·amplitude |");
     println!("|---:|---:|---:|---:|");
-    for n in [10usize, 14, 18, 20, 22, 24] {
+    for n in [10usize, 14, 16, 18, 20, 22, 24] {
         let mut layer = Circuit::new(n);
         for q in 0..n {
             layer.h(q).rz(q, 0.3);
@@ -116,6 +119,49 @@ fn main() -> Result<()> {
         });
         record(format!("gradient_tfim10/{}", name.replace(' ', "_")), t);
         println!("| {name} | {} |", fmt_time(t));
+    }
+
+    println!("\n## Batched evaluation (same circuit and Hamiltonian, 256 parameter vectors)\n");
+    println!("| quantity | one call per vector | one batch call | speed-up |");
+    println!("|---|---:|---:|---:|");
+    let thetas: Vec<Vec<f64>> = (0..256)
+        .map(|k| {
+            (0..circuit.num_parameters())
+                .map(|j| ((k * 31 + j * 7) % 97) as f64 * 0.06 - 3.0)
+                .collect()
+        })
+        .collect();
+    let loop_values = median_seconds(5, || {
+        for t in &thetas {
+            expectation(&circuit, &h, t, None).unwrap();
+        }
+    });
+    let batch_values = median_seconds(5, || {
+        expectation_batch(&circuit, &h, &thetas, None).unwrap();
+    });
+    let loop_grads = median_seconds(3, || {
+        for t in &thetas {
+            expectation_and_gradient(&circuit, &h, t, None, GradientMethod::Adjoint).unwrap();
+        }
+    });
+    let batch_grads = median_seconds(3, || {
+        expectation_and_gradient_batch(&circuit, &h, &thetas, None, GradientMethod::Adjoint)
+            .unwrap();
+    });
+    record("batch256_tfim10/values_loop".into(), loop_values);
+    record("batch256_tfim10/values_batch".into(), batch_values);
+    record("batch256_tfim10/gradients_loop".into(), loop_grads);
+    record("batch256_tfim10/gradients_batch".into(), batch_grads);
+    for (name, a, b) in [
+        ("expectation values", loop_values, batch_values),
+        ("values + adjoint gradients", loop_grads, batch_grads),
+    ] {
+        println!(
+            "| {name} | {} | {} | {:.1}× |",
+            fmt_time(a),
+            fmt_time(b),
+            a / b
+        );
     }
 
     println!("\n## QAOA value + gradient (p = 3, random 3-regular graphs)\n");

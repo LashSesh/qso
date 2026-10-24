@@ -354,6 +354,26 @@ pub(crate) fn run_with_block(amps: &mut [C64], circuit: &Circuit, theta: &[f64],
     }
 }
 
+/// Call `f(base, block)` for every block of `2^c` amplitudes (`base` is the
+/// register index of its first amplitude), blocks in parallel.
+pub(crate) fn for_each_block<F>(amps: &mut [C64], c: usize, f: F)
+where
+    F: Fn(usize, &mut [C64]) + Sync + Send,
+{
+    let block = 1usize << c;
+    #[cfg(feature = "parallel")]
+    if amps.len() > block {
+        use rayon::prelude::*;
+        amps.par_chunks_mut(block)
+            .enumerate()
+            .for_each(|(k, chunk)| f(k * block, chunk));
+        return;
+    }
+    amps.chunks_mut(block)
+        .enumerate()
+        .for_each(|(k, chunk)| f(k * block, chunk));
+}
+
 /// Apply `circuit` with parameters `theta` (already validated) to `amps`.
 pub(crate) fn run(amps: &mut [C64], circuit: &Circuit, theta: &[f64]) {
     run_with_block(amps, circuit, theta, BLOCK_QUBITS);

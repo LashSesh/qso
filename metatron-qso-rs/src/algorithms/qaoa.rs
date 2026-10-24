@@ -27,6 +27,7 @@ use crate::linalg::inner;
 use crate::optimize::{Method, Objective, Options, minimize};
 use crate::parallel::{for_each_mut, map_collect, map_tasks, sum_c64, sum_f64};
 use crate::quantum::kernels;
+use crate::quantum::plan::{BLOCK_QUBITS, for_each_block};
 use crate::quantum::{MAX_QUBITS, StateVector};
 use crate::rng::Rng;
 
@@ -97,10 +98,55 @@ pub struct MaxCutQaoa {
     p: usize,
     cut: Vec<f64>,
     max_cut: f64,
+    /// Distinct cut values and the index of each string's value, when there
+    /// are at most 2¹⁶ of them (always for unweighted graphs): a cost layer
+    /// then looks phases up in a table instead of evaluating `e^{−iγc}`
+    /// for every amplitude.
+    levels: Option<(Vec<f64>, Vec<u16>)>,
 }
 
-/// Apply `e^{−iβ Σ X}` (or its inverse for negative β).
-fn mixer(amps: &mut [C64], n: usize, beta: f64) {
+/// Distinct values of `cut` and the index of every entry, if there are at
+/// most 2¹⁶ distinct values.
+fn cut_levels(cut: &[f64]) -> Option<(Vec<f64>, Vec<u16>)> {
+    let mut values: Vec<f64> = Vec::new();
+    for &c in cut {
+        if let Err(pos) = values.binary_search_by(|v| v.total_cmp(&c)) {
+            if values.len() == 1 << 16 {
+                return None;
+            }
+            values.insert(pos, c);
+        }
+    }
+    let index = map_collect(cut.len(), |b| {
+        values
+            .binary_search_by(|v| v.total_cmp(&cut[b]))
+            .expect("every value is listed") as u16
+    });
+    Some((values, index))
+}
+
+/// Phase factor `e^{i·sign·γ·cut[b]}` for every string, through the level
+/// table when there is one.
+enum Phases<'a> {
+    Table(Vec<C64>, &'a [u16]),
+    Direct(&'a [f64], f64),
+}
+
+impl Phases<'_> {
+    #[inline]
+    fn at(&self, b: usize) -> C64 {
+        match self {
+            Phases::Table(table, index) => table[index[b] as usize],
+            Phases::Direct(cut, angle) => C64::from_polar(1.0, angle * cut[b]),
+        }
+    }
+}
+
+/// Apply `e^{−iγC}` (if `cost` is given) and then `e^{−iβ Σ X}` (or its
+/// inverse for negative β). The phases and the rotations of the qubits
+/// below the block size are applied block by block in one pass over
+/// memory; the higher qubits follow one pass each.
+fn layer(amps: &mut [C64], n: usize, cost: Option<&Phases<'_>>, beta: f64) {
     let (c, s) = (beta.cos(), beta.sin());
     let m = [
         C64::new(c, 0.0),
@@ -108,9 +154,52 @@ fn mixer(amps: &mut [C64], n: usize, beta: f64) {
         C64::new(0.0, -s),
         C64::new(c, 0.0),
     ];
-    for q in 0..n {
+    let low = BLOCK_QUBITS.min(n);
+    for_each_block(amps, low, |base, block| {
+        if let Some(phases) = cost {
+            for (i, a) in block.iter_mut().enumerate() {
+                *a *= phases.at(base + i);
+            }
+        }
+        for q in 0..low {
+            kernels::apply_1q(block, q, 0, &m);
+        }
+    });
+    for q in low..n {
         kernels::apply_1q(amps, q, 0, &m);
     }
+}
+
+fn mixer(amps: &mut [C64], n: usize, beta: f64) {
+    layer(amps, n, None, beta);
+}
+
+/// `⟨λ|Σ_q X_q|φ⟩`: the qubits below the block size block by block, the
+/// others in one streaming pass each. The sum is ordered, so the result
+/// does not depend on the number of threads.
+fn mixer_overlap(lambda: &[C64], phi: &[C64], n: usize) -> C64 {
+    let low = BLOCK_QUBITS.min(n);
+    let block = 1usize << low;
+    let per_block = map_tasks(phi.len() / block, |k| {
+        let (l, p) = (
+            &lambda[k * block..(k + 1) * block],
+            &phi[k * block..(k + 1) * block],
+        );
+        let mut acc = C64::new(0.0, 0.0);
+        for q in 0..low {
+            let bit = 1usize << q;
+            for i in 0..block {
+                acc += l[i].conj() * p[i ^ bit];
+            }
+        }
+        acc
+    });
+    let mut total: C64 = per_block.into_iter().sum();
+    for q in low..n {
+        let bit = 1usize << q;
+        total += sum_c64(phi.len(), |b| lambda[b].conj() * phi[b ^ bit]);
+    }
+    total
 }
 
 impl MaxCutQaoa {
@@ -137,7 +226,14 @@ impl MaxCutQaoa {
                 .sum()
         });
         let max_cut = cut.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-        Ok(Self { n, p, cut, max_cut })
+        let levels = cut_levels(&cut);
+        Ok(Self {
+            n,
+            p,
+            cut,
+            max_cut,
+            levels,
+        })
     }
 
     /// The same graph at a different depth (reuses the cut table).
@@ -177,6 +273,20 @@ impl MaxCutQaoa {
             .collect()
     }
 
+    /// Phases `e^{i·angle·cut[b]}`.
+    fn phases(&self, angle: f64) -> Phases<'_> {
+        match &self.levels {
+            Some((values, index)) => Phases::Table(
+                values
+                    .iter()
+                    .map(|&v| C64::from_polar(1.0, angle * v))
+                    .collect(),
+                index,
+            ),
+            None => Phases::Direct(&self.cut, angle),
+        }
+    }
+
     fn check(&self, params: &[f64]) -> Result<()> {
         if params.len() != 2 * self.p {
             return Err(QsoError::ParameterCount {
@@ -192,10 +302,7 @@ impl MaxCutQaoa {
         let dim = self.cut.len();
         let mut amps = vec![C64::new(1.0 / (dim as f64).sqrt(), 0.0); dim];
         for l in 0..self.p {
-            let g = gammas[l];
-            let cut = &self.cut;
-            kernels::apply_diagonal(&mut amps, |b| C64::from_polar(1.0, -g * cut[b]));
-            mixer(&mut amps, self.n, betas[l]);
+            layer(&mut amps, self.n, Some(&self.phases(-gammas[l])), betas[l]);
         }
         amps
     }
@@ -225,22 +332,16 @@ impl MaxCutQaoa {
         let n = self.n;
         for l in (0..self.p).rev() {
             // Mixer: ∂/∂β = 2·Im⟨λ|B|φ⟩ with B = Σ_q X_q.
-            let b_phi = sum_c64(phi.len(), |b| {
-                let mut acc = C64::new(0.0, 0.0);
-                for q in 0..n {
-                    acc += phi[b ^ (1 << q)];
-                }
-                lambda[b].conj() * acc
-            });
+            let b_phi = mixer_overlap(&lambda, &phi, n);
             grad[self.p + l] = 2.0 * b_phi.im;
             mixer(&mut phi, n, -betas[l]);
             mixer(&mut lambda, n, -betas[l]);
             // Cost: ∂/∂γ = 2·Im⟨λ|C|φ⟩.
             let c_phi = sum_c64(phi.len(), |b| lambda[b].conj() * phi[b] * cut[b]);
             grad[l] = 2.0 * c_phi.im;
-            let g = gammas[l];
-            for_each_mut(&mut phi, |b, a| *a *= C64::from_polar(1.0, g * cut[b]));
-            for_each_mut(&mut lambda, |b, a| *a *= C64::from_polar(1.0, g * cut[b]));
+            let phases = self.phases(gammas[l]);
+            for_each_mut(&mut phi, |b, a| *a *= phases.at(b));
+            for_each_mut(&mut lambda, |b, a| *a *= phases.at(b));
         }
         Ok((value, grad))
     }
@@ -378,6 +479,31 @@ mod tests {
     use super::*;
     use crate::algorithms::{ansatz, models};
     use crate::graph::{generators, metatron};
+
+    #[test]
+    fn phase_tables_match_direct_phases() {
+        let mut rng = Rng::seed_from_u64(8);
+        let mut edges = Vec::new();
+        for u in 0..11 {
+            for v in u + 1..11 {
+                if rng.uniform() < 0.4 {
+                    edges.push((u, v, rng.uniform_range(0.1, 2.0)));
+                }
+            }
+        }
+        let g = Graph::from_weighted_edges(11, &edges).unwrap();
+        let tabled = MaxCutQaoa::new(&g, 2).unwrap();
+        assert!(tabled.levels.is_some());
+        let mut direct = tabled.clone();
+        direct.levels = None;
+        let x = [0.3, 0.9, 0.7, 0.2];
+        let (a, ga) = tabled.expectation_and_gradient(&x).unwrap();
+        let (b, gb) = direct.expectation_and_gradient(&x).unwrap();
+        assert!((a - b).abs() < 1e-12);
+        assert!(ga.iter().zip(&gb).all(|(p, q)| (p - q).abs() < 1e-12));
+        let many: Vec<f64> = (0..70_000).map(|k| k as f64).collect();
+        assert!(cut_levels(&many).is_none());
+    }
 
     #[test]
     fn fast_path_matches_explicit_circuit() {
