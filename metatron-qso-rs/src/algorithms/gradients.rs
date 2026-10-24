@@ -107,6 +107,55 @@ pub fn expectation_and_gradient(
     }
 }
 
+/// Run `f(k)` for `k in 0..count`: in parallel across `k` when one
+/// simulation of `n_qubits` qubits is too small to use the threads itself,
+/// one after another (each simulation parallel inside) otherwise. Results
+/// do not depend on the number of threads.
+fn batch<T, F>(n_qubits: usize, count: usize, f: F) -> Result<Vec<T>>
+where
+    T: Send,
+    F: Fn(usize) -> Result<T> + Sync + Send,
+{
+    let small = n_qubits < crate::parallel::PAR_THRESHOLD.trailing_zeros() as usize;
+    let results: Vec<Result<T>> = if small {
+        crate::parallel::map_tasks(count, f)
+    } else {
+        (0..count).map(f).collect()
+    };
+    results.into_iter().collect()
+}
+
+/// [`expectation`] for many parameter vectors at once.
+///
+/// For registers below 16 qubits the evaluations run in parallel, one per
+/// thread, which is much faster than a loop when each evaluation is too
+/// small to parallelise by itself (energy landscapes, grid searches,
+/// batches of classifier inputs).
+pub fn expectation_batch(
+    circuit: &Circuit,
+    observable: &PauliSum,
+    thetas: &[Vec<f64>],
+    initial: Option<&StateVector>,
+) -> Result<Vec<f64>> {
+    batch(circuit.n_qubits(), thetas.len(), |k| {
+        expectation(circuit, observable, &thetas[k], initial)
+    })
+}
+
+/// [`expectation_and_gradient`] for many parameter vectors at once (in
+/// parallel as for [`expectation_batch`]).
+pub fn expectation_and_gradient_batch(
+    circuit: &Circuit,
+    observable: &PauliSum,
+    thetas: &[Vec<f64>],
+    initial: Option<&StateVector>,
+    method: GradientMethod,
+) -> Result<Vec<(f64, Vec<f64>)>> {
+    batch(circuit.n_qubits(), thetas.len(), |k| {
+        expectation_and_gradient(circuit, observable, &thetas[k], initial, method)
+    })
+}
+
 fn adjoint(
     circuit: &Circuit,
     observable: &PauliSum,
@@ -206,6 +255,35 @@ fn parameter_shift(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn batches_match_single_evaluations() {
+        use crate::algorithms::ansatz::{Entanglement, efficient_su2};
+        let circuit = efficient_su2(5, 2, Entanglement::Linear);
+        let h: PauliSum = "Z0 Z1 + 0.5 X2 - 0.3 Y3 Z4".parse().unwrap();
+        let thetas: Vec<Vec<f64>> = (0..17)
+            .map(|k| {
+                (0..circuit.num_parameters())
+                    .map(|j| 0.1 * (k * j) as f64 - 0.7)
+                    .collect()
+            })
+            .collect();
+        let values = expectation_batch(&circuit, &h, &thetas, None).unwrap();
+        let both =
+            expectation_and_gradient_batch(&circuit, &h, &thetas, None, GradientMethod::Adjoint)
+                .unwrap();
+        for (k, theta) in thetas.iter().enumerate() {
+            let (v, g) =
+                expectation_and_gradient(&circuit, &h, theta, None, GradientMethod::Adjoint)
+                    .unwrap();
+            assert_eq!(values[k], expectation(&circuit, &h, theta, None).unwrap());
+            assert_eq!(both[k], (v, g));
+        }
+        // An invalid entry fails the whole batch.
+        let mut bad = thetas.clone();
+        bad[3].pop();
+        assert!(expectation_batch(&circuit, &h, &bad, None).is_err());
+    }
+
     use super::*;
     use crate::rng::Rng;
 

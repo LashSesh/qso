@@ -314,6 +314,20 @@ def expectation_and_gradient(
     step: float = 1e-5,
     initial_state: Optional[StateVector] = None,
 ) -> Tuple[float, RealArray]: ...
+def expectation_batch(
+    circuit: Circuit,
+    observable: PauliSum,
+    thetas: ArrayLike,
+    initial_state: Optional[StateVector] = None,
+) -> RealArray: ...
+def expectation_and_gradient_batch(
+    circuit: Circuit,
+    observable: PauliSum,
+    thetas: ArrayLike,
+    method: str = "adjoint",
+    step: float = 1e-5,
+    initial_state: Optional[StateVector] = None,
+) -> Tuple[RealArray, RealArray]: ...
 
 # ---------------------------------------------------------------------------
 # VQE and QAOA
