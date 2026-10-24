@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] — 2026-10-24
+
+Packaging fix; the code is identical to 1.0.0, whose release notes describe
+the rewrite: <https://github.com/LashSesh/qso/blob/main/CHANGELOG.md#100--2026-10-24>.
+
+### Fixed
+
+- PyPI rejected the source distribution of 1.0.0 because its metadata named a
+  `LICENSE` file at the archive root that the archive did not contain, so
+  1.0.0 is on PyPI as wheels only. 1.0.1 ships the source distribution as
+  well, for platforms without a prebuilt wheel.
+- The release workflow now checks that every license file named in the
+  source distribution's metadata is in the archive before anything is
+  published.
+
 ## [1.0.0] — 2026-10-24
 
 First stable release: a ground-up rewrite of the 0.1 prototype. The audit in [docs/AUDIT_v0.1.md](docs/AUDIT_v0.1.md)
