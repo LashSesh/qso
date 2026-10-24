@@ -139,7 +139,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # Under Miri the parallel thresholds are lowered (src/parallel.rs), so
       # the multi-threaded kernel paths run on 7-qubit registers.
-      - run: "cargo miri test -p metatron-qso-rs --lib -- quantum::kernels:: parallel::"
+      - run: "cargo miri test -p metatron-qso-rs --lib -- quantum::kernels:: quantum::plan:: parallel::"
 
   fuzz:
     name: fuzz (60 s per target)

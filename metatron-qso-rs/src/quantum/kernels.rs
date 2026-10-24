@@ -318,7 +318,30 @@ pub(crate) fn apply_instruction(
         .controls
         .iter()
         .fold(0usize, |m, &c| m | (1 << (c + offset)));
-    let t: Vec<usize> = inst.targets.iter().map(|&q| q + offset).collect();
+    apply_instruction_masked(amps, inst, angles, conj, offset, controls);
+}
+
+/// [`apply_instruction`] with the control mask given explicitly (already
+/// shifted by `offset`): the instruction's own controls are ignored. Used
+/// to apply a gate to a block of a larger register whose high control bits
+/// are known to be set.
+pub(crate) fn apply_instruction_masked(
+    amps: &mut [C64],
+    inst: &Instruction,
+    angles: &[f64],
+    conj: bool,
+    offset: usize,
+    controls: usize,
+) {
+    let mut targets = [0usize; MAX_DENSE_TARGETS];
+    assert!(
+        inst.targets.len() <= MAX_DENSE_TARGETS,
+        "at most {MAX_DENSE_TARGETS} targets"
+    );
+    for (slot, &q) in targets.iter_mut().zip(&inst.targets) {
+        *slot = q + offset;
+    }
+    let t = &targets[..inst.targets.len()];
     let cj = |z: C64| if conj { z.conj() } else { z };
     match inst.kind {
         GateKind::Swap => apply_swap(amps, t[0], t[1], controls),
@@ -355,7 +378,7 @@ pub(crate) fn apply_instruction(
             match t.len() {
                 1 => apply_1q(amps, t[0], controls, &m[..].try_into().expect("2x2")),
                 2 => apply_2q(amps, t[0], t[1], controls, &m[..].try_into().expect("4x4")),
-                _ => apply_kq(amps, &t, controls, &m),
+                _ => apply_kq(amps, t, controls, &m),
             }
         }
         kind if kind.num_targets() == Some(1) => {

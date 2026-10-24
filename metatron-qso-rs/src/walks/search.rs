@@ -246,10 +246,17 @@ pub(crate) fn optimize_peak(
             }
             let t = 0.5 * (a + b);
             let p = success(t);
-            if p > values[k] { (t, p) } else { (t_k, values[k]) }
+            if p > values[k] {
+                (t, p)
+            } else {
+                (t_k, values[k])
+            }
         })
         .collect();
-    let best = refined.iter().map(|r| r.1).fold(f64::NEG_INFINITY, f64::max);
+    let best = refined
+        .iter()
+        .map(|r| r.1)
+        .fold(f64::NEG_INFINITY, f64::max);
     let (time, success_probability) = refined
         .into_iter()
         .find(|r| r.1 >= best - 1e-10)

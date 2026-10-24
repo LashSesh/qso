@@ -254,10 +254,7 @@ impl StateVector {
             });
         }
         circuit.check_parameters(theta)?;
-        for inst in circuit.instructions() {
-            let angles = inst.angles(theta);
-            kernels::apply_instruction(&mut self.amps, inst, &angles, false, 0);
-        }
+        super::plan::run(&mut self.amps, circuit, theta);
         Ok(())
     }
 

@@ -14,6 +14,7 @@ pub(crate) mod decompose;
 pub mod gates;
 pub(crate) mod kernels;
 pub mod pauli;
+pub(crate) mod plan;
 pub mod qasm;
 pub mod state;
 
