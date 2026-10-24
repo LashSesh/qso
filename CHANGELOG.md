@@ -4,7 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.2.0] — 2026-10-24
+
+Milestone 1.2 of the [roadmap](docs/ROADMAP.md): trust, supply chain and
+documentation. Fuzzing and the review of the parsers that came with it
+found six robustness bugs, all fixed (below); no validated result changed.
 
 ### Added
 
@@ -46,7 +50,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
-Found by fuzzing:
+Found by fuzzing (the unvalidated graph JSON by reviewing the targets):
 
 - `from_qasm2` panicked on malformed brackets (`qreg q]3[;`, `h q]0[;`),
   overflowed on huge register sizes and could overflow the stack on deeply

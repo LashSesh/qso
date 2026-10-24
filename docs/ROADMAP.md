@@ -1,6 +1,6 @@
 # QSO Roadmap (1.x)
 
-Status: proposal, October 2026, after the 1.1.0 release.
+Status: October 2026. 1.1 and 1.2 delivered; 1.3 is next.
 
 QSO 1.0 delivers what it documents: every number in the README is reproduced
 by a test against an independent reference, the packages are on crates.io
@@ -36,8 +36,8 @@ which withdraws the results of version 1.
 | Quantum walks | continuous-time only; exact analysis up to 2048 nodes | no discrete-time (coined, Szegedy) walks, no symmetry reduction, no state-transfer analysis, no circuits for walks |
 | Physics and chemistry | TFIM, XXZ, MaxCut, H₂ only | no fermion-to-qubit mappings, no product-formula (Trotter) circuits, no excited states |
 | Interoperability | OpenQASM 2 without `gate` definitions | no OpenQASM 3, no Qiskit/PennyLane/Cirq bridges, no browser build |
-| Documentation | README, architecture notes, rustdoc | no user guide, no tutorials or notebooks, no hosted Python reference |
-| Engineering | CI on 3 OSes, MSRV, release workflow | no fuzzing of the parsers, no Miri for the `unsafe` kernels, no API-compatibility check, no benchmark tracking, registry tokens instead of Trusted Publishing |
+| Documentation | user guide, executed tutorials and Python reference on GitHub Pages (1.2) | no Rust-specific tutorials; no hosted documentation per released version |
+| Engineering | CI on Linux (x86_64, arm64), macOS and Windows; Miri, fuzzing, API checks, weekly cross-validation and benchmark tracking; Trusted Publishing (1.2) | no coverage measurement; fuzzing only of the parsers and deserialisers |
 
 ### Measured performance against established simulators
 
@@ -113,9 +113,14 @@ Boson sampling with exact sampling, the graph classifier, multi-target
 Grover benchmarks, the cross-framework comparison, faster H/RY/RZ/CX
 kernels, the `technical_note` benchmark program and version 2 of the note.
 
-### 1.2 — Foundations: trust, supply chain, documentation (M)
+### 1.2 — Foundations: trust, supply chain, documentation (delivered)
 
 Cheap, protects the 1.x promise, and gives users their first impression.
+Everything below is in place. Fuzzing and the accompanying review found
+six robustness bugs, all fixed with regression tests
+([CHANGELOG](../CHANGELOG.md)). Miri found
+nothing in the `unsafe` kernels. Density matrices of noisy circuits agree
+with Qiskit Aer to 3.5·10⁻¹⁵.
 
 | Deliverable | Detail |
 |---|---|

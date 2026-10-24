@@ -82,8 +82,8 @@ or by the benchmark report you can run yourself.
 | Full bunching of n photons, boson / distinguishable probability | n! for n = 1 … 6 | n! |
 | State vectors of random circuits, largest difference to Qiskit Aer, Qulacs, Cirq, PennyLane | ≤ 3 × 10⁻¹⁵ | — |
 
-The test-suite (183 Rust tests and 196 Python tests, run in CI on Linux,
-macOS and Windows) also checks:
+The test-suite (189 Rust tests and 206 Python tests, run in CI on Linux
+(x86_64 and arm64), macOS and Windows) also checks:
 
 - every gate against an independent dense-matrix reference, and the QFT
   against the DFT matrix;
@@ -145,8 +145,9 @@ Fruit of Life (contact graph)
 pip install metatron-qso
 ```
 
-Prebuilt wheels for Linux (x86_64, aarch64), macOS (Intel and Apple silicon)
-and Windows (x86_64); one `abi3` wheel covers CPython 3.9 and newer.
+Prebuilt wheels for Linux (x86_64, aarch64; glibc and musl), macOS (Intel
+and Apple silicon) and Windows (x86_64, arm64); one `abi3` wheel covers
+CPython 3.9 and newer.
 
 **Rust library** ([crates.io](https://crates.io/crates/metatron-qso-rs),
 Rust ≥ 1.89)

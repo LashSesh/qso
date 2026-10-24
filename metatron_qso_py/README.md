@@ -14,8 +14,8 @@ pip install metatron-qso
 ```
 
 Wheels target the stable ABI (`abi3`, one wheel for CPython ≥ 3.9) and are
-provided for Linux (x86_64, aarch64), macOS (Intel and Apple silicon) and
-Windows (x86_64). The only runtime dependency is NumPy. On other platforms
+provided for Linux (x86_64, aarch64; glibc and musl), macOS (Intel and Apple
+silicon) and Windows (x86_64, arm64). The only runtime dependency is NumPy. On other platforms
 pip builds from the source distribution, which needs a Rust toolchain
 ≥ 1.89.
 
@@ -120,7 +120,9 @@ energy = q.estimate_expectation(bell, q.PauliSum("Z0 Z1"), shots=10_000,
 ```
 
 More complete scripts are in
-[`examples/`](https://github.com/LashSesh/qso/tree/main/metatron_qso_py/examples).
+[`examples/`](https://github.com/LashSesh/qso/tree/main/metatron_qso_py/examples);
+the [user guide](https://lashsesh.github.io/qso/) has tutorials and the full
+API reference.
 
 ## API overview
 
