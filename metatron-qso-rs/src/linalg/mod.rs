@@ -3,15 +3,19 @@
 //! * [`dense`] — Hermitian eigendecomposition and `exp(−iHt)` for dense
 //!   matrices (nalgebra).
 //! * [`sparse`] — compressed sparse row matrices for graph Hamiltonians.
-//! * [`krylov`] — matrix-free Lanczos ground states and Krylov propagation
-//!   `exp(−iHt)|v⟩` for operators far too large to store densely.
+//! * [`krylov`] — matrix-free Lanczos ground states, Krylov propagation
+//!   `exp(−iHt)|v⟩` and cyclic-subspace spectra for operators far too large
+//!   to store densely.
 
 pub mod dense;
 pub mod krylov;
 pub mod sparse;
 
 pub use dense::{CMatrix, RMatrix, eigh, eigh_real, expm_hermitian};
-pub use krylov::{KrylovOptions, LanczosResult, expm_multiply, lanczos_ground_state};
+pub use krylov::{
+    CyclicSpectrum, KrylovOptions, LanczosResult, cyclic_spectrum, expm_multiply,
+    lanczos_ground_state,
+};
 pub use sparse::CsrMatrix;
 
 use num_complex::Complex64 as C64;

@@ -15,9 +15,7 @@
 //! weight key.
 //!
 //! Both readers reject malformed input with an error and never build more
-//! than [`MAX_GENERATED_NODES`](super::generators::MAX_GENERATED_NODES)
-//! nodes or [`MAX_GENERATED_EDGES`](super::generators::MAX_GENERATED_EDGES)
-//! edges.
+//! than [`MAX_GENERATED_NODES`] nodes or [`MAX_GENERATED_EDGES`] edges.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;

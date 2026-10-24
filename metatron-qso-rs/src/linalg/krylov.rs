@@ -97,8 +97,13 @@ where
             }
         }
         let beta = norm(&w);
+        // Scale of H seen so far: the tridiagonal entries bound ‖H‖ from below.
+        let scale_ref = alphas
+            .iter()
+            .map(|a| a.abs())
+            .chain(betas.iter().copied())
+            .fold(1.0, f64::max);
         betas.push(beta);
-        let scale_ref = alphas.iter().map(|a| a.abs()).fold(1.0, f64::max);
         if beta <= 1e-13 * scale_ref || vectors.len() == dim {
             return LanczosBasis {
                 vectors,
@@ -240,6 +245,71 @@ where
         method: "Lanczos",
         iterations: matvecs,
         residual: last_estimate,
+    })
+}
+
+/// Spectral decomposition of a vector within its cyclic subspace; see
+/// [`cyclic_spectrum`].
+#[derive(Clone, Debug)]
+pub struct CyclicSpectrum {
+    /// The distinct eigenvalues `λ_k` of `H` with `Π_λ v ≠ 0`, ascending.
+    pub values: Vec<f64>,
+    /// Components `w_k = ⟨x_k|v⟩`, so that `v = Σ_k w_k x_k`.
+    pub weights: Vec<f64>,
+    /// Normalised eigenvectors `x_k = Π_{λ_k} v / ‖Π_{λ_k} v‖` as columns.
+    pub vectors: DMatrix<f64>,
+}
+
+/// Spectral decomposition of a real vector `v` under a real symmetric
+/// operator, restricted to the cyclic (Krylov) subspace spanned by
+/// `v, Hv, H²v, …`.
+///
+/// That subspace is the smallest invariant subspace of `H` containing `v`;
+/// its dimension is the number of distinct eigenvalues `λ` with
+/// `Π_λ v ≠ 0`. For start vectors with symmetry it is far smaller than the
+/// dimension of `H`: 21 for a node of the 2²⁰-node hypercube. Everything a
+/// walk started at `v` can do (its limiting and time-averaged distributions
+/// included) is determined by this decomposition.
+///
+/// Lanczos with full re-orthogonalisation builds the subspace until the
+/// next Lanczos vector vanishes to rounding error; if that does not happen
+/// within `max_dim` vectors the call fails with
+/// [`QsoError::NoConvergence`].
+pub fn cyclic_spectrum<F>(apply: F, v: &[f64], max_dim: usize) -> Result<CyclicSpectrum>
+where
+    F: Fn(&[C64], &mut [C64]),
+{
+    let dim = v.len();
+    let nv = v.iter().map(|x| x * x).sum::<f64>().sqrt();
+    if dim == 0 || nv == 0.0 {
+        return Err(QsoError::ZeroNorm);
+    }
+    let start: Vec<C64> = v.iter().map(|&x| C64::new(x / nv, 0.0)).collect();
+    let mut matvecs = 0;
+    let basis = build_basis(&apply, start, max_dim.max(1), &mut matvecs, |_, _| false);
+    let k = basis.alphas.len();
+    if !basis.breakdown {
+        return Err(QsoError::NoConvergence {
+            method: "cyclic subspace (Lanczos)",
+            iterations: k,
+            residual: basis.betas[k - 1],
+        });
+    }
+    let (values, y) = tridiagonal_eigh(&basis.alphas, &basis.betas[..k - 1]);
+    let m = basis.vectors.len().min(k);
+    let mut vectors = DMatrix::<f64>::zeros(dim, k);
+    for c in 0..k {
+        let coeffs: Vec<C64> = (0..m).map(|i| C64::new(y[(i, c)], 0.0)).collect();
+        let x = combine(&basis.vectors[..m], &coeffs);
+        for (r, xr) in x.iter().enumerate() {
+            vectors[(r, c)] = xr.re;
+        }
+    }
+    let weights = (0..k).map(|c| nv * y[(0, c)]).collect();
+    Ok(CyclicSpectrum {
+        values,
+        weights,
+        vectors,
     })
 }
 

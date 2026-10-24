@@ -9,8 +9,11 @@
 //! * [`ContinuousWalk`] — exact propagation through the eigendecomposition
 //!   (n ≤ [`DENSE_LIMIT`]) or Krylov propagation on sparse matrices (any n);
 //!   exact limiting and time-averaged distributions with correct handling of
-//!   degenerate eigenvalues.
+//!   degenerate eigenvalues, beyond `DENSE_LIMIT` through the start node's
+//!   cyclic subspace.
 //! * [`search`] — Childs–Goldstone spatial search.
+//! * [`quotient`] — exact walks and searches reduced by symmetry to a few
+//!   dimensions (equitable partitions), for graphs of any size.
 //! * [`dephasing`] — open-system walks with site dephasing (Lindblad).
 //! * [`classical`] — classical random-walk baselines.
 //!
@@ -28,6 +31,7 @@
 
 pub mod classical;
 pub mod dephasing;
+pub mod quotient;
 pub mod search;
 
 use num_complex::Complex64 as C64;
@@ -35,10 +39,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{QsoError, Result};
 use crate::graph::Graph;
-use crate::linalg::{CMatrix, CsrMatrix, KrylovOptions, RMatrix, eigh_real, expm_multiply};
+use crate::linalg::{
+    CMatrix, CsrMatrix, KrylovOptions, RMatrix, cyclic_spectrum, eigh_real, expm_multiply,
+};
 
 pub use classical::{classical_hitting_times, classical_walk_probabilities};
 pub use dephasing::DephasingWalk;
+pub use quotient::{Quotient, QuotientSearch, QuotientWalk};
 pub use search::{SearchResult, SpatialSearch};
 
 /// Largest graph for which dense eigendecompositions are used.
@@ -66,6 +73,68 @@ pub(crate) fn eigenspaces(values: &[f64]) -> Vec<std::ops::Range<usize>> {
         }
     }
     spaces
+}
+
+/// Spectral data of a start vector: eigenvalues `λ_k` (ascending), its
+/// components `c_k = ⟨x_k|start⟩` and the eigenvectors `x_k` (columns), on
+/// the full space or on the start vector's cyclic subspace.
+pub(crate) struct StartSpectrum<'a> {
+    pub values: std::borrow::Cow<'a, [f64]>,
+    pub coeffs: Vec<f64>,
+    pub vectors: std::borrow::Cow<'a, RMatrix>,
+}
+
+impl StartSpectrum<'_> {
+    /// `P̄(j) = Σ_λ |⟨j|Π_λ|start⟩|²`, with degenerate eigenvalues grouped.
+    pub fn limiting_distribution(&self) -> Vec<f64> {
+        let n = self.vectors.nrows();
+        let mut dist = vec![0.0; n];
+        for space in eigenspaces(&self.values) {
+            for (j, d) in dist.iter_mut().enumerate() {
+                let amp: f64 = space
+                    .clone()
+                    .map(|k| self.vectors[(j, k)] * self.coeffs[k])
+                    .sum();
+                *d += amp * amp;
+            }
+        }
+        dist
+    }
+
+    /// Exact time average `(1/T)∫₀ᵀ P(j, t) dt`.
+    pub fn average_distribution(&self, t_max: f64) -> Vec<f64> {
+        let (n, m) = self.vectors.shape();
+        // P(j,t) = Σ_ab c_a c_b x_a(j) x_b(j) e^{−i(λa−λb)t}
+        let kernel = |d: f64| {
+            let x = d * t_max;
+            if x.abs() < 1e-12 {
+                C64::new(1.0, 0.0)
+            } else {
+                // (1/T)∫ e^{−idt} dt = (1 − e^{−idT})/(idT)
+                (C64::new(1.0, 0.0) - C64::from_polar(1.0, -x)) / C64::new(0.0, x)
+            }
+        };
+        let mut avg = vec![0.0; n];
+        for a in 0..m {
+            for b in 0..m {
+                let coeff = self.coeffs[a] * self.coeffs[b];
+                if coeff == 0.0 {
+                    continue;
+                }
+                let k = kernel(self.values[a] - self.values[b]).re * coeff;
+                for (j, p) in avg.iter_mut().enumerate() {
+                    *p += k * self.vectors[(j, a)] * self.vectors[(j, b)];
+                }
+            }
+        }
+        avg
+    }
+}
+
+/// Largest cyclic subspace used for walks beyond [`DENSE_LIMIT`] nodes: at
+/// most `DENSE_LIMIT` vectors and `2²⁵` stored amplitudes.
+fn cyclic_limit(n: usize) -> usize {
+    DENSE_LIMIT.min((1usize << 25) / n.max(1)).max(1)
 }
 
 /// Total-variation distance `½ Σ |p − q|`.
@@ -211,57 +280,62 @@ impl ContinuousWalk {
         Ok(u)
     }
 
+    /// Spectral data of the walker started at `start`: the full
+    /// eigendecomposition up to [`DENSE_LIMIT`] nodes, beyond that the
+    /// start node's cyclic subspace (see [`cyclic_spectrum`]).
+    pub(crate) fn start_spectrum(&self, start: usize) -> Result<StartSpectrum<'_>> {
+        self.check_node(start)?;
+        match &self.spectral {
+            Some((values, vectors)) => Ok(StartSpectrum {
+                values: std::borrow::Cow::Borrowed(values),
+                coeffs: (0..self.n).map(|k| vectors[(start, k)]).collect(),
+                vectors: std::borrow::Cow::Borrowed(vectors),
+            }),
+            None => {
+                let mut v = vec![0.0; self.n];
+                v[start] = 1.0;
+                let h = &self.hamiltonian;
+                let c = cyclic_spectrum(|x, y| h.matvec(x, y), &v, cyclic_limit(self.n))?;
+                Ok(StartSpectrum {
+                    values: std::borrow::Cow::Owned(c.values),
+                    coeffs: c.weights,
+                    vectors: std::borrow::Cow::Owned(c.vectors),
+                })
+            }
+        }
+    }
+
+    /// Dimension of the smallest invariant subspace containing `|start⟩`:
+    /// the number of distinct eigenvalues the walker ever sees.
+    pub fn cyclic_dimension(&self, start: usize) -> Result<usize> {
+        let spectrum = self.start_spectrum(start)?;
+        Ok(eigenspaces(&spectrum.values)
+            .into_iter()
+            .filter(|space| space.clone().any(|k| spectrum.coeffs[k].abs() > 1e-12))
+            .count())
+    }
+
     /// Limiting (infinite-time-averaged) distribution
     /// `P̄(j) = Σ_λ |⟨j|Π_λ|start⟩|²`, where `Π_λ` projects onto the full
     /// eigenspace of `λ` (degeneracies are grouped, which v0.1 omitted).
+    ///
+    /// Beyond [`DENSE_LIMIT`] nodes the start node's cyclic subspace is
+    /// used, which is exact and small for symmetric graphs (21 dimensions on
+    /// the 2²⁰-node hypercube); the call fails if that subspace exceeds
+    /// `min(DENSE_LIMIT, 2²⁵/n)` dimensions.
     pub fn limiting_distribution(&self, start: usize) -> Result<Vec<f64>> {
-        self.check_node(start)?;
-        let (values, vectors) = self.require_dense()?;
-        let mut dist = vec![0.0; self.n];
-        for space in eigenspaces(values) {
-            for (j, d) in dist.iter_mut().enumerate() {
-                let amp: f64 = space
-                    .clone()
-                    .map(|k| vectors[(j, k)] * vectors[(start, k)])
-                    .sum();
-                *d += amp * amp;
-            }
-        }
-        Ok(dist)
+        Ok(self.start_spectrum(start)?.limiting_distribution())
     }
 
-    /// Exact time average `(1/T)∫₀ᵀ P(j, t) dt` of the node probabilities.
+    /// Exact time average `(1/T)∫₀ᵀ P(j, t) dt` of the node probabilities
+    /// (beyond [`DENSE_LIMIT`] nodes as for
+    /// [`limiting_distribution`](Self::limiting_distribution)).
     pub fn average_distribution(&self, start: usize, t_max: f64) -> Result<Vec<f64>> {
         self.check_node(start)?;
         if t_max.is_nan() || t_max <= 0.0 {
             return self.probabilities(start, 0.0);
         }
-        let (values, vectors) = self.require_dense()?;
-        let n = self.n;
-        // P(j,t) = Σ_ab c_a c_b V_ja V_jb e^{−i(λa−λb)t}, with c_k = V_{start,k}
-        let kernel = |d: f64| {
-            let x = d * t_max;
-            if x.abs() < 1e-12 {
-                C64::new(1.0, 0.0)
-            } else {
-                // (1/T)∫ e^{−idt} dt = (1 − e^{−idT})/(idT)
-                (C64::new(1.0, 0.0) - C64::from_polar(1.0, -x)) / C64::new(0.0, x)
-            }
-        };
-        let mut avg = vec![0.0; n];
-        for a in 0..n {
-            for b in 0..n {
-                let k = kernel(values[a] - values[b]);
-                let coeff = vectors[(start, a)] * vectors[(start, b)];
-                if coeff == 0.0 {
-                    continue;
-                }
-                for (j, p) in avg.iter_mut().enumerate() {
-                    *p += (k * (coeff * vectors[(j, a)] * vectors[(j, b)])).re;
-                }
-            }
-        }
-        Ok(avg)
+        Ok(self.start_spectrum(start)?.average_distribution(t_max))
     }
 
     /// Mixing time of Aharonov, Ambainis, Kempe & Vazirani (2001): the
@@ -292,12 +366,13 @@ impl ContinuousWalk {
                 format!("must be finite and positive, got {t_max}"),
             ));
         }
-        let limit = self.limiting_distribution(start)?;
+        let spectrum = self.start_spectrum(start)?;
+        let limit = spectrum.limiting_distribution();
         let steps = steps.max(1);
         let mut mixed = None;
         for k in (1..=steps).rev() {
             let t = t_max * k as f64 / steps as f64;
-            if total_variation(&self.average_distribution(start, t)?, &limit) > epsilon {
+            if total_variation(&spectrum.average_distribution(t), &limit) > epsilon {
                 break;
             }
             mixed = Some(t);
@@ -400,6 +475,54 @@ mod tests {
         for t in [f64::NAN, 0.0, -1.0, f64::INFINITY] {
             assert!(walk.mixing_time(0, 0.1, t, 10).is_err());
         }
+    }
+
+    #[test]
+    fn large_walks_use_the_cyclic_subspace() {
+        // Q12 has 4096 > DENSE_LIMIT nodes; a walker at a node only ever
+        // sees the 13 distinct Laplacian eigenvalues 0, 2, …, 24.
+        let d = 12;
+        let g = generators::hypercube(d);
+        let walk = ContinuousWalk::new(&g, Generator::Laplacian, 1.0).unwrap();
+        assert!(walk.spectrum().is_none());
+        assert_eq!(walk.cyclic_dimension(5).unwrap(), d + 1);
+        let q = Quotient::hypercube(d).unwrap();
+        let reduced = QuotientWalk::new(&q, Generator::Laplacian, 1.0).unwrap();
+        let cell_limit = reduced.limiting_distribution(0).unwrap();
+        let cell_avg = reduced.average_distribution(0, 3.0).unwrap();
+        let limit = walk.limiting_distribution(0).unwrap();
+        let avg = walk.average_distribution(0, 3.0).unwrap();
+        for v in [0usize, 1, 6, 0b1010_1010_1010, 4095] {
+            let k = v.count_ones() as usize;
+            let size = q.sizes()[k];
+            assert!((limit[v] - cell_limit[k] / size).abs() < 1e-12, "v={v}");
+            assert!((avg[v] - cell_avg[k] / size).abs() < 1e-12, "v={v}");
+        }
+        assert!((limit.iter().sum::<f64>() - 1.0).abs() < 1e-10);
+        assert!(walk.mixing_time(0, 0.05, 50.0, 50).unwrap().is_some());
+        // Cyclic and dense decompositions agree where both exist.
+        let small =
+            ContinuousWalk::new(&generators::petersen(), Generator::Adjacency, 1.0).unwrap();
+        let h = small.hamiltonian();
+        let mut v = vec![0.0; 10];
+        v[2] = 1.0;
+        let c = crate::linalg::cyclic_spectrum(|x, y| h.matvec(x, y), &v, 10).unwrap();
+        assert_eq!(c.values.len(), 3);
+        let cyclic = StartSpectrum {
+            values: std::borrow::Cow::Owned(c.values),
+            coeffs: c.weights,
+            vectors: std::borrow::Cow::Owned(c.vectors),
+        };
+        let dense = small.limiting_distribution(2).unwrap();
+        for (a, b) in cyclic.limiting_distribution().iter().zip(&dense) {
+            assert!((a - b).abs() < 1e-12);
+        }
+        // A start vector without symmetry exceeds a small subspace limit.
+        let r = generators::erdos_renyi(40, 0.3, &mut crate::rng::Rng::seed_from_u64(2)).unwrap();
+        let h = r.laplacian_csr();
+        let mut v = vec![0.0; 40];
+        v[0] = 1.0;
+        assert!(crate::linalg::cyclic_spectrum(|x, y| h.matvec(x, y), &v, 10).is_err());
     }
 
     #[test]

@@ -161,42 +161,9 @@ impl SpatialSearch {
     /// Maximise the success probability over `t ∈ [0, t_max]`: grid scan
     /// with `resolution` points followed by golden-section refinement.
     pub fn optimize_time(&self, t_max: f64, resolution: usize) -> SearchResult {
-        let resolution = resolution.max(2);
-        let dt = t_max / (resolution - 1) as f64;
-        let (mut best_t, mut best_p) = (0.0, self.success_probability(0.0));
-        for k in 1..resolution {
-            let t = k as f64 * dt;
-            let p = self.success_probability(t);
-            if p > best_p {
-                best_t = t;
-                best_p = p;
-            }
-        }
-        // Golden-section search on [best_t − dt, best_t + dt].
-        let (mut a, mut b) = ((best_t - dt).max(0.0), (best_t + dt).min(t_max));
-        let g = (5f64.sqrt() - 1.0) / 2.0;
-        for _ in 0..60 {
-            let c = b - g * (b - a);
-            let d = a + g * (b - a);
-            if self.success_probability(c) > self.success_probability(d) {
-                b = d;
-            } else {
-                a = c;
-            }
-        }
-        let t = 0.5 * (a + b);
-        let p = self.success_probability(t);
-        let (time, success_probability) = if p > best_p { (t, p) } else { (best_t, best_p) };
-        SearchResult {
-            gamma: self.gamma,
-            time,
-            success_probability,
-            expected_time: if success_probability > 0.0 {
-                time / success_probability
-            } else {
-                f64::INFINITY
-            },
-        }
+        optimize_peak(self.gamma, t_max, resolution, |t| {
+            self.success_probability(t)
+        })
     }
 
     /// Scan hopping rates and return the best [`SearchResult`].
@@ -236,32 +203,95 @@ impl SpatialSearch {
         resolution: usize,
     ) -> Result<SearchResult> {
         let gc = Self::critical_gamma(graph)?;
-        let eval = |gamma: f64| -> Result<SearchResult> {
+        optimize_rate(gc, |gamma| {
             Ok(SpatialSearch::new(graph, marked, generator, gamma)?
                 .optimize_time(t_max, resolution))
-        };
-        let grid: Vec<f64> = (0..=20).map(|k| gc * (0.5 + 0.05 * k as f64)).collect();
-        let mut best = Self::scan_gamma(graph, marked, generator, &grid, t_max, resolution)?;
-        let (mut a, mut b) = (best.gamma - 0.05 * gc, best.gamma + 0.05 * gc);
-        let phi = (5f64.sqrt() - 1.0) / 2.0;
-        for _ in 0..30 {
-            let c = b - phi * (b - a);
-            let d = a + phi * (b - a);
-            let (rc, rd) = (eval(c)?, eval(d)?);
-            if rc.success_probability > rd.success_probability {
-                b = d;
-                if rc.success_probability > best.success_probability {
-                    best = rc;
-                }
-            } else {
-                a = c;
-                if rd.success_probability > best.success_probability {
-                    best = rd;
-                }
+        })
+    }
+}
+
+/// Peak of `success(t)` over `t ∈ [0, t_max]`: grid scan with `resolution`
+/// points followed by golden-section refinement around the best point.
+pub(crate) fn optimize_peak(
+    gamma: f64,
+    t_max: f64,
+    resolution: usize,
+    success: impl Fn(f64) -> f64,
+) -> SearchResult {
+    let resolution = resolution.max(2);
+    let dt = t_max / (resolution - 1) as f64;
+    let (mut best_t, mut best_p) = (0.0, success(0.0));
+    for k in 1..resolution {
+        let t = k as f64 * dt;
+        let p = success(t);
+        if p > best_p {
+            best_t = t;
+            best_p = p;
+        }
+    }
+    // Golden-section search on [best_t − dt, best_t + dt].
+    let (mut a, mut b) = ((best_t - dt).max(0.0), (best_t + dt).min(t_max));
+    let g = (5f64.sqrt() - 1.0) / 2.0;
+    for _ in 0..60 {
+        let c = b - g * (b - a);
+        let d = a + g * (b - a);
+        if success(c) > success(d) {
+            b = d;
+        } else {
+            a = c;
+        }
+    }
+    let t = 0.5 * (a + b);
+    let p = success(t);
+    let (time, success_probability) = if p > best_p { (t, p) } else { (best_t, best_p) };
+    SearchResult {
+        gamma,
+        time,
+        success_probability,
+        expected_time: if success_probability > 0.0 {
+            time / success_probability
+        } else {
+            f64::INFINITY
+        },
+    }
+}
+
+/// Best hopping rate near the critical rate `gc`: scan `[gc/2, 3gc/2]` in
+/// steps of `gc/20`, then refine by golden-section search.
+pub(crate) fn optimize_rate(
+    gc: f64,
+    eval: impl Fn(f64) -> Result<SearchResult>,
+) -> Result<SearchResult> {
+    let mut best: Option<SearchResult> = None;
+    for k in 0..=20 {
+        let r = eval(gc * (0.5 + 0.05 * k as f64))?;
+        if best
+            .as_ref()
+            .is_none_or(|b| r.success_probability > b.success_probability)
+        {
+            best = Some(r);
+        }
+    }
+    let mut best = best.expect("the grid is not empty");
+    let (mut a, mut b) = (best.gamma - 0.05 * gc, best.gamma + 0.05 * gc);
+    let phi = (5f64.sqrt() - 1.0) / 2.0;
+    for _ in 0..30 {
+        let c = b - phi * (b - a);
+        let d = a + phi * (b - a);
+        let (rc, rd) = (eval(c)?, eval(d)?);
+        if rc.success_probability > rd.success_probability {
+            b = d;
+            if rc.success_probability > best.success_probability {
+                best = rc;
+            }
+        } else {
+            a = c;
+            if rd.success_probability > best.success_probability {
+                best = rd;
             }
         }
-        Ok(best)
     }
+    Ok(best)
 }
 
 #[cfg(test)]
