@@ -321,6 +321,9 @@ mod tests {
     fn paths_have_pst_only_up_to_three_nodes() {
         let p2 = StateTransfer::new(&generators::path(2), Generator::Adjacency, 1.0, 0, 1).unwrap();
         assert!((p2.perfect_transfer_time().unwrap() - FRAC_PI_2).abs() < 1e-9);
+        // Of the periodic perfect transfers the earliest is reported.
+        let best = p2.best_transfer(60.0, 20_000).unwrap();
+        assert!((best.time - FRAC_PI_2).abs() < 1e-7 && best.fidelity > 1.0 - 1e-12);
         let p3 = StateTransfer::new(&generators::path(3), Generator::Adjacency, 1.0, 0, 2).unwrap();
         assert!((p3.perfect_transfer_time().unwrap() - PI / 2f64.sqrt()).abs() < 1e-9);
         assert_eq!(p3.signs().unwrap(), &[1, -1, 1]);

@@ -211,7 +211,9 @@ impl SpatialSearch {
 }
 
 /// Peak of `success(t)` over `t ∈ [0, t_max]`: grid scan with `resolution`
-/// points followed by golden-section refinement around the best point.
+/// points, then golden-section refinement of every grid peak within 10⁻³ of
+/// the highest (at most 32). Dynamics often repeat their best value; of
+/// peaks equal to within 10⁻¹⁰ the earliest is returned.
 pub(crate) fn optimize_peak(
     gamma: f64,
     t_max: f64,
@@ -220,30 +222,38 @@ pub(crate) fn optimize_peak(
 ) -> SearchResult {
     let resolution = resolution.max(2);
     let dt = t_max / (resolution - 1) as f64;
-    let (mut best_t, mut best_p) = (0.0, success(0.0));
-    for k in 1..resolution {
-        let t = k as f64 * dt;
-        let p = success(t);
-        if p > best_p {
-            best_t = t;
-            best_p = p;
-        }
-    }
-    // Golden-section search on [best_t − dt, best_t + dt].
-    let (mut a, mut b) = ((best_t - dt).max(0.0), (best_t + dt).min(t_max));
-    let g = (5f64.sqrt() - 1.0) / 2.0;
-    for _ in 0..60 {
-        let c = b - g * (b - a);
-        let d = a + g * (b - a);
-        if success(c) > success(d) {
-            b = d;
-        } else {
-            a = c;
-        }
-    }
-    let t = 0.5 * (a + b);
-    let p = success(t);
-    let (time, success_probability) = if p > best_p { (t, p) } else { (best_t, best_p) };
+    let values: Vec<f64> = (0..resolution).map(|k| success(k as f64 * dt)).collect();
+    let grid_max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let is_peak = |k: usize| {
+        (k == 0 || values[k] >= values[k - 1])
+            && (k + 1 == resolution || values[k] >= values[k + 1])
+    };
+    let phi = (5f64.sqrt() - 1.0) / 2.0;
+    let refined: Vec<(f64, f64)> = (0..resolution)
+        .filter(|&k| values[k] >= grid_max - 1e-3 && is_peak(k))
+        .take(32)
+        .map(|k| {
+            let t_k = k as f64 * dt;
+            let (mut a, mut b) = ((t_k - dt).max(0.0), (t_k + dt).min(t_max));
+            for _ in 0..60 {
+                let c = b - phi * (b - a);
+                let d = a + phi * (b - a);
+                if success(c) > success(d) {
+                    b = d;
+                } else {
+                    a = c;
+                }
+            }
+            let t = 0.5 * (a + b);
+            let p = success(t);
+            if p > values[k] { (t, p) } else { (t_k, values[k]) }
+        })
+        .collect();
+    let best = refined.iter().map(|r| r.1).fold(f64::NEG_INFINITY, f64::max);
+    let (time, success_probability) = refined
+        .into_iter()
+        .find(|r| r.1 >= best - 1e-10)
+        .expect("the grid maximum is a peak");
     SearchResult {
         gamma,
         time,

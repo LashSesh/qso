@@ -63,7 +63,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p metatron-qso-rs --features cli --examples --bins
       - run: |
-          for ex in quickstart metatron_walks circuits qaoa_maxcut vqe_h2; do
+          for ex in quickstart metatron_walks metatron_atlas circuits qaoa_maxcut vqe_h2; do
             cargo run --release -p metatron-qso-rs --example "$ex"
           done
           cargo run --release -p metatron-qso-rs --example technical_note -- --quick --out /dev/null
@@ -72,6 +72,14 @@ jobs:
           ./target/release/qso search --graph metatron --marked 3
           ./target/release/qso qaoa --graph petersen --p 2
           ./target/release/qso vqe --model h2 --json
+          ./target/release/qso graph johnson:5,2 --save /tmp/j52.graphml
+          ./target/release/qso iso /tmp/j52.graphml johnson:5,2
+          ./target/release/qso reduce --graph hypercube:12
+          ./target/release/qso transfer --graph path:3
+          ./target/release/qso coined --graph hypercube:8
+          ./target/release/qso hitting --graph cycle:64
+          ./target/release/qso walk-circuit --graph cycle:16 > /tmp/walk.qasm
+          ./target/release/qso qasm /tmp/walk.qasm --shots 100
       - name: Benchmarks compile
         run: cargo bench -p metatron-qso-rs --no-run
 

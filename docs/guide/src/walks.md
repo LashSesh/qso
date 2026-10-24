@@ -7,7 +7,11 @@ A continuous-time quantum walk evolves a state on the nodes of a graph with
 (adjacency). Up to 2048 nodes QSO diagonalises `H` exactly, which gives
 probabilities at any time, limiting and time-averaged distributions, and
 mixing times. Beyond that size, `evolve` and `probabilities` propagate with
-a Krylov method.
+a Krylov method, and the limiting and averaged distributions come from the
+start node's *cyclic subspace* — the smallest invariant subspace containing
+it, whose dimension is the number of distinct eigenvalues the walker sees
+(13 on the 4096-node hypercube Q₁₂). For walks on far larger symmetric
+graphs, see [Symmetry and state transfer](symmetry.md).
 
 ```python
 import metatron_qso as q
@@ -27,6 +31,14 @@ import metatron_qso as q
 
 walk = q.ContinuousWalk(q.Graph.metatron_cube())
 print(walk.mixing_time(0, 0.02, 20.0, steps=2000))
+```
+
+```python
+import metatron_qso as q
+
+big = q.ContinuousWalk(q.Graph.hypercube(12))     # 4096 nodes
+assert big.spectrum is None and big.cyclic_dimension(0) == 13
+print(big.limiting_distribution(0)[:3])
 ```
 
 ## Spatial search
