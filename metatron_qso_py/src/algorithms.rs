@@ -3,8 +3,10 @@
 use metatron_qso::algorithms::ansatz::{self, Entanglement, Rotation};
 use metatron_qso::algorithms::classifier::VariationalClassifier;
 use metatron_qso::algorithms::gradients::{self, GradientMethod};
+use metatron_qso::algorithms::graph_classifier::GraphClassifier;
 use metatron_qso::algorithms::qaoa::{self, MaxCutQaoa, QaoaConfig, QaoaResult};
 use metatron_qso::algorithms::{Vqe, grover, models, qft};
+use metatron_qso::graph::Graph;
 use metatron_qso::optimize::{Method, Options};
 use metatron_qso::quantum::bitstring;
 use numpy::{IntoPyArray, PyArray1};
@@ -772,6 +774,142 @@ impl PyClassifier {
     }
 }
 
+/// Graph classifier with QAOA-type quantum layers.
+///
+/// Each graph `G` defines its cut operator `C_G`; `layers` trainable blocks
+/// `exp(−iβ Σ X)·exp(−iγ C_G)` act on `|+⟩ⁿ` with the same parameters for
+/// every graph, and `p(y = 1 | G) = σ(a·(⟨C_G⟩/W − ½) + b)`. Graphs are
+/// simulated exactly, so each needs at most about 20 nodes.
+#[pyclass(name = "GraphClassifier", module = "metatron_qso")]
+pub struct PyGraphClassifier {
+    inner: GraphClassifier,
+}
+
+fn graph_list(graphs: &[PyRef<'_, PyGraph>]) -> Vec<Graph> {
+    graphs.iter().map(|g| g.inner.clone()).collect()
+}
+
+#[pymethods]
+impl PyGraphClassifier {
+    #[new]
+    fn new(layers: usize) -> PyResult<Self> {
+        Ok(Self {
+            inner: GraphClassifier::new(layers).raise()?,
+        })
+    }
+
+    /// Train on `graphs` with 0/1 `labels` (L-BFGS, `restarts` seeded
+    /// starts, best loss kept).
+    #[pyo3(signature = (graphs, labels, max_iterations = 300, restarts = 4, seed = 0))]
+    fn fit<'py>(
+        &mut self,
+        py: Python<'py>,
+        graphs: Vec<PyRef<'py, PyGraph>>,
+        labels: RealArg<'_>,
+        max_iterations: usize,
+        restarts: usize,
+        seed: u64,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let graphs = graph_list(&graphs);
+        let ys = self::labels(&labels)?;
+        let model = &mut self.inner;
+        let r = py
+            .detach(|| model.fit(&graphs, &ys, &options(max_iterations), restarts, seed))
+            .raise()?;
+        Ok(pydict!(py, {
+            "loss" => r.loss,
+            "accuracy" => r.accuracy,
+            "iterations" => r.iterations,
+            "evaluations" => r.evaluations,
+        }))
+    }
+
+    /// Normalised expected cut `⟨C_G⟩ / W(G)`, with the trained angles or
+    /// with `angles = [γ…, β…]`.
+    #[pyo3(signature = (graph, angles = None))]
+    fn feature(
+        &self,
+        py: Python<'_>,
+        graph: &PyGraph,
+        angles: Option<RealArg<'_>>,
+    ) -> PyResult<f64> {
+        let model = &self.inner;
+        let g = &graph.inner;
+        match angles {
+            Some(a) => {
+                let a = real_vec(&a);
+                check_finite("angles", &a)?;
+                py.detach(|| model.feature_with(g, &a)).raise()
+            }
+            None => py.detach(|| model.feature(g)).raise(),
+        }
+    }
+
+    /// `p(y = 1 | G)`.
+    fn predict_proba(&self, py: Python<'_>, graph: &PyGraph) -> PyResult<f64> {
+        let (model, g) = (&self.inner, &graph.inner);
+        py.detach(|| model.predict_proba(g)).raise()
+    }
+
+    /// Predicted class (`p ≥ ½`).
+    fn predict(&self, py: Python<'_>, graph: &PyGraph) -> PyResult<bool> {
+        let (model, g) = (&self.inner, &graph.inner);
+        py.detach(|| model.predict(g)).raise()
+    }
+
+    /// Fraction of correctly classified graphs.
+    fn accuracy(
+        &self,
+        py: Python<'_>,
+        graphs: Vec<PyRef<'_, PyGraph>>,
+        labels: RealArg<'_>,
+    ) -> PyResult<f64> {
+        let graphs = graph_list(&graphs);
+        let ys = self::labels(&labels)?;
+        let model = &self.inner;
+        py.detach(|| model.accuracy(&graphs, &ys)).raise()
+    }
+
+    #[getter]
+    fn layers(&self) -> usize {
+        self.inner.layers
+    }
+
+    #[getter]
+    fn num_parameters(&self) -> usize {
+        self.inner.num_parameters()
+    }
+
+    /// Trained parameters `[γ…, β…, a, b]` (empty before `fit`).
+    #[getter]
+    fn parameters<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<f64>> {
+        real_array(py, self.inner.parameters.clone())
+    }
+
+    #[setter]
+    fn set_parameters(&mut self, theta: RealArg<'_>) -> PyResult<()> {
+        let theta = real_vec(&theta);
+        check_finite("parameters", &theta)?;
+        if theta.len() != self.inner.num_parameters() {
+            return Err(invalid(format!(
+                "expected {} parameters, got {}",
+                self.inner.num_parameters(),
+                theta.len()
+            )));
+        }
+        self.inner.parameters = theta;
+        Ok(())
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "GraphClassifier(layers={}, trained={})",
+            self.inner.layers,
+            !self.inner.parameters.is_empty()
+        )
+    }
+}
+
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(h2_sto3g, m)?)?;
     m.add_function(wrap_pyfunction!(transverse_field_ising, m)?)?;
@@ -784,6 +922,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(expectation_and_gradient, m)?)?;
     m.add_function(wrap_pyfunction!(run_vqe, m)?)?;
     m.add_class::<PyMaxCutQaoa>()?;
+    m.add_class::<PyGraphClassifier>()?;
     m.add_function(wrap_pyfunction!(optimize_qaoa_layerwise, m)?)?;
     m.add_function(wrap_pyfunction!(grover_search, m)?)?;
     m.add_function(wrap_pyfunction!(grover_circuit, m)?)?;

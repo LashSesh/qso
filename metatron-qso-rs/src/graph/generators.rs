@@ -143,6 +143,20 @@ pub fn petersen() -> Graph {
     with_layout(g, pos)
 }
 
+/// The Heawood graph: the (3, 6)-cage, i.e. the smallest cubic graph of
+/// girth 6 (14 nodes, 21 edges, bipartite, |Aut| = 336). LCF notation
+/// `[5, −5]⁷`.
+pub fn heawood() -> Graph {
+    let mut g = Graph::new(14).with_name("Heawood");
+    for k in 0..14 {
+        g.add_edge(k, (k + 1) % 14).expect("Hamiltonian cycle");
+        if k % 2 == 0 {
+            g.add_edge(k, (k + 5) % 14).expect("chord");
+        }
+    }
+    with_layout(g, circle_positions(14))
+}
+
 /// Random `d`-regular simple graph on `n` nodes (pairing model with
 /// rejection; `n·d` must be even).
 pub fn random_regular(n: usize, d: usize, rng: &mut Rng) -> Result<Graph> {
@@ -322,7 +336,7 @@ impl std::str::FromStr for PlatonicSolid {
 /// | `fruit-of-life` | Fruit-of-Life contact graph |
 /// | `metatron:<max_length>` | lines of Metatron's Cube up to a length |
 /// | `complete:N`, `cycle:N`, `path:N`, `star:N` | standard families |
-/// | `hypercube:D`, `petersen` | |
+/// | `hypercube:D`, `petersen`, `heawood` | |
 /// | `grid:RxC`, `torus:RxC` | rectangular grid / torus |
 /// | `bipartite:A,B` | complete bipartite graph |
 /// | `platonic:NAME` | tetrahedron, cube, octahedron, dodecahedron, icosahedron |
@@ -357,6 +371,7 @@ pub fn from_spec(spec: &str) -> Result<Graph> {
         "metatron" => super::metatron::distance_graph(args.parse::<f64>().map_err(|_| bad())?),
         "fruit-of-life" | "fruit_of_life" | "fol" => super::metatron::fruit_of_life(),
         "petersen" => petersen(),
+        "heawood" => heawood(),
         "complete" | "k" => complete(one()?),
         "cycle" | "c" => {
             let n = one()?;

@@ -8,10 +8,12 @@
 //! * [`grover`] — Grover search
 //! * [`qft`] — quantum Fourier transform and phase estimation
 //! * [`classifier`] — variational classifier with data re-uploading
+//! * [`graph_classifier`] — graph classifier with QAOA-type quantum layers
 
 pub mod ansatz;
 pub mod classifier;
 pub mod gradients;
+pub mod graph_classifier;
 pub mod grover;
 pub mod models;
 pub mod qaoa;
@@ -19,5 +21,6 @@ pub mod qft;
 pub mod vqe;
 
 pub use gradients::GradientMethod;
+pub use graph_classifier::GraphClassifier;
 pub use qaoa::{MaxCutQaoa, QaoaConfig, QaoaResult};
 pub use vqe::{Vqe, VqeResult};

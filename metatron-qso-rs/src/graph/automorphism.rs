@@ -319,6 +319,8 @@ mod tests {
         }
         assert_eq!(star(7).automorphism_group().order(), Some(720));
         assert_eq!(petersen().automorphism_group().order(), Some(120));
+        // Heawood graph: PGL(2, 7) ⋊ duality, order 336.
+        assert_eq!(heawood().automorphism_group().order(), Some(336));
         assert_eq!(hypercube(3).automorphism_group().order(), Some(48));
         assert_eq!(hypercube(4).automorphism_group().order(), Some(384));
         assert_eq!(

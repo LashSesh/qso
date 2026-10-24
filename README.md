@@ -291,7 +291,7 @@ Graph specifications (also `Graph.from_spec` in Python):
 | `metatron:<length>` | Lines of Metatron's Cube up to a length (`metatron:1` = contact graph) |
 | `fruit-of-life` | Fruit-of-Life contact graph |
 | `complete:N`, `cycle:N`, `path:N`, `star:N` | Standard families |
-| `hypercube:D`, `petersen`, `bipartite:A,B` | |
+| `hypercube:D`, `petersen`, `heawood`, `bipartite:A,B` | |
 | `grid:RxC`, `torus:RxC` | Rectangular grid, periodic grid |
 | `platonic:NAME` | `tetrahedron`, `cube`, `octahedron`, `dodecahedron`, `icosahedron` |
 | `random-regular:N,D[,SEED]`, `erdos-renyi:N,P[,SEED]` | Random graphs |

@@ -193,6 +193,12 @@ impl PyGraph {
         wrap(generators::petersen())
     }
 
+    /// The Heawood graph, the smallest cubic graph of girth 6.
+    #[staticmethod]
+    fn heawood() -> Self {
+        wrap(generators::heawood())
+    }
+
     /// `rows × cols` grid; a torus if `periodic` (each side ≥ 3).
     #[staticmethod]
     #[pyo3(signature = (rows, cols, periodic = false))]
@@ -367,6 +373,16 @@ impl PyGraph {
     /// Largest hop distance (`None` if disconnected).
     fn diameter(&self) -> Option<usize> {
         self.inner.diameter()
+    }
+
+    /// Length of the shortest cycle (`None` for a forest).
+    fn girth(&self) -> Option<usize> {
+        self.inner.girth()
+    }
+
+    /// Number of triangles.
+    fn triangle_count(&self) -> usize {
+        self.inner.triangle_count()
     }
 
     fn copy(&self) -> Self {

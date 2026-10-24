@@ -301,6 +301,41 @@ impl Graph {
         count
     }
 
+    /// Length of the shortest cycle, or `None` for a forest.
+    ///
+    /// Breadth-first search from every vertex; `O(n·m)`.
+    pub fn girth(&self) -> Option<usize> {
+        let n = self.num_nodes();
+        let mut best: Option<usize> = None;
+        let mut dist = vec![usize::MAX; n];
+        let mut parent = vec![usize::MAX; n];
+        let mut queue = std::collections::VecDeque::new();
+        for s in 0..n {
+            dist.iter_mut().for_each(|d| *d = usize::MAX);
+            dist[s] = 0;
+            parent[s] = usize::MAX;
+            queue.clear();
+            queue.push_back(s);
+            while let Some(u) = queue.pop_front() {
+                // Every cycle closed from here on has length ≥ 2·dist[u].
+                if best.is_some_and(|b| 2 * dist[u] >= b) {
+                    break;
+                }
+                for &(v, _) in &self.adj[u] {
+                    if dist[v] == usize::MAX {
+                        dist[v] = dist[u] + 1;
+                        parent[v] = u;
+                        queue.push_back(v);
+                    } else if parent[u] != v {
+                        let len = dist[u] + dist[v] + 1;
+                        best = Some(best.map_or(len, |b| b.min(len)));
+                    }
+                }
+            }
+        }
+        best
+    }
+
     /// Dense weighted adjacency matrix `A`.
     pub fn adjacency_matrix(&self) -> RMatrix {
         let mut a = RMatrix::zeros(self.n, self.n);
@@ -451,6 +486,40 @@ mod tests {
         assert!(!g.is_connected());
         assert_eq!(g.connected_components(), vec![vec![0, 1, 2], vec![3]]);
         assert_eq!(g.diameter(), None);
+    }
+
+    #[test]
+    fn girth_of_standard_graphs() {
+        assert_eq!(complete(4).girth(), Some(3));
+        assert_eq!(hypercube(3).girth(), Some(4));
+        assert_eq!(petersen().girth(), Some(5));
+        assert_eq!(heawood().girth(), Some(6));
+        assert!(heawood().is_bipartite() && heawood().regular_degree() == Some(3));
+        assert_eq!(cycle(7).girth(), Some(7));
+        assert_eq!(path(6).girth(), None);
+        assert_eq!(star(5).girth(), None);
+        assert_eq!(grid_2d(3, 4, false).girth(), Some(4));
+        assert_eq!(platonic(PlatonicSolid::Dodecahedron).girth(), Some(5));
+        // Brute force on random graphs: girth = shortest cycle through any
+        // edge = 1 + shortest u–v path avoiding the edge itself.
+        let mut rng = crate::Rng::seed_from_u64(31);
+        for _ in 0..30 {
+            let g = erdos_renyi(9, 0.3, &mut rng).unwrap();
+            let expected = g
+                .edges()
+                .iter()
+                .filter_map(|&(u, v, _)| {
+                    let mut h = Graph::new(g.num_nodes());
+                    for &(a, b, _) in g.edges() {
+                        if (a, b) != (u, v) {
+                            h.add_edge(a, b).unwrap();
+                        }
+                    }
+                    h.distances_from(u)[v].map(|d| d + 1)
+                })
+                .min();
+            assert_eq!(g.girth(), expected);
+        }
     }
 
     #[test]
