@@ -1,6 +1,6 @@
 [package]
 name = "metatron_qso_py"
-description = "Python bindings for QSO 2.0 (metatron-qso-rs)."
+description = "Python bindings for QSO (metatron-qso-rs)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

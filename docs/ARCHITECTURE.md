@@ -1,6 +1,6 @@
 # Architecture
 
-This document explains how QSO 2.0 is built and why. API details live in
+This document explains how QSO is built and why. API details live in
 the rustdoc (`cargo doc -p metatron-qso-rs --open`).
 
 ## Layers

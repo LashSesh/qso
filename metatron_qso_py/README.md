@@ -1,6 +1,6 @@
 # metatron-qso (Python)
 
-Python bindings for **QSO 2.0**, a validated quantum simulator written in
+Python bindings for **QSO**, a validated quantum simulator written in
 pure Rust (`metatron-qso-rs`): exact state-vector and density-matrix
 simulation, VQE and QAOA with exact gradients, Grover search, QFT and phase
 estimation, and continuous-time quantum walks on arbitrary graphs —

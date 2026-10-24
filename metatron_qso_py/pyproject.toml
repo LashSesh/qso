@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "metatron-qso"
-version = "2.0.0"
+version = "1.0.0"
 description = "Validated quantum simulation in pure Rust: circuits, VQE/QAOA with exact gradients, noise, and quantum walks on graphs including Metatron's Cube."
 readme = "README.md"
 requires-python = ">=3.9"

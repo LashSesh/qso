@@ -1,4 +1,4 @@
-# QSO 2.0 — Plan
+# QSO 1.0 — Plan
 
 ## Goal
 
@@ -28,13 +28,13 @@ evolved incrementally).
 
 ## Scope decisions
 
-| v0.1 component | 2.0 decision |
+| v0.1 component | 1.0 decision |
 |---|---|
 | `metatron-qso-rs` (13-dim toy core) | **Rewritten** as the n-qubit simulation core (same crate name, lib `metatron_qso`). |
 | `metatron_backend` (fake simulator, IBM stub) | **Replaced** by the core `backend` module: a real statevector backend plus OpenQASM 2.0 export for running on any vendor's hardware with their own tooling. |
 | `metatron_qso_py` (broken packaging) | **Rewritten** with PyO3 + numpy, fixed packaging, pytest suite. |
 | DTL / Kuramoto "58.5 % advantage" | **Removed** (definitional, not quantum). |
-| SCS, TRITON, auto-tuning | **Removed.** Hyper-parameter search for 2.0 is done with real metrics (seeded multi-start, layer-wise QAOA initialisation); an external tuner such as Optuna can drive the Python API. |
+| SCS, TRITON, auto-tuning | **Removed.** Hyper-parameter search for 1.0 is done with real metrics (seeded multi-start, layer-wise QAOA initialisation); an external tuner such as Optuna can drive the Python API. |
 | DioniceOS (`external/`), `metatron_dionice_bridge` | **Removed** from QSO; unrelated to quantum simulation. History preserves it; the ledger already has its own repository. |
 | `metatron_telemetry` (synthetic data) | **Removed.** Results are emitted as JSON by the CLI and the API. |
 | Concept PDFs | Moved to `docs/archive/` unchanged. |

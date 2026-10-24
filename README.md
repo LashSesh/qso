@@ -23,10 +23,11 @@ README is reproduced by
 [`metatron-qso-rs/tests/validation.rs`](metatron-qso-rs/tests/validation.rs)
 or by the benchmark report you can run yourself.
 
-> **Version 2.0.0** is a complete rewrite. Version 0.1 simulated a single
-> 13-level system instead of qubits, and several of its results and
-> subsystems did not hold up; the [audit](docs/AUDIT_v0.1.md) documents why.
-> The 0.1 code remains available in the git history.
+> **Version 1.0.0** is the first stable release and a complete rewrite of
+> the 0.1 prototype. Version 0.1 simulated a single 13-level system instead
+> of qubits, and several of its results and subsystems did not hold up; the
+> [audit](docs/AUDIT_v0.1.md) documents why. The 0.1 code remains available
+> in the git history.
 
 ## Contents
 
@@ -358,7 +359,7 @@ metatron-qso-rs/            Rust library `metatron_qso` and the `qso` CLI
   tests/                    validation, robustness and property tests
   examples/, benches/       runnable examples, criterion benchmarks
 metatron_qso_py/            Python package (PyO3 + NumPy): src/, python/, tests/, examples/
-docs/                       audit of v0.1, 2.0 plan, architecture, benchmarks
+docs/                       audit of v0.1, 1.0 plan, architecture, benchmarks
 docs/archive/               concept documents of v0.1 (PDF)
 .github/workflows/          CI and release (wheels) workflows
 ```
@@ -394,7 +395,7 @@ needs a test against an independent reference.
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the simulator works: kernels, determinism, gradients, Krylov methods, automorphism search, walks |
 | [docs/BENCHMARKS.md](docs/BENCHMARKS.md) | Measured performance with method and variance |
 | [docs/AUDIT_v0.1.md](docs/AUDIT_v0.1.md) | What was wrong with version 0.1, with evidence |
-| [docs/QSO_2.0_PLAN.md](docs/QSO_2.0_PLAN.md) | Goals, scope decisions and validation targets of the rewrite |
+| [docs/QSO_1.0_PLAN.md](docs/QSO_1.0_PLAN.md) | Goals, scope decisions and validation targets of the rewrite |
 | [metatron_qso_py/README.md](metatron_qso_py/README.md) | Python API |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
 | [docs.rs/metatron-qso-rs](https://docs.rs/metatron-qso-rs) | Rust API reference (locally: `cargo doc -p metatron-qso-rs --open`) |
