@@ -132,8 +132,8 @@ mod tests {
         // Shortest lines are the 18 contacts of tangent circles.
         assert!((lengths[0].0 - 1.0).abs() < 1e-12);
         assert_eq!(lengths[0].1, 18);
-        // Seven distinct lengths: 1, √3, 2, 2√3, √7, 3, 4 with
-        // multiplicities 18, 18, 15, 6, 12, 6, 3 (√7 < 2√3 numerically).
+        // Seven distinct lengths, ascending: 1, √3, 2, √7, 3, 2√3, 4 with
+        // multiplicities 18, 18, 15, 12, 6, 6, 3.
         let expected = [
             (1.0, 18),
             (3f64.sqrt(), 18),
