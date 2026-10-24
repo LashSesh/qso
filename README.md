@@ -1,6 +1,9 @@
 # QSO — Metatron Quantum State Operator
 
 [![CI](https://github.com/LashSesh/qso/actions/workflows/ci.yml/badge.svg)](https://github.com/LashSesh/qso/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/metatron-qso-rs.svg)](https://crates.io/crates/metatron-qso-rs)
+[![PyPI](https://img.shields.io/pypi/v/metatron-qso.svg)](https://pypi.org/project/metatron-qso/)
+[![docs.rs](https://img.shields.io/docsrs/metatron-qso-rs)](https://docs.rs/metatron-qso-rs)
 [![Rust 1.89+](https://img.shields.io/badge/rust-1.89%2B-orange.svg)](https://www.rust-lang.org/)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](metatron_qso_py/README.md)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
@@ -130,32 +133,38 @@ Fruit of Life (contact graph)
 
 ## Installation
 
-QSO is not yet published on crates.io or PyPI; install it from this
-repository. A Rust toolchain ≥ 1.89 is required (`rustup` is the easiest way
-to get one). No C/C++ toolchain or system libraries are needed.
+**Python package** ([PyPI](https://pypi.org/project/metatron-qso/))
 
-**Rust library**
-
-```toml
-[dependencies]
-metatron-qso-rs = { git = "https://github.com/LashSesh/qso" }
+```bash
+pip install metatron-qso
 ```
 
-Features: `parallel` (default; multi-threading via rayon) and `cli`.
+Prebuilt wheels for Linux (x86_64, aarch64), macOS (Intel and Apple silicon)
+and Windows (x86_64); one `abi3` wheel covers CPython 3.9 and newer.
+
+**Rust library** ([crates.io](https://crates.io/crates/metatron-qso-rs),
+Rust ≥ 1.89)
+
+```bash
+cargo add metatron-qso-rs
+```
+
+The library is imported as `metatron_qso`. Features: `parallel` (default;
+multi-threading via rayon) and `cli`.
 
 **Command-line tool**
 
 ```bash
-git clone https://github.com/LashSesh/qso && cd qso
-cargo install --path metatron-qso-rs --features cli
+cargo install metatron-qso-rs --features cli
 ```
 
-**Python package** (CPython ≥ 3.9, one `abi3` wheel for all versions)
+**From source.** No C/C++ toolchain or system libraries are needed, only Rust
+(and maturin for the Python package):
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install maturin numpy
-maturin develop --release -m metatron_qso_py/Cargo.toml
+git clone https://github.com/LashSesh/qso && cd qso
+cargo install --path metatron-qso-rs --features cli
+pip install maturin && maturin develop --release -m metatron_qso_py/Cargo.toml
 ```
 
 ## Quick start
@@ -370,8 +379,10 @@ pytest metatron_qso_py/tests
 
 CI runs formatting, Clippy and rustdoc; tests on Linux, macOS and Windows; a
 build without multi-threading; the minimum Rust version; all examples and
-CLI smoke tests; and the Python tests on 3.9 and 3.13. Tagging `v*` builds
-wheels and a source distribution.
+CLI smoke tests; and the Python tests on 3.9 and 3.13. Pushing a tag
+`vX.Y.Z` builds and tests the wheels and the source distribution and
+publishes the release to crates.io, PyPI and GitHub
+([CONTRIBUTING.md](CONTRIBUTING.md#releasing)).
 
 New features follow one rule ([CONTRIBUTING.md](CONTRIBUTING.md)): a claim
 needs a test against an independent reference.
@@ -386,7 +397,7 @@ needs a test against an independent reference.
 | [docs/QSO_2.0_PLAN.md](docs/QSO_2.0_PLAN.md) | Goals, scope decisions and validation targets of the rewrite |
 | [metatron_qso_py/README.md](metatron_qso_py/README.md) | Python API |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
-| API reference | `cargo doc -p metatron-qso-rs --open` |
+| [docs.rs/metatron-qso-rs](https://docs.rs/metatron-qso-rs) | Rust API reference (locally: `cargo doc -p metatron-qso-rs --open`) |
 
 ## License
 
