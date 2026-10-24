@@ -4,6 +4,62 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Fuzz targets (`metatron-qso-rs/fuzz`) for the OpenQASM and Pauli-sum
+  parsers, graph specifications and the JSON form of `Circuit`,
+  `StateVector`, `Graph` and `PauliSum`; 60 s per target on every pull
+  request, 10 min per target weekly.
+- Miri checks of the `unsafe` statevector kernels on multi-threaded paths,
+  and a test of every kernel against a textbook reference.
+- API checks: `cargo-semver-checks` against the last release, `stubtest`
+  for the Python type stubs.
+- Weekly cross-validation, now also of noisy circuits: density matrices
+  with depolarising and amplitude-damping noise agree with Qiskit Aer to
+  3.5·10⁻¹⁵. `benchmarks/cross_framework/run.py --check` fails on any
+  deviation above rounding level.
+- Weekly benchmark tracking (`benchmark_report --json`,
+  `benchmarks/track.py`): slowdowns of more than 25 % against the median of
+  the last four runs fail the job.
+- Wheels for musllinux (x86_64, aarch64) and Windows on Arm; Linux aarch64
+  wheels are now built and tested natively; CI runs on Linux arm64 and
+  Python 3.14.
+- `generators::check_generated_size`, `MAX_GENERATED_NODES`,
+  `MAX_GENERATED_EDGES`, `qasm::MAX_QASM_QUBITS`, `MAX_QASM_INSTRUCTIONS`.
+
+### Changed
+
+- Releases are published with Trusted Publishing (no stored registry
+  tokens) from the protected environment `release`; PyPI uploads carry
+  attestations.
+- The Python type stubs declare constructors as `__new__`, mark classes
+  `@final` and result dictionaries `@type_check_only`, and match the
+  compiled module.
+- JSON numbers round-trip exactly (`serde_json` with `float_roundtrip`).
+
+### Fixed
+
+Found by fuzzing:
+
+- `from_qasm2` panicked on malformed brackets (`qreg q]3[;`, `h q]0[;`),
+  overflowed on huge register sizes and could overflow the stack on deeply
+  nested parameter expressions; it now rejects them, as well as duplicate
+  registers and parameters that are not finite (`1/0`, `ln(0)`).
+- The `U`/`u3` gate lost unitarity for very large angles (|λ| ≳ 10¹²),
+  because `e^{i(φ+λ)}` was computed from the rounded sum `φ + λ`.
+- `PauliSum` parsing accepted coefficients that overflow to infinity
+  (`5e555 Z0`), which then printed as `inf` and could not be read back.
+- Graph specifications such as `complete:204204` built graphs with up to
+  10¹⁸ edges; specifications and the Python graph constructors are now
+  limited to 2²⁰ nodes and 2²² edges (`hypercube:20` stays available), and
+  `Graph(10**12)` raises `ValueError` instead of aborting the interpreter.
+- Graphs read from JSON were not validated; inconsistent adjacency lists or
+  invalid edges now fail to deserialise.
+- `random_regular` bounds its work for parameters where the pairing method
+  almost never succeeds (large `d`) instead of running for minutes.
+
 ## [1.1.0] — 2026-10-24
 
 Delivers the scope of the 2025 technical note with validated

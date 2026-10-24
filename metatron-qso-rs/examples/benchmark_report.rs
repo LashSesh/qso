@@ -1,7 +1,9 @@
 //! Prints the benchmark and validation table used in `docs/BENCHMARKS.md`.
 //!
 //! Run with `cargo run --release --example benchmark_report`. Timings are
-//! medians of repeated runs on the current machine.
+//! medians of repeated runs on the current machine. With `--json PATH` the
+//! timings are also written as JSON (`{"metrics": {name: seconds}, ...}`)
+//! for the weekly benchmark tracking (`benchmarks/track.py`).
 
 use std::time::Instant;
 
@@ -33,6 +35,15 @@ fn fmt_time(s: f64) -> String {
 }
 
 fn main() -> Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    let json_path = args
+        .iter()
+        .position(|a| a == "--json")
+        .and_then(|i| args.get(i + 1).cloned());
+    let mut metrics = serde_json::Map::new();
+    let mut record = |name: String, seconds: f64| {
+        metrics.insert(name, serde_json::json!(seconds));
+    };
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
@@ -56,6 +67,7 @@ fn main() -> Result<()> {
             _ => 3,
         };
         let t = median_seconds(repeats, || psi.apply_circuit(&layer, &[]).unwrap());
+        record(format!("statevector_layer/qubits={n}"), t);
         let per = t / (layer.len() as f64 * (1u64 << n) as f64) * 1e9;
         println!("| {n} | {} | {} | {per:.3} |", layer.len(), fmt_time(t));
     }
@@ -78,6 +90,7 @@ fn main() -> Result<()> {
         }
         let mut psi = StateVector::zero(n);
         let t = median_seconds(5, || psi.apply_circuit(&c, &[]).unwrap());
+        record(format!("gate_pass/{kind}/qubits={n}"), t / 5.0);
         let per = t / (c.len() as f64 * (1u64 << n) as f64) * 1e9;
         println!("| {kind} | {} | {per:.3} |", fmt_time(t / 5.0));
     }
@@ -101,6 +114,7 @@ fn main() -> Result<()> {
         let t = median_seconds(21, || {
             expectation_and_gradient(&circuit, &h, &theta, None, m).unwrap();
         });
+        record(format!("gradient_tfim10/{}", name.replace(' ', "_")), t);
         println!("| {name} | {} |", fmt_time(t));
     }
 
@@ -115,6 +129,7 @@ fn main() -> Result<()> {
         let t = median_seconds(repeats, || {
             qaoa.expectation_and_gradient(&x).unwrap();
         });
+        record(format!("qaoa_value_gradient_p3/nodes={n}"), t);
         println!("| {n} | {} |", fmt_time(t));
     }
 
@@ -125,6 +140,7 @@ fn main() -> Result<()> {
     let t = median_seconds(101, || {
         cube.probabilities(0, 1.3).unwrap();
     });
+    record("walk/metatron_dense".into(), t);
     println!(
         "| Metatron's Cube, P(t) (dense spectral) | {} |",
         fmt_time(t)
@@ -134,6 +150,7 @@ fn main() -> Result<()> {
     let t = median_seconds(5, || {
         walk.probabilities(0, 5.0).unwrap();
     });
+    record("walk/torus_100x100_krylov".into(), t);
     println!(
         "| 100×100 torus (10 000 nodes), P(t = 5) (Krylov) | {} |",
         fmt_time(t)
@@ -141,6 +158,7 @@ fn main() -> Result<()> {
     let t = median_seconds(5, || {
         metatron::metatron_cube().automorphism_group();
     });
+    record("automorphism_group/metatron".into(), t);
     println!(
         "| automorphism group of Metatron's Cube (13!) | {} |",
         fmt_time(t)
@@ -209,5 +227,18 @@ fn main() -> Result<()> {
             .order()
             .unwrap()
     );
+    if let Some(path) = json_path {
+        let report = serde_json::json!({
+            "commit": std::env::var("QSO_COMMIT").or_else(|_| std::env::var("GITHUB_SHA")).ok(),
+            "threads": threads,
+            "metrics": metrics,
+        });
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&report).expect("serialisable") + "\n",
+        )
+        .map_err(|e| QsoError::invalid("--json", e.to_string()))?;
+        eprintln!("wrote {path}");
+    }
     Ok(())
 }

@@ -128,6 +128,23 @@ def correctness(quick: bool) -> dict:
         for name, run in runners.items():
             max_diff[name] = max(max_diff[name], float(np.max(np.abs(run(n, ops) - ref))))
 
+    # Noisy circuits: density matrices against Qiskit Aer's density-matrix
+    # method with the same channels after every gate.
+    noise_models = [
+        {"p1": 0.01, "p2": 0.03},
+        {"p1": 0.002, "p2": 0.02, "gamma": 0.05},
+        {"p1": 0.2, "p2": 0.5, "gamma": 0.3},
+    ]
+    noisy_circuits = [fw.random_ops(5, 30, rng) for _ in range(2 if quick else 6)]
+    density_diff = 0.0
+    for noise in noise_models:
+        for ops in noisy_circuits:
+            n = 1 + max(max(qs) for _, qs, _ in ops)
+            density_diff = max(
+                density_diff,
+                float(np.max(np.abs(fw.qso_density(n, ops, noise) - fw.aer_density(n, ops, noise)))),
+            )
+
     # Energies and gradients on the 10-qubit TFIM ansatz.
     import metatron_qso as q
 
@@ -160,7 +177,40 @@ def correctness(quick: bool) -> dict:
         "tfim10_energy": value,
         "gradients_vs_qso": gradients,
         "permanent_max_relative_difference_vs_thewalrus": perm_err,
+        "noisy_circuits": {
+            "circuits": len(noisy_circuits),
+            "qubits": 5,
+            "gates_per_circuit": 30,
+            "noise_models": noise_models,
+            "max_density_matrix_difference_vs_qiskit_aer": density_diff,
+        },
     }
+
+
+# Largest accepted deviations for --check (all are rounding-level).
+TOLERANCES = {
+    "state": 1e-12,
+    "gradient": 1e-12,
+    "permanent": 1e-10,
+    "density_matrix": 1e-12,
+}
+
+
+def check(c: dict) -> list[str]:
+    """Deviations in the correctness section that exceed TOLERANCES."""
+    failures = []
+    for name, d in c["max_amplitude_difference_vs_qso"].items():
+        if not d <= TOLERANCES["state"]:
+            failures.append(f"final states differ from {name} by {d:.3g}")
+    for name, g in c["gradients_vs_qso"].items():
+        if not max(g["value_diff"], g["max_gradient_diff"]) <= TOLERANCES["gradient"]:
+            failures.append(f"energies or gradients differ from {name}: {g}")
+    if not c["permanent_max_relative_difference_vs_thewalrus"] <= TOLERANCES["permanent"]:
+        failures.append(f"permanents differ from The Walrus by {c['permanent_max_relative_difference_vs_thewalrus']:.3g}")
+    d = c["noisy_circuits"]["max_density_matrix_difference_vs_qiskit_aer"]
+    if not d <= TOLERANCES["density_matrix"]:
+        failures.append(f"noisy density matrices differ from Qiskit Aer by {d:.3g}")
+    return failures
 
 
 # ----------------------------------------------------------------------------
@@ -254,16 +304,26 @@ def main() -> None:
     ap.add_argument("--out", default="cross_framework.json")
     ap.add_argument("--rounds", type=int, default=5)
     ap.add_argument("--quick", action="store_true")
+    ap.add_argument("--check", action="store_true",
+                    help="exit with status 1 if a correctness deviation exceeds its tolerance")
+    ap.add_argument("--no-timing", action="store_true", help="correctness only")
     args = ap.parse_args()
     started = time.time()
     report = {"environment": environment()}
     report["correctness"] = correctness(args.quick)
     print("correctness:", json.dumps(report["correctness"]["max_amplitude_difference_vs_qso"]), file=sys.stderr)
-    report["timing"] = timing(1 if args.quick else args.rounds, args.quick)
-    report["rounds"] = 1 if args.quick else args.rounds
+    failures = check(report["correctness"])
+    report["correctness"]["failures"] = failures
+    if not args.no_timing:
+        report["timing"] = timing(1 if args.quick else args.rounds, args.quick)
+        report["rounds"] = 1 if args.quick else args.rounds
     report["seconds"] = time.time() - started
     Path(args.out).write_text(json.dumps(report, indent=2) + "\n")
     print(f"wrote {args.out}", file=sys.stderr)
+    for f in failures:
+        print(f"::error title=Cross-validation::{f}", file=sys.stderr)
+    if args.check and failures:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

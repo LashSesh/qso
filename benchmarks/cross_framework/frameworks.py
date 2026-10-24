@@ -131,6 +131,51 @@ def aer_state(n: int, ops: list) -> np.ndarray:
     return np.asarray(sim.run(tqc).result().get_statevector())
 
 
+# --------------------------------------------------------------------------- Noise
+# A noise specification is a dict with
+#   p1     depolarising probability after every single-qubit gate,
+#   p2     two-qubit depolarising probability after every two-qubit gate,
+#   gamma  amplitude damping after every gate, on each of its qubits (optional).
+# QSO's depolarising channels are (1−p)ρ + p/3 Σ PρP (one qubit) and
+# (1−p)ρ + p/15 Σ PρP (two qubits); Qiskit's depolarizing_error(λ, n) is
+# (1−λ)ρ + λ I/2ⁿ, so λ = 4p/3 and λ = 16p/15 respectively.
+NOISY_1Q = GATES_1Q + GATES_ROT
+NOISY_2Q = GATES_2Q
+
+
+def qso_density(n: int, ops: list, noise: dict) -> np.ndarray:
+    import metatron_qso as q
+
+    single = [q.Channel.depolarizing(noise["p1"])]
+    multi = [q.Channel.depolarizing_2q(noise["p2"])]
+    if noise.get("gamma"):
+        single.append(q.Channel.amplitude_damping(noise["gamma"]))
+        multi.append(q.Channel.amplitude_damping(noise["gamma"]))
+    model = q.NoiseModel(single_qubit=single, multi_qubit=multi)
+    return q.DensityMatrix.simulate(qso_circuit(n, ops), noise=model).to_matrix()
+
+
+def aer_density(n: int, ops: list, noise: dict) -> np.ndarray:
+    from qiskit import transpile
+    from qiskit_aer import AerSimulator
+    from qiskit_aer.noise import NoiseModel, amplitude_damping_error, depolarizing_error
+
+    e1 = depolarizing_error(4 * noise["p1"] / 3, 1)
+    e2 = depolarizing_error(16 * noise["p2"] / 15, 2)
+    if noise.get("gamma"):
+        damping = amplitude_damping_error(noise["gamma"])
+        e1 = e1.compose(damping)
+        e2 = e2.compose(damping.tensor(damping))
+    model = NoiseModel()
+    model.add_all_qubit_quantum_error(e1, NOISY_1Q)
+    model.add_all_qubit_quantum_error(e2, NOISY_2Q)
+    sim = AerSimulator(method="density_matrix", noise_model=model)
+    qc = qiskit_circuit(n, ops, save=False)
+    qc.save_density_matrix()
+    tqc = transpile(qc, sim, optimization_level=0)
+    return np.asarray(sim.run(tqc).result().data()["density_matrix"])
+
+
 # --------------------------------------------------------------------------- Qulacs
 _QULACS = {
     "h": "add_H_gate", "x": "add_X_gate", "y": "add_Y_gate", "z": "add_Z_gate",

@@ -33,5 +33,5 @@ print(f"\nQFT on {m} qubits: {len(circuit)} gates, max deviation from the DFT ma
 
 for phase in (0.3125, 1 / 3):
     u = np.diag([1, np.exp(2j * np.pi * phase)])
-    r = q.estimate_phase(6, u, [0, 1])
-    print(f"phase estimation (6 bits) of {phase:.6f}: {r['phase']:.6f} with P = {r['probability']:.4f}")
+    est = q.estimate_phase(6, u, [0, 1])
+    print(f"phase estimation (6 bits) of {phase:.6f}: {est['phase']:.6f} with P = {est['probability']:.4f}")

@@ -1,0 +1,13 @@
+# Names that exist only for type checking (aliases in the stub).
+metatron_qso._core.Angle
+metatron_qso._core.ComplexArray
+metatron_qso._core.Edge
+metatron_qso._core.Instruction
+metatron_qso._core.IntArray
+metatron_qso._core.RealArray
+# PyO3 adds __all__ to every extension module.
+metatron_qso._core.__all__
+# PyO3 fills the reflected division slot whenever __truediv__ exists; it
+# returns NotImplemented, so `2 / x` is not supported and stays out of the stub.
+metatron_qso._core.Parameter.__rtruediv__
+metatron_qso._core.PauliSum.__rtruediv__
