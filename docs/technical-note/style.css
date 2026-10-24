@@ -106,9 +106,17 @@ table {
   margin: 0.6em auto 1.1em auto;
   font-size: 8.6pt;
   line-height: 1.3;
-  break-inside: avoid;
-  page-break-inside: avoid;
   text-align: left;
+}
+
+/* Long tables may break across pages (the header repeats); rows may not,
+   and a caption stays with its table. */
+tr {
+  break-inside: avoid;
+}
+
+p:has(+ table) {
+  break-after: avoid;
 }
 
 thead tr {
@@ -148,8 +156,21 @@ pre {
   break-inside: avoid;
 }
 
+/* Typeset formulas in the text face: Chromium otherwise maps identifiers
+   to Unicode mathematical italics, which Charter lacks, and falls back to a
+   sans-serif font. */
 math {
-  font-size: 105%;
+  font-family: Charter, "Bitstream Charter", "Liberation Serif", serif;
+  font-size: 100%;
+}
+
+math mi {
+  text-transform: none;
+  font-style: italic;
+}
+
+math mi[mathvariant="normal"] {
+  font-style: normal;
 }
 
 math[display="block"] {

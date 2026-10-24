@@ -1,0 +1,383 @@
+{
+  "environment": {
+    "python": "3.12.3",
+    "platform": "Linux-6.18.44-fc-v153-x86_64-with-glibc2.39",
+    "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+    "logical_cpus": 4,
+    "packages": {
+      "metatron-qso": "1.1.0",
+      "qiskit": "2.6.1",
+      "qiskit-aer": "0.18.0",
+      "qulacs": "0.6.14",
+      "cirq-core": "1.7.0",
+      "pennylane": "0.45.1",
+      "pennylane-lightning": "0.45.0",
+      "thewalrus": "0.22.0",
+      "numpy": "2.5.4",
+      "projectq": null
+    },
+    "machine": "cloud VM, 4 vCPU Intel Xeon @ 2.10 GHz (AVX-512), 15 GB RAM",
+    "commit": "a2675e2e1b186684d361b5313691c5c0d53c3c09",
+    "date": "2026-10-24",
+    "notes": [
+      "ProjectQ is not included: version 0.8.0 (2022) does not build on current CPython.",
+      "Cirq is timed with its built-in Python simulator, not qsim.",
+      "Aer circuits are transpiled at optimization_level=0 so the gate list is unchanged; Aer's default gate fusion is on."
+    ]
+  },
+  "correctness": {
+    "random_circuits": 20,
+    "qubits": 8,
+    "gates_per_circuit": 60,
+    "max_amplitude_difference_vs_qso": {
+      "qiskit-aer": 1.0448048107080504e-15,
+      "qulacs": 2.4439095612427427e-15,
+      "cirq": 3.4021815010030383e-16,
+      "pennylane-lightning": 2.1094237467877974e-15
+    },
+    "tfim10_energy": 2.017985428848778,
+    "gradients_vs_qso": {
+      "pennylane-lightning (adjoint)": {
+        "value_diff": 4.440892098500626e-16,
+        "max_gradient_diff": 1.7208456881689926e-15
+      },
+      "qulacs (backprop)": {
+        "value_diff": 1.7763568394002505e-15,
+        "max_gradient_diff": 5.273559366969494e-16
+      }
+    },
+    "permanent_max_relative_difference_vs_thewalrus": 2.790971415005601e-14
+  },
+  "timing": [
+    {
+      "kind": "1",
+      "n": 16,
+      "library": "qso",
+      "median": 0.00242521600011969,
+      "minimum": 0.002138130999810528,
+      "runs": 75
+    },
+    {
+      "kind": "1",
+      "n": 16,
+      "library": "qulacs",
+      "median": 0.0012144870006522979,
+      "minimum": 0.0006987820006543188,
+      "runs": 75
+    },
+    {
+      "kind": "1",
+      "n": 16,
+      "library": "aer",
+      "median": 0.005182292999961646,
+      "minimum": 0.004072975000781298,
+      "runs": 75
+    },
+    {
+      "kind": "1",
+      "n": 16,
+      "library": "pennylane",
+      "median": 0.003763229000469437,
+      "minimum": 0.00306975599960424,
+      "runs": 75
+    },
+    {
+      "kind": "1",
+      "n": 16,
+      "library": "cirq",
+      "median": 0.00537203000021691,
+      "minimum": 0.004529795000053127,
+      "runs": 75
+    },
+    {
+      "kind": "1",
+      "n": 20,
+      "library": "qso",
+      "median": 0.01601350700002513,
+      "minimum": 0.01261431500006438,
+      "runs": 35
+    },
+    {
+      "kind": "1",
+      "n": 20,
+      "library": "qulacs",
+      "median": 0.016250153000328282,
+      "minimum": 0.012100055999326287,
+      "runs": 35
+    },
+    {
+      "kind": "1",
+      "n": 20,
+      "library": "aer",
+      "median": 0.04569273400011298,
+      "minimum": 0.03700157799994486,
+      "runs": 35
+    },
+    {
+      "kind": "1",
+      "n": 20,
+      "library": "pennylane",
+      "median": 0.04538026199952583,
+      "minimum": 0.0420175700000982,
+      "runs": 35
+    },
+    {
+      "kind": "1",
+      "n": 20,
+      "library": "cirq",
+      "median": 0.04148928900031024,
+      "minimum": 0.03330134999941947,
+      "runs": 35
+    },
+    {
+      "kind": "1",
+      "n": 22,
+      "library": "qso",
+      "median": 0.0801165054995181,
+      "minimum": 0.0688586390006094,
+      "runs": 20
+    },
+    {
+      "kind": "1",
+      "n": 22,
+      "library": "qulacs",
+      "median": 0.09838923349980178,
+      "minimum": 0.07883265800046502,
+      "runs": 20
+    },
+    {
+      "kind": "1",
+      "n": 22,
+      "library": "aer",
+      "median": 0.21241057250017548,
+      "minimum": 0.17346873899987258,
+      "runs": 20
+    },
+    {
+      "kind": "1",
+      "n": 22,
+      "library": "pennylane",
+      "median": 0.19457218399975318,
+      "minimum": 0.1784671570003411,
+      "runs": 20
+    },
+    {
+      "kind": "1",
+      "n": 24,
+      "library": "qso",
+      "median": 0.5521175149997362,
+      "minimum": 0.5084506389994203,
+      "runs": 15
+    },
+    {
+      "kind": "1",
+      "n": 24,
+      "library": "qulacs",
+      "median": 0.6646983359996739,
+      "minimum": 0.594561595000414,
+      "runs": 15
+    },
+    {
+      "kind": "1",
+      "n": 24,
+      "library": "aer",
+      "median": 0.8819165830000202,
+      "minimum": 0.7905249649993493,
+      "runs": 15
+    },
+    {
+      "kind": "1",
+      "n": 24,
+      "library": "pennylane",
+      "median": 2.127301966000232,
+      "minimum": 1.6469236339999043,
+      "runs": 15
+    },
+    {
+      "kind": "10",
+      "n": 20,
+      "library": "qso",
+      "median": 0.15402595199975622,
+      "minimum": 0.14256851400023152,
+      "runs": 15
+    },
+    {
+      "kind": "10",
+      "n": 20,
+      "library": "qulacs",
+      "median": 0.1563894339997205,
+      "minimum": 0.1422308349992818,
+      "runs": 15
+    },
+    {
+      "kind": "10",
+      "n": 20,
+      "library": "aer",
+      "median": 0.4132030090004264,
+      "minimum": 0.3612737040002685,
+      "runs": 15
+    },
+    {
+      "kind": "10",
+      "n": 20,
+      "library": "pennylane",
+      "median": 0.41165312099928997,
+      "minimum": 0.3939136069993765,
+      "runs": 15
+    },
+    {
+      "kind": "10",
+      "n": 22,
+      "library": "qso",
+      "median": 0.592947658999492,
+      "minimum": 0.5764819910000369,
+      "runs": 10
+    },
+    {
+      "kind": "10",
+      "n": 22,
+      "library": "qulacs",
+      "median": 0.7471241180001016,
+      "minimum": 0.6807690629993886,
+      "runs": 10
+    },
+    {
+      "kind": "10",
+      "n": 22,
+      "library": "aer",
+      "median": 1.9307730374998755,
+      "minimum": 1.7307765909999944,
+      "runs": 10
+    },
+    {
+      "kind": "10",
+      "n": 22,
+      "library": "pennylane",
+      "median": 1.730039436500192,
+      "minimum": 1.6273375079999823,
+      "runs": 10
+    },
+    {
+      "kind": "gradient",
+      "n": 10,
+      "library": "qso",
+      "median": 0.000532093000401801,
+      "minimum": 0.000441486999989138,
+      "runs": 75
+    },
+    {
+      "kind": "gradient",
+      "n": 10,
+      "library": "pennylane",
+      "median": 0.01895386999967741,
+      "minimum": 0.01706262199968478,
+      "runs": 75
+    },
+    {
+      "kind": "gradient",
+      "n": 10,
+      "library": "qulacs",
+      "median": 0.002087396000206354,
+      "minimum": 0.0017207060000146157,
+      "runs": 75
+    },
+    {
+      "kind": "permanent",
+      "n": 10,
+      "library": "qso",
+      "median": 1.3234999642008916e-05,
+      "minimum": 1.1521000487846322e-05,
+      "runs": 25
+    },
+    {
+      "kind": "permanent",
+      "n": 10,
+      "library": "thewalrus",
+      "median": 4.029199953947682e-05,
+      "minimum": 2.4274999304907396e-05,
+      "runs": 25
+    },
+    {
+      "kind": "permanent",
+      "n": 14,
+      "library": "qso",
+      "median": 0.000263668000116013,
+      "minimum": 0.00024343699988094158,
+      "runs": 25
+    },
+    {
+      "kind": "permanent",
+      "n": 14,
+      "library": "thewalrus",
+      "median": 0.0005260540001472691,
+      "minimum": 0.00044901700039190473,
+      "runs": 25
+    },
+    {
+      "kind": "permanent",
+      "n": 18,
+      "library": "qso",
+      "median": 0.008017047000066668,
+      "minimum": 0.0019405249995543272,
+      "runs": 25
+    },
+    {
+      "kind": "permanent",
+      "n": 18,
+      "library": "thewalrus",
+      "median": 0.011861484999826644,
+      "minimum": 0.00969876499948441,
+      "runs": 25
+    },
+    {
+      "kind": "permanent",
+      "n": 20,
+      "library": "qso",
+      "median": 0.015968781000083254,
+      "minimum": 0.00671008500012249,
+      "runs": 25
+    },
+    {
+      "kind": "permanent",
+      "n": 20,
+      "library": "thewalrus",
+      "median": 0.05173002399988036,
+      "minimum": 0.04473432800023147,
+      "runs": 25
+    },
+    {
+      "kind": "permanent",
+      "n": 22,
+      "library": "qso",
+      "median": 0.037060656499761535,
+      "minimum": 0.02947283499997866,
+      "runs": 10
+    },
+    {
+      "kind": "permanent",
+      "n": 22,
+      "library": "thewalrus",
+      "median": 0.2078052385004412,
+      "minimum": 0.19541967900022428,
+      "runs": 10
+    },
+    {
+      "kind": "permanent",
+      "n": 24,
+      "library": "qso",
+      "median": 0.14413330900015353,
+      "minimum": 0.12290368899994064,
+      "runs": 10
+    },
+    {
+      "kind": "permanent",
+      "n": 24,
+      "library": "thewalrus",
+      "median": 0.8774359140002161,
+      "minimum": 0.8225812220007356,
+      "runs": 10
+    }
+  ],
+  "rounds": 5,
+  "seconds": 534.479866027832
+}

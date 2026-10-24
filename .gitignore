@@ -15,3 +15,6 @@ dist/
 .idea/
 .vscode/
 .DS_Store
+
+# Intermediate files of the technical-note build
+docs/technical-note/build/

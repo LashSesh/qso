@@ -82,7 +82,7 @@ or by the benchmark report you can run yourself.
 | Full bunching of n photons, boson / distinguishable probability | n! for n = 1 … 6 | n! |
 | State vectors of random circuits, largest difference to Qiskit Aer, Qulacs, Cirq, PennyLane | ≤ 3 × 10⁻¹⁵ | — |
 
-The test-suite (153 Rust tests and 161 Python tests, run in CI on Linux,
+The test-suite (177 Rust tests and 182 Python tests, run in CI on Linux,
 macOS and Windows) also checks:
 
 - every gate against an independent dense-matrix reference, and the QFT
@@ -272,7 +272,8 @@ search on Q8 for [17]: gamma 0.146868, best time 27.522674, success 0.754627 (ex
 
 Python scripts are in [`metatron_qso_py/examples/`](metatron_qso_py/examples/):
 `01_metatron_quantum_walk.py`, `02_qaoa_maxcut.py`, `03_vqe_h2.py`,
-`04_grover_and_qft.py` and `05_noise.py`.
+`04_grover_and_qft.py`, `05_noise.py`, `06_boson_sampling.py` and
+`07_graph_classifier.py`.
 
 ## Command-line reference
 
@@ -310,14 +311,22 @@ Measured with `cargo run --release --example benchmark_report` on a
 
 | Workload | Time |
 |---|---:|
-| 24-qubit layer (71 gates: H, RZ, CX chain) | 0.94 s (0.79 ns per gate·amplitude) |
-| Full gradient, 10 qubits, 100 parameters, adjoint | 1.6 ms (43× faster than parameter shift) |
-| QAOA value + gradient, 20 nodes, p = 3 | 0.31 s |
-| Quantum walk on a 100 × 100 torus (10 000 nodes), Krylov | 0.13 s |
-| Automorphism group of Metatron's Cube (13!) | 3.2 ms |
+| 24-qubit layer (71 gates: H, RZ, CX chain) | 0.46 s (0.39 ns per gate·amplitude) |
+| Full gradient, 10 qubits, 100 parameters, adjoint | 0.53 ms (52× faster than parameter shift) |
+| QAOA value + gradient, 20 nodes, p = 3 | 0.17 s |
+| Quantum walk on a 100 × 100 torus (10 000 nodes), Krylov | 84 ms |
+| Automorphism group of Metatron's Cube (13!) | 3.0 ms |
+| Permanent of a 24 × 24 complex matrix | 0.14 s |
 
 Timings varied between runs on this shared VM (up to 2× for
 sub-millisecond workloads, up to 1.5× for the larger ones).
+
+On the same machine, with every framework at its default settings, QSO
+simulates 20–24-qubit circuits as fast as Qulacs or faster and 2–4× faster
+than Qiskit Aer and PennyLane Lightning; Qulacs is 2–3× faster on 16 qubits.
+Its adjoint gradient is the fastest of those compared, and its permanents
+are 1.5–6× faster than The Walrus. Method and full tables:
+[technical note](docs/technical-note/), Section 3.8.
 
 ## Scope and limits
 

@@ -79,8 +79,9 @@ def pm(d: dict, digits: int = 3) -> str:
 def table(header: list[str], rows: list[list], align: str | None = None) -> str:
     align = align or "l" + "r" * (len(header) - 1)
     marks = {"l": ":---", "r": "---:", "c": ":---:"}
-    out = ["| " + " | ".join(header) + " |", "|" + "|".join(marks[a] for a in align) + "|"]
-    out += ["| " + " | ".join(str(c) for c in row) + " |" for row in rows]
+    cell = lambda c: str(c).replace("|", "\\|")  # noqa: E731
+    out = ["| " + " | ".join(cell(h) for h in header) + " |", "|" + "|".join(marks[a] for a in align) + "|"]
+    out += ["| " + " | ".join(cell(c) for c in row) + " |" for row in rows]
     return "\n".join(out)
 
 
@@ -95,20 +96,20 @@ def table_grover_single(d):
             rows.append([r["n_qubits"], f"{r['items']:,}".replace(",", " "), r["iterations"],
                          f"{r['success']:.6f}", f"{r['theory']:.6f}", sci(r["abs_error"]),
                          f"{r['query_ratio']:.1f}"])
-    return table(["n", "N = 2ⁿ", "k", "P (simulated)", "sin²((2k+1)θ)", "|Δ|",
+    return table(["n", "N = 2ⁿ", "k", "P (simulated)", "sin²((2k+1)θ)", "deviation",
                   "(N+1)/2 ÷ k"], rows)
 
 
 def table_grover_multi(d):
     rows = [[r["marked"], r["iterations"], f"{r['success']:.6f}", f"{r['theory']:.6f}", sci(r["abs_error"])]
             for r in d["tn"]["grover"]["multi"]]
-    return table(["M", "k", "P (simulated)", "sin²((2k+1)θ)", "|Δ|"], rows)
+    return table(["M", "k", "P (simulated)", "sin²((2k+1)θ)", "deviation"], rows)
 
 
 def table_mixing(d):
     rows = [[f"{r['epsilon']:g}", f"{r['mixing_time']:.3f}", f"{r['closed_form']:.3f}"]
             for r in d["tn"]["walks"]["metatron_mixing_times"]]
-    return table(["ε", "M_ε (QSO)", "M_ε (closed form)"], rows)
+    return table(["ε", "$M_\\varepsilon$ (QSO)", "$M_\\varepsilon$ (closed form)"], rows)
 
 
 def table_search_scaling(d):
@@ -127,9 +128,16 @@ def table_fruit_search(d):
 
 
 def table_automorphisms(d):
-    rows = [[r["graph"], f"{r['order']:,}".replace(",", " "), r["reference"]]
+    reference = {
+        "Metatron's Cube": "13! (symmetric group S₁₃)",
+        "Fruit of Life": "12 (dihedral group D₆)",
+        "dodecahedron": "120 (icosahedral group Iₕ)",
+        "Petersen": "120 (S₅)",
+        "Heawood": "336 (PGL(2, 7))",
+    }
+    rows = [[r["graph"], f"{r['order']:,}".replace(",", " "), reference.get(r["graph"], r["reference"])]
             for r in d["tn"]["walks"]["automorphism_groups"]]
-    return table(["graph", "|Aut| (QSO)", "reference"], rows, "lrr")
+    return table(["graph", "group order (QSO)", "reference"], rows, "lrr")
 
 
 def table_qaoa_reference(d):
@@ -162,8 +170,8 @@ def table_qaoa_depth(d):
 def table_vqe(d):
     rows = []
     for r in d["tn"]["vqe"]["spin_models"]:
-        rows.append([r["model"], r["ansatz"], r["layers"], r["parameters"], f"{r['energy']:.6f}",
-                     f"{r['exact']:.6f}", sci(r["relative_error"])])
+        rows.append([r["model"].split(" ")[0], r["ansatz"].split(" ")[0], r["layers"], r["parameters"],
+                     f"{r['energy']:.6f}", f"{r['exact']:.6f}", sci(r["relative_error"])])
     return table(["model", "ansatz", "layers", "parameters", "E (VQE)", "E₀ (Lanczos)",
                   "relative error"], rows, "llrrrrr")
 
@@ -179,8 +187,9 @@ def table_graph_classifier(d):
     rows = []
     for key in ("triangles", "squares"):
         t = d["tn"]["graph_classifier"][key]
+        task = {"triangles": "triangle present", "squares": "4-cycle present"}[key]
         for m in t["models"]:
-            rows.append([t["task"], t["nodes"], m["layers"], pm(m["train"]), pm(m["test"]),
+            rows.append([task, t["nodes"], m["layers"], pm(m["train"]), pm(m["test"]),
                          ms(m["seconds"]["mean"])])
     return table(["task", "nodes", "layers", "train accuracy", "test accuracy", "training time"],
                  rows, "lrrrrr")
@@ -189,7 +198,7 @@ def table_graph_classifier(d):
 def table_bunching(d):
     rows = [[r["photons"], f"{r['ratio']:.10g}", f"{r['reference']:g}"]
             for r in d["tn"]["boson_sampling"]["full_bunching"]]
-    return table(["photons n", "P_boson / P_dist (QSO)", "n!"], rows)
+    return table(["photons n", "$P_\\text{boson}/P_\\text{dist}$ (QSO)", "n!"], rows)
 
 
 def table_boson_distance(d):
@@ -229,8 +238,10 @@ LIB_NAMES = {
 
 def table_correctness(d):
     c = d["xf"]["correctness"]
-    rows = [[name, sci(v)] for name, v in c["max_amplitude_difference_vs_qso"].items()]
-    return table(["framework", "max |ψ_QSO − ψ|"], rows)
+    names = {"qiskit-aer": "Qiskit Aer", "qulacs": "Qulacs", "cirq": "Cirq",
+             "pennylane-lightning": "PennyLane Lightning"}
+    rows = [[names.get(name, name), sci(v)] for name, v in c["max_amplitude_difference_vs_qso"].items()]
+    return table(["framework", "largest amplitude difference to QSO"], rows)
 
 
 def table_layers(d):
@@ -268,7 +279,7 @@ def table_gradients(d):
         diff = diff_of.get(lib)
         rows.append([names[lib], f"{ms(r['median'])} ({ms(r['minimum'])})",
                      sci(diff["max_gradient_diff"]) if diff else "reference"])
-    return table(["method", "value + gradient", "max |∇ − ∇_QSO|"], rows)
+    return table(["method", "value + gradient", "largest gradient difference to QSO"], rows)
 
 
 def table_performance(d):
@@ -337,10 +348,8 @@ def main() -> None:
     ap.add_argument("--out", default=str(HERE / "QSO_Technical_Note_v2.pdf"))
     args = ap.parse_args()
     data = load()
-    data["doi"] = args.doi or ""
+    data["doi_suffix"] = f" · DOI {args.doi}" if args.doi else ""
     text = render((HERE / "note.md").read_text(), data)
-    if args.doi:
-        text = text.replace("<!-- DOI -->", f"DOI: [{args.doi}](https://doi.org/{args.doi})")
     filled = HERE / "build" / "note.md"
     filled.parent.mkdir(exist_ok=True)
     filled.write_text(text)

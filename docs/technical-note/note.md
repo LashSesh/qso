@@ -2,7 +2,7 @@
 title: "Validated Quantum Algorithm Benchmarks of the Metatron QSO Simulation Framework"
 subtitle: "Technical Note, version 2 — corrects and replaces version 1 of 26 November 2025"
 author: "Sebastian Klemm"
-date: "QSO {{tn.environment.qso_version}} · {{tn.environment.date}} · <!-- DOI -->"
+date: "QSO {{tn.environment.qso_version}} · {{tn.environment.date}}{{doi_suffix}}"
 ---
 
 <div class="abstract">
@@ -60,7 +60,7 @@ states (up to 34 qubits) and density matrices (up to 14 qubits) with
 multi-threaded kernels, computes exact gradients by adjoint
 differentiation [17], and provides the algorithms benchmarked here.
 Conventions: qubit 0 is the least significant bit of a basis index, time
-evolution is exp(−iHt) and rotations are R_P(θ) = exp(−iθP/2). All random
+evolution is $e^{-iHt}$ and rotations are $R_P(\theta) = e^{-i\theta P/2}$. All random
 numbers come from one seeded generator (xoshiro256++), and parallel sums
 are combined in a fixed order, so every result is bit-for-bit
 reproducible on the same platform for any number of threads.
@@ -144,24 +144,26 @@ limiting distributions from the eigendecomposition with degenerate
 eigenspaces grouped; it returns P₀ = {{tn.walks.metatron_limiting_centre:.15f}}
 (exact: {{tn.walks.metatron_limiting_centre_reference:.15f}}).
 
-The mixing time M_ε of Aharonov et al. [3] is the smallest T from which on
-the time-averaged distribution stays within total-variation distance ε of
-the limit. On K₁₃ that distance is (24/169)·|sin(13T)/(13T)|, which gives
-M_ε in closed form (evaluated on the same time grid, spacing 0.001):
+The mixing time $M_\varepsilon$ of Aharonov et al. [3] is the smallest $T$
+from which on the time-averaged distribution stays within total-variation
+distance $\varepsilon$ of the limit. On K₁₃ that distance is
+$\tfrac{24}{169}\,\lvert \sin(13T)/(13T) \rvert$, which gives
+$M_\varepsilon$ in closed form (evaluated on the same time grid, spacing
+0.001):
 
 **Table 5.** Mixing time of the walk on Metatron's Cube from vertex 0.
 
 {{@mixing}}
 
-The Fruit-of-Life contact graph mixes more slowly (M₀.₀₅ =
+The Fruit-of-Life contact graph mixes more slowly ($M_{0.05}$ =
 {{tn.walks.fruit_mixing_time_eps005:.2f}}) and keeps
 {{tn.walks.fruit_limiting_centre:.4f}} of the probability at the centre in
 the limit.
 
 **Spatial search.** Childs and Goldstone [4] search for a marked vertex w
-with H = γL − |w⟩⟨w|. On the complete graph K_N with γ = 1/N the walk
-rotates the uniform superposition into |w⟩, with success probability 1 at
-T = π√N/2. On Metatron's Cube QSO obtains
+with $H = \gamma L - |w\rangle\langle w|$. On the complete graph $K_N$ with
+$\gamma = 1/N$ the walk rotates the uniform superposition into
+$|w\rangle$, with success probability 1 at $T = \pi\sqrt{N}/2$. On Metatron's Cube QSO obtains
 P(T) = {{tn.walks.search_exact.success:.15f}} at T = {{tn.walks.search_exact.time:.6f}};
 its rate optimiser, started from no prior knowledge, finds
 γ = {{tn.walks.search_optimised.gamma:.9f}} (1/13 = 0.076923077) and
@@ -184,11 +186,12 @@ optimised, Laplacian generator).
 
 ## 3.3 QAOA for MaxCut
 
-QAOA [5] alternates e^{−iγC} for the cut operator C = Σ_{(u,v)} (1 − Z_u Z_v)/2
-with the mixer e^{−iβΣX} and maximises ⟨C⟩. QSO simulates it on the full
-2ⁿ-dimensional state, with exact gradients and layer-wise (INTERP)
-initialisation, and reports the approximation ratio ⟨C⟩/C_max with C_max
-found by enumeration.
+QAOA [5] alternates $e^{-i\gamma C}$ for the cut operator
+$C = \sum_{(u,v) \in E} (1 - Z_u Z_v)/2$ with the mixer
+$e^{-i\beta \sum_q X_q}$ and maximises $\langle C \rangle$. QSO simulates it
+on the full $2^n$-dimensional state, with exact gradients and layer-wise
+(INTERP) initialisation, and reports the approximation ratio
+$\langle C \rangle / C_{\max}$ with $C_{\max}$ found by enumeration.
 
 **Table 8.** QAOA against analytic and published values.
 
@@ -198,7 +201,7 @@ On the ring the optimum (2p+1)/(2p+2) is proven [6]. For cubic graphs in
 which no edge lies on a cycle of length at most 2p+1, every edge sees the
 same tree-like neighbourhood, so the optimal ratio is a universal constant:
 0.6925 for p = 1 [5] and 0.7559 for p = 2 [8]. The 3-cube Q₃ (girth 4) and
-the Heawood graph (girth 6; bipartite, so C_max = |E| = 21) satisfy the
+the Heawood graph (girth 6; bipartite, so $C_{\max} = |E| = 21$) satisfy the
 conditions. In addition, the one-layer expected cut, summed over edges,
 matches the closed form of Wang et al. [7] to 10⁻¹² on graphs with
 triangles, varying degrees and random structure (part of the
@@ -226,8 +229,9 @@ gradients). It is not monotone in the depth, because the optimiser can end
 in a local minimum; these are the values the software produces, not
 selected results.
 
-**Table 10.** VQE on the open transverse-field Ising chain (critical point)
-and the XXZ chain.
+**Table 10.** VQE on the open transverse-field Ising chain at the critical
+point (TFIM, J = h = 1) and the XXZ chain (J = 1, Δ = 0.5). RealAmplitudes
+uses RY rotations, EfficientSU2 RY and RZ rotations, both with a CX chain.
 
 {{@vqe}}
 
@@ -254,9 +258,10 @@ correct and reproducible training pipeline, not an advantage.
 ## 3.6 Graph classification with quantum layers
 
 Version 1 reported a quantum machine-learning experiment on graphs. QSO
-now provides a graph classifier in which every input graph G defines its
-own cut operator C_G: p shared, trainable layers e^{−iβΣX}e^{−iγC_G} act on
-|+⟩ⁿ, and p(y = 1|G) = σ(a·(⟨C_G⟩/|E| − ½) + b). Because the evolution is
+now provides a graph classifier in which every input graph $G$ defines its
+own cut operator $C_G$: $p$ shared, trainable layers
+$e^{-i\beta \sum_q X_q} e^{-i\gamma C_G}$ act on $|{+}\rangle^{\otimes n}$, and
+$p(y = 1 \mid G) = \sigma\big(a\,(\langle C_G \rangle / |E| - \tfrac12) + b\big)$. Because the evolution is
 local, after p layers each edge's contribution depends only on the
 subgraph within distance p of the edge (the QAOA light cone). This gives a
 falsifiable prediction: one layer can detect triangles, but it cannot
@@ -270,7 +275,8 @@ class in each of the training and test sets,
 identical for all cubic graphs, so a classifier using them cannot exceed
 50 %; counting triangles or 4-cycles classifies perfectly.
 
-**Table 12.** Graph classification (mean ± standard deviation over seeds).
+**Table 12.** Graph classification of random cubic graphs (mean ± standard
+deviation over seeds; the 4-cycle task uses triangle-free graphs only).
 
 {{@graph_classifier}}
 
@@ -285,9 +291,12 @@ training procedure, not generalisation to unseen structures.
 
 ## 3.7 Boson sampling
 
-n single photons entering an m-mode interferometer U leave in occupation
-pattern T with probability |perm(U_{T,S})|²/∏t_i! for indistinguishable
-photons and perm(|U_{T,S}|²)/∏t_i! for distinguishable ones [12]. QSO
+$n$ single photons entering an $m$-mode interferometer $U$ with input
+occupation $S$ leave in occupation pattern $T$ with probability
+$|\operatorname{perm}(U_{T,S})|^2 / \prod_i t_i!$ if they are
+indistinguishable and $\operatorname{perm}(|U_{T,S}|^2) / \prod_i t_i!$ if
+they are distinguishable, where $U_{T,S}$ repeats row $i$ of $U$ $t_i$
+times and takes the columns of the occupied input modes [12]. QSO
 computes permanents with Glynn's formula in Gray-code order
 (O(n·2ⁿ)) [14], draws Haar-random interferometers [16] and samples exactly
 with the algorithm of Clifford and Clifford [13].
@@ -304,7 +313,7 @@ and {{tn.boson_sampling.hom.p_coincidence_distinguishable:.3f}} if
 distinguishable: visibility {{tn.boson_sampling.hom.visibility:.6f}}.
 
 *Bunching.* If all n photons leave through one mode, the submatrix has
-rank one, so P_boson/P_dist = n! for every interferometer:
+rank one, so $P_\text{boson}/P_\text{dist} = n!$ for every interferometer:
 
 **Table 13.** Full-bunching enhancement in Haar-random 8-mode
 interferometers.
@@ -381,8 +390,8 @@ model with a 100-parameter ansatz.
 
 From 20 qubits on, QSO is as fast as Qulacs or faster and two to four
 times faster than Qiskit Aer and PennyLane Lightning on this machine. On
-16 qubits, where one gate takes only tens of microseconds, Qulacs is about
-three times faster; at that size the cost of distributing work over the
+16 qubits, where one gate takes only tens of microseconds, Qulacs is two
+to three times faster; at that size the cost of distributing work over the
 threads dominates, and QSO's handling of it is a topic for future work.
 The adjoint gradient is the fastest of the three methods compared;
 PennyLane's adjoint method is dominated by Python overhead at this size.
@@ -411,8 +420,9 @@ they are published.
 
 {{@performance}}
 
-Above about 20 qubits a gate is limited by memory bandwidth: it reads and
-writes every amplitude (16 bytes). A full gradient of the
+Registers below 2¹⁶ amplitudes run on one thread; the cost per gate and
+amplitude falls up to 22 qubits as all threads take part and rises again at
+24 qubits, where one state vector takes 256 MB. A full gradient of the
 100-parameter ansatz of Table 19 takes
 {{tn.performance.gradients_tfim10_100_parameters.0.seconds:ms}} by adjoint
 differentiation, {{tn.performance.gradients_tfim10_100_parameters.1.seconds:ms}}
