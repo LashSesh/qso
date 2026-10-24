@@ -209,3 +209,10 @@ def test_edge_list_graphml_and_networkx_round_trips():
 
     d = q.Graph.from_networkx(Duck())
     assert d.name == "duck" and d.edges == [(0, 1, 0.5), (0, 2, 1.0)]
+
+    class Repeated(Duck):
+        def nodes(self):
+            return ["x", ("y", 1), 7, "x"]
+
+    with pytest.raises(ValueError, match="twice"):
+        q.Graph.from_networkx(Repeated())

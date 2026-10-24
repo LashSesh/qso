@@ -20,9 +20,11 @@ validated result of earlier releases changed.
   (`(10, 6, 3, 4)` for J(5, 2), `(13, 6, 2, 3)` for Paley(13)).
 - **Canonical labelling and isomorphism** (`graph::canonical`,
   `Graph::canonical_form`, `is_isomorphic`, `isomorphism`): individualisation–
-  refinement with automorphism pruning and backjumping. Agrees with brute
-  force on 300 random graphs, is invariant under relabelling and separates
-  the cospectral Shrikhande and 4×4 rook's graphs.
+  refinement with Hopcroft-style colour refinement, automorphism and twin
+  pruning and backjumping. Agrees with brute force on 300 random graphs, is
+  invariant under relabelling and separates the cospectral Shrikhande and
+  4×4 rook's graphs; K₄₀₀ and stars need one leaf, 8000-node cycles take
+  well under a second.
 - **Graph files** (`graph::io`): edge lists and GraphML (common subset,
   without an XML dependency), with size limits and a new fuzz target;
   `Graph.from_networkx` in Python by duck typing, without importing NetworkX.
@@ -58,7 +60,7 @@ validated result of earlier releases changed.
   1995).
 - **Batched evaluation:** `expectation_batch` and
   `expectation_and_gradient_batch` (Rust and Python) evaluate many
-  parameter vectors in parallel; 3.3–3.6× faster than a loop at 10 qubits
+  parameter vectors in parallel; 3–4× faster than a loop at 10 qubits
   on 4 cores.
 - CLI commands `iso`, `reduce`, `transfer`, `coined`, `hitting` and
   `walk-circuit`; graph arguments accept edge-list and GraphML files;
@@ -73,19 +75,34 @@ validated result of earlier releases changed.
 - **Faster state-vector simulation** (`quantum::plan`): gates whose targets
   lie below qubit 14, and diagonal gates anywhere, are applied block by
   block to cache-sized blocks of 2¹⁴ amplitudes, the blocks in parallel;
-  runs of single-qubit gates on higher qubits are fused. Layers of H, RZ
-  and a CX chain run 3.8× faster at 16 qubits and 1.4–2× faster at 18–24
-  qubits; planned and gate-by-gate simulation agree to 1e-12 on random
+  runs of single-qubit gates on higher qubits are fused. Against 1.2.0 on
+  the same machine (medians of three alternating runs, see
+  [BENCHMARKS.md](docs/BENCHMARKS.md)), layers of H, RZ and a CX chain run
+  4.7× faster at 16 qubits and 1.6–2.6× faster at 18–24 qubits, single
+  gate types 1.7–2.3× faster at 22 qubits; 10- and 14-qubit registers are
+  unchanged. Planned and gate-by-gate simulation agree to 1e-12 on random
   circuits over the whole gate set, with controls and symbolic angles
   (also under Miri).
 - QAOA cost layers use a table of the distinct cut values instead of a
   complex exponential per amplitude, and share a blocked pass with the
-  mixer: value and gradient 1.2–1.65× faster.
+  mixer: value and gradient 1.15–1.45× faster.
 - `Graph::from_weighted_edges` builds adjacency lists in O(m log m)
   whatever the edge order (was quadratic for reversed stars);
-  `strongly_regular_parameters` needs O(n) memory.
-- Spatial-search and transfer optimisation refine every near-maximal peak
-  and report the earliest of equal maxima.
+  `strongly_regular_parameters` counts 2-paths in O(n·k²) time and O(n)
+  memory.
+
+### Fixed
+
+- Limiting and time-averaged distributions grouped eigenvalues closer than
+  1e-9·max(1, ‖H‖) into one eigenspace. For Hamiltonians of small norm
+  (small hopping rates) this merged distinct eigenvalues and returned
+  wrong distributions. Eigenvalues are now grouped within 1e-11 of the
+  spectral radius, with no absolute floor; results no longer depend on the
+  scale of H (checked for γ from 1e-10 to 1e10).
+- Spatial-search time optimisation refined only the best grid point and
+  could return the lower of two peaks whose heights differ by less than
+  the grid error. Every near-maximal peak is now refined, NaN values are
+  skipped, and the earliest of equal maxima is reported.
 - Lanczos breakdown detection scales with the off-diagonal entries as
   well (it could miss breakdowns for large hopping rates).
 

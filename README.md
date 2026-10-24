@@ -90,7 +90,7 @@ or by the benchmark report you can run yourself.
 | Full bunching of n photons, boson / distinguishable probability | n! for n = 1 … 6 | n! |
 | State vectors of random circuits, largest difference to Qiskit Aer, Qulacs, Cirq, PennyLane | ≤ 3 × 10⁻¹⁵ | — |
 
-The test-suite (189 Rust tests and 206 Python tests, run in CI on Linux
+The test-suite (245 Rust tests and 218 Python tests, run in CI on Linux
 (x86_64 and arm64), macOS and Windows) also checks:
 
 - every gate against an independent dense-matrix reference, and the QFT
@@ -333,11 +333,13 @@ Measured with `cargo run --release --example benchmark_report` on a
 
 | Workload | Time |
 |---|---:|
-| 24-qubit layer (71 gates: H, RZ, CX chain) | 0.46 s (0.39 ns per gate·amplitude) |
-| Full gradient, 10 qubits, 100 parameters, adjoint | 0.53 ms (52× faster than parameter shift) |
-| QAOA value + gradient, 20 nodes, p = 3 | 0.17 s |
-| Quantum walk on a 100 × 100 torus (10 000 nodes), Krylov | 84 ms |
-| Automorphism group of Metatron's Cube (13!) | 3.0 ms |
+| 16-qubit layer (47 gates: H, RZ, CX chain) | 0.55 ms (4.7× faster than 1.2.0) |
+| 24-qubit layer (71 gates) | 0.21 s (0.18 ns per gate·amplitude; 2.3× faster than 1.2.0) |
+| Full gradient, 10 qubits, 100 parameters, adjoint | 0.47 ms (53× faster than parameter shift) |
+| 256 values and gradients of that ansatz, one batch call | 34 ms (3.7× faster than a loop) |
+| QAOA value + gradient, 20 nodes, p = 3 | 0.13 s |
+| Quantum walk on a 100 × 100 torus (10 000 nodes), Krylov | 78 ms |
+| Automorphism group of Metatron's Cube (13!) | 2.7 ms |
 | Permanent of a 24 × 24 complex matrix | 0.14 s |
 
 Timings varied between runs on this shared VM (up to 2× for
