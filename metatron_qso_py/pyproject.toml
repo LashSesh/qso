@@ -31,6 +31,7 @@ Repository = "https://github.com/LashSesh/qso"
 python-source = "python"
 module-name = "metatron_qso._core"
 features = ["pyo3/extension-module"]
+exclude = ["**/__pycache__/**", "**/*.pyc"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

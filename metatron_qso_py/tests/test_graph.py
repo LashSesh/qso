@@ -25,9 +25,9 @@ def test_automorphism_orders(graph, order):
 
 
 def test_huge_automorphism_group_order_overflows_to_none():
-    k40 = q.Graph.complete(40)  # 40! > 2^128
-    assert k40.automorphism_group_order() is None
-    assert k40.automorphism_log10_order() == pytest.approx(math.log10(math.factorial(40)))
+    k35 = q.Graph.complete(35)  # 35! > 2^128
+    assert k35.automorphism_group_order() is None
+    assert k35.automorphism_log10_order() == pytest.approx(math.log10(math.factorial(35)))
 
 
 def test_orbits():
@@ -83,6 +83,10 @@ def test_construction_and_weights():
     assert g.edges == [(0, 1, 1.0), (1, 2, 2.0), (2, 3, 0.5)]
     h = q.Graph.from_edges(4, g.edges)
     assert h.edges == g.edges
+    k = q.Graph.from_edges(4, np.array([[0, 1], [1, 2], [2, 3]]), np.array([1.0, 2.0, 0.5]))
+    assert k.edges == g.edges
+    with pytest.raises(TypeError):
+        q.Graph.from_edges(4, [(0, 1, 2, 3)])
     g.add_edge(3, 0, weight=-1.5)
     assert g.num_edges == 4 and g.neighbors(0) == [(1, 1.0), (3, -1.5)]
     assert g.degrees() == [2, 2, 2, 2]

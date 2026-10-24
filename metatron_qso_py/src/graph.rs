@@ -5,16 +5,40 @@ use metatron_qso::graph::generators::{self, PlatonicSolid};
 use metatron_qso::graph::{Graph, metatron};
 use numpy::ndarray::Array2;
 use numpy::{IntoPyArray, PyArray1, PyArray2};
+use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use crate::{Raise, invalid, pydict, real_array, rmatrix};
 
-/// An edge given as `(u, v)` or `(u, v, weight)`.
-#[derive(FromPyObject)]
-enum EdgeSpec {
-    Weighted(usize, usize, f64),
-    Plain(usize, usize),
+/// An edge given as a `(u, v)` or `(u, v, weight)` sequence.
+struct EdgeSpec {
+    u: usize,
+    v: usize,
+    weight: Option<f64>,
+}
+
+impl<'a, 'py> FromPyObject<'a, 'py> for EdgeSpec {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+        let items = obj.try_iter()?.collect::<PyResult<Vec<_>>>()?;
+        match items.as_slice() {
+            [u, v] => Ok(Self {
+                u: u.extract()?,
+                v: v.extract()?,
+                weight: None,
+            }),
+            [u, v, w] => Ok(Self {
+                u: u.extract()?,
+                v: v.extract()?,
+                weight: Some(w.extract()?),
+            }),
+            _ => Err(PyTypeError::new_err(
+                "edges must be (u, v) or (u, v, weight) sequences",
+            )),
+        }
+    }
 }
 
 /// Undirected weighted graph (no self loops or multi-edges) with optional
@@ -46,7 +70,7 @@ impl PyGraph {
     }
 
     /// Graph from `(u, v)` or `(u, v, w)` edges; `weights` (one per edge)
-    /// may be given for unweighted edge tuples.
+    /// may be given for unweighted edges.
     #[staticmethod]
     #[pyo3(signature = (n, edges, weights = None))]
     fn from_edges(n: usize, edges: Vec<EdgeSpec>, weights: Option<Vec<f64>>) -> PyResult<Self> {
@@ -62,18 +86,17 @@ impl PyGraph {
         }
         let mut g = Graph::new(n);
         for (k, e) in edges.into_iter().enumerate() {
-            let (u, v, w) = match e {
-                EdgeSpec::Weighted(u, v, w) => {
-                    if weights.is_some() {
-                        return Err(invalid(
-                            "give weights either inside the edge tuples or as `weights`",
-                        ));
-                    }
-                    (u, v, w)
+            let w = match (e.weight, &weights) {
+                (Some(_), Some(_)) => {
+                    return Err(invalid(
+                        "give weights either inside the edges or as `weights`",
+                    ));
                 }
-                EdgeSpec::Plain(u, v) => (u, v, weights.as_ref().map_or(1.0, |w| w[k])),
+                (Some(w), None) => w,
+                (None, Some(ws)) => ws[k],
+                (None, None) => 1.0,
             };
-            g.add_weighted_edge(u, v, w).raise()?;
+            g.add_weighted_edge(e.u, e.v, w).raise()?;
         }
         Ok(wrap(g))
     }

@@ -5,7 +5,7 @@ use metatron_qso::linalg::KrylovOptions;
 use metatron_qso::quantum::{MAX_QUBITS, PauliSum, StateVector};
 use numpy::{PyArray1, PyArray2};
 use pyo3::prelude::*;
-use pyo3::types::{PyComplex, PyDict};
+use pyo3::types::PyDict;
 
 use crate::circuit::{PyCircuit, theta_or_empty};
 use crate::{
@@ -26,7 +26,7 @@ fn wrap(inner: StateVector) -> PyStateVector {
 }
 
 /// Run `circuit(theta)` on |0…0⟩ without the GIL.
-pub(crate) fn run_circuit(
+fn run_circuit(
     py: Python<'_>,
     circuit: &PyCircuit,
     theta: Option<RealArg<'_>>,
@@ -118,13 +118,8 @@ impl PyStateVector {
     }
 
     /// ⟨self|other⟩.
-    fn inner<'py>(
-        &self,
-        py: Python<'py>,
-        other: &PyStateVector,
-    ) -> PyResult<Bound<'py, PyComplex>> {
-        let z = self.inner.inner(&other.inner).raise()?;
-        Ok(PyComplex::from_doubles(py, z.re, z.im))
+    fn inner(&self, other: &PyStateVector) -> PyResult<metatron_qso::C64> {
+        self.inner.inner(&other.inner).raise()
     }
 
     /// |⟨self|other⟩|².

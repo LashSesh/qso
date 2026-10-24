@@ -159,7 +159,8 @@ fn efficient_su2(n: usize, layers: usize, entanglement: &str) -> PyResult<PyCirc
 }
 
 /// `layers` × (rotations on every qubit, CX entanglers) plus a final
-/// rotation layer.
+/// rotation layer. `rotations`: any of `rx`, `ry`, `rz` (default
+/// `("ry", "rz")`); `entanglement`: `linear`, `circular` or `full`.
 #[pyfunction]
 #[pyo3(signature = (n, layers, rotations = None, entanglement = "linear"))]
 fn hardware_efficient(
@@ -220,7 +221,10 @@ fn expectation_and_gradient<'py>(
 // VQE
 
 /// Variational eigensolver: minimise ⟨H⟩ over the ansatz parameters from
-/// `restarts` seeded random starts.
+/// `restarts` seeded random starts (run in parallel).
+///
+/// `method`: `lbfgs`, `adam`, `gradient_descent`, `nelder_mead` or `spsa`;
+/// `gradient`: `adjoint`, `parameter_shift` or `finite_difference`.
 #[pyfunction]
 #[pyo3(signature = (
     hamiltonian,
