@@ -1,7 +1,7 @@
 # metatron-qso-rs
 
 Validated quantum simulation in pure Rust — the core library of
-[QSO 2.0](https://github.com/LashSesh/qso).
+[QSO](https://github.com/LashSesh/qso).
 
 * **Statevector simulator** with multi-threaded kernels, arbitrary controls,
   custom unitaries, measurement and entanglement entropy (up to 34 qubits).
@@ -21,6 +21,10 @@ Validated quantum simulation in pure Rust — the core library of
 Every algorithm is tested against closed-form or literature results (QAOA
 ring ratios (2p+1)/(2p+2), H₂ full-CI energy, Grover's sine law, QFT = DFT,
 exact phase estimation, automorphism group orders, …).
+
+```bash
+cargo add metatron-qso-rs        # the library is imported as `metatron_qso`
+```
 
 ```rust
 use metatron_qso::prelude::*;

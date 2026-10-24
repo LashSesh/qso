@@ -1,9 +1,27 @@
 name: Release
 
-# Builds Python wheels (abi3, one per platform) and attaches them, together
-# with the source distribution, to the GitHub release of a `v*` tag.
-# Publishing to crates.io / PyPI is a manual step (`cargo publish`,
-# `twine upload dist/*`) so that no registry tokens live in this repository.
+# Pushing a tag `vX.Y.Z` publishes version X.Y.Z:
+#
+#   1. preflight  – tag, Cargo and pyproject versions agree, the CHANGELOG has
+#                   an entry, and the crate packages and builds on its own
+#                   (`cargo publish --dry-run`);
+#      tokens     – the registry tokens are set;
+#   2. wheels     – abi3 wheels for Linux (x86_64, aarch64), macOS (universal2)
+#                   and Windows (x86_64); each native wheel is installed and
+#                   the Python test-suite runs against it;
+#      sdist      – source distribution, built and tested the same way;
+#   3. crates.io  – `metatron-qso-rs`;
+#   4. PyPI       – `metatron-qso` (wheels + sdist);
+#   5. GitHub     – release with notes from CHANGELOG.md and all artefacts.
+#
+# Publishing steps skip versions that are already on the registry, so a
+# failed run can be re-run. Started manually (workflow_dispatch), the
+# workflow runs steps 1–2 only and publishes nothing; use this as a dry run.
+#
+# Repository secrets:
+#   CRATES_IO – crates.io API token with the `publish-update` scope for the
+#               crate `metatron-qso-rs`
+#   PYPI      – PyPI API token scoped to the project `metatron-qso`
 
 on:
   push:
@@ -11,15 +29,70 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Versions agree
+        run: |
+          python3 - <<'EOF'
+          import os, re, sys, tomllib
+
+          cargo = tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"]
+          py = tomllib.load(open("metatron_qso_py/pyproject.toml", "rb"))["project"]["version"]
+          errors = []
+          if cargo != py:
+              errors.append(f"Cargo.toml has {cargo}, pyproject.toml has {py}")
+          if not re.search(rf"^## \[{re.escape(cargo)}\]", open("CHANGELOG.md").read(), re.M):
+              errors.append(f"CHANGELOG.md has no '## [{cargo}]' section")
+          if os.environ["GITHUB_REF_TYPE"] == "tag" and os.environ["GITHUB_REF_NAME"] != f"v{cargo}":
+              errors.append(f"tag {os.environ['GITHUB_REF_NAME']} does not match version {cargo}")
+          for e in errors:
+              print(f"::error::{e}")
+          print(f"version {cargo}")
+          sys.exit(1 if errors else 0)
+          EOF
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Crate packages and builds on its own
+        run: cargo publish -p metatron-qso-rs --dry-run --locked
+
+  tokens:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Registry tokens are set
+        env:
+          CRATES_IO: ${{ secrets.CRATES_IO }}
+          PYPI: ${{ secrets.PYPI }}
+        run: |
+          ok=1
+          if [ -z "$CRATES_IO" ]; then
+            echo "::error::repository secret CRATES_IO is not set"; ok=0
+          fi
+          case "$PYPI" in
+            pypi-*) ;;
+            "") echo "::error::repository secret PYPI is not set"; ok=0 ;;
+            *) echo "::error::secret PYPI does not start with 'pypi-'"; ok=0 ;;
+          esac
+          [ "$ok" = 1 ]
+
   wheels:
-    name: wheel (${{ matrix.os }})
+    name: wheel (${{ matrix.platform }})
+    needs: preflight
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - { platform: linux-x86_64, os: ubuntu-latest, target: x86_64, test: true }
+          - { platform: linux-aarch64, os: ubuntu-latest, target: aarch64, test: false }
+          - { platform: macos-universal2, os: macos-latest, target: universal2-apple-darwin, test: true }
+          - { platform: windows-x86_64, os: windows-latest, target: x64, test: true }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -28,35 +101,106 @@ jobs:
       - uses: PyO3/maturin-action@v1
         with:
           command: build
-          args: --release -m metatron_qso_py/Cargo.toml -o dist
+          target: ${{ matrix.target }}
+          args: --release --locked -m metatron_qso_py/Cargo.toml -o dist
           manylinux: auto
+      - name: Test the wheel
+        if: matrix.test
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest dist/*.whl
+          python -m pytest metatron_qso_py/tests -q
       - uses: actions/upload-artifact@v4
         with:
-          name: wheel-${{ matrix.os }}
+          name: wheel-${{ matrix.platform }}
           path: dist/*.whl
 
   sdist:
+    needs: preflight
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - uses: PyO3/maturin-action@v1
         with:
           command: sdist
           args: -m metatron_qso_py/Cargo.toml -o dist
+      - name: Build from the source distribution and test
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest twine
+          python -m twine check --strict dist/*.tar.gz
+          python -m pip install dist/*.tar.gz
+          python -m pytest metatron_qso_py/tests -q
       - uses: actions/upload-artifact@v4
         with:
           name: sdist
           path: dist/*.tar.gz
 
-  release:
-    needs: [wheels, sdist]
-    if: startsWith(github.ref, 'refs/tags/')
+  crates-io:
+    needs: [tokens, wheels, sdist]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Publish metatron-qso-rs
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if curl -fsS -o /dev/null -A "LashSesh/qso release workflow" \
+              "https://crates.io/api/v1/crates/metatron-qso-rs/$version"; then
+            echo "metatron-qso-rs $version is already on crates.io"
+          else
+            cargo publish -p metatron-qso-rs --locked
+          fi
+
+  pypi:
+    needs: crates-io
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+      - run: ls -l dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI }}
+          skip-existing: true
+          # Attestations need Trusted Publishing; this workflow uses a token.
+          attestations: false
+
+  github-release:
+    needs: pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Release notes from CHANGELOG.md
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          {
+            echo "\`pip install metatron-qso==$version\` · \`cargo add metatron-qso-rs@$version\`"
+            echo
+            # The section of this version, without its heading; repository
+            # links made absolute so that they work on the release page.
+            awk -v v="$version" '/^## \[/ { p = index($0, "[" v "]") > 0; next } p' CHANGELOG.md \
+              | sed -E "s#\]\(((docs|metatron-qso-rs|metatron_qso_py)/[^)]*)\)#](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/\1)#g"
+          } > notes.md
+          cat notes.md
       - uses: softprops/action-gh-release@v2
         with:
+          name: QSO ${{ github.ref_name }}
+          body_path: notes.md
           files: dist/*
+          make_latest: true

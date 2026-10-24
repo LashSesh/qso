@@ -1,4 +1,4 @@
-//! # Metatron QSO 2.0 — validated quantum simulation in pure Rust
+//! # Metatron QSO — validated quantum simulation in pure Rust
 //!
 //! QSO simulates quantum circuits and quantum walks exactly and runs the
 //! standard variational and textbook algorithms on top. Every algorithm is

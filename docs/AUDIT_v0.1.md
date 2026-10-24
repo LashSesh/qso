@@ -1,6 +1,6 @@
 # Audit of QSO v0.1 (claims vs. reality)
 
-This document records why QSO 2.0 is a rewrite rather than an incremental
+This document records why QSO 1.0 is a rewrite rather than an incremental
 release. Every finding below was verified against the v0.1 source tree
 (commit `b688a23`, still available in the git history); file references are
 to that tree. The audit was carried out in October 2026.
@@ -80,10 +80,10 @@ not reproducible.
   vs 510). nalgebra was compiled in two versions; editions/MSRV were
   inconsistent.
 
-## 4. Consequences for 2.0
+## 4. Consequences for 1.0
 
-Nothing from v0.1 was kept verbatim. The 2.0 plan
-([QSO_2.0_PLAN.md](QSO_2.0_PLAN.md)) replaces the 13-dim toy with a real
+Nothing from v0.1 was kept verbatim. The 1.0 plan
+([QSO_1.0_PLAN.md](QSO_1.0_PLAN.md)) replaces the 13-dim toy with a real
 n-qubit simulator, keeps Metatron's Cube as an honestly analysed showcase
 graph, and makes every claim in the documentation traceable to a test or a
 reproducible benchmark.

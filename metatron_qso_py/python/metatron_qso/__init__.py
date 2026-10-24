@@ -1,4 +1,4 @@
-"""QSO 2.0 — validated quantum simulation in pure Rust.
+"""QSO — validated quantum simulation in pure Rust.
 
 Exact state-vector and density-matrix simulation, VQE and QAOA with exact
 gradients, Grover search, QFT and phase estimation, and continuous-time

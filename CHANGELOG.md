@@ -4,12 +4,12 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [2.0.0] — 2026-10
+## [1.0.0] — 2026-10-24
 
-Ground-up rewrite. The audit in [docs/AUDIT_v0.1.md](docs/AUDIT_v0.1.md)
+First stable release: a ground-up rewrite of the 0.1 prototype. The audit in [docs/AUDIT_v0.1.md](docs/AUDIT_v0.1.md)
 showed that v0.1 simulated a single 13-level system (not qubits), that its
 headline results were trivial or incorrect, and that several subsystems
-returned placeholder data. 2.0 replaces it with a validated simulator. The
+returned placeholder data. 1.0 replaces it with a validated simulator. The
 API is not compatible with 0.1.
 
 ### Added
@@ -53,4 +53,4 @@ API is not compatible with 0.1.
 
 ## [0.1.0] — 2025-11-16
 
-Initial prototype. Superseded by 2.0.0; see the audit for an assessment.
+Initial prototype. Superseded by 1.0.0; see the audit for an assessment.

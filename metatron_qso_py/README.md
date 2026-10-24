@@ -1,6 +1,6 @@
 # metatron-qso (Python)
 
-Python bindings for **QSO 2.0**, a validated quantum simulator written in
+Python bindings for **QSO**, a validated quantum simulator written in
 pure Rust (`metatron-qso-rs`): exact state-vector and density-matrix
 simulation, VQE and QAOA with exact gradients, Grover search, QFT and phase
 estimation, and continuous-time quantum walks on arbitrary graphs —
@@ -9,16 +9,22 @@ literature results.
 
 ## Install
 
-From the repository (requires a Rust toolchain):
+```bash
+pip install metatron-qso
+```
+
+Wheels target the stable ABI (`abi3`, one wheel for CPython ≥ 3.9) and are
+provided for Linux (x86_64, aarch64), macOS (Intel and Apple silicon) and
+Windows (x86_64). The only runtime dependency is NumPy. On other platforms
+pip builds from the source distribution, which needs a Rust toolchain
+≥ 1.89.
+
+From a clone of the [repository](https://github.com/LashSesh/qso):
 
 ```bash
 pip install maturin
 maturin develop --release -m metatron_qso_py/Cargo.toml   # into the active venv
-# or: maturin build --release -m metatron_qso_py/Cargo.toml && pip install target/wheels/*.whl
 ```
-
-The wheel targets the stable ABI (`abi3`, CPython ≥ 3.9) and needs only
-NumPy at runtime.
 
 ## Conventions
 
@@ -113,7 +119,8 @@ energy = q.estimate_expectation(bell, q.PauliSum("Z0 Z1"), shots=10_000,
                                 noise=q.NoiseModel.depolarizing(0.01, 0.02))
 ```
 
-More complete scripts are in [`examples/`](examples/).
+More complete scripts are in
+[`examples/`](https://github.com/LashSesh/qso/tree/main/metatron_qso_py/examples).
 
 ## API overview
 
@@ -130,7 +137,8 @@ More complete scripts are in [`examples/`](examples/).
 
 `Graph.from_spec` accepts the graph specifications of the `qso` command-line
 tool, e.g. `"metatron"`, `"metatron:1"`, `"hypercube:4"`, `"platonic:cube"`
-(full list in the [main README](../README.md#command-line-reference)).
+(full list in the
+[main README](https://github.com/LashSesh/qso#command-line-reference)).
 
 Type information ships with the package (`_core.pyi`, `py.typed`).
 

@@ -1,4 +1,4 @@
-//! Python bindings for QSO 2.0 ([`metatron_qso`]).
+//! Python bindings for QSO ([`metatron_qso`]).
 //!
 //! The extension module is `metatron_qso._core`; the pure-Python package
 //! `metatron_qso` re-exports it. Conventions:
