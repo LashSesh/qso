@@ -82,7 +82,7 @@ or by the benchmark report you can run yourself.
 | Full bunching of n photons, boson / distinguishable probability | n! for n = 1 … 6 | n! |
 | State vectors of random circuits, largest difference to Qiskit Aer, Qulacs, Cirq, PennyLane | ≤ 3 × 10⁻¹⁵ | — |
 
-The test-suite (177 Rust tests and 182 Python tests, run in CI on Linux,
+The test-suite (183 Rust tests and 196 Python tests, run in CI on Linux,
 macOS and Windows) also checks:
 
 - every gate against an independent dense-matrix reference, and the QFT
