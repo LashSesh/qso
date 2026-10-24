@@ -221,12 +221,71 @@ impl SpatialSearch {
         }
         best.ok_or_else(|| QsoError::invalid("gammas", "no hopping rates given"))
     }
+
+    /// Optimise the hopping rate and the measurement time together.
+    ///
+    /// The critical rate [`SpatialSearch::critical_gamma`] is optimal only
+    /// asymptotically (on K₁₃ it gives 0.981 instead of 1); this scans
+    /// `γ ∈ [γ_c/2, 3γ_c/2]` and refines the best rate by golden-section
+    /// search on the peak success probability within `[0, t_max]`.
+    pub fn optimize(
+        graph: &Graph,
+        marked: &[usize],
+        generator: Generator,
+        t_max: f64,
+        resolution: usize,
+    ) -> Result<SearchResult> {
+        let gc = Self::critical_gamma(graph)?;
+        let eval = |gamma: f64| -> Result<SearchResult> {
+            Ok(SpatialSearch::new(graph, marked, generator, gamma)?
+                .optimize_time(t_max, resolution))
+        };
+        let grid: Vec<f64> = (0..=20).map(|k| gc * (0.5 + 0.05 * k as f64)).collect();
+        let mut best = Self::scan_gamma(graph, marked, generator, &grid, t_max, resolution)?;
+        let (mut a, mut b) = (best.gamma - 0.05 * gc, best.gamma + 0.05 * gc);
+        let phi = (5f64.sqrt() - 1.0) / 2.0;
+        for _ in 0..30 {
+            let c = b - phi * (b - a);
+            let d = a + phi * (b - a);
+            let (rc, rd) = (eval(c)?, eval(d)?);
+            if rc.success_probability > rd.success_probability {
+                b = d;
+                if rc.success_probability > best.success_probability {
+                    best = rc;
+                }
+            } else {
+                a = c;
+                if rd.success_probability > best.success_probability {
+                    best = rd;
+                }
+            }
+        }
+        Ok(best)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::graph::generators;
+
+    #[test]
+    fn joint_optimisation_recovers_exact_complete_graph_rate() {
+        let g = generators::complete(13);
+        let t_max = PI * 13f64.sqrt();
+        let at_critical = SpatialSearch::new(
+            &g,
+            &[4],
+            Generator::Laplacian,
+            SpatialSearch::critical_gamma(&g).unwrap(),
+        )
+        .unwrap()
+        .optimize_time(t_max, 400);
+        assert!(at_critical.success_probability < 0.99);
+        let best = SpatialSearch::optimize(&g, &[4], Generator::Laplacian, t_max, 400).unwrap();
+        assert!((best.gamma - 1.0 / 13.0).abs() < 1e-4, "{best:?}");
+        assert!(best.success_probability > 1.0 - 1e-7);
+    }
     use std::f64::consts::PI;
 
     #[test]

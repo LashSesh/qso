@@ -300,9 +300,148 @@ pub fn platonic(solid: PlatonicSolid) -> Graph {
     unit_distance_graph(&solid.vertices(), solid.name())
 }
 
+impl std::str::FromStr for PlatonicSolid {
+    type Err = QsoError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        PlatonicSolid::ALL
+            .into_iter()
+            .find(|p| p.name().eq_ignore_ascii_case(s.trim()))
+            .ok_or_else(|| QsoError::Parse(format!("unknown Platonic solid '{s}'")))
+    }
+}
+
+/// Build a graph from a short textual specification:
+///
+/// | Spec | Graph |
+/// |---|---|
+/// | `metatron` | Metatron's Cube (K₁₃ with Fruit-of-Life embedding) |
+/// | `fruit-of-life` | Fruit-of-Life contact graph |
+/// | `metatron:<max_length>` | lines of Metatron's Cube up to a length |
+/// | `complete:N`, `cycle:N`, `path:N`, `star:N` | standard families |
+/// | `hypercube:D`, `petersen` | |
+/// | `grid:RxC`, `torus:RxC` | rectangular grid / torus |
+/// | `bipartite:A,B` | complete bipartite graph |
+/// | `platonic:NAME` | tetrahedron, cube, octahedron, dodecahedron, icosahedron |
+/// | `random-regular:N,D[,SEED]`, `erdos-renyi:N,P[,SEED]` | random graphs |
+pub fn from_spec(spec: &str) -> Result<Graph> {
+    let spec = spec.trim();
+    let (kind, args) = match spec.split_once(':') {
+        Some((k, a)) => (k.trim().to_ascii_lowercase(), a.trim()),
+        None => (spec.to_ascii_lowercase(), ""),
+    };
+    let bad = || QsoError::Parse(format!("invalid graph specification '{spec}'"));
+    let nums = |sep: char| -> Result<Vec<f64>> {
+        args.split(sep)
+            .map(|x| x.trim().parse::<f64>().map_err(|_| bad()))
+            .collect()
+    };
+    let int = |x: f64| -> Result<usize> {
+        if x >= 0.0 && x.fract() == 0.0 && x < 1e9 {
+            Ok(x as usize)
+        } else {
+            Err(bad())
+        }
+    };
+    let one = || -> Result<usize> {
+        match nums(',')?.as_slice() {
+            [n] => int(*n),
+            _ => Err(bad()),
+        }
+    };
+    let graph = match kind.as_str() {
+        "metatron" | "metatron-cube" if args.is_empty() => super::metatron::metatron_cube(),
+        "metatron" => super::metatron::distance_graph(args.parse::<f64>().map_err(|_| bad())?),
+        "fruit-of-life" | "fruit_of_life" | "fol" => super::metatron::fruit_of_life(),
+        "petersen" => petersen(),
+        "complete" | "k" => complete(one()?),
+        "cycle" | "c" => {
+            let n = one()?;
+            if n < 3 {
+                return Err(bad());
+            }
+            cycle(n)
+        }
+        "path" | "p" => path(one()?),
+        "star" => star(one()?),
+        "hypercube" | "q" => {
+            let d = one()?;
+            if d > 20 {
+                return Err(bad());
+            }
+            hypercube(d)
+        }
+        "grid" | "torus" => {
+            let dims = nums('x')?;
+            let [r, c] = dims.as_slice() else {
+                return Err(bad());
+            };
+            let (r, c) = (int(*r)?, int(*c)?);
+            let periodic = kind == "torus";
+            if periodic && (r < 3 || c < 3) {
+                return Err(bad());
+            }
+            grid_2d(r, c, periodic)
+        }
+        "bipartite" => match nums(',')?.as_slice() {
+            [a, b] => complete_bipartite(int(*a)?, int(*b)?),
+            _ => return Err(bad()),
+        },
+        "platonic" => platonic(args.parse()?),
+        "random-regular" => {
+            let v = nums(',')?;
+            let (n, d, seed) = match v.as_slice() {
+                [n, d] => (int(*n)?, int(*d)?, 0),
+                [n, d, s] => (int(*n)?, int(*d)?, int(*s)? as u64),
+                _ => return Err(bad()),
+            };
+            random_regular(n, d, &mut Rng::seed_from_u64(seed))?
+        }
+        "erdos-renyi" | "gnp" => {
+            let v = nums(',')?;
+            let (n, p, seed) = match v.as_slice() {
+                [n, p] => (int(*n)?, *p, 0),
+                [n, p, s] => (int(*n)?, *p, int(*s)? as u64),
+                _ => return Err(bad()),
+            };
+            erdos_renyi(n, p, &mut Rng::seed_from_u64(seed))?
+        }
+        _ => return Err(bad()),
+    };
+    Ok(graph)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn graph_specifications() {
+        assert_eq!(from_spec("metatron").unwrap().num_edges(), 78);
+        assert_eq!(from_spec("fruit-of-life").unwrap().num_edges(), 18);
+        assert_eq!(from_spec("metatron:1.0").unwrap().num_edges(), 18);
+        assert_eq!(from_spec("cycle:7").unwrap().num_edges(), 7);
+        assert_eq!(from_spec("grid:3x4").unwrap().num_nodes(), 12);
+        assert_eq!(from_spec("torus:3x3").unwrap().num_edges(), 18);
+        assert_eq!(from_spec("platonic:Icosahedron").unwrap().num_edges(), 30);
+        assert_eq!(from_spec("bipartite:2,3").unwrap().num_edges(), 6);
+        assert_eq!(
+            from_spec("random-regular:10,3,5").unwrap().regular_degree(),
+            Some(3)
+        );
+        assert!(from_spec("erdos-renyi:10,0.5").is_ok());
+        for bad in [
+            "cycle:2",
+            "grid:3",
+            "complete:x",
+            "nonsense",
+            "torus:2x5",
+            "platonic:sphere",
+            "complete:2.5",
+        ] {
+            assert!(from_spec(bad).is_err(), "{bad}");
+        }
+    }
 
     #[test]
     fn platonic_solids_have_correct_shape() {

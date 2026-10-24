@@ -556,9 +556,9 @@ mod tests {
 
     #[test]
     fn large_register_uses_parallel_kernels_consistently() {
-        // 15 qubits crosses the parallel threshold; compare against a
+        // 17 qubits crosses the parallel threshold; compare against a
         // reference built gate by gate with the naive implementation.
-        let n = 15;
+        let n = 17;
         let mut rng = Rng::seed_from_u64(8);
         let mut c = Circuit::new(n);
         for q in 0..n {

@@ -12,7 +12,11 @@ use num_complex::Complex64;
 use rayon::prelude::*;
 
 /// Problem size from which kernels switch to multi-threaded execution.
-pub(crate) const PAR_THRESHOLD: usize = 1 << 14;
+/// Below ~2¹⁶ amplitudes a gate takes only tens of microseconds and the
+/// scheduling overhead outweighs the gain (measured with the benchmark
+/// report example).
+#[cfg_attr(not(feature = "parallel"), allow(dead_code))]
+pub(crate) const PAR_THRESHOLD: usize = 1 << 16;
 
 /// Granularity of parallel work items and of deterministic reductions.
 const CHUNK: usize = 1 << 12;
@@ -54,6 +58,40 @@ where
     for i in 0..n {
         f(i);
     }
+}
+
+/// Call `f(a, b)` for every pair `(data[i], data[i + stride])` with bit
+/// `stride` of `i` clear (`stride` a power of two dividing `data.len()/2`).
+///
+/// This is the memory layout of an uncontrolled single-qubit gate; iterating
+/// over contiguous halves lets the compiler vectorise the inner loop.
+#[inline]
+pub(crate) fn for_each_pair<T, F>(data: &mut [T], stride: usize, f: F)
+where
+    T: Send,
+    F: Fn(&mut T, &mut T) + Sync + Send,
+{
+    let block = |chunk: &mut [T]| {
+        let (lo, hi) = chunk.split_at_mut(stride);
+        lo.iter_mut().zip(hi).for_each(|(a, b)| f(a, b));
+    };
+    #[cfg(feature = "parallel")]
+    if data.len() >= PAR_THRESHOLD {
+        if stride >= CHUNK {
+            // Few large blocks: parallelise inside each block.
+            data.par_chunks_mut(2 * stride).for_each(|chunk| {
+                let (lo, hi) = chunk.split_at_mut(stride);
+                lo.par_chunks_mut(CHUNK)
+                    .zip(hi.par_chunks_mut(CHUNK))
+                    .for_each(|(l, h)| l.iter_mut().zip(h).for_each(|(a, b)| f(a, b)));
+            });
+        } else {
+            data.par_chunks_mut(CHUNK.max(2 * stride))
+                .for_each(|group| group.chunks_exact_mut(2 * stride).for_each(block));
+        }
+        return;
+    }
+    data.chunks_exact_mut(2 * stride).for_each(block);
 }
 
 /// Mutate every element of `data` with knowledge of its index.

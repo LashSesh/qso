@@ -14,7 +14,7 @@ use num_complex::Complex64 as C64;
 
 use super::circuit::Instruction;
 use super::gates::{GateKind, dmatrix_1q, dmatrix_2q, matrix_1q, matrix_2q};
-use crate::parallel::{SyncPtr, for_each_index, for_each_mut};
+use crate::parallel::{SyncPtr, for_each_index, for_each_mut, for_each_pair};
 
 /// Insert a zero bit at position `pos` of `k`.
 #[inline(always)]
@@ -49,11 +49,20 @@ fn sorted_positions(qubits: &[usize], controls: usize) -> Vec<usize> {
 pub(crate) fn apply_1q(amps: &mut [C64], target: usize, controls: usize, m: &[C64; 4]) {
     debug_assert!(amps.len().is_power_of_two());
     debug_assert_eq!(controls & (1 << target), 0);
+    let m = *m;
+    if controls == 0 {
+        // Contiguous, vectorisable fast path for uncontrolled gates.
+        for_each_pair(amps, 1 << target, move |a, b| {
+            let (x, y) = (*a, *b);
+            *a = m[0] * x + m[1] * y;
+            *b = m[2] * x + m[3] * y;
+        });
+        return;
+    }
     let positions = sorted_positions(&[target], controls);
     let count = amps.len() >> positions.len();
     let bit = 1usize << target;
     let ptr = SyncPtr::new(amps);
-    let m = *m;
     for_each_index(count, move |k| {
         let i0 = insert_zeros(k, &positions) | controls;
         let i1 = i0 | bit;
@@ -101,6 +110,26 @@ pub(crate) fn apply_2q(
                 let row = &m[4 * r..4 * r + 4];
                 *p.add(idx[r]) = row[0] * v[0] + row[1] * v[1] + row[2] * v[2] + row[3] * v[3];
             }
+        }
+    });
+}
+
+/// Pauli X on `target` restricted to `controls` (a pure permutation).
+pub(crate) fn apply_x(amps: &mut [C64], target: usize, controls: usize) {
+    if controls == 0 {
+        for_each_pair(amps, 1 << target, std::mem::swap);
+        return;
+    }
+    let positions = sorted_positions(&[target], controls);
+    let count = amps.len() >> positions.len();
+    let bit = 1usize << target;
+    let ptr = SyncPtr::new(amps);
+    for_each_index(count, move |k| {
+        let i0 = insert_zeros(k, &positions) | controls;
+        // SAFETY: distinct `k` map to disjoint index pairs.
+        unsafe {
+            let p = ptr.get();
+            std::ptr::swap(p.add(i0), p.add(i0 | bit));
         }
     });
 }
@@ -212,6 +241,7 @@ pub(crate) fn apply_instruction(
     let cj = |z: C64| if conj { z.conj() } else { z };
     match inst.kind {
         GateKind::Swap => apply_swap(amps, t[0], t[1], controls),
+        GateKind::X => apply_x(amps, t[0], controls),
         GateKind::Z | GateKind::S | GateKind::Sdg | GateKind::T | GateKind::Tdg | GateKind::P => {
             let m = matrix_1q(inst.kind, angles);
             apply_phase_on_mask(amps, controls | (1 << t[0]), cj(m[3]));

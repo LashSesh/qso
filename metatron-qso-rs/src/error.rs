@@ -70,7 +70,8 @@ pub enum QsoError {
 }
 
 impl QsoError {
-    pub(crate) fn invalid(name: &'static str, reason: impl Into<String>) -> Self {
+    /// Shorthand for [`QsoError::InvalidArgument`].
+    pub fn invalid(name: &'static str, reason: impl Into<String>) -> Self {
         QsoError::InvalidArgument {
             name,
             reason: reason.into(),

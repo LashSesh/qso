@@ -1,18 +1,17 @@
-# Ignore Rust build artifacts
+# Rust build artifacts
 **/target/
 
-# Ignore temporary benchmark outputs
-**/*.json.tmp
-
-# Python cache
+# Python
 *.pyc
 __pycache__/
 .pytest_cache/
 *.egg-info/
+*.so
+*.pyd
+.venv/
+dist/
 
-# SCS state files
-scs_state.json
-scs_history.json
-
-# Temporary extraction dirs
-/tmp/
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
