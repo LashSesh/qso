@@ -17,6 +17,8 @@
 //! * [`transfer`] — perfect state transfer (decision and time) and the best
 //!   transfer fidelity between two nodes.
 //! * [`dephasing`] — open-system walks with site dephasing (Lindblad).
+//! * [`discrete`] — discrete-time walks: coined walks and their search,
+//!   the walk on the line, and Szegedy walks with quantum hitting times.
 //! * [`classical`] — classical random-walk baselines.
 //!
 //! ```
@@ -33,6 +35,7 @@
 
 pub mod classical;
 pub mod dephasing;
+pub mod discrete;
 pub mod quotient;
 pub mod search;
 pub mod transfer;
@@ -48,6 +51,7 @@ use crate::linalg::{
 
 pub use classical::{classical_hitting_times, classical_walk_probabilities};
 pub use dephasing::DephasingWalk;
+pub use discrete::{Coin, CoinedWalk, DiscreteSearchResult, LineWalk, SzegedyWalk};
 pub use quotient::{Quotient, QuotientSearch, QuotientWalk};
 pub use search::{SearchResult, SpatialSearch};
 pub use transfer::{StateTransfer, TransferResult};
