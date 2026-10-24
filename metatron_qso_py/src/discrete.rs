@@ -155,8 +155,10 @@ impl PyCoinedWalk {
     }
 
     /// Search from the uniform superposition: `{"steps",
-    /// "success_probability", "history"}` with the first peak of the
-    /// success probability within `max_steps` steps.
+    /// "success_probability", "history"}` with the step of the highest
+    /// success probability within `max_steps` steps. The probability
+    /// oscillates; about `(π/2)·√(N/2)` steps reach the first peak on the
+    /// hypercube.
     fn search<'py>(&self, py: Python<'py>, max_steps: usize) -> PyResult<Bound<'py, PyDict>> {
         let w = &self.inner;
         let r = py.detach(|| w.search(max_steps)).raise()?;

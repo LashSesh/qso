@@ -70,7 +70,8 @@ pub enum Coin {
 /// Outcome of a discrete-time search.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DiscreteSearchResult {
-    /// Number of steps at which the success probability first peaks.
+    /// Number of steps with the highest success probability in the window
+    /// (the earliest, if several are equal).
     pub steps: usize,
     /// Probability of measuring a marked node after `steps` steps.
     pub success_probability: f64,
@@ -334,8 +335,10 @@ impl CoinedWalk {
     }
 
     /// Search from the uniform superposition: the success probability (of
-    /// measuring a marked node) after up to `max_steps` steps, and its
-    /// first maximum.
+    /// measuring a marked node) after `0, …, max_steps` steps, and the step
+    /// where it is highest. The success probability oscillates; choose
+    /// `max_steps` to cover the first peak only (about `(π/2)·√(N/2)` steps
+    /// on the hypercube) unless later, slightly higher peaks are wanted.
     pub fn search(&self, max_steps: usize) -> Result<DiscreteSearchResult> {
         if !self.marked.contains(&true) {
             return Err(QsoError::invalid(
