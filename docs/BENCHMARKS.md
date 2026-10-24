@@ -14,8 +14,9 @@ the report on yours before comparing.
 **Machine for the numbers below:** cloud VM, 4 vCPU Intel Xeon @ 2.10 GHz
 (AVX-512), 15 GB RAM, Linux 6.18, rustc 1.97.0, QSO 1.3.0, release profile
 (`opt-level = 3`, thin LTO, `codegen-units = 1`), default features (rayon
-parallelism). A comparison with Qiskit Aer, Qulacs, Cirq and PennyLane on
-the same machine is in the [technical note](technical-note/) (Section 3.8).
+parallelism). A comparison with Qiskit Aer, Qulacs, Cirq, PennyLane
+Lightning and The Walrus on the same machine is
+[below](#comparison-with-other-simulators-130).
 
 The machine is a shared virtual machine: repeated runs varied by up to 2×
 for sub-millisecond workloads and by tens of percent for larger ones. The
@@ -122,6 +123,51 @@ any qubit, block by block to cache-sized blocks of 2¹⁴ amplitudes, the
 blocks in parallel, and fuses runs of single-qubit gates on higher qubits
 (see [ARCHITECTURE.md](ARCHITECTURE.md)). Registers of 14 qubits or fewer
 fit into one block and run as before.
+
+## Comparison with other simulators (1.3.0)
+
+Measured with [`benchmarks/cross_framework`](../benchmarks/cross_framework/)
+on the same machine (five interleaved rounds, a fresh process per
+measurement, every framework with its default threading and warmed up for
+at least 0.25 s; medians, the other framework's time relative to QSO in
+brackets). Raw data:
+[`results-1.3.0.json`](../benchmarks/cross_framework/results-1.3.0.json).
+Versions: Qulacs 0.6.14, Qiskit Aer 0.18.0, PennyLane Lightning 0.45.0,
+Cirq 1.7.0 (built-in simulator), The Walrus 0.22.0. Final states agree to
+≤ 2.5·10⁻¹⁵, gradients to ≤ 1.4·10⁻¹⁵, permanents to 7.3·10⁻¹⁴ (relative).
+
+| workload | QSO | Qulacs | Qiskit Aer | PennyLane Lightning | Cirq |
+|---|---:|---:|---:|---:|---:|
+| one layer, 16 qubits | 0.92 ms | 0.71 ms (0.8×) | 4.50 ms (4.9×) | 3.71 ms (4.0×) | 5.63 ms (6.1×) |
+| one layer, 20 qubits | 10.2 ms | 15.5 ms (1.5×) | 41.6 ms (4.1×) | 44.0 ms (4.3×) | 37.9 ms (3.7×) |
+| one layer, 22 qubits | 49.9 ms | 81.7 ms (1.6×) | 199 ms (4.0×) | 184 ms (3.7×) | — |
+| one layer, 24 qubits | 251 ms | 642 ms (2.6×) | 836 ms (3.3×) | 2.31 s (9.2×) | — |
+| ten layers, 20 qubits | 89.6 ms | 147 ms (1.6×) | 385 ms (4.3×) | 403 ms (4.5×) | — |
+| ten layers, 22 qubits | 381 ms | 697 ms (1.8×) | 1.79 s (4.7×) | 1.71 s (4.5×) | — |
+| value + gradient, 10 qubits, 100 parameters | 0.52 ms | 1.99 ms (3.8×, backprop) | — | 19.2 ms (37×, adjoint) | — |
+
+| permanent, n × n | QSO | The Walrus |
+|---:|---:|---:|
+| 10 | 13 µs | 25 µs (2.0×) |
+| 14 | 0.26 ms | 0.48 ms (1.8×) |
+| 18 | 1.9 ms | 11.4 ms (6.0×) |
+| 20 | 8.6 ms | 47.7 ms (5.5×) |
+| 22 | 30.3 ms | 264 ms (8.7×) |
+| 24 | 178 ms | 853 ms (4.8×) |
+
+From 20 qubits on QSO is the fastest of these simulators. At 16 qubits
+Qulacs is faster in the median; QSO's 16-qubit times vary more (fastest run
+0.44 ms against Qulacs' 0.60 ms).
+
+**Warm-up matters on virtual machines.** QSO's worker threads (rayon) sleep
+as soon as they are idle, and on this VM waking them is slow, so the first
+tens of milliseconds of a burst of work run at close to single-thread
+speed: with three warm-up runs (5 ms) instead of 0.25 s, the 16-qubit layer
+took 1.57 ms against Qulacs' 0.75 ms. Qulacs' OpenMP workers spin instead;
+with `OMP_WAIT_POLICY=passive` its 16-qubit layer takes 3–4 ms on the same
+machine. Larger registers and repeated evaluations (optimisation loops) are
+not affected. The technical note (Section 3.8) has the comparison for QSO
+1.1.
 
 ## Reading the numbers
 

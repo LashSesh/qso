@@ -90,6 +90,11 @@ validated result of earlier releases changed.
   whatever the edge order (was quadratic for reversed stars);
   `strongly_regular_parameters` counts 2-paths in O(n·k²) time and O(n)
   memory.
+- The cross-framework comparison warms every framework up for at least
+  0.25 s: rayon workers sleep when idle and need tens of milliseconds to
+  reach full speed on virtual machines. Results for 1.3.0 (QSO fastest
+  from 20 qubits on, Qulacs 1.3× faster at 16 qubits) are in
+  [BENCHMARKS.md](docs/BENCHMARKS.md) with the raw data.
 
 ### Fixed
 

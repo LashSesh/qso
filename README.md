@@ -340,18 +340,20 @@ Measured with `cargo run --release --example benchmark_report` on a
 | QAOA value + gradient, 20 nodes, p = 3 | 0.13 s |
 | Quantum walk on a 100 × 100 torus (10 000 nodes), Krylov | 78 ms |
 | Automorphism group of Metatron's Cube (13!) | 2.7 ms |
-| Permanent of a 24 × 24 complex matrix | 0.14 s |
+| Permanent of a 24 × 24 complex matrix | 0.18 s (4.8× faster than The Walrus) |
 
 Timings varied between runs on this shared VM (up to 2× for
 sub-millisecond workloads, up to 1.5× for the larger ones).
 
-On the same machine, with every framework at its default settings, QSO
-simulates 20–24-qubit circuits about as fast as Qulacs or up to 1.4× faster
-and 1.7–3.3× faster than Qiskit Aer and PennyLane Lightning; Qulacs is 2×
-faster on 16 qubits. Its adjoint gradient is the fastest of those compared,
-and its permanents are 1.1–6.5× faster than The Walrus. Method and full
-tables:
-[technical note](docs/technical-note/), Section 3.8.
+On the same machine, with every framework at its default settings and
+warmed up, QSO 1.3 simulates 20–24-qubit circuits 1.5–2.6× faster than
+Qulacs, 3.3–4.7× faster than Qiskit Aer and 3.7–9× faster than PennyLane
+Lightning; at 16 qubits Qulacs is 1.3× faster in the median. Its adjoint
+gradient is the fastest of those compared (3.8× faster than Qulacs'
+backprop), and its permanents are 1.8–8.7× faster than The Walrus. On
+virtual machines QSO's worker threads need tens of milliseconds of work to
+reach full speed, so isolated short simulations run slower. Method and
+tables: [docs/BENCHMARKS.md](docs/BENCHMARKS.md#comparison-with-other-simulators-130).
 
 ## Scope and limits
 
