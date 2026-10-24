@@ -117,7 +117,7 @@ impl SpatialSearch {
     /// gives the same value, as `L = dI − A`).
     pub fn critical_gamma(graph: &Graph) -> Result<f64> {
         let n = graph.num_nodes();
-        if n < 2 || n > DENSE_LIMIT || !graph.is_connected() {
+        if !(2..=DENSE_LIMIT).contains(&n) || !graph.is_connected() {
             return Err(QsoError::invalid(
                 "graph",
                 "need a connected graph with 2..=DENSE_LIMIT nodes",

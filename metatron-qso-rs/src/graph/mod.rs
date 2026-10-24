@@ -178,7 +178,7 @@ impl Graph {
 
     /// Common degree if the graph is regular.
     pub fn regular_degree(&self) -> Option<usize> {
-        let d = self.degree(0.min(self.n.saturating_sub(1)));
+        let d = self.degree(0);
         (self.n > 0 && (0..self.n).all(|u| self.degree(u) == d)).then_some(d)
     }
 

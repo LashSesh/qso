@@ -274,6 +274,12 @@ impl Circuit {
         &self.instructions
     }
 
+    /// Mutable access for in-crate rewrites that preserve validity (e.g.
+    /// shifting a bound angle).
+    pub(crate) fn instructions_mut(&mut self) -> &mut [Instruction] {
+        &mut self.instructions
+    }
+
     pub fn len(&self) -> usize {
         self.instructions.len()
     }
@@ -319,6 +325,15 @@ impl Circuit {
                     .matrix
                     .as_ref()
                     .ok_or_else(|| QsoError::invalid("matrix", "unitary gate without matrix"))?;
+                if inst.targets.len() > super::kernels::MAX_DENSE_TARGETS {
+                    return Err(QsoError::invalid(
+                        "targets",
+                        format!(
+                            "custom unitaries act on at most {} qubits",
+                            super::kernels::MAX_DENSE_TARGETS
+                        ),
+                    ));
+                }
                 let dim = 1usize << inst.targets.len();
                 if m.len() != dim * dim {
                     return Err(QsoError::DimensionMismatch {
@@ -565,6 +580,25 @@ impl Circuit {
         }
         for inst in &other.instructions {
             self.try_push(inst.clone())?;
+        }
+        self.n_params = self.n_params.max(other.n_params);
+        Ok(self)
+    }
+
+    /// Append `other` with its qubit `q` mapped to `mapping[q]` of this
+    /// circuit (parameter indices are shared).
+    pub fn append_mapped(&mut self, other: &Circuit, mapping: &[usize]) -> Result<&mut Self> {
+        if mapping.len() != other.n_qubits {
+            return Err(QsoError::DimensionMismatch {
+                expected: other.n_qubits,
+                actual: mapping.len(),
+            });
+        }
+        for inst in &other.instructions {
+            let mut mapped = inst.clone();
+            mapped.targets.iter_mut().for_each(|q| *q = mapping[*q]);
+            mapped.controls.iter_mut().for_each(|q| *q = mapping[*q]);
+            self.try_push(mapped)?;
         }
         self.n_params = self.n_params.max(other.n_params);
         Ok(self)

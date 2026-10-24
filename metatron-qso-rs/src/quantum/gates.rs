@@ -316,15 +316,6 @@ pub(crate) fn dmatrix_2q(kind: GateKind, p: &[f64]) -> [C64; 16] {
     }
 }
 
-/// Dense matrix of a gate kind on its targets (row-major, dimension 2^k).
-pub(crate) fn matrix_dense(kind: GateKind, p: &[f64]) -> Vec<C64> {
-    match kind.num_targets() {
-        Some(1) => matrix_1q(kind, p).to_vec(),
-        Some(2) => matrix_2q(kind, p).to_vec(),
-        _ => unreachable!("matrix_dense needs a fixed-arity kind"),
-    }
-}
-
 /// Conjugate transpose of a square row-major matrix.
 pub(crate) fn dagger(m: &[C64]) -> Vec<C64> {
     let d = (m.len() as f64).sqrt().round() as usize;

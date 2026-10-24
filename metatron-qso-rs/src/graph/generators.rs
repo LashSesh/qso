@@ -143,7 +143,7 @@ pub fn petersen() -> Graph {
 /// Random `d`-regular simple graph on `n` nodes (pairing model with
 /// rejection; `n·d` must be even).
 pub fn random_regular(n: usize, d: usize, rng: &mut Rng) -> Result<Graph> {
-    if (n * d) % 2 != 0 || d >= n {
+    if !(n * d).is_multiple_of(2) || d >= n {
         return Err(QsoError::invalid("n/d", "need n·d even and d < n"));
     }
     'attempt: for _ in 0..10_000 {

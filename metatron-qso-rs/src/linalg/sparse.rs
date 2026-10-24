@@ -36,7 +36,7 @@ impl CsrMatrix {
             }
             sorted.push((r, c, v));
         }
-        sorted.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+        sorted.sort_by_key(|a| (a.0, a.1));
         let mut indptr = vec![0usize; n + 1];
         let mut indices = Vec::with_capacity(sorted.len());
         let mut values: Vec<f64> = Vec::with_capacity(sorted.len());

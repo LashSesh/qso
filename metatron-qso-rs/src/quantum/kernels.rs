@@ -230,7 +230,7 @@ pub(crate) fn apply_instruction(
             apply_diagonal(amps, move |i| {
                 if i & controls != controls {
                     C64::new(1.0, 0.0)
-                } else if (i & mask).count_ones() % 2 == 0 {
+                } else if (i & mask).count_ones().is_multiple_of(2) {
                     same
                 } else {
                     diff

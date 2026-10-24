@@ -233,7 +233,7 @@ impl ContinuousWalk {
     /// Exact time average `(1/T)∫₀ᵀ P(j, t) dt` of the node probabilities.
     pub fn average_distribution(&self, start: usize, t_max: f64) -> Result<Vec<f64>> {
         self.check_node(start)?;
-        if !(t_max > 0.0) {
+        if t_max.is_nan() || t_max <= 0.0 {
             return self.probabilities(start, 0.0);
         }
         let (values, vectors) = self.require_dense()?;

@@ -118,7 +118,9 @@ fn refine(g: &Graph, colours: &mut [u32]) {
         c.len()
     };
     loop {
-        let mut keyed: Vec<(u32, Vec<(u32, u64)>, usize)> = (0..2 * n)
+        // (current colour, sorted neighbour colours with weights, vertex)
+        type Signature = (u32, Vec<(u32, u64)>, usize);
+        let mut keyed: Vec<Signature> = (0..2 * n)
             .map(|x| {
                 let (v, off) = if x < n { (x, 0) } else { (x - n, n) };
                 let mut sig: Vec<(u32, u64)> = g

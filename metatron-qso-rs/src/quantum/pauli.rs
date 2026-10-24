@@ -160,7 +160,7 @@ impl PauliString {
 
     /// Whether the two strings commute.
     pub fn commutes_with(&self, other: &PauliString) -> bool {
-        ((self.x & other.z).count_ones() + (self.z & other.x).count_ones()) % 2 == 0
+        ((self.x & other.z).count_ones() + (self.z & other.x).count_ones()).is_multiple_of(2)
     }
 
     /// Product `self · other = phase · result`.
@@ -178,7 +178,7 @@ impl PauliString {
     /// Phase `i^{#Y}·(−1)^{popcount(b∧z)}` and image `b ⊕ x` of basis state `b`.
     #[inline]
     pub(crate) fn act(&self, b: usize) -> (C64, usize) {
-        let sign = if ((b as u64) & self.z).count_ones() % 2 == 0 {
+        let sign = if ((b as u64) & self.z).count_ones().is_multiple_of(2) {
             1.0
         } else {
             -1.0
@@ -323,7 +323,7 @@ impl PauliSum {
                 let z = s.z;
                 sum_f64(n, |b| {
                     let p = amps[b].norm_sqr();
-                    if ((b as u64) & z).count_ones() % 2 == 0 {
+                    if ((b as u64) & z).count_ones().is_multiple_of(2) {
                         p
                     } else {
                         -p
@@ -376,7 +376,7 @@ impl PauliSum {
             terms
                 .iter()
                 .map(|&(c, s)| {
-                    if ((b as u64) & s.z).count_ones() % 2 == 0 {
+                    if ((b as u64) & s.z).count_ones().is_multiple_of(2) {
                         c
                     } else {
                         -c
@@ -583,9 +583,9 @@ impl FromStr for PauliSum {
                 while pos < chars.len() {
                     let d = chars[pos];
                     let prev = chars[pos - 1];
-                    if d.is_ascii_digit() || d == '.' || d == 'e' || d == 'E' {
-                        pos += 1;
-                    } else if (d == '+' || d == '-') && (prev == 'e' || prev == 'E') {
+                    let mantissa = d.is_ascii_digit() || d == '.' || d == 'e' || d == 'E';
+                    let exponent_sign = (d == '+' || d == '-') && (prev == 'e' || prev == 'E');
+                    if mantissa || exponent_sign {
                         pos += 1;
                     } else {
                         break;

@@ -337,9 +337,9 @@ impl<'a> Expr<'a> {
                     } else {
                         0
                     };
-                    if d.is_ascii_digit() || d == b'.' || d == b'e' || d == b'E' {
-                        self.pos += 1;
-                    } else if (d == b'+' || d == b'-') && (prev == b'e' || prev == b'E') {
+                    let mantissa = d.is_ascii_digit() || d == b'.' || d == b'e' || d == b'E';
+                    let exponent_sign = (d == b'+' || d == b'-') && (prev == b'e' || prev == b'E');
+                    if mantissa || exponent_sign {
                         self.pos += 1;
                     } else {
                         break;
