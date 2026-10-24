@@ -1,5 +1,5 @@
 [workspace]
-members = ["metatron-qso-rs"]
+members = ["metatron-qso-rs", "metatron_qso_py"]
 resolver = "3"
 
 [workspace.package]
@@ -7,7 +7,7 @@ version = "2.0.0"
 edition = "2024"
 rust-version = "1.88"
 authors = ["Sebastian Klemm"]
-license = "MIT"
+license = "Apache-2.0"
 repository = "https://github.com/LashSesh/qso"
 
 [workspace.dependencies]
@@ -21,6 +21,8 @@ thiserror = "2.0"
 clap = { version = "4.6", features = ["derive"] }
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 proptest = "1.12"
+pyo3 = "0.30"
+numpy = "0.30"
 
 [profile.release]
 opt-level = 3
