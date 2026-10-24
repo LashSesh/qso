@@ -4,7 +4,8 @@
 Framework* — version 2 of the technical note first published on Zenodo on
 26 November 2025. Version 2 withdraws all results of version 1 (see its
 Section 1 and [AUDIT_v0.1.md](../AUDIT_v0.1.md)) and replaces them with
-validated ones.
+validated ones. DOI of version 2:
+[10.5281/zenodo.23623226](https://doi.org/10.5281/zenodo.23623226).
 
 | File | Content |
 |---|---|
@@ -29,6 +30,6 @@ results are deterministic; timings depend on the machine.
 Requires Python 3, pandoc ≥ 3 and Node with Playwright's Chromium.
 
 ```bash
-python docs/technical-note/build.py                          # without DOI
-python docs/technical-note/build.py --doi 10.5281/zenodo.N   # with the DOI of this version
+python docs/technical-note/build.py                                 # without DOI
+python docs/technical-note/build.py --doi 10.5281/zenodo.23623226   # as published
 ```
