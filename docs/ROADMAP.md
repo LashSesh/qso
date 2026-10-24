@@ -1,13 +1,19 @@
 # QSO Roadmap (1.x)
 
-Status: proposal, October 2026, after the 1.0.1 release.
+Status: proposal, October 2026, after the 1.1.0 release.
 
 QSO 1.0 delivers what it documents: every number in the README is reproduced
 by a test against an independent reference, the packages are on crates.io
 and PyPI, and releases are automated. This roadmap plans the next stage: from
 a correct, small simulator to the reference toolkit for its niche.
 
-## 1. Where 1.0 stands
+Release 1.1 delivered what the 2025 technical note had promised but QSO 0.1
+never implemented — exact boson sampling, multi-target Grover search,
+machine learning on graphs and a real comparison with other frameworks —
+together with version 2 of the note ([docs/technical-note/](technical-note/)),
+which withdraws the results of version 1.
+
+## 1. Where QSO stands
 
 **Strengths**
 
@@ -22,9 +28,10 @@ a correct, small simulator to the reference toolkit for its niche.
 
 **Gaps** (found by reviewing the code and measuring; details in each milestone)
 
-| Area | 1.0 | Gap |
+| Area | Now | Gap |
 |---|---|---|
-| Statevector speed | one pass over the state per gate | no gate fusion, no explicit SIMD — see [measurements](#measured-performance-against-established-simulators) |
+| Statevector speed | specialised kernels (1.1): as fast as Qulacs from 20 qubits, 2–4× faster than Qiskit Aer and PennyLane Lightning | about 3× slower than Qulacs on 16 qubits (thread scheduling); no gate fusion, no explicit SIMD — see [measurements](#measured-performance-against-established-simulators) |
+| Boson sampling | exact probabilities and exact sampling (1.1) | no partial distinguishability, photon loss or Gaussian boson sampling |
 | Noise | density matrices up to 14 qubits; one noise model for all gates and qubits | no trajectories for larger registers, no per-qubit/per-gate models, no error mitigation |
 | Quantum walks | continuous-time only; exact analysis up to 2048 nodes | no discrete-time (coined, Szegedy) walks, no symmetry reduction, no state-transfer analysis, no circuits for walks |
 | Physics and chemistry | TFIM, XXZ, MaxCut, H₂ only | no fermion-to-qubit mappings, no product-formula (Trotter) circuits, no excited states |
@@ -34,7 +41,26 @@ a correct, small simulator to the reference toolkit for its niche.
 
 ### Measured performance against established simulators
 
-<!-- filled in from the comparison run -->
+Measured for the technical note (Section 3.8) with
+[`benchmarks/cross_framework`](../benchmarks/cross_framework/) on a 4-core
+cloud VM, every framework with default threading, five interleaved rounds:
+
+* **Correctness:** final states of random circuits agree with Qiskit Aer,
+  Qulacs, Cirq and PennyLane Lightning to ≤ 3·10⁻¹⁵; gradients agree with
+  PennyLane's and Qulacs' to ≤ 2·10⁻¹⁵; permanents agree with The Walrus to
+  3·10⁻¹⁴.
+* **State vectors:** a first comparison (QSO 1.0.1) put QSO 1.2–1.7× behind
+  Qulacs from 20 to 24 qubits and traced this to the H and CX kernels
+  (2× slower per amplitude) and to single-threaded allocation. After the
+  1.1 kernels QSO is level with or faster than Qulacs on 20–24 qubits and
+  2–4× faster than Qiskit Aer and PennyLane Lightning. On 16 qubits Qulacs
+  is about 3× faster: a gate takes tens of microseconds there and the cost
+  of handing work to sleeping worker threads dominates.
+* **Gradients:** the adjoint gradient of a 100-parameter, 10-qubit ansatz
+  takes about 0.5 ms, against 2–5 ms with Qulacs' `backprop` and about
+  20 ms with PennyLane Lightning's adjoint method.
+* **Gate fusion** did not help Qiskit Aer on four threads but gave it
+  1.6–1.7× single-threaded, so fusion matters most for low thread counts.
 
 ## 2. Direction
 
@@ -81,7 +107,13 @@ Metatron's Cube that is not graph theory or physics.
 
 Sizes: S ≈ days, M ≈ 1–2 weeks, L ≈ 3–6 weeks of focused work.
 
-### 1.1 — Foundations: trust, supply chain, documentation (M)
+### 1.1 — Scope of the 2025 technical note (delivered)
+
+Boson sampling with exact sampling, the graph classifier, multi-target
+Grover benchmarks, the cross-framework comparison, faster H/RY/RZ/CX
+kernels, the `technical_note` benchmark program and version 2 of the note.
+
+### 1.2 — Foundations: trust, supply chain, documentation (M)
 
 Cheap, protects the 1.x promise, and gives users their first impression.
 
@@ -91,7 +123,7 @@ Cheap, protects the 1.x promise, and gives users their first impression.
 | Unsafe-code checks | Miri job for `kernels.rs` and `parallel.rs` on small registers |
 | Fuzzing | `cargo-fuzz` targets for the OpenQASM, Pauli-string and graph-spec parsers and for `Circuit`/`StateVector` deserialisation; short run per PR, long run weekly |
 | API stability | `cargo-semver-checks`; `stubtest` comparing `_core.pyi` with the compiled module |
-| Cross-validation | scheduled job comparing QSO with Qiskit Aer and Qulacs on random circuits (pure and noisy), using the harness from the comparison run |
+| Cross-validation | run `benchmarks/cross_framework` on a schedule and extend it to noisy circuits (density matrices against Qiskit Aer) |
 | Benchmark tracking | weekly `benchmark_report` run, results stored, regressions > 25 % flagged |
 | Platforms | musllinux and Windows arm64 wheels; native aarch64 tests; Python 3.14 in the matrix; Node-24 action versions |
 | Documentation | user guide (mdBook) and Python API reference on GitHub Pages; tutorials as notebooks executed in CI so they cannot go stale: circuits and gradients, VQE and QAOA, noise, quantum walks on Metatron's Cube |
@@ -99,7 +131,7 @@ Cheap, protects the 1.x promise, and gives users their first impression.
 **Done when** every job is green on `main`, the docs site is live, and a
 release has been published without stored tokens.
 
-### 1.2 — Quantum walks: exact at scale (L)
+### 1.3 — Quantum walks: exact at scale (L)
 
 | Deliverable | Detail |
 |---|---|
@@ -131,11 +163,12 @@ Validation targets:
 * Canonical forms agree under random relabelling and separate known
   cospectral, non-isomorphic pairs (Shrikhande graph vs 4×4 rook's graph).
 
-### 1.3 — Simulation performance (L)
+### 1.4 — Simulation performance (L)
 
 | Deliverable | Detail |
 |---|---|
-| Gate fusion | fuse runs of gates into dense blocks on up to k qubits (k chosen by measurement, typically 2–5) before execution; on by default, can be switched off; used by simulation, sampling, expectation values and the adjoint pass |
+| Small registers | adaptive parallelism so that registers of 12–18 qubits do not pay for waking worker threads on every gate (per-gate thresholds, running whole circuits on one thread when that is faster) |
+| Gate fusion | fuse runs of gates into dense blocks on up to k qubits (k chosen by measurement, typically 2–5) before execution; on by default, can be switched off; used by simulation, sampling, expectation values and the adjoint pass; most valuable at low thread counts |
 | SIMD kernels | explicit AVX2/AVX-512/NEON paths for dense 1-, 2- and k-qubit kernels with runtime detection and the current code as fallback |
 | Cache blocking | execute fused blocks on low qubits chunk-wise so the state passes through main memory fewer times |
 | Batched evaluation | many parameter vectors or observables per call (landscapes, multi-start optimisation); vectorised in Python |
@@ -146,7 +179,7 @@ cross-validation job stays green; speed-ups are measured with
 `benchmark_report` and the comparison harness. Targets are set from the
 measurements in section 1.
 
-### 1.4 — Noise at scale and error mitigation (L)
+### 1.5 — Noise at scale and error mitigation (L)
 
 | Deliverable | Detail |
 |---|---|
@@ -160,7 +193,7 @@ error (χ² test) up to 10 qubits; mitigated estimates converge to the
 noiseless value within their error bars; PEC is unbiased for known Pauli
 channels; shadow estimates satisfy their variance bounds.
 
-### 1.5 — Algorithms and physics (L)
+### 1.6 — Algorithms and physics (L)
 
 | Deliverable | Detail |
 |---|---|
@@ -176,7 +209,7 @@ equal to full CI, for H₂, LiH and BeH₂ in STO-3G; QFI agrees with finite
 differences; VQD energies match exact diagonalisation; amplitude-estimation
 error scales as 1/M.
 
-### 1.6 — Interoperability and reach (M–L)
+### 1.7 — Interoperability and reach (M–L)
 
 | Deliverable | Detail |
 |---|---|
@@ -189,7 +222,7 @@ primitives agree with Qiskit Aer within shot noise; the PennyLane device
 passes PennyLane's device test-suite; QASM round trips on the official
 example files.
 
-### Research track (decide after 1.6)
+### Research track (decide after 1.7)
 
 Stabilizer simulation (Clifford tableaux for thousands of qubits, as the base
 for error-correction experiments), matrix-product-state simulation for
@@ -199,13 +232,14 @@ core is close to memory bandwidth.
 
 ## 5. Order and reasoning
 
-1. **1.1 first:** small, makes every later release safer, and documentation
+1. **1.2 first:** small, makes every later release safer, and documentation
    is what new users see first.
-2. **1.2 next:** QSO's distinctive contribution; it builds directly on the
+2. **1.3 next:** QSO's distinctive contribution; it builds directly on the
    refinement, Lanczos and walk code that already exists.
-3. **1.3 before 1.6:** a Qiskit or PennyLane backend is only attractive if
-   it is fast.
-4. **1.4 and 1.5** enter crowded fields and can swap places depending on
+3. **1.4 before 1.7:** a Qiskit or PennyLane backend is only attractive if
+   it is fast; the 1.1 kernels closed the gap on large registers, small
+   registers remain.
+4. **1.5 and 1.6** enter crowded fields and can swap places depending on
    whether noise or chemistry users show up first.
 
 ## 6. Measures of success
@@ -220,7 +254,7 @@ core is close to memory bandwidth.
 
 ## 7. Decisions for the maintainer
 
-* Order of 1.2 (walks) and 1.3 (performance).
-* Whether the Qiskit and PennyLane bridges (1.6) are wanted, given that they
+* Order of 1.3 (walks) and 1.4 (performance).
+* Whether the Qiskit and PennyLane bridges (1.7) are wanted, given that they
   add test dependencies and follow those projects' release cycles.
 * Whether the browser playground is worth its maintenance cost.

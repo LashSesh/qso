@@ -333,10 +333,8 @@ distinguishable photons in m = n² modes (10 Haar-random interferometers).
 
 {{@boson_distance}}
 
-**Table 15.** Cost of one permanent of a random complex n × n matrix and of
-one exact sample.
-
-{{@boson_timing}}
+**Table 15.** Cost of one exact sample of n photons in m = n² modes
+(permanent timings are compared with The Walrus in Table 20).
 
 {{@sampling_timing}}
 
@@ -381,14 +379,21 @@ model with a 100-parameter ansatz.
 
 {{@gradients}}
 
-In this comparison QSO is about as fast as Qulacs on large registers and
-faster than Qiskit Aer and PennyLane Lightning; on 16 qubits Qulacs is
-faster because its worker threads spin between gates instead of
-sleeping. The adjoint gradient is faster than Qulacs' reverse-mode
-gradient and much faster than PennyLane's adjoint method, whose cost is
-dominated by Python overhead at this size. Two QSO kernels (H and CX) were
-optimised after a first comparison had identified them as the cause of a
-1.2–1.7× gap to Qulacs; the numbers above are for the optimised code.
+From 20 qubits on, QSO is as fast as Qulacs or faster and two to four
+times faster than Qiskit Aer and PennyLane Lightning on this machine. On
+16 qubits, where one gate takes only tens of microseconds, Qulacs is about
+three times faster; at that size the cost of distributing work over the
+threads dominates, and QSO's handling of it is a topic for future work.
+The adjoint gradient is the fastest of the three methods compared;
+PennyLane's adjoint method is dominated by Python overhead at this size.
+Two QSO kernels (H and CX) were optimised during this work after a first
+comparison had shown a 1.2–1.7× gap to Qulacs on large registers; all
+numbers above are for the optimised code.
+
+**Table 20.** Permanents: QSO against The Walrus (median time per
+permanent of a random complex n × n matrix).
+
+{{@permanent_comparison}}
 
 ## 3.9 Test-suite
 
@@ -402,7 +407,7 @@ they are published.
 
 # 4 Simulator performance
 
-**Table 20.** One layer of the benchmark circuit in QSO (Rust, no Python).
+**Table 21.** One layer of the benchmark circuit in QSO (Rust, no Python).
 
 {{@performance}}
 

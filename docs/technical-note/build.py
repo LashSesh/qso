@@ -206,14 +206,13 @@ def _timing(d, kind, n, lib):
     return None
 
 
-def table_boson_timing(d):
-    b = d["tn"]["boson_sampling"]
-    perm = {r["n"]: r["seconds"] for r in b["permanent_seconds"]}
+def table_permanent_comparison(d):
+    sizes = sorted({r["n"] for r in d["xf"]["timing"] if r["kind"] == "permanent"})
     rows = []
-    for n, t in perm.items():
-        walrus = _timing(d, "permanent", n, "thewalrus")
-        rows.append([n, ms(t), ms(walrus["median"]) if walrus else "—"])
-    return table(["n", "permanent, QSO", "permanent, The Walrus"], rows)
+    for n in sizes:
+        q, w = _timing(d, "permanent", n, "qso"), _timing(d, "permanent", n, "thewalrus")
+        rows.append([n, ms(q["median"]), ms(w["median"]), f"{w['median'] / q['median']:.1f}"])
+    return table(["n", "QSO", "The Walrus", "ratio"], rows)
 
 
 def table_sampling_timing(d):
