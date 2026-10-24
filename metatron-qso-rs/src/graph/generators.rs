@@ -57,8 +57,11 @@ pub fn star(n: usize) -> Graph {
     for u in 1..n {
         g.add_edge(0, u).expect("valid edge");
     }
+    if n == 0 {
+        return g;
+    }
     let mut pos = vec![[0.0; 3]];
-    pos.extend(circle_positions(n.saturating_sub(1)));
+    pos.extend(circle_positions(n - 1));
     with_layout(g, pos)
 }
 

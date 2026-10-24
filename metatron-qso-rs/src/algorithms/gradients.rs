@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{QsoError, Result};
 use crate::linalg::inner;
 use crate::quantum::kernels;
-use crate::quantum::{Circuit, GateKind, Param, PauliSum, StateVector};
+use crate::quantum::{Circuit, GateKind, MAX_QUBITS, Param, PauliSum, StateVector};
 
 /// How gradients are computed.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Default)]
@@ -39,6 +39,13 @@ fn prepare(
     initial: Option<&StateVector>,
 ) -> Result<StateVector> {
     circuit.check_parameters(theta)?;
+    if circuit.n_qubits() > MAX_QUBITS {
+        return Err(QsoError::TooManyQubits {
+            what: "state-vector simulation",
+            max: MAX_QUBITS,
+            requested: circuit.n_qubits(),
+        });
+    }
     let state = match initial {
         Some(s) => {
             if s.n_qubits() != circuit.n_qubits() {

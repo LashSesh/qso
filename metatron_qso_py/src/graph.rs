@@ -108,6 +108,16 @@ impl PyGraph {
         Ok(())
     }
 
+    /// Graph from a specification string such as `"metatron"`,
+    /// `"fruit-of-life"`, `"cycle:8"`, `"grid:3x4"`, `"platonic:cube"` or
+    /// `"random-regular:12,3,7"` (same syntax as the `qso` CLI).
+    #[staticmethod]
+    fn from_spec(spec: &str) -> PyResult<Self> {
+        let g = generators::from_spec(spec).raise()?;
+        check_nodes(g.num_nodes())?;
+        Ok(wrap(g))
+    }
+
     /// Metatron's Cube: the complete graph K13 on the 13 Fruit-of-Life
     /// centres.
     #[staticmethod]

@@ -120,7 +120,7 @@ impl SpatialSearch {
         if !(2..=DENSE_LIMIT).contains(&n) || !graph.is_connected() {
             return Err(QsoError::invalid(
                 "graph",
-                "need a connected graph with 2..=DENSE_LIMIT nodes",
+                format!("need a connected graph with 2..={DENSE_LIMIT} nodes"),
             ));
         }
         let spectrum = graph.laplacian_spectrum();

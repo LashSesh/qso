@@ -129,3 +129,23 @@ def test_large_graph_uses_krylov_propagation():
 def test_invalid_walk_inputs_raise_value_error(call):
     with pytest.raises(ValueError):
         call()
+
+
+def test_joint_search_optimisation_finds_exact_rate_on_metatron_cube():
+    g = q.Graph.from_spec("metatron")
+    r = q.SpatialSearch.optimize(g, [3])
+    assert r["gamma"] == pytest.approx(1 / 13, abs=1e-4)
+    assert r["success_probability"] == pytest.approx(1.0, abs=1e-7)
+    assert r["time"] == pytest.approx(np.pi * np.sqrt(13) / 2, abs=1e-3)
+    # The asymptotic critical rate alone falls short on K13.
+    plain = q.SpatialSearch(g, [3]).optimize_time(np.pi * np.sqrt(13))
+    assert plain["success_probability"] < 0.99
+
+
+def test_graph_specifications():
+    assert q.Graph.from_spec("fruit-of-life").num_edges == 18
+    assert q.Graph.from_spec("platonic:dodecahedron").automorphism_group_order() == 120
+    assert q.Graph.from_spec("torus:3x4").num_edges == 24
+    for bad in ["cycle:2", "nonsense", "complete:0"]:
+        with pytest.raises(ValueError):
+            q.Graph.from_spec(bad)

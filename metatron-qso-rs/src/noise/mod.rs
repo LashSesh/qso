@@ -303,6 +303,24 @@ impl NoiseModel {
             readout: None,
         })
     }
+
+    /// Add classical readout flips `(P(read 1 | 0), P(read 0 | 1))`.
+    pub fn with_readout(mut self, p01: f64, p10: f64) -> Result<Self> {
+        check_probability("p01", p01)?;
+        check_probability("p10", p10)?;
+        self.readout = Some((p01, p10));
+        Ok(self)
+    }
+
+    /// Check the readout probabilities (the channels are validated when
+    /// they are constructed).
+    pub fn validate(&self) -> Result<()> {
+        if let Some((p01, p10)) = self.readout {
+            check_probability("p01", p01)?;
+            check_probability("p10", p10)?;
+        }
+        Ok(())
+    }
 }
 
 /// Density matrix of `n` qubits.
@@ -394,6 +412,9 @@ impl DensityMatrix {
             });
         }
         circuit.check_parameters(theta)?;
+        if let Some(model) = noise {
+            model.validate()?;
+        }
         let n = self.n_qubits;
         for inst in circuit.instructions() {
             let angles = inst.angles(theta);
@@ -528,6 +549,7 @@ impl DensityMatrix {
     }
 
     /// Sample `shots` measurements of all qubits, including readout error.
+    /// Readout probabilities are clamped to `[0, 1]`.
     pub fn sample(&self, shots: usize, readout: Option<(f64, f64)>, rng: &mut Rng) -> Counts {
         let probs = self.probabilities();
         let mut cumulative = Vec::with_capacity(probs.len());
@@ -541,7 +563,7 @@ impl DensityMatrix {
             let mut b = sample_cumulative(&cumulative, rng);
             if let Some((p01, p10)) = readout {
                 for q in 0..self.n_qubits {
-                    let flip = if (b >> q) & 1 == 0 { p01 } else { p10 };
+                    let flip = if (b >> q) & 1 == 0 { p01 } else { p10 }.clamp(0.0, 1.0);
                     if rng.uniform() < flip {
                         b ^= 1 << q;
                     }

@@ -19,7 +19,7 @@ use super::gradients::{GradientMethod, expectation, expectation_and_gradient};
 use crate::error::{QsoError, Result};
 use crate::optimize::{Method, Objective, Options, minimize};
 use crate::parallel::map_tasks;
-use crate::quantum::{Circuit, PauliSum, StateVector};
+use crate::quantum::{Circuit, MAX_QUBITS, PauliSum, StateVector};
 use crate::rng::Rng;
 
 /// VQE problem and solver configuration.
@@ -88,6 +88,13 @@ impl Objective for Energy<'_> {
 impl Vqe {
     /// VQE for `hamiltonian` with the parametrised `ansatz`.
     pub fn new(hamiltonian: PauliSum, ansatz: Circuit) -> Result<Self> {
+        if ansatz.n_qubits() > MAX_QUBITS {
+            return Err(QsoError::TooManyQubits {
+                what: "VQE",
+                max: MAX_QUBITS,
+                requested: ansatz.n_qubits(),
+            });
+        }
         if hamiltonian.min_qubits() > ansatz.n_qubits() {
             return Err(QsoError::QubitOutOfRange {
                 qubit: hamiltonian.min_qubits() - 1,

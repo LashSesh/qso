@@ -178,8 +178,11 @@ impl Graph {
 
     /// Common degree if the graph is regular.
     pub fn regular_degree(&self) -> Option<usize> {
+        if self.n == 0 {
+            return None;
+        }
         let d = self.degree(0);
-        (self.n > 0 && (0..self.n).all(|u| self.degree(u) == d)).then_some(d)
+        (0..self.n).all(|u| self.degree(u) == d).then_some(d)
     }
 
     /// Hop distances from `source` (`None` for unreachable nodes).

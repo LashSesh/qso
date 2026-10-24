@@ -224,6 +224,37 @@ impl PySpatialSearch {
         py.detach(|| SpatialSearch::critical_gamma(g)).raise()
     }
 
+    /// Optimise the hopping rate (around the critical rate) and the
+    /// measurement time together. `t_max=None` uses `π√N`. On complete
+    /// graphs this recovers the exact optimum γ = 1/N with success 1.
+    #[staticmethod]
+    #[pyo3(signature = (graph, marked, generator = "laplacian", t_max = None, resolution = 400))]
+    fn optimize<'py>(
+        py: Python<'py>,
+        graph: &PyGraph,
+        marked: Indices,
+        generator: &str,
+        t_max: Option<f64>,
+        resolution: usize,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let gen_ = self::generator(generator)?;
+        let marked = marked.into_vec();
+        let g = &graph.inner;
+        let t_max = t_max.unwrap_or(std::f64::consts::PI * (g.num_nodes() as f64).sqrt());
+        if !(t_max.is_finite() && t_max > 0.0) {
+            return Err(invalid("`t_max` must be positive and finite"));
+        }
+        let r = py
+            .detach(|| SpatialSearch::optimize(g, &marked, gen_, t_max, resolution.max(2)))
+            .raise()?;
+        Ok(pydict!(py, {
+            "gamma" => r.gamma,
+            "time" => r.time,
+            "success_probability" => r.success_probability,
+            "expected_time" => r.expected_time,
+        }))
+    }
+
     /// Probability of measuring a marked node at time `t`.
     fn success_probability(&self, t: f64) -> PyResult<f64> {
         check_time("t", t)?;

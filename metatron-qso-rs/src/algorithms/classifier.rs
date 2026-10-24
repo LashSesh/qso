@@ -39,6 +39,13 @@ const EPS: f64 = 1e-9;
 
 impl VariationalClassifier {
     pub fn new(n_qubits: usize, n_features: usize, layers: usize) -> Result<Self> {
+        if n_qubits > crate::quantum::MAX_QUBITS {
+            return Err(QsoError::TooManyQubits {
+                what: "classifier",
+                max: crate::quantum::MAX_QUBITS,
+                requested: n_qubits,
+            });
+        }
         if n_qubits == 0 || n_features == 0 || layers == 0 {
             return Err(QsoError::invalid(
                 "shape",
@@ -90,6 +97,9 @@ impl VariationalClassifier {
                 actual: x.len(),
             });
         }
+        if x.iter().any(|v| !v.is_finite()) {
+            return Err(QsoError::invalid("x", "features must be finite"));
+        }
         Ok(())
     }
 
@@ -117,6 +127,12 @@ impl VariationalClassifier {
 
     /// Fraction of correctly classified samples.
     pub fn accuracy(&self, xs: &[Vec<f64>], ys: &[bool]) -> Result<f64> {
+        if xs.len() != ys.len() {
+            return Err(QsoError::DimensionMismatch {
+                expected: xs.len(),
+                actual: ys.len(),
+            });
+        }
         let mut correct = 0usize;
         for (x, &y) in xs.iter().zip(ys) {
             if self.predict(x)? == y {

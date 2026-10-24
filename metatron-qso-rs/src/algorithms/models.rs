@@ -19,6 +19,9 @@ fn bonds(n: usize, periodic: bool) -> Vec<(usize, usize)> {
 }
 
 /// Transverse-field Ising chain `H = −J Σ Z_i Z_{i+1} − h Σ X_i`.
+///
+/// # Panics
+/// If `n > 64` (Pauli strings address at most 64 qubits).
 pub fn transverse_field_ising(n: usize, j: f64, h: f64, periodic: bool) -> PauliSum {
     let mut terms = Vec::new();
     for (a, b) in bonds(n, periodic) {
@@ -31,6 +34,9 @@ pub fn transverse_field_ising(n: usize, j: f64, h: f64, periodic: bool) -> Pauli
 }
 
 /// XXZ Heisenberg chain `H = J Σ (X_i X_{i+1} + Y_i Y_{i+1} + Δ Z_i Z_{i+1})`.
+///
+/// # Panics
+/// If `n > 64` (Pauli strings address at most 64 qubits).
 pub fn heisenberg_xxz(n: usize, j: f64, delta: f64, periodic: bool) -> PauliSum {
     let mut terms = Vec::new();
     for (a, b) in bonds(n, periodic) {

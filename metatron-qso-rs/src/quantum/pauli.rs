@@ -91,6 +91,9 @@ impl PauliString {
     }
 
     /// Single-qubit Pauli `p` on qubit `q`.
+    ///
+    /// # Panics
+    /// If `q ≥ 64` (use [`PauliString::new`] for untrusted input).
     pub fn single(q: usize, p: Pauli) -> Self {
         let mut s = Self::identity();
         s.set(q, p);
@@ -98,6 +101,7 @@ impl PauliString {
     }
 
     fn set(&mut self, q: usize, p: Pauli) {
+        assert!(q < 64, "Pauli strings support qubits 0..64, got {q}");
         let bit = 1u64 << q;
         self.x &= !bit;
         self.z &= !bit;
@@ -368,6 +372,13 @@ impl PauliSum {
     /// Diagonal of a diagonal operator (`None` if any term flips bits).
     pub fn diagonal(&self, n_qubits: usize) -> Result<Option<Vec<f64>>> {
         self.check_register(n_qubits)?;
+        if n_qubits > super::state::MAX_QUBITS {
+            return Err(QsoError::TooManyQubits {
+                what: "diagonal of a Pauli sum",
+                max: super::state::MAX_QUBITS,
+                requested: n_qubits,
+            });
+        }
         if !self.is_diagonal() {
             return Ok(None);
         }
