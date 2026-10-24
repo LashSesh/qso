@@ -1,0 +1,63 @@
+name: Benchmarks
+
+# Produces the data of the technical note: every validated quantity
+# (examples/technical_note.rs) and the cross-framework comparison
+# (benchmarks/cross_framework). Started manually; the JSON results are
+# uploaded as artefacts and printed at the end of each log.
+
+on:
+  workflow_dispatch:
+    inputs:
+      rounds:
+        description: Interleaved timing rounds of the cross-framework comparison
+        default: "5"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  technical-note:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Compute every number of the technical note
+        env:
+          QSO_COMMIT: ${{ github.sha }}
+          QSO_MACHINE: GitHub Actions ${{ runner.os }} ${{ runner.arch }} (ubuntu-latest)
+        run: cargo run --release -p metatron-qso-rs --example technical_note -- --out technical_note.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: technical-note
+          path: technical_note.json
+      - run: cat technical_note.json
+
+  cross-framework:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install the reference frameworks and QSO from this commit
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install maturin -r benchmarks/cross_framework/requirements.txt
+          maturin build --release -m metatron_qso_py/Cargo.toml -o dist
+          python -m pip install dist/*.whl
+      - name: Compare
+        env:
+          QSO_COMMIT: ${{ github.sha }}
+          QSO_MACHINE: GitHub Actions ${{ runner.os }} ${{ runner.arch }} (ubuntu-latest)
+        run: python benchmarks/cross_framework/run.py --rounds "${{ inputs.rounds }}" --out cross_framework.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cross-framework
+          path: cross_framework.json
+      - run: cat cross_framework.json

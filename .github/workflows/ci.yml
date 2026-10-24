@@ -66,6 +66,7 @@ jobs:
           for ex in quickstart metatron_walks circuits qaoa_maxcut vqe_h2; do
             cargo run --release -p metatron-qso-rs --example "$ex"
           done
+          cargo run --release -p metatron-qso-rs --example technical_note -- --quick --out /dev/null
       - run: |
           ./target/release/qso graph metatron
           ./target/release/qso search --graph metatron --marked 3

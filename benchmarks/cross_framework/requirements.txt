@@ -1,0 +1,11 @@
+# Reference frameworks for the cross-framework comparison (versions used in
+# the technical note). metatron-qso itself is installed from this repository
+# (see README.md) so that the comparison measures the checked-out code.
+qiskit==2.6.1
+qiskit-aer==0.18.0
+qulacs==0.6.14
+cirq-core==1.7.0
+pennylane==0.45.1
+pennylane-lightning==0.45.0
+thewalrus==0.22.0
+numpy==2.5.4

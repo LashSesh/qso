@@ -4,6 +4,51 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] — 2026-10-24
+
+Delivers the scope of the 2025 technical note with validated
+implementations, and the second version of that note, which withdraws the
+results of the first.
+
+### Added
+
+- `photonics` module: permanents (Glynn's formula in Gray-code order,
+  deterministic in parallel), Haar-random interferometers, beam splitters
+  and `BosonSampler` with exact output probabilities for indistinguishable
+  and distinguishable photons, full output distributions and exact
+  sampling (Clifford & Clifford 2018). Python: `permanent`, `haar_unitary`,
+  `beam_splitter`, `BosonSampler`.
+- `GraphClassifier`: graph classification with trainable QAOA-type quantum
+  layers and exact gradients (Python: `GraphClassifier`).
+- `Graph::girth` and the Heawood graph (`heawood`); Python
+  `Graph.girth`, `Graph.triangle_count`, `Graph.heawood`.
+- `examples/technical_note.rs`, which computes every number of the
+  technical note with its reference, and `benchmarks/cross_framework/`,
+  which compares QSO with Qiskit Aer, Qulacs, Cirq, PennyLane Lightning and
+  The Walrus; the manual *Benchmarks* workflow runs both.
+- Technical note, version 2 ([docs/technical-note/](docs/technical-note/)).
+- Validation against further published results: QAOA at p = 2 reaches
+  0.7559 on the Heawood graph (Wurtz & Love 2021), the one-layer QAOA
+  expectation matches the closed form of Wang et al. (2018), the
+  Hong–Ou–Mandel dip, the n! enhancement of full bunching, and a χ² test
+  of the exact boson sampler.
+- `CITATION.cff`.
+
+### Changed
+
+- Faster statevector kernels, found by the cross-framework comparison:
+  real 2×2 matrices (H, RY) use real arithmetic, diagonal matrices (RZ)
+  and single-qubit phase gates scale contiguous halves, singly controlled X
+  swaps contiguous runs, and new registers are written in parallel. At 22
+  qubits H and RY are about twice as fast, RZ and CX about 1.4 times.
+
+### Fixed
+
+- `ContinuousWalk::mixing_time` returned the first time at which the
+  time-averaged distribution came within ε of the limit. As documented
+  (Aharonov et al. 2001) it now returns the time from which on the bound
+  holds; the two differ when the average oscillates.
+
 ## [1.0.1] — 2026-10-24
 
 Packaging fix; the code is identical to 1.0.0, whose release notes describe

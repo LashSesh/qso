@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use QSO in your work, please cite it as below."
+title: "Metatron QSO: validated quantum simulation in pure Rust"
+type: software
+authors:
+  - family-names: Klemm
+    given-names: Sebastian
+repository-code: "https://github.com/LashSesh/qso"
+url: "https://github.com/LashSesh/qso"
+license: Apache-2.0
+version: 1.1.0
+date-released: 2026-10-24
+keywords:
+  - quantum computing
+  - quantum simulation
+  - quantum walks
+  - QAOA
+  - VQE
+  - boson sampling
+  - Rust
+abstract: >-
+  Statevector and density-matrix simulation of quantum circuits with exact
+  adjoint gradients, variational algorithms (VQE, QAOA, classifiers),
+  continuous-time quantum walks with exact symmetry analysis, and exact
+  boson sampling, written in pure Rust with Python bindings. Every
+  algorithm is validated against closed-form or published results.
