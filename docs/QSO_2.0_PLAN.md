@@ -93,3 +93,19 @@ circuits, states, Pauli sums, VQE, QAOA, walks and search with numpy I/O.
 5. CI (fmt, clippy `-D warnings`, tests, docs, Python tests), README and
    documentation rewrite, removal of legacy components.
 6. Independent review and fixes.
+
+## Status (October 2026)
+
+All phases are implemented on the `claude/epic-babbage-kclgsp` branch:
+
+| Phase | Result |
+|---|---|
+| 1. Foundation | `error`, `rng`, `parallel`, `linalg`, `quantum` (state, gates, circuits, Pauli sums, OpenQASM) |
+| 2. Graphs & walks | `graph` (incl. Platonic solids, Metatron family, automorphisms), `walks` |
+| 3. Algorithms & noise | `optimize`, `algorithms` (gradients, VQE, QAOA, Grover, QFT/QPE, classifier, models), `noise`, `backend` |
+| 4. Interfaces | `qso` CLI, Python package, examples, criterion benches, benchmark report |
+| 5. CI & docs | GitHub Actions (lint, tests on three OSes, serial build, MSRV, examples, Python, release wheels); README, ARCHITECTURE, BENCHMARKS, CONTRIBUTING, CHANGELOG |
+| 6. Review | independent correctness review, findings fixed with regression tests |
+
+Every validation target in the table above is an automated test; the
+README's numbers are reproduced by `metatron-qso-rs/tests/validation.rs`.
