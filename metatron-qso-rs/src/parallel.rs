@@ -19,7 +19,7 @@ use rayon::prelude::*;
 pub(crate) const PAR_THRESHOLD: usize = 1 << 16;
 
 /// Granularity of parallel work items and of deterministic reductions.
-const CHUNK: usize = 1 << 12;
+pub(crate) const CHUNK: usize = 1 << 12;
 
 /// Raw pointer that may be shared between threads.
 ///
@@ -56,6 +56,28 @@ where
         return;
     }
     for i in 0..n {
+        f(i);
+    }
+}
+
+/// Call `f(i)` for every `i in 0..n_items`, where the items together touch
+/// `work` elements: in parallel once `work` reaches the threshold, with at
+/// least `min_len` items per task.
+#[inline]
+pub(crate) fn for_each_item<F>(n_items: usize, work: usize, min_len: usize, f: F)
+where
+    F: Fn(usize) + Sync + Send,
+{
+    #[cfg(feature = "parallel")]
+    if work >= PAR_THRESHOLD {
+        (0..n_items)
+            .into_par_iter()
+            .with_min_len(min_len.max(1))
+            .for_each(f);
+        return;
+    }
+    let _ = (work, min_len);
+    for i in 0..n_items {
         f(i);
     }
 }

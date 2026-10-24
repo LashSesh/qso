@@ -90,7 +90,10 @@ impl StateVector {
     /// If `n_qubits > MAX_QUBITS`.
     pub fn zero(n_qubits: usize) -> Self {
         check_size(n_qubits).expect("register too large");
-        let mut amps = vec![C64::new(0.0, 0.0); 1 << n_qubits];
+        // Written in parallel so that large registers are first touched (and
+        // their pages faulted in) by all threads rather than by the first
+        // gate's kernel.
+        let mut amps = crate::parallel::map_collect(1 << n_qubits, |_| C64::new(0.0, 0.0));
         amps[0] = C64::new(1.0, 0.0);
         Self { n_qubits, amps }
     }

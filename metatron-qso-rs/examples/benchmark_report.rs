@@ -60,6 +60,28 @@ fn main() -> Result<()> {
         println!("| {n} | {} | {} | {per:.3} |", layer.len(), fmt_time(t));
     }
 
+    println!("\n## Cost per gate type (22 qubits, 5 passes over all qubits)\n");
+    println!("| gate | time per pass | ns per gate·amplitude |");
+    println!("|---|---:|---:|");
+    let n = 22;
+    for kind in ["H", "RY", "RZ", "CX"] {
+        let mut c = Circuit::new(n);
+        for _ in 0..5 {
+            for q in 0..n {
+                match kind {
+                    "H" => c.h(q),
+                    "RY" => c.ry(q, 0.3),
+                    "RZ" => c.rz(q, 0.3),
+                    _ => c.cx(q, (q + 1) % n),
+                };
+            }
+        }
+        let mut psi = StateVector::zero(n);
+        let t = median_seconds(5, || psi.apply_circuit(&c, &[]).unwrap());
+        let per = t / (c.len() as f64 * (1u64 << n) as f64) * 1e9;
+        println!("| {kind} | {} | {per:.3} |", fmt_time(t / 5.0));
+    }
+
     println!("\n## Gradients (TFIM, 10 qubits, EfficientSU2 with 4 layers = 100 parameters)\n");
     let h = models::transverse_field_ising(10, 1.0, 0.7, false);
     let circuit = ansatz::efficient_su2(10, 4, Entanglement::Linear);
