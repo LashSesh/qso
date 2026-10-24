@@ -181,7 +181,11 @@ fn hypercube_q30_transfers_perfectly_in_31_dimensions() {
     let p = walk.cell_probabilities(0, PI / 2.0).unwrap();
     assert!(close(p[30], 1.0, 1e-15));
     let transfer = StateTransfer::from_quotient(&q, Generator::Laplacian, 1.0, 0, 30).unwrap();
-    assert!(close(transfer.perfect_transfer_time().unwrap(), PI / 2.0, 1e-9));
+    assert!(close(
+        transfer.perfect_transfer_time().unwrap(),
+        PI / 2.0,
+        1e-9
+    ));
 }
 
 #[test]
