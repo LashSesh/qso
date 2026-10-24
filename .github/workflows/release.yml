@@ -133,6 +133,23 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install pytest twine
           python -m twine check --strict dist/*.tar.gz
+          # PyPI rejects an sdist whose metadata names a license file that
+          # the archive does not contain; twine does not check this.
+          python - dist/*.tar.gz <<'EOF'
+          import sys, tarfile
+
+          for path in sys.argv[1:]:
+              with tarfile.open(path) as tar:
+                  root = tar.getnames()[0].split("/")[0]
+                  names = set(tar.getnames())
+                  meta = tar.extractfile(f"{root}/PKG-INFO").read().decode()
+              declared = [line.split(":", 1)[1].strip() for line in meta.splitlines()
+                          if line.startswith("License-File:")]
+              missing = [f for f in declared if f"{root}/{f}" not in names]
+              print(f"{path}: License-File {declared}")
+              if missing:
+                  sys.exit(f"{path}: declared license files missing from the archive: {missing}")
+          EOF
           python -m pip install dist/*.tar.gz
           python -m pytest metatron_qso_py/tests -q
       - uses: actions/upload-artifact@v4

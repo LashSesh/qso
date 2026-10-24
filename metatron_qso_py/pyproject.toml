@@ -4,11 +4,12 @@ build-backend = "maturin"
 
 [project]
 name = "metatron-qso"
-version = "1.0.0"
+version = "1.0.1"
 description = "Validated quantum simulation in pure Rust: circuits, VQE/QAOA with exact gradients, noise, and quantum walks on graphs including Metatron's Cube."
 readme = "README.md"
 requires-python = ">=3.9"
 license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [{ name = "Sebastian Klemm" }]
 keywords = ["quantum", "simulator", "qaoa", "vqe", "quantum-walk"]
 classifiers = [
