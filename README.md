@@ -322,10 +322,11 @@ Timings varied between runs on this shared VM (up to 2× for
 sub-millisecond workloads, up to 1.5× for the larger ones).
 
 On the same machine, with every framework at its default settings, QSO
-simulates 20–24-qubit circuits as fast as Qulacs or faster and 2–4× faster
-than Qiskit Aer and PennyLane Lightning; Qulacs is 2–3× faster on 16 qubits.
-Its adjoint gradient is the fastest of those compared, and its permanents
-are 1.5–6× faster than The Walrus. Method and full tables:
+simulates 20–24-qubit circuits about as fast as Qulacs or up to 1.4× faster
+and 1.7–3.3× faster than Qiskit Aer and PennyLane Lightning; Qulacs is 2×
+faster on 16 qubits. Its adjoint gradient is the fastest of those compared,
+and its permanents are 1.1–6.5× faster than The Walrus. Method and full
+tables:
 [technical note](docs/technical-note/), Section 3.8.
 
 ## Scope and limits

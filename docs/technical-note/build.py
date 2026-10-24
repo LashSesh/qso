@@ -40,8 +40,46 @@ def load() -> dict:
         "max_state_diff": max(data["xf"]["correctness"]["max_amplitude_difference_vs_qso"].values()),
         "girth5_distinct_min": min(d["train_negative"] for d in squares),
         "girth5_distinct_max": max(d["train_negative"] for d in squares),
+        **speed_ratios(data["xf"]["timing"]),
+        **kernel_scaling(data["tn"]["performance"]["statevector_layers"]),
     }
     return data
+
+
+def kernel_scaling(layers: list) -> dict:
+    """Register size with the lowest cost per gate and amplitude; the text
+    says the cost rises again towards the largest register."""
+    best = min(layers, key=lambda r: r["ns_per_gate_amplitude"])["qubits"]
+    largest = max(r["qubits"] for r in layers)
+    if best == largest:
+        raise SystemExit("the text says the cost per amplitude rises at the largest register")
+    return {"kernel_best_qubits": best, "kernel_largest_qubits": largest,
+            "kernel_largest_mb": 16 * 2**largest // 2**20}
+
+
+def speed_ratios(timing: list) -> dict:
+    """Ranges of median-time ratios (other framework / QSO) quoted in the
+    text, so that the prose follows the data."""
+    median = {(r["kind"], r["n"], r["library"]): r["median"] for r in timing if "median" in r}
+
+    def ratios(kinds, libs, sizes):
+        return [median[k, n, lib] / median[k, n, "qso"]
+                for (k, n, lib) in median if k in kinds and lib in libs and sizes(n)]
+
+    large = lambda n: n >= 20
+    qulacs = ratios({"1", "10"}, {"qulacs"}, large)
+    others = ratios({"1", "10"}, {"aer", "pennylane"}, large)
+    small = ratios({"1"}, {"qulacs"}, lambda n: n < 20)
+    walrus = ratios({"permanent"}, {"thewalrus"}, lambda n: True)
+    gradient = {lib: median["gradient", 10, lib] for lib in ("qso", "qulacs", "pennylane")}
+    if min(gradient, key=gradient.get) != "qso":
+        raise SystemExit("the text says QSO's adjoint gradient is the fastest; the data disagree")
+    return {
+        "qulacs_large_min": min(qulacs), "qulacs_large_max": max(qulacs),
+        "others_large_min": min(others), "others_large_max": max(others),
+        "qso_vs_qulacs_small": 1 / max(small),
+        "walrus_min": min(walrus), "walrus_max": max(walrus),
+    }
 
 
 def lookup(data: dict, path: str):
@@ -79,7 +117,7 @@ def pm(d: dict, digits: int = 3) -> str:
 def table(header: list[str], rows: list[list], align: str | None = None) -> str:
     align = align or "l" + "r" * (len(header) - 1)
     marks = {"l": ":---", "r": "---:", "c": ":---:"}
-    cell = lambda c: str(c).replace("|", "\\|")  # noqa: E731
+    cell = lambda c: str(c).replace("|", "\\|")
     out = ["| " + " | ".join(cell(h) for h in header) + " |", "|" + "|".join(marks[a] for a in align) + "|"]
     out += ["| " + " | ".join(cell(c) for c in row) + " |" for row in rows]
     return "\n".join(out)

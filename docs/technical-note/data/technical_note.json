@@ -64,31 +64,31 @@
     "permanent_seconds": [
       {
         "n": 10,
-        "seconds": 0.000012883
+        "seconds": 0.000011029
       },
       {
         "n": 14,
-        "seconds": 0.00025172
+        "seconds": 0.000260914
       },
       {
         "n": 18,
-        "seconds": 0.001662941
+        "seconds": 0.002234029
       },
       {
         "n": 20,
-        "seconds": 0.007194582
+        "seconds": 0.008326628
       },
       {
         "n": 22,
-        "seconds": 0.0313088
+        "seconds": 0.035222331
       },
       {
         "n": 24,
-        "seconds": 0.137996067
+        "seconds": 0.138576441
       },
       {
         "n": 26,
-        "seconds": 0.599820043
+        "seconds": 0.581098385
       }
     ],
     "sampler_validation": {
@@ -107,38 +107,38 @@
       {
         "modes": 16,
         "photons": 4,
-        "seconds_per_sample": 1.272775e-6
+        "seconds_per_sample": 1.089145e-6
       },
       {
         "modes": 36,
         "photons": 6,
-        "seconds_per_sample": 3.449515e-6
+        "seconds_per_sample": 3.16e-6
       },
       {
         "modes": 64,
         "photons": 8,
-        "seconds_per_sample": 0.00001195601
+        "seconds_per_sample": 0.000013936090000000001
       },
       {
         "modes": 100,
         "photons": 10,
-        "seconds_per_sample": 0.000042545029999999995
+        "seconds_per_sample": 0.00006372882
       },
       {
         "modes": 144,
         "photons": 12,
-        "seconds_per_sample": 0.00066573215
+        "seconds_per_sample": 0.0004936991
       },
       {
         "modes": 196,
         "photons": 14,
-        "seconds_per_sample": 0.0029705499999999998
+        "seconds_per_sample": 0.00311906515
       }
     ]
   },
   "environment": {
     "arch": "x86_64",
-    "commit": "a2675e2e1b186684d361b5313691c5c0d53c3c09",
+    "commit": "d005c4dbd31a4dbec1448f01f0f7bcee53e0b62f",
     "date": "2026-10-24",
     "machine": "cloud VM, 4 vCPU Intel Xeon @ 2.10 GHz (AVX-512), 15 GB RAM",
     "os": "linux",
@@ -176,8 +176,8 @@
         {
           "layers": 1,
           "seconds": {
-            "mean": 0.1584500096,
-            "std": 0.020156642888841267
+            "mean": 0.1192660682,
+            "std": 0.0037693519958565433
           },
           "test": {
             "mean": 0.5,
@@ -191,8 +191,8 @@
         {
           "layers": 2,
           "seconds": {
-            "mean": 14.367040054399999,
-            "std": 1.0396111004531616
+            "mean": 13.9303548788,
+            "std": 1.5581982349012387
           },
           "test": {
             "mean": 0.9650000000000001,
@@ -238,8 +238,8 @@
         {
           "layers": 1,
           "seconds": {
-            "mean": 1.1570712371999998,
-            "std": 0.0682525165283818
+            "mean": 1.1423249264,
+            "std": 0.0641246779971026
           },
           "test": {
             "mean": 1.0,
@@ -253,8 +253,8 @@
         {
           "layers": 2,
           "seconds": {
-            "mean": 4.333357649,
-            "std": 0.7600941448736583
+            "mean": 4.1591267288,
+            "std": 0.6419952197229961
           },
           "test": {
             "mean": 0.9800000000000001,
@@ -330,7 +330,7 @@
         "theory": 0.9991823155432941
       }
     ],
-    "seconds_n12": 0.005258825,
+    "seconds_n12": 0.005432194,
     "single": [
       {
         "abs_error": 4.440892098500626e-16,
@@ -488,53 +488,53 @@
     "gradients_tfim10_100_parameters": [
       {
         "method": "adjoint",
-        "seconds": 0.000501692
+        "seconds": 0.000512188
       },
       {
         "method": "parameter shift",
-        "seconds": 0.025458985
+        "seconds": 0.025637421
       },
       {
         "method": "finite differences",
-        "seconds": 0.022933755
+        "seconds": 0.023538502
       }
     ],
     "statevector_layers": [
       {
         "gates": 29,
-        "ns_per_gate_amplitude": 0.49393857758620685,
+        "ns_per_gate_amplitude": 0.5289264547413793,
         "qubits": 10,
-        "seconds": 0.000014668
+        "seconds": 0.000015707
       },
       {
         "gates": 41,
-        "ns_per_gate_amplitude": 0.4669308546112805,
+        "ns_per_gate_amplitude": 0.5006222608612805,
         "qubits": 14,
-        "seconds": 0.000313658
+        "seconds": 0.00033629
       },
       {
         "gates": 53,
-        "ns_per_gate_amplitude": 0.3703727002413768,
+        "ns_per_gate_amplitude": 0.4474333277288473,
         "qubits": 18,
-        "seconds": 0.005145822
+        "seconds": 0.006216474
       },
       {
         "gates": 59,
-        "ns_per_gate_amplitude": 0.2413486222089347,
+        "ns_per_gate_amplitude": 0.2831339755300748,
         "qubits": 20,
-        "seconds": 0.01493127
+        "seconds": 0.017516362
       },
       {
         "gates": 65,
-        "ns_per_gate_amplitude": 0.2628503799438477,
+        "ns_per_gate_amplitude": 0.20954468433673565,
         "qubits": 22,
-        "seconds": 0.071660836
+        "seconds": 0.057128117
       },
       {
         "gates": 71,
-        "ns_per_gate_amplitude": 0.39924210813683525,
+        "ns_per_gate_amplitude": 0.34650952883169683,
         "qubits": 24,
-        "seconds": 0.475570147
+        "seconds": 0.41275603
       }
     ]
   },
@@ -648,7 +648,7 @@
       }
     ]
   },
-  "total_seconds": 145.219576517,
+  "total_seconds": 141.178095946,
   "vqc": {
     "datasets": [
       {
@@ -672,8 +672,8 @@
           "std": 0.0
         },
         "vqc_train_seconds": {
-          "mean": 0.023212431199999998,
-          "std": 0.0054766575598551625
+          "mean": 0.0210303846,
+          "std": 0.004594748106734829
         }
       },
       {
@@ -697,8 +697,8 @@
           "std": 0.016298006013006655
         },
         "vqc_train_seconds": {
-          "mean": 0.014222595600000002,
-          "std": 0.00330186987288094
+          "mean": 0.0169881764,
+          "std": 0.005087262916674182
         }
       },
       {
@@ -722,8 +722,8 @@
           "std": 0.008838834764831853
         },
         "vqc_train_seconds": {
-          "mean": 0.0207902178,
-          "std": 0.00730137847998066
+          "mean": 0.018138591,
+          "std": 0.004524843138565412
         }
       }
     ],
@@ -747,7 +747,7 @@
         "model": "TFIM (J = 1, h = 1)",
         "parameters": 16,
         "relative_error": 0.010545922307733904,
-        "seconds": 0.003128058
+        "seconds": 0.00353404
       },
       {
         "abs_error": 0.013860456042330327,
@@ -758,7 +758,7 @@
         "model": "TFIM (J = 1, h = 1)",
         "parameters": 24,
         "relative_error": 0.0014088762397693759,
-        "seconds": 0.019252358
+        "seconds": 0.01935624
       },
       {
         "abs_error": 0.011349867694679716,
@@ -769,7 +769,7 @@
         "model": "TFIM (J = 1, h = 1)",
         "parameters": 32,
         "relative_error": 0.001153682019604877,
-        "seconds": 0.065825238
+        "seconds": 0.069233235
       },
       {
         "abs_error": 0.0028981240803140906,
@@ -780,7 +780,7 @@
         "model": "TFIM (J = 1, h = 1)",
         "parameters": 40,
         "relative_error": 0.0002945861336876701,
-        "seconds": 0.086305216
+        "seconds": 0.083568611
       },
       {
         "abs_error": 0.17529954445944895,
@@ -791,7 +791,7 @@
         "model": "TFIM (J = 1, h = 1)",
         "parameters": 32,
         "relative_error": 0.017818703964504586,
-        "seconds": 0.010069473
+        "seconds": 0.009234401
       },
       {
         "abs_error": 0.158618431421214,
@@ -802,7 +802,7 @@
         "model": "TFIM (J = 1, h = 1)",
         "parameters": 48,
         "relative_error": 0.016123115901550415,
-        "seconds": 0.067167711
+        "seconds": 0.074309276
       },
       {
         "abs_error": 0.010998244035585358,
@@ -813,7 +813,7 @@
         "model": "TFIM (J = 1, h = 1)",
         "parameters": 64,
         "relative_error": 0.001117940467009071,
-        "seconds": 0.136348326
+        "seconds": 0.133427005
       },
       {
         "abs_error": 0.09451201822778188,
@@ -824,7 +824,7 @@
         "model": "TFIM (J = 1, h = 1)",
         "parameters": 80,
         "relative_error": 0.00960687992134672,
-        "seconds": 0.142114873
+        "seconds": 0.149447161
       },
       {
         "abs_error": 0.8776353487512445,
@@ -835,7 +835,7 @@
         "model": "XXZ (J = 1, Δ = 0.5)",
         "parameters": 16,
         "relative_error": 0.07716835042616908,
-        "seconds": 0.004598335
+        "seconds": 0.004545271
       },
       {
         "abs_error": 0.6300029747848725,
@@ -846,7 +846,7 @@
         "model": "XXZ (J = 1, Δ = 0.5)",
         "parameters": 24,
         "relative_error": 0.05539463559313371,
-        "seconds": 0.013770407
+        "seconds": 0.016351955
       },
       {
         "abs_error": 0.404894267277367,
@@ -857,7 +857,7 @@
         "model": "XXZ (J = 1, Δ = 0.5)",
         "parameters": 32,
         "relative_error": 0.03560137219548441,
-        "seconds": 0.037592555
+        "seconds": 0.055113964
       },
       {
         "abs_error": 0.13080011318946738,
@@ -868,7 +868,7 @@
         "model": "XXZ (J = 1, Δ = 0.5)",
         "parameters": 40,
         "relative_error": 0.011500937131519666,
-        "seconds": 0.074798047
+        "seconds": 0.073439265
       },
       {
         "abs_error": 0.877635348755156,
@@ -879,7 +879,7 @@
         "model": "XXZ (J = 1, Δ = 0.5)",
         "parameters": 32,
         "relative_error": 0.07716835042651302,
-        "seconds": 0.009572458
+        "seconds": 0.014627387
       },
       {
         "abs_error": 0.6005849533684469,
@@ -890,7 +890,7 @@
         "model": "XXZ (J = 1, Δ = 0.5)",
         "parameters": 48,
         "relative_error": 0.05280798022568824,
-        "seconds": 0.028086872
+        "seconds": 0.02798404
       },
       {
         "abs_error": 0.18725597409579464,
@@ -901,7 +901,7 @@
         "model": "XXZ (J = 1, Δ = 0.5)",
         "parameters": 64,
         "relative_error": 0.016464964234836982,
-        "seconds": 0.100317029
+        "seconds": 0.123012778
       },
       {
         "abs_error": 0.023151249609489,
@@ -912,7 +912,7 @@
         "model": "XXZ (J = 1, Δ = 0.5)",
         "parameters": 80,
         "relative_error": 0.0020356333017018577,
-        "seconds": 0.167742525
+        "seconds": 0.133487854
       }
     ]
   },

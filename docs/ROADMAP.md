@@ -30,7 +30,7 @@ which withdraws the results of version 1.
 
 | Area | Now | Gap |
 |---|---|---|
-| Statevector speed | specialised kernels (1.1): as fast as Qulacs from 20 qubits, 2–4× faster than Qiskit Aer and PennyLane Lightning | 2–3× slower than Qulacs on 16 qubits (thread scheduling); no gate fusion, no explicit SIMD — see [measurements](#measured-performance-against-established-simulators) |
+| Statevector speed | specialised kernels (1.1): about as fast as Qulacs or faster from 20 qubits, 1.7–3.3× faster than Qiskit Aer and PennyLane Lightning | 2× slower than Qulacs on 16 qubits (thread scheduling); no gate fusion, no explicit SIMD — see [measurements](#measured-performance-against-established-simulators) |
 | Boson sampling | exact probabilities and exact sampling (1.1) | no partial distinguishability, photon loss or Gaussian boson sampling |
 | Noise | density matrices up to 14 qubits; one noise model for all gates and qubits | no trajectories for larger registers, no per-qubit/per-gate models, no error mitigation |
 | Quantum walks | continuous-time only; exact analysis up to 2048 nodes | no discrete-time (coined, Szegedy) walks, no symmetry reduction, no state-transfer analysis, no circuits for walks |
@@ -52,10 +52,10 @@ cloud VM, every framework with default threading, five interleaved rounds:
 * **State vectors:** a first comparison (QSO 1.0.1) put QSO 1.2–1.7× behind
   Qulacs from 20 to 24 qubits and traced this to the H and CX kernels
   (2× slower per amplitude) and to single-threaded allocation. After the
-  1.1 kernels QSO is level with or faster than Qulacs on 20–24 qubits and
-  2–4× faster than Qiskit Aer and PennyLane Lightning. On 16 qubits Qulacs
-  is 2–3× faster: a gate takes tens of microseconds there and the cost
-  of handing work to sleeping worker threads dominates.
+  1.1 kernels Qulacs takes 0.96–1.4 times as long as QSO on 20–24 qubits,
+  Qiskit Aer and PennyLane Lightning 1.7–3.3 times as long. On 16 qubits
+  Qulacs is 2× faster: a gate takes tens of microseconds there and the
+  cost of handing work to sleeping worker threads dominates.
 * **Gradients:** the adjoint gradient of a 100-parameter, 10-qubit ansatz
   takes about 0.5 ms, against 2–5 ms with Qulacs' `backprop` and about
   20 ms with PennyLane Lightning's adjoint method.

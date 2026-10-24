@@ -388,11 +388,14 @@ model with a 100-parameter ansatz.
 
 {{@gradients}}
 
-From 20 qubits on, QSO is as fast as Qulacs or faster and two to four
-times faster than Qiskit Aer and PennyLane Lightning on this machine. On
-16 qubits, where one gate takes only tens of microseconds, Qulacs is two
-to three times faster; at that size the cost of distributing work over the
-threads dominates, and QSO's handling of it is a topic for future work.
+From 20 qubits on, Qulacs takes {{derived.qulacs_large_min:.2f}} to
+{{derived.qulacs_large_max:.2f}} times as long as QSO (ratios of medians),
+Qiskit Aer and PennyLane Lightning {{derived.others_large_min:.1f}} to
+{{derived.others_large_max:.1f}} times as long. On 16 qubits, where one
+gate takes only tens of microseconds, QSO takes
+{{derived.qso_vs_qulacs_small:.1f}} times as long as Qulacs; at that size
+the cost of distributing work over the threads dominates, and QSO's
+handling of it is a topic for future work.
 The adjoint gradient is the fastest of the three methods compared;
 PennyLane's adjoint method is dominated by Python overhead at this size.
 Two QSO kernels (H and CX) were optimised during this work after a first
@@ -403,6 +406,9 @@ numbers above are for the optimised code.
 permanent of a random complex n × n matrix).
 
 {{@permanent_comparison}}
+
+The Walrus takes {{derived.walrus_min:.1f}} to {{derived.walrus_max:.1f}}
+times as long as QSO for the permanents of Table 20.
 
 ## 3.9 Test-suite
 
@@ -421,8 +427,9 @@ they are published.
 {{@performance}}
 
 Registers below 2¹⁶ amplitudes run on one thread; the cost per gate and
-amplitude falls up to 22 qubits as all threads take part and rises again at
-24 qubits, where one state vector takes 256 MB. A full gradient of the
+amplitude is lowest at {{derived.kernel_best_qubits}} qubits, where all
+threads take part, and higher again at {{derived.kernel_largest_qubits}}
+qubits, where one state vector takes {{derived.kernel_largest_mb}} MB. A full gradient of the
 100-parameter ansatz of Table 19 takes
 {{tn.performance.gradients_tfim10_100_parameters.0.seconds:ms}} by adjoint
 differentiation, {{tn.performance.gradients_tfim10_100_parameters.1.seconds:ms}}
