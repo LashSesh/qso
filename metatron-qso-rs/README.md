@@ -1,88 +1,41 @@
-# Metatron QSO (Rust Edition)
+# metatron-qso-rs
 
-An idiomatic Rust reimagination of the Metatron Quantum State Operator, evolving
-the original Python system into a modular, high-performance hybrid quantum-classical
-framework. The library couples a 13-dimensional Hilbert space, the Metatron Cube
-graph, Dynamic Tripolar Logic (DTL) resonator networks, and symmetry-aware
-Hamiltonian dynamics.
+Validated quantum simulation in pure Rust — the core library of
+[QSO 2.0](https://github.com/LashSesh/qso).
 
-## Highlights
+* **Statevector simulator** with multi-threaded kernels, arbitrary controls,
+  custom unitaries, measurement and entanglement entropy (up to 34 qubits).
+* **Circuits** with differentiable symbolic parameters and OpenQASM 2.0
+  import/export.
+* **Pauli-sum observables** with matrix-free expectation values and Lanczos
+  ground states.
+* **Density matrices and noise** (depolarising, damping, thermal relaxation,
+  readout error).
+* **Adjoint and parameter-shift gradients**; L-BFGS, Adam, Nelder–Mead, SPSA.
+* **Algorithms**: VQE, QAOA-MaxCut, Grover, QFT, phase estimation,
+  variational classifier.
+* **Graphs and quantum walks**: Platonic solids, Metatron's Cube and the
+  Fruit of Life, exact automorphism groups, CTQW (dense and Krylov), spatial
+  search, dephasing.
 
-- **Static typing & safety:** compile-time guarantees around dimensions,
-  normalization, and operator compatibility.
-- **High-performance numerics:** powered by [`nalgebra`](https://nalgebra.org/)
-  for dense linear algebra and [`rayon`](https://docs.rs/rayon) ready for future
-  parallel extensions.
-- **Graph-native design:** explicit Metatron Cube construction using `petgraph`
-  interoperability.
-- **DTL dynamics:** modular Tripolar Logic primitives with both single
-  resonators and network-level Kuramoto synchronisation.
-- **Symmetry awareness:** discrete symmetry group utilities validate Hamiltonian
-  invariants and prepare the ground for group-theoretic orbital analysis.
-- **Quantum walk analytics:** high-end benchmarking harness with mixing time,
-  hitting time, scattering, and Krylov subspace solvers tailored to the Metatron
-  Cube topology.
+Every algorithm is tested against closed-form or literature results (QAOA
+ring ratios (2p+1)/(2p+2), H₂ full-CI energy, Grover's sine law, QFT = DFT,
+exact phase estimation, automorphism group orders, …).
 
-## Crate Layout
+```rust
+use metatron_qso::prelude::*;
 
-```
-src/
-├── dtl/              # Dynamic Tripolar Logic (states, operations, resonators)
-├── graph/            # Metatron Cube structure and analytics
-├── hamiltonian.rs    # Tight-binding Hamiltonian and spectral tooling
-├── params.rs         # Global configuration (J, ε, ω, κ)
-├── qso.rs            # High-level orchestrator and reporting
-├── quantum/          # Quantum states and operators on H₁₃
-└── quantum_walk/     # Continuous-time walks, benchmarks, Krylov & scattering
+fn main() -> Result<()> {
+    let qaoa = MaxCutQaoa::new(&generators::cycle(10), 1)?;
+    let result = qaoa.optimize(&QaoaConfig::default())?;
+    assert!((result.approximation_ratio.unwrap() - 0.75).abs() < 1e-6);
+    Ok(())
+}
 ```
 
-Supplementary documentation lives in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+Features: `parallel` (default, rayon), `cli` (the `qso` binary).
 
-## Getting Started
+Conventions: qubit 0 is the least significant bit; `exp(−iHt)`;
+`R_P(θ) = exp(−iθP/2)`. All randomness is seeded and reproducible.
 
-```bash
-cargo test
-```
-
-For exploratory usage, run the provided example:
-
-```bash
-cargo run --example basic
-cargo run --example quantum_walk
-```
-
-The basic example constructs the full QSO stack, evolves a basis state, and
-prints an analysis report. The `quantum_walk` example exercises the high-end
-benchmarking harness (mixing time, hitting time, Krylov, scattering).
-
-To generate the consolidated benchmark suite used in CI, run:
-
-```bash
-# Option 1: Write to file directly (recommended)
-cargo run --release --bin quantum_walk_bench target/quantum_walk_bench.json
-
-# Option 2: Write to stdout and redirect
-cargo run --release --bin quantum_walk_bench > target/quantum_walk_bench.json
-
-# Compare against baseline
-cargo run --release --bin quantum_walk_bench_compare \
-    ../ci/quantum_walk_baseline.json target/quantum_walk_bench.json
-```
-
-The first command emits a JSON report capturing mixing-time and hitting-time
-statistics; the second ensures the results stay within the expected tolerance
-window captured in `ci/quantum_walk_baseline.json`.
-
-## Minimum Rust Version
-
-Rust 1.78 (edition 2024) or later is recommended.
-
-## Roadmap
-
-- [ ] Expand symmetry group enumeration with automated graph automorphism
-      discovery (`petgraph` + Schreier-Sims).
-- [ ] Integrate optional GPU backends for Hamiltonian exponentiation.
-- [ ] Extend benchmarking harnesses in `benches/` for quantum-walk performance
-      studies.
-- [ ] Add serialization stories for dynamic DTL trajectories.
-- [ ] Provide bindings to external hardware control layers.
+License: Apache-2.0.

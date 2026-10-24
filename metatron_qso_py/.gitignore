@@ -1,0 +1,4 @@
+# Built by `maturin develop`
+python/metatron_qso/*.so
+python/metatron_qso/*.pyd
+__pycache__/

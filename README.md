@@ -1,853 +1,393 @@
-# Q⊗DASH - Metatron Cube Quantum State Operator
+# QSO — Metatron Quantum State Operator
 
-[![Rust](https://img.shields.io/badge/rust-1.85.0-orange.svg)](https://www.rust-lang.org/)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Workspace](https://img.shields.io/badge/workspace-24_crates-blue.svg)]()
+[![CI](https://github.com/LashSesh/qso/actions/workflows/ci.yml/badge.svg)](https://github.com/LashSesh/qso/actions/workflows/ci.yml)
+[![Rust 1.89+](https://img.shields.io/badge/rust-1.89%2B-orange.svg)](https://www.rust-lang.org/)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](metatron_qso_py/README.md)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-**Enterprise-grade Quantum Computing Framework based on a 13-dimensional Metatron-Graph**
+**Validated quantum simulation in pure Rust, with Python bindings and a
+command-line tool.**
 
-Q⊗DASH (Metatron Quantum State Operator; QSO) is a state-of-the-art quantum computing framework in pure Rust, based on the Sacred Geometry of Metatron's Cube. The system implements a complete stack of quantum algorithms, variational methods, dynamic tripolar logic, and automatic calibration through the Seraphic Calibration Shell.
+QSO simulates quantum circuits exactly — as pure states or as density
+matrices with noise — and runs variational and textbook algorithms on top of
+them. It also simulates continuous-time quantum walks on arbitrary graphs.
+Its signature geometry is **Metatron's Cube**, treated with mathematical
+precision: the complete graph K₁₃ drawn on the 13 centres of the Fruit of
+Life.
 
-## 🌟 Highlights
+The rule of the project: **no claim without a test.** Every number in this
+README is reproduced by
+[`metatron-qso-rs/tests/validation.rs`](metatron-qso-rs/tests/validation.rs)
+or by the benchmark report you can run yourself.
 
-- **13-dimensional Metatron Cube** - Complete geometric quantum structure with 78 edges
-- **Variational Quantum Algorithms** - VQE, QAOA, VQC with 3 ansatz types
-- **Dynamic Tripolar Logic (DTL)** - 58.5% information advantage over binary systems
-- **Seraphic Calibration Shell (SCS)** - Automatic hyperparameter optimization
-- **DioniceOS Integration** - 4D-funnel system for 4D-5D coupling
-- **Python SDK** - High-performance bindings via PyO3
-- **Backend Abstraction** - Unified interface for Local/IBM/Cloud backends
-- **Telemetry & Dashboard** - Real-time monitoring with REST API
-- **24 Rust Crates** - Modular workspace architecture
+> **Version 2.0.0** is a complete rewrite. Version 0.1 simulated a single
+> 13-level system instead of qubits, and several of its results and
+> subsystems did not hold up; the [audit](docs/AUDIT_v0.1.md) documents why.
+> The 0.1 code remains available in the git history.
 
-## 📦 Workspace Overview
+## Contents
 
-The project is organized as a Cargo workspace with 24 crates:
+- [What is in the box](#what-is-in-the-box)
+- [Validated results](#validated-results)
+- [Metatron's Cube, precisely](#metatrons-cube-precisely)
+- [Installation](#installation)
+- [Quick start](#quick-start) — Rust, Python, command line
+- [Examples](#examples)
+- [Command-line reference](#command-line-reference)
+- [Performance](#performance)
+- [Scope and limits](#scope-and-limits)
+- [Conventions](#conventions)
+- [Repository layout](#repository-layout)
+- [Development](#development)
+- [Documentation](#documentation)
+- [License](#license)
 
-### Main Components (6 Crates)
+## What is in the box
 
-| Crate | Description | Type |
-|-------|-------------|------|
-| **metatron-qso-rs** | Core Quantum Computing Library | lib + 8 bins |
-| **metatron_qso_py** | Python SDK (PyO3 Bindings) | cdylib |
-| **metatron_backend** | Backend Abstraction (Local/IBM) | lib |
-| **metatron_dionice_bridge** | DioniceOS 4D-5D Integration | lib |
-| **metatron_triton** | TRITON Spiral Search Optimizer | lib |
-| **metatron_telemetry** | HTTP Telemetry Server | bin |
+| Area | Contents |
+|---|---|
+| **Statevector simulator** | n-qubit pure states (up to 34 qubits) with multi-threaded kernels. Gates: H, X, Y, Z, S, S†, T, T†, √X, √X†, RX, RY, RZ, P, U, SWAP, RXX, RYY, RZZ and custom unitaries on up to 6 qubits, each with any number of control qubits. Sampling, mid-circuit measurement, reduced density matrices, entanglement entropy |
+| **Circuits** | Builder API with symbolic, differentiable parameters (`θ = a·p[i] + b`), inverse, binding, depth and gate counts. OpenQASM 2.0 export *and* import |
+| **Observables** | Pauli strings and sums with a parser (`"0.5*Z0 Z1 - X2"`), matrix-free expectation values and `H\|ψ⟩`, exact ground states by Lanczos |
+| **Noise** | Density-matrix simulator (up to 14 qubits) on the same kernels. Depolarising (1 and 2 qubits), amplitude damping, phase damping, bit flip, phase flip, thermal relaxation (T₁/T₂), custom Kraus channels, readout error, noise models applied after every gate |
+| **Gradients** | Adjoint differentiation (all partial derivatives for about three circuit runs), parameter-shift rules (2-term, and 4-term for controlled rotations), finite differences |
+| **Algorithms** | VQE with seeded parallel restarts; QAOA for weighted MaxCut (fast diagonal simulation, exact optimum by enumeration, INTERP layer-wise initialisation); Grover search; QFT; phase estimation; variational classifier with data re-uploading |
+| **Models** | Transverse-field Ising, XXZ Heisenberg, MaxCut cost operator, H₂ / STO-3G (2 qubits, with full-CI reference) |
+| **Optimisers** | L-BFGS with strong-Wolfe line search, Adam, gradient descent with momentum, Nelder–Mead, SPSA |
+| **Graphs** | Weighted graphs; complete, cycle, path, star, bipartite, hypercube, grid/torus, Petersen and random graphs; the five Platonic solids; the Metatron's Cube / Fruit-of-Life family; **exact automorphism groups** |
+| **Quantum walks** | Continuous-time walks on any graph — exact on up to 2048 nodes, Krylov propagation beyond — with limiting and time-averaged distributions and mixing times. Childs–Goldstone spatial search with optimised hopping rate, Lindblad dephasing, classical random-walk baselines |
+| **Backends** | Statevector and noisy density-matrix backends, shot-based estimation with qubit-wise-commuting measurement groups |
+| **Interfaces** | Rust library `metatron_qso`, Python package `metatron_qso` (NumPy I/O, type stubs), `qso` command-line tool with JSON output |
+| **Reproducibility** | One explicit, portable seeded RNG (xoshiro256++) for all randomness; parallel sums give bit-identical results for any thread count |
 
-### DioniceOS Integration (18 Crates)
+## Validated results
 
-- **apollyon_5d/** (3 Crates) - 5D dynamic system framework
-  - `core` - Dynamics, coupling, ensemble, stability
-  - `bridge` - Integration layer
-  - `metatron` - Geometric cognition engine
+| Quantity | QSO | Reference |
+|---|---:|---:|
+| H₂ / STO-3G total energy at 0.735 Å (VQE) | −1.137306 Ha | −1.137306 Ha (full CI) |
+| QAOA on a ring, depth p = 1, 2, 3, 4 | 0.75, 0.8333, 0.875, 0.9 | (2p+1)/(2p+2), Mbeng et al. 2019 |
+| QAOA p = 1 on the cube graph Q₃ | 0.692450 | 0.6925, 3-regular triangle-free (Farhi et al. 2014) |
+| QAOA p = 3 on Metatron's Cube (maximum cut 42) | 0.99997 | — |
+| Grover, 10 qubits, 25 iterations | 0.999461 | sin²((2k+1)θ) = 0.999461 |
+| Quantum walk on Metatron's Cube, limiting P(centre) | 0.857988 | 145/169 |
+| Spatial search on Metatron's Cube, γ = 1/13, t = π√13/2 | 1.000000 | 1 |
+| Automorphism group orders: Metatron's Cube / Fruit of Life / dodecahedron | 6 227 020 800 / 12 / 120 | 13! / D₆ / I_h |
 
-- **infinity-ledger/** (13 Crates) - MEF Pipeline System
-  - `mef-core` - Core MEF pipeline
-  - `mef-ledger` - Hash-chained ledger
-  - `mef-memory` - Vector memory with adaptive routing
-  - `mef-router` - S7 routing system
-  - `mef-spiral`, `mef-storage`, `mef-hdag`, `mef-topology`, `mef-coupling`, `mef-schemas`
-  - `mef-solvecoagula` - Double-kick operators
-  - Additional: acquisition, domains, knowledge, api, audit, cli, benchmarks, tic, vector-db
+The test-suite (153 Rust tests and 161 Python tests, run in CI on Linux,
+macOS and Windows) also checks:
 
-- **apollyon-mef-bridge/** - APOLLYON-5D ⟷ Infinity-Ledger Bridge
-  - 4D-funnel system (8 modules)
-  - 4 bidirectional adapters
-  - Unified cognitive engine
+- every gate against an independent dense-matrix reference, and the QFT
+  against the DFT matrix;
+- exact phase estimation, and adjoint vs. parameter-shift vs.
+  finite-difference gradients;
+- Lanczos and Krylov propagation against dense diagonalisation;
+- the symmetry groups of all Platonic solids (24, 48, 48, 120, 120);
+- T₁/T₂ decay, the Zeno limit of dephased walks, and classical hitting
+  times against closed forms;
+- property tests on random circuits (norm, inverse, QASM round trips,
+  statevector = density matrix) and on random graphs (automorphism orders
+  against brute force);
+- robustness: invalid input yields an error, never a panic or a wrong
+  result.
 
-- **overlay/** - Unified 5D Cube Overlay
+## Metatron's Cube, precisely
 
-## 🚀 Quick Start
+The Fruit of Life consists of 13 equal circles: one in the centre, six
+touching it, and six more touching those along the same rays. Joining every
+pair of the 13 centres gives the 78 lines of Metatron's Cube.
 
-### Prerequisites
+* **As a graph it is K₁₃.** Every node is adjacent to every other, the
+  symmetry group is the full S₁₃ (order 13! = 6 227 020 800), and the
+  Laplacian spectrum is {0, 13¹²}.
+* **The geometry lives in the embedding.** There are seven distinct line
+  lengths: 1, √3, 2, √7, 3, 2√3 and 4, with multiplicities 18, 18, 15, 12, 6, 6
+  and 3.
+* **Short lines recover the structure.** Keeping only lines up to a given
+  length gives a family of graphs (`metatron:<length>`). The Fruit-of-Life
+  **contact graph** (tangent circles, 18 edges) has exactly the hexagonal
+  symmetry D₆ of order 12.
+* **On the Platonic solids:** K₁₃ contains every graph on at most 13
+  vertices, so it trivially contains the tetrahedron, octahedron, cube and
+  icosahedron graphs, but not the 20-vertex dodecahedron. The drawing shows
+  planar *projections* of the solids. QSO provides the solids themselves as
+  graphs (`platonic:<name>`).
 
-**For Windows users**: Before building, you need to install additional tools:
-- **CMake** (required for cryptographic dependencies)
-- **NASM** (recommended for performance)
-- **Visual Studio Build Tools 2022** with C++ workload
+What quantum dynamics on these graphs looks like:
 
-📖 **See [docs/WINDOWS_SETUP.md](docs/WINDOWS_SETUP.md) for detailed Windows installation instructions**
+* A quantum walk started at the centre of the Cube stays there with
+  time-averaged probability exactly 145/169.
+* Spatial search with γ = 1/13 finds a marked node with probability 1 at
+  t = π√13/2 ≈ 5.66. A classical random walk needs 12 steps on average.
+* QAOA reaches 99.997 % of the maximum cut at depth 3.
 
-**For Linux/macOS users**:
-- Rust 1.85.0+
-- Standard build tools (gcc/clang)
-- CMake (usually available via package manager: `apt install cmake` / `brew install cmake`)
-
-### Installation
-
-```bash
-# Clone repository
-git clone https://github.com/LashSesh/qso.git
-cd qso
-
-# Build core library
-cargo build --release -p metatron-qso-rs
-
-# Run all tests
-cargo test --workspace
-
-# Run benchmarks
-cargo run --release --bin quantum_walk_bench
+```text
+$ qso graph fruit-of-life
+Fruit of Life (contact graph)
+  nodes 13, edges 18, degree 1..6, connected true, bipartite false
+  diameter Some(4), triangles 6, algebraic connectivity 0.585786
+  |Aut| = 12 (log10 1.079), orbits 3
 ```
 
-### First Quantum Program
+## Installation
+
+QSO is not yet published on crates.io or PyPI; install it from this
+repository. A Rust toolchain ≥ 1.89 is required (`rustup` is the easiest way
+to get one). No C/C++ toolchain or system libraries are needed.
+
+**Rust library**
+
+```toml
+[dependencies]
+metatron-qso-rs = { git = "https://github.com/LashSesh/qso" }
+```
+
+Features: `parallel` (default; multi-threading via rayon) and `cli`.
+
+**Command-line tool**
+
+```bash
+git clone https://github.com/LashSesh/qso && cd qso
+cargo install --path metatron-qso-rs --features cli
+```
+
+**Python package** (CPython ≥ 3.9, one `abi3` wheel for all versions)
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install maturin numpy
+maturin develop --release -m metatron_qso_py/Cargo.toml
+```
+
+## Quick start
+
+### Rust
 
 ```rust
-use metatron_qso_rs::prelude::*;
+use metatron_qso::prelude::*;
 
 fn main() -> Result<()> {
-    // Initialize Metatron QSO
-    let qso = QSO::new(QSOParameters::default())?;
+    // VQE for H₂.
+    let h2 = models::h2_sto3g();
+    let ansatz = ansatz::real_amplitudes(2, 1, Entanglement::Linear);
+    let vqe = Vqe::new(h2.hamiltonian.clone(), ansatz)?
+        .with_restarts(4)
+        .run()?;
+    println!("E = {:.6} Ha", vqe.energy + h2.nuclear_repulsion); // −1.137306
 
-    // Quantum walk from center node
-    let initial = QuantumState::basis_state(0); // Node 0 = center
-    let evolved = qso.evolve_state(&initial, 1.0)?;
+    // QAOA for MaxCut on Metatron's Cube.
+    let qaoa = MaxCutQaoa::new(&metatron::metatron_cube(), 2)?;
+    let r = qaoa.optimize(&QaoaConfig::default())?;
+    println!("ratio = {:.4}", r.approximation_ratio.unwrap());
 
-    // Probability distribution
-    for (node, prob) in evolved.probabilities().iter().enumerate() {
-        println!("Node {}: {:.4}", node, prob);
-    }
+    // A parametrised circuit with exact gradients.
+    let mut c = Circuit::new(2);
+    let theta = c.new_parameter();
+    c.h(0).cx(0, 1).ry(1, theta);
+    let zz: PauliSum = "Z0 Z1".parse()?;
+    let (e, grad) = metatron_qso::algorithms::gradients::expectation_and_gradient(
+        &c,
+        &zz,
+        &[0.3],
+        None,
+        GradientMethod::Adjoint,
+    )?;
+    println!("<ZZ> = {e:.4}, d<ZZ>/dθ = {:.4}", grad[0]);
 
+    // Quantum walk and spatial search.
+    let walk = ContinuousWalk::new(&metatron::fruit_of_life(), Generator::Laplacian, 1.0)?;
+    println!("P(t=2) = {:?}", walk.probabilities(0, 2.0)?);
     Ok(())
 }
 ```
 
-### Python SDK Usage
+This is [`examples/quickstart.rs`](metatron-qso-rs/examples/quickstart.rs)
+(`cargo run --release --example quickstart`). It prints `E = -1.137306 Ha`,
+`ratio = 0.9991`, `<ZZ> = 0.9553, d<ZZ>/dθ = -0.2955` (that is cos 0.3 and
+−sin 0.3) and the walk probabilities.
 
-```bash
-# Install Python SDK
-cd metatron_qso_py
-pip install maturin
-maturin develop --release
-```
+### Python
 
 ```python
-import metatron_qso
+import metatron_qso as qso
 
-# Create Metatron graph
-graph = metatron_qso.MetatronGraph()
+h2 = qso.h2_sto3g()
+result = qso.run_vqe(h2["hamiltonian"], qso.real_amplitudes(2, 1), restarts=4)
+print(result["energy"] + h2["nuclear_repulsion"])          # -1.137306
 
-# Run quantum walk
-result = metatron_qso.run_quantum_walk(
-    graph=graph,
-    source_nodes=[0],
-    t_max=5.0,
-    dt=0.1
-)
+qaoa = qso.MaxCutQaoa(qso.Graph.metatron_cube(), 2)
+print(qaoa.optimize()["approximation_ratio"])              # 0.9991
 
-# QAOA for MaxCut
-qaoa_result = metatron_qso.solve_maxcut_qaoa(
-    graph=graph,
-    depth=3,
-    max_iters=100
-)
+walk = qso.ContinuousWalk(qso.Graph.fruit_of_life())
+print(walk.limiting_distribution(0))                       # numpy array
 
-# VQE ground state
-vqe_result = metatron_qso.run_vqe(
-    graph=graph,
-    depth=2,
-    ansatz_type="hardware_efficient"
-)
+best = qso.SpatialSearch.optimize(qso.Graph.from_spec("metatron"), [3])
+print(best["gamma"], best["success_probability"])          # 0.0769 (= 1/13), 1.0
 ```
 
-## 🧬 Core Features - metatron-qso-rs
+The full Python API is described in
+[`metatron_qso_py/README.md`](metatron_qso_py/README.md).
 
-### Metatron Geometry
+### Command line
 
-**13-dimensional Cube** based on Sacred Geometry:
-- **1 center node** (Node 0)
-- **6 hexagon nodes** (Nodes 1-6)
-- **6 cube nodes** (Nodes 7-12)
-- **78 edges** with complete connectivity
-- Embedding of all 5 Platonic solids
-- Symmetry group G_M for error-resistant operations
+```text
+$ qso vqe --model tfim:6,1,0.8 --layers 6 --restarts 8
+VQE (lbfgs, 6 qubits, 6 layers): E = -6.4397095536  exact = -6.4397097308  error = 1.771e-7
 
-**Graph Properties**:
-- Average degree: 12
-- Algebraic connectivity: λ₁ > 0 (high)
-- Code distance: d ≥ 6 (topological error correction)
+$ qso qaoa --graph petersen --p 4 --layerwise
+p=1  <C>=10.386751  C_max=12  ratio=0.865563  P(optimal)=0.1682  most likely 1110001011 (cut 12)
+p=2  <C>=11.105320  C_max=12  ratio=0.925443  P(optimal)=0.4490  most likely 1110001011 (cut 12)
+p=3  <C>=11.648892  C_max=12  ratio=0.970741  P(optimal)=0.7626  most likely 1100110110 (cut 12)
+p=4  <C>=11.936517  C_max=12  ratio=0.994710  P(optimal)=0.9767  most likely 1001101101 (cut 12)
 
-### Quantum Algorithms
-
-#### Variational Quantum Algorithms (VQA)
-
-**VQE (Variational Quantum Eigensolver)**:
-```rust
-use metatron_qso_rs::vqa::{VQE, AnsatzType};
-
-let vqe = VQE::builder()
-    .hamiltonian(qso.hamiltonian().clone())
-    .ansatz_type(AnsatzType::HardwareEfficient)
-    .depth(2)
-    .optimizer_name("ADAM")
-    .max_iterations(1000)
-    .build()?;
-
-let result = vqe.run()?;
-println!("Ground Energy: {:.10}", result.ground_energy);
+$ qso search --graph hypercube:8 --marked 17 --generator adjacency
+search on Q8 for [17]: gamma 0.146868, best time 27.522674, success 0.754627 (expected time with repetition 36.4719)
 ```
 
-**3 Ansatz Types**:
-- `HardwareEfficient` - Optimized for hardware implementation
-- `EfficientSU2` - SU(2)-based
-- `MetatronAnsatz` - Specialized for Metatron geometry
+## Examples
 
-**QAOA (Quantum Approximate Optimization Algorithm)**:
-```rust
-use metatron_qso_rs::vqa::{QAOA, MaxCutProblem};
+| Rust (`cargo run --release --example …`) | Shows |
+|---|---|
+| [`quickstart`](metatron-qso-rs/examples/quickstart.rs) | The snippet above |
+| [`metatron_walks`](metatron-qso-rs/examples/metatron_walks.rs) | Symmetry groups, line lengths, coherent and dephased walks, spatial search vs. classical hitting times on Metatron's Cube and the Fruit of Life |
+| [`qaoa_maxcut`](metatron-qso-rs/examples/qaoa_maxcut.rs) | QAOA depth 1–4 with INTERP on rings, Q₃, Petersen, random 3-regular and Fruit-of-Life graphs |
+| [`vqe_h2`](metatron-qso-rs/examples/vqe_h2.rs) | VQE for H₂ with every optimiser, shot-based and noisy energy estimates |
+| [`circuits`](metatron-qso-rs/examples/circuits.rs) | GHZ state, OpenQASM export, Grover's sine law, phase estimation |
+| [`benchmark_report`](metatron-qso-rs/examples/benchmark_report.rs) | The performance and validation tables of [BENCHMARKS.md](docs/BENCHMARKS.md) |
 
-let graph = MetatronGraph::new();
-let problem = MaxCutProblem::from_graph(&graph);
-let qaoa = QAOA::new(problem.hamiltonian(), 3);
-let result = qaoa.run()?;
+Python scripts are in [`metatron_qso_py/examples/`](metatron_qso_py/examples/):
+`01_metatron_quantum_walk.py`, `02_qaoa_maxcut.py`, `03_vqe_h2.py`,
+`04_grover_and_qft.py` and `05_noise.py`.
 
-println!("Approximation ratio: {:.4}", result.approximation_ratio);
+## Command-line reference
+
+`qso <command> [options]`. Every command accepts `--json` for
+machine-readable output; `qso <command> --help` lists all options.
+
+| Command | Purpose | Main options |
+|---|---|---|
+| `graph [SPEC]` | Structure, Laplacian spectrum, automorphism group and orbits | — |
+| `walk` | Node probabilities at time t and limiting distribution | `--graph`, `--start`, `--time`, `--gamma`, `--generator laplacian\|adjacency` |
+| `search` | Quantum-walk spatial search (rate and time optimised unless `--gamma` is given) | `--graph`, `--marked 3,7`, `--gamma`, `--generator`, `--t-max` |
+| `qaoa` | QAOA for MaxCut with exact optimum and approximation ratio | `--graph`, `--p`, `--restarts`, `--seed`, `--layerwise` |
+| `vqe` | VQE with an EfficientSU2 ansatz, compared with the exact ground energy | `--model h2\|tfim:N,J,H\|heisenberg:N,J,Δ`, `--hamiltonian "<Pauli sum>"`, `--qubits`, `--layers`, `--method`, `--restarts`, `--seed` |
+| `grover` | Grover search, simulated vs. theoretical success | `--qubits`, `--marked`, `--iterations` |
+| `qasm FILE` | Simulate an OpenQASM 2.0 file and sample counts | `--shots`, `--seed`, `--noise p1,p2` |
+
+Graph specifications (also `Graph.from_spec` in Python):
+
+| Spec | Graph |
+|---|---|
+| `metatron` | Metatron's Cube (K₁₃ with the Fruit-of-Life embedding) |
+| `metatron:<length>` | Lines of Metatron's Cube up to a length (`metatron:1` = contact graph) |
+| `fruit-of-life` | Fruit-of-Life contact graph |
+| `complete:N`, `cycle:N`, `path:N`, `star:N` | Standard families |
+| `hypercube:D`, `petersen`, `bipartite:A,B` | |
+| `grid:RxC`, `torus:RxC` | Rectangular grid, periodic grid |
+| `platonic:NAME` | `tetrahedron`, `cube`, `octahedron`, `dodecahedron`, `icosahedron` |
+| `random-regular:N,D[,SEED]`, `erdos-renyi:N,P[,SEED]` | Random graphs |
+
+## Performance
+
+Measured with `cargo run --release --example benchmark_report` on a
+4-thread cloud VM (full tables, method and run-to-run variance in
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md)):
+
+| Workload | Time |
+|---|---:|
+| 24-qubit layer (71 gates: H, RZ, CX chain) | 0.94 s (0.79 ns per gate·amplitude) |
+| Full gradient, 10 qubits, 100 parameters, adjoint | 1.6 ms (43× faster than parameter shift) |
+| QAOA value + gradient, 20 nodes, p = 3 | 0.31 s |
+| Quantum walk on a 100 × 100 torus (10 000 nodes), Krylov | 0.13 s |
+| Automorphism group of Metatron's Cube (13!) | 3.2 ms |
+
+Timings varied between runs on this shared VM (up to 2× for
+sub-millisecond workloads, up to 1.5× for the larger ones).
+
+## Scope and limits
+
+QSO is a classical simulator running on one machine (multi-threaded CPU).
+Know its boundaries:
+
+| Limit | Value | Reason |
+|---|---|---|
+| Pure-state register | 34 qubits | 2³⁴ amplitudes = 256 GiB; practical limit is your RAM (16 bytes per amplitude) |
+| Density-matrix register | 14 qubits | 4¹⁴ entries = 4 GiB |
+| Pauli strings | qubits 0–63 | Stored as two 64-bit masks |
+| Custom unitary gates | up to 6 target qubits | Dense kernel |
+| Exact walk analysis | up to 2048 nodes | Dense eigendecomposition. Beyond that, `evolve`/`probabilities` use Krylov; limiting distributions and spatial search need the dense path |
+| Automorphism groups | intended for up to a few hundred nodes | Exact search, worst-case exponential like every known algorithm |
+| OpenQASM | version 2.0, `qelib1.inc` gates | No custom `gate` definitions, classical control or `reset`; version 3 is not supported |
+
+Not included: GPU acceleration, tensor-network or stabiliser simulation,
+fermion-to-qubit mappings beyond the bundled H₂ Hamiltonian, and
+submission to quantum hardware. To run on hardware, export a circuit with
+`to_qasm2` and submit it with the vendor's SDK.
+
+## Conventions
+
+* Qubit 0 is the least significant bit of a basis index (as in Qiskit); bit
+  strings print qubit n−1 first.
+* Time evolution is `exp(−iHt)`; rotations are `R_P(θ) = exp(−iθP/2)`;
+  `P(λ) = diag(1, e^{iλ})`; `U(θ, φ, λ)` follows OpenQASM.
+* Quantum walks use `H = γL` (Laplacian) or `H = −γA` (adjacency).
+* Invalid input returns `QsoError` in Rust and raises `ValueError` in
+  Python.
+
+## Repository layout
+
+```
+metatron-qso-rs/            Rust library `metatron_qso` and the `qso` CLI
+  src/quantum/              states, gates, kernels, circuits, Pauli sums, OpenQASM
+  src/noise/                density matrices, channels, noise models
+  src/algorithms/           gradients, ansätze, models, VQE, QAOA, Grover, QFT/QPE, classifier
+  src/optimize/             L-BFGS, Adam, gradient descent, Nelder–Mead, SPSA
+  src/graph/                graphs, generators, Metatron family, automorphisms
+  src/walks/                quantum walks, spatial search, dephasing, classical walks
+  src/linalg/               Hermitian eigensolvers, Lanczos, Krylov, sparse matrices
+  src/backend.rs            execution backends and shot-based estimation
+  src/bin/qso.rs            command-line tool
+  tests/                    validation, robustness and property tests
+  examples/, benches/       runnable examples, criterion benchmarks
+metatron_qso_py/            Python package (PyO3 + NumPy): src/, python/, tests/, examples/
+docs/                       audit of v0.1, 2.0 plan, architecture, benchmarks
+docs/archive/               concept documents of v0.1 (PDF)
+.github/workflows/          CI and release (wheels) workflows
 ```
 
-**VQC (Variational Quantum Classifier)**:
-- Binary and multi-class classification
-- Parameter shift rule for gradients
-- Training/test split support
-
-**Optimizers**: COBYLA, ADAM, L-BFGS-B
-
-#### Quantum Walks
-
-**4 Implementations**:
-- **CTQW (Continuous-Time Quantum Walk)** - Spectral propagator method
-- **Krylov Methods** - Lanczos algorithm for large systems
-- **Scattering Analysis** - Density of states, scattering channels
-- **Benchmark Suite** - Hitting time, mixing time, fidelity
-
-```rust
-use metatron_qso_rs::quantum_walk::*;
-
-let walk = ContinuousQuantumWalk::new(graph.adjacency_matrix());
-let result = walk.evolve(initial_state, time)?;
-```
-
-#### Advanced Algorithms
-
-- **Grover Search** - Metatron-specific variant
-- **Boson Sampling** - Platonic-solid interference
-- **Quantum Machine Learning** - Graph-structured ML
-
-### Dynamic Tripolar Logic (DTL)
-
-**58.5% information advantage** over binary systems:
-
-**3 States**:
-- **L+** (active) - High activation
-- **L-** (inactive) - Low activation
-- **Ld** (dynamic/undetermined) - Superposition
-
-**Features**:
-- Kuramoto synchronization networks
-- Resonator dynamics
-- Tripolar gate operations
-- Network coupling
-
-**Information Capacity** (13 nodes):
-- Binary: 13.0 bit
-- Tripolar: 20.6 bit (+58.5%)
-- With phase: 46.6 bit (+258%)
-
-### Symmetry & Error Correction
-
-- **G_M Symmetry Group** - Metatron-specific symmetries
-- **Topological Codes** - Code distance d ≥ 6
-- **Error-resistant Operations** - Symmetry-protected gates
-
-## 🐍 Python SDK - metatron_qso_py
-
-**High-Performance Python Bindings via PyO3**
-
-### Installation
+## Development
 
 ```bash
-cd metatron_qso_py
-pip install maturin
-maturin develop --release
-```
-
-### Features
-
-- ✅ **Python-idiomatic API** - dict returns, list parameters
-- ✅ **Rust performance** - Zero-cost bindings
-- ✅ **Jupyter-ready** - Interactive notebooks
-- ✅ **Type safety** - Clear error handling
-
-### Examples
-
-```bash
-# Run examples
-python metatron_qso_py/examples/01_quantum_walk_basic.py
-python metatron_qso_py/examples/02_qaoa_maxcut_basic.py
-python metatron_qso_py/examples/03_vqe_ground_state.py
-
-# Jupyter notebook
-jupyter notebook metatron_qso_py/notebooks/QuantumWalk_Intro.ipynb
-```
-
-### Auto-Tuning Integration
-
-```python
-import metatron_qso
-
-# QAOA with automatic calibration
-result, proposal = metatron_qso.solve_maxcut_qaoa_with_tuning(
-    graph=graph,
-    depth=3,
-    max_iters=100,
-    auto_calibrate=True
-)
-
-if proposal.por_accepted:
-    print(f"SCS suggests: depth={proposal.config.ansatz_depth}")
-```
-
-## 🔧 Seraphic Calibration Shell (SCS)
-
-**Automatic Hyperparameter Optimization for Quantum Algorithms**
-
-The SCS is a meta-algorithm for automatic calibration of quantum algorithms. It uses field-theoretic feedback and fixpoint dynamics.
-
-### Core Concepts
-
-**Performance Triplet Φ(c) = (ψ, ρ, ω)**:
-- **ψ (Quality)** - Algorithm-specific quality
-- **ρ (Stability)** - Robustness across multiple runs
-- **ω (Efficiency)** - Computational efficiency
-
-**Mandorla Field M(t)**:
-- 16-dimensional resonance field
-- Historical performance patterns
-- Guides configuration changes
-
-**Double-Kick Operator T = Φ_V ∘ Φ_U**:
-- Update-Kick Φ_U: Improves quality
-- Stabilization-Kick Φ_V: Optimizes stability
-- Converges to fixpoint attractors
-
-**Proof-of-Resonance (PoR)**:
-- Acceptance criterion for new configurations
-- Guarantees monotonic quality improvement
-- Validates field resonance
-
-**CRI (Calibration Regime Initialization)**:
-- Detects stagnation in local optimum
-- Automatically switches to new regime
-- Enables global exploration
-
-### CLI Usage
-
-```bash
-# Initialize SCS
-python -m scs.cli init
-
-# Execute 5 calibration steps
-python -m scs.cli step -n 5
-
-# Show status
-python -m scs.cli status
-
-# Export best configuration
-python -m scs.cli export -o best_config.json
-```
-
-### Python API
-
-```python
-from scs import AutoTuner
-
-tuner = AutoTuner(benchmark_dir="benchmarks", enabled=True)
-tuner.initialize()
-
-for iteration in range(10):
-    result = run_algorithm()
-    metrics = {"psi": 0.85, "rho": 0.80, "omega": 0.72}
-
-    tuner.ingest_benchmark("qaoa", config, metrics, result)
-    proposal = tuner.propose_new_config()
-
-    if proposal.por_accepted:
-        config = proposal.config
-```
-
-## 🌐 DioniceOS Integration
-
-**4D-5D Coupling System for Cognitive Quantum Processing**
-
-### Architecture
-
-```
-4D-Funnel (Gabriel) ←→ APOLLYON-5D ←→ Infinity-Ledger (MEF)
-                               ↓
-                     Metatron QSO (via Bridge)
-```
-
-### 4D-Funnel System
-
-**Components**:
-- **Funnel Graph** - Directed graph with Hebbian learning
-- **Hyperbion Layer** - Morphodynamic 4D-5D coupling
-- **HDAG Field** - 5D resonance lattice (hyperdimensional acyclic)
-- **Policies** - Explore, exploit, homeostasis
-
-**Properties**:
-- Deterministic: Same inputs → identical outputs
-- Proof-carrying: Cryptographic verification
-- Coordinate mapping: SCS metrics → 4D state space
-
-### 5D Coordinate Space
-
-Unified 5D Space **(x, y, z, ψ, ω)**:
-- **x, y, z** - Spatial coordinates
-- **ψ** (psi) - Semantic weight / resonance
-- **ω** (omega) - Temporal phase / oscillation
-
-### Bidirectional Adapters
-
-**4 Adapters** for seamless integration:
-- **State Adapter** - 5D ⟷ Spiral
-- **Spectral Adapter** - Features ⟷ Signature
-- **Metatron Adapter** - Cube-13 ⟷ S7
-- **Resonance Adapter** - Field ⟷ PoR
-
-### Integration Flow
-
-1. **SCS State** (ψ, ρ, ω, algorithm) → QDashCalibrationState
-2. **Bridge Mapping** → 4D state space
-3. **4D-Funnel Coupling Tick**:
-   - Lift 4D → 5D
-   - Hyperbion absorption
-   - HDAG relaxation & gradient
-   - Project 5D → 4D
-   - Funnel advection
-4. **Calibration Suggestion** generation
-
-### Test Coverage
-
-- APOLLYON-5D: 109 tests
-- Infinity-Ledger: Complete MEF tests
-- Bridge: 84 tests (41 for 4D-funnel)
-
-## 🔌 Backend Abstraction - metatron_backend
-
-**Unified Interface for Multiple Quantum Backends**
-
-### Supported Backends
-
-- **Local Simulator** (default) - Pure Rust simulation
-- **IBM Quantum** (feature-gated) - IBM Cloud integration
-- Extensible for AWS Braket, IonQ, Rigetti
-
-### Usage
-
-```rust
-use metatron_backend::*;
-
-// Backend registry
-let registry = BackendRegistry::new();
-
-// Local backend
-let local = registry.get_backend("local")?;
-
-// Execute circuit
-let circuit = Circuit::new(num_qubits);
-circuit.add_gate(Gate::H(0));
-circuit.add_gate(Gate::CNOT(0, 1));
-
-let result = local.execute(&circuit)?;
-println!("Measurements: {:?}", result.measurements);
-```
-
-### Features
-
-- **Provider Abstraction** - Unified API for all backends
-- **Circuit Representation** - Backend-agnostic format
-- **Registry Pattern** - Factory for backend instances
-- **Feature Gates** - Optional IBM/Cloud integration
-
-## 📊 Telemetry & Dashboard - metatron_telemetry
-
-**Real-time Monitoring with HTTP REST API**
-
-### Features
-
-- **REST API** - Complete HTTP endpoints
-- **Real-time Metrics** - Live performance tracking
-- **Historical Data** - Persistent storage
-- **Web Dashboard** - Browser-based UI
-- **Demo Mode** - Sample data for testing
-
-### Starting the Server
-
-```bash
-cargo run --release --bin metatron_telemetry
-```
-
-```
-🚀 Telemetry server running on http://localhost:3000
-
-Endpoints:
-  GET  /health              - Health check
-  GET  /api/metrics         - Current metrics
-  POST /api/metrics         - Add metric
-  GET  /api/metrics/history - Historical data
-  GET  /dashboard           - Web dashboard
-```
-
-### API Usage
-
-```bash
-# Health check
-curl http://localhost:3000/health
-
-# Get metrics
-curl http://localhost:3000/api/metrics
-
-# Send metric
-curl -X POST http://localhost:3000/api/metrics \
-  -H "Content-Type: application/json" \
-  -d '{"algorithm": "vqe", "energy": -12.9997, "iterations": 150}'
-```
-
-### Web Dashboard
-
-```bash
-# Open dashboard in browser
-open http://localhost:3000/dashboard
-```
-
-Features:
-- Live metric visualization
-- Algorithm performance charts
-- Historical trend analysis
-- Export to JSON/CSV
-
-## 🔍 TRITON - Spiral Search Optimizer
-
-**Evolutionary Spiral-Search for SCS Calibration**
-
-### Concept
-
-TRITON uses golden-angle spirals for efficient hyperparameter exploration:
-
-**SpectralSignature (ψ, ρ, ω)**:
-- 3D quality metric
-- Momentum-based search
-- Adaptive step size
-
-### Usage
-
-```rust
-use metatron_triton::*;
-
-let search = TritonSearch::new(config_space);
-let signature = SpectralSignature::new(0.85, 0.80, 0.72);
-
-let proposal = search.evolve(current_config, signature)?;
-
-if proposal.quality_improved() {
-    apply_config(proposal.config);
-}
-```
-
-### Features
-
-- Golden-angle spirals (φ = 137.5°)
-- Momentum-driven evolution
-- Calibration proposals
-- Integration with SCS
-
-## 🧪 Testing & Benchmarking
-
-### Running Tests
-
-```bash
-# All unit tests in workspace
-cargo test --workspace
-
-# Test specific crate
-cargo test -p metatron-qso-rs
-cargo test -p metatron_dionice_bridge
-
-# DioniceOS tests
-cargo test -p apollyon_5d            # 109 tests
-cargo test -p apollyon-mef-bridge    # 84 tests (41 for 4D-funnel)
-```
-
-### Benchmark Suite
-
-**8 Benchmark Binaries**:
-
-```bash
-# Core benchmarks
-cargo run --release --bin quantum_walk_bench
-cargo run --release --bin vqe_bench
-cargo run --release --bin qaoa_bench
-cargo run --release --bin vqc_bench
-
-# Comparison benchmarks
-cargo run --release --bin integration_bench
-cargo run --release --bin cross_system_bench
-cargo run --release --bin advanced_algorithms_bench
-cargo run --release --bin benchmark_compare
-```
-
-### Performance Baselines
-
-| Benchmark | Performance | Convergence |
-|-----------|------------|-------------|
-| Quantum Walk | 31,941 ops/sec | 100% |
-| VQE (HardwareEfficient) | ~150 iters | E₀ = -12.9997 |
-| QAOA (depth=3) | ~100 iters | ratio = 0.9974 |
-| VQC (binary) | ~200 epochs | acc = 50-90% |
-
-### CI/CD Integration
-
-**GitHub Actions** with automatic baseline comparison:
-- Parallel test execution
-- Performance regression detection
-- Baseline tracking in `metatron-qso-rs/ci/`
-- Daily performance metrics
-
-## 📖 Documentation
-
-### Overview Documents (Root)
-
-- **[PRODUCT_OVERVIEW.md](PRODUCT_OVERVIEW.md)** - Architecture overview
-- **[DIONICEOS_INTEGRATION.md](DIONICEOS_INTEGRATION.md)** - DioniceOS integration guide
-- **[VQA_IMPLEMENTATION_GUIDE.md](VQA_IMPLEMENTATION_GUIDE.md)** - VQA algorithms guide
-- **[QUANTENINFORMATIONSVERARBEITUNG_DOKUMENTATION.md](QUANTENINFORMATIONSVERARBEITUNG_DOKUMENTATION.md)** - Quantum info (DE)
-- **[BENCHMARK_SUITE_DOCUMENTATION.md](BENCHMARK_SUITE_DOCUMENTATION.md)** - Benchmark system
-- **[CHANGELOG.md](CHANGELOG.md)** - Version history
-- **[RELEASE_PLAN.md](RELEASE_PLAN.md)** - Packaging strategy
-- **[DEV_SETUP.md](DEV_SETUP.md)** - Development setup
-
-### SCS Documentation (docs/)
-
-- **[docs/SCS_CORE_DESIGN.md](docs/SCS_CORE_DESIGN.md)** - Architecture & data flow
-- **[docs/SCS_BENCHMARK_SCHEMA.md](docs/SCS_BENCHMARK_SCHEMA.md)** - JSON schema specification
-- **[docs/SCS_USAGE_GUIDE.md](docs/SCS_USAGE_GUIDE.md)** - Workflows & best practices
-- **[docs/seraphic_calibration_shell.md](docs/seraphic_calibration_shell.md)** - Overview
-
-### System Documentation (docs/)
-
-- **[docs/backend_system.md](docs/backend_system.md)** - Backend architecture
-- **[docs/telemetry_and_dashboard.md](docs/telemetry_and_dashboard.md)** - Telemetry system
-- **[docs/pyo3_integration.md](docs/pyo3_integration.md)** - Python bindings
-- **[docs/PYTHON_SDK_GUIDE.md](docs/PYTHON_SDK_GUIDE.md)** - Python API reference
-- **[docs/CI_PIPELINE_OVERVIEW.md](docs/CI_PIPELINE_OVERVIEW.md)** - CI/CD pipeline
-
-### DioniceOS Documentation
-
-- **[docs/dioniceos/README.md](docs/dioniceos/README.md)** - Complete DioniceOS guide
-- **[docs/dioniceos/QUICK_START.md](docs/dioniceos/QUICK_START.md)** - Quick start
-
-### Core Library Documentation (metatron-qso-rs/docs/)
-
-- **[metatron-qso-rs/docs/ARCHITECTURE.md](metatron-qso-rs/docs/ARCHITECTURE.md)** - Core architecture
-- **[metatron-qso-rs/docs/RUST_CORE_GUIDE.md](metatron-qso-rs/docs/RUST_CORE_GUIDE.md)** - Developer guide
-- **quantum_walk_mixing.md**, **cross_system_vqe_scoring.md**, **vqe_tuning.md**, **vqc_overview.md**
-
-### Setup Guides (docs/)
-
-- **[docs/WINDOWS_SETUP.md](docs/WINDOWS_SETUP.md)** - **Windows 10/11 setup guide** (EN) 🔥
-- **[docs/SCHNELLANLEITUNG.md](docs/SCHNELLANLEITUNG.md)** - Quick guide (DE)
-
-### API Documentation
-
-```bash
-# Generate and open rustdoc
-cargo doc --open --workspace
-```
-
-## 🛠️ Development
-
-### Prerequisites
-
-- **Rust** 1.85.0+ (Edition 2021)
-- **Cargo** with workspace support
-- **Python** 3.8+ (for Python SDK)
-- **Maturin** (for Python bindings)
-
-### Building the Project
-
-```bash
-# Build entire workspace
-cargo build --release --workspace
-
-# Build individual crate
-cargo build --release -p metatron-qso-rs
-cargo build --release -p metatron_backend
-cargo build --release -p metatron_telemetry
-
-# Build Python SDK
-cd metatron_qso_py
-maturin develop --release
-```
-
-### Code Quality
-
-```bash
-# Formatting
 cargo fmt --all
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test -p metatron-qso-rs --all-features      # unit, validation, robustness, property and doc tests
+cargo bench -p metatron-qso-rs                    # criterion benchmarks
 
-# Linting
-cargo clippy --workspace -- -D warnings
-
-# Python linting
-cd scs
-ruff check .
-ruff format .
+# Python (inside a virtualenv)
+pip install maturin numpy pytest
+maturin develop --release -m metatron_qso_py/Cargo.toml
+pytest metatron_qso_py/tests
 ```
 
-### Features
+CI runs formatting, Clippy and rustdoc; tests on Linux, macOS and Windows; a
+build without multi-threading; the minimum Rust version; all examples and
+CLI smoke tests; and the Python tests on 3.9 and 3.13. Tagging `v*` builds
+wheels and a source distribution.
 
-**metatron-qso-rs Features**:
-- `walks` - Quantum walk algorithms
-- `vqa` - Variational quantum algorithms
-- `dtl` - Dynamic tripolar logic
-- `codes` - Symmetry codes
-- `advanced` - Advanced algorithms
+New features follow one rule ([CONTRIBUTING.md](CONTRIBUTING.md)): a claim
+needs a test against an independent reference.
 
-**metatron_backend Features**:
-- `local` (default) - Local simulator
-- `ibm` - IBM Quantum integration
-- `all-backends` - All backends
+## Documentation
 
-```bash
-# Build with specific features
-cargo build --release -p metatron-qso-rs --features "walks,vqa,dtl"
-cargo build --release -p metatron_backend --features "ibm"
-```
+| Document | Content |
+|---|---|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the simulator works: kernels, determinism, gradients, Krylov methods, automorphism search, walks |
+| [docs/BENCHMARKS.md](docs/BENCHMARKS.md) | Measured performance with method and variance |
+| [docs/AUDIT_v0.1.md](docs/AUDIT_v0.1.md) | What was wrong with version 0.1, with evidence |
+| [docs/QSO_2.0_PLAN.md](docs/QSO_2.0_PLAN.md) | Goals, scope decisions and validation targets of the rewrite |
+| [metatron_qso_py/README.md](metatron_qso_py/README.md) | Python API |
+| [CHANGELOG.md](CHANGELOG.md) | Release history |
+| API reference | `cargo doc -p metatron-qso-rs --open` |
 
+## License
 
-## 📊 Architecture Diagram
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                           Q⊗DASH Workspace                          │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  ┌──────────────────┐      ┌──────────────────┐                   │
-│  │ metatron-qso-rs  │◄────►│ metatron_backend │                   │
-│  │  • Quantum Core  │      │  • Local/IBM     │                   │
-│  │  • VQA/QAOA/VQC  │      │  • Circuit API   │                   │
-│  │  • Quantum Walks │      └──────────────────┘                   │
-│  │  • DTL System    │                                             │
-│  └────────┬─────────┘                                             │
-│           │                                                        │
-│           ▼                                                        │
-│  ┌──────────────────┐      ┌──────────────────────────┐          │
-│  │ metatron_qso_py  │      │ metatron_dionice_bridge  │          │
-│  │  • PyO3 Bindings │      │  • 4D-Trichter System    │          │
-│  │  • Python API    │◄────►│  • 4D-5D Coupling        │          │
-│  │  • Auto-Tuning   │      │  • 4 Adapters            │          │
-│  └──────────────────┘      └───────────┬──────────────┘          │
-│                                        │                          │
-│  ┌──────────────────┐                 ▼                          │
-│  │ metatron_triton  │      ┌──────────────────────────┐          │
-│  │  • Spiral Search │      │   DioniceOS (18 Crates)  │          │
-│  │  • TRITON        │      ├──────────────────────────┤          │
-│  └──────────────────┘      │ • apollyon_5d (3)        │          │
-│                            │ • infinity-ledger (13)   │          │
-│  ┌──────────────────┐      │ • apollyon-mef-bridge    │          │
-│  │ metatron_telemetry│      │ • unified_5d_cube        │          │
-│  │  • HTTP Server   │      └──────────────────────────┘          │
-│  │  • REST API      │                                             │
-│  │  • Dashboard     │                                             │
-│  └──────────────────┘                                             │
-│                                                                     │
-│  ┌──────────────────────────────────────────┐                     │
-│  │         SCS (Python 12 Modules)          │                     │
-│  │  • Calibrator • Field • Operators • PoR  │                     │
-│  │  • CRI • CLI • AutoTuner • Benchmark     │                     │
-│  └──────────────────────────────────────────┘                     │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-## 🔬 Scientific Background
-
-### Information-theoretic Advantage
-
-**Metatron System (13 nodes)**:
-```
-Binary:             13.0 bit (classical)
-Tripolar:           20.6 bit (+58.5%)
-Tripolar with phase: 46.6 bit (+258%)
-```
-
-### Quantum Algorithm Complexity
-
-| Algorithm | Complexity | Speedup vs. Classical |
-|-----------|------------|----------------------|
-| Quantum Walk Search | O(√N) | ~3.6× |
-| VQE Ground State | O(poly(n)) | Exponential |
-| QAOA MaxCut | O(p·M) | >0.75 approximation |
-| Boson Sampling | #P-hard | Classically intractable |
-| Grover Search | O(√N) | Quadratic |
-
-### 4D-5D Coupling Theory
-
-**5D State Space**: (x, y, z, ψ, ω)
-- Semantic dimension: ψ (resonance/weight)
-- Temporal dimension: ω (phase/oscillation)
-
-**Coupling Operator**:
-```
-Lift:    4D → 5D  (Hyperbion absorption)
-Relax:   5D → 5D  (HDAG gradient descent)
-Project: 5D → 4D  (Funnel advection)
-```
-
-## 🤝 Contributing
-
-Contributions are welcome! Please note:
-
-1. **Fork** the repository
-2. **Create feature branch** (`git checkout -b feature/amazing-feature`)
-3. **Add tests** (`cargo test --workspace`)
-4. **Check formatting** (`cargo fmt --all && cargo clippy --workspace`)
-5. **Commit** (`git commit -m 'Add amazing feature'`)
-6. **Push** to branch (`git push origin feature/amazing-feature`)
-7. **Open pull request**
-
-### Development Guidelines
-
-- All new features need tests
-- Documentation with rustdoc
-- Update benchmark baselines when performance changes
-- Add Python examples for new APIs
-
-## 📝 License
-
-This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for details.
-
-## 🙏 Acknowledgments
-
-- **Sacred Geometry** - Metatron's Cube as fundamental structure
-- **Quantum Computing** - VQE/QAOA/VQC research
-- **Rust Community** - nalgebra, petgraph, rayon, pyo3
-- **DioniceOS** - 4D-5D integration framework
-
-## 📧 Contact & Support
-
-- **GitHub Issues**: [https://github.com/LashSesh/qso/issues](https://github.com/LashSesh/qso/issues)
-- **Documentation**: See [docs/](docs/) directory
-- **Examples**: [metatron_qso_py/examples/](metatron_qso_py/examples/)
-
-## 📈 Status & Metrics
-
-- **Lines of Code**: ~8,222 Rust (Core) + ~17,200 Rust (Python bindings) + ~3,204 Python (SCS)
-- **Test Coverage**: 109 tests (APOLLYON-5D) + 84 tests (Bridge) + inline tests
-- **Workspace Crates**: 24 (6 main + 18 DioniceOS)
-- **Benchmark Suites**: 8 executables with CI/CD integration
-- **Documentation Files**: 30+ Markdown files
-
----
-
-**Made with ❤️ in Rust** | **Powered by Quantum Geometry** | **© 2025 Sebastian Klemm (Aion-Chronos; "Sol invictus Mithra")**
+Apache License 2.0, see [LICENSE](LICENSE). © 2025–2026 Sebastian Klemm.

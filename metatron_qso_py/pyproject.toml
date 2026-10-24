@@ -1,52 +1,37 @@
 [build-system]
-requires = ["maturin>=1.0,<2.0"]
+requires = ["maturin>=1.8,<2.0"]
 build-backend = "maturin"
 
 [project]
 name = "metatron-qso"
-version = "0.1.0"
-description = "Python SDK for Metatron Quantum State Operator - High-performance quantum computing on sacred geometry"
-authors = [
-    {name = "Sebastian Klemm"}
-]
+version = "2.0.0"
+description = "Validated quantum simulation in pure Rust: circuits, VQE/QAOA with exact gradients, noise, and quantum walks on graphs including Metatron's Cube."
 readme = "README.md"
-requires-python = ">=3.8"
-license = {text = "MIT"}
-keywords = ["quantum", "computing", "metatron", "vqa", "quantum-walk", "qaoa"]
+requires-python = ">=3.9"
+license = "Apache-2.0"
+authors = [{ name = "Sebastian Klemm" }]
+keywords = ["quantum", "simulator", "qaoa", "vqe", "quantum-walk"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
-    "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
     "Programming Language :: Rust",
     "Topic :: Scientific/Engineering :: Physics",
-    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
 ]
-dependencies = [
-    "numpy>=1.20.0",
-]
+dependencies = ["numpy>=1.21"]
 
 [project.optional-dependencies]
-dev = [
-    "pytest>=7.0.0",
-    "pytest-benchmark>=4.0.0",
-    "jupyter>=1.0.0",
-    "matplotlib>=3.5.0",
-    "networkx>=3.0",
-]
+dev = ["pytest>=7"]
 
 [project.urls]
-Homepage = "https://github.com/LashSesh/qso"
-Documentation = "https://github.com/LashSesh/qso/tree/main/docs"
 Repository = "https://github.com/LashSesh/qso"
-Issues = "https://github.com/LashSesh/qso/issues"
 
 [tool.maturin]
-features = ["pyo3/extension-module"]
 python-source = "python"
+module-name = "metatron_qso._core"
+features = ["pyo3/extension-module"]
+exclude = ["**/__pycache__/**", "**/*.pyc"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
