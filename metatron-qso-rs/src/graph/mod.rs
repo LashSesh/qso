@@ -554,8 +554,11 @@ impl Graph {
     /// The graph relabelled canonically; isomorphic graphs give equal
     /// edge lists.
     pub fn canonical_form(&self) -> Graph {
-        self.relabeled(&self.canonical_labelling())
-            .expect("a labelling is a permutation")
+        let mut g = self
+            .relabeled(&self.canonical_labelling())
+            .expect("a labelling is a permutation");
+        g.edges.sort_by_key(|&(u, v, _)| (u, v));
+        g
     }
 
     /// Whether `other` is isomorphic to this graph (weights included).

@@ -2,7 +2,7 @@
 
 use metatron_qso::Rng;
 use metatron_qso::graph::generators::{self, PlatonicSolid};
-use metatron_qso::graph::{Graph, metatron};
+use metatron_qso::graph::{Graph, io, metatron};
 use numpy::ndarray::Array2;
 use numpy::{IntoPyArray, PyArray1, PyArray2};
 use pyo3::exceptions::PyTypeError;
@@ -89,7 +89,7 @@ impl PyGraph {
                 edges.len()
             )));
         }
-        let mut g = Graph::new(n);
+        let mut list = Vec::with_capacity(edges.len());
         for (k, e) in edges.into_iter().enumerate() {
             let w = match (e.weight, &weights) {
                 (Some(_), Some(_)) => {
@@ -101,9 +101,83 @@ impl PyGraph {
                 (None, Some(ws)) => ws[k],
                 (None, None) => 1.0,
             };
-            g.add_weighted_edge(e.u, e.v, w).raise()?;
+            list.push((e.u, e.v, w));
         }
+        generators::check_generated_size(n as u128, list.len() as u128).raise()?;
+        Graph::from_weighted_edges(n, &list).raise().map(wrap)
+    }
+
+    /// Graph from a NetworkX graph (or anything with `nodes()` and
+    /// `edges(data=True)`); nodes are numbered in the order of `nodes()`,
+    /// weights are read from the edge attribute `weight` (default 1).
+    /// NetworkX itself is not needed.
+    #[staticmethod]
+    #[pyo3(signature = (graph, weight = "weight"))]
+    fn from_networkx(graph: &Bound<'_, PyAny>, weight: &str) -> PyResult<Self> {
+        let index = PyDict::new(graph.py());
+        let mut n = 0usize;
+        for node in graph.call_method0("nodes")?.try_iter()? {
+            index.set_item(node?, n)?;
+            n += 1;
+        }
+        check_nodes(n)?;
+        let kwargs = PyDict::new(graph.py());
+        kwargs.set_item("data", true)?;
+        let mut list = Vec::new();
+        for item in graph.call_method("edges", (), Some(&kwargs))?.try_iter()? {
+            let (u, v, data): (Bound<'_, PyAny>, Bound<'_, PyAny>, Bound<'_, PyAny>) =
+                item?.extract()?;
+            let lookup = |x: &Bound<'_, PyAny>| -> PyResult<usize> {
+                index
+                    .get_item(x)?
+                    .ok_or_else(|| invalid(format!("edge endpoint {x} is not a node")))?
+                    .extract()
+            };
+            let w: f64 = match data.call_method1("get", (weight,))? {
+                x if x.is_none() => 1.0,
+                x => x.extract()?,
+            };
+            list.push((lookup(&u)?, lookup(&v)?, w));
+        }
+        generators::check_generated_size(n as u128, list.len() as u128).raise()?;
+        let name: String = graph
+            .getattr("name")
+            .and_then(|x| x.extract())
+            .unwrap_or_default();
+        let g = Graph::from_weighted_edges(n, &list).raise()?;
+        Ok(wrap(if name.is_empty() {
+            g
+        } else {
+            g.with_name(name)
+        }))
+    }
+
+    /// Graph from an edge list: one `u v [weight]` per line, nodes from 0,
+    /// `#` or `%` comments, `# nodes N` for the number of nodes.
+    #[staticmethod]
+    fn from_edge_list(text: &str) -> PyResult<Self> {
+        let g = io::from_edge_list(text).raise()?;
+        check_nodes(g.num_nodes())?;
         Ok(wrap(g))
+    }
+
+    /// The graph as an edge list (see `from_edge_list`).
+    fn to_edge_list(&self) -> String {
+        io::to_edge_list(&self.inner)
+    }
+
+    /// Graph from a GraphML document (nodes, edges and a `weight` key;
+    /// node ids are numbered in order of appearance).
+    #[staticmethod]
+    fn from_graphml(text: &str) -> PyResult<Self> {
+        let g = io::from_graphml(text).raise()?;
+        check_nodes(g.num_nodes())?;
+        Ok(wrap(g))
+    }
+
+    /// The graph as a GraphML document.
+    fn to_graphml(&self) -> String {
+        io::to_graphml(&self.inner)
     }
 
     /// Add the edge `{u, v}` with weight `weight` (finite, non-zero).
@@ -260,6 +334,99 @@ impl PyGraph {
         py.detach(|| generators::erdos_renyi(n, p, &mut Rng::seed_from_u64(seed)))
             .raise()
             .map(wrap)
+    }
+
+    /// Johnson graph J(n, k): k-subsets of n elements, adjacent when they
+    /// share k − 1 elements.
+    #[staticmethod]
+    fn johnson(n: usize, k: usize) -> PyResult<Self> {
+        generators::johnson(n, k).raise().map(wrap)
+    }
+
+    /// Kneser graph K(n, k): k-subsets, adjacent when disjoint
+    /// (K(5, 2) is the Petersen graph).
+    #[staticmethod]
+    fn kneser(n: usize, k: usize) -> PyResult<Self> {
+        generators::kneser(n, k).raise().map(wrap)
+    }
+
+    /// Hamming graph H(d, q): words of length d over q letters, adjacent
+    /// when they differ in one letter (H(d, 2) is the hypercube).
+    #[staticmethod]
+    fn hamming(d: usize, q: usize) -> PyResult<Self> {
+        generators::hamming(d, q).raise().map(wrap)
+    }
+
+    /// Rook's graph K_m □ K_n (m × n board, adjacent in a row or column).
+    #[staticmethod]
+    fn rook(m: usize, n: usize) -> PyResult<Self> {
+        generators::rook(m, n).raise().map(wrap)
+    }
+
+    /// Paley graph of prime order q ≡ 1 (mod 4).
+    #[staticmethod]
+    fn paley(q: usize) -> PyResult<Self> {
+        generators::paley(q).raise().map(wrap)
+    }
+
+    /// Circulant graph: node i joined to i ± s (mod n) for every jump s.
+    #[staticmethod]
+    fn circulant(n: usize, jumps: Vec<usize>) -> PyResult<Self> {
+        generators::circulant(n, &jumps).raise().map(wrap)
+    }
+
+    /// Cayley graph of Z_2^d: node x joined to x XOR g for every generator g.
+    #[staticmethod]
+    fn cayley_z2(d: usize, generators: Vec<u64>) -> PyResult<Self> {
+        generators::cayley_z2(d, &generators).raise().map(wrap)
+    }
+
+    /// The Shrikhande graph: strongly regular (16, 6, 2, 2) like the 4 × 4
+    /// rook's graph, but not isomorphic to it.
+    #[staticmethod]
+    fn shrikhande() -> Self {
+        wrap(generators::shrikhande())
+    }
+
+    /// Cartesian product: node (g, h) has index g·|H| + h.
+    fn cartesian_product(&self, other: &PyGraph) -> PyResult<Self> {
+        self.inner.cartesian_product(&other.inner).raise().map(wrap)
+    }
+
+    /// `(n, k, λ, μ)` if the graph is strongly regular, else `None`.
+    fn strongly_regular_parameters(&self, py: Python<'_>) -> Option<(usize, usize, usize, usize)> {
+        let g = &self.inner;
+        py.detach(|| g.strongly_regular_parameters())
+    }
+
+    /// The graph with node `u` renamed `perm[u]`.
+    fn relabeled(&self, perm: Vec<usize>) -> PyResult<Self> {
+        self.inner.relabeled(&perm).raise().map(wrap)
+    }
+
+    /// Canonical labelling: `labels[u]` is the canonical index of node `u`;
+    /// isomorphic graphs get identical canonical forms.
+    fn canonical_labelling(&self, py: Python<'_>) -> Vec<usize> {
+        let g = &self.inner;
+        py.detach(|| g.canonical_labelling())
+    }
+
+    /// The graph relabelled canonically.
+    fn canonical_form(&self, py: Python<'_>) -> Self {
+        let g = &self.inner;
+        wrap(py.detach(|| g.canonical_form()))
+    }
+
+    /// Whether the graphs are isomorphic (edge weights included).
+    fn is_isomorphic(&self, py: Python<'_>, other: &PyGraph) -> bool {
+        let (g, h) = (&self.inner, &other.inner);
+        py.detach(|| g.is_isomorphic(h))
+    }
+
+    /// An isomorphism to `other` (node `u` maps to `iso[u]`), or `None`.
+    fn isomorphism(&self, py: Python<'_>, other: &PyGraph) -> Option<Vec<usize>> {
+        let (g, h) = (&self.inner, &other.inner);
+        py.detach(|| g.isomorphism(h))
     }
 
     #[getter]

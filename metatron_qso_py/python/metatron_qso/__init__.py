@@ -1,8 +1,10 @@
 """QSO — validated quantum simulation in pure Rust.
 
 Exact state-vector and density-matrix simulation, VQE and QAOA with exact
-gradients, Grover search, QFT and phase estimation, and continuous-time
-quantum walks on arbitrary graphs (including Metatron's Cube), and exact
+gradients, Grover search, QFT and phase estimation; continuous- and
+discrete-time quantum walks on arbitrary graphs (including Metatron's Cube),
+reduced by symmetry to exact low-dimensional problems where possible, with
+state-transfer analysis and walk circuits; graph isomorphism; and exact
 boson sampling.
 
 Conventions: qubit 0 is the least significant bit of a basis index; bit
@@ -16,23 +18,33 @@ from ._core import (
     BosonSampler,
     Channel,
     Circuit,
+    CoinedWalk,
     ContinuousWalk,
     DensityMatrix,
     DephasingWalk,
     Graph,
     GraphClassifier,
+    LineWalk,
     MaxCutQaoa,
     NoiseModel,
     Parameter,
     PauliSum,
+    Quotient,
+    QuotientSearch,
+    QuotientWalk,
     SpatialSearch,
+    StateTransfer,
     StateVector,
+    SzegedyWalk,
     VariationalClassifier,
     __version__,
     beam_splitter,
     bitstring,
+    cayley_walk_circuit,
+    circulant_walk_circuit,
     classical_hitting_times,
     classical_walk_probabilities,
+    diagonal_unitary_circuit,
     efficient_su2,
     estimate_expectation,
     estimate_phase,
@@ -54,6 +66,7 @@ from ._core import (
     run_vqe,
     simulate,
     transverse_field_ising,
+    trotter_walk_circuit,
 )
 
 __all__ = [
@@ -62,23 +75,33 @@ __all__ = [
     "BosonSampler",
     "Channel",
     "Circuit",
+    "CoinedWalk",
     "ContinuousWalk",
     "DensityMatrix",
     "DephasingWalk",
     "Graph",
     "GraphClassifier",
+    "LineWalk",
     "MaxCutQaoa",
     "NoiseModel",
     "Parameter",
     "PauliSum",
+    "Quotient",
+    "QuotientSearch",
+    "QuotientWalk",
     "SpatialSearch",
+    "StateTransfer",
     "StateVector",
+    "SzegedyWalk",
     "VariationalClassifier",
     "__version__",
     "beam_splitter",
     "bitstring",
+    "cayley_walk_circuit",
+    "circulant_walk_circuit",
     "classical_hitting_times",
     "classical_walk_probabilities",
+    "diagonal_unitary_circuit",
     "efficient_su2",
     "estimate_expectation",
     "estimate_phase",
@@ -100,4 +123,5 @@ __all__ = [
     "run_vqe",
     "simulate",
     "transverse_field_ising",
+    "trotter_walk_circuit",
 ]

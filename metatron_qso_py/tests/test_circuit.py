@@ -119,6 +119,16 @@ def test_qasm_round_trip_preserves_state_up_to_global_phase():
     assert_same_up_to_phase(a, b)
 
 
+def test_qasm_exports_multi_controlled_gates():
+    c = q.Circuit(5)
+    for k in range(5):
+        c.ry(k, 0.3 + 0.1 * k)
+    c.mcx([0, 1, 2, 3], 4).mcz([0, 1, 2, 3, 4]).mcx([1, 2, 3], 0)
+    c.unitary(np.array([[0, 1j], [1j, 0]]), [2], controls=[0, 1, 4])
+    again = q.Circuit.from_qasm(c.to_qasm())
+    assert_same_up_to_phase(q.simulate(c).amplitudes, q.simulate(again).amplitudes)
+
+
 def test_qasm_parameters_and_measurement():
     ansatz = q.real_amplitudes(2, 1)
     theta = [0.1, 0.2, 0.3, 0.4]
@@ -150,7 +160,6 @@ def test_qasm_parameters_and_measurement():
         lambda: q.Circuit.from_qasm("OPENQASM 2.0;\nqreg q[64];\nh q[0];"),
         lambda: q.Circuit(1).new_parameter() / 0.0,
         # No OpenQASM 2 (qelib1) form for X with three controls.
-        lambda: q.Circuit(4).mcx([0, 1, 2], 3).to_qasm(),
     ],
 )
 def test_invalid_circuits_raise_value_error(build):

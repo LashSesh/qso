@@ -325,6 +325,7 @@ mod tests {
             for seed in 0..3 {
                 let (h, _) = shuffled(g, seed);
                 assert_eq!(certificate(g), certificate(&h), "{}", g.name());
+                assert_eq!(g.canonical_form().edges(), h.canonical_form().edges());
                 let iso = isomorphism(g, &h).expect("isomorphic");
                 assert!(is_isomorphism(g, &h, &iso), "{}", g.name());
             }

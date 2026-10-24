@@ -114,38 +114,33 @@ impl StartSpectrum<'_> {
 
     /// Exact time average `(1/T)∫₀ᵀ P(j, t) dt`.
     pub fn average_distribution(&self, t_max: f64) -> Vec<f64> {
-        let (n, m) = self.vectors.shape();
-        // P(j,t) = Σ_ab c_a c_b x_a(j) x_b(j) e^{−i(λa−λb)t}
-        let kernel = |d: f64| {
+        let m = self.vectors.ncols();
+        // P(j,t) = Σ_ab c_a c_b x_a(j) x_b(j) e^{−i(λa−λb)t}; the average
+        // replaces the phase by (1/T)∫ e^{−idt} dt, whose real part is
+        // sin(dT)/(dT). With M_ab = c_a c_b sinc((λa−λb)T), the average is
+        // the diagonal of X·M·Xᵀ.
+        let sinc = |d: f64| {
             let x = d * t_max;
-            if x.abs() < 1e-12 {
-                C64::new(1.0, 0.0)
-            } else {
-                // (1/T)∫ e^{−idt} dt = (1 − e^{−idT})/(idT)
-                (C64::new(1.0, 0.0) - C64::from_polar(1.0, -x)) / C64::new(0.0, x)
-            }
+            if x.abs() < 1e-12 { 1.0 } else { x.sin() / x }
         };
-        let mut avg = vec![0.0; n];
-        for a in 0..m {
-            for b in 0..m {
-                let coeff = self.coeffs[a] * self.coeffs[b];
-                if coeff == 0.0 {
-                    continue;
-                }
-                let k = kernel(self.values[a] - self.values[b]).re * coeff;
-                for (j, p) in avg.iter_mut().enumerate() {
-                    *p += k * self.vectors[(j, a)] * self.vectors[(j, b)];
-                }
-            }
-        }
-        avg
+        let kernel = RMatrix::from_fn(m, m, |a, b| {
+            self.coeffs[a] * self.coeffs[b] * sinc(self.values[a] - self.values[b])
+        });
+        let xm = &*self.vectors * kernel;
+        xm.row_iter()
+            .zip(self.vectors.row_iter())
+            .map(|(a, b)| a.dot(&b))
+            .collect()
     }
 }
 
 /// Largest cyclic subspace used for walks beyond [`DENSE_LIMIT`] nodes: at
-/// most `DENSE_LIMIT` vectors and `2²⁵` stored amplitudes.
+/// most `DENSE_LIMIT` vectors, `2²⁵` stored amplitudes and `n·m² ≤ 2³²`
+/// operations (a few seconds).
 fn cyclic_limit(n: usize) -> usize {
-    DENSE_LIMIT.min((1usize << 25) / n.max(1)).max(1)
+    let n = n.max(1);
+    let by_cost = ((1u64 << 32) as f64 / n as f64).sqrt() as usize;
+    DENSE_LIMIT.min((1usize << 25) / n).min(by_cost).max(1)
 }
 
 /// Total-variation distance `½ Σ |p − q|`.
@@ -306,7 +301,7 @@ impl ContinuousWalk {
                 let mut v = vec![0.0; self.n];
                 v[start] = 1.0;
                 let h = &self.hamiltonian;
-                let c = cyclic_spectrum(|x, y| h.matvec(x, y), &v, cyclic_limit(self.n))?;
+                let c = cyclic_spectrum(|x, y| h.matvec_real(x, y), &v, cyclic_limit(self.n))?;
                 Ok(StartSpectrum {
                     values: std::borrow::Cow::Owned(c.values),
                     coeffs: c.weights,
@@ -333,7 +328,7 @@ impl ContinuousWalk {
     /// Beyond [`DENSE_LIMIT`] nodes the start node's cyclic subspace is
     /// used, which is exact and small for symmetric graphs (21 dimensions on
     /// the 2²⁰-node hypercube); the call fails if that subspace exceeds
-    /// `min(DENSE_LIMIT, 2²⁵/n)` dimensions.
+    /// `min(DENSE_LIMIT, 2²⁵/n, √(2³²/n))` dimensions.
     pub fn limiting_distribution(&self, start: usize) -> Result<Vec<f64>> {
         Ok(self.start_spectrum(start)?.limiting_distribution())
     }
@@ -517,7 +512,7 @@ mod tests {
         let h = small.hamiltonian();
         let mut v = vec![0.0; 10];
         v[2] = 1.0;
-        let c = crate::linalg::cyclic_spectrum(|x, y| h.matvec(x, y), &v, 10).unwrap();
+        let c = crate::linalg::cyclic_spectrum(|x, y| h.matvec_real(x, y), &v, 10).unwrap();
         assert_eq!(c.values.len(), 3);
         let cyclic = StartSpectrum {
             values: std::borrow::Cow::Owned(c.values),
@@ -533,7 +528,7 @@ mod tests {
         let h = r.laplacian_csr();
         let mut v = vec![0.0; 40];
         v[0] = 1.0;
-        assert!(crate::linalg::cyclic_spectrum(|x, y| h.matvec(x, y), &v, 10).is_err());
+        assert!(crate::linalg::cyclic_spectrum(|x, y| h.matvec_real(x, y), &v, 10).is_err());
     }
 
     #[test]

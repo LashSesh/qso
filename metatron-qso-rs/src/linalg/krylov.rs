@@ -277,34 +277,85 @@ pub struct CyclicSpectrum {
 /// [`QsoError::NoConvergence`].
 pub fn cyclic_spectrum<F>(apply: F, v: &[f64], max_dim: usize) -> Result<CyclicSpectrum>
 where
-    F: Fn(&[C64], &mut [C64]),
+    F: Fn(&[f64], &mut [f64]),
 {
+    use nalgebra::DMatrixView;
+
+    fn dot(a: &[f64], b: &[f64]) -> f64 {
+        let mut acc = [0.0; 4];
+        let (ca, cb) = (a.chunks_exact(4), b.chunks_exact(4));
+        let tail: f64 = ca
+            .remainder()
+            .iter()
+            .zip(cb.remainder())
+            .map(|(x, y)| x * y)
+            .sum();
+        for (x, y) in ca.zip(cb) {
+            for k in 0..4 {
+                acc[k] += x[k] * y[k];
+            }
+        }
+        acc.iter().sum::<f64>() + tail
+    }
+    /// Remove from `w` its components along the columns of `basis`.
+    fn project_out(basis: &[f64], w: &mut [f64]) {
+        let dim = w.len();
+        let coeffs: Vec<f64> = basis.chunks_exact(dim).map(|q| dot(q, w)).collect();
+        for (q, c) in basis.chunks_exact(dim).zip(coeffs) {
+            w.iter_mut().zip(q).for_each(|(x, y)| *x -= c * y);
+        }
+    }
+
     let dim = v.len();
     let nv = v.iter().map(|x| x * x).sum::<f64>().sqrt();
     if dim == 0 || nv == 0.0 {
         return Err(QsoError::ZeroNorm);
     }
-    let start: Vec<C64> = v.iter().map(|&x| C64::new(x / nv, 0.0)).collect();
-    let mut matvecs = 0;
-    let basis = build_basis(&apply, start, max_dim.max(1), &mut matvecs, |_, _| false);
-    let k = basis.alphas.len();
-    if !basis.breakdown {
-        return Err(QsoError::NoConvergence {
-            method: "cyclic subspace (Lanczos)",
-            iterations: k,
-            residual: basis.betas[k - 1],
-        });
-    }
-    let (values, y) = tridiagonal_eigh(&basis.alphas, &basis.betas[..k - 1]);
-    let m = basis.vectors.len().min(k);
-    let mut vectors = DMatrix::<f64>::zeros(dim, k);
-    for c in 0..k {
-        let coeffs: Vec<C64> = (0..m).map(|i| C64::new(y[(i, c)], 0.0)).collect();
-        let x = combine(&basis.vectors[..m], &coeffs);
-        for (r, xr) in x.iter().enumerate() {
-            vectors[(r, c)] = xr.re;
+    let max_dim = max_dim.clamp(1, dim);
+    // Lanczos vectors as the columns of a column-major buffer.
+    let mut basis: Vec<f64> = v.iter().map(|x| x / nv).collect();
+    let (mut alphas, mut betas): (Vec<f64>, Vec<f64>) = (Vec::new(), Vec::new());
+    let mut w = vec![0.0; dim];
+    let mut scale = 1.0f64;
+    loop {
+        let j = alphas.len();
+        let q = &basis[j * dim..(j + 1) * dim];
+        apply(q, &mut w);
+        let alpha = dot(q, &w);
+        alphas.push(alpha);
+        scale = scale.max(alpha.abs());
+        // Three-term recurrence, then full re-orthogonalisation; a second
+        // pass only if the first removed a large part of the vector
+        // (Kahan–Parlett "twice is enough").
+        w.iter_mut().zip(q).for_each(|(x, y)| *x -= alpha * y);
+        if j > 0 {
+            let (prev, beta) = (&basis[(j - 1) * dim..j * dim], betas[j - 1]);
+            w.iter_mut().zip(prev).for_each(|(x, y)| *x -= beta * y);
         }
+        let before = dot(&w, &w).sqrt();
+        project_out(&basis, &mut w);
+        let mut beta = dot(&w, &w).sqrt();
+        if beta < 0.7 * before {
+            project_out(&basis, &mut w);
+            beta = dot(&w, &w).sqrt();
+        }
+        if beta <= 1e-13 * scale || j + 1 == dim {
+            break;
+        }
+        if j + 1 == max_dim {
+            return Err(QsoError::NoConvergence {
+                method: "cyclic subspace (Lanczos)",
+                iterations: j + 1,
+                residual: beta,
+            });
+        }
+        scale = scale.max(beta);
+        betas.push(beta);
+        basis.extend(w.iter().map(|x| x / beta));
     }
+    let k = alphas.len();
+    let (values, y) = tridiagonal_eigh(&alphas, &betas);
+    let vectors = DMatrixView::from_slice(&basis, dim, k) * &y;
     let weights = (0..k).map(|c| nv * y[(0, c)]).collect();
     Ok(CyclicSpectrum {
         values,
