@@ -280,6 +280,18 @@ impl ContinuousWalk {
         t_max: f64,
         steps: usize,
     ) -> Result<Option<f64>> {
+        if !(epsilon.is_finite() && epsilon >= 0.0) {
+            return Err(QsoError::invalid(
+                "epsilon",
+                format!("must be finite and non-negative, got {epsilon}"),
+            ));
+        }
+        if !(t_max.is_finite() && t_max > 0.0) {
+            return Err(QsoError::invalid(
+                "t_max",
+                format!("must be finite and positive, got {t_max}"),
+            ));
+        }
         let limit = self.limiting_distribution(start)?;
         let steps = steps.max(1);
         let mut mixed = None;
@@ -381,6 +393,13 @@ mod tests {
         assert!((k_mix..=steps).all(|k| tv(grid(k)) <= eps));
         assert!(tv(grid(k_mix - 1)) > eps);
         assert_eq!(walk.mixing_time(0, 1e-9, 1.0, 10).unwrap(), None);
+        // Comparisons with NaN are false, so a NaN bound would always "hold".
+        for (eps, t) in [(f64::NAN, 1.0), (-0.1, 1.0), (f64::INFINITY, 1.0)] {
+            assert!(walk.mixing_time(0, eps, t, 10).is_err());
+        }
+        for t in [f64::NAN, 0.0, -1.0, f64::INFINITY] {
+            assert!(walk.mixing_time(0, 0.1, t, 10).is_err());
+        }
     }
 
     #[test]

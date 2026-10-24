@@ -16,7 +16,10 @@
 mod boson;
 pub mod permanent;
 
-pub use boson::{BosonSampler, Distribution, count_patterns, occupation_patterns};
+pub use boson::{
+    BosonSampler, Distribution, MAX_OUTPUT_ENTRIES, MAX_PATTERNS, count_patterns,
+    occupation_patterns,
+};
 pub use permanent::{MAX_PERMANENT_DIM, permanent, permanent_real};
 
 use crate::error::{QsoError, Result};
@@ -65,8 +68,13 @@ pub fn beam_splitter(theta: f64, phi: f64) -> CMatrix {
     )
 }
 
-/// Largest entry of `|U†U − I|`; zero for an exactly unitary matrix.
+/// Largest entry of `|U†U − I|`; zero for an exactly unitary matrix and
+/// infinite for a matrix that is not square or whose deviation is not
+/// finite, so that every tolerance check rejects it.
 pub fn unitarity_error(u: &CMatrix) -> f64 {
+    if !u.is_square() {
+        return f64::INFINITY;
+    }
     let m = u.nrows();
     let g = u.adjoint() * u;
     (0..m)
@@ -75,7 +83,13 @@ pub fn unitarity_error(u: &CMatrix) -> f64 {
             let target = if i == j { 1.0 } else { 0.0 };
             (g[(i, j)] - target).norm()
         })
-        .fold(0.0, f64::max)
+        .fold(0.0, |worst, e| {
+            if e.is_nan() {
+                f64::INFINITY
+            } else {
+                worst.max(e)
+            }
+        })
 }
 
 fn check_modes(m: usize) -> Result<()> {
@@ -121,5 +135,24 @@ mod tests {
     fn beam_splitter_is_unitary() {
         assert!(unitarity_error(&beam_splitter(0.3, 1.1)) < 1e-15);
         assert!(haar_unitary(0, &mut Rng::seed_from_u64(1)).is_err());
+    }
+
+    #[test]
+    fn unitarity_error_rejects_malformed_matrices() {
+        let c = |re: f64| C64::new(re, 0.0);
+        assert_eq!(
+            unitarity_error(&CMatrix::from_element(3, 2, c(0.5))),
+            f64::INFINITY
+        );
+        assert_eq!(
+            unitarity_error(&CMatrix::from_element(2, 3, c(0.5))),
+            f64::INFINITY
+        );
+        let mut u = CMatrix::identity(2, 2);
+        u[(0, 1)] = c(f64::NAN);
+        assert_eq!(unitarity_error(&u), f64::INFINITY);
+        u[(0, 1)] = c(f64::INFINITY);
+        assert_eq!(unitarity_error(&u), f64::INFINITY);
+        assert_eq!(unitarity_error(&CMatrix::zeros(0, 0)), 0.0);
     }
 }

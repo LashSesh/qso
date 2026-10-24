@@ -24,7 +24,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::classifier::TrainingReport;
-use super::qaoa::MaxCutQaoa;
+use super::qaoa::{MAX_QAOA_DEPTH, MaxCutQaoa};
 use crate::error::{QsoError, Result};
 use crate::graph::Graph;
 use crate::optimize::{Method, Objective, Options, minimize};
@@ -33,6 +33,13 @@ use crate::rng::Rng;
 
 /// L2 penalty on the readout weights `a` and `b`.
 const READOUT_L2: f64 = 1e-4;
+
+/// Largest graph (in nodes, i.e. qubits) the classifier accepts.
+pub const MAX_GRAPH_NODES: usize = 24;
+
+/// Largest total size `Σ 2ⁿ` of the cut tables that training keeps in
+/// memory, one per graph (2 GiB).
+pub const MAX_TRAINING_STATES: usize = 1 << 28;
 
 /// Quantum graph classifier (see the module documentation).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -45,9 +52,7 @@ pub struct GraphClassifier {
 
 impl GraphClassifier {
     pub fn new(layers: usize) -> Result<Self> {
-        if layers == 0 {
-            return Err(QsoError::invalid("layers", "need at least one layer"));
-        }
+        check_layers(layers)?;
         Ok(Self {
             layers,
             parameters: Vec::new(),
@@ -56,10 +61,12 @@ impl GraphClassifier {
 
     /// `2·layers + 2`.
     pub fn num_parameters(&self) -> usize {
-        2 * self.layers + 2
+        self.layers.saturating_mul(2).saturating_add(2)
     }
 
     fn trained(&self) -> Result<&[f64]> {
+        // The fields are public (and deserialisable), so check them again.
+        check_layers(self.layers)?;
         if self.parameters.len() != self.num_parameters() {
             return Err(QsoError::invalid(
                 "model",
@@ -71,6 +78,7 @@ impl GraphClassifier {
 
     /// Feature `f(G) = ⟨C_G⟩ / W(G)` for the angles `[γ…, β…]`.
     pub fn feature_with(&self, graph: &Graph, angles: &[f64]) -> Result<f64> {
+        check_layers(self.layers)?;
         if angles.len() != 2 * self.layers {
             return Err(QsoError::ParameterCount {
                 expected: 2 * self.layers,
@@ -113,7 +121,8 @@ impl GraphClassifier {
     }
 
     /// Train with L-BFGS from `restarts` seeded random starts (angles in
-    /// `[0, π/2)`, readout at zero) and keep the lowest loss.
+    /// `[0, π/2)`, readout at zero) and keep the lowest loss. `restarts = 0`
+    /// counts as one start.
     pub fn fit(
         &mut self,
         graphs: &[Graph],
@@ -122,7 +131,24 @@ impl GraphClassifier {
         restarts: usize,
         seed: u64,
     ) -> Result<TrainingReport> {
+        check_layers(self.layers)?;
         check_data(graphs, labels)?;
+        let states = graphs.iter().try_fold(0usize, |total, g| {
+            let n = g.num_nodes();
+            if n > MAX_GRAPH_NODES {
+                return None;
+            }
+            total.checked_add(1 << n)
+        });
+        if states.is_none_or(|s| s > MAX_TRAINING_STATES) {
+            return Err(QsoError::invalid(
+                "graphs",
+                format!(
+                    "training needs every graph to have at most {MAX_GRAPH_NODES} nodes and \
+                     Σ 2ⁿ ≤ {MAX_TRAINING_STATES} over all graphs"
+                ),
+            ));
+        }
         let restarts = restarts.max(1);
         let instances = map_tasks(graphs.len(), |k| Instance::new(&graphs[k], self.layers))
             .into_iter()
@@ -160,6 +186,16 @@ fn sigmoid(z: f64) -> f64 {
     1.0 / (1.0 + (-z).exp())
 }
 
+fn check_layers(layers: usize) -> Result<()> {
+    if layers == 0 || layers > MAX_QAOA_DEPTH {
+        return Err(QsoError::invalid(
+            "layers",
+            format!("number of layers must lie in 1..={MAX_QAOA_DEPTH}, got {layers}"),
+        ));
+    }
+    Ok(())
+}
+
 fn check_data(graphs: &[Graph], labels: &[bool]) -> Result<()> {
     if graphs.is_empty() || graphs.len() != labels.len() {
         return Err(QsoError::invalid(
@@ -178,11 +214,27 @@ struct Instance {
 
 impl Instance {
     fn new(graph: &Graph, layers: usize) -> Result<Self> {
-        let weight: f64 = graph.edges().iter().map(|&(_, _, w)| w).sum();
-        if weight <= 0.0 {
+        if graph.num_nodes() > MAX_GRAPH_NODES {
             return Err(QsoError::invalid(
                 "graph",
-                "every graph needs a positive total edge weight",
+                format!(
+                    "graphs may have at most {MAX_GRAPH_NODES} nodes, got {}",
+                    graph.num_nodes()
+                ),
+            ));
+        }
+        // Positive weights keep the feature ⟨C_G⟩/W(G) within [0, 1].
+        if graph.edges().iter().any(|&(_, _, w)| w <= 0.0) {
+            return Err(QsoError::invalid(
+                "graph",
+                "every edge weight must be positive",
+            ));
+        }
+        let weight: f64 = graph.edges().iter().map(|&(_, _, w)| w).sum();
+        if !weight.is_finite() || weight <= 0.0 {
+            return Err(QsoError::invalid(
+                "graph",
+                "every graph needs at least one edge and a finite total weight",
             ));
         }
         Ok(Self {
@@ -379,5 +431,45 @@ mod tests {
             m.fit(&[generators::cycle(4)], &[], &Options::default(), 1, 0)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn rejects_hostile_inputs() {
+        let angles = [0.1, 0.2];
+        assert!(GraphClassifier::new(MAX_QAOA_DEPTH + 1).is_err());
+        assert!(GraphClassifier::new(usize::MAX).is_err());
+        // Mixed-sign weights could cancel in W(G); every weight must be > 0.
+        let mut mixed = Graph::new(3);
+        mixed.add_weighted_edge(0, 1, 2.0).unwrap();
+        mixed.add_weighted_edge(1, 2, -1.0).unwrap();
+        let model = GraphClassifier::new(1).unwrap();
+        assert!(model.feature_with(&mixed, &angles).is_err());
+        assert!(
+            model
+                .feature_with(&generators::complete(4), &angles)
+                .is_ok()
+        );
+        // Graph sizes are bounded per graph and in total.
+        let big = generators::cycle(MAX_GRAPH_NODES + 1);
+        assert!(model.feature_with(&big, &angles).is_err());
+        let mut m = GraphClassifier::new(1).unwrap();
+        let opts = Options::default();
+        assert!(m.fit(&[big], &[true], &opts, 1, 0).is_err());
+        let graphs = vec![generators::cycle(MAX_GRAPH_NODES); 17];
+        let labels = vec![true; 17];
+        assert!(m.fit(&graphs, &labels, &opts, 1, 0).is_err());
+        // Public fields set to nonsense (e.g. by deserialisation) are caught.
+        let forged = GraphClassifier {
+            layers: usize::MAX,
+            parameters: Vec::new(),
+        };
+        assert_eq!(forged.num_parameters(), usize::MAX);
+        assert!(forged.predict(&generators::cycle(4)).is_err());
+        assert!(forged.feature_with(&generators::cycle(4), &angles).is_err());
+        let forged = GraphClassifier {
+            layers: 0,
+            parameters: vec![0.0, 0.0],
+        };
+        assert!(forged.predict(&generators::cycle(4)).is_err());
     }
 }

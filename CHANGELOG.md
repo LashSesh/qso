@@ -41,6 +41,7 @@ results of the first.
   and single-qubit phase gates scale contiguous halves, singly controlled X
   swaps contiguous runs, and new registers are written in parallel. At 22
   qubits H and RY are about twice as fast, RZ and CX about 1.4 times.
+- `MaxCutQaoa` accepts depths up to `MAX_QAOA_DEPTH` = 10 000.
 
 ### Fixed
 
@@ -48,6 +49,8 @@ results of the first.
   time-averaged distribution came within ε of the limit. As documented
   (Aharonov et al. 2001) it now returns the time from which on the bound
   holds; the two differ when the average oscillates.
+- `ContinuousWalk::mixing_time` accepted a NaN or negative ε and a
+  non-positive or infinite `t_max`; a NaN bound counted as satisfied.
 
 ## [1.0.1] — 2026-10-24
 

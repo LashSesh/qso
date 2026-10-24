@@ -11,6 +11,10 @@ use crate::{C64, Rng};
 /// Largest number of output patterns [`occupation_patterns`] enumerates.
 pub const MAX_PATTERNS: usize = 2_000_000;
 
+/// Largest number of occupation numbers (patterns or samples × modes) a
+/// single call returns, to keep results within a few hundred megabytes.
+pub const MAX_OUTPUT_ENTRIES: usize = 1 << 26;
+
 /// Shots per deterministic work unit in [`BosonSampler::sample`].
 const SHOT_CHUNK: usize = 64;
 
@@ -69,18 +73,18 @@ impl BosonSampler {
                 actual: input.len(),
             });
         }
+        let n = checked_total(input).filter(|n| (1..=MAX_PHOTONS).contains(n));
+        if n.is_none() {
+            return Err(QsoError::invalid(
+                "input",
+                format!("number of photons must lie in 1..={MAX_PHOTONS}"),
+            ));
+        }
         let photon_modes: Vec<usize> = input
             .iter()
             .enumerate()
             .flat_map(|(j, &s)| std::iter::repeat_n(j, s))
             .collect();
-        let n = photon_modes.len();
-        if n == 0 || n > MAX_PHOTONS {
-            return Err(QsoError::invalid(
-                "input",
-                format!("number of photons must lie in 1..={MAX_PHOTONS}, got {n}"),
-            ));
-        }
         Ok(Self {
             unitary,
             input: input.to_vec(),
@@ -166,6 +170,7 @@ impl BosonSampler {
                 "exact sampling needs at most one photon per input mode",
             ));
         }
+        self.check_shots(shots)?;
         Ok(self.sample_with(shots, rng, |s, rng| s.sample_one(rng)))
     }
 
@@ -173,6 +178,7 @@ impl BosonSampler {
     /// input mode `j` through output mode `i` with probability `|U_ij|²`,
     /// independently of the others.
     pub fn sample_distinguishable(&self, shots: usize, rng: &mut Rng) -> Result<Vec<Vec<usize>>> {
+        self.check_shots(shots)?;
         let m = self.n_modes();
         let cumulative: Vec<Vec<f64>> = self
             .photon_modes
@@ -194,6 +200,20 @@ impl BosonSampler {
             }
             out
         }))
+    }
+
+    fn check_shots(&self, shots: usize) -> Result<()> {
+        match shots.checked_mul(self.n_modes()) {
+            Some(entries) if entries <= MAX_OUTPUT_ENTRIES => Ok(()),
+            _ => Err(QsoError::invalid(
+                "shots",
+                format!(
+                    "{shots} shots of {} modes exceed the supported {MAX_OUTPUT_ENTRIES} \
+                     occupation numbers per call",
+                    self.n_modes()
+                ),
+            )),
+        }
     }
 
     /// Run `one` for every shot. Shots are split into fixed chunks with one
@@ -272,12 +292,11 @@ impl BosonSampler {
                 actual: output.len(),
             });
         }
-        let total: usize = output.iter().sum();
-        if total != self.n_photons() {
+        if checked_total(output) != Some(self.n_photons()) {
             return Err(QsoError::invalid(
                 "output",
                 format!(
-                    "pattern holds {total} photons, the input {}",
+                    "pattern must hold as many photons as the input ({})",
                     self.n_photons()
                 ),
             ));
@@ -305,16 +324,38 @@ fn factorial_product(occupation: &[usize]) -> f64 {
         .product()
 }
 
-/// Number of ways to place `n` photons in `m` modes, `C(m + n − 1, n)`.
+/// Total photon number of an occupation, or `None` on overflow.
+fn checked_total(occupation: &[usize]) -> Option<usize> {
+    occupation.iter().try_fold(0usize, |a, &t| a.checked_add(t))
+}
+
+fn gcd(mut a: u128, mut b: u128) -> u128 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
+/// Number of ways to place `n` photons in `m` modes, `C(m + n − 1, n)`;
+/// `u128::MAX` if the exact value does not fit into a `u128`.
 pub fn count_patterns(n_photons: usize, n_modes: usize) -> u128 {
     if n_modes == 0 {
         return u128::from(n_photons == 0);
     }
-    // C(m − 1 + n, n) built up multiplicatively; every intermediate value
-    // is itself a binomial coefficient, so the division is exact.
+    // C(top, k) with the smaller of the two symmetric choices of k, built
+    // up multiplicatively: c_k = c_{k−1}·(top − k + 1)/k is a binomial
+    // coefficient at every step. Dividing by the gcd first keeps the
+    // product exact until the result itself overflows.
+    let top = n_modes as u128 - 1 + n_photons as u128;
+    let k_max = (n_photons as u128).min(n_modes as u128 - 1);
     let mut c: u128 = 1;
-    for k in 1..=n_photons as u128 {
-        c = c.saturating_mul(n_modes as u128 - 1 + k) / k;
+    for k in 1..=k_max {
+        let g = gcd(c, k);
+        let factor = (top - k + 1) / (k / g);
+        match (c / g).checked_mul(factor) {
+            Some(next) => c = next,
+            None => return u128::MAX,
+        }
     }
     c
 }
@@ -324,12 +365,13 @@ pub fn count_patterns(n_photons: usize, n_modes: usize) -> u128 {
 pub fn occupation_patterns(n_photons: usize, n_modes: usize) -> Result<Vec<Vec<usize>>> {
     check_modes(n_modes)?;
     let count = count_patterns(n_photons, n_modes);
-    if count > MAX_PATTERNS as u128 {
+    let entries = count.saturating_mul(n_modes as u128);
+    if count > MAX_PATTERNS as u128 || entries > MAX_OUTPUT_ENTRIES as u128 {
         return Err(QsoError::invalid(
             "patterns",
             format!(
-                "{n_photons} photons in {n_modes} modes give {count} patterns, \
-                 more than the supported {MAX_PATTERNS}"
+                "{n_photons} photons in {n_modes} modes give {count} patterns, more than the \
+                 supported {MAX_PATTERNS} (or {MAX_OUTPUT_ENTRIES} occupation numbers)"
             ),
         ));
     }
@@ -480,6 +522,56 @@ mod tests {
         assert!(s.probability(&[1, 0, 0]).is_err());
         assert!(s.probability(&[1, 1]).is_err());
         assert!(occupation_patterns(30, 40).is_err());
+    }
+
+    #[test]
+    fn rejects_hostile_sizes() {
+        let u = haar_unitary(3, &mut Rng::seed_from_u64(1)).unwrap();
+        // Photon totals that overflow are rejected, not wrapped around.
+        assert!(BosonSampler::new(u.clone(), &[usize::MAX, 2, 0]).is_err());
+        assert!(BosonSampler::new(u.clone(), &[MAX_PHOTONS + 1, 0, 0]).is_err());
+        let s = BosonSampler::new(u, &[1, 1, 0]).unwrap();
+        assert!(s.probability(&[usize::MAX, 3, 0]).is_err());
+        assert!(s.probability_distinguishable(&[usize::MAX, 3, 0]).is_err());
+        // Output sizes are bounded before anything is allocated.
+        let shots = MAX_OUTPUT_ENTRIES / 3 + 1;
+        assert!(s.sample(shots, &mut Rng::seed_from_u64(1)).is_err());
+        assert!(
+            s.sample_distinguishable(usize::MAX, &mut Rng::seed_from_u64(1))
+                .is_err()
+        );
+        // C(301, 2)·300 = 13.5 million entries; C(1025, 2)·1024 = 537 million.
+        assert!(occupation_patterns(2, 300).is_ok());
+        assert!(occupation_patterns(2, 1024).is_err());
+    }
+
+    #[test]
+    fn pattern_counts_are_exact_or_saturate() {
+        for m in 0..12 {
+            for n in 0..12 {
+                let expected = if m == 0 {
+                    usize::from(n == 0)
+                } else {
+                    occupation_patterns(n, m).unwrap().len()
+                };
+                assert_eq!(count_patterns(n, m), expected as u128, "n={n} m={m}");
+            }
+        }
+        assert_eq!(count_patterns(1, 1024), 1024);
+        assert_eq!(count_patterns(usize::MAX, 1), 1);
+        assert_eq!(count_patterns(usize::MAX, 2), 1 << 64);
+        // C(119, 60) and C(131, 65) fit; C(132, 66) does not.
+        assert_eq!(
+            count_patterns(60, 60),
+            48_307_454_420_181_661_301_946_569_760_686_328
+        );
+        assert_eq!(
+            count_patterns(65, 67),
+            188_694_833_082_770_476_622_296_176_145_946_360_850
+        );
+        assert_eq!(count_patterns(66, 67), u128::MAX);
+        assert_eq!(count_patterns(30, 1024), u128::MAX);
+        assert_eq!(count_patterns(usize::MAX, usize::MAX), u128::MAX);
     }
 
     #[test]

@@ -60,6 +60,13 @@ def test_girth_heawood_and_triangles():
     assert q.Graph.complete(5).triangle_count() == 10
 
 
+def mixed_sign_graph():
+    g = q.Graph(3)
+    g.add_edge(0, 1, 2.0)
+    g.add_edge(1, 2, -1.0)
+    return g
+
+
 @pytest.mark.parametrize(
     "call",
     [
@@ -68,6 +75,11 @@ def test_girth_heawood_and_triangles():
         lambda: q.GraphClassifier(1).feature(q.Graph.cycle(4), angles=[0.1]),
         lambda: q.GraphClassifier(1).fit([q.Graph.cycle(4)], [1, 0]),
         lambda: q.GraphClassifier(1).fit([q.Graph.cycle(4)], [0.5]),
+        lambda: q.GraphClassifier(10_001),
+        lambda: q.GraphClassifier(2**64 - 1),
+        lambda: q.GraphClassifier(1).feature(mixed_sign_graph(), angles=[0.1, 0.2]),
+        lambda: q.GraphClassifier(1).fit([q.Graph.cycle(25)], [1]),
+        lambda: q.MaxCutQaoa(q.Graph.cycle(4), 10_001),
     ],
 )
 def test_invalid_input(call):

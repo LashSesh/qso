@@ -80,6 +80,13 @@ def test_full_bunching_ratio_is_n_factorial():
         lambda: q.permanent(np.ones((2, 3))),
         lambda: q.permanent(np.full((2, 2), np.nan)),
         lambda: q.haar_unitary(0),
+        # Overflowing photon totals and oversized outputs are rejected
+        # before anything is allocated.
+        lambda: q.BosonSampler(np.eye(3), [2**64 - 1, 2, 0]),
+        lambda: q.BosonSampler(np.eye(3), [1, 1, 0]).probability([2**64 - 1, 3, 0]),
+        lambda: q.BosonSampler(np.eye(3), [1, 1, 0]).sample(2**26 // 3 + 1),
+        lambda: q.BosonSampler(np.eye(3), [1, 1, 0]).sample(2**64 - 1, distinguishable=True),
+        lambda: q.BosonSampler(np.eye(1024), [1, 1] + [0] * 1022).distribution(),
     ],
 )
 def test_invalid_input_raises_value_error(call):
