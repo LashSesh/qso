@@ -19,6 +19,9 @@ fn matrix(name: &str, a: &ComplexMatrixArg<'_>) -> PyResult<CMatrix> {
     Ok(CMatrix::from_fn(rows, cols, |r, c| view[(r, c)]))
 }
 
+/// `(patterns, probabilities)` returned by `BosonSampler.distribution`.
+type DistributionArrays<'py> = (Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<f64>>);
+
 /// Occupation patterns as an integer matrix (one pattern per row).
 fn patterns_array<'py>(
     py: Python<'py>,
@@ -130,7 +133,7 @@ impl PyBosonSampler {
         &self,
         py: Python<'py>,
         distinguishable: bool,
-    ) -> PyResult<(Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<f64>>)> {
+    ) -> PyResult<DistributionArrays<'py>> {
         let s = &self.inner;
         let d = py
             .detach(|| {
