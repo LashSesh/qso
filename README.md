@@ -175,11 +175,14 @@ Measured with `cargo run --release --example benchmark_report` on a
 
 | Workload | Time |
 |---|---:|
-| 24-qubit layer (71 gates: H, RZ, CX chain) | 0.84 s (0.7 ns per gate·amplitude) |
-| Full gradient, 10 qubits, 100 parameters, adjoint | 1.0 ms (65× faster than parameter shift) |
-| QAOA value + gradient, 20 nodes, p = 3 | 0.28 s |
-| Quantum walk on a 100 × 100 torus (10 000 nodes), Krylov | 97 ms |
-| Automorphism group of Metatron's Cube (13!) | 3 ms |
+| 24-qubit layer (71 gates: H, RZ, CX chain) | 0.94 s (0.79 ns per gate·amplitude) |
+| Full gradient, 10 qubits, 100 parameters, adjoint | 1.6 ms (43× faster than parameter shift) |
+| QAOA value + gradient, 20 nodes, p = 3 | 0.31 s |
+| Quantum walk on a 100 × 100 torus (10 000 nodes), Krylov | 0.13 s |
+| Automorphism group of Metatron's Cube (13!) | 3.2 ms |
+
+Timings varied between runs on this shared VM (up to 2× for sub-millisecond
+workloads, up to 1.5× for the larger ones); see the benchmark page.
 
 ## Conventions
 

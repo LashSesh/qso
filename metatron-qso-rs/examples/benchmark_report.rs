@@ -50,7 +50,11 @@ fn main() -> Result<()> {
             layer.cx(q, q + 1);
         }
         let mut psi = StateVector::zero(n);
-        let repeats = if n >= 22 { 3 } else { 9 };
+        let repeats = match n {
+            0..=14 => 101,
+            15..=20 => 15,
+            _ => 3,
+        };
         let t = median_seconds(repeats, || psi.apply_circuit(&layer, &[]).unwrap());
         let per = t / (layer.len() as f64 * (1u64 << n) as f64) * 1e9;
         println!("| {n} | {} | {} | {per:.3} |", layer.len(), fmt_time(t));
@@ -72,7 +76,7 @@ fn main() -> Result<()> {
             GradientMethod::FiniteDifference { step: 1e-6 },
         ),
     ] {
-        let t = median_seconds(5, || {
+        let t = median_seconds(21, || {
             expectation_and_gradient(&circuit, &h, &theta, None, m).unwrap();
         });
         println!("| {name} | {} |", fmt_time(t));
@@ -85,7 +89,8 @@ fn main() -> Result<()> {
         let g = generators::random_regular(n, 3, &mut Rng::seed_from_u64(1))?;
         let qaoa = MaxCutQaoa::new(&g, 3)?;
         let x = [0.4, 0.6, 0.8, 0.5, 0.3, 0.1];
-        let t = median_seconds(5, || {
+        let repeats = if n <= 14 { 51 } else { 7 };
+        let t = median_seconds(repeats, || {
             qaoa.expectation_and_gradient(&x).unwrap();
         });
         println!("| {n} | {} |", fmt_time(t));

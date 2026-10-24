@@ -71,8 +71,8 @@ Adjoint differentiation (Jones & Gacon 2020) keeps three vectors: the state
 `φ`, the co-state `λ = H|ψ⟩`, and a scratch copy. Walking the circuit
 backwards, each gate is undone on `φ` and `λ`, and every parameter of the
 gate contributes `2·Re⟨λ|∂U φ⟩·scale`. The cost is about three circuit
-simulations regardless of the parameter count (1 ms vs 67 ms for parameter
-shift with 100 parameters). Parameter-shift rules are provided for
+simulations regardless of the parameter count (1.6 ms vs 68 ms for
+parameter shift with 100 parameters, see BENCHMARKS.md). Parameter-shift rules are provided for
 hardware-faithful gradients and as an independent check: two terms for
 `exp(−iθG/2)` with `G² = I` and phase gates, four terms for single-controlled
 rotations.
