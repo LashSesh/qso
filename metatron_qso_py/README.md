@@ -107,6 +107,23 @@ search = q.SpatialSearch(cube, marked=[4], gamma=1 / 13)
 print(search.success_probability(math.pi * math.sqrt(13) / 2))  # 1.0
 ```
 
+Symmetry, state transfer and discrete-time walks:
+
+```python
+import math
+import metatron_qso as q
+
+walk = q.QuotientWalk(q.Quotient.hypercube(30))       # 2^30 nodes, 31 cells
+print(walk.cell_probabilities(0, math.pi / 2)[-1])     # 1.0: the antipode
+
+print(q.StateTransfer(q.Graph.path(3), 0, 2, "adjacency").perfect_transfer_time)  # pi/sqrt(2)
+print(q.Graph.shrikhande().is_isomorphic(q.Graph.rook(4, 4)))                     # False
+
+skw = q.CoinedWalk(q.Graph.hypercube(10), "grover", marked=[0]).search(60)
+print(skw["steps"], skw["success_probability"])        # 38 0.435
+print(q.SzegedyWalk(q.Graph.cycle(64), 0).hitting_time(1000))                    # 16
+```
+
 Noise:
 
 ```python
@@ -128,13 +145,13 @@ API reference.
 
 | Area | Names |
 |---|---|
-| Graphs | `Graph` (`from_spec`, `metatron_cube`, `fruit_of_life`, `metatron_distance_graph`, `complete`, `cycle`, `path`, `star`, `complete_bipartite`, `hypercube`, `petersen`, `grid`, `platonic`, `random_regular`, `erdos_renyi`, `heawood`; `girth`, `triangle_count`, automorphisms, spectra), `metatron_line_lengths` |
+| Graphs | `Graph` (`from_spec`, `metatron_cube`, `fruit_of_life`, `metatron_distance_graph`, `complete`, `cycle`, `path`, `star`, `complete_bipartite`, `hypercube`, `petersen`, `grid`, `platonic`, `random_regular`, `erdos_renyi`, `heawood`, `johnson`, `kneser`, `hamming`, `rook`, `paley`, `circulant`, `cayley_z2`, `shrikhande`; `cartesian_product`, `strongly_regular_parameters`, `girth`, `triangle_count`, automorphisms, spectra; `canonical_labelling`, `canonical_form`, `is_isomorphic`, `isomorphism`, `relabeled`; `from_edge_list`/`to_edge_list`, `from_graphml`/`to_graphml`, `from_networkx`), `metatron_line_lengths` |
 | Circuits | `Circuit`, `Parameter`, `qft`, `inverse_qft`, `grover_circuit` |
 | States | `StateVector`, `simulate`, `PauliSum`, `bitstring` |
 | Models | `h2_sto3g`, `transverse_field_ising`, `heisenberg_xxz`, `maxcut_cost` |
-| Variational | `real_amplitudes`, `efficient_su2`, `hardware_efficient`, `qaoa_maxcut_circuit`, `expectation_and_gradient`, `run_vqe`, `MaxCutQaoa`, `optimize_qaoa_layerwise`, `VariationalClassifier`, `GraphClassifier` |
+| Variational | `real_amplitudes`, `efficient_su2`, `hardware_efficient`, `qaoa_maxcut_circuit`, `expectation_and_gradient`, `expectation_batch`, `expectation_and_gradient_batch`, `run_vqe`, `MaxCutQaoa`, `optimize_qaoa_layerwise`, `VariationalClassifier`, `GraphClassifier` |
 | Textbook | `grover_search`, `estimate_phase` |
-| Walks | `ContinuousWalk`, `SpatialSearch` (`optimize` tunes rate and time jointly), `DephasingWalk`, `classical_walk_probabilities`, `classical_hitting_times` |
+| Walks | `ContinuousWalk`, `SpatialSearch` (`optimize` tunes rate and time jointly), `DephasingWalk`, `classical_walk_probabilities`, `classical_hitting_times`; `Quotient`, `QuotientWalk`, `QuotientSearch`, `StateTransfer`; `CoinedWalk`, `LineWalk`, `SzegedyWalk`; `circulant_walk_circuit`, `cayley_walk_circuit`, `trotter_walk_circuit`, `diagonal_unitary_circuit` |
 | Noise | `Channel`, `NoiseModel`, `DensityMatrix`, `estimate_expectation` |
 | Boson sampling | `BosonSampler`, `permanent`, `haar_unitary`, `beam_splitter` |
 
