@@ -45,7 +45,8 @@ pub(super) fn run(
         value,
         iterations: options.max_iterations,
         evaluations: 0,
-        converged: true,
+        // SPSA has no convergence test; it runs a fixed iteration budget.
+        converged: false,
         message: "completed the configured number of SPSA iterations".into(),
         history,
     }

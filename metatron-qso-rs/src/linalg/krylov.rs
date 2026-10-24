@@ -253,6 +253,9 @@ where
     F: Fn(&[C64], &mut [C64]),
 {
     let dim = v.len();
+    if !t.is_finite() {
+        return Err(QsoError::invalid("t", "evolution time must be finite"));
+    }
     let mut w = v.to_vec();
     if t == 0.0 || dim == 0 {
         return Ok(w);

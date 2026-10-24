@@ -32,9 +32,44 @@ pub fn bitstring(b: usize, n_qubits: usize) -> String {
 /// Amplitude `k` belongs to basis state `|b_{n−1} … b_1 b_0⟩` with
 /// `k = Σ_q b_q·2^q` (little-endian: qubit 0 is the least significant bit).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "StateVectorData")]
 pub struct StateVector {
     n_qubits: usize,
     amps: Vec<C64>,
+}
+
+/// Unvalidated serialised form of a [`StateVector`].
+#[derive(Deserialize)]
+struct StateVectorData {
+    n_qubits: usize,
+    amps: Vec<C64>,
+}
+
+impl TryFrom<StateVectorData> for StateVector {
+    type Error = QsoError;
+
+    /// Checks the register size and that there are exactly 2ⁿ finite
+    /// amplitudes (the norm is kept as stored).
+    fn try_from(data: StateVectorData) -> Result<Self> {
+        check_size(data.n_qubits)?;
+        if data.amps.len() != 1 << data.n_qubits {
+            return Err(QsoError::DimensionMismatch {
+                expected: 1 << data.n_qubits,
+                actual: data.amps.len(),
+            });
+        }
+        if data
+            .amps
+            .iter()
+            .any(|a| !a.re.is_finite() || !a.im.is_finite())
+        {
+            return Err(QsoError::invalid("amps", "amplitudes must be finite"));
+        }
+        Ok(Self {
+            n_qubits: data.n_qubits,
+            amps: data.amps,
+        })
+    }
 }
 
 fn check_size(n_qubits: usize) -> Result<()> {
@@ -188,8 +223,19 @@ impl StateVector {
 
     /// Apply a single instruction with parameters `theta`.
     pub fn apply_instruction(&mut self, inst: &Instruction, theta: &[f64]) -> Result<()> {
-        for q in inst.qubits() {
-            self.check_qubit(q)?;
+        inst.validate(self.n_qubits)?;
+        for p in &inst.params {
+            if let crate::quantum::Param::Symbol(s) = p
+                && s.index >= theta.len()
+            {
+                return Err(QsoError::ParameterCount {
+                    expected: s.index + 1,
+                    actual: theta.len(),
+                });
+            }
+        }
+        if theta.iter().any(|t| !t.is_finite()) {
+            return Err(QsoError::invalid("theta", "parameters must be finite"));
         }
         let angles = inst.angles(theta);
         kernels::apply_instruction(&mut self.amps, inst, &angles, false, 0);

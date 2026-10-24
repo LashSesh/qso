@@ -3,10 +3,13 @@
 //! Export targets the gate set of the original `qelib1.inc` (Cross et al.,
 //! arXiv:1707.03429) so that the output loads in every OpenQASM 2 consumer
 //! (Qiskit, Cirq, tket, hardware vendors). Gates outside that set are
-//! decomposed exactly (e.g. `rzz → cx·rz·cx`, `swap → 3 cx`); single-qubit
-//! gates without a native controlled form are emitted as `cu3` plus a
-//! `u1` phase correction on the control. Uncontrolled gates are exported up
-//! to a global phase, which OpenQASM 2 cannot express.
+//! decomposed exactly (e.g. `rzz → cx·rz·cx`, `swap → 3 cx`); controlled
+//! single-qubit gates without a native controlled form are decomposed into
+//! `u1`, `u3` and `cx`. `cu3` is never emitted because the original and
+//! Qiskit's `qelib1.inc` define it differently (by a controlled phase); the
+//! exported circuits are exact under both. Uncontrolled gates are exported
+//! up to a global phase, which OpenQASM 2 cannot express. When *importing*
+//! `cu3`, Qiskit's definition (exact controlled-U3) is assumed.
 //!
 //! Import understands the same set plus the extensions shipped with Qiskit's
 //! `qelib1.inc` (`sx`, `sxdg`, `p`, `cp`, `u`, `swap`, `cswap`, `crx`,
@@ -58,18 +61,37 @@ fn zyz(m: &[C64; 4]) -> (f64, f64, f64, f64) {
     (theta, phi, lambda, alpha)
 }
 
-fn emit_1q_controlled(out: &mut String, m: &[C64; 4], c: usize, t: usize) {
-    let (theta, phi, lambda, alpha) = zyz(m);
+/// Controlled `e^{iα}·U3(θ, φ, λ)` from uncontrolled `u1`, `u3` and `cx`.
+///
+/// `cu3` itself is avoided: the original `qelib1.inc` defines it without
+/// the `u1((λ+φ)/2)` on the control (a controlled global phase), Qiskit's
+/// with it. Built from uncontrolled gates the circuit is exact under both
+/// definitions (they differ only by global phases of uncontrolled gates).
+fn emit_controlled_u3(
+    out: &mut String,
+    theta: f64,
+    phi: f64,
+    lambda: f64,
+    alpha: f64,
+    c: usize,
+    t: usize,
+) {
+    let _ = writeln!(out, "u1({}) q[{c}];", real((lambda + phi) / 2.0 + alpha));
+    let _ = writeln!(out, "u1({}) q[{t}];", real((lambda - phi) / 2.0));
+    let _ = writeln!(out, "cx q[{c}],q[{t}];");
     let _ = writeln!(
         out,
-        "cu3({},{},{}) q[{c}],q[{t}];",
-        real(theta),
-        real(phi),
-        real(lambda)
+        "u3({},0,{}) q[{t}];",
+        real(-theta / 2.0),
+        real(-(phi + lambda) / 2.0)
     );
-    if alpha.abs() > 1e-15 {
-        let _ = writeln!(out, "u1({}) q[{c}];", real(alpha));
-    }
+    let _ = writeln!(out, "cx q[{c}],q[{t}];");
+    let _ = writeln!(out, "u3({},{},0) q[{t}];", real(theta / 2.0), real(phi));
+}
+
+fn emit_1q_controlled(out: &mut String, m: &[C64; 4], c: usize, t: usize) {
+    let (theta, phi, lambda, alpha) = zyz(m);
+    emit_controlled_u3(out, theta, phi, lambda, alpha, c, t);
 }
 
 fn emit_instruction(out: &mut String, inst: &Instruction, angles: &[f64]) -> Result<()> {
@@ -148,17 +170,7 @@ fn emit_instruction(out: &mut String, inst: &Instruction, angles: &[f64]) -> Res
         (P, 1) => {
             let _ = writeln!(out, "cu1({}) q[{}],q[{}];", real(angles[0]), c[0], t[0]);
         }
-        (U, 1) => {
-            let _ = writeln!(
-                out,
-                "cu3({},{},{}) q[{}],q[{}];",
-                real(angles[0]),
-                real(angles[1]),
-                real(angles[2]),
-                c[0],
-                t[0]
-            );
-        }
+        (U, 1) => emit_controlled_u3(out, angles[0], angles[1], angles[2], 0.0, c[0], t[0]),
         (S | Sdg | T | Tdg | SX | SXdg | RX | RY, 1) => {
             emit_1q_controlled(out, &matrix_1q(inst.kind, angles), c[0], t[0]);
         }
@@ -284,20 +296,22 @@ impl<'a> Expr<'a> {
     }
 
     fn product(&mut self) -> Result<f64> {
-        let mut v = self.power()?;
+        let mut v = self.unary()?;
         while let Some(op @ (b'*' | b'/')) = self.peek() {
             self.pos += 1;
-            let rhs = self.power()?;
+            let rhs = self.unary()?;
             v = if op == b'*' { v * rhs } else { v / rhs };
         }
         Ok(v)
     }
 
+    /// `^` binds tighter than unary minus and is right-associative:
+    /// `-2^2 = −4`, `2^-1 = 0.5`, `2^3^2 = 2^9`.
     fn power(&mut self) -> Result<f64> {
-        let base = self.unary()?;
+        let base = self.atom()?;
         if self.peek() == Some(b'^') {
             self.pos += 1;
-            let exp = self.power()?;
+            let exp = self.unary()?;
             return Ok(base.powf(exp));
         }
         Ok(base)
@@ -313,7 +327,7 @@ impl<'a> Expr<'a> {
                 self.pos += 1;
                 self.unary()
             }
-            _ => self.atom(),
+            _ => self.power(),
         }
     }
 
@@ -491,16 +505,37 @@ pub fn from_qasm2(src: &str) -> Result<Circuit> {
             }
             _ => {
                 // Gate application: name[(params)] operands
-                let (head, operands) = match stmt.find(')') {
-                    Some(close) if stmt[..close].contains('(') => {
-                        (&stmt[..=close], &stmt[close + 1..])
+                let name_end = stmt
+                    .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+                    .unwrap_or(stmt.len());
+                let rest = &stmt[name_end..];
+                let (head, operands) = if rest.trim_start().starts_with('(') {
+                    // Parameter list: find the matching ')' by depth.
+                    let open = name_end + (rest.len() - rest.trim_start().len());
+                    let mut depth = 0usize;
+                    let mut close = None;
+                    for (i, ch) in stmt[open..].char_indices() {
+                        match ch {
+                            '(' => depth += 1,
+                            ')' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    close = Some(open + i);
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
                     }
-                    _ => {
-                        let split = stmt.find(char::is_whitespace).ok_or_else(|| {
-                            QsoError::Parse(format!("malformed statement '{stmt}'"))
-                        })?;
-                        (&stmt[..split], &stmt[split..])
+                    let close = close.ok_or_else(|| {
+                        QsoError::Parse(format!("unbalanced parentheses in '{stmt}'"))
+                    })?;
+                    (&stmt[..=close], &stmt[close + 1..])
+                } else {
+                    if name_end == stmt.len() {
+                        return Err(QsoError::Parse(format!("malformed statement '{stmt}'")));
                     }
+                    (&stmt[..name_end], rest)
                 };
                 let (name, params) = match head.find('(') {
                     Some(open) => {

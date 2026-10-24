@@ -315,6 +315,15 @@ impl NoiseModel {
     /// Check the readout probabilities (the channels are validated when
     /// they are constructed).
     pub fn validate(&self) -> Result<()> {
+        if let Some(ch) = self.single_qubit.iter().find(|c| c.n_qubits != 1) {
+            return Err(QsoError::invalid(
+                "single_qubit",
+                format!(
+                    "channel {} acts on {} qubits; single-qubit gates need 1-qubit channels",
+                    ch.name, ch.n_qubits
+                ),
+            ));
+        }
         if let Some((p01, p10)) = self.readout {
             check_probability("p01", p01)?;
             check_probability("p10", p10)?;
@@ -325,9 +334,43 @@ impl NoiseModel {
 
 /// Density matrix of `n` qubits.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "DensityMatrixData")]
 pub struct DensityMatrix {
     n_qubits: usize,
     data: Vec<C64>,
+}
+
+/// Unvalidated serialised form of a [`DensityMatrix`].
+#[derive(Deserialize)]
+struct DensityMatrixData {
+    n_qubits: usize,
+    data: Vec<C64>,
+}
+
+impl TryFrom<DensityMatrixData> for DensityMatrix {
+    type Error = QsoError;
+
+    fn try_from(raw: DensityMatrixData) -> Result<Self> {
+        DensityMatrix::check_size(raw.n_qubits)?;
+        let expected = 1usize << (2 * raw.n_qubits);
+        if raw.data.len() != expected {
+            return Err(QsoError::DimensionMismatch {
+                expected,
+                actual: raw.data.len(),
+            });
+        }
+        if raw
+            .data
+            .iter()
+            .any(|a| !a.re.is_finite() || !a.im.is_finite())
+        {
+            return Err(QsoError::invalid("data", "entries must be finite"));
+        }
+        Ok(Self {
+            n_qubits: raw.n_qubits,
+            data: raw.data,
+        })
+    }
 }
 
 impl DensityMatrix {
@@ -387,7 +430,15 @@ impl DensityMatrix {
     }
 
     /// Entry `ρ[r, c]`.
+    ///
+    /// # Panics
+    /// If `r` or `c` is not below `2ⁿ`.
     pub fn get(&self, r: usize, c: usize) -> C64 {
+        let dim = 1usize << self.n_qubits;
+        assert!(
+            r < dim && c < dim,
+            "index ({r}, {c}) outside a {dim}x{dim} density matrix"
+        );
         self.data[r + (c << self.n_qubits)]
     }
 

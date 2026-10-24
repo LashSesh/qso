@@ -177,6 +177,13 @@ impl Vqe {
         &self.ansatz
     }
 
+    fn method_uses_gradient(&self) -> bool {
+        matches!(
+            self.method,
+            Method::Lbfgs { .. } | Method::Adam { .. } | Method::GradientDescent { .. }
+        )
+    }
+
     /// Energy at parameters `theta`.
     pub fn energy(&self, theta: &[f64]) -> Result<f64> {
         expectation(
@@ -206,6 +213,19 @@ impl Vqe {
     /// Run all restarts and return the best result.
     pub fn run(&self) -> Result<VqeResult> {
         let dim = self.ansatz.num_parameters();
+        // Surface an unsupported gradient method (e.g. parameter shift on a
+        // doubly-controlled rotation) instead of silently falling back to
+        // finite differences inside the optimiser.
+        if self.method_uses_gradient() {
+            let probe = vec![0.1; dim];
+            expectation_and_gradient(
+                &self.ansatz,
+                &self.hamiltonian,
+                &probe,
+                self.initial_state.as_ref(),
+                self.gradient,
+            )?;
+        }
         let base = Rng::seed_from_u64(self.seed);
         let runs = map_tasks(self.restarts, |r| {
             let x0 = match (&self.initial_parameters, r) {

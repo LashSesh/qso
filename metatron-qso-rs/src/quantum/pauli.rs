@@ -562,9 +562,28 @@ impl FromStr for PauliSum {
             Ok(())
         };
 
+        // The previous token was `*`, so a following sign is unary.
+        let mut after_star = false;
         while pos < chars.len() {
             let c = chars[pos];
-            if c.is_whitespace() || c == '*' {
+            if c.is_whitespace() {
+                pos += 1;
+                continue;
+            }
+            if c == '*' {
+                if !has_content || after_star {
+                    return Err(QsoError::Parse(format!("unexpected '*' at {pos}")));
+                }
+                after_star = true;
+                dangling = true;
+                pos += 1;
+                continue;
+            }
+            if (c == '+' || c == '-') && after_star {
+                // `2*-X0`: the sign belongs to the factor, not a new term.
+                if c == '-' {
+                    sign = -sign;
+                }
                 pos += 1;
                 continue;
             }
@@ -585,6 +604,7 @@ impl FromStr for PauliSum {
                 continue;
             }
             dangling = false;
+            after_star = false;
             if c.is_ascii_digit() || c == '.' {
                 if coef.is_some() || !factors.is_empty() {
                     return Err(QsoError::Parse(format!("unexpected number at {pos}")));
@@ -643,10 +663,11 @@ impl FromStr for PauliSum {
             }
             has_content = true;
         }
+        if dangling {
+            return Err(QsoError::Parse("expression ends with an operator".into()));
+        }
         if has_content {
             finish(sign, coef, &mut factors, &mut terms)?;
-        } else if dangling {
-            return Err(QsoError::Parse("expression ends with an operator".into()));
         }
         Ok(PauliSum::from_terms(terms))
     }

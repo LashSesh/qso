@@ -18,7 +18,7 @@ pub fn qft(n: usize, swaps: bool) -> Circuit {
     for j in (0..n).rev() {
         c.h(j);
         for k in (0..j).rev() {
-            c.cp(k, j, PI / (1u64 << (j - k)) as f64);
+            c.cp(k, j, PI / 2f64.powi((j - k) as i32));
         }
     }
     if swaps {
@@ -109,7 +109,7 @@ pub fn estimate_phase(
         .max_by(|&x, &y| distribution[x].total_cmp(&distribution[y]))
         .expect("non-empty");
     Ok(PhaseEstimate {
-        phase: m as f64 / (1u64 << t) as f64,
+        phase: m as f64 / 2f64.powi(t as i32),
         probability: distribution[m],
         distribution,
     })

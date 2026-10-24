@@ -315,9 +315,16 @@ impl Objective for NegativeCut<'_> {
 }
 
 /// INTERP initialisation (Zhou et al., Phys. Rev. X 10, 021067, 2020):
-/// from optimal depth-p parameters build a depth-(p+1) starting point by
-/// linear interpolation, `x'_i = ((i−1)/p)·x_{i−1} + ((p−i+1)/p)·x_i`.
-pub fn interpolate_parameters(params: &[f64]) -> Vec<f64> {
+/// from optimal depth-p parameters `[γ₁…γ_p, β₁…β_p]` build a depth-(p+1)
+/// starting point by linear interpolation,
+/// `x'_i = ((i−1)/p)·x_{i−1} + ((p−i+1)/p)·x_i`.
+pub fn interpolate_parameters(params: &[f64]) -> Result<Vec<f64>> {
+    if params.is_empty() || !params.len().is_multiple_of(2) {
+        return Err(QsoError::invalid(
+            "params",
+            "expected [γ₁…γ_p, β₁…β_p] with p ≥ 1",
+        ));
+    }
     let p = params.len() / 2;
     let interp = |x: &[f64]| -> Vec<f64> {
         (1..=p + 1)
@@ -330,7 +337,7 @@ pub fn interpolate_parameters(params: &[f64]) -> Vec<f64> {
     };
     let mut out = interp(&params[..p]);
     out.extend(interp(&params[p..]));
-    out
+    Ok(out)
 }
 
 /// Optimise depths `1..=p_max`, seeding each depth with the INTERP
@@ -349,7 +356,7 @@ pub fn optimize_layerwise(
         if let Some(prev) = results.last() {
             let mut x = prev.gammas.clone();
             x.extend(&prev.betas);
-            cfg.initial = Some(interpolate_parameters(&x));
+            cfg.initial = Some(interpolate_parameters(&x)?);
         }
         results.push(qaoa.optimize(&cfg)?);
     }
@@ -474,7 +481,9 @@ mod tests {
     #[test]
     fn interpolation_formula() {
         // p = 1 → 2: [γ] → [γ, γ]·(…)
-        let x = interpolate_parameters(&[0.4, 0.2]);
+        let x = interpolate_parameters(&[0.4, 0.2]).unwrap();
+        assert!(interpolate_parameters(&[]).is_err());
+        assert!(interpolate_parameters(&[0.1, 0.2, 0.3]).is_err());
         assert_eq!(x.len(), 4);
         assert!((x[0] - 0.4).abs() < 1e-15 && (x[1] - 0.4).abs() < 1e-15);
         assert!((x[2] - 0.2).abs() < 1e-15 && (x[3] - 0.2).abs() < 1e-15);

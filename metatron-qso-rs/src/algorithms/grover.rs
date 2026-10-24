@@ -11,7 +11,7 @@ use crate::quantum::{Circuit, StateVector};
 
 /// Grover rotation angle `θ = asin √(M/N)`.
 fn angle(n_qubits: usize, n_marked: usize) -> f64 {
-    ((n_marked as f64) / (1u64 << n_qubits) as f64)
+    ((n_marked as f64) / 2f64.powi(n_qubits as i32))
         .sqrt()
         .asin()
 }

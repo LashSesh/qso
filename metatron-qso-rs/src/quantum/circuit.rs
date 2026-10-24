@@ -142,8 +142,29 @@ pub struct Instruction {
     pub controls: Vec<usize>,
     pub params: Vec<Param>,
     /// Row-major matrix for [`GateKind::Unitary`].
-    #[serde(skip)]
+    #[serde(default, with = "matrix_serde")]
     pub matrix: Option<Arc<Vec<C64>>>,
+}
+
+/// (De)serialise `Option<Arc<Vec<C64>>>` as an optional list of `[re, im]`.
+mod matrix_serde {
+    use std::sync::Arc;
+
+    use num_complex::Complex64 as C64;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub(super) fn serialize<S: Serializer>(
+        m: &Option<Arc<Vec<C64>>>,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        m.as_deref().serialize(s)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<Option<Arc<Vec<C64>>>, D::Error> {
+        Ok(Option::<Vec<C64>>::deserialize(d)?.map(Arc::new))
+    }
 }
 
 impl Instruction {
@@ -200,11 +221,36 @@ impl Instruction {
 }
 
 /// An ordered list of instructions on `n_qubits` qubits.
+///
+/// Deserialisation re-validates every instruction, so a circuit read from
+/// untrusted JSON is as safe to simulate as one built in code.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "CircuitData")]
 pub struct Circuit {
     n_qubits: usize,
     n_params: usize,
     instructions: Vec<Instruction>,
+}
+
+/// Unvalidated serialised form of a [`Circuit`].
+#[derive(Deserialize)]
+struct CircuitData {
+    n_qubits: usize,
+    n_params: usize,
+    instructions: Vec<Instruction>,
+}
+
+impl TryFrom<CircuitData> for Circuit {
+    type Error = QsoError;
+
+    fn try_from(data: CircuitData) -> Result<Self> {
+        let mut c = Circuit::new(data.n_qubits);
+        for inst in data.instructions {
+            c.try_push(inst)?;
+        }
+        c.reserve_parameters(data.n_params);
+        Ok(c)
+    }
 }
 
 macro_rules! fixed_1q {
@@ -319,6 +365,15 @@ impl Circuit {
     }
 
     fn validate(&self, inst: &Instruction) -> Result<()> {
+        inst.validate(self.n_qubits)
+    }
+}
+
+impl Instruction {
+    /// Check arity, parameter count, qubit range and distinctness, finite
+    /// angles, and (for custom unitaries) shape and unitarity of the matrix.
+    pub fn validate(&self, n_qubits: usize) -> Result<()> {
+        let inst = self;
         let n_targets = match inst.kind {
             GateKind::Unitary => {
                 let m = inst
@@ -371,11 +426,8 @@ impl Circuit {
         }
         let mut seen: Vec<usize> = Vec::with_capacity(inst.targets.len() + inst.controls.len());
         for q in inst.qubits() {
-            if q >= self.n_qubits {
-                return Err(QsoError::QubitOutOfRange {
-                    qubit: q,
-                    n_qubits: self.n_qubits,
-                });
+            if q >= n_qubits {
+                return Err(QsoError::QubitOutOfRange { qubit: q, n_qubits });
             }
             if seen.contains(&q) {
                 return Err(QsoError::DuplicateQubit {
@@ -386,15 +438,19 @@ impl Circuit {
             seen.push(q);
         }
         for p in &inst.params {
-            if let Param::Value(v) = p
-                && !v.is_finite()
-            {
+            let finite = match p {
+                Param::Value(v) => v.is_finite(),
+                Param::Symbol(s) => s.scale.is_finite() && s.offset.is_finite(),
+            };
+            if !finite {
                 return Err(QsoError::invalid("angle", "non-finite gate angle"));
             }
         }
         Ok(())
     }
+}
 
+impl Circuit {
     /// Builder helper: append a gate and panic on invalid input.
     ///
     /// The fluent methods (`h`, `cx`, `ry`, …) use this; invalid qubit
@@ -646,6 +702,9 @@ impl Circuit {
                 expected: self.n_params,
                 actual: theta.len(),
             });
+        }
+        if theta.iter().any(|t| !t.is_finite()) {
+            return Err(QsoError::invalid("theta", "parameters must be finite"));
         }
         Ok(())
     }

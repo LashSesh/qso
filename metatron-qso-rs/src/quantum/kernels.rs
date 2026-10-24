@@ -32,7 +32,14 @@ fn insert_zeros(mut k: usize, sorted: &[usize]) -> usize {
     k
 }
 
-fn sorted_positions(qubits: &[usize], controls: usize) -> Vec<usize> {
+/// Sorted bit positions touched by a gate.
+///
+/// # Panics
+/// If a position repeats or lies outside a register of `len` amplitudes.
+/// The `unsafe` kernels rely on this check (once per gate) for soundness:
+/// it guarantees that distinct loop indices address disjoint amplitudes
+/// that are in bounds, whatever the caller passed in.
+fn sorted_positions(qubits: &[usize], controls: usize, len: usize) -> Vec<usize> {
     let mut pos: Vec<usize> = qubits.to_vec();
     let mut c = controls;
     while c != 0 {
@@ -41,6 +48,15 @@ fn sorted_positions(qubits: &[usize], controls: usize) -> Vec<usize> {
         c &= c - 1;
     }
     pos.sort_unstable();
+    let n_bits = len.trailing_zeros() as usize;
+    assert!(
+        len.is_power_of_two(),
+        "amplitude count must be a power of two"
+    );
+    assert!(
+        pos.windows(2).all(|w| w[0] != w[1]) && pos.last().is_none_or(|&p| p < n_bits),
+        "gate qubits {pos:?} must be distinct and below {n_bits}"
+    );
     pos
 }
 
@@ -51,6 +67,10 @@ pub(crate) fn apply_1q(amps: &mut [C64], target: usize, controls: usize, m: &[C6
     debug_assert_eq!(controls & (1 << target), 0);
     let m = *m;
     if controls == 0 {
+        assert!(
+            1usize << target < amps.len(),
+            "target {target} outside the register"
+        );
         // Contiguous, vectorisable fast path for uncontrolled gates.
         for_each_pair(amps, 1 << target, move |a, b| {
             let (x, y) = (*a, *b);
@@ -59,7 +79,7 @@ pub(crate) fn apply_1q(amps: &mut [C64], target: usize, controls: usize, m: &[C6
         });
         return;
     }
-    let positions = sorted_positions(&[target], controls);
+    let positions = sorted_positions(&[target], controls, amps.len());
     let count = amps.len() >> positions.len();
     let bit = 1usize << target;
     let ptr = SyncPtr::new(amps);
@@ -87,7 +107,7 @@ pub(crate) fn apply_2q(
 ) {
     debug_assert!(amps.len().is_power_of_two());
     debug_assert_ne!(first, second);
-    let positions = sorted_positions(&[first, second], controls);
+    let positions = sorted_positions(&[first, second], controls, amps.len());
     let count = amps.len() >> positions.len();
     let bf = 1usize << first;
     let bs = 1usize << second;
@@ -117,10 +137,14 @@ pub(crate) fn apply_2q(
 /// Pauli X on `target` restricted to `controls` (a pure permutation).
 pub(crate) fn apply_x(amps: &mut [C64], target: usize, controls: usize) {
     if controls == 0 {
+        assert!(
+            1usize << target < amps.len(),
+            "target {target} outside the register"
+        );
         for_each_pair(amps, 1 << target, std::mem::swap);
         return;
     }
-    let positions = sorted_positions(&[target], controls);
+    let positions = sorted_positions(&[target], controls, amps.len());
     let count = amps.len() >> positions.len();
     let bit = 1usize << target;
     let ptr = SyncPtr::new(amps);
@@ -136,7 +160,7 @@ pub(crate) fn apply_x(amps: &mut [C64], target: usize, controls: usize) {
 
 /// Swap qubits `a` and `b` on the subspace selected by `controls`.
 pub(crate) fn apply_swap(amps: &mut [C64], a: usize, b: usize, controls: usize) {
-    let positions = sorted_positions(&[a, b], controls);
+    let positions = sorted_positions(&[a, b], controls, amps.len());
     let count = amps.len() >> positions.len();
     let ba = 1usize << a;
     let bb = 1usize << b;
@@ -164,7 +188,7 @@ pub(crate) fn apply_kq(amps: &mut [C64], targets: &[usize], controls: usize, m: 
     );
     let d = 1usize << k;
     debug_assert_eq!(m.len(), d * d);
-    let positions = sorted_positions(targets, controls);
+    let positions = sorted_positions(targets, controls, amps.len());
     let count = amps.len() >> positions.len();
     let offsets: Vec<usize> = (0..d)
         .map(|l| {
@@ -209,7 +233,7 @@ where
 
 /// Multiply amplitudes whose `mask` bits are all set by `phase`.
 pub(crate) fn apply_phase_on_mask(amps: &mut [C64], mask: usize, phase: C64) {
-    let positions = sorted_positions(&[], mask);
+    let positions = sorted_positions(&[], mask, amps.len());
     let count = amps.len() >> positions.len();
     let ptr = SyncPtr::new(amps);
     for_each_index(count, move |k| {
