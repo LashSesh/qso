@@ -171,3 +171,66 @@ fn qaoa_p2_on_large_girth_cubic_graphs_reaches_the_tree_value() {
     assert!(close(r.max_cut, 21.0, 0.0));
     assert!(close(r.approximation_ratio.unwrap(), 0.7559, 5e-5), "{r:?}");
 }
+
+#[test]
+fn hypercube_q30_transfers_perfectly_in_31_dimensions() {
+    use metatron_qso::walks::{Quotient, QuotientWalk, StateTransfer};
+    let q = Quotient::hypercube(30).unwrap();
+    assert_eq!((q.num_cells(), q.num_nodes()), (31, 2f64.powi(30)));
+    let walk = QuotientWalk::new(&q, Generator::Laplacian, 1.0).unwrap();
+    let p = walk.cell_probabilities(0, PI / 2.0).unwrap();
+    assert!(close(p[30], 1.0, 1e-15));
+    let transfer = StateTransfer::from_quotient(&q, Generator::Laplacian, 1.0, 0, 30).unwrap();
+    assert!(close(transfer.perfect_transfer_time().unwrap(), PI / 2.0, 1e-9));
+}
+
+#[test]
+fn perfect_state_transfer_on_paths() {
+    use metatron_qso::walks::StateTransfer;
+    let ends = |n: usize| {
+        StateTransfer::new(&generators::path(n), Generator::Adjacency, 1.0, 0, n - 1)
+            .unwrap()
+            .perfect_transfer_time()
+    };
+    assert!(close(ends(2).unwrap(), PI / 2.0, 1e-9));
+    assert!(close(ends(3).unwrap(), PI / 2f64.sqrt(), 1e-9));
+    assert!((4..=12).all(|n| ends(n).is_none()));
+}
+
+#[test]
+fn hadamard_walk_spreads_at_konnos_rate() {
+    use metatron_qso::walks::LineWalk;
+    let steps = 1000;
+    let s = std::f64::consts::FRAC_1_SQRT_2;
+    let p = LineWalk::hadamard()
+        .distribution(steps, [C64::new(s, 0.0), C64::new(0.0, s)])
+        .unwrap();
+    let x = |k: usize| k as f64 - steps as f64;
+    let second: f64 = p.iter().enumerate().map(|(k, q)| q * x(k).powi(2)).sum();
+    let mean: f64 = p.iter().enumerate().map(|(k, q)| q * x(k)).sum();
+    let sigma = (second - mean * mean).sqrt() / steps as f64;
+    assert!(close(sigma, 0.54120, 5e-6));
+    assert!(close((1.0 - s).sqrt(), 0.54120, 5e-6));
+}
+
+#[test]
+fn szegedy_hitting_time_on_cycles_is_a_quarter_of_the_length() {
+    use metatron_qso::walks::SzegedyWalk;
+    for n in [16usize, 32, 64, 128] {
+        let w = SzegedyWalk::new(&generators::cycle(n), &[0]).unwrap();
+        assert_eq!(w.hitting_time(10 * n), Some(n / 4));
+        let h = classical_hitting_times(&generators::cycle(n), 0).unwrap();
+        let classical: f64 = h.iter().sum::<f64>() / n as f64;
+        assert!(close(classical, (n * n - 1) as f64 / 6.0, 1e-6));
+    }
+}
+
+#[test]
+fn shrikhande_and_rook_graph_are_cospectral_but_not_isomorphic() {
+    let (s, r) = (generators::shrikhande(), generators::rook(4, 4).unwrap());
+    assert_eq!(s.strongly_regular_parameters(), Some((16, 6, 2, 2)));
+    assert_eq!(r.strongly_regular_parameters(), Some((16, 6, 2, 2)));
+    assert!(!s.is_isomorphic(&r));
+    assert_eq!(s.automorphism_group().order(), Some(192));
+    assert_eq!(r.automorphism_group().order(), Some(1152));
+}
