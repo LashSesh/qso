@@ -102,7 +102,7 @@ where
             .iter()
             .map(|a| a.abs())
             .chain(betas.iter().copied())
-            .fold(1.0, f64::max);
+            .fold(0.0, f64::max);
         betas.push(beta);
         if beta <= 1e-13 * scale_ref || vectors.len() == dim {
             return LanczosBasis {
@@ -274,7 +274,13 @@ pub struct CyclicSpectrum {
 /// Lanczos with full re-orthogonalisation builds the subspace until the
 /// next Lanczos vector vanishes to rounding error; if that does not happen
 /// within `max_dim` vectors the call fails with
-/// [`QsoError::NoConvergence`].
+/// [`QsoError::NoConvergence`]. In floating point the recurrence also picks
+/// up rounding noise from outside the subspace and amplifies it: the
+/// termination is reliable when the vector sees few, well-separated
+/// eigenvalues (hypercubes, Hamming graphs, stars, complete bipartite
+/// graphs), but on long spectra (tori, long cycles) the iteration may run
+/// to `max_dim`. For graphs, the quotient by an equitable partition
+/// (`walks::Quotient`) is the robust alternative.
 pub fn cyclic_spectrum<F>(apply: F, v: &[f64], max_dim: usize) -> Result<CyclicSpectrum>
 where
     F: Fn(&[f64], &mut [f64]),
@@ -316,7 +322,7 @@ where
     let mut basis: Vec<f64> = v.iter().map(|x| x / nv).collect();
     let (mut alphas, mut betas): (Vec<f64>, Vec<f64>) = (Vec::new(), Vec::new());
     let mut w = vec![0.0; dim];
-    let mut scale = 1.0f64;
+    let mut scale = 0.0f64;
     loop {
         let j = alphas.len();
         let q = &basis[j * dim..(j + 1) * dim];

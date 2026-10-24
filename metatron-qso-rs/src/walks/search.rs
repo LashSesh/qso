@@ -210,57 +210,98 @@ impl SpatialSearch {
     }
 }
 
-/// Peak of `success(t)` over `t ∈ [0, t_max]`: grid scan with `resolution`
-/// points, then golden-section refinement of every grid peak within 10⁻³ of
-/// the highest (at most 32). Dynamics often repeat their best value; of
-/// peaks equal to within 10⁻¹⁰ the earliest is returned.
+/// Largest grid used by the peak searches (larger resolutions are capped).
+pub const MAX_RESOLUTION: usize = 1 << 24;
+
+/// Peak of `success(t)` over `t ∈ [0, t_max]`: a grid scan with `resolution`
+/// points (at most [`MAX_RESOLUTION`]), then golden-section refinement of
+/// the highest grid peaks (up to 32, all within 10⁻³ of the best). Dynamics
+/// often repeat their best value; of peaks equal to within 10⁻¹⁰ the
+/// earliest is returned. Values that are not finite (from a non-finite or
+/// overflowing `t`) are ignored; with no usable value, the result is `t = 0`.
 pub(crate) fn optimize_peak(
     gamma: f64,
     t_max: f64,
     resolution: usize,
     success: impl Fn(f64) -> f64,
 ) -> SearchResult {
-    let resolution = resolution.max(2);
-    let dt = t_max / (resolution - 1) as f64;
-    let values: Vec<f64> = (0..resolution).map(|k| success(k as f64 * dt)).collect();
-    let grid_max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    let is_peak = |k: usize| {
-        (k == 0 || values[k] >= values[k - 1])
-            && (k + 1 == resolution || values[k] >= values[k + 1])
+    let value = |t: f64| {
+        let p = success(t);
+        if p.is_finite() { p } else { f64::NEG_INFINITY }
     };
+    let resolution = resolution.clamp(2, MAX_RESOLUTION);
+    let t_max = if t_max.is_finite() && t_max > 0.0 {
+        t_max
+    } else {
+        0.0
+    };
+    let dt = t_max / (resolution - 1) as f64;
+    // Stream the grid, keeping the 32 highest local peaks, ranked by the
+    // vertex of the parabola through the three grid values (a better
+    // estimate of the peak height than the grid value itself).
+    const KEEP: usize = 32;
+    let mut peaks: Vec<(f64, usize, f64)> = Vec::with_capacity(KEEP + 1);
+    let (mut prev, mut cur) = (f64::NEG_INFINITY, value(0.0));
+    for k in 0..resolution {
+        let next = if k + 1 < resolution {
+            value((k + 1) as f64 * dt)
+        } else {
+            f64::NEG_INFINITY
+        };
+        if cur > f64::NEG_INFINITY && cur >= prev && cur >= next {
+            let curvature = prev - 2.0 * cur + next;
+            let height = if curvature < 0.0 && curvature.is_finite() {
+                cur - (prev - next).powi(2) / (8.0 * curvature)
+            } else {
+                cur
+            };
+            peaks.push((height, k, cur));
+            if peaks.len() > KEEP {
+                // Drop the lowest (the latest among equals).
+                let worst = (0..peaks.len())
+                    .min_by(|&a, &b| {
+                        peaks[a]
+                            .0
+                            .total_cmp(&peaks[b].0)
+                            .then(peaks[b].1.cmp(&peaks[a].1))
+                    })
+                    .expect("non-empty");
+                peaks.swap_remove(worst);
+            }
+        }
+        (prev, cur) = (cur, next);
+    }
+    let grid_max = peaks.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
     let phi = (5f64.sqrt() - 1.0) / 2.0;
-    let refined: Vec<(f64, f64)> = (0..resolution)
-        .filter(|&k| values[k] >= grid_max - 1e-3 && is_peak(k))
-        .take(32)
-        .map(|k| {
+    let mut refined: Vec<(usize, f64, f64)> = peaks
+        .iter()
+        .filter(|&&(h, _, _)| h >= grid_max - 1e-3)
+        .map(|&(_, k, v)| {
             let t_k = k as f64 * dt;
             let (mut a, mut b) = ((t_k - dt).max(0.0), (t_k + dt).min(t_max));
             for _ in 0..60 {
                 let c = b - phi * (b - a);
                 let d = a + phi * (b - a);
-                if success(c) > success(d) {
+                if value(c) > value(d) {
                     b = d;
                 } else {
                     a = c;
                 }
             }
             let t = 0.5 * (a + b);
-            let p = success(t);
-            if p > values[k] {
-                (t, p)
-            } else {
-                (t_k, values[k])
-            }
+            let p = value(t);
+            if p > v { (k, t, p) } else { (k, t_k, v) }
         })
         .collect();
+    refined.sort_by_key(|r| r.0);
     let best = refined
         .iter()
-        .map(|r| r.1)
+        .map(|r| r.2)
         .fold(f64::NEG_INFINITY, f64::max);
     let (time, success_probability) = refined
         .into_iter()
-        .find(|r| r.1 >= best - 1e-10)
-        .expect("the grid maximum is a peak");
+        .find(|r| r.2 >= best - 1e-10)
+        .map_or((0.0, success(0.0)), |r| (r.1, r.2));
     SearchResult {
         gamma,
         time,
@@ -394,6 +435,32 @@ mod tests {
         // K_N: γ_c = (N−1)/N².
         let k = generators::complete(13);
         assert!((SpatialSearch::critical_gamma(&k).unwrap() - 12.0 / 169.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn peak_search_is_robust() {
+        let s = SpatialSearch::new(
+            &generators::complete(9),
+            &[0],
+            Generator::Laplacian,
+            1.0 / 9.0,
+        )
+        .unwrap();
+        // Infinite or overflowing windows and absurd resolutions do not panic.
+        for (t_max, res) in [(f64::INFINITY, 10), (f64::NAN, 10), (1e308, 3), (-1.0, 10)] {
+            let r = s.optimize_time(t_max, res);
+            assert!(r.success_probability.is_finite() && r.time.is_finite());
+        }
+        let r = s.optimize_time(1.0, usize::MAX);
+        assert!(r.success_probability > 0.0);
+        // A later, higher peak beyond the first 32 near-maximal ones is found.
+        // Peaks at kπ, each higher than the one before (by about 1e-7).
+        let f = |t: f64| 1.0 - 1e-1 / (1.0 + t) - 0.1 * t.sin().powi(2);
+        let r = optimize_peak(0.0, 2000.0, 200_000, f);
+        assert!(
+            (r.time - 636.0 * std::f64::consts::PI).abs() < 1e-3,
+            "{r:?}"
+        );
     }
 
     #[test]

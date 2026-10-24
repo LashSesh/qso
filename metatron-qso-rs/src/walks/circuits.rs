@@ -17,7 +17,9 @@
 //! * [`diagonal_unitary`] — any diagonal unitary `Σ_y e^{iφ(y)}|y⟩⟨y|`,
 //!   exactly (global phase included), by the Walsh decomposition of `φ`.
 //!
-//! The circuits export to OpenQASM 2 ([`to_qasm2`](crate::quantum::to_qasm2)).
+//! The circuits export to OpenQASM 2 ([`to_qasm2`](crate::quantum::to_qasm2)),
+//! and are limited like OpenQASM programs to
+//! [`MAX_QASM_INSTRUCTIONS`] gates; graphs may have at most 2²⁰ nodes.
 //!
 //! ```
 //! use metatron_qso::graph::generators;
@@ -42,6 +44,7 @@ use crate::algorithms::qft::{inverse_qft, qft};
 use crate::error::{QsoError, Result};
 use crate::graph::Graph;
 use crate::quantum::Circuit;
+use crate::quantum::qasm::MAX_QASM_INSTRUCTIONS;
 
 /// Qubits needed for `n` nodes (at least one).
 fn qubits_for(n: usize) -> usize {
@@ -61,8 +64,19 @@ fn check_inputs(graph: &Graph, gamma: f64, t: f64) -> Result<()> {
     if !t.is_finite() {
         return Err(QsoError::invalid("t", "evolution time must be finite"));
     }
-    if graph.num_nodes() > 1 << 24 {
-        return Err(QsoError::invalid("graph", "at most 2^24 nodes"));
+    if graph.num_nodes() > 1 << 20 {
+        return Err(QsoError::invalid("graph", "at most 2^20 nodes"));
+    }
+    Ok(())
+}
+
+/// Reject circuits with more gates than an OpenQASM program may have.
+fn check_gate_count(gates: u128) -> Result<()> {
+    if gates > MAX_QASM_INSTRUCTIONS as u128 {
+        return Err(QsoError::invalid(
+            "circuit",
+            format!("the walk circuit would have {gates} gates, more than {MAX_QASM_INSTRUCTIONS}"),
+        ));
     }
     Ok(())
 }
@@ -118,10 +132,17 @@ pub fn diagonal_unitary(phases: &[f64]) -> Result<Circuit> {
     }
     a.iter_mut().for_each(|x| *x /= len as f64);
     let scale = phases.iter().fold(1.0f64, |m, p| m.max(p.abs()));
+    let kept = |s: usize| a[s].abs() > 1e-15 * scale;
+    let gates: u128 = 4
+        + (1..len)
+            .filter(|&s| kept(s))
+            .map(|s| 2 * s.count_ones() as u128 - 1)
+            .sum::<u128>();
+    check_gate_count(gates)?;
     let mut c = Circuit::new(n);
     global_phase(&mut c, a[0]);
     for (s, &coeff) in a.iter().enumerate().skip(1) {
-        if coeff.abs() > 1e-15 * scale {
+        if kept(s) {
             let qubits: Vec<usize> = (0..n).filter(|&q| s >> q & 1 == 1).collect();
             z_string_rotation(&mut c, &qubits, coeff);
         }
@@ -129,9 +150,9 @@ pub fn diagonal_unitary(phases: &[f64]) -> Result<Circuit> {
     Ok(c)
 }
 
-/// The graph's jump weights if it is circulant on a power-of-two number of
-/// nodes: `jumps[s]` for `s = 1..=N/2`.
-fn circulant_jumps(graph: &Graph) -> Result<Vec<f64>> {
+/// The graph's jumps `(s, weight)` (`1 ≤ s ≤ N/2`) if it is circulant on a
+/// power-of-two number of nodes.
+fn circulant_jumps(graph: &Graph) -> Result<Vec<(usize, f64)>> {
     let n = graph.num_nodes();
     if !n.is_power_of_two() {
         return Err(QsoError::invalid(
@@ -144,11 +165,8 @@ fn circulant_jumps(graph: &Graph) -> Result<Vec<f64>> {
         jumps[v.min(n - v)] = w;
     }
     let not_circulant = || QsoError::invalid("graph", "graph is not circulant");
+    let expected = graph.degree(0);
     for u in 0..n {
-        let expected = (1..=n / 2)
-            .filter(|&s| jumps[s] != 0.0)
-            .map(|s| if 2 * s == n { 1 } else { 2 })
-            .sum::<usize>();
         if graph.degree(u) != expected {
             return Err(not_circulant());
         }
@@ -159,7 +177,10 @@ fn circulant_jumps(graph: &Graph) -> Result<Vec<f64>> {
             }
         }
     }
-    Ok(jumps)
+    Ok((1..=n / 2)
+        .filter(|&s| jumps[s] != 0.0)
+        .map(|s| (s, jumps[s]))
+        .collect())
 }
 
 /// Exact walk circuit for a circulant graph on `2ⁿ` nodes (see the module
@@ -169,21 +190,18 @@ pub fn circulant_walk(graph: &Graph, generator: Generator, gamma: f64, t: f64) -
     check_inputs(graph, gamma, t)?;
     let jumps = circulant_jumps(graph)?;
     let n = graph.num_nodes();
-    let degree: f64 = (1..=n / 2)
-        .map(|s| if 2 * s == n { jumps[s] } else { 2.0 * jumps[s] })
+    let degree: f64 = jumps
+        .iter()
+        .map(|&(s, w)| if 2 * s == n { w } else { 2.0 * w })
         .sum();
     let phases: Vec<f64> = (0..n)
         .map(|y| {
             // Adjacency eigenvalue of the Fourier mode y.
-            let lambda: f64 = (1..=n / 2)
-                .filter(|&s| jumps[s] != 0.0)
-                .map(|s| {
+            let lambda: f64 = jumps
+                .iter()
+                .map(|&(s, w)| {
                     let c = (2.0 * PI * ((s * y) % n) as f64 / n as f64).cos();
-                    if 2 * s == n {
-                        jumps[s] * c
-                    } else {
-                        2.0 * jumps[s] * c
-                    }
+                    if 2 * s == n { w * c } else { 2.0 * w * c }
                 })
                 .sum();
             let energy = match generator {
@@ -299,6 +317,19 @@ pub fn trotter_walk(
         return Err(QsoError::invalid("order", "order must be 1 or 2"));
     }
     let k = qubits_for(graph.num_nodes());
+    // Gates per edge: CX gates and X gates around one multi-controlled gate.
+    let per_step: u128 = graph
+        .edges()
+        .iter()
+        .map(|&(u, v, _)| {
+            let diff = u ^ v;
+            let p = diff.trailing_zeros() as usize;
+            let a = if u >> p & 1 == 0 { u } else { v };
+            let zeros = (0..k).filter(|&q| q != p && a >> q & 1 == 0).count();
+            (2 * (diff.count_ones() as usize - 1) + 2 * zeros + 1) as u128
+        })
+        .sum();
+    check_gate_count(per_step * steps as u128 * order as u128)?;
     let tau = t / steps as f64;
     let term = |w: f64, dt: f64| -> [C64; 4] {
         // Adjacency: exp(iγwτ X); Laplacian: e^{−iγwτ}·exp(iγwτ X).
@@ -418,6 +449,21 @@ mod tests {
         let c = cayley_walk(&generators::hypercube(6), Generator::Adjacency, 1.0, 1.0).unwrap();
         assert_eq!(c.len(), 6);
         assert!(circulant_walk(&generators::cycle(6), Generator::Laplacian, 1.0, 1.0).is_err());
+        // Size limits: a 2^16-node cycle is fine, a long product formula is not.
+        let big =
+            circulant_walk(&generators::cycle(1 << 16), Generator::Laplacian, 1.0, 1.0).unwrap();
+        assert!(big.len() <= MAX_QASM_INSTRUCTIONS);
+        assert!(
+            trotter_walk(
+                &generators::hypercube(14),
+                Generator::Laplacian,
+                1.0,
+                1.0,
+                18,
+                2
+            )
+            .is_err()
+        );
         assert!(circulant_walk(&generators::path(8), Generator::Laplacian, 1.0, 1.0).is_err());
         assert!(cayley_walk(&generators::cycle(8), Generator::Laplacian, 1.0, 1.0).is_err());
     }

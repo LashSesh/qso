@@ -29,8 +29,17 @@ type Certificate = Vec<(u32, u32, u64)>;
 /// neighbour colours and weights), so the result is invariant under
 /// relabelling.
 pub(crate) fn refine(g: &Graph, colours: &mut [u32]) {
+    refine_bounded(g, colours, usize::MAX);
+}
+
+/// [`refine`], stopping early (and returning `false`) as soon as there are
+/// more than `max_colours` colours.
+pub(crate) fn refine_bounded(g: &Graph, colours: &mut [u32], max_colours: usize) -> bool {
     let n = g.num_nodes();
     let mut count = distinct(colours);
+    if count > max_colours {
+        return false;
+    }
     loop {
         type Signature = (u32, Vec<(u32, u64)>, usize);
         let mut keyed: Vec<Signature> = (0..n)
@@ -54,7 +63,10 @@ pub(crate) fn refine(g: &Graph, colours: &mut [u32]) {
         }
         let new_count = if n == 0 { 0 } else { id as usize + 1 };
         if new_count == count {
-            return;
+            return true;
+        }
+        if new_count > max_colours {
+            return false;
         }
         count = new_count;
     }

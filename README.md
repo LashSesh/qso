@@ -80,7 +80,7 @@ or by the benchmark report you can run yourself.
 | Grover, 10 qubits, 25 iterations | 0.999461 | sin²((2k+1)θ) = 0.999461 |
 | Quantum walk on Metatron's Cube, limiting P(centre) | 0.857988 | 145/169 |
 | Spatial search on Metatron's Cube, γ = 1/13, t = π√13/2 | 1.000000 | 1 |
-| Walk on the hypercube Q₃₀ (2³⁰ nodes, 31 cells), P(antipode, γt = π/2) | 1 (to 10⁻¹⁵) | 1, Christandl et al. 2004 |
+| Walk on the hypercube Q₃₀ (2³⁰ nodes, 31 cells), P(antipode, γt = π/2) | 1 (to 2·10⁻¹⁵) | 1, Christandl et al. 2004 |
 | Perfect state transfer between the ends of P₂, P₃ / P₄ … P₁₂ | π/2, π/√2 / none | Christandl et al. 2004 |
 | Hadamard walk on the line, σ(t)/t at t = 1000 | 0.54120 | √(1 − 1/√2) = 0.54120, Konno 2002 |
 | Szegedy quantum hitting time on cycles Cₙ, n = 16 … 128 | n/4 | √ of the classical n²/6 up to a constant, Szegedy 2004 |

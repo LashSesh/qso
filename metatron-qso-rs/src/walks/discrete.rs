@@ -409,6 +409,9 @@ impl LineWalk {
     /// `k − steps`. The Hadamard walk from `(|L⟩ + i|R⟩)/√2` spreads
     /// symmetrically with standard deviation `→ √(1 − 1/√2)·steps`.
     pub fn distribution(&self, steps: usize, coin_state: [C64; 2]) -> Result<Vec<f64>> {
+        if steps > 1 << 20 {
+            return Err(QsoError::invalid("steps", "at most 2^20 steps"));
+        }
         let norm = coin_state[0].norm_sqr() + coin_state[1].norm_sqr();
         if !norm.is_finite() || (norm - 1.0).abs() >= 1e-10 {
             return Err(QsoError::invalid(

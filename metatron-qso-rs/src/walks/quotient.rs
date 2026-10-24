@@ -28,9 +28,10 @@
 //!   probabilities, limiting and time-averaged distributions.
 //! * [`QuotientSearch`] — Childs–Goldstone spatial search for marked cells.
 //!
-//! The reduced problems are solved densely, so they need at most
-//! [`DENSE_LIMIT`] cells; graphs without much symmetry
-//! have nearly as many cells as nodes.
+//! The reduced problems are solved densely, so a quotient may have at most
+//! [`DENSE_LIMIT`] cells; graphs without much symmetry have nearly as many
+//! cells as nodes, and building their quotient fails early (colour
+//! refinement stops as soon as the limit is passed).
 //!
 //! ```
 //! use metatron_qso::walks::{Generator, Quotient, QuotientWalk};
@@ -49,7 +50,7 @@ use super::search::{SearchResult, optimize_peak, optimize_rate};
 use super::{DENSE_LIMIT, Generator, StartSpectrum};
 use crate::error::{QsoError, Result};
 use crate::graph::Graph;
-use crate::graph::canonical::refine;
+use crate::graph::canonical::refine_bounded;
 use crate::linalg::{RMatrix, eigh_real};
 
 /// An equitable partition and its quotient matrix (see the module
@@ -62,6 +63,14 @@ pub struct Quotient {
     matrix: RMatrix,
     /// Cell of every node, for partitions of an explicit graph.
     cell_of: Option<Vec<usize>>,
+}
+
+fn too_many_cells(cells: usize) -> QsoError {
+    QsoError::TooManyQubits {
+        what: "dense quotient (cells)",
+        max: DENSE_LIMIT,
+        requested: cells,
+    }
 }
 
 /// `C(n, k)` in floating point (exact up to 2⁵³, then correctly rounded to
@@ -84,6 +93,9 @@ impl Quotient {
         if k == 0 {
             return Err(QsoError::invalid("sizes", "need at least one cell"));
         }
+        if k > DENSE_LIMIT {
+            return Err(too_many_cells(k));
+        }
         if matrix.shape() != (k, k) {
             return Err(QsoError::DimensionMismatch {
                 expected: k,
@@ -102,8 +114,12 @@ impl Quotient {
                 "total number of nodes overflows",
             ));
         }
-        if matrix.iter().any(|x| !x.is_finite()) {
-            return Err(QsoError::invalid("matrix", "entries must be finite"));
+        if matrix.iter().any(|x| !x.is_finite()) || (0..k).any(|i| !matrix.row(i).sum().is_finite())
+        {
+            return Err(QsoError::invalid(
+                "matrix",
+                "entries and row sums (degrees) must be finite",
+            ));
         }
         for i in 0..k {
             if sizes[i] == 1.0 && matrix[(i, i)] != 0.0 {
@@ -210,7 +226,9 @@ impl Quotient {
             .iter()
             .map(|x| distinct.binary_search(x).expect("present") as u32)
             .collect();
-        refine(graph, &mut c);
+        if !refine_bounded(graph, &mut c, DENSE_LIMIT) {
+            return Err(too_many_cells(DENSE_LIMIT + 1));
+        }
         let (cells, k) = Self::renumber(&c.iter().map(|&x| x as usize).collect::<Vec<_>>());
         Ok(Self::of_cells(graph, cells, k))
     }
@@ -243,7 +261,8 @@ impl Quotient {
     }
 
     /// The partition `cell_of` (node → cell label) of `graph`, after
-    /// checking that it is equitable (to a relative tolerance of 1e-9).
+    /// checking that it is equitable (to 10⁻⁹ relative to the largest edge
+    /// weight).
     pub fn from_cells(graph: &Graph, cell_of: &[usize]) -> Result<Self> {
         let n = graph.num_nodes();
         if n == 0 {
@@ -256,8 +275,17 @@ impl Quotient {
             });
         }
         let (cells, k) = Self::renumber(cell_of);
+        if k > DENSE_LIMIT {
+            return Err(too_many_cells(k));
+        }
         let q = Self::of_cells(graph, cells, k);
         let cells = q.cell_of.as_ref().expect("explicit");
+        // Relative tolerance against the largest edge weight, so that the
+        // check does not loosen for graphs with small weights.
+        let scale = graph
+            .edges()
+            .iter()
+            .fold(0.0f64, |m, &(_, _, w)| m.max(w.abs()));
         let mut row = vec![0.0; k];
         for v in 0..n {
             row.iter_mut().for_each(|x| *x = 0.0);
@@ -267,7 +295,7 @@ impl Quotient {
             let i = cells[v];
             for (j, &x) in row.iter().enumerate() {
                 let expected = q.matrix[(i, j)];
-                if (x - expected).abs() > 1e-9 * expected.abs().max(1.0) {
+                if (x - expected).abs() > 1e-9 * expected.abs().max(scale) {
                     return Err(QsoError::invalid(
                         "cell_of",
                         format!(
@@ -306,6 +334,9 @@ impl Quotient {
         if parts.is_empty() || parts.contains(&0) {
             return Err(QsoError::invalid("parts", "need non-empty parts"));
         }
+        if parts.len() + 1 > DENSE_LIMIT {
+            return Err(too_many_cells(parts.len() + 1));
+        }
         // Cells: the start node, the rest of part 0, parts 1.. .
         let mut sizes = vec![1.0];
         let mut part_of_cell = vec![0];
@@ -336,6 +367,9 @@ impl Quotient {
     pub fn hamming(d: usize, q: usize) -> Result<Self> {
         if d == 0 || q < 2 {
             return Err(QsoError::invalid("hamming", "need d ≥ 1 and q ≥ 2"));
+        }
+        if d + 1 > DENSE_LIMIT {
+            return Err(too_many_cells(d + 1));
         }
         if d as f64 * (q as f64).ln() > 709.0 {
             return Err(QsoError::invalid(
@@ -375,6 +409,9 @@ impl Quotient {
             return Err(QsoError::invalid("johnson", "need 0 < k < n"));
         }
         let m = k.min(n - k);
+        if m + 1 > DENSE_LIMIT {
+            return Err(too_many_cells(m + 1));
+        }
         let sizes: Vec<f64> = (0..=m)
             .map(|i| binomial(k, i) * binomial(n - k, i))
             .collect();
@@ -437,7 +474,8 @@ impl Quotient {
             if i == j {
                 bij
             } else {
-                bij.signum() * (bij * bji).abs().sqrt()
+                // √(B_ij·B_ji), without overflowing the product.
+                bij.signum() * bij.abs().sqrt() * bji.abs().sqrt()
             }
         })
     }
@@ -737,10 +775,13 @@ impl QuotientSearch {
             return Err(QsoError::invalid("quotient", "need at least two cells"));
         }
         let (values, vectors) = eigh_real(&quotient.laplacian());
-        let scale = values.last().copied().unwrap_or(1.0).abs().max(1.0);
-        let tol = 1e-9 * scale;
+        let scale = values.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+        let tol = super::EIGEN_TOL * scale;
         if values.iter().filter(|&&l| l.abs() <= tol).count() != 1 {
-            return Err(QsoError::invalid("quotient", "graph must be connected"));
+            return Err(QsoError::invalid(
+                "quotient",
+                "the reduced Laplacian has more than one zero eigenvalue (disconnected graph)",
+            ));
         }
         Ok(values
             .iter()
@@ -1011,6 +1052,55 @@ mod tests {
         let best =
             QuotientSearch::optimize(&q20, &[0], Generator::Laplacian, 3000.0, 3000).unwrap();
         assert!(best.success_probability > 0.85, "{best:?}");
+    }
+
+    #[test]
+    fn quotients_are_bounded_and_scale_free() {
+        // Graphs without symmetry stop refining at the cell limit.
+        let mut rng = Rng::seed_from_u64(9);
+        let g = generators::erdos_renyi(3000, 0.002, &mut rng).unwrap();
+        assert!(Quotient::with_singletons(&g, &[0]).is_err());
+        assert!(Quotient::from_cells(&g, &(0..3000).collect::<Vec<_>>()).is_err());
+        assert!(Quotient::johnson(60_000, 30_000).is_err());
+        assert!(Quotient::complete_multipartite(&[1; 40_000]).is_err());
+        // Equitability is checked relative to the weights.
+        let tiny =
+            Graph::from_weighted_edges(4, &[(0, 1, 1e-10), (1, 2, 1e-10), (2, 3, 1e-10)]).unwrap();
+        assert!(Quotient::from_cells(&tiny, &[0, 0, 1, 1]).is_err());
+        assert!(Quotient::from_cells(&tiny, &[0, 1, 1, 0]).is_ok());
+        // Huge entries do not overflow the reduced adjacency matrix.
+        let big = RMatrix::from_row_slice(2, 2, &[0.0, 1e200, 1e200, 0.0]);
+        let q = Quotient::from_matrix(vec![1.0, 1.0], big).unwrap();
+        assert_eq!(q.adjacency()[(0, 1)], 1e200);
+        let overflow = RMatrix::from_row_slice(2, 2, &[0.0, 1e308, 1e308, 1e308]);
+        assert!(Quotient::from_matrix(vec![1.0, 2.0], overflow).is_err());
+        // Results do not depend on the overall scale of H.
+        let p = generators::petersen();
+        for gamma in [1e-10, 1.0, 1e10] {
+            let q = Quotient::with_singletons(&p, &[0]).unwrap();
+            let limit = QuotientWalk::new(&q, Generator::Laplacian, gamma)
+                .unwrap()
+                .limiting_distribution(0)
+                .unwrap();
+            let full = ContinuousWalk::new(&p, Generator::Laplacian, gamma)
+                .unwrap()
+                .limiting_distribution(0)
+                .unwrap();
+            assert!(
+                close(&q.node_probabilities(&limit).unwrap(), &full, 1e-12),
+                "γ = {gamma}"
+            );
+        }
+        let scaled = Graph::from_weighted_edges(3, &[(0, 1, 1e-10), (1, 2, 1e-10)]).unwrap();
+        let q = Quotient::with_singletons(&scaled, &[0]).unwrap();
+        assert!(QuotientSearch::critical_gamma(&q, 0).is_ok());
+        // Eigenvalues N − 2 and N of a huge multipartite graph stay apart.
+        let q = Quotient::complete_multipartite(&[2, 4_000_000_000, 4_000_000_000]).unwrap();
+        let limit = QuotientWalk::new(&q, Generator::Laplacian, 1.0)
+            .unwrap()
+            .limiting_distribution(0)
+            .unwrap();
+        assert!((limit[0] - 0.5).abs() < 1e-6, "{limit:?}");
     }
 
     #[test]

@@ -9,8 +9,8 @@
 //! * [`ContinuousWalk`] — exact propagation through the eigendecomposition
 //!   (n ≤ [`DENSE_LIMIT`]) or Krylov propagation on sparse matrices (any n);
 //!   exact limiting and time-averaged distributions with correct handling of
-//!   degenerate eigenvalues, beyond `DENSE_LIMIT` through the start node's
-//!   cyclic subspace.
+//!   degenerate eigenvalues, beyond `DENSE_LIMIT` through symmetry
+//!   reduction or the start node's cyclic subspace.
 //! * [`search`] — Childs–Goldstone spatial search.
 //! * [`quotient`] — exact walks and searches reduced by symmetry to a few
 //!   dimensions (equitable partitions), for graphs of any size.
@@ -56,7 +56,7 @@ pub use classical::{classical_hitting_times, classical_walk_probabilities};
 pub use dephasing::DephasingWalk;
 pub use discrete::{Coin, CoinedWalk, DiscreteSearchResult, LineWalk, SzegedyWalk};
 pub use quotient::{Quotient, QuotientSearch, QuotientWalk};
-pub use search::{SearchResult, SpatialSearch};
+pub use search::{MAX_RESOLUTION, SearchResult, SpatialSearch};
 pub use transfer::{StateTransfer, TransferResult};
 
 /// Largest graph for which dense eigendecompositions are used.
@@ -71,10 +71,19 @@ pub enum Generator {
     Adjacency,
 }
 
-/// Group sorted eigenvalues into degenerate clusters (relative tolerance).
+/// Relative tolerance below which eigenvalues count as equal: 10⁻¹¹ of the
+/// largest eigenvalue magnitude. Degenerate eigenvalues of dense
+/// eigendecompositions of up to 2048 nodes come out within 2·10⁻¹⁴ of
+/// each other (complete graphs, hypercubes, tori, Johnson, Hamming and
+/// Paley graphs measured), so the margin is a factor of about 500.
+pub(crate) const EIGEN_TOL: f64 = 1e-11;
+
+/// Group sorted eigenvalues into degenerate clusters (tolerance
+/// [`EIGEN_TOL`] relative to the largest magnitude, so the grouping does
+/// not depend on the overall scale of `H`).
 pub(crate) fn eigenspaces(values: &[f64]) -> Vec<std::ops::Range<usize>> {
-    let scale = values.iter().fold(1.0f64, |m, v| m.max(v.abs()));
-    let tol = 1e-9 * scale;
+    let scale = values.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+    let tol = EIGEN_TOL * scale;
     let mut spaces = Vec::new();
     let mut start = 0;
     for i in 1..=values.len() {
@@ -112,8 +121,11 @@ impl StartSpectrum<'_> {
         dist
     }
 
-    /// Exact time average `(1/T)∫₀ᵀ P(j, t) dt`.
+    /// Exact time average `(1/T)∫₀ᵀ P(j, t) dt` (the limit for `T = ∞`).
     pub fn average_distribution(&self, t_max: f64) -> Vec<f64> {
+        if t_max.is_infinite() {
+            return self.limiting_distribution();
+        }
         let m = self.vectors.ncols();
         // P(j,t) = Σ_ab c_a c_b x_a(j) x_b(j) e^{−i(λa−λb)t}; the average
         // replaces the phase by (1/T)∫ e^{−idt} dt, whose real part is
@@ -157,6 +169,8 @@ pub struct ContinuousWalk {
     hamiltonian: CsrMatrix,
     /// Eigenvalues (ascending) and eigenvectors (columns) for n ≤ DENSE_LIMIT.
     spectral: Option<(Vec<f64>, RMatrix)>,
+    /// The graph, kept beyond DENSE_LIMIT for symmetry reduction.
+    graph: Option<Graph>,
 }
 
 impl ContinuousWalk {
@@ -183,6 +197,7 @@ impl ContinuousWalk {
             generator,
             hamiltonian,
             spectral,
+            graph: (n > DENSE_LIMIT).then(|| graph.clone()),
         })
     }
 
@@ -298,10 +313,32 @@ impl ContinuousWalk {
                 vectors: std::borrow::Cow::Borrowed(vectors),
             }),
             None => {
+                let limit = cyclic_limit(self.n);
+                // First the quotient by the equitable partition with the
+                // start node as a cell of its own: an exact invariant
+                // subspace, solved densely.
+                if let Some(graph) = &self.graph
+                    && let Ok(q) = Quotient::with_singletons(graph, &[start])
+                    && q.num_cells() <= limit
+                {
+                    let (values, y) = eigh_real(&q.hamiltonian(self.generator, self.gamma));
+                    let cells = q.cell_of().expect("explicit graph");
+                    let sizes = q.sizes();
+                    let k = values.len();
+                    let vectors = RMatrix::from_fn(self.n, k, |j, a| {
+                        y[(cells[j], a)] / sizes[cells[j]].sqrt()
+                    });
+                    return Ok(StartSpectrum {
+                        values: std::borrow::Cow::Owned(values),
+                        coeffs: (0..k).map(|a| y[(cells[start], a)]).collect(),
+                        vectors: std::borrow::Cow::Owned(vectors),
+                    });
+                }
+                // Otherwise the start vector's cyclic subspace by Lanczos.
                 let mut v = vec![0.0; self.n];
                 v[start] = 1.0;
                 let h = &self.hamiltonian;
-                let c = cyclic_spectrum(|x, y| h.matvec_real(x, y), &v, cyclic_limit(self.n))?;
+                let c = cyclic_spectrum(|x, y| h.matvec_real(x, y), &v, limit)?;
                 Ok(StartSpectrum {
                     values: std::borrow::Cow::Owned(c.values),
                     coeffs: c.weights,
@@ -312,7 +349,8 @@ impl ContinuousWalk {
     }
 
     /// Dimension of the smallest invariant subspace containing `|start⟩`:
-    /// the number of distinct eigenvalues the walker ever sees.
+    /// the number of distinct eigenvalues the walker ever sees (those with
+    /// a projection of the start node above 10⁻¹²).
     pub fn cyclic_dimension(&self, start: usize) -> Result<usize> {
         let spectrum = self.start_spectrum(start)?;
         Ok(eigenspaces(&spectrum.values)
@@ -325,10 +363,13 @@ impl ContinuousWalk {
     /// `P̄(j) = Σ_λ |⟨j|Π_λ|start⟩|²`, where `Π_λ` projects onto the full
     /// eigenspace of `λ` (degeneracies are grouped, which v0.1 omitted).
     ///
-    /// Beyond [`DENSE_LIMIT`] nodes the start node's cyclic subspace is
-    /// used, which is exact and small for symmetric graphs (21 dimensions on
-    /// the 2²⁰-node hypercube); the call fails if that subspace exceeds
-    /// `min(DENSE_LIMIT, 2²⁵/n, √(2³²/n))` dimensions.
+    /// Beyond [`DENSE_LIMIT`] nodes the walk is reduced to the quotient by
+    /// the coarsest equitable partition in which the start node is a cell
+    /// of its own (exact; 21 cells on the 2²⁰-node hypercube, 561 on the
+    /// 64×64 torus), solved densely. If that has more than
+    /// `min(DENSE_LIMIT, 2²⁵/n, √(2³²/n))` cells, the start node's cyclic
+    /// subspace is built by Lanczos instead, which can fail when the walker
+    /// sees many eigenvalues.
     pub fn limiting_distribution(&self, start: usize) -> Result<Vec<f64>> {
         Ok(self.start_spectrum(start)?.limiting_distribution())
     }
@@ -506,6 +547,14 @@ mod tests {
         }
         assert!((limit.iter().sum::<f64>() - 1.0).abs() < 1e-10);
         assert!(walk.mixing_time(0, 0.05, 50.0, 50).unwrap().is_some());
+        // The 64×64 torus: 561 cells from a node, many distinct eigenvalues.
+        let torus = generators::grid_2d(64, 64, true);
+        let walk = ContinuousWalk::new(&torus, Generator::Laplacian, 1.0).unwrap();
+        let limit = walk.limiting_distribution(0).unwrap();
+        assert!((limit.iter().sum::<f64>() - 1.0).abs() < 1e-10);
+        // Symmetric under the dihedral group of the square fixing node 0.
+        assert!((limit[1] - limit[64]).abs() < 1e-14 && (limit[1] - limit[63]).abs() < 1e-14);
+        assert!((walk.average_distribution(0, f64::INFINITY).unwrap()[0] - limit[0]).abs() < 1e-15);
         // Cyclic and dense decompositions agree where both exist.
         let small =
             ContinuousWalk::new(&generators::petersen(), Generator::Adjacency, 1.0).unwrap();

@@ -74,7 +74,7 @@ pub struct StateTransfer {
 }
 
 /// Best rational approximation `p/q` of `x` with `q ≤ max_den`, if it is
-/// within `tol`.
+/// within `tol` (absolute).
 fn rationalize(x: f64, max_den: i64, tol: f64) -> Option<(i64, i64)> {
     let (mut p0, mut q0, mut p1, mut q1) = (0i64, 1i64, 1i64, 0i64);
     let mut r = x;
@@ -91,7 +91,7 @@ fn rationalize(x: f64, max_den: i64, tol: f64) -> Option<(i64, i64)> {
         if q2 > max_den {
             return None;
         }
-        if (x - p2 as f64 / q2 as f64).abs() <= tol * x.abs().max(1.0) {
+        if (x - p2 as f64 / q2 as f64).abs() <= tol {
             return Some((p2, q2));
         }
         (p0, q0, p1, q1) = (p1, q1, p2, q2);
@@ -182,31 +182,41 @@ impl StateTransfer {
     }
 
     fn analyse(&mut self, single_target: bool) {
-        const TOL: f64 = 1e-8;
+        // Eigenvector components are accurate to about 10⁻¹⁵; projections
+        // below 10⁻¹² cannot be told apart from zero, and signs are
+        // compared to a relative accuracy of 10⁻⁶ above that noise floor.
+        const FLOOR: f64 = 1e-12;
         let mut support = Vec::new();
         let mut signs = Vec::new();
         let mut cospectral = single_target;
         for space in eigenspaces(&self.values) {
             // Within an eigenspace, E_θ e_u and E_θ e_v have coordinates
             // source[a] and target[a] on its orthonormal basis.
-            let norm_u: f64 = space.clone().map(|a| self.source[a].powi(2)).sum();
+            let norm_u: f64 = space
+                .clone()
+                .map(|a| self.source[a].powi(2))
+                .sum::<f64>()
+                .sqrt();
             let plus: f64 = space
                 .clone()
                 .map(|a| (self.target[a] - self.source[a]).powi(2))
-                .sum();
+                .sum::<f64>()
+                .sqrt();
             let minus: f64 = space
                 .clone()
                 .map(|a| (self.target[a] + self.source[a]).powi(2))
-                .sum();
-            let sign = if plus <= TOL * TOL {
+                .sum::<f64>()
+                .sqrt();
+            let tol = 1e-6 * norm_u + 0.1 * FLOOR;
+            let sign = if plus <= tol {
                 1
-            } else if minus <= TOL * TOL {
+            } else if minus <= tol {
                 -1
             } else {
                 cospectral = false;
                 0
             };
-            if norm_u > TOL * TOL {
+            if norm_u > FLOOR {
                 support.push(
                     self.values[space.start..space.end].iter().sum::<f64>() / space.len() as f64,
                 );
@@ -227,12 +237,20 @@ impl StateTransfer {
         if theta.len() < 2 {
             return None;
         }
-        // Differences D_k = θ_k − θ_0 as rational multiples of D_1.
+        // Eigenvalues are accurate to about 2·10⁻¹⁴·‖H‖ (measured, see
+        // EIGEN_TOL), so a ratio r = D_k/D_1 of eigenvalue differences is
+        // known to δ·(1 + |r|)/|D_1| with δ = 10⁻¹²·‖H‖ (a factor 50 to
+        // spare). Requiring that precision rules out the fractions that
+        // merely approximate an irrational ratio: with denominators up to
+        // 10⁴, those are typically off by 10⁻⁹ or more.
+        let norm = self.values.iter().fold(0.0f64, |m, v| m.max(v.abs()));
         let d1 = theta[1] - theta[0];
         let mut fractions = Vec::with_capacity(theta.len() - 1);
         let mut lcm: i64 = 1;
         for &t in &theta[1..] {
-            let (p, q) = rationalize((t - theta[0]) / d1, 10_000, 1e-9)?;
+            let r = (t - theta[0]) / d1;
+            let tol = 1e-12 * norm * (1.0 + r.abs()) / d1.abs();
+            let (p, q) = rationalize(r, 10_000, tol)?;
             lcm = lcm.checked_mul(q / gcd(lcm, q))?;
             fractions.push((p, q));
         }
@@ -250,7 +268,7 @@ impl StateTransfer {
             }
         }
         let tau = std::f64::consts::PI / g.abs();
-        (self.fidelity(tau) >= 1.0 - 1e-8).then_some(tau)
+        (self.fidelity(tau) >= 1.0 - 1e-10).then_some(tau)
     }
 
     /// `⟨v| e^{−iHt} |u⟩`.
@@ -313,6 +331,11 @@ mod tests {
         assert_eq!(rationalize(0.75, 100, 1e-12), Some((3, 4)));
         assert_eq!(rationalize(-2.0, 100, 1e-12), Some((-2, 1)));
         assert_eq!(rationalize(1.0 / 3.0 + 1e-13, 100, 1e-9), Some((1, 3)));
+        assert_eq!(
+            rationalize(2.0731321849709876, 10_000, 2.1e-9),
+            Some((14429, 6960))
+        );
+        assert_eq!(rationalize(2.0731321849709876, 10_000, 1e-11), None);
         assert_eq!(rationalize(2f64.sqrt(), 10_000, 1e-12), None);
         assert_eq!(gcd(12, -18), 6);
     }
@@ -385,6 +408,53 @@ mod tests {
         // The weight-15 cell holds C(30,15) nodes: no PST into any of them.
         let mid = StateTransfer::from_quotient(&q, Generator::Laplacian, 1.0, 0, 15).unwrap();
         assert!(!mid.strongly_cospectral() && mid.perfect_transfer_time().is_none());
+    }
+
+    #[test]
+    fn irrational_ratios_are_not_mistaken_for_transfer() {
+        // Twins 4 and 5 are strongly cospectral, but the eigenvalues
+        // ±√(3 ± √3) have the irrational ratio 2.07313…, which 14429/6960
+        // approximates to 10⁻⁹ (once reported as PST at t ≈ 20838).
+        let g = Graph::from_edges(6, &[(0, 2), (0, 4), (0, 5), (1, 4), (1, 5), (2, 3)]).unwrap();
+        let t = StateTransfer::new(&g, Generator::Adjacency, 1.0, 4, 5).unwrap();
+        assert!(t.strongly_cospectral());
+        assert!(t.perfect_transfer_time().is_none());
+        // On random small graphs, every PST claim is genuine: early (for
+        // integer or quadratic eigenvalues, τ = π/g with g ≥ 1/2) and with
+        // fidelity 1 to rounding error.
+        let mut rng = crate::rng::Rng::seed_from_u64(31);
+        let mut claims = 0;
+        for k in 0..3000 {
+            let n = 4 + k % 4;
+            let g = generators::erdos_renyi(n, 0.5, &mut rng).unwrap();
+            for v in 1..n {
+                let t = StateTransfer::new(&g, Generator::Adjacency, 1.0, 0, v).unwrap();
+                if let Some(tau) = t.perfect_transfer_time() {
+                    claims += 1;
+                    assert!(tau <= 2.0 * PI, "{:?} 0→{v}: τ = {tau}", g.edges());
+                    assert!(t.fidelity(tau) > 1.0 - 1e-12);
+                }
+            }
+        }
+        assert!(claims > 0);
+    }
+
+    #[test]
+    fn analysis_does_not_depend_on_the_scale_of_h() {
+        for gamma in [1e-10, 1.0, 1e10] {
+            let p2 = StateTransfer::new(&generators::path(2), Generator::Adjacency, gamma, 0, 1)
+                .unwrap();
+            let tau = p2.perfect_transfer_time().unwrap();
+            assert!((tau * gamma - FRAC_PI_2).abs() < 1e-9, "γ = {gamma}");
+            let p3 = StateTransfer::new(&generators::path(3), Generator::Adjacency, gamma, 0, 2)
+                .unwrap();
+            assert!((p3.perfect_transfer_time().unwrap() * gamma - PI / 2f64.sqrt()).abs() < 1e-9);
+        }
+        // Q60 from its quotient: every eigenvalue is in the support.
+        let q = Quotient::hypercube(60).unwrap();
+        let t = StateTransfer::from_quotient(&q, Generator::Laplacian, 1.0, 0, 60).unwrap();
+        assert_eq!(t.support().len(), 61);
+        assert!((t.perfect_transfer_time().unwrap() - FRAC_PI_2).abs() < 1e-9);
     }
 
     #[test]

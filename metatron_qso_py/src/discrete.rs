@@ -327,9 +327,6 @@ fn trotter_walk_circuit(
 ) -> PyResult<PyCircuit> {
     check_time("t", t)?;
     let gen_ = self::generator(generator)?;
-    if (graph.inner.num_edges() as u128) * (steps as u128) * (order as u128) > 1 << 22 {
-        return Err(invalid("the circuit would exceed 2^22 edge rotations"));
-    }
     let g = &graph.inner;
     PyCircuit::wrap(
         py.detach(|| circuits::trotter_walk(g, gen_, gamma, t, steps, order))

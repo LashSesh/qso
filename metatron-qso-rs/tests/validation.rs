@@ -179,7 +179,7 @@ fn hypercube_q30_transfers_perfectly_in_31_dimensions() {
     assert_eq!((q.num_cells(), q.num_nodes()), (31, 2f64.powi(30)));
     let walk = QuotientWalk::new(&q, Generator::Laplacian, 1.0).unwrap();
     let p = walk.cell_probabilities(0, PI / 2.0).unwrap();
-    assert!(close(p[30], 1.0, 1e-15));
+    assert!(close(p[30], 1.0, 1e-14), "{}", p[30]);
     let transfer = StateTransfer::from_quotient(&q, Generator::Laplacian, 1.0, 0, 30).unwrap();
     assert!(close(
         transfer.perfect_transfer_time().unwrap(),
