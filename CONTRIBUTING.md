@@ -62,7 +62,7 @@ Releases are published by [`.github/workflows/release.yml`](.github/workflows/re
    `metatron-qso-rs` to crates.io and `metatron-qso` to PyPI and creates the
    GitHub release with the changelog section as notes.
 
-The workflow needs two repository secrets: `CARGO_REGISTRY_TOKEN` (crates.io
-token with the `publish-update` scope for `metatron-qso-rs`) and
-`PYPI_API_TOKEN` (PyPI token scoped to the project `metatron-qso`). Versions
+The workflow needs two repository secrets: `CRATES_IO` (crates.io token with
+the `publish-update` scope for `metatron-qso-rs`) and `PYPI` (PyPI token
+scoped to the project `metatron-qso`). Versions
 already on a registry are skipped, so a failed run can be re-run.

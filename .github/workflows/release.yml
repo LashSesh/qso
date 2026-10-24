@@ -19,9 +19,9 @@ name: Release
 # workflow runs steps 1–2 only and publishes nothing; use this as a dry run.
 #
 # Repository secrets:
-#   CARGO_REGISTRY_TOKEN – crates.io API token with the `publish-update` scope
-#                          for the crate `metatron-qso-rs`
-#   PYPI_API_TOKEN       – PyPI API token scoped to the project `metatron-qso`
+#   CRATES_IO – crates.io API token with the `publish-update` scope for the
+#               crate `metatron-qso-rs`
+#   PYPI      – PyPI API token scoped to the project `metatron-qso`
 
 on:
   push:
@@ -68,17 +68,17 @@ jobs:
     steps:
       - name: Registry tokens are set
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+          CRATES_IO: ${{ secrets.CRATES_IO }}
+          PYPI: ${{ secrets.PYPI }}
         run: |
           ok=1
-          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
-            echo "::error::repository secret CARGO_REGISTRY_TOKEN is not set"; ok=0
+          if [ -z "$CRATES_IO" ]; then
+            echo "::error::repository secret CRATES_IO is not set"; ok=0
           fi
-          case "$PYPI_API_TOKEN" in
+          case "$PYPI" in
             pypi-*) ;;
-            "") echo "::error::repository secret PYPI_API_TOKEN is not set"; ok=0 ;;
-            *) echo "::error::PYPI_API_TOKEN does not start with 'pypi-'"; ok=0 ;;
+            "") echo "::error::repository secret PYPI is not set"; ok=0 ;;
+            *) echo "::error::secret PYPI does not start with 'pypi-'"; ok=0 ;;
           esac
           [ "$ok" = 1 ]
 
@@ -149,7 +149,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Publish metatron-qso-rs
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO }}
         run: |
           version="${GITHUB_REF_NAME#v}"
           if curl -fsS -o /dev/null -A "LashSesh/qso release workflow" \
@@ -170,7 +170,7 @@ jobs:
       - run: ls -l dist
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
+          password: ${{ secrets.PYPI }}
           skip-existing: true
           # Attestations need Trusted Publishing; this workflow uses a token.
           attestations: false
