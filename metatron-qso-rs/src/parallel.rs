@@ -194,6 +194,28 @@ where
     }
 }
 
+/// Deterministic sum over `0..n` where `f(start, end)` evaluates one fixed
+/// chunk `start..end` (for loops that carry state from one index to the
+/// next, such as Gray-code enumerations). Chunks are combined in order.
+pub(crate) fn sum_ranges<T, F>(n: u64, f: F) -> T
+where
+    T: Send + std::iter::Sum<T>,
+    F: Fn(u64, u64) -> T + Sync + Send,
+{
+    let chunk = CHUNK as u64;
+    let n_chunks = n.div_ceil(chunk);
+    let partial = |c: u64| {
+        let start = c * chunk;
+        f(start, (start + chunk).min(n))
+    };
+    #[cfg(feature = "parallel")]
+    if n >= PAR_THRESHOLD as u64 {
+        let parts: Vec<T> = (0..n_chunks).into_par_iter().map(partial).collect();
+        return parts.into_iter().sum();
+    }
+    (0..n_chunks).map(partial).sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

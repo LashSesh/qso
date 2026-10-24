@@ -13,6 +13,7 @@
 //! | [`optimize`] | L-BFGS, Adam, Nelder–Mead, SPSA, gradient descent |
 //! | [`graph`] | graphs, Platonic solids, Metatron's Cube / Fruit of Life, exact automorphism groups |
 //! | [`walks`] | continuous-time quantum walks, spatial search, dephasing, classical baselines |
+//! | [`photonics`] | linear interferometers, permanents, exact boson sampling |
 //! | [`backend`] | execution backends and shot-based expectation values |
 //! | [`linalg`] | Hermitian eigensolvers, Lanczos, Krylov propagation, sparse matrices |
 //!
@@ -54,6 +55,7 @@ pub mod linalg;
 pub mod noise;
 pub mod optimize;
 pub(crate) mod parallel;
+pub mod photonics;
 pub mod quantum;
 pub mod rng;
 pub mod walks;
@@ -76,6 +78,7 @@ pub mod prelude {
     pub use crate::graph::{Graph, generators, metatron};
     pub use crate::noise::{Channel, DensityMatrix, NoiseModel};
     pub use crate::optimize::{Method, Options, minimize};
+    pub use crate::photonics::{self, BosonSampler};
     pub use crate::quantum::{
         Circuit, GateKind, Param, Parameter, Pauli, PauliString, PauliSum, StateVector, bitstring,
         from_qasm2, to_qasm2,

@@ -2,7 +2,8 @@
 
 Exact state-vector and density-matrix simulation, VQE and QAOA with exact
 gradients, Grover search, QFT and phase estimation, and continuous-time
-quantum walks on arbitrary graphs (including Metatron's Cube).
+quantum walks on arbitrary graphs (including Metatron's Cube), and exact
+boson sampling.
 
 Conventions: qubit 0 is the least significant bit of a basis index; bit
 strings print qubit n-1 first; time evolution is exp(-iHt); rotations are
@@ -12,6 +13,7 @@ R_P(theta) = exp(-i theta P / 2). Invalid input raises ``ValueError``.
 from ._core import (
     MAX_DENSITY_QUBITS,
     MAX_QUBITS,
+    BosonSampler,
     Channel,
     Circuit,
     ContinuousWalk,
@@ -26,6 +28,7 @@ from ._core import (
     StateVector,
     VariationalClassifier,
     __version__,
+    beam_splitter,
     bitstring,
     classical_hitting_times,
     classical_walk_probabilities,
@@ -36,12 +39,14 @@ from ._core import (
     grover_circuit,
     grover_search,
     h2_sto3g,
+    haar_unitary,
     hardware_efficient,
     heisenberg_xxz,
     inverse_qft,
     maxcut_cost,
     metatron_line_lengths,
     optimize_qaoa_layerwise,
+    permanent,
     qaoa_maxcut_circuit,
     qft,
     real_amplitudes,
@@ -53,6 +58,7 @@ from ._core import (
 __all__ = [
     "MAX_DENSITY_QUBITS",
     "MAX_QUBITS",
+    "BosonSampler",
     "Channel",
     "Circuit",
     "ContinuousWalk",
@@ -67,6 +73,7 @@ __all__ = [
     "StateVector",
     "VariationalClassifier",
     "__version__",
+    "beam_splitter",
     "bitstring",
     "classical_hitting_times",
     "classical_walk_probabilities",
@@ -77,12 +84,14 @@ __all__ = [
     "grover_circuit",
     "grover_search",
     "h2_sto3g",
+    "haar_unitary",
     "hardware_efficient",
     "heisenberg_xxz",
     "inverse_qft",
     "maxcut_cost",
     "metatron_line_lengths",
     "optimize_qaoa_layerwise",
+    "permanent",
     "qaoa_maxcut_circuit",
     "qft",
     "real_amplitudes",
