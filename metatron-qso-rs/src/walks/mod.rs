@@ -16,6 +16,8 @@
 //!   dimensions (equitable partitions), for graphs of any size.
 //! * [`transfer`] — perfect state transfer (decision and time) and the best
 //!   transfer fidelity between two nodes.
+//! * [`circuits`] — walks as gate circuits: exact for circulant graphs and
+//!   Cayley graphs of `Z₂ⁿ`, product formulas for any graph.
 //! * [`dephasing`] — open-system walks with site dephasing (Lindblad).
 //! * [`discrete`] — discrete-time walks: coined walks and their search,
 //!   the walk on the line, and Szegedy walks with quantum hitting times.
@@ -33,6 +35,7 @@
 //! assert!((limit[5] - 2.0 / 169.0).abs() < 1e-12);
 //! ```
 
+pub mod circuits;
 pub mod classical;
 pub mod dephasing;
 pub mod discrete;
