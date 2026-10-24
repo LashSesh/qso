@@ -245,8 +245,9 @@ fn graph(spec: &str) -> Result<Graph> {
         return read_graph_file(std::path::Path::new(path));
     }
     match generators::from_spec(spec) {
-        Err(e) if std::path::Path::new(spec).is_file() => {
-            read_graph_file(std::path::Path::new(spec)).map_err(|_| e)
+        // A file that is not a specification reports its own parse errors.
+        Err(_) if std::path::Path::new(spec).is_file() => {
+            read_graph_file(std::path::Path::new(spec))
         }
         result => result,
     }

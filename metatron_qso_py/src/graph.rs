@@ -117,7 +117,11 @@ impl PyGraph {
         let index = PyDict::new(graph.py());
         let mut n = 0usize;
         for node in graph.call_method0("nodes")?.try_iter()? {
-            index.set_item(node?, n)?;
+            let node = node?;
+            if index.contains(&node)? {
+                return Err(invalid(format!("node {node} appears twice")));
+            }
+            index.set_item(node, n)?;
             n += 1;
         }
         check_nodes(n)?;

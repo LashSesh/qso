@@ -174,12 +174,18 @@ Platonic solids and the Metatron family.
 The search tree of individualisation–refinement (as in nauty): refine,
 individualise each vertex of the smallest non-trivial colour class, refine
 again, until the colouring is discrete. Each leaf numbers the vertices; the
-canonical form is the leaf whose relabelled edge list is smallest. Colours
-are numbered from sorted signatures, so every step commutes with
-relabelling. Two leaves with equal edge lists give an automorphism; it fixes
-the common prefix of their paths, so the search jumps back there and prunes
-children in the same orbit of the automorphisms found so far. With this,
-K₆₀ takes 0.1 s instead of 60! leaves. Cospectral strongly regular graphs
+canonical form is the leaf whose relabelled edge list is smallest.
+Refinement keeps an ordered partition and splits it as in Hopcroft's
+algorithm (`O(m log n)` splitting steps); colours are class positions, so
+every step commutes with relabelling. Two leaves with equal edge lists give
+an automorphism; it fixes the common prefix of their paths, so the search
+jumps back there and prunes children in the same orbit of the automorphisms
+found so far. Twins (vertices with equal neighbourhoods apart from each
+other) are interchangeable, so only one per class is explored, and a colouring
+whose classes are all twin classes is finished directly. K₄₀₀, stars,
+complete bipartite and empty graphs need a single leaf (milliseconds); paths
+and cycles with thousands of vertices take well under a second; random cubic
+graphs with 2000 vertices take seconds. Cospectral strongly regular graphs
 (Shrikhande vs 4×4 rook's graph) are separated, and isomorphism decisions
 agree with brute force on random graphs.
 

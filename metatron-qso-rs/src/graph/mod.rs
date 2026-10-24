@@ -523,23 +523,53 @@ impl Graph {
         if !self.is_unweighted() || k == 0 || k + 1 == self.n {
             return None;
         }
+        // Count 2-paths from each node: O(n·k²) instead of O(n²·k).
         let (mut lambda, mut mu) = (None, None);
-        let mut row = vec![false; self.n];
-        for u in 0..self.n {
-            for &(w, _) in self.neighbors(u) {
-                row[w] = true;
+        let check = |slot: &mut Option<usize>, common: usize| match *slot {
+            None => {
+                *slot = Some(common);
+                true
             }
-            for v in u + 1..self.n {
-                let common = self.neighbors(v).iter().filter(|&&(w, _)| row[w]).count();
-                let slot = if row[v] { &mut lambda } else { &mut mu };
-                match *slot {
-                    None => *slot = Some(common),
-                    Some(c) if c != common => return None,
-                    _ => {}
+            Some(c) => c == common,
+        };
+        let mut paths = vec![0usize; self.n];
+        let mut adjacent = vec![false; self.n];
+        let mut touched = Vec::new();
+        for u in 0..self.n {
+            for &(v, _) in self.neighbors(u) {
+                adjacent[v] = true;
+                for &(w, _) in self.neighbors(v) {
+                    if w != u {
+                        if paths[w] == 0 {
+                            touched.push(w);
+                        }
+                        paths[w] += 1;
+                    }
                 }
             }
-            for &(w, _) in self.neighbors(u) {
-                row[w] = false;
+            let mut ok = self
+                .neighbors(u)
+                .iter()
+                .all(|&(v, _)| check(&mut lambda, paths[v]));
+            let mut distant = 0;
+            for &w in &touched {
+                if !adjacent[w] {
+                    distant += 1;
+                    ok &= check(&mut mu, paths[w]);
+                }
+            }
+            if distant < self.n - 1 - k {
+                ok &= check(&mut mu, 0);
+            }
+            if !ok {
+                return None;
+            }
+            for &w in &touched {
+                paths[w] = 0;
+            }
+            touched.clear();
+            for &(v, _) in self.neighbors(u) {
+                adjacent[v] = false;
             }
         }
         Some((self.n, k, lambda?, mu?))

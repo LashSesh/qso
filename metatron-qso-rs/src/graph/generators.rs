@@ -319,8 +319,12 @@ pub fn hamming(d: usize, q: usize) -> Result<Graph> {
     if d == 0 || q < 2 {
         return Err(QsoError::invalid("d/q", "need d ≥ 1 and q ≥ 2"));
     }
-    let nodes = (q as u128).checked_pow(d as u32).unwrap_or(u128::MAX);
-    check_generated_size(nodes, nodes.saturating_mul((d * (q - 1)) as u128) / 2)?;
+    let nodes = u32::try_from(d)
+        .ok()
+        .and_then(|e| (q as u128).checked_pow(e))
+        .unwrap_or(u128::MAX);
+    let degree = (d as u128).saturating_mul(q as u128 - 1);
+    check_generated_size(nodes, nodes.saturating_mul(degree) / 2)?;
     let n = nodes as usize;
     let mut g = Graph::new(n).with_name(format!("H({d},{q})"));
     for x in 0..n {
@@ -362,7 +366,7 @@ pub fn circulant(n: usize, jumps: &[usize]) -> Result<Graph> {
     let mut sorted = jumps.to_vec();
     sorted.sort_unstable();
     sorted.dedup();
-    if sorted.len() != jumps.len() || sorted.iter().any(|&s| s == 0 || 2 * s > n) {
+    if sorted.len() != jumps.len() || sorted.iter().any(|&s| s == 0 || s > n / 2) {
         return Err(QsoError::invalid("jumps", "need distinct jumps in 1..=n/2"));
     }
     check_generated_size(n as u128, n as u128 * jumps.len() as u128)?;
@@ -396,7 +400,7 @@ pub fn cayley_z2(d: usize, generators: &[u64]) -> Result<Graph> {
         ));
     }
     let n = 1usize << d;
-    check_generated_size(n as u128, (n * generators.len()) as u128 / 2)?;
+    check_generated_size(n as u128, n as u128 * generators.len() as u128 / 2)?;
     let mut g = Graph::new(n).with_name(format!("cayley_z2({d};{generators:?})"));
     for x in 0..n {
         for &mask in &sorted {
@@ -413,14 +417,14 @@ pub fn cayley_z2(d: usize, generators: &[u64]) -> Result<Graph> {
 /// is a non-zero square. Strongly regular with parameters
 /// `(q, (q−1)/2, (q−5)/4, (q−1)/4)`; self-complementary.
 pub fn paley(q: usize) -> Result<Graph> {
+    check_generated_size(q as u128, (q as u128) * (q as u128).saturating_sub(1) / 4)?;
     let prime = q >= 5
         && (2..)
-            .take_while(|d| d * d <= q)
+            .take_while(|&d| d <= q / d)
             .all(|d| !q.is_multiple_of(d));
     if !prime || q % 4 != 1 {
         return Err(QsoError::invalid("q", "need a prime q ≡ 1 (mod 4)"));
     }
-    check_generated_size(q as u128, (q * (q - 1) / 4) as u128)?;
     let mut square = vec![false; q];
     for x in 1..q {
         square[x * x % q] = true;
@@ -846,6 +850,16 @@ mod tests {
             Some((10, 3, 0, 1))
         );
         assert_eq!(cycle(6).strongly_regular_parameters(), None);
+        assert_eq!(cycle(5).strongly_regular_parameters(), Some((5, 2, 0, 1)));
+        // Disjoint triangles (μ = 0) and K3,3 (λ = 0).
+        let triangles = Graph::from_edges(6, &[(0, 1), (1, 2), (0, 2), (3, 4), (4, 5), (3, 5)]);
+        assert_eq!(
+            triangles.unwrap().strongly_regular_parameters(),
+            Some((6, 2, 1, 0))
+        );
+        let k33 = complete_bipartite(3, 3);
+        assert_eq!(k33.strongly_regular_parameters(), Some((6, 3, 0, 3)));
+        assert_eq!(hypercube(3).strongly_regular_parameters(), None);
         // Circulants and cubelike graphs.
         assert!(circulant(9, &[1]).unwrap().is_isomorphic(&cycle(9)));
         assert!(
@@ -868,6 +882,18 @@ mod tests {
         assert_eq!(from_spec("circulant:10,1,3").unwrap().num_edges(), 20);
         assert!(from_spec("hamming:30,2").is_err());
         assert!(from_spec("johnson:62,31").is_err());
+    }
+
+    #[test]
+    fn huge_arguments_are_errors() {
+        assert!(hamming(1 << 40, 3).is_err());
+        assert!(hamming(usize::MAX, 2).is_err());
+        assert!(circulant(4, &[1 << 63]).is_err());
+        assert!(circulant(10, &[1 << 63]).is_err());
+        let start = std::time::Instant::now();
+        assert!(paley(18_446_744_073_709_551_557).is_err());
+        assert!(paley(1_000_000_000_000_000_009).is_err());
+        assert!(start.elapsed().as_millis() < 100);
     }
 
     #[test]

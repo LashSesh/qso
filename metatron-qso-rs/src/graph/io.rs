@@ -2,17 +2,19 @@
 //!
 //! **Edge lists** are plain text, one edge `u v [weight]` per line with
 //! nodes numbered from 0. Lines starting with `#` or `%` are comments,
-//! except `# nodes N`, which sets the number of nodes (so that isolated
-//! nodes survive a round trip); without it the graph has `max label + 1`
-//! nodes. [`to_edge_list`] writes that line.
+//! except `# nodes N` (exactly), which sets the number of nodes (so that
+//! isolated nodes survive a round trip; without it the graph has
+//! `max label + 1` nodes), and `# name: …`. [`to_edge_list`] writes both.
 //!
 //! **GraphML** ([graphml.graphdrawing.org](http://graphml.graphdrawing.org/))
 //! is read for the common subset: `<node id=…>` and `<edge source=… target=…>`
 //! elements, edge weights from a `<data>` element whose key is declared with
-//! `attr.name="weight"`, comments and the XML declaration. Node ids may be
-//! any strings; nodes are numbered in order of appearance. Directed edges
-//! are read as undirected. [`to_graphml`] writes nodes `n0, n1, …` and a
-//! weight key.
+//! `attr.name="weight"` (and that key's `<default>` for edges without one),
+//! comments and the XML declaration. Node ids may be any strings; nodes are
+//! numbered in order of appearance. Directed edges are read as undirected;
+//! a pair of opposite directed edges with equal weights becomes one edge.
+//! Hyperedges, nested graphs, DOCTYPE and CDATA are rejected.
+//! [`to_graphml`] writes nodes `n0, n1, …` and a weight key.
 //!
 //! Both readers reject malformed input with an error and never build more
 //! than [`MAX_GENERATED_NODES`] nodes or [`MAX_GENERATED_EDGES`] edges.
@@ -31,7 +33,7 @@ fn parse_error(msg: impl Into<String>) -> QsoError {
 /// Edge list of `g` (see the module documentation).
 pub fn to_edge_list(g: &Graph) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "# {}", g.name().replace('\n', " "));
+    let _ = writeln!(out, "# name: {}", g.name().replace('\n', " "));
     let _ = writeln!(out, "# nodes {}", g.num_nodes());
     for &(u, v, w) in g.edges() {
         if w == 1.0 {
@@ -46,26 +48,31 @@ pub fn to_edge_list(g: &Graph) -> String {
 /// Read an edge list (see the module documentation).
 pub fn from_edge_list(text: &str) -> Result<Graph> {
     let mut declared: Option<usize> = None;
+    let mut name: Option<String> = None;
     let mut edges: Vec<(usize, usize, f64)> = Vec::new();
     for (k, raw) in text.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() {
             continue;
         }
-        if let Some(rest) = line.strip_prefix('#').or_else(|| line.strip_prefix('%')) {
-            let mut words = rest.split_whitespace();
-            if words.next() == Some("nodes") {
-                let n: usize = words
-                    .next()
-                    .and_then(|x| x.parse().ok())
-                    .filter(|_| words.next().is_none())
-                    .ok_or_else(|| parse_error(format!("line {}: malformed '# nodes N'", k + 1)))?;
+        if line.starts_with('%') {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix('#') {
+            // `# nodes N` (exactly) declares the node count and `# name: …`
+            // the name; any other `#` line is a comment.
+            let words: Vec<&str> = rest.split_whitespace().collect();
+            if let ["nodes", count] = words[..]
+                && let Ok(n) = count.parse::<usize>()
+            {
                 if n > MAX_GENERATED_NODES {
                     return Err(parse_error(format!(
                         "at most {MAX_GENERATED_NODES} nodes are supported"
                     )));
                 }
                 declared = Some(n);
+            } else if let Some(n) = rest.trim_start().strip_prefix("name:") {
+                name = Some(n.trim().to_string());
             }
             continue;
         }
@@ -113,7 +120,11 @@ pub fn from_edge_list(text: &str) -> Result<Graph> {
         Some(n) => n,
         None => needed,
     };
-    Graph::from_weighted_edges(n, &edges)
+    let g = Graph::from_weighted_edges(n, &edges)?;
+    Ok(match name {
+        Some(name) => g.with_name(name),
+        None => g,
+    })
 }
 
 fn escape(text: &str) -> String {
@@ -240,24 +251,30 @@ fn parse_tag(body: &str) -> Result<Tag> {
 
 /// Read a GraphML document (see the module documentation).
 pub fn from_graphml(text: &str) -> Result<Graph> {
+    /// An edge as read: endpoints, weight if given, and whether directed.
+    type RawEdge = (String, String, Option<f64>, bool);
     let mut nodes: HashMap<String, usize> = HashMap::new();
-    let mut weight_keys: Vec<String> = Vec::new();
-    let mut edges: Vec<(String, String, f64)> = Vec::new();
+    // Weight keys (by id) with their defaults, in declaration order.
+    let mut weight_keys: HashMap<String, Option<f64>> = HashMap::new();
+    let mut first_weight_key: Option<String> = None;
+    let mut edges: Vec<RawEdge> = Vec::new();
     let mut graph_name: Option<String> = None;
-    // Edge being read and the data key whose text is being read.
-    let mut open_edge: Option<(String, String, f64)> = None;
-    let mut open_data: Option<String> = None;
+    let mut directed_default = false;
+    // Edge being read, the weight key being declared, and the element
+    // whose text is being collected (a weight <data> or a <default>).
+    let mut open_edge: Option<RawEdge> = None;
+    let mut open_key: Option<String> = None;
+    let mut text_buf: Option<String> = None;
     let mut seen_graphml = false;
+    let parse_weight = |t: &str| -> Result<f64> {
+        let t = unescape(t.trim())?;
+        t.parse()
+            .map_err(|_| parse_error(format!("invalid weight '{t}'")))
+    };
     let mut rest = text;
     while let Some(lt) = rest.find('<') {
-        let between = &rest[..lt];
-        if let (Some(key), Some(edge)) = (&open_data, open_edge.as_mut())
-            && weight_keys.contains(key)
-            && !between.trim().is_empty()
-        {
-            edge.2 = unescape(between.trim())?
-                .parse()
-                .map_err(|_| parse_error(format!("invalid weight '{}'", between.trim())))?;
+        if let Some(buf) = text_buf.as_mut() {
+            buf.push_str(&rest[..lt]);
         }
         rest = &rest[lt..];
         if let Some(r) = rest.strip_prefix("<!--") {
@@ -277,8 +294,25 @@ pub fn from_graphml(text: &str) -> Result<Graph> {
         if rest.starts_with("<!") {
             return Err(parse_error("DOCTYPE and CDATA are not supported"));
         }
+        // The end of the tag: the first '>' outside quoted attribute values.
+        let mut quote: Option<char> = None;
         let gt = rest
-            .find('>')
+            .char_indices()
+            .find(|&(_, c)| match quote {
+                Some(q) => {
+                    if c == q {
+                        quote = None;
+                    }
+                    false
+                }
+                None => {
+                    if c == '"' || c == '\'' {
+                        quote = Some(c);
+                    }
+                    c == '>'
+                }
+            })
+            .map(|(i, _)| i)
             .ok_or_else(|| parse_error("unterminated tag"))?;
         let tag = parse_tag(&rest[1..gt])?;
         rest = &rest[gt + 1..];
@@ -291,7 +325,20 @@ pub fn from_graphml(text: &str) -> Result<Graph> {
                     let id = tag
                         .attr("id")
                         .ok_or_else(|| parse_error("<key> without id"))?;
-                    weight_keys.push(id.to_string());
+                    weight_keys.insert(id.to_string(), None);
+                    first_weight_key.get_or_insert_with(|| id.to_string());
+                    if !tag.self_closing {
+                        open_key = Some(id.to_string());
+                    }
+                }
+            }
+            ("key", true) => open_key = None,
+            ("default", false) if open_key.is_some() && !tag.self_closing => {
+                text_buf = Some(String::new());
+            }
+            ("default", true) => {
+                if let (Some(key), Some(t)) = (&open_key, text_buf.take()) {
+                    weight_keys.insert(key.clone(), Some(parse_weight(&t)?));
                 }
             }
             ("graph", false) => {
@@ -299,7 +346,9 @@ pub fn from_graphml(text: &str) -> Result<Graph> {
                     return Err(parse_error("only one <graph> is supported"));
                 }
                 graph_name = Some(tag.attr("id").unwrap_or("graph").to_string());
+                directed_default = tag.attr("edgedefault") == Some("directed");
             }
+            ("hyperedge", _) => return Err(parse_error("hyperedges are not supported")),
             ("node", false) => {
                 let id = tag
                     .attr("id")
@@ -324,7 +373,11 @@ pub fn from_graphml(text: &str) -> Result<Graph> {
                 let target = tag
                     .attr("target")
                     .ok_or_else(|| parse_error("<edge> without target"))?;
-                let edge = (source.to_string(), target.to_string(), 1.0);
+                let directed = match tag.attr("directed") {
+                    Some(d) => d == "true",
+                    None => directed_default,
+                };
+                let edge = (source.to_string(), target.to_string(), None, directed);
                 if tag.self_closing {
                     edges.push(edge);
                 } else {
@@ -338,9 +391,18 @@ pub fn from_graphml(text: &str) -> Result<Graph> {
                 edges.push(edge);
             }
             ("data", false) if !tag.self_closing => {
-                open_data = Some(tag.attr("key").unwrap_or_default().to_string());
+                let key = tag.attr("key").unwrap_or_default();
+                if open_edge.is_some() && weight_keys.contains_key(key) {
+                    text_buf = Some(String::new());
+                }
             }
-            ("data", true) => open_data = None,
+            ("data", true) => {
+                if let (Some(t), Some(edge)) = (text_buf.take(), open_edge.as_mut())
+                    && !t.trim().is_empty()
+                {
+                    edge.2 = Some(parse_weight(&t)?);
+                }
+            }
             _ => {}
         }
         if edges.len() > MAX_GENERATED_EDGES {
@@ -361,9 +423,28 @@ pub fn from_graphml(text: &str) -> Result<Graph> {
             .copied()
             .ok_or_else(|| parse_error(format!("edge to undeclared node '{id}'")))
     };
+    let default = first_weight_key
+        .and_then(|k| weight_keys[&k])
+        .unwrap_or(1.0);
     let mut list = Vec::with_capacity(edges.len());
-    for (s, t, w) in &edges {
-        list.push((index(s)?, index(t)?, *w));
+    // Opposite directed edges with equal weights become one undirected edge.
+    let mut directed_seen: HashMap<(usize, usize), f64> = HashMap::new();
+    for (s, t, w, directed) in &edges {
+        let (u, v, w) = (index(s)?, index(t)?, w.unwrap_or(default));
+        if *directed {
+            match directed_seen.get(&(v, u)) {
+                Some(&back) if back.to_bits() == w.to_bits() => continue,
+                Some(_) => {
+                    return Err(parse_error(format!(
+                        "opposite directed edges '{s}'–'{t}' with different weights"
+                    )));
+                }
+                None => {
+                    directed_seen.insert((u, v), w);
+                }
+            }
+        }
+        list.push((u, v, w));
     }
     Ok(Graph::from_weighted_edges(nodes.len(), &list)?.with_name(graph_name.unwrap_or_default()))
 }
@@ -394,6 +475,35 @@ mod tests {
             assert_eq!((b.num_nodes(), b.edges()), (g.num_nodes(), g.edges()));
             assert_eq!(b.name(), g.name());
         }
+    }
+
+    #[test]
+    fn review_regressions() {
+        // A graph named "nodes …" still round-trips; the name is kept.
+        let g = Graph::from_edges(3, &[(0, 1)])
+            .unwrap()
+            .with_name("nodes 7 and more");
+        let back = from_edge_list(&to_edge_list(&g)).unwrap();
+        assert_eq!((back.num_nodes(), back.name()), (3, "nodes 7 and more"));
+        let doc = "<graphml><graph id=\"nodes\"><node id=\"x\"/></graph></graphml>";
+        let h = from_graphml(doc).unwrap();
+        assert_eq!(from_edge_list(&to_edge_list(&h)).unwrap().num_nodes(), 1);
+        // Ordinary comments that start with "nodes" are comments.
+        let e = from_edge_list("% nodes are numbered from 0\n# nodes: see below\n0 1\n").unwrap();
+        assert_eq!(e.num_nodes(), 2);
+        // <default> of the weight key, comments inside data, '>' in values.
+        let doc = r#"<graphml><key id="w" for="edge" attr.name="weight"><default>2.5</default></key>
+            <graph edgedefault="undirected"><node id="a>b"/><node id="c"/><node id="d"/>
+            <edge source="a>b" target="c"/>
+            <edge source="c" target="d"><data key="w">1<!-- x -->5</data></edge></graph></graphml>"#;
+        let g = from_graphml(doc).unwrap();
+        assert_eq!(g.edges(), &[(0, 1, 2.5), (1, 2, 15.0)]);
+        // Opposite directed edges merge when their weights agree.
+        let doc = r#"<graphml><graph edgedefault="directed"><node id="a"/><node id="b"/>
+            <edge source="a" target="b"/><edge source="b" target="a"/></graph></graphml>"#;
+        assert_eq!(from_graphml(doc).unwrap().num_edges(), 1);
+        let doc = r#"<graphml><graph><node id="a"/><hyperedge/></graph></graphml>"#;
+        assert!(from_graphml(doc).is_err());
     }
 
     #[test]

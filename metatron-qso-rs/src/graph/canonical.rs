@@ -7,76 +7,244 @@
 //! refines again, until every cell is a single node. Each such *leaf*
 //! labels the nodes `0..n` by their colours, and the canonical form is the
 //! leaf whose relabelled edge list is lexicographically smallest. Colours
-//! are assigned from sorted signatures, so every step is invariant under
-//! relabelling and isomorphic graphs get identical canonical forms.
+//! are positions in an ordered partition, split by sorted signatures, so
+//! every step is invariant under relabelling and isomorphic graphs get
+//! identical canonical forms. Refinement follows Hopcroft's scheme
+//! (`O(m log n)` splitting steps).
 //!
 //! Two leaves with the same edge list differ by an automorphism. The search
 //! records such automorphisms, jumps back to where the two paths part, and
 //! skips children that an automorphism fixing the current path maps onto an
-//! already explored child; with this pruning complete graphs need `O(n)`
-//! leaves instead of `n!`. The worst
+//! already explored child. Twins (nodes with the same neighbours apart from
+//! each other) can be swapped by an automorphism, so only one twin of a
+//! class is explored, and a node whose classes are all sets of twins is
+//! finished directly: complete, empty, complete bipartite graphs and stars
+//! need one leaf. The worst
 //! case is still exponential, as for every known algorithm on hard
-//! instances; the method is intended for graphs with up to a few hundred
-//! nodes.
+//! instances, and graphs without symmetry cost one refinement per node of
+//! the first cell (2000-node random cubic graphs take seconds).
 
 use super::Graph;
 
 /// Edge list of a leaf: `(min label, max label, weight bits)`, sorted.
 type Certificate = Vec<(u32, u32, u64)>;
 
-/// Colour refinement of a single graph. Colours only ever split, and new
-/// colours are numbered in sorted order of (old colour, multiset of
-/// neighbour colours and weights), so the result is invariant under
-/// relabelling.
+/// Colour refinement of a single graph: the coarsest refinement of
+/// `colours` in which nodes of one colour have the same multiset of edge
+/// weights into every colour class. On return each node's colour is the
+/// position of its class in an ordered partition (classes ordered by their
+/// initial colour, then by the splitting steps), so the result is invariant
+/// under relabelling, and a discrete colouring is a permutation of `0..n`.
 pub(crate) fn refine(g: &Graph, colours: &mut [u32]) {
     refine_bounded(g, colours, usize::MAX);
 }
 
 /// [`refine`], stopping early (and returning `false`) as soon as there are
 /// more than `max_colours` colours.
+///
+/// Partition refinement with a queue of splitter classes (Hopcroft): when a
+/// class splits, its parts are queued, except the largest one if the class
+/// was not queued itself, so every edge is examined `O(log n)` times.
 pub(crate) fn refine_bounded(g: &Graph, colours: &mut [u32], max_colours: usize) -> bool {
+    use std::collections::VecDeque;
     let n = g.num_nodes();
-    let mut count = distinct(colours);
+    if n == 0 {
+        return true;
+    }
+    // Ordered partition: `order[start..end[start]]` is the class starting
+    // at position `start`; `cell[v]` is the start of v's class.
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by_key(|&v| colours[v]);
+    let mut pos = vec![0usize; n];
+    for (i, &v) in order.iter().enumerate() {
+        pos[v] = i;
+    }
+    let mut cell = vec![0usize; n];
+    let mut end = vec![0usize; n];
+    let mut queue = VecDeque::new();
+    let mut queued = vec![false; n];
+    let mut start = 0;
+    let mut count = 0;
+    for i in 1..=n {
+        if i == n || colours[order[i]] != colours[order[i - 1]] {
+            for &v in &order[start..i] {
+                cell[v] = start;
+            }
+            end[start] = i;
+            queue.push_back(start);
+            queued[start] = true;
+            count += 1;
+            start = i;
+        }
+    }
+    let finish = |cell: &[usize], colours: &mut [u32]| {
+        for (c, &x) in colours.iter_mut().zip(cell) {
+            *c = x as u32;
+        }
+    };
     if count > max_colours {
+        finish(&cell, colours);
         return false;
     }
-    loop {
-        type Signature = (u32, Vec<(u32, u64)>, usize);
-        let mut keyed: Vec<Signature> = (0..n)
-            .map(|v| {
-                let mut sig: Vec<(u32, u64)> = g
-                    .neighbors(v)
-                    .iter()
-                    .map(|&(w, wt)| (colours[w], wt.to_bits()))
-                    .collect();
-                sig.sort_unstable();
-                (colours[v], sig, v)
-            })
-            .collect();
-        keyed.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
-        let mut id = 0u32;
-        for k in 0..keyed.len() {
-            if k > 0 && (keyed[k].0, &keyed[k].1) != (keyed[k - 1].0, &keyed[k - 1].1) {
-                id += 1;
+    let mut hits: Vec<(usize, usize, u64)> = Vec::new();
+    let mut keys: Vec<(Vec<u64>, usize)> = Vec::new();
+    let mut blocks: Vec<(usize, usize)> = Vec::new();
+    while let Some(splitter) = queue.pop_front() {
+        queued[splitter] = false;
+        // (class of w, w, weight) for every edge from the splitter to w.
+        hits.clear();
+        for &v in &order[splitter..end[splitter]] {
+            for &(w, wt) in g.neighbors(v) {
+                hits.push((cell[w], w, wt.to_bits()));
             }
-            colours[keyed[k].2] = id;
         }
-        let new_count = if n == 0 { 0 } else { id as usize + 1 };
-        if new_count == count {
-            return true;
+        hits.sort_unstable();
+        let mut i = 0;
+        while i < hits.len() {
+            let c = hits[i].0;
+            let mut j = i;
+            while j < hits.len() && hits[j].0 == c {
+                j += 1;
+            }
+            let (cs, ce) = (c, end[c]);
+            // Key of each touched member: its sorted weights into the
+            // splitter. Untouched members have the empty key.
+            keys.clear();
+            let mut k = i;
+            while k < j {
+                let w = hits[k].1;
+                let mut weights = Vec::new();
+                while k < j && hits[k].1 == w {
+                    weights.push(hits[k].2);
+                    k += 1;
+                }
+                keys.push((weights, w));
+            }
+            i = j;
+            let untouched = (ce - cs) - keys.len();
+            keys.sort_by(|a, b| a.0.cmp(&b.0));
+            if ce - cs < 2 || (untouched == 0 && keys[0].0 == keys[keys.len() - 1].0) {
+                continue;
+            }
+            // Move the touched members to the end of the class, in key
+            // order (O(touched) work, as Hopcroft's bound needs); the
+            // untouched ones stay in front as the first block.
+            let tail = ce - keys.len();
+            for (idx, (_, v)) in keys.iter().enumerate() {
+                let (from, to) = (pos[*v], tail + idx);
+                let other = order[to];
+                order.swap(from, to);
+                pos[other] = from;
+                pos[*v] = to;
+            }
+            // The swaps above may have moved touched members out of their
+            // target slots again; place them once more in key order.
+            for (idx, (_, v)) in keys.iter().enumerate() {
+                let (from, to) = (pos[*v], tail + idx);
+                if from != to {
+                    let other = order[to];
+                    order.swap(from, to);
+                    pos[other] = from;
+                    pos[*v] = to;
+                }
+            }
+            blocks.clear();
+            if untouched > 0 {
+                blocks.push((cs, tail));
+            }
+            let mut b = tail;
+            for idx in 1..=keys.len() {
+                if idx == keys.len() || keys[idx].0 != keys[idx - 1].0 {
+                    blocks.push((b, tail + idx));
+                    b = tail + idx;
+                }
+            }
+            for &(bs, be) in &blocks {
+                end[bs] = be;
+                for &v in &order[bs..be] {
+                    cell[v] = bs;
+                }
+            }
+            count += blocks.len() - 1;
+            if count > max_colours {
+                finish(&cell, colours);
+                return false;
+            }
+            let largest = blocks
+                .iter()
+                .enumerate()
+                .max_by(|a, b| (a.1.1 - a.1.0).cmp(&(b.1.1 - b.1.0)).then(b.0.cmp(&a.0)))
+                .map(|(idx, _)| idx)
+                .expect("at least two blocks");
+            let was_queued = queued[cs];
+            for (idx, &(bs, _)) in blocks.iter().enumerate() {
+                if !queued[bs] && (was_queued || idx != largest) {
+                    queued[bs] = true;
+                    queue.push_back(bs);
+                }
+            }
         }
-        if new_count > max_colours {
-            return false;
-        }
-        count = new_count;
     }
+    finish(&cell, colours);
+    true
 }
 
-fn distinct(colours: &[u32]) -> usize {
-    let mut c = colours.to_vec();
-    c.sort_unstable();
-    c.dedup();
-    c.len()
+/// Twin classes of `g` within the colour classes: nodes `a`, `b` of one
+/// colour are twins if `N(a) \ {b} = N(b) \ {a}`, weights included, so
+/// that swapping them is an automorphism fixing every other node. Returns
+/// a union–find forest whose roots are the twin classes.
+fn twin_classes(g: &Graph, colours: &[u32]) -> Vec<usize> {
+    use std::collections::HashMap;
+    let n = g.num_nodes();
+    let mut size = HashMap::new();
+    for &c in colours {
+        *size.entry(c).or_insert(0usize) += 1;
+    }
+    let mut parent: Vec<usize> = (0..n).collect();
+    // False twins (not adjacent) have equal neighbourhoods; true twins
+    // (adjacent with weight w) have equal "closed" neighbourhoods
+    // N(a) ∪ {(a, w)}.
+    type Key = (u32, bool, Vec<(usize, u64)>);
+    let mut seen: HashMap<Key, usize> = HashMap::new();
+    for a in 0..n {
+        if size[&colours[a]] < 2 {
+            continue;
+        }
+        let open: Vec<(usize, u64)> = g
+            .neighbors(a)
+            .iter()
+            .map(|&(v, w)| (v, w.to_bits()))
+            .collect();
+        let mut inside: Vec<u64> = g
+            .neighbors(a)
+            .iter()
+            .filter(|&&(v, _)| colours[v] == colours[a])
+            .map(|&(_, w)| w.to_bits())
+            .collect();
+        inside.sort_unstable();
+        inside.dedup();
+        let mut keys = vec![(colours[a], false, open.clone())];
+        for w in inside {
+            let mut closed = open.clone();
+            let pos = closed.partition_point(|&(v, _)| v < a);
+            closed.insert(pos, (a, w));
+            keys.push((colours[a], true, closed));
+        }
+        for key in keys {
+            match seen.get(&key) {
+                Some(&rep) => {
+                    let (x, y) = (find(&mut parent, rep), find(&mut parent, a));
+                    if x != y {
+                        parent[x.max(y)] = x.min(y);
+                    }
+                }
+                None => {
+                    seen.insert(key, a);
+                }
+            }
+        }
+    }
+    parent
 }
 
 /// Union–find root with path halving.
@@ -186,9 +354,32 @@ impl Search<'_> {
             return self.leaf(&colours, path);
         };
         let cell: Vec<usize> = (0..n).filter(|&v| colours[v] as usize == target).collect();
-        // Orbits of the automorphisms found so far that fix the path,
-        // updated as the children below find new ones.
-        let mut parent: Vec<usize> = (0..n).collect();
+        let mut twins = twin_classes(self.g, &colours);
+        // If every class is a set of twins, all leaves below are equivalent
+        // (they differ by swaps of twins, which are automorphisms fixing the
+        // path): finish one of them directly. Individualising a twin splits
+        // only its own class, so the leaf numbers each class's members
+        // consecutively from the class position.
+        let mut root_of_class: Vec<Option<usize>> = vec![None; max];
+        let all_twins = (0..n).all(|v| {
+            let r = find(&mut twins, v);
+            *root_of_class[colours[v] as usize].get_or_insert(r) == r
+        });
+        if all_twins {
+            let mut next: Vec<u32> = (0..max as u32).collect();
+            let labels: Vec<u32> = colours
+                .iter()
+                .map(|&c| {
+                    let l = next[c as usize];
+                    next[c as usize] += 1;
+                    l
+                })
+                .collect();
+            return self.leaf(&labels, path);
+        }
+        // Orbits of the automorphisms found so far that fix the path, and of
+        // the swaps of twins, updated as the children below find new ones.
+        let mut parent = twins;
         let mut merged = 0;
         let mut explored: Vec<usize> = Vec::new();
         for &v in &cell {
@@ -239,14 +430,29 @@ pub fn canonical_labelling(g: &Graph) -> Vec<usize> {
     if n == 0 {
         return Vec::new();
     }
-    let mut search = Search {
-        g,
-        best: None,
-        first: None,
-        automorphisms: Vec::new(),
+    let run = || {
+        let mut search = Search {
+            g,
+            best: None,
+            first: None,
+            automorphisms: Vec::new(),
+        };
+        search.explore(vec![0; n], &mut Vec::new());
+        search.best.expect("every search reaches a leaf").labels
     };
-    search.explore(vec![0; n], &mut Vec::new());
-    search.best.expect("every search reaches a leaf").labels
+    // The search recurses once per individualised node. Large graphs get a
+    // thread with a large stack, so that deep searches cannot overflow the
+    // caller's (for example a Python thread's 512 KiB).
+    if n <= 1024 {
+        return run();
+    }
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(256 << 20)
+            .spawn_scoped(scope, run)
+            .map(|handle| handle.join().expect("canonical search panicked"))
+            .unwrap_or_else(|_| run())
+    })
 }
 
 /// Canonical certificate: the sorted edge list `(label u, label v, weight)`
@@ -418,13 +624,47 @@ mod tests {
         }
     }
 
+    #[test]
+    fn twins_and_long_paths_are_fast() {
+        // Classes of twins finish at once; long paths refine in O(m log n).
+        let start = std::time::Instant::now();
+        let graphs = [
+            complete(400),
+            Graph::new(20_000),
+            star(2000),
+            complete_bipartite(200, 200),
+            path(20_000),
+            cycle(8000),
+        ];
+        for (k, g) in graphs.iter().enumerate() {
+            let (h, _) = shuffled(g, k as u64);
+            assert_eq!(g.canonical_form().edges(), h.canonical_form().edges());
+        }
+        assert!(start.elapsed().as_secs() < 20, "{:?}", start.elapsed());
+        // Weighted 4-cycles: twins only if their edge weights agree. In
+        // `w`, 1 and 2 are twins (weights 2 to 0 and 1 to 3); `u` is `w`
+        // relabelled; in `v` the weights alternate and nothing is a twin.
+        let w =
+            Graph::from_weighted_edges(4, &[(0, 1, 2.0), (0, 2, 2.0), (1, 3, 1.0), (2, 3, 1.0)])
+                .unwrap();
+        let u =
+            Graph::from_weighted_edges(4, &[(0, 1, 2.0), (0, 2, 1.0), (1, 3, 2.0), (2, 3, 1.0)])
+                .unwrap();
+        let v =
+            Graph::from_weighted_edges(4, &[(0, 1, 2.0), (0, 2, 1.0), (1, 3, 1.0), (2, 3, 2.0)])
+                .unwrap();
+        assert!(w.is_isomorphic(&u));
+        assert!(!w.is_isomorphic(&v));
+        assert_eq!(w.automorphism_group().order(), Some(2));
+    }
+
     fn disjoint_triangles() -> Graph {
         Graph::from_edges(6, &[(0, 1), (1, 2), (2, 0), (3, 4), (4, 5), (5, 3)]).unwrap()
     }
 
     #[test]
     fn pruning_keeps_large_symmetric_graphs_fast() {
-        // K60 has 60! automorphisms; the pruned search visits O(n) leaves.
+        // K60 has 60! automorphisms; twin pruning finishes it in one leaf.
         let start = std::time::Instant::now();
         let k = complete(60);
         let (h, _) = shuffled(&k, 1);

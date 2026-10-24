@@ -59,10 +59,13 @@ assert q.Graph.heawood().girth() == 6
 `canonical_labelling()` renumbers the nodes so that isomorphic graphs get
 identical edge lists (`canonical_form()`); edge weights count.
 `is_isomorphic` and `isomorphism` compare two graphs. The algorithm is
-individualisation–refinement with automorphism pruning, as in nauty: fast
-for the structured graphs of this library (K₆₀ in under 0.1 s, the
-1024-node hypercube in 0.1 s), exponential only on specially constructed
-hard instances.
+individualisation–refinement with automorphism and twin pruning, as in
+nauty. Highly symmetric graphs are fast (K₄₀₀ and stars in milliseconds,
+the 4096-node hypercube in about half a second, paths and cycles with
+thousands of nodes well under a second); graphs without symmetry cost one
+refinement per node of a colour class (random cubic graphs with 2000 nodes
+take seconds). Like every known algorithm, it is exponential on specially
+constructed hard instances.
 
 ```python
 import metatron_qso as q
