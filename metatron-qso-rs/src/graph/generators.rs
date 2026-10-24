@@ -208,6 +208,251 @@ pub fn erdos_renyi(n: usize, p: f64, rng: &mut Rng) -> Result<Graph> {
     Ok(g)
 }
 
+/// Binomial coefficient `C(n, k)` as `u128`, saturating.
+fn binomial(n: u64, k: u64) -> u128 {
+    if k > n {
+        return 0;
+    }
+    let k = k.min(n - k);
+    let mut c: u128 = 1;
+    for i in 0..k {
+        c = c.saturating_mul((n - i) as u128) / (i + 1) as u128;
+    }
+    c
+}
+
+/// All `k`-element subsets of `0..n` as bit masks, in colex order (the
+/// position of a subset is its rank in the combinatorial number system).
+fn subsets(n: usize, k: usize) -> Vec<u64> {
+    let mut out = Vec::new();
+    if k > n {
+        return out;
+    }
+    if k == 0 {
+        return vec![0];
+    }
+    // Gosper's hack enumerates masks with k bits in increasing order,
+    // which is colex order.
+    let mut x: u64 = (1u64 << k) - 1;
+    let limit: u64 = 1u64 << n;
+    while x < limit {
+        out.push(x);
+        let c = x & x.wrapping_neg();
+        let r = x + c;
+        x = (((r ^ x) >> 2) / c) | r;
+    }
+    out
+}
+
+/// Rank of a subset in colex order: `Σ C(c_i, i + 1)` over its sorted
+/// elements `c_0 < c_1 < …`.
+fn colex_rank(mut mask: u64) -> usize {
+    let mut rank = 0u128;
+    let mut i = 0u64;
+    while mask != 0 {
+        let c = mask.trailing_zeros() as u64;
+        rank += binomial(c, i + 1);
+        i += 1;
+        mask &= mask - 1;
+    }
+    rank as usize
+}
+
+/// Johnson graph `J(n, k)`: the `k`-subsets of `{0, …, n−1}`, adjacent when
+/// they share `k − 1` elements (distance-regular; `J(n, 2)` is the
+/// triangular graph). Nodes are the subsets in colex order.
+pub fn johnson(n: usize, k: usize) -> Result<Graph> {
+    if !(1..=62).contains(&n) || k == 0 || k >= n {
+        return Err(QsoError::invalid("n/k", "need 0 < k < n ≤ 62"));
+    }
+    let nodes = binomial(n as u64, k as u64);
+    check_generated_size(nodes, nodes * (k * (n - k)) as u128 / 2)?;
+    let sets = subsets(n, k);
+    let mut g = Graph::new(sets.len()).with_name(format!("J({n},{k})"));
+    for (a, &set) in sets.iter().enumerate() {
+        // Swap one element out and one in.
+        for out in (0..n).filter(|&i| set >> i & 1 == 1) {
+            for inn in (0..n).filter(|&i| set >> i & 1 == 0) {
+                let b = colex_rank(set & !(1 << out) | 1 << inn);
+                if a < b {
+                    g.add_edge(a, b).expect("valid edge");
+                }
+            }
+        }
+    }
+    Ok(g)
+}
+
+/// Kneser graph `K(n, k)`: the `k`-subsets of `{0, …, n−1}`, adjacent when
+/// disjoint (`K(5, 2)` is the Petersen graph). Nodes in colex order.
+pub fn kneser(n: usize, k: usize) -> Result<Graph> {
+    if !(1..=62).contains(&n) || k == 0 || 2 * k > n {
+        return Err(QsoError::invalid("n/k", "need 0 < 2k ≤ n ≤ 62"));
+    }
+    let nodes = binomial(n as u64, k as u64);
+    let degree = binomial((n - k) as u64, k as u64);
+    check_generated_size(nodes, nodes.saturating_mul(degree) / 2)?;
+    let sets = subsets(n, k);
+    let mut g = Graph::new(sets.len()).with_name(format!("Kneser({n},{k})"));
+    let full: u64 = (1u64 << n) - 1;
+    for (a, &set) in sets.iter().enumerate() {
+        // Neighbours: the k-subsets of the complement.
+        let complement = full & !set;
+        let free: Vec<usize> = (0..n).filter(|&i| complement >> i & 1 == 1).collect();
+        for sub in subsets(free.len(), k) {
+            let mask = (0..free.len())
+                .filter(|&j| sub >> j & 1 == 1)
+                .fold(0u64, |m, j| m | 1 << free[j]);
+            let b = colex_rank(mask);
+            if a < b {
+                g.add_edge(a, b).expect("valid edge");
+            }
+        }
+    }
+    Ok(g)
+}
+
+/// Hamming graph `H(d, q)`: words of length `d` over `q` symbols, adjacent
+/// when they differ in exactly one position (`H(d, 2)` is the hypercube,
+/// `H(2, q)` the `q × q` rook's graph). Node `x` has digits `x` in base `q`.
+pub fn hamming(d: usize, q: usize) -> Result<Graph> {
+    if d == 0 || q < 2 {
+        return Err(QsoError::invalid("d/q", "need d ≥ 1 and q ≥ 2"));
+    }
+    let nodes = (q as u128).checked_pow(d as u32).unwrap_or(u128::MAX);
+    check_generated_size(nodes, nodes.saturating_mul((d * (q - 1)) as u128) / 2)?;
+    let n = nodes as usize;
+    let mut g = Graph::new(n).with_name(format!("H({d},{q})"));
+    for x in 0..n {
+        let mut place = 1;
+        for _ in 0..d {
+            let digit = (x / place) % q;
+            for other in digit + 1..q {
+                g.add_edge(x, x + (other - digit) * place)
+                    .expect("valid edge");
+            }
+            place *= q;
+        }
+    }
+    Ok(g)
+}
+
+/// Rook's graph `K_m □ K_n`: squares of an `m × n` board, adjacent when in
+/// the same row or column. `rook(4, 4)` is strongly regular (16, 6, 2, 2),
+/// cospectral with but not isomorphic to the Shrikhande graph.
+pub fn rook(m: usize, n: usize) -> Result<Graph> {
+    if m == 0 || n == 0 {
+        return Err(QsoError::invalid("m/n", "board sides must be positive"));
+    }
+    let nodes = m as u128 * n as u128;
+    check_generated_size(nodes, nodes * (m + n - 2) as u128 / 2)?;
+    Ok(complete(m)
+        .cartesian_product(&complete(n))?
+        .with_name(format!("rook({m}x{n})")))
+}
+
+/// Circulant graph (Cayley graph of `Z_n`): node `u` is joined to
+/// `u ± s (mod n)` for every jump `s` (`1 ≤ s ≤ n/2`). Cycles and complete
+/// graphs are circulants; all circulants are diagonalised by the Fourier
+/// transform.
+pub fn circulant(n: usize, jumps: &[usize]) -> Result<Graph> {
+    if n < 2 {
+        return Err(QsoError::invalid("n", "need at least 2 nodes"));
+    }
+    let mut sorted = jumps.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    if sorted.len() != jumps.len() || sorted.iter().any(|&s| s == 0 || 2 * s > n) {
+        return Err(QsoError::invalid("jumps", "need distinct jumps in 1..=n/2"));
+    }
+    check_generated_size(n as u128, n as u128 * jumps.len() as u128)?;
+    let mut g = Graph::new(n).with_name(format!("circulant({n};{jumps:?})"));
+    for u in 0..n {
+        for &s in &sorted {
+            let v = (u + s) % n;
+            if !g.has_edge(u, v) {
+                g.add_edge(u, v).expect("valid edge");
+            }
+        }
+    }
+    Ok(with_layout(g, circle_positions(n)))
+}
+
+/// Cayley graph of `Z_2^d` ("cubelike" graph): node `x` is joined to
+/// `x ⊕ g` for every generator bit mask `g` (`H(d, 2)` uses the unit
+/// vectors). All such graphs are diagonalised by the Walsh–Hadamard
+/// transform.
+pub fn cayley_z2(d: usize, generators: &[u64]) -> Result<Graph> {
+    if d == 0 || d > 20 {
+        return Err(QsoError::invalid("d", "need 1 ≤ d ≤ 20"));
+    }
+    let mut sorted = generators.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    if sorted.len() != generators.len() || sorted.iter().any(|&x| x == 0 || x >> d != 0) {
+        return Err(QsoError::invalid(
+            "generators",
+            "need distinct non-zero masks below 2^d",
+        ));
+    }
+    let n = 1usize << d;
+    check_generated_size(n as u128, (n * generators.len()) as u128 / 2)?;
+    let mut g = Graph::new(n).with_name(format!("cayley_z2({d};{generators:?})"));
+    for x in 0..n {
+        for &mask in &sorted {
+            let y = x ^ mask as usize;
+            if x < y {
+                g.add_edge(x, y).expect("valid edge");
+            }
+        }
+    }
+    Ok(g)
+}
+
+/// Paley graph of a prime `q ≡ 1 (mod 4)`: `Z_q`, with `u ~ v` when `u − v`
+/// is a non-zero square. Strongly regular with parameters
+/// `(q, (q−1)/2, (q−5)/4, (q−1)/4)`; self-complementary.
+pub fn paley(q: usize) -> Result<Graph> {
+    let prime = q >= 5
+        && (2..)
+            .take_while(|d| d * d <= q)
+            .all(|d| !q.is_multiple_of(d));
+    if !prime || q % 4 != 1 {
+        return Err(QsoError::invalid("q", "need a prime q ≡ 1 (mod 4)"));
+    }
+    check_generated_size(q as u128, (q * (q - 1) / 4) as u128)?;
+    let mut square = vec![false; q];
+    for x in 1..q {
+        square[x * x % q] = true;
+    }
+    let mut g = Graph::new(q).with_name(format!("Paley({q})"));
+    for u in 0..q {
+        for v in u + 1..q {
+            if square[v - u] {
+                g.add_edge(u, v).expect("valid edge");
+            }
+        }
+    }
+    Ok(with_layout(g, circle_positions(q)))
+}
+
+/// The Shrikhande graph: the Cayley graph of `Z_4 × Z_4` with connection
+/// set `±(1,0), ±(0,1), ±(1,1)`. Strongly regular (16, 6, 2, 2) like the
+/// 4 × 4 rook's graph, but not isomorphic to it (|Aut| = 192 vs 1152).
+pub fn shrikhande() -> Graph {
+    let id = |a: usize, b: usize| 4 * (a % 4) + b % 4;
+    let mut g = Graph::new(16).with_name("Shrikhande");
+    for a in 0..4 {
+        for b in 0..4 {
+            for (da, db) in [(1, 0), (0, 1), (1, 1)] {
+                g.add_edge(id(a, b), id(a + da, b + db))
+                    .expect("valid edge");
+            }
+        }
+    }
+    g
+}
+
 /// The five Platonic solids.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PlatonicSolid {
@@ -372,6 +617,9 @@ pub fn check_generated_size(nodes: u128, edges: u128) -> Result<()> {
 /// | `grid:RxC`, `torus:RxC` | rectangular grid / torus |
 /// | `bipartite:A,B` | complete bipartite graph |
 /// | `platonic:NAME` | tetrahedron, cube, octahedron, dodecahedron, icosahedron |
+/// | `johnson:N,K`, `kneser:N,K`, `hamming:D,Q` | distance-regular families |
+/// | `paley:Q`, `shrikhande`, `rook:MxN` | strongly regular graphs |
+/// | `circulant:N,S1,S2,…` | Cayley graph of `Z_N` with jumps `±S_i` |
 /// | `random-regular:N,D[,SEED]`, `erdos-renyi:N,P[,SEED]` | random graphs |
 ///
 /// Specifications of graphs with more than [`MAX_GENERATED_NODES`] nodes
@@ -409,6 +657,29 @@ pub fn from_spec(spec: &str) -> Result<Graph> {
         "fruit-of-life" | "fruit_of_life" | "fol" => super::metatron::fruit_of_life(),
         "petersen" => petersen(),
         "heawood" => heawood(),
+        "shrikhande" => shrikhande(),
+        "johnson" | "kneser" | "hamming" => match nums(',')?.as_slice() {
+            [a, b] => {
+                let (a, b) = (int(*a)?, int(*b)?);
+                match kind.as_str() {
+                    "johnson" => johnson(a, b)?,
+                    "kneser" => kneser(a, b)?,
+                    _ => hamming(a, b)?,
+                }
+            }
+            _ => return Err(bad()),
+        },
+        "paley" => paley(one()?)?,
+        "rook" => match nums('x')?.as_slice() {
+            [m, n] => rook(int(*m)?, int(*n)?)?,
+            _ => return Err(bad()),
+        },
+        "circulant" => {
+            let v = nums(',')?;
+            let (n, jumps) = v.split_first().ok_or_else(bad)?;
+            let jumps = jumps.iter().map(|&j| int(j)).collect::<Result<Vec<_>>>()?;
+            circulant(int(*n)?, &jumps)?
+        }
         "complete" | "k" => {
             let n = one()?;
             size(n as u128, pairs(n))?;
@@ -528,6 +799,86 @@ mod tests {
         // The limits leave room for large graphs.
         assert_eq!(from_spec("hypercube:20").unwrap().num_nodes(), 1 << 20);
         assert_eq!(from_spec("complete:2000").unwrap().num_edges(), 1_999_000);
+    }
+
+    #[test]
+    fn distance_regular_and_strongly_regular_families() {
+        // Johnson J(n,k): C(n,k) nodes, degree k(n−k); J(n,2) = T(n) is SRG.
+        let j = johnson(6, 3).unwrap();
+        assert_eq!((j.num_nodes(), j.regular_degree()), (20, Some(9)));
+        assert_eq!(
+            johnson(5, 2).unwrap().strongly_regular_parameters(),
+            Some((10, 6, 3, 4))
+        );
+        // Kneser K(5,2) is the Petersen graph.
+        let k = kneser(5, 2).unwrap();
+        assert!(k.is_isomorphic(&petersen()));
+        assert_eq!(kneser(7, 3).unwrap().regular_degree(), Some(4));
+        // Hamming H(d,2) is the hypercube; H(2,q) the rook's graph.
+        assert!(hamming(4, 2).unwrap().is_isomorphic(&hypercube(4)));
+        assert!(hamming(2, 4).unwrap().is_isomorphic(&rook(4, 4).unwrap()));
+        assert_eq!(
+            hamming(3, 3).unwrap().automorphism_group().order(),
+            Some(1296)
+        );
+        // Paley(q): (q, (q−1)/2, (q−5)/4, (q−1)/4); Paley(5) = C5.
+        for q in [5, 13, 17, 29] {
+            assert_eq!(
+                paley(q).unwrap().strongly_regular_parameters(),
+                Some((q, (q - 1) / 2, (q - 5) / 4, (q - 1) / 4)),
+                "Paley({q})"
+            );
+        }
+        assert!(paley(5).unwrap().is_isomorphic(&cycle(5)));
+        // Shrikhande vs rook 4×4: same parameters, different groups.
+        assert_eq!(
+            shrikhande().strongly_regular_parameters(),
+            Some((16, 6, 2, 2))
+        );
+        assert_eq!(
+            rook(4, 4).unwrap().strongly_regular_parameters(),
+            Some((16, 6, 2, 2))
+        );
+        assert_eq!(shrikhande().automorphism_group().order(), Some(192));
+        assert_eq!(rook(4, 4).unwrap().automorphism_group().order(), Some(1152));
+        assert_eq!(
+            petersen().strongly_regular_parameters(),
+            Some((10, 3, 0, 1))
+        );
+        assert_eq!(cycle(6).strongly_regular_parameters(), None);
+        // Circulants and cubelike graphs.
+        assert!(circulant(9, &[1]).unwrap().is_isomorphic(&cycle(9)));
+        assert!(
+            circulant(8, &[1, 2, 3, 4])
+                .unwrap()
+                .is_isomorphic(&complete(8))
+        );
+        assert!(
+            cayley_z2(3, &[1, 2, 4])
+                .unwrap()
+                .is_isomorphic(&hypercube(3))
+        );
+        assert!(circulant(8, &[5]).is_err());
+        assert!(circulant(8, &[1, 1]).is_err());
+        assert!(paley(7).is_err() && paley(9).is_err());
+        assert!(johnson(5, 0).is_err() && kneser(5, 3).is_err() && hamming(0, 2).is_err());
+        // Specs.
+        assert_eq!(from_spec("johnson:6,3").unwrap().num_nodes(), 20);
+        assert_eq!(from_spec("rook:3x4").unwrap().num_edges(), 3 * 4 * 5 / 2);
+        assert_eq!(from_spec("circulant:10,1,3").unwrap().num_edges(), 20);
+        assert!(from_spec("hamming:30,2").is_err());
+        assert!(from_spec("johnson:62,31").is_err());
+    }
+
+    #[test]
+    fn subset_ranking_is_colex() {
+        for (n, k) in [(6, 3), (10, 4), (12, 1)] {
+            for (rank, &set) in subsets(n, k).iter().enumerate() {
+                assert_eq!(colex_rank(set), rank);
+                assert_eq!(set.count_ones() as usize, k);
+            }
+            assert_eq!(subsets(n, k).len() as u128, binomial(n as u64, k as u64));
+        }
     }
 
     #[test]

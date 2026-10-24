@@ -43,3 +43,10 @@ path = "fuzz_targets/json.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "graph_io"
+path = "fuzz_targets/graph_io.rs"
+test = false
+doc = false
+bench = false

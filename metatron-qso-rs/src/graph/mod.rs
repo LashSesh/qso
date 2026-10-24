@@ -1,12 +1,18 @@
 //! Undirected weighted graphs.
 //!
 //! [`Graph`] is the substrate for quantum walks, spatial search and QAOA.
-//! [`generators`] provides standard families (including the five Platonic
-//! solids), [`metatron`] the Fruit-of-Life / Metatron's-Cube family, and
-//! [`automorphism`] computes symmetry groups exactly.
+//! [`generators`] provides standard families (the five Platonic solids,
+//! distance-regular families such as hypercubes, Hamming, Johnson and
+//! Kneser graphs, Paley graphs, circulants and Cayley graphs of `Z₂ᵈ`),
+//! [`metatron`] the Fruit-of-Life / Metatron's-Cube family,
+//! [`automorphism`] computes symmetry groups exactly, [`canonical`] gives
+//! canonical forms and isomorphisms, and [`io`] reads and writes edge lists
+//! and GraphML.
 
 pub mod automorphism;
+pub mod canonical;
 pub mod generators;
+pub mod io;
 pub mod metatron;
 
 use std::collections::VecDeque;
@@ -58,10 +64,7 @@ impl TryFrom<GraphData> for Graph {
                 actual: data.adj.len(),
             });
         }
-        let mut g = Graph::new(data.n).with_name(data.name);
-        for (u, v, w) in data.edges {
-            g.add_weighted_edge(u, v, w)?;
-        }
+        let g = Graph::from_weighted_edges(data.n, &data.edges)?.with_name(data.name);
         if g.adj != data.adj {
             return Err(QsoError::invalid(
                 "adj",
@@ -89,19 +92,32 @@ impl Graph {
 
     /// Graph with unit-weight `edges`.
     pub fn from_edges(n: usize, edges: &[(usize, usize)]) -> Result<Self> {
-        let mut g = Self::new(n);
-        for &(u, v) in edges {
-            g.add_edge(u, v)?;
-        }
-        Ok(g)
+        let weighted: Vec<_> = edges.iter().map(|&(u, v)| (u, v, 1.0)).collect();
+        Self::from_weighted_edges(n, &weighted)
     }
 
-    /// Graph with weighted `edges`.
+    /// Graph with weighted `edges`, in `O(m log m)` time whatever their order.
     pub fn from_weighted_edges(n: usize, edges: &[(usize, usize, f64)]) -> Result<Self> {
         let mut g = Self::new(n);
         for &(u, v, w) in edges {
-            g.add_weighted_edge(u, v, w)?;
+            g.check_edge(u, v, w)?;
+            g.adj[u].push((v, w));
+            g.adj[v].push((u, w));
         }
+        for (u, list) in g.adj.iter_mut().enumerate() {
+            list.sort_unstable_by_key(|&(z, _)| z);
+            if let Some(pair) = list.windows(2).find(|p| p[0].0 == p[1].0) {
+                return Err(QsoError::InvalidEdge {
+                    u,
+                    v: pair[0].0,
+                    reason: "edge already present".to_string(),
+                });
+            }
+        }
+        g.edges = edges
+            .iter()
+            .map(|&(u, v, w)| (u.min(v), u.max(v), w))
+            .collect();
         Ok(g)
     }
 
@@ -112,6 +128,26 @@ impl Graph {
 
     /// Add an edge of weight `w` (finite and non-zero).
     pub fn add_weighted_edge(&mut self, u: usize, v: usize, w: f64) -> Result<&mut Self> {
+        self.check_edge(u, v, w)?;
+        if self.has_edge(u, v) {
+            return Err(QsoError::InvalidEdge {
+                u,
+                v,
+                reason: "edge already present".to_string(),
+            });
+        }
+        let (a, b) = if u < v { (u, v) } else { (v, u) };
+        self.edges.push((a, b, w));
+        for (x, y) in [(u, v), (v, u)] {
+            let list = &mut self.adj[x];
+            let pos = list.partition_point(|&(z, _)| z < y);
+            list.insert(pos, (y, w));
+        }
+        Ok(self)
+    }
+
+    /// Range, loop and weight checks shared by the edge constructors.
+    fn check_edge(&self, u: usize, v: usize, w: f64) -> Result<()> {
         for x in [u, v] {
             if x >= self.n {
                 return Err(QsoError::NodeOutOfRange {
@@ -131,17 +167,7 @@ impl Graph {
         if !w.is_finite() || w == 0.0 {
             return Err(invalid("weight must be finite and non-zero"));
         }
-        if self.has_edge(u, v) {
-            return Err(invalid("edge already present"));
-        }
-        let (a, b) = if u < v { (u, v) } else { (v, u) };
-        self.edges.push((a, b, w));
-        for (x, y) in [(u, v), (v, u)] {
-            let list = &mut self.adj[x];
-            let pos = list.partition_point(|&(z, _)| z < y);
-            list.insert(pos, (y, w));
-        }
-        Ok(self)
+        Ok(())
     }
 
     /// Set a descriptive name.
@@ -463,6 +489,83 @@ impl Graph {
             g.positions = Some(new_pos);
         }
         Ok(g)
+    }
+
+    /// Cartesian product `G □ H`: node `(g, h)` has index `g·|H| + h`; it is
+    /// joined to `(g', h)` for every edge `g g'` and to `(g, h')` for every
+    /// edge `h h'`, with the same weights.
+    pub fn cartesian_product(&self, other: &Graph) -> Result<Graph> {
+        let (n, m) = (self.n, other.n);
+        let nodes = n
+            .checked_mul(m)
+            .ok_or_else(|| QsoError::invalid("graph", "product too large"))?;
+        generators::check_generated_size(
+            nodes as u128,
+            self.edges.len() as u128 * m as u128 + other.edges.len() as u128 * n as u128,
+        )?;
+        let mut edges = Vec::with_capacity(self.edges.len() * m + other.edges.len() * n);
+        for &(u, v, w) in &self.edges {
+            edges.extend((0..m).map(|h| (u * m + h, v * m + h, w)));
+        }
+        for &(u, v, w) in &other.edges {
+            edges.extend((0..n).map(|x| (x * m + u, x * m + v, w)));
+        }
+        Ok(Graph::from_weighted_edges(nodes, &edges)?
+            .with_name(format!("{} □ {}", self.name, other.name)))
+    }
+
+    /// Parameters `(n, k, λ, μ)` if the graph is strongly regular: unweighted,
+    /// `k`-regular, every two adjacent nodes have `λ` common neighbours and
+    /// every two distinct non-adjacent nodes `μ`. Complete and empty graphs
+    /// are excluded, as usual. Takes `O(n² k)` time and `O(n)` memory.
+    pub fn strongly_regular_parameters(&self) -> Option<(usize, usize, usize, usize)> {
+        let k = self.regular_degree()?;
+        if !self.is_unweighted() || k == 0 || k + 1 == self.n {
+            return None;
+        }
+        let (mut lambda, mut mu) = (None, None);
+        let mut row = vec![false; self.n];
+        for u in 0..self.n {
+            for &(w, _) in self.neighbors(u) {
+                row[w] = true;
+            }
+            for v in u + 1..self.n {
+                let common = self.neighbors(v).iter().filter(|&&(w, _)| row[w]).count();
+                let slot = if row[v] { &mut lambda } else { &mut mu };
+                match *slot {
+                    None => *slot = Some(common),
+                    Some(c) if c != common => return None,
+                    _ => {}
+                }
+            }
+            for &(w, _) in self.neighbors(u) {
+                row[w] = false;
+            }
+        }
+        Some((self.n, k, lambda?, mu?))
+    }
+
+    /// Canonical labelling (see [`canonical`]): `labels[u]` is the canonical
+    /// index of node `u`.
+    pub fn canonical_labelling(&self) -> Vec<usize> {
+        canonical::canonical_labelling(self)
+    }
+
+    /// The graph relabelled canonically; isomorphic graphs give equal
+    /// edge lists.
+    pub fn canonical_form(&self) -> Graph {
+        self.relabeled(&self.canonical_labelling())
+            .expect("a labelling is a permutation")
+    }
+
+    /// Whether `other` is isomorphic to this graph (weights included).
+    pub fn is_isomorphic(&self, other: &Graph) -> bool {
+        canonical::isomorphism(self, other).is_some()
+    }
+
+    /// An isomorphism to `other` (node `u` ↦ `iso[u]`), if one exists.
+    pub fn isomorphism(&self, other: &Graph) -> Option<Vec<usize>> {
+        canonical::isomorphism(self, other)
     }
 
     /// Symmetry group (see [`automorphism_group`]).
