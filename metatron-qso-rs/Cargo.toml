@@ -1,84 +1,41 @@
 [package]
 name = "metatron-qso-rs"
-version = "0.1.0"
-edition = "2024"
-authors = ["Sebastian Klemm"]
-description = "Metatron Quantum State Operator - A quantum computing framework based on 13-dimensional sacred geometry"
-license = "MIT"
-repository = "https://github.com/LashSesh/qso"
-documentation = "https://docs.rs/metatron-qso-rs"
+description = "Validated quantum simulation in pure Rust: statevector and density-matrix simulators, variational algorithms with adjoint gradients, and continuous-time quantum walks on arbitrary graphs, including Metatron's Cube."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 readme = "README.md"
-keywords = ["quantum", "computing", "metatron", "vqa", "quantum-walk"]
-categories = ["science", "algorithms", "mathematics"]
-
-[dependencies]
-nalgebra = { version = "0.32", features = ["std"] }
-num-complex = { version = "0.4", features = ["serde"] }
-petgraph = "0.6"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-rayon = "1.10"
-thiserror = "1.0"
-approx = "0.5"
-rand = { version = "0.8", features = ["std", "small_rng"] }
-rand_distr = "0.4"
-chrono = { version = "0.4", features = ["serde"] }
-# VQA optimization dependencies
-log = "0.4"
-
-[dev-dependencies]
-proptest = "1.4"
-criterion = "0.5"
+documentation = "https://docs.rs/metatron-qso-rs"
+keywords = ["quantum", "simulator", "qaoa", "vqe", "quantum-walk"]
+categories = ["science", "simulation", "mathematics"]
 
 [lib]
 name = "metatron_qso"
-path = "src/lib.rs"
 
 [[bin]]
-name = "quantum_walk_bench"
-path = "src/bin/quantum_walk_bench.rs"
-
-[[bin]]
-name = "quantum_walk_bench_compare"
-path = "src/bin/quantum_walk_bench_compare.rs"
-
-[[bin]]
-name = "vqe_bench"
-path = "src/bin/vqe_bench.rs"
-
-[[bin]]
-name = "qaoa_bench"
-path = "src/bin/qaoa_bench.rs"
-
-[[bin]]
-name = "vqc_bench"
-path = "src/bin/vqc_bench.rs"
-
-[[bin]]
-name = "integration_bench"
-path = "src/bin/integration_bench.rs"
-
-[[bin]]
-name = "cross_system_bench"
-path = "src/bin/cross_system_bench.rs"
-
-[[bin]]
-name = "benchmark_compare"
-path = "src/bin/benchmark_compare.rs"
-
-[[bin]]
-name = "advanced_algorithms_bench"
-path = "src/bin/advanced_algorithms_bench.rs"
-required-features = ["advanced"]
-
-[[example]]
-name = "vqa_demo"
-path = "examples/vqa_demo.rs"
+name = "qso"
+path = "src/bin/qso.rs"
+required-features = ["cli"]
 
 [features]
-default = ["walks", "vqa", "dtl"]
-walks = []
-vqa = []
-codes = []
-dtl = []
-advanced = []
+default = ["parallel"]
+## Multi-threaded kernels via rayon.
+parallel = ["dep:rayon"]
+## The `qso` command-line tool.
+cli = ["dep:clap"]
+
+[dependencies]
+nalgebra.workspace = true
+num-complex.workspace = true
+rayon = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+clap = { workspace = true, optional = true }
+
+[dev-dependencies]
+criterion.workspace = true
+proptest.workspace = true
