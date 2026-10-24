@@ -28,6 +28,10 @@
 //!   probabilities, limiting and time-averaged distributions.
 //! * [`QuotientSearch`] — Childs–Goldstone spatial search for marked cells.
 //!
+//! The reduced problems are solved densely, so they need at most
+//! [`DENSE_LIMIT`] cells; graphs without much symmetry
+//! have nearly as many cells as nodes.
+//!
 //! ```
 //! use metatron_qso::walks::{Generator, Quotient, QuotientWalk};
 //!
@@ -42,7 +46,7 @@
 use num_complex::Complex64 as C64;
 
 use super::search::{SearchResult, optimize_peak, optimize_rate};
-use super::{Generator, StartSpectrum};
+use super::{DENSE_LIMIT, Generator, StartSpectrum};
 use crate::error::{QsoError, Result};
 use crate::graph::Graph;
 use crate::graph::canonical::refine;
@@ -483,7 +487,19 @@ impl Quotient {
         Ok(())
     }
 
-    fn check_cell(&self, cell: usize) -> Result<()> {
+    /// Reduced problems are solved densely: at most [`DENSE_LIMIT`] cells.
+    pub(crate) fn check_dense(&self) -> Result<()> {
+        if self.num_cells() > DENSE_LIMIT {
+            return Err(QsoError::TooManyQubits {
+                what: "dense quotient analysis (cells)",
+                max: DENSE_LIMIT,
+                requested: self.num_cells(),
+            });
+        }
+        Ok(())
+    }
+
+    pub(crate) fn check_cell(&self, cell: usize) -> Result<()> {
         if cell >= self.num_cells() {
             return Err(QsoError::invalid(
                 "cell",
@@ -516,6 +532,7 @@ impl QuotientWalk {
                 "hopping rate must be positive and finite",
             ));
         }
+        quotient.check_dense()?;
         let (values, vectors) = eigh_real(&quotient.hamiltonian(generator, gamma));
         Ok(Self {
             quotient: quotient.clone(),
@@ -649,6 +666,7 @@ impl QuotientSearch {
                 "must be finite and non-negative",
             ));
         }
+        quotient.check_dense()?;
         let mut marked = marked_cells.to_vec();
         marked.sort_unstable();
         marked.dedup();
@@ -714,6 +732,7 @@ impl QuotientSearch {
     /// obtained here without the full spectrum.
     pub fn critical_gamma(quotient: &Quotient, cell: usize) -> Result<f64> {
         quotient.check_cell(cell)?;
+        quotient.check_dense()?;
         if quotient.num_cells() < 2 {
             return Err(QsoError::invalid("quotient", "need at least two cells"));
         }

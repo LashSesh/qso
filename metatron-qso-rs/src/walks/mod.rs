@@ -14,6 +14,8 @@
 //! * [`search`] — Childs–Goldstone spatial search.
 //! * [`quotient`] — exact walks and searches reduced by symmetry to a few
 //!   dimensions (equitable partitions), for graphs of any size.
+//! * [`transfer`] — perfect state transfer (decision and time) and the best
+//!   transfer fidelity between two nodes.
 //! * [`dephasing`] — open-system walks with site dephasing (Lindblad).
 //! * [`classical`] — classical random-walk baselines.
 //!
@@ -33,6 +35,7 @@ pub mod classical;
 pub mod dephasing;
 pub mod quotient;
 pub mod search;
+pub mod transfer;
 
 use num_complex::Complex64 as C64;
 use serde::{Deserialize, Serialize};
@@ -47,6 +50,7 @@ pub use classical::{classical_hitting_times, classical_walk_probabilities};
 pub use dephasing::DephasingWalk;
 pub use quotient::{Quotient, QuotientSearch, QuotientWalk};
 pub use search::{SearchResult, SpatialSearch};
+pub use transfer::{StateTransfer, TransferResult};
 
 /// Largest graph for which dense eigendecompositions are used.
 pub const DENSE_LIMIT: usize = 2048;
