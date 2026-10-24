@@ -8,12 +8,13 @@ authors:
 repository-code: "https://github.com/LashSesh/qso"
 url: "https://github.com/LashSesh/qso"
 license: Apache-2.0
-version: 1.2.0
+version: 1.3.0
 date-released: 2026-10-24
 keywords:
   - quantum computing
   - quantum simulation
   - quantum walks
+  - state transfer
   - QAOA
   - VQE
   - boson sampling
@@ -21,6 +22,7 @@ keywords:
 abstract: >-
   Statevector and density-matrix simulation of quantum circuits with exact
   adjoint gradients, variational algorithms (VQE, QAOA, classifiers),
-  continuous-time quantum walks with exact symmetry analysis, and exact
-  boson sampling, written in pure Rust with Python bindings. Every
-  algorithm is validated against closed-form or published results.
+  continuous- and discrete-time quantum walks with exact symmetry
+  reduction, state-transfer analysis and walk circuits, graph isomorphism,
+  and exact boson sampling, written in pure Rust with Python bindings.
+  Every algorithm is validated against closed-form or published results.
