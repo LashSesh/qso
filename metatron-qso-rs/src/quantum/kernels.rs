@@ -435,7 +435,152 @@ mod tests {
             .collect()
     }
 
+    /// Textbook application of a dense `2^k × 2^k` matrix to `targets`
+    /// (`targets[0]` most significant) on basis states with all `controls`
+    /// set: safe indexing only, independent of the kernels under test.
+    fn reference(amps: &[C64], targets: &[usize], controls: usize, m: &[C64]) -> Vec<C64> {
+        let k = targets.len();
+        let local = |b: usize| (0..k).fold(0, |acc, j| (acc << 1) | ((b >> targets[j]) & 1));
+        let with_local = |b: usize, l: usize| {
+            (0..k).fold(b, |acc, j| {
+                let bit = 1 << targets[j];
+                if (l >> (k - 1 - j)) & 1 == 1 {
+                    acc | bit
+                } else {
+                    acc & !bit
+                }
+            })
+        };
+        (0..amps.len())
+            .map(|b| {
+                if b & controls != controls {
+                    return amps[b];
+                }
+                let r = local(b);
+                (0..1 << k)
+                    .map(|c| m[r * (1 << k) + c] * amps[with_local(b, c)])
+                    .sum()
+            })
+            .collect()
+    }
+
+    fn random_matrix(k: usize, rng: &mut crate::Rng) -> Vec<C64> {
+        (0..1 << (2 * k))
+            .map(|_| C64::new(rng.normal(), rng.normal()))
+            .collect()
+    }
+
+    fn assert_close(a: &[C64], b: &[C64], what: &str) {
+        for (i, (x, y)) in a.iter().zip(b).enumerate() {
+            assert!((x - y).norm() < 1e-12, "{what}: amplitude {i}: {x} vs {y}");
+        }
+    }
+
+    /// Run `f` on several worker threads, so that the parallel paths of
+    /// the kernels really execute concurrently (Miri then checks them for
+    /// data races as well as for out-of-bounds and aliasing errors).
+    fn on_threads(f: impl FnOnce() + Send) {
+        #[cfg(feature = "parallel")]
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap()
+            .install(f);
+        #[cfg(not(feature = "parallel"))]
+        f();
+    }
+
+    /// Every `unsafe` kernel against [`reference`] on 3 qubits (serial) and
+    /// 7 qubits (parallel under Miri, whose thresholds are lowered so that
+    /// 2⁷ amplitudes span several work chunks).
     #[test]
+    fn unsafe_kernels_match_the_reference() {
+        on_threads(|| {
+            let mut rng = crate::Rng::seed_from_u64(2024);
+            for n in [3usize, 7] {
+                let state = random_state(n, 7 + n as u64);
+                let others = |skip: &[usize]| -> Vec<usize> {
+                    (0..n).filter(|q| !skip.contains(q)).collect()
+                };
+                let control_masks = |skip: &[usize], rng: &mut crate::Rng| -> Vec<usize> {
+                    let free = others(skip);
+                    let pick = |rng: &mut crate::Rng| free[rng.below(free.len() as u64) as usize];
+                    let mut masks = vec![0];
+                    if !free.is_empty() {
+                        masks.push(1 << pick(rng));
+                        masks.push((1 << pick(rng)) | (1 << pick(rng)));
+                    }
+                    masks
+                };
+                for t in 0..n {
+                    let m = random_matrix(1, &mut rng);
+                    let m1: [C64; 4] = m.clone().try_into().unwrap();
+                    let x = [0.0, 1.0, 1.0, 0.0].map(|v| C64::new(v, 0.0));
+                    for c in control_masks(&[t], &mut rng) {
+                        let mut a = state.clone();
+                        apply_1q(&mut a, t, c, &m1);
+                        assert_close(&a, &reference(&state, &[t], c, &m), "apply_1q");
+                        let mut a = state.clone();
+                        apply_x(&mut a, t, c);
+                        assert_close(&a, &reference(&state, &[t], c, &x), "apply_x");
+                        let phase = C64::from_polar(1.0, 0.3 + t as f64);
+                        let diag = [
+                            C64::new(1.0, 0.0),
+                            C64::new(0.0, 0.0),
+                            C64::new(0.0, 0.0),
+                            phase,
+                        ];
+                        let mut a = state.clone();
+                        apply_phase_on_mask(&mut a, c | (1 << t), phase);
+                        assert_close(
+                            &a,
+                            &reference(&state, &[t], c, &diag),
+                            "apply_phase_on_mask",
+                        );
+                    }
+                }
+                for f in 0..n {
+                    for s in others(&[f]) {
+                        let m = random_matrix(2, &mut rng);
+                        let m2: [C64; 16] = m.clone().try_into().unwrap();
+                        let mut swap = vec![C64::new(0.0, 0.0); 16];
+                        for (r, c) in [(0, 0), (1, 2), (2, 1), (3, 3)] {
+                            swap[4 * r + c] = C64::new(1.0, 0.0);
+                        }
+                        for c in control_masks(&[f, s], &mut rng) {
+                            let mut a = state.clone();
+                            apply_2q(&mut a, f, s, c, &m2);
+                            assert_close(&a, &reference(&state, &[f, s], c, &m), "apply_2q");
+                            let mut a = state.clone();
+                            apply_swap(&mut a, f, s, c);
+                            assert_close(&a, &reference(&state, &[f, s], c, &swap), "apply_swap");
+                        }
+                    }
+                }
+                for _ in 0..6 {
+                    let mut targets: Vec<usize> = Vec::new();
+                    while targets.len() < 3 {
+                        let q = rng.below(n as u64) as usize;
+                        if !targets.contains(&q) {
+                            targets.push(q);
+                        }
+                    }
+                    let m = random_matrix(3, &mut rng);
+                    for c in control_masks(&targets, &mut rng) {
+                        let mut a = state.clone();
+                        apply_kq(&mut a, &targets, c, &m);
+                        assert_close(&a, &reference(&state, &targets, c, &m), "apply_kq");
+                    }
+                }
+            }
+        });
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "2¹⁷ amplitudes; covered by unsafe_kernels_match_the_reference"
+    )]
     fn block_cx_matches_the_generic_kernel() {
         // n = 17 crosses the parallel threshold and makes runs longer than
         // CHUNK for high qubits.
@@ -457,6 +602,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore = "2¹⁷ amplitudes; safe code")]
     fn real_matrix_path_matches_the_complex_kernel() {
         let h = std::f64::consts::FRAC_1_SQRT_2;
         let real = [

@@ -15,11 +15,21 @@ use rayon::prelude::*;
 /// Below ~2¹⁶ amplitudes a gate takes only tens of microseconds and the
 /// scheduling overhead outweighs the gain (measured with the benchmark
 /// report example).
+#[cfg(not(miri))]
 #[cfg_attr(not(feature = "parallel"), allow(dead_code))]
 pub(crate) const PAR_THRESHOLD: usize = 1 << 16;
 
 /// Granularity of parallel work items and of deterministic reductions.
+#[cfg(not(miri))]
 pub(crate) const CHUNK: usize = 1 << 12;
+
+// Under Miri the same code paths run on registers small enough to
+// interpret: 7 qubits are parallel and split into several chunks.
+#[cfg(miri)]
+#[cfg_attr(not(feature = "parallel"), allow(dead_code))]
+pub(crate) const PAR_THRESHOLD: usize = 1 << 6;
+#[cfg(miri)]
+pub(crate) const CHUNK: usize = 1 << 3;
 
 /// Raw pointer that may be shared between threads.
 ///
@@ -271,8 +281,10 @@ mod tests {
 
     #[test]
     fn sums_match_serial_reference() {
-        let n: usize = (1 << 16) + 123;
-        let f = |i: usize| ((i as f64) * 0.37).sin();
+        let n: usize = PAR_THRESHOLD + 123;
+        // Rounding makes the sum depend on the order of additions; the
+        // summand avoids transcendental functions, which Miri perturbs.
+        let f = |i: usize| 1.0 / (i as f64 + 0.37);
         let serial: f64 = {
             // Same chunked order as the implementation.
             let mut total = 0.0;
@@ -319,7 +331,7 @@ mod tests {
 
     #[test]
     fn for_each_mut_sees_correct_indices() {
-        let mut v = vec![0usize; (1 << 15) + 7];
+        let mut v = vec![0usize; 2 * PAR_THRESHOLD + 7];
         for_each_mut(&mut v, |i, x| *x = i * 2);
         assert!(v.iter().enumerate().all(|(i, &x)| x == 2 * i));
     }

@@ -175,11 +175,14 @@ pub(crate) fn matrix_1q(kind: GateKind, p: &[f64]) -> [C64; 4] {
         U => {
             let (theta, phi, lambda) = (p[0], p[1], p[2]);
             let (c, s) = half_angle(theta);
+            // e^{iφ}·e^{iλ} rather than e^{i(φ+λ)}: the sum loses precision
+            // for large angles and the matrix would no longer be unitary.
+            let (e_phi, e_lambda) = (C64::from_polar(1.0, phi), C64::from_polar(1.0, lambda));
             [
                 C64::new(c, 0.0),
-                -C64::from_polar(s, lambda),
-                C64::from_polar(s, phi),
-                C64::from_polar(c, phi + lambda),
+                -e_lambda * s,
+                e_phi * s,
+                e_phi * e_lambda * c,
             ]
         }
         Swap | RXX | RYY | RZZ | Unitary => {
@@ -220,25 +223,16 @@ pub(crate) fn dmatrix_1q(kind: GateKind, p: &[f64], which: usize) -> [C64; 4] {
         U => {
             let (theta, phi, lambda) = (p[0], p[1], p[2]);
             let (c, s) = half_angle(theta);
+            let (e_phi, e_lambda) = (C64::from_polar(1.0, phi), C64::from_polar(1.0, lambda));
             match which {
                 0 => [
                     C64::new(-s / 2.0, 0.0),
-                    -C64::from_polar(c / 2.0, lambda),
-                    C64::from_polar(c / 2.0, phi),
-                    C64::from_polar(-s / 2.0, phi + lambda),
+                    -e_lambda * (c / 2.0),
+                    e_phi * (c / 2.0),
+                    e_phi * e_lambda * (-s / 2.0),
                 ],
-                1 => [
-                    ZERO,
-                    ZERO,
-                    C64::from_polar(s, phi) * I,
-                    C64::from_polar(c, phi + lambda) * I,
-                ],
-                2 => [
-                    ZERO,
-                    -C64::from_polar(s, lambda) * I,
-                    ZERO,
-                    C64::from_polar(c, phi + lambda) * I,
-                ],
+                1 => [ZERO, ZERO, e_phi * s * I, e_phi * e_lambda * c * I],
+                2 => [ZERO, -e_lambda * s * I, ZERO, e_phi * e_lambda * c * I],
                 _ => unreachable!("U has three parameters"),
             }
         }
@@ -483,5 +477,17 @@ mod tests {
         let ud = dagger(&u);
         let prod = mul2(&u, &ud.clone().try_into().unwrap());
         assert!(close(&prod, &[ONE, ZERO, ZERO, ONE], 1e-12));
+    }
+
+    #[test]
+    fn u_gate_stays_unitary_for_large_angles() {
+        // Found by the `qasm` fuzz target: with λ ≈ 3·10¹⁴ the sum φ + λ is
+        // rounded to a multiple of 1/16, so e^{i(φ+λ)} ≠ e^{iφ}·e^{iλ}.
+        for lambda in [2.96e14, -1e17, 1e300] {
+            let u = matrix_1q(GateKind::U, &[0.1, 0.2, lambda]);
+            let ud = dagger(&u);
+            let prod = mul2(&u, &ud.clone().try_into().unwrap());
+            assert!(close(&prod, &[ONE, ZERO, ZERO, ONE], 1e-14), "λ = {lambda}");
+        }
     }
 }

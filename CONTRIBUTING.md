@@ -23,10 +23,32 @@ cargo test -p metatron-qso-rs --no-default-features --lib   # serial build
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps -p metatron-qso-rs
 
 # Python bindings (inside a virtualenv)
-pip install maturin numpy pytest
+pip install maturin numpy pytest mypy
 maturin develop --release -m metatron_qso_py/Cargo.toml
 pytest metatron_qso_py/tests
+python -m mypy.stubtest metatron_qso._core --ignore-disjoint-bases \
+  --allowlist metatron_qso_py/stubtest-allowlist.txt    # stubs match the module
 ```
+
+CI additionally runs these checks; run them locally when you touch the
+corresponding code:
+
+```bash
+# unsafe kernels under Miri (nightly; registers are small under Miri)
+MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-ignore-leaks" \
+  cargo +nightly miri test -p metatron-qso-rs --lib -- quantum::kernels:: parallel::
+
+# parsers and deserialisers (nightly, cargo install cargo-fuzz)
+cd metatron-qso-rs
+cargo +nightly fuzz run qasm fuzz/corpus/qasm fuzz/seeds/qasm -- -max_total_time=60
+#   targets: qasm, pauli, graph_spec, json
+
+# public API against the last release (cargo install cargo-semver-checks)
+cargo semver-checks -p metatron-qso-rs --release-type minor
+```
+
+An input that made a fuzz target fail is kept as `fuzz/seeds/<target>/regression-*`
+together with a unit test, so that CI replays it on every run.
 
 ## Conventions
 
@@ -62,7 +84,8 @@ Releases are published by [`.github/workflows/release.yml`](.github/workflows/re
    `metatron-qso-rs` to crates.io and `metatron-qso` to PyPI and creates the
    GitHub release with the changelog section as notes.
 
-The workflow needs two repository secrets: `CRATES_IO` (crates.io token with
-the `publish-update` scope for `metatron-qso-rs`) and `PYPI` (PyPI token
-scoped to the project `metatron-qso`). Versions
-already on a registry are skipped, so a failed run can be re-run.
+Publishing uses Trusted Publishing (OpenID Connect); no registry tokens are
+stored. The publishing jobs run in the GitHub environment `release`, which
+must be approved by the maintainer, and PyPI and crates.io each trust
+`release.yml` in that environment (setup in the header of the workflow).
+Versions already on a registry are skipped, so a failed run can be re-run.

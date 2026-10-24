@@ -1,9 +1,21 @@
 name: Benchmarks
 
-# Produces the data of the technical note: every validated quantity
-# (examples/technical_note.rs) and the cross-framework comparison
-# (benchmarks/cross_framework). Started manually; the JSON results are
-# uploaded as artefacts and printed at the end of each log.
+# Weekly (and on demand):
+#
+#   technical-note  – every validated quantity of the technical note
+#                     (examples/technical_note.rs);
+#   cross-framework – correctness against Qiskit Aer, Qulacs, Cirq, PennyLane
+#                     Lightning and The Walrus, including noisy circuits
+#                     (density matrices against Qiskit Aer); fails on any
+#                     deviation above rounding level; plus the timing
+#                     comparison of the technical note;
+#   tracking        – `benchmark_report` timings compared with the median of
+#                     the last four runs, stored on the `benchmark-data`
+#                     branch; a slowdown of more than 25 % fails the job;
+#   fuzz            – ten minutes per fuzz target, with the corpus kept
+#                     between runs.
+#
+# The JSON results are uploaded as artefacts.
 
 on:
   workflow_dispatch:
@@ -11,6 +23,8 @@ on:
       rounds:
         description: Interleaved timing rounds of the cross-framework comparison
         default: "5"
+  schedule:
+    - cron: "17 3 * * 1"
 
 permissions:
   contents: read
@@ -22,7 +36,7 @@ jobs:
   technical-note:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Compute every number of the technical note
@@ -30,7 +44,7 @@ jobs:
           QSO_COMMIT: ${{ github.sha }}
           QSO_MACHINE: GitHub Actions ${{ runner.os }} ${{ runner.arch }} (ubuntu-latest)
         run: cargo run --release -p metatron-qso-rs --example technical_note -- --out technical_note.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: technical-note
           path: technical_note.json
@@ -39,8 +53,8 @@ jobs:
   cross-framework:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - uses: dtolnay/rust-toolchain@stable
@@ -55,9 +69,88 @@ jobs:
         env:
           QSO_COMMIT: ${{ github.sha }}
           QSO_MACHINE: GitHub Actions ${{ runner.os }} ${{ runner.arch }} (ubuntu-latest)
-        run: python benchmarks/cross_framework/run.py --rounds "${{ inputs.rounds }}" --out cross_framework.json
-      - uses: actions/upload-artifact@v4
+        run: python benchmarks/cross_framework/run.py --check --rounds "${{ inputs.rounds || '5' }}" --out cross_framework.json
+      - uses: actions/upload-artifact@v7
+        if: always()
         with:
           name: cross-framework
           path: cross_framework.json
       - run: cat cross_framework.json
+        if: always()
+
+  tracking:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Benchmark
+        env:
+          QSO_COMMIT: ${{ github.sha }}
+        run: cargo run --release -p metatron-qso-rs --example benchmark_report -- --json benchmark.json
+      - name: History from the benchmark-data branch
+        run: |
+          if git fetch origin benchmark-data:benchmark-data; then
+            git worktree add history benchmark-data
+          else
+            git worktree add --orphan -b benchmark-data history
+          fi
+      - name: Compare with the last runs
+        id: compare
+        continue-on-error: true
+        run: python3 benchmarks/track.py --history history/results --new benchmark.json --store
+      - name: Store the result
+        # Only runs of main are history; other branches are compared only.
+        if: github.ref == 'refs/heads/main'
+        working-directory: history
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add results
+          git commit -m "Benchmark results for ${GITHUB_SHA::12}"
+          git push origin benchmark-data
+      - uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-report
+          path: benchmark.json
+      - name: Fail on regressions
+        if: steps.compare.outcome == 'failure'
+        run: |
+          echo "::error::benchmark regression, see the job summary"
+          exit 1
+
+  fuzz:
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: metatron-qso-rs/fuzz
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - uses: actions/cache@v6
+        with:
+          path: metatron-qso-rs/fuzz/corpus
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: fuzz-corpus-
+      - name: Fuzz the parsers and deserialisers (10 minutes each)
+        working-directory: metatron-qso-rs
+        run: |
+          for t in qasm pauli graph_spec json; do
+            mkdir -p "fuzz/corpus/$t"
+            # The prebuilt cargo-fuzz is a static musl binary and would
+            # default to the musl target, which the sanitizer cannot use.
+            cargo fuzz run --target x86_64-unknown-linux-gnu "$t" "fuzz/corpus/$t" "fuzz/seeds/$t" -- \
+              -max_total_time=600 -rss_limit_mb=2048 -timeout=30
+          done
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: fuzz-artifacts
+          path: metatron-qso-rs/fuzz/artifacts

@@ -53,7 +53,12 @@ fn check_nodes(n: usize) -> PyResult<()> {
     if n == 0 {
         return Err(invalid("a graph needs at least one node"));
     }
-    Ok(())
+    generators::check_generated_size(n as u128, 0).raise()
+}
+
+/// Number of node pairs `n(n−1)/2`.
+fn pairs(n: usize) -> u128 {
+    n as u128 * (n as u128).saturating_sub(1) / 2
 }
 
 fn wrap(inner: Graph) -> PyGraph {
@@ -145,6 +150,7 @@ impl PyGraph {
     #[staticmethod]
     fn complete(n: usize) -> PyResult<Self> {
         check_nodes(n)?;
+        generators::check_generated_size(n as u128, pairs(n)).raise()?;
         Ok(wrap(generators::complete(n)))
     }
 
@@ -154,6 +160,7 @@ impl PyGraph {
         if n < 3 {
             return Err(invalid("a cycle needs at least 3 nodes"));
         }
+        check_nodes(n)?;
         Ok(wrap(generators::cycle(n)))
     }
 
@@ -174,7 +181,10 @@ impl PyGraph {
     /// Complete bipartite graph K_{a,b}.
     #[staticmethod]
     fn complete_bipartite(a: usize, b: usize) -> PyResult<Self> {
-        check_nodes(a + b)?;
+        if a + b == 0 {
+            return Err(invalid("a graph needs at least one node"));
+        }
+        generators::check_generated_size(a as u128 + b as u128, a as u128 * b as u128).raise()?;
         Ok(wrap(generators::complete_bipartite(a, b)))
     }
 
@@ -203,10 +213,11 @@ impl PyGraph {
     #[staticmethod]
     #[pyo3(signature = (rows, cols, periodic = false))]
     fn grid(rows: usize, cols: usize, periodic: bool) -> PyResult<Self> {
-        check_nodes(
-            rows.checked_mul(cols)
-                .ok_or_else(|| invalid("grid too large"))?,
-        )?;
+        let nodes = rows as u128 * cols as u128;
+        if nodes == 0 {
+            return Err(invalid("a graph needs at least one node"));
+        }
+        generators::check_generated_size(nodes, 2 * nodes).raise()?;
         if periodic && (rows < 3 || cols < 3) {
             return Err(invalid("a torus needs at least 3 nodes per dimension"));
         }
@@ -234,6 +245,7 @@ impl PyGraph {
     #[pyo3(signature = (n, d, seed = 0))]
     fn random_regular(py: Python<'_>, n: usize, d: usize, seed: u64) -> PyResult<Self> {
         check_nodes(n)?;
+        generators::check_generated_size(n as u128, n as u128 * d as u128 / 2).raise()?;
         py.detach(|| generators::random_regular(n, d, &mut Rng::seed_from_u64(seed)))
             .raise()
             .map(wrap)
@@ -244,6 +256,7 @@ impl PyGraph {
     #[pyo3(signature = (n, p, seed = 0))]
     fn erdos_renyi(py: Python<'_>, n: usize, p: f64, seed: u64) -> PyResult<Self> {
         check_nodes(n)?;
+        generators::check_generated_size(n as u128, pairs(n)).raise()?;
         py.detach(|| generators::erdos_renyi(n, p, &mut Rng::seed_from_u64(seed)))
             .raise()
             .map(wrap)

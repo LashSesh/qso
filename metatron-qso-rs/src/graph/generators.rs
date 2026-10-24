@@ -160,10 +160,18 @@ pub fn heawood() -> Graph {
 /// Random `d`-regular simple graph on `n` nodes (pairing model with
 /// rejection; `n·d` must be even).
 pub fn random_regular(n: usize, d: usize, rng: &mut Rng) -> Result<Graph> {
-    if !(n * d).is_multiple_of(2) || d >= n {
+    let stubs_total = n
+        .checked_mul(d)
+        .ok_or_else(|| QsoError::invalid("n/d", "n·d overflows"))?;
+    if !stubs_total.is_multiple_of(2) || d >= n {
         return Err(QsoError::invalid("n/d", "need n·d even and d < n"));
     }
-    'attempt: for _ in 0..10_000 {
+    // Pairings succeed with probability ≈ e^{(1−d²)/4}, independent of n;
+    // bounding the work (not only the attempts) keeps hopeless requests
+    // from running for minutes. Seeds that succeed within the bound give
+    // the same graph as before.
+    let attempts = (100_000_000 / stubs_total.max(1)).clamp(10, 10_000);
+    'attempt: for _ in 0..attempts {
         let mut stubs: Vec<usize> = (0..n).flat_map(|u| std::iter::repeat_n(u, d)).collect();
         rng.shuffle(&mut stubs);
         let mut g = Graph::new(n).with_name(format!("random_regular({n},{d})"));
@@ -328,6 +336,30 @@ impl std::str::FromStr for PlatonicSolid {
     }
 }
 
+/// Largest number of nodes of a graph built by [`from_spec`] (and by the
+/// Python constructors).
+pub const MAX_GENERATED_NODES: usize = 1 << 20;
+
+/// Largest number of edges (for Erdős–Rényi graphs: of candidate pairs) of
+/// a graph built by [`from_spec`] (and by the Python constructors).
+pub const MAX_GENERATED_EDGES: usize = 1 << 22;
+
+/// Check a requested graph size against [`MAX_GENERATED_NODES`] and
+/// [`MAX_GENERATED_EDGES`] before building it (`u128`, so that products of
+/// two `usize` arguments cannot overflow).
+pub fn check_generated_size(nodes: u128, edges: u128) -> Result<()> {
+    if nodes > MAX_GENERATED_NODES as u128 || edges > MAX_GENERATED_EDGES as u128 {
+        return Err(QsoError::invalid(
+            "graph",
+            format!(
+                "{nodes} nodes and {edges} edges exceed the supported \
+                 {MAX_GENERATED_NODES} nodes or {MAX_GENERATED_EDGES} edges"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Build a graph from a short textual specification:
 ///
 /// | Spec | Graph |
@@ -341,6 +373,9 @@ impl std::str::FromStr for PlatonicSolid {
 /// | `bipartite:A,B` | complete bipartite graph |
 /// | `platonic:NAME` | tetrahedron, cube, octahedron, dodecahedron, icosahedron |
 /// | `random-regular:N,D[,SEED]`, `erdos-renyi:N,P[,SEED]` | random graphs |
+///
+/// Specifications of graphs with more than [`MAX_GENERATED_NODES`] nodes
+/// or [`MAX_GENERATED_EDGES`] edges are rejected before anything is built.
 pub fn from_spec(spec: &str) -> Result<Graph> {
     let spec = spec.trim();
     let (kind, args) = match spec.split_once(':') {
@@ -366,22 +401,37 @@ pub fn from_spec(spec: &str) -> Result<Graph> {
             _ => Err(bad()),
         }
     };
+    let size = check_generated_size;
+    let pairs = |n: usize| n as u128 * (n as u128).saturating_sub(1) / 2;
     let graph = match kind.as_str() {
         "metatron" | "metatron-cube" if args.is_empty() => super::metatron::metatron_cube(),
         "metatron" => super::metatron::distance_graph(args.parse::<f64>().map_err(|_| bad())?),
         "fruit-of-life" | "fruit_of_life" | "fol" => super::metatron::fruit_of_life(),
         "petersen" => petersen(),
         "heawood" => heawood(),
-        "complete" | "k" => complete(one()?),
+        "complete" | "k" => {
+            let n = one()?;
+            size(n as u128, pairs(n))?;
+            complete(n)
+        }
         "cycle" | "c" => {
             let n = one()?;
             if n < 3 {
                 return Err(bad());
             }
+            size(n as u128, n as u128)?;
             cycle(n)
         }
-        "path" | "p" => path(one()?),
-        "star" => star(one()?),
+        "path" | "p" => {
+            let n = one()?;
+            size(n as u128, n as u128)?;
+            path(n)
+        }
+        "star" => {
+            let n = one()?;
+            size(n as u128, n as u128)?;
+            star(n)
+        }
         "hypercube" | "q" => {
             let d = one()?;
             if d > 20 {
@@ -399,10 +449,16 @@ pub fn from_spec(spec: &str) -> Result<Graph> {
             if periodic && (r < 3 || c < 3) {
                 return Err(bad());
             }
+            let nodes = r as u128 * c as u128;
+            size(nodes, 2 * nodes)?;
             grid_2d(r, c, periodic)
         }
         "bipartite" => match nums(',')?.as_slice() {
-            [a, b] => complete_bipartite(int(*a)?, int(*b)?),
+            [a, b] => {
+                let (a, b) = (int(*a)?, int(*b)?);
+                size(a as u128 + b as u128, a as u128 * b as u128)?;
+                complete_bipartite(a, b)
+            }
             _ => return Err(bad()),
         },
         "platonic" => platonic(args.parse()?),
@@ -413,6 +469,7 @@ pub fn from_spec(spec: &str) -> Result<Graph> {
                 [n, d, s] => (int(*n)?, int(*d)?, int(*s)? as u64),
                 _ => return Err(bad()),
             };
+            size(n as u128, n as u128 * d as u128 / 2)?;
             random_regular(n, d, &mut Rng::seed_from_u64(seed))?
         }
         "erdos-renyi" | "gnp" => {
@@ -422,6 +479,7 @@ pub fn from_spec(spec: &str) -> Result<Graph> {
                 [n, p, s] => (int(*n)?, *p, int(*s)? as u64),
                 _ => return Err(bad()),
             };
+            size(n as u128, pairs(n))?;
             erdos_renyi(n, p, &mut Rng::seed_from_u64(seed))?
         }
         _ => return Err(bad()),
@@ -456,9 +514,28 @@ mod tests {
             "torus:2x5",
             "platonic:sphere",
             "complete:2.5",
+            // Found by the `graph_spec` fuzz target: 2·10¹⁰ edges.
+            "K:204204",
+            "complete:2898",
+            "bipartite:5000,5000",
+            "grid:100000x100000",
+            "path:1048577",
+            "erdos-renyi:3000,0.0",
+            "random-regular:1000000,10",
         ] {
             assert!(from_spec(bad).is_err(), "{bad}");
         }
+        // The limits leave room for large graphs.
+        assert_eq!(from_spec("hypercube:20").unwrap().num_nodes(), 1 << 20);
+        assert_eq!(from_spec("complete:2000").unwrap().num_edges(), 1_999_000);
+    }
+
+    #[test]
+    fn hopeless_random_regular_requests_fail_quickly() {
+        // Pairing succeeds with probability ≈ e^{−(d²−1)/4}: never for d = 60.
+        let start = std::time::Instant::now();
+        assert!(random_regular(4000, 60, &mut Rng::seed_from_u64(1)).is_err());
+        assert!(start.elapsed().as_secs() < 30);
     }
 
     #[test]

@@ -20,7 +20,12 @@ pub use automorphism::{AutomorphismGroup, automorphism_group};
 
 /// Simple undirected graph with real edge weights (no self loops, no
 /// multi-edges) and optional 3-D node positions for plotting.
+///
+/// Deserialisation rebuilds the graph from its edge list with the same
+/// checks as [`Graph::add_weighted_edge`] and verifies the stored adjacency
+/// lists against it, so a graph read from untrusted JSON is well-formed.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "GraphData")]
 pub struct Graph {
     name: String,
     n: usize,
@@ -29,6 +34,45 @@ pub struct Graph {
     /// Edges `(u, v, w)` with `u < v`, in insertion order.
     edges: Vec<(usize, usize, f64)>,
     positions: Option<Vec<[f64; 3]>>,
+}
+
+/// Unvalidated serialised form of a [`Graph`].
+#[derive(Deserialize)]
+struct GraphData {
+    name: String,
+    n: usize,
+    adj: Vec<Vec<(usize, f64)>>,
+    edges: Vec<(usize, usize, f64)>,
+    positions: Option<Vec<[f64; 3]>>,
+}
+
+impl TryFrom<GraphData> for Graph {
+    type Error = QsoError;
+
+    fn try_from(data: GraphData) -> Result<Self> {
+        // The adjacency lists were read from the input, so this bounds the
+        // allocation below by the input size.
+        if data.adj.len() != data.n {
+            return Err(QsoError::DimensionMismatch {
+                expected: data.n,
+                actual: data.adj.len(),
+            });
+        }
+        let mut g = Graph::new(data.n).with_name(data.name);
+        for (u, v, w) in data.edges {
+            g.add_weighted_edge(u, v, w)?;
+        }
+        if g.adj != data.adj {
+            return Err(QsoError::invalid(
+                "adj",
+                "adjacency lists do not match the edge list",
+            ));
+        }
+        match data.positions {
+            Some(p) => g.with_positions(p),
+            None => Ok(g),
+        }
+    }
 }
 
 impl Graph {
@@ -486,6 +530,46 @@ mod tests {
         assert!(!g.is_connected());
         assert_eq!(g.connected_components(), vec![vec![0, 1, 2], vec![3]]);
         assert_eq!(g.diameter(), None);
+    }
+
+    #[test]
+    fn json_round_trip_and_validation() {
+        let g = super::metatron::metatron_cube();
+        let text = serde_json::to_string(&g).unwrap();
+        assert_eq!(serde_json::from_str::<Graph>(&text).unwrap(), g);
+        let mut w = Graph::new(3);
+        w.add_weighted_edge(2, 0, -1.5).unwrap();
+        let text = serde_json::to_string(&w).unwrap();
+        assert_eq!(serde_json::from_str::<Graph>(&text).unwrap(), w);
+        // Inconsistent or invalid data is rejected, not stored.
+        let base = |n: &str, adj: &str, edges: &str, pos: &str| {
+            format!(r#"{{"name":"g","n":{n},"adj":{adj},"edges":{edges},"positions":{pos}}}"#)
+        };
+        for bad in [
+            base("1000000000000", "[]", "[]", "null"),
+            base("2", "[[],[]]", "[[0,5,1.0]]", "null"),
+            base("2", "[[],[]]", "[[0,0,1.0]]", "null"),
+            base("2", "[[],[]]", "[[0,1,0.0]]", "null"),
+            base(
+                "2",
+                "[[[1,1.0]],[[0,1.0]]]",
+                "[[0,1,1.0],[1,0,1.0]]",
+                "null",
+            ),
+            base("2", "[[],[]]", "[[0,1,1.0]]", "null"),
+            base("2", "[[[1,1.0]],[[0,2.0]]]", "[[0,1,1.0]]", "null"),
+            base("2", "[[[1,1.0]],[[0,1.0]]]", "[[0,1,1.0]]", "[[0,0,0]]"),
+        ] {
+            assert!(serde_json::from_str::<Graph>(&bad).is_err(), "{bad}");
+        }
+        let ok = base(
+            "2",
+            "[[[1,1.0]],[[0,1.0]]]",
+            "[[1,0,1.0]]",
+            "[[0,0,0],[1,0,0]]",
+        );
+        let g: Graph = serde_json::from_str(&ok).unwrap();
+        assert_eq!(g.edges(), &[(0, 1, 1.0)]);
     }
 
     #[test]
