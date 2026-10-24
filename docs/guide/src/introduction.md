@@ -1,0 +1,45 @@
+# QSO User Guide
+
+QSO is a quantum simulator written in pure Rust, with a Python package and a
+command-line tool. It simulates quantum circuits exactly, as pure states or as
+density matrices with noise, and runs variational and textbook algorithms on
+top of them. It also simulates quantum walks on arbitrary graphs and samples
+photons in linear interferometers. Its signature geometry is **Metatron's
+Cube**, the complete graph K₁₃ on the 13 centres of the Fruit of Life.
+
+The rule of the project is **no claim without a test**. Every algorithm is
+compared with an independent reference: a closed form, a published value, a
+dense-matrix computation, a second method or another simulator. The chapter
+[How QSO is validated](validation.md) describes the checks, and the
+[technical note](https://github.com/LashSesh/qso/tree/main/docs/technical-note)
+reports them in full.
+
+## What this guide covers
+
+| Chapter | Topics |
+|---|---|
+| [Circuits and states](circuits.md) | Gates, simulation, sampling, observables, OpenQASM |
+| [Parameters and gradients](gradients.md) | Symbolic parameters, adjoint and parameter-shift gradients |
+| [Variational algorithms](variational.md) | VQE, QAOA, variational and graph classifiers |
+| [Noise](noise.md) | Channels, noise models, density matrices, shot estimates |
+| [Graphs](graphs.md) | Graph library, specifications, symmetry groups |
+| [Quantum walks](walks.md) | Continuous-time walks, spatial search, dephasing |
+| [Boson sampling](photonics.md) | Permanents, interferometers, exact sampling |
+| [Command line](cli.md) | The `qso` tool |
+
+The **tutorials** are Jupyter notebooks from
+[`docs/tutorials`](https://github.com/LashSesh/qso/tree/main/docs/tutorials).
+They are executed every time this site is built, so their output always comes
+from the current code.
+
+Examples use the Python package, with Rust equivalents where the interfaces
+differ. The two share one implementation. Every code block in this guide is
+run when the site is built.
+
+## Versions
+
+This guide describes the code on the `main` branch. Released versions are on
+[PyPI](https://pypi.org/project/metatron-qso/) and
+[crates.io](https://crates.io/crates/metatron-qso-rs); the
+[changelog](https://github.com/LashSesh/qso/blob/main/CHANGELOG.md) lists what
+changed in each release.

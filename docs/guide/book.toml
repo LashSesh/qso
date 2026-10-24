@@ -1,0 +1,16 @@
+[book]
+title = "QSO User Guide"
+authors = ["Sebastian Klemm"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+# The tutorial pages are generated from the notebooks in docs/tutorials by
+# docs/build_site.py; a missing page is an error, not an empty chapter.
+create-missing = false
+
+[output.html]
+git-repository-url = "https://github.com/LashSesh/qso"
+edit-url-template = "https://github.com/LashSesh/qso/edit/main/docs/guide/{path}"
+mathjax-support = true

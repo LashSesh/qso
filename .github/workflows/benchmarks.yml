@@ -144,7 +144,9 @@ jobs:
         run: |
           for t in qasm pauli graph_spec json; do
             mkdir -p "fuzz/corpus/$t"
-            cargo fuzz run "$t" "fuzz/corpus/$t" "fuzz/seeds/$t" -- \
+            # The prebuilt cargo-fuzz is a static musl binary and would
+            # default to the musl target, which the sanitizer cannot use.
+            cargo fuzz run --target x86_64-unknown-linux-gnu "$t" "fuzz/corpus/$t" "fuzz/seeds/$t" -- \
               -max_total_time=600 -rss_limit_mb=2048 -timeout=30
           done
       - uses: actions/upload-artifact@v7

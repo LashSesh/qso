@@ -18,3 +18,8 @@ dist/
 
 # Intermediate files of the technical-note build
 docs/technical-note/build/
+
+# Documentation site (built by docs/build_site.py)
+docs/guide/book/
+docs/guide/src/tutorials/
+site/

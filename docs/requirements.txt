@@ -1,0 +1,9 @@
+# Tools for docs/build_site.py (the guide, the executed tutorials and the
+# Python API reference). metatron-qso itself is built from the repository.
+ipykernel==7.4.0
+jupyter_client==8.10.0
+matplotlib==3.11.2
+nbconvert==7.17.2
+nbformat==5.11.1
+numpy==2.5.4
+pdoc==16.0.0

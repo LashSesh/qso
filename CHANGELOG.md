@@ -8,6 +8,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Documentation site (<https://lashsesh.github.io/qso/>): a user guide
+  (mdBook, `docs/guide`), four tutorials as notebooks (`docs/tutorials`)
+  and the Python API reference (pdoc). The notebooks are executed and every
+  code block of the guide is run on each build (`docs/build_site.py`, the
+  *Docs* workflow), so none of them can go stale.
 - Fuzz targets (`metatron-qso-rs/fuzz`) for the OpenQASM and Pauli-sum
   parsers, graph specifications and the JSON form of `Circuit`,
   `StateVector`, `Graph` and `PauliSum`; 60 s per target on every pull

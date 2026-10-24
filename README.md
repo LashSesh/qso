@@ -411,6 +411,7 @@ needs a test against an independent reference.
 
 | Document | Content |
 |---|---|
+| [User guide](https://lashsesh.github.io/qso/) | Guide, executed tutorials and Python API reference (sources in [docs/guide](docs/guide/) and [docs/tutorials](docs/tutorials/)) |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the simulator works: kernels, determinism, gradients, Krylov methods, automorphism search, walks |
 | [Technical note](docs/technical-note/QSO_Technical_Note_v2.pdf) | Validated benchmarks of every algorithm family, comparison with Qiskit Aer, Qulacs, Cirq and PennyLane, correction of the 2025 note ([source and data](docs/technical-note/); DOI [10.5281/zenodo.23623226](https://doi.org/10.5281/zenodo.23623226)) |
 | [docs/BENCHMARKS.md](docs/BENCHMARKS.md) | Measured performance with method and variance |
