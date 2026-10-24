@@ -126,14 +126,15 @@ More complete scripts are in
 
 | Area | Names |
 |---|---|
-| Graphs | `Graph` (`from_spec`, `metatron_cube`, `fruit_of_life`, `metatron_distance_graph`, `complete`, `cycle`, `path`, `star`, `complete_bipartite`, `hypercube`, `petersen`, `grid`, `platonic`, `random_regular`, `erdos_renyi`), `metatron_line_lengths` |
+| Graphs | `Graph` (`from_spec`, `metatron_cube`, `fruit_of_life`, `metatron_distance_graph`, `complete`, `cycle`, `path`, `star`, `complete_bipartite`, `hypercube`, `petersen`, `grid`, `platonic`, `random_regular`, `erdos_renyi`, `heawood`; `girth`, `triangle_count`, automorphisms, spectra), `metatron_line_lengths` |
 | Circuits | `Circuit`, `Parameter`, `qft`, `inverse_qft`, `grover_circuit` |
 | States | `StateVector`, `simulate`, `PauliSum`, `bitstring` |
 | Models | `h2_sto3g`, `transverse_field_ising`, `heisenberg_xxz`, `maxcut_cost` |
-| Variational | `real_amplitudes`, `efficient_su2`, `hardware_efficient`, `qaoa_maxcut_circuit`, `expectation_and_gradient`, `run_vqe`, `MaxCutQaoa`, `optimize_qaoa_layerwise`, `VariationalClassifier` |
+| Variational | `real_amplitudes`, `efficient_su2`, `hardware_efficient`, `qaoa_maxcut_circuit`, `expectation_and_gradient`, `run_vqe`, `MaxCutQaoa`, `optimize_qaoa_layerwise`, `VariationalClassifier`, `GraphClassifier` |
 | Textbook | `grover_search`, `estimate_phase` |
 | Walks | `ContinuousWalk`, `SpatialSearch` (`optimize` tunes rate and time jointly), `DephasingWalk`, `classical_walk_probabilities`, `classical_hitting_times` |
 | Noise | `Channel`, `NoiseModel`, `DensityMatrix`, `estimate_expectation` |
+| Boson sampling | `BosonSampler`, `permanent`, `haar_unitary`, `beam_splitter` |
 
 `Graph.from_spec` accepts the graph specifications of the `qso` command-line
 tool, e.g. `"metatron"`, `"metatron:1"`, `"hypercube:4"`, `"platonic:cube"`

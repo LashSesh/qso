@@ -15,6 +15,7 @@ mod algorithms;
 mod circuit;
 mod graph;
 mod noise;
+mod photonics;
 mod state;
 mod walks;
 
@@ -166,5 +167,6 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     algorithms::register(m)?;
     walks::register(m)?;
     noise::register(m)?;
+    photonics::register(m)?;
     Ok(())
 }

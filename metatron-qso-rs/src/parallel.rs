@@ -19,7 +19,7 @@ use rayon::prelude::*;
 pub(crate) const PAR_THRESHOLD: usize = 1 << 16;
 
 /// Granularity of parallel work items and of deterministic reductions.
-const CHUNK: usize = 1 << 12;
+pub(crate) const CHUNK: usize = 1 << 12;
 
 /// Raw pointer that may be shared between threads.
 ///
@@ -56,6 +56,28 @@ where
         return;
     }
     for i in 0..n {
+        f(i);
+    }
+}
+
+/// Call `f(i)` for every `i in 0..n_items`, where the items together touch
+/// `work` elements: in parallel once `work` reaches the threshold, with at
+/// least `min_len` items per task.
+#[inline]
+pub(crate) fn for_each_item<F>(n_items: usize, work: usize, min_len: usize, f: F)
+where
+    F: Fn(usize) + Sync + Send,
+{
+    #[cfg(feature = "parallel")]
+    if work >= PAR_THRESHOLD {
+        (0..n_items)
+            .into_par_iter()
+            .with_min_len(min_len.max(1))
+            .for_each(f);
+        return;
+    }
+    let _ = (work, min_len);
+    for i in 0..n_items {
         f(i);
     }
 }
@@ -194,6 +216,55 @@ where
     }
 }
 
+/// Most partial sums [`sum_ranges`] keeps in memory at once.
+const MAX_PARTS: u64 = 1 << 16;
+
+/// Deterministic sum over `0..n` where `f(start, end)` evaluates one fixed
+/// chunk `start..end` (for loops that carry state from one index to the
+/// next, such as Gray-code enumerations). Chunks are combined in order.
+pub(crate) fn sum_ranges<T, F>(n: u64, f: F) -> T
+where
+    T: Send + std::iter::Sum<T>,
+    F: Fn(u64, u64) -> T + Sync + Send,
+{
+    sum_ranges_with(n, CHUNK as u64, MAX_PARTS, f)
+}
+
+/// `(chunks per part, number of parts)` for `n_chunks` chunks split into at
+/// most `max_parts` parts.
+fn partition(n_chunks: u64, max_parts: u64) -> (u64, u64) {
+    let per_part = n_chunks.div_ceil(max_parts).max(1);
+    (per_part, n_chunks.div_ceil(per_part))
+}
+
+/// [`sum_ranges`] with explicit sizes. At most `max_parts` partial sums are
+/// formed, each over consecutive chunks (one chunk per part up to
+/// `chunk · max_parts` indices); parts are evaluated in parallel and added
+/// in order. The grouping depends only on `n`, never on the thread count.
+fn sum_ranges_with<T, F>(n: u64, chunk: u64, max_parts: u64, f: F) -> T
+where
+    T: Send + std::iter::Sum<T>,
+    F: Fn(u64, u64) -> T + Sync + Send,
+{
+    let n_chunks = n.div_ceil(chunk);
+    let (per_part, n_parts) = partition(n_chunks, max_parts);
+    let part = |p: u64| -> T {
+        let first = p * per_part;
+        (first..(first + per_part).min(n_chunks))
+            .map(|c| {
+                let start = c * chunk;
+                f(start, (start + chunk).min(n))
+            })
+            .sum()
+    };
+    #[cfg(feature = "parallel")]
+    if n >= PAR_THRESHOLD as u64 {
+        let parts: Vec<T> = (0..n_parts).into_par_iter().map(part).collect();
+        return parts.into_iter().sum();
+    }
+    (0..n_parts).map(part).sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,6 +286,35 @@ mod tests {
             total
         };
         assert_eq!(sum_f64(n, f).to_bits(), serial.to_bits());
+    }
+
+    #[test]
+    fn range_sums_cover_every_index_once_in_bounded_parts() {
+        // Integer sums are exact, so any gap, overlap or reordering of the
+        // ranges would show up as a wrong total or a wrong range list.
+        for (n, chunk, max_parts) in [(0, 4, 3), (1, 4, 3), (12, 4, 3), (13, 4, 3), (1000, 7, 5)] {
+            let seen = std::sync::Mutex::new(Vec::new());
+            let total: u64 = sum_ranges_with(n, chunk, max_parts, |s, e| {
+                assert!(s < e && e - s <= chunk && e <= n);
+                seen.lock().unwrap().push((s, e));
+                (s..e).sum::<u64>()
+            });
+            assert_eq!(total, n * n.saturating_sub(1) / 2, "n = {n}");
+            let mut seen = seen.into_inner().unwrap();
+            seen.sort_unstable();
+            assert_eq!(seen.len() as u64, n.div_ceil(chunk));
+            assert!(seen.windows(2).all(|w| w[0].1 == w[1].0));
+        }
+        // Beyond chunk·max_parts indices the parts grow; their number does
+        // not: a 40 × 40 permanent (2³⁹ terms) keeps 2¹⁶ partial sums, not 2²⁷.
+        assert_eq!(partition(1 << 27, MAX_PARTS), (1 << 11, MAX_PARTS));
+        assert_eq!(partition(MAX_PARTS, MAX_PARTS), (1, MAX_PARTS));
+        assert_eq!(partition(MAX_PARTS + 1, MAX_PARTS), (2, MAX_PARTS / 2 + 1));
+        assert_eq!(partition(0, MAX_PARTS), (1, 0));
+        for n_chunks in [1, 2, 99, 1 << 20, (1 << 40) + 3, u64::MAX / 4] {
+            let (per, parts) = partition(n_chunks, MAX_PARTS);
+            assert!(parts <= MAX_PARTS && per * parts >= n_chunks && per * (parts - 1) < n_chunks);
+        }
     }
 
     #[test]

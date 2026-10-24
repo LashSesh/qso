@@ -124,6 +124,10 @@ def test_large_graph_uses_krylov_propagation():
         lambda: q.DephasingWalk(q.Graph.cycle(4)).evolve(np.eye(3), 1.0),
         lambda: q.classical_walk_probabilities(q.Graph.cycle(4), 7, 1.0),
         lambda: q.classical_hitting_times(q.Graph.cycle(4), 7),
+        lambda: q.ContinuousWalk(q.Graph.cycle(4)).mixing_time(0, math.nan, 1.0),
+        lambda: q.ContinuousWalk(q.Graph.cycle(4)).mixing_time(0, -0.1, 1.0),
+        lambda: q.ContinuousWalk(q.Graph.cycle(4)).mixing_time(0, 0.1, math.inf),
+        lambda: q.ContinuousWalk(q.Graph.cycle(4)).mixing_time(0, 0.1, 0.0),
     ],
 )
 def test_invalid_walk_inputs_raise_value_error(call):

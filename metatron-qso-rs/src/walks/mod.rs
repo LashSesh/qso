@@ -264,9 +264,15 @@ impl ContinuousWalk {
         Ok(avg)
     }
 
-    /// Smallest `T` on the grid `t_max·k/steps` at which the time-averaged
-    /// distribution is within total-variation distance `epsilon` of the
-    /// limiting distribution (the mixing time of Aharonov et al., 2001).
+    /// Mixing time of Aharonov, Ambainis, Kempe & Vazirani (2001): the
+    /// smallest `T` on the grid `t_max·k/steps` such that the time-averaged
+    /// distribution stays within total-variation distance `epsilon` of the
+    /// limiting distribution at `T` and at every later grid point up to
+    /// `t_max`. `None` if the bound fails at `t_max`.
+    ///
+    /// The time average oscillates while it converges, so a single grid
+    /// point below `epsilon` is not enough; choose `t_max` well beyond the
+    /// expected mixing time.
     pub fn mixing_time(
         &self,
         start: usize,
@@ -274,14 +280,29 @@ impl ContinuousWalk {
         t_max: f64,
         steps: usize,
     ) -> Result<Option<f64>> {
-        let limit = self.limiting_distribution(start)?;
-        for k in 1..=steps.max(1) {
-            let t = t_max * k as f64 / steps.max(1) as f64;
-            if total_variation(&self.average_distribution(start, t)?, &limit) <= epsilon {
-                return Ok(Some(t));
-            }
+        if !(epsilon.is_finite() && epsilon >= 0.0) {
+            return Err(QsoError::invalid(
+                "epsilon",
+                format!("must be finite and non-negative, got {epsilon}"),
+            ));
         }
-        Ok(None)
+        if !(t_max.is_finite() && t_max > 0.0) {
+            return Err(QsoError::invalid(
+                "t_max",
+                format!("must be finite and positive, got {t_max}"),
+            ));
+        }
+        let limit = self.limiting_distribution(start)?;
+        let steps = steps.max(1);
+        let mut mixed = None;
+        for k in (1..=steps).rev() {
+            let t = t_max * k as f64 / steps as f64;
+            if total_variation(&self.average_distribution(start, t)?, &limit) > epsilon {
+                break;
+            }
+            mixed = Some(t);
+        }
+        Ok(mixed)
     }
 }
 
@@ -351,6 +372,34 @@ mod tests {
         assert!(total_variation(&num, &exact) < 1e-5);
         let mix = walk.mixing_time(0, 0.05, 200.0, 400).unwrap();
         assert!(mix.is_some());
+    }
+
+    #[test]
+    fn mixing_time_requires_the_bound_to_hold_from_then_on() {
+        // On K13, started at node 0, the time-averaged distance to the limit
+        // is (24/169)·|sin(13T)/(13T)|: for ε = 0.02 it first dips below ε
+        // at 13T ≈ 2.7, rises above it again in the next lobe (0.217·24/169
+        // ≈ 0.031 at 13T ≈ 4.49) and only then stays below.
+        let walk =
+            ContinuousWalk::new(&metatron::metatron_cube(), Generator::Laplacian, 1.0).unwrap();
+        let (eps, t_max, steps) = (0.02, 20.0, 2000);
+        let limit = walk.limiting_distribution(0).unwrap();
+        let tv = |t: f64| total_variation(&walk.average_distribution(0, t).unwrap(), &limit);
+        let grid = |k: usize| t_max * k as f64 / steps as f64;
+        let first_dip = (1..=steps).map(grid).find(|&t| tv(t) <= eps).unwrap();
+        let mix = walk.mixing_time(0, eps, t_max, steps).unwrap().unwrap();
+        assert!(mix > first_dip);
+        let k_mix = (mix / t_max * steps as f64).round() as usize;
+        assert!((k_mix..=steps).all(|k| tv(grid(k)) <= eps));
+        assert!(tv(grid(k_mix - 1)) > eps);
+        assert_eq!(walk.mixing_time(0, 1e-9, 1.0, 10).unwrap(), None);
+        // Comparisons with NaN are false, so a NaN bound would always "hold".
+        for (eps, t) in [(f64::NAN, 1.0), (-0.1, 1.0), (f64::INFINITY, 1.0)] {
+            assert!(walk.mixing_time(0, eps, t, 10).is_err());
+        }
+        for t in [f64::NAN, 0.0, -1.0, f64::INFINITY] {
+            assert!(walk.mixing_time(0, 0.1, t, 10).is_err());
+        }
     }
 
     #[test]

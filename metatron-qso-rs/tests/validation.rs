@@ -152,3 +152,22 @@ fn qaoa_ring_of_disagrees_reaches_proven_optimum_at_every_depth() {
         );
     }
 }
+
+#[test]
+fn qaoa_p2_on_large_girth_cubic_graphs_reaches_the_tree_value() {
+    // For cubic graphs of girth > 2p + 1 every edge sees a tree, so the
+    // optimal per-edge expectation is a universal constant: 0.6925 at p = 1
+    // and 0.7559 at p = 2 (Wurtz & Love, Phys. Rev. A 103, 042612, 2021).
+    // The Heawood graph (girth 6) is bipartite, so C_max = |E| and the
+    // approximation ratio equals that per-edge value.
+    let config = QaoaConfig {
+        restarts: 16,
+        ..Default::default()
+    };
+    let r = MaxCutQaoa::new(&generators::heawood(), 2)
+        .unwrap()
+        .optimize(&config)
+        .unwrap();
+    assert!(close(r.max_cut, 21.0, 0.0));
+    assert!(close(r.approximation_ratio.unwrap(), 0.7559, 5e-5), "{r:?}");
+}

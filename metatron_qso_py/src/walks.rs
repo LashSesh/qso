@@ -118,9 +118,10 @@ impl PyContinuousWalk {
         ))
     }
 
-    /// Smallest `T` on the grid `t_max·k/steps` at which the time-averaged
-    /// distribution is within total-variation distance `epsilon` of the
-    /// limit (`None` if never).
+    /// Mixing time (Aharonov et al. 2001): smallest `T` on the grid
+    /// `t_max·k/steps` from which on the time-averaged distribution stays
+    /// within total-variation distance `epsilon` of the limit, up to
+    /// `t_max` (`None` if the bound fails at `t_max`).
     #[pyo3(signature = (start, epsilon, t_max, steps = 200))]
     fn mixing_time(
         &self,

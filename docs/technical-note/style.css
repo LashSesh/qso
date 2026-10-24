@@ -1,0 +1,199 @@
+/* Print layout of the QSO technical note (A4, headless Chromium). */
+
+:root {
+  --text: #1a1a1a;
+  --muted: #555;
+  --rule: #999;
+  --accent: #1d4e89;
+}
+
+html {
+  font-family: Charter, "Bitstream Charter", "Liberation Serif", serif;
+  font-size: 10.3pt;
+  line-height: 1.42;
+  color: var(--text);
+  background: #fff;
+}
+
+body {
+  margin: 0;
+  max-width: none;
+  padding: 0;
+  hyphens: auto;
+  text-align: justify;
+}
+
+header#title-block-header {
+  text-align: center;
+  margin: 0 0 1.4em 0;
+}
+
+h1.title {
+  font-size: 17pt;
+  line-height: 1.25;
+  margin: 0 0 0.3em 0;
+  text-align: center;
+}
+
+p.subtitle {
+  font-size: 11.5pt;
+  margin: 0 0 0.9em 0;
+  color: var(--muted);
+}
+
+p.author {
+  font-size: 11pt;
+  margin: 0.2em 0;
+}
+
+p.date {
+  font-size: 10pt;
+  color: var(--muted);
+  margin: 0.2em 0 0 0;
+}
+
+h1, h2, h3 {
+  font-weight: bold;
+  text-align: left;
+  page-break-after: avoid;
+  break-after: avoid;
+}
+
+h1 {
+  font-size: 13pt;
+  margin: 1.5em 0 0.5em 0;
+}
+
+h2 {
+  font-size: 11pt;
+  margin: 1.2em 0 0.4em 0;
+}
+
+h3 {
+  font-size: 10.3pt;
+  font-style: italic;
+  font-weight: normal;
+  margin: 1em 0 0.3em 0;
+}
+
+p {
+  margin: 0 0 0.6em 0;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.abstract {
+  margin: 0 2.5em 1.6em 2.5em;
+  font-size: 9.6pt;
+}
+
+.abstract p:first-child::before {
+  content: "Abstract. ";
+  font-weight: bold;
+}
+
+.notice {
+  border-left: 3px solid #b03a2e;
+  padding: 0.3em 0 0.3em 0.9em;
+  margin: 0 0 1em 0;
+}
+
+table {
+  border-collapse: collapse;
+  margin: 0.6em auto 1.1em auto;
+  font-size: 8.6pt;
+  line-height: 1.3;
+  text-align: left;
+}
+
+/* Long tables may break across pages (the header repeats); rows may not,
+   and a caption stays with its table. */
+tr {
+  break-inside: avoid;
+}
+
+p:has(+ table) {
+  break-after: avoid;
+}
+
+thead tr {
+  border-top: 1.2px solid var(--text);
+  border-bottom: 0.7px solid var(--text);
+}
+
+tbody tr:last-child {
+  border-bottom: 1.2px solid var(--text);
+}
+
+th, td {
+  padding: 0.18em 0.6em;
+  vertical-align: top;
+}
+
+th {
+  font-weight: bold;
+}
+
+caption, .table-caption {
+  font-size: 8.8pt;
+  color: var(--muted);
+}
+
+code {
+  font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace;
+  font-size: 8.6pt;
+}
+
+pre {
+  font-size: 8.4pt;
+  background: #f5f5f5;
+  padding: 0.5em 0.8em;
+  border-radius: 3px;
+  white-space: pre-wrap;
+  break-inside: avoid;
+}
+
+/* Typeset formulas in the text face: Chromium otherwise maps identifiers
+   to Unicode mathematical italics, which Charter lacks, and falls back to a
+   sans-serif font. */
+math {
+  font-family: Charter, "Bitstream Charter", "Liberation Serif", serif;
+  font-size: 100%;
+}
+
+math mi {
+  text-transform: none;
+  font-style: italic;
+}
+
+math mi[mathvariant="normal"] {
+  font-style: normal;
+}
+
+math[display="block"] {
+  margin: 0.4em 0;
+}
+
+ol.references, #references ol {
+  font-size: 8.8pt;
+  padding-left: 1.8em;
+}
+
+#references li, ol.references li {
+  margin-bottom: 0.25em;
+  text-align: left;
+}
+
+.small {
+  font-size: 8.8pt;
+  color: var(--muted);
+}
+
+hr {
+  border: none;
+  border-top: 0.7px solid var(--rule);
+  margin: 1.2em 0;
+}

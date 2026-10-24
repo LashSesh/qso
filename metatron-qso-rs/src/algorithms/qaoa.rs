@@ -76,6 +76,20 @@ pub struct QaoaResult {
     pub converged: bool,
 }
 
+/// Largest QAOA depth `p` accepted (`2p` parameters, `2p` layers per
+/// evaluation).
+pub const MAX_QAOA_DEPTH: usize = 10_000;
+
+fn check_depth(p: usize) -> Result<()> {
+    if p == 0 || p > MAX_QAOA_DEPTH {
+        return Err(QsoError::invalid(
+            "p",
+            format!("QAOA depth must lie in 1..={MAX_QAOA_DEPTH}, got {p}"),
+        ));
+    }
+    Ok(())
+}
+
 /// QAOA instance for MaxCut on a fixed graph and depth `p`.
 #[derive(Clone, Debug)]
 pub struct MaxCutQaoa {
@@ -113,9 +127,7 @@ impl MaxCutQaoa {
                 requested: n,
             });
         }
-        if p == 0 {
-            return Err(QsoError::invalid("p", "QAOA depth must be at least 1"));
-        }
+        check_depth(p)?;
         let edges = graph.edges().to_vec();
         let cut = map_collect(1usize << n, |b| {
             edges
@@ -130,9 +142,7 @@ impl MaxCutQaoa {
 
     /// The same graph at a different depth (reuses the cut table).
     pub fn with_depth(&self, p: usize) -> Result<Self> {
-        if p == 0 {
-            return Err(QsoError::invalid("p", "QAOA depth must be at least 1"));
-        }
+        check_depth(p)?;
         Ok(Self { p, ..self.clone() })
     }
 
@@ -487,5 +497,17 @@ mod tests {
         assert_eq!(x.len(), 4);
         assert!((x[0] - 0.4).abs() < 1e-15 && (x[1] - 0.4).abs() < 1e-15);
         assert!((x[2] - 0.2).abs() < 1e-15 && (x[3] - 0.2).abs() < 1e-15);
+    }
+
+    #[test]
+    fn depth_is_bounded() {
+        let g = generators::cycle(4);
+        assert!(MaxCutQaoa::new(&g, 0).is_err());
+        assert!(MaxCutQaoa::new(&g, MAX_QAOA_DEPTH + 1).is_err());
+        assert!(MaxCutQaoa::new(&g, usize::MAX).is_err());
+        let q = MaxCutQaoa::new(&g, MAX_QAOA_DEPTH).unwrap();
+        assert_eq!(q.num_parameters(), 2 * MAX_QAOA_DEPTH);
+        assert!(q.with_depth(0).is_err());
+        assert!(q.with_depth(usize::MAX / 2 + 1).is_err());
     }
 }

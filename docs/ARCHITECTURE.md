@@ -35,10 +35,22 @@ parallelises without locks (`SyncPtr` documents this safety contract).
 Specialised paths:
 
 * uncontrolled single-qubit gates iterate over contiguous half-blocks
-  (`parallel::for_each_pair`), which the compiler vectorises;
+  (`parallel::for_each_pair`), which the compiler vectorises; diagonal
+  matrices (`RZ`) scale each half without branching, and real matrices
+  (`H`, `RY`) use real instead of complex products, about twice as fast;
 * `X`, `SWAP` and their controlled forms are permutations (no arithmetic);
-* `Z, S, T, P, RZ, RZZ` and the QAOA cost layer are diagonal phase
+  a singly controlled `X` swaps contiguous runs of `2^min(c, t)`
+  amplitudes, split into fixed pieces so that gates on high qubits
+  parallelise too;
+* `Z, S, T, P, RZZ` and the QAOA cost layer are diagonal phase
   multiplications.
+
+A new register is written in parallel, so its memory pages are faulted in
+by all threads rather than inside the first gate.
+
+These paths came out of a comparison with Qulacs and Qiskit Aer (see
+[BENCHMARKS.md](BENCHMARKS.md)), which traced the remaining gap to the
+generic 2×2 kernel for `H` and the per-index loop for `CX`.
 
 The kernels never assume unitarity. The same code therefore applies
 
@@ -71,7 +83,7 @@ Adjoint differentiation (Jones & Gacon 2020) keeps three vectors: the state
 `φ`, the co-state `λ = H|ψ⟩`, and a scratch copy. Walking the circuit
 backwards, each gate is undone on `φ` and `λ`, and every parameter of the
 gate contributes `2·Re⟨λ|∂U φ⟩·scale`. The cost is about three circuit
-simulations regardless of the parameter count (1.6 ms vs 68 ms for
+simulations regardless of the parameter count (0.53 ms vs 28 ms for
 parameter shift with 100 parameters, see BENCHMARKS.md). Parameter-shift rules are provided for
 hardware-faithful gradients and as an independent check: two terms for
 `exp(−iθG/2)` with `G² = I` and phase gates, four terms for single-controlled

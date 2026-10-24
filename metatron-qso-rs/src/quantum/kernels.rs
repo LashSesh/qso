@@ -14,7 +14,7 @@ use num_complex::Complex64 as C64;
 
 use super::circuit::Instruction;
 use super::gates::{GateKind, dmatrix_1q, dmatrix_2q, matrix_1q, matrix_2q};
-use crate::parallel::{SyncPtr, for_each_index, for_each_mut, for_each_pair};
+use crate::parallel::{CHUNK, SyncPtr, for_each_index, for_each_item, for_each_mut, for_each_pair};
 
 /// Insert a zero bit at position `pos` of `k`.
 #[inline(always)]
@@ -71,7 +71,27 @@ pub(crate) fn apply_1q(amps: &mut [C64], target: usize, controls: usize, m: &[C6
             1usize << target < amps.len(),
             "target {target} outside the register"
         );
-        // Contiguous, vectorisable fast path for uncontrolled gates.
+        // Contiguous, vectorisable fast paths for uncontrolled gates:
+        // diagonal matrices (RZ) scale each half without branching, real
+        // matrices (H, RY) need two real products per amplitude instead of
+        // two complex ones.
+        if m[1] == C64::new(0.0, 0.0) && m[2] == C64::new(0.0, 0.0) {
+            let (d0, d1) = (m[0], m[3]);
+            for_each_pair(amps, 1 << target, move |a, b| {
+                *a *= d0;
+                *b *= d1;
+            });
+            return;
+        }
+        if m.iter().all(|z| z.im == 0.0) {
+            let [a00, a01, a10, a11] = m.map(|z| z.re);
+            for_each_pair(amps, 1 << target, move |a, b| {
+                let (x, y) = (*a, *b);
+                *a = x * a00 + y * a01;
+                *b = x * a10 + y * a11;
+            });
+            return;
+        }
         for_each_pair(amps, 1 << target, move |a, b| {
             let (x, y) = (*a, *b);
             *a = m[0] * x + m[1] * y;
@@ -145,6 +165,10 @@ pub(crate) fn apply_x(amps: &mut [C64], target: usize, controls: usize) {
         return;
     }
     let positions = sorted_positions(&[target], controls, amps.len());
+    if positions.len() == 2 {
+        apply_cx(amps, controls, target, &positions);
+        return;
+    }
     let count = amps.len() >> positions.len();
     let bit = 1usize << target;
     let ptr = SyncPtr::new(amps);
@@ -154,6 +178,33 @@ pub(crate) fn apply_x(amps: &mut [C64], target: usize, controls: usize) {
         unsafe {
             let p = ptr.get();
             std::ptr::swap(p.add(i0), p.add(i0 | bit));
+        }
+    });
+}
+
+/// Singly controlled X (`positions` = sorted `[control, target]`, already
+/// validated). The amplitudes to exchange form contiguous runs of length
+/// `2^min(control, target)`: run `r` starts at `insert_zeros(r·L) | control`
+/// and is swapped with the run `2^target` further on. Long runs are split
+/// into pieces of at most `CHUNK` elements so that gates on high qubits
+/// parallelise as well.
+fn apply_cx(amps: &mut [C64], control_mask: usize, target: usize, positions: &[usize]) {
+    let run = 1usize << positions[0];
+    let piece = run.min(CHUNK);
+    let pieces_per_run = run / piece;
+    let runs = amps.len() >> (positions.len() + positions[0]);
+    let shift = 1usize << target;
+    let len = amps.len();
+    let ptr = SyncPtr::new(amps);
+    for_each_item(runs * pieces_per_run, len, CHUNK / piece, move |w| {
+        let (r, k) = (w / pieces_per_run, w % pieces_per_run);
+        let start = (insert_zeros(r << positions[0], positions) | control_mask) + k * piece;
+        // SAFETY: the start index has the control bit set and the target bit
+        // clear, both ranges lie inside one run of the register (positions
+        // were validated), and distinct `w` address disjoint ranges.
+        unsafe {
+            let p = ptr.get();
+            std::ptr::swap_nonoverlapping(p.add(start), p.add(start + shift), piece);
         }
     });
 }
@@ -233,6 +284,12 @@ where
 
 /// Multiply amplitudes whose `mask` bits are all set by `phase`.
 pub(crate) fn apply_phase_on_mask(amps: &mut [C64], mask: usize, phase: C64) {
+    if mask.is_power_of_two() {
+        // Uncontrolled phase gate: scale the upper half of every block.
+        assert!(mask < amps.len(), "qubit outside the register");
+        for_each_pair(amps, mask, move |_, b| *b *= phase);
+        return;
+    }
     let positions = sorted_positions(&[], mask, amps.len());
     let count = amps.len() >> positions.len();
     let ptr = SyncPtr::new(amps);
@@ -271,10 +328,8 @@ pub(crate) fn apply_instruction(
             apply_phase_on_mask(amps, controls | (1 << t[0]), cj(m[3]));
         }
         GateKind::RZ if controls == 0 => {
-            let m = matrix_1q(GateKind::RZ, angles);
-            let (p0, p1) = (cj(m[0]), cj(m[3]));
-            let bit = t[0];
-            apply_diagonal(amps, move |i| if (i >> bit) & 1 == 1 { p1 } else { p0 });
+            let m = matrix_1q(GateKind::RZ, angles).map(cj);
+            apply_1q(amps, t[0], 0, &m);
         }
         GateKind::RZZ => {
             let half = angles[0] / 2.0;
@@ -360,6 +415,76 @@ mod tests {
         assert_eq!(insert_zero(0b111, 1), 0b1101);
         assert_eq!(insert_zero(0b111, 3), 0b0111);
         assert_eq!(insert_zeros(0b11, &[0, 2]), 0b1010);
+    }
+
+    /// Reference: X through the generic controlled 2×2 kernel.
+    fn reference_cx(amps: &mut [C64], c: usize, t: usize) {
+        let x = [
+            C64::new(0.0, 0.0),
+            C64::new(1.0, 0.0),
+            C64::new(1.0, 0.0),
+            C64::new(0.0, 0.0),
+        ];
+        apply_1q(amps, t, 1 << c, &x);
+    }
+
+    fn random_state(n: usize, seed: u64) -> Vec<C64> {
+        let mut rng = crate::Rng::seed_from_u64(seed);
+        (0..1usize << n)
+            .map(|_| C64::new(rng.normal(), rng.normal()))
+            .collect()
+    }
+
+    #[test]
+    fn block_cx_matches_the_generic_kernel() {
+        // n = 17 crosses the parallel threshold and makes runs longer than
+        // CHUNK for high qubits.
+        for n in [3usize, 6, 17] {
+            let state = random_state(n, n as u64);
+            for c in 0..n {
+                for t in 0..n {
+                    if c == t || (n == 17 && (c + t) % 4 != 0 && c.max(t) < 14) {
+                        continue;
+                    }
+                    let mut fast = state.clone();
+                    let mut slow = state.clone();
+                    apply_x(&mut fast, t, 1 << c);
+                    reference_cx(&mut slow, c, t);
+                    assert_eq!(fast, slow, "n = {n}, control {c}, target {t}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn real_matrix_path_matches_the_complex_kernel() {
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        let real = [
+            C64::new(h, 0.0),
+            C64::new(h, 0.0),
+            C64::new(h, 0.0),
+            C64::new(-h, 0.0),
+        ];
+        for n in [4usize, 17] {
+            let state = random_state(n, 99);
+            for t in 0..n {
+                let mut fast = state.clone();
+                apply_1q(&mut fast, t, 0, &real);
+                // Reference: the textbook loop over amplitude pairs.
+                let mut slow = state.clone();
+                let bit = 1usize << t;
+                for i in 0..slow.len() {
+                    if i & bit == 0 {
+                        let (a, b) = (state[i], state[i | bit]);
+                        slow[i] = real[0] * a + real[1] * b;
+                        slow[i | bit] = real[2] * a + real[3] * b;
+                    }
+                }
+                for (x, y) in fast.iter().zip(&slow) {
+                    assert!((x - y).norm() < 1e-14);
+                }
+            }
+        }
     }
 
     #[test]
