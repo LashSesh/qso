@@ -63,7 +63,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p metatron-qso-rs --features cli --examples --bins
       - run: |
-          for ex in quickstart metatron_walks circuits qaoa_maxcut vqe_h2; do
+          for ex in quickstart metatron_walks metatron_atlas circuits qaoa_maxcut vqe_h2; do
             cargo run --release -p metatron-qso-rs --example "$ex"
           done
           cargo run --release -p metatron-qso-rs --example technical_note -- --quick --out /dev/null
@@ -72,6 +72,14 @@ jobs:
           ./target/release/qso search --graph metatron --marked 3
           ./target/release/qso qaoa --graph petersen --p 2
           ./target/release/qso vqe --model h2 --json
+          ./target/release/qso graph johnson:5,2 --save /tmp/j52.graphml
+          ./target/release/qso iso /tmp/j52.graphml johnson:5,2
+          ./target/release/qso reduce --graph hypercube:12
+          ./target/release/qso transfer --graph path:3
+          ./target/release/qso coined --graph hypercube:8
+          ./target/release/qso hitting --graph cycle:64
+          ./target/release/qso walk-circuit --graph cycle:16 > /tmp/walk.qasm
+          ./target/release/qso qasm /tmp/walk.qasm --shots 100
       - name: Benchmarks compile
         run: cargo bench -p metatron-qso-rs --no-run
 
@@ -131,7 +139,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # Under Miri the parallel thresholds are lowered (src/parallel.rs), so
       # the multi-threaded kernel paths run on 7-qubit registers.
-      - run: "cargo miri test -p metatron-qso-rs --lib -- quantum::kernels:: parallel::"
+      - run: "cargo miri test -p metatron-qso-rs --lib -- quantum::kernels:: quantum::plan:: parallel::"
 
   fuzz:
     name: fuzz (60 s per target)
@@ -150,7 +158,7 @@ jobs:
       - name: Fuzz the parsers and deserialisers
         working-directory: metatron-qso-rs
         run: |
-          for t in qasm pauli graph_spec json; do
+          for t in qasm pauli graph_spec graph_io json; do
             mkdir -p "fuzz/corpus/$t"
             # The prebuilt cargo-fuzz is a static musl binary and would
             # default to the musl target, which the sanitizer cannot use.

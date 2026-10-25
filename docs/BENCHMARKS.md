@@ -12,10 +12,11 @@ with `cargo bench -p metatron-qso-rs`. Numbers depend on the machine; run
 the report on yours before comparing.
 
 **Machine for the numbers below:** cloud VM, 4 vCPU Intel Xeon @ 2.10 GHz
-(AVX-512), 15 GB RAM, Linux 6.18, rustc 1.97.0, QSO 1.1.0, release profile
+(AVX-512), 15 GB RAM, Linux 6.18, rustc 1.97.0, QSO 1.3.0, release profile
 (`opt-level = 3`, thin LTO, `codegen-units = 1`), default features (rayon
-parallelism). A comparison with Qiskit Aer, Qulacs, Cirq and PennyLane on
-the same machine is in the [technical note](technical-note/) (Section 3.8).
+parallelism). A comparison with Qiskit Aer, Qulacs, Cirq, PennyLane
+Lightning and The Walrus on the same machine is
+[below](#comparison-with-other-simulators-130).
 
 The machine is a shared virtual machine: repeated runs varied by up to 2×
 for sub-millisecond workloads and by tens of percent for larger ones. The
@@ -26,46 +27,54 @@ tables show one complete run.
 
 | qubits | gates/layer | time/layer | ns per gate·amplitude |
 |---:|---:|---:|---:|
-| 10 | 29 | 14.5 µs | 0.489 |
-| 14 | 41 | 307.7 µs | 0.458 |
-| 18 | 53 | 5.16 ms | 0.371 |
-| 20 | 59 | 15.25 ms | 0.246 |
-| 22 | 65 | 56.48 ms | 0.207 |
-| 24 | 71 | 459.19 ms | 0.385 |
+| 10 | 29 | 14.4 µs | 0.485 |
+| 14 | 41 | 319.8 µs | 0.476 |
+| 16 | 47 | 546.4 µs | 0.177 |
+| 18 | 53 | 2.20 ms | 0.159 |
+| 20 | 59 | 8.72 ms | 0.141 |
+| 22 | 65 | 34.36 ms | 0.126 |
+| 24 | 71 | 210.71 ms | 0.177 |
 
 ## Cost per gate type (22 qubits, 5 passes over all qubits)
 
 | gate | time per pass | ns per gate·amplitude |
 |---|---:|---:|
-| H | 18.52 ms | 0.201 |
-| RY | 20.31 ms | 0.220 |
-| RZ | 25.92 ms | 0.281 |
-| CX | 13.78 ms | 0.149 |
+| H | 8.17 ms | 0.089 |
+| RY | 8.44 ms | 0.092 |
+| RZ | 12.07 ms | 0.131 |
+| CX | 7.83 ms | 0.085 |
 
 ## Gradients (TFIM, 10 qubits, EfficientSU2 with 4 layers = 100 parameters)
 
 | method | time per full gradient |
 |---|---:|
-| adjoint | 529.1 µs |
-| parameter shift | 27.68 ms |
-| finite differences | 23.57 ms |
+| adjoint | 465.9 µs |
+| parameter shift | 24.53 ms |
+| finite differences | 22.44 ms |
+
+## Batched evaluation (same circuit and Hamiltonian, 256 parameter vectors)
+
+| quantity | one call per vector | one batch call | speed-up |
+|---|---:|---:|---:|
+| expectation values | 26.76 ms | 8.24 ms | 3.2× |
+| values + adjoint gradients | 128.26 ms | 34.27 ms | 3.7× |
 
 ## QAOA value + gradient (p = 3, random 3-regular graphs)
 
 | nodes | time |
 |---:|---:|
-| 10 | 343.3 µs |
-| 14 | 7.59 ms |
-| 18 | 45.26 ms |
-| 20 | 173.48 ms |
+| 10 | 231.5 µs |
+| 14 | 4.61 ms |
+| 18 | 35.34 ms |
+| 20 | 128.54 ms |
 
 ## Quantum walks
 
 | case | time |
 |---|---:|
 | Metatron's Cube, P(t) (dense spectral) | 0.4 µs |
-| 100×100 torus (10 000 nodes), P(t = 5) (Krylov) | 83.77 ms |
-| automorphism group of Metatron's Cube (13!) | 2.96 ms |
+| 100×100 torus (10 000 nodes), P(t = 5) (Krylov) | 78.39 ms |
+| automorphism group of Metatron's Cube (13!) | 2.73 ms |
 
 ## Validated results (reproduced by this run)
 
@@ -81,12 +90,92 @@ tables show one complete run.
 | \|Aut\| Metatron's Cube / Fruit of Life / dodecahedron | 6227020800 / 12 / 120 | 13! / 12 / 120 |
 <!-- END REPORT -->
 
+## 1.2.0 and 1.3.0 on the same machine
+
+Medians of three runs of each version, alternating between the two builds
+(the 1.2.0 report with a 16-qubit row added):
+
+| workload | 1.2.0 | 1.3.0 | speed-up |
+|---|---:|---:|---:|
+| layer, 10 qubits | 14.9 µs | 14.4 µs | 1.0× |
+| layer, 14 qubits | 317.4 µs | 312.5 µs | 1.0× |
+| layer, 16 qubits | 2.56 ms | 546.4 µs | 4.7× |
+| layer, 18 qubits | 5.56 ms | 2.16 ms | 2.6× |
+| layer, 20 qubits | 14.74 ms | 9.37 ms | 1.6× |
+| layer, 22 qubits | 65.69 ms | 38.08 ms | 1.7× |
+| layer, 24 qubits | 476.39 ms | 210.71 ms | 2.3× |
+| H pass, 22 qubits | 19.58 ms | 8.77 ms | 2.2× |
+| RY pass, 22 qubits | 19.39 ms | 8.44 ms | 2.3× |
+| RZ pass, 22 qubits | 23.93 ms | 12.08 ms | 2.0× |
+| CX pass, 22 qubits | 13.70 ms | 7.91 ms | 1.7× |
+| adjoint gradient, 10 qubits | 531.7 µs | 473.4 µs | 1.1× |
+| parameter shift gradient, 10 qubits | 26.55 ms | 24.75 ms | 1.1× |
+| QAOA value + gradient, 10 nodes | 355.6 µs | 244.4 µs | 1.4× |
+| QAOA value + gradient, 14 nodes | 7.44 ms | 5.09 ms | 1.5× |
+| QAOA value + gradient, 18 nodes | 41.89 ms | 36.03 ms | 1.2× |
+| QAOA value + gradient, 20 nodes | 171.30 ms | 129.97 ms | 1.3× |
+| Metatron's Cube, P(t) (dense spectral) | 0.4 µs | 0.4 µs | 1.0× |
+| 100×100 torus (10 000 nodes), P(t = 5) (Krylov) | 82.81 ms | 85.12 ms | 1.0× |
+| automorphism group of Metatron's Cube (13!) | 2.88 ms | 2.81 ms | 1.0× |
+
+Release 1.3.0 applies gates on the lower 14 qubits, and diagonal gates on
+any qubit, block by block to cache-sized blocks of 2¹⁴ amplitudes, the
+blocks in parallel, and fuses runs of single-qubit gates on higher qubits
+(see [ARCHITECTURE.md](ARCHITECTURE.md)). Registers of 14 qubits or fewer
+fit into one block and run as before.
+
+## Comparison with other simulators (1.3.0)
+
+Measured with [`benchmarks/cross_framework`](../benchmarks/cross_framework/)
+on the same machine (five interleaved rounds, a fresh process per
+measurement, every framework with its default threading and warmed up for
+at least 0.25 s; medians, the other framework's time relative to QSO in
+brackets). Raw data:
+[`results-1.3.0.json`](../benchmarks/cross_framework/results-1.3.0.json).
+Versions: Qulacs 0.6.14, Qiskit Aer 0.18.0, PennyLane Lightning 0.45.0,
+Cirq 1.7.0 (built-in simulator), The Walrus 0.22.0. Final states agree to
+≤ 2.5·10⁻¹⁵, gradients to ≤ 1.4·10⁻¹⁵, permanents to 7.3·10⁻¹⁴ (relative).
+
+| workload | QSO | Qulacs | Qiskit Aer | PennyLane Lightning | Cirq |
+|---|---:|---:|---:|---:|---:|
+| one layer, 16 qubits | 0.92 ms | 0.71 ms (0.8×) | 4.50 ms (4.9×) | 3.71 ms (4.0×) | 5.63 ms (6.1×) |
+| one layer, 20 qubits | 10.2 ms | 15.5 ms (1.5×) | 41.6 ms (4.1×) | 44.0 ms (4.3×) | 37.9 ms (3.7×) |
+| one layer, 22 qubits | 49.9 ms | 81.7 ms (1.6×) | 199 ms (4.0×) | 184 ms (3.7×) | — |
+| one layer, 24 qubits | 251 ms | 642 ms (2.6×) | 836 ms (3.3×) | 2.31 s (9.2×) | — |
+| ten layers, 20 qubits | 89.6 ms | 147 ms (1.6×) | 385 ms (4.3×) | 403 ms (4.5×) | — |
+| ten layers, 22 qubits | 381 ms | 697 ms (1.8×) | 1.79 s (4.7×) | 1.71 s (4.5×) | — |
+| value + gradient, 10 qubits, 100 parameters | 0.52 ms | 1.99 ms (3.8×, backprop) | — | 19.2 ms (37×, adjoint) | — |
+
+| permanent, n × n | QSO | The Walrus |
+|---:|---:|---:|
+| 10 | 13 µs | 25 µs (2.0×) |
+| 14 | 0.26 ms | 0.48 ms (1.8×) |
+| 18 | 1.9 ms | 11.4 ms (6.0×) |
+| 20 | 8.6 ms | 47.7 ms (5.5×) |
+| 22 | 30.3 ms | 264 ms (8.7×) |
+| 24 | 178 ms | 853 ms (4.8×) |
+
+From 20 qubits on QSO is the fastest of these simulators. At 16 qubits
+Qulacs is faster in the median; QSO's 16-qubit times vary more (fastest run
+0.44 ms against Qulacs' 0.60 ms).
+
+**Warm-up matters on virtual machines.** QSO's worker threads (rayon) sleep
+as soon as they are idle, and on this VM waking them is slow, so the first
+tens of milliseconds of a burst of work run at close to single-thread
+speed: with three warm-up runs (5 ms) instead of 0.25 s, the 16-qubit layer
+took 1.57 ms against Qulacs' 0.75 ms. Qulacs' OpenMP workers spin instead;
+with `OMP_WAIT_POLICY=passive` its 16-qubit layer takes 3–4 ms on the same
+machine. Larger registers and repeated evaluations (optimisation loops) are
+not affected. The technical note (Section 3.8) has the comparison for QSO
+1.1.
+
 ## Reading the numbers
 
 * **ns per gate·amplitude** normalises a layer's time by gates × 2ⁿ.
-  Registers below 2¹⁶ amplitudes run single-threaded. The cost per
-  amplitude falls up to 22 qubits as all threads take part and rises again
-  at 24 qubits, where one state vector takes 256 MB.
+  Registers of up to 14 qubits fit into one cache block and are simulated
+  gate by gate on one thread. Larger registers are split into blocks that
+  run in parallel, and the cost per amplitude drops to 0.14–0.19 ns from
+  16 qubits on; at 24 qubits one state vector takes 256 MB.
 * **Cost per gate type**: uncontrolled real matrices (H, RY) and the
   diagonal RZ have dedicated vectorisable paths; singly controlled X swaps
   contiguous runs of amplitudes (see [ARCHITECTURE.md](ARCHITECTURE.md)).
@@ -94,9 +183,13 @@ tables show one complete run.
   100 parameters, while parameter shift and finite differences need two
   evaluations per parameter. The ratio grows linearly with the parameter
   count.
+* **Batched evaluation** runs one parameter vector per thread for
+  registers below 16 qubits, where a single evaluation cannot use all
+  threads. Run-to-run variation of the speed-up was 2.7–4.4×.
 * **QAOA** uses the fast diagonal path: the cut values of all 2ⁿ bit strings
-  are precomputed once, a cost layer is one phase multiplication and a mixer
-  layer is n single-qubit rotations.
+  are precomputed once, a cost layer multiplies by phases from a table of
+  the distinct cut values, and cost and mixer layers share one blocked pass
+  over the state.
 * **Quantum walks** on small graphs use one dense eigendecomposition, after
   which evaluating P(t) costs O(n²). Large graphs use sparse Krylov
   propagation, whose cost grows with ‖H‖·t.

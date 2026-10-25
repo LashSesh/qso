@@ -14,11 +14,19 @@ g.add_edge(3, 0)
 print(g.summary())
 
 for spec in ["metatron", "metatron:1", "fruit-of-life", "petersen", "heawood",
-             "hypercube:4", "torus:4x5", "platonic:dodecahedron",
-             "random-regular:12,3,7", "erdos-renyi:20,0.2,1"]:
+             "hypercube:4", "torus:4x5", "platonic:dodecahedron", "johnson:7,3",
+             "kneser:7,2", "hamming:3,4", "paley:13", "rook:3x4", "shrikhande",
+             "circulant:12,1,5", "random-regular:12,3,7", "erdos-renyi:20,0.2,1"]:
     h = q.Graph.from_spec(spec)
     print(f"{spec:24} {h.num_nodes:3} nodes {h.num_edges:3} edges")
 ```
+
+Each family also has a constructor: `Graph.johnson(n, k)`, `kneser(n, k)`,
+`hamming(d, q)`, `paley(q)`, `rook(m, n)`, `shrikhande()`,
+`circulant(n, jumps)` and `cayley_z2(d, generators)` (node `x` joined to
+`x XOR g`), besides the older `complete`, `cycle`, `path`, `star`, `grid`,
+`hypercube`, `platonic`, `petersen`, `heawood` and the random graphs.
+`g.cartesian_product(h)` builds products such as prisms and rook's graphs.
 
 Specifications and the Python constructors reject graphs with more than
 2²⁰ nodes or 2²² edges before building anything. Hypercubes up to dimension
@@ -45,6 +53,57 @@ assert q.Graph.fruit_of_life().automorphism_group_order() == 12      # D6
 assert q.Graph.platonic("dodecahedron").automorphism_group_order() == 120
 assert q.Graph.heawood().girth() == 6
 ```
+
+## Isomorphism and canonical forms
+
+`canonical_labelling()` renumbers the nodes so that isomorphic graphs get
+identical edge lists (`canonical_form()`); edge weights count.
+`is_isomorphic` and `isomorphism` compare two graphs. The algorithm is
+individualisation–refinement with automorphism and twin pruning, as in
+nauty. Highly symmetric graphs are fast (K₄₀₀ and stars in milliseconds,
+the 4096-node hypercube in about half a second, paths and cycles with
+thousands of nodes well under a second); graphs without symmetry cost one
+refinement per node of a colour class (random cubic graphs with 2000 nodes
+take seconds). Like every known algorithm, it is exponential on specially
+constructed hard instances.
+
+```python
+import metatron_qso as q
+
+s, r = q.Graph.shrikhande(), q.Graph.rook(4, 4)
+print(s.strongly_regular_parameters(), r.strongly_regular_parameters())  # both (16, 6, 2, 2)
+assert not s.is_isomorphic(r)                     # same spectrum, different graphs
+print(q.Graph.kneser(5, 2).isomorphism(q.Graph.petersen()))
+g = q.Graph.platonic("icosahedron")
+h = g.relabeled([11, 3, 7, 0, 9, 1, 4, 10, 2, 8, 6, 5])
+assert g.canonical_form().edges == h.canonical_form().edges
+```
+
+## Reading and writing graphs
+
+Graphs read and write **edge lists** (one `u v [weight]` per line, `#`
+comments, `# nodes N` for isolated nodes) and **GraphML** (nodes, edges and
+a `weight` key; node ids may be any strings). `Graph.from_networkx` takes a
+NetworkX graph, or anything with `nodes()` and `edges(data=True)`, without
+importing NetworkX.
+
+```python
+import metatron_qso as q
+
+g = q.Graph.petersen()
+text = g.to_edge_list()
+assert q.Graph.from_edge_list(text).is_isomorphic(g)
+assert q.Graph.from_graphml(g.to_graphml()).edges == g.edges
+
+graphml = """<graphml><key id="w" for="edge" attr.name="weight"/>
+<graph edgedefault="undirected"><node id="a"/><node id="b"/><node id="c"/>
+<edge source="a" target="b"><data key="w">2.5</data></edge>
+<edge source="b" target="c"/></graph></graphml>"""
+print(q.Graph.from_graphml(graphml).edges)        # [(0, 1, 2.5), (1, 2, 1.0)]
+```
+
+Both readers reject malformed input with a `ValueError` and enforce the size
+limits above.
 
 ## Metatron's Cube
 

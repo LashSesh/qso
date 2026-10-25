@@ -150,3 +150,69 @@ def test_generators():
 def test_invalid_graphs_raise_value_error(build):
     with pytest.raises(ValueError):
         build()
+
+
+def test_distance_regular_families():
+    assert q.Graph.johnson(5, 2).strongly_regular_parameters() == (10, 6, 3, 4)
+    assert q.Graph.paley(13).strongly_regular_parameters() == (13, 6, 2, 3)
+    assert q.Graph.shrikhande().strongly_regular_parameters() == (16, 6, 2, 2)
+    assert q.Graph.rook(4, 4).strongly_regular_parameters() == (16, 6, 2, 2)
+    assert q.Graph.hamming(3, 3).num_nodes == 27
+    assert q.Graph.kneser(5, 2).is_isomorphic(q.Graph.petersen())
+    assert q.Graph.circulant(8, [1]).is_isomorphic(q.Graph.cycle(8))
+    assert q.Graph.cayley_z2(3, [1, 2, 4]).is_isomorphic(q.Graph.hypercube(3))
+    prism = q.Graph.cycle(4).cartesian_product(q.Graph.path(2))
+    assert prism.is_isomorphic(q.Graph.hypercube(3))
+    for build in (lambda: q.Graph.paley(7), lambda: q.Graph.johnson(3, 3)):
+        with pytest.raises(ValueError):
+            build()
+
+
+def test_isomorphism_and_canonical_forms():
+    g = q.Graph.platonic("dodecahedron")
+    perm = list(np.random.default_rng(3).permutation(g.num_nodes))
+    h = g.relabeled(perm)
+    iso = g.isomorphism(h)
+    assert iso is not None
+    assert all(abs(h.adjacency_matrix()[iso[u], iso[v]] - w) == 0 for u, v, w in g.edges)
+    assert g.canonical_form().edges == h.canonical_form().edges
+    assert sorted(g.canonical_labelling()) == list(range(g.num_nodes))
+    # Cospectral but not isomorphic.
+    s, r = q.Graph.shrikhande(), q.Graph.rook(4, 4)
+    assert np.allclose(s.adjacency_spectrum(), r.adjacency_spectrum())
+    assert not s.is_isomorphic(r) and s.isomorphism(r) is None
+
+
+def test_edge_list_graphml_and_networkx_round_trips():
+    g = q.Graph.from_edges(5, [(0, 1, 2.5), (1, 2), (3, 2)])
+    text = g.to_edge_list()
+    assert "# nodes 5" in text
+    again = q.Graph.from_edge_list(text)
+    assert (again.num_nodes, again.edges) == (5, g.edges)
+    assert q.Graph.from_graphml(g.to_graphml()).edges == g.edges
+    with pytest.raises(ValueError):
+        q.Graph.from_edge_list("0 1\n1 x\n")
+    with pytest.raises(ValueError):
+        q.Graph.from_graphml("<graphml><graph><edge source='a' target='b'/></graph></graphml>")
+
+    class Duck:
+        """Minimal stand-in for a NetworkX graph."""
+
+        name = "duck"
+
+        def nodes(self):
+            return ["x", ("y", 1), 7]
+
+        def edges(self, data=False):
+            assert data
+            return [("x", ("y", 1), {"weight": 0.5}), (7, "x", {})]
+
+    d = q.Graph.from_networkx(Duck())
+    assert d.name == "duck" and d.edges == [(0, 1, 0.5), (0, 2, 1.0)]
+
+    class Repeated(Duck):
+        def nodes(self):
+            return ["x", ("y", 1), 7, "x"]
+
+    with pytest.raises(ValueError, match="twice"):
+        q.Graph.from_networkx(Repeated())

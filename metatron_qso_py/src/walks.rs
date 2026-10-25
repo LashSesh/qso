@@ -16,7 +16,7 @@ use crate::{
     real_array, square_complex,
 };
 
-fn generator(name: &str) -> PyResult<Generator> {
+pub(crate) fn generator(name: &str) -> PyResult<Generator> {
     match name.to_ascii_lowercase().as_str() {
         "laplacian" => Ok(Generator::Laplacian),
         "adjacency" => Ok(Generator::Adjacency),
@@ -26,14 +26,14 @@ fn generator(name: &str) -> PyResult<Generator> {
     }
 }
 
-fn generator_name(g: Generator) -> &'static str {
+pub(crate) fn generator_name(g: Generator) -> &'static str {
     match g {
         Generator::Laplacian => "laplacian",
         Generator::Adjacency => "adjacency",
     }
 }
 
-fn check_time(name: &str, t: f64) -> PyResult<()> {
+pub(crate) fn check_time(name: &str, t: f64) -> PyResult<()> {
     if t.is_finite() {
         Ok(())
     } else {
@@ -45,7 +45,9 @@ fn check_time(name: &str, t: f64) -> PyResult<()> {
 /// `H = γL` (`"laplacian"`) or `H = −γA` (`"adjacency"`).
 ///
 /// Graphs with up to 2048 nodes are diagonalised once; larger graphs use
-/// Krylov propagation (no limiting/average distributions or propagator).
+/// Krylov propagation, and limiting and averaged distributions through the
+/// start node's cyclic subspace (small for symmetric graphs); the dense
+/// propagator needs at most 2048 nodes.
 #[pyclass(name = "ContinuousWalk", module = "metatron_qso", frozen)]
 pub struct PyContinuousWalk {
     inner: ContinuousWalk,
@@ -101,6 +103,13 @@ impl PyContinuousWalk {
             py,
             py.detach(|| w.limiting_distribution(start)).raise()?,
         ))
+    }
+
+    /// Dimension of the smallest invariant subspace containing the start
+    /// node: the number of distinct eigenvalues the walker sees.
+    fn cyclic_dimension(&self, py: Python<'_>, start: usize) -> PyResult<usize> {
+        let w = &self.inner;
+        py.detach(|| w.cyclic_dimension(start)).raise()
     }
 
     /// Exact time average of the node probabilities over `[0, t_max]`.

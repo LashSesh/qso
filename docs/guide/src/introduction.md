@@ -3,8 +3,10 @@
 QSO is a quantum simulator written in pure Rust, with a Python package and a
 command-line tool. It simulates quantum circuits exactly, as pure states or as
 density matrices with noise, and runs variational and textbook algorithms on
-top of them. It also simulates quantum walks on arbitrary graphs and samples
-photons in linear interferometers. Its signature geometry is **Metatron's
+top of them. It also simulates continuous- and discrete-time quantum walks on
+arbitrary graphs — reduced by symmetry where possible, with state-transfer
+analysis and compilation to circuits — and samples photons in linear
+interferometers. Its signature geometry is **Metatron's
 Cube**, the complete graph K₁₃ on the 13 centres of the Fruit of Life.
 
 The rule of the project is **no claim without a test**. Every algorithm is
@@ -22,8 +24,10 @@ reports them in full.
 | [Parameters and gradients](gradients.md) | Symbolic parameters, adjoint and parameter-shift gradients |
 | [Variational algorithms](variational.md) | VQE, QAOA, variational and graph classifiers |
 | [Noise](noise.md) | Channels, noise models, density matrices, shot estimates |
-| [Graphs](graphs.md) | Graph library, specifications, symmetry groups |
+| [Graphs](graphs.md) | Graph library, specifications, symmetry groups, isomorphism, files |
 | [Quantum walks](walks.md) | Continuous-time walks, spatial search, dephasing |
+| [Symmetry and state transfer](symmetry.md) | Quotients by equitable partitions, perfect state transfer |
+| [Discrete-time walks and circuits](discrete.md) | Coined, line and Szegedy walks; walks as circuits |
 | [Boson sampling](photonics.md) | Permanents, interferometers, exact sampling |
 | [Command line](cli.md) | The `qso` tool |
 

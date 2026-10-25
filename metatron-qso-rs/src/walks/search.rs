@@ -161,42 +161,9 @@ impl SpatialSearch {
     /// Maximise the success probability over `t ∈ [0, t_max]`: grid scan
     /// with `resolution` points followed by golden-section refinement.
     pub fn optimize_time(&self, t_max: f64, resolution: usize) -> SearchResult {
-        let resolution = resolution.max(2);
-        let dt = t_max / (resolution - 1) as f64;
-        let (mut best_t, mut best_p) = (0.0, self.success_probability(0.0));
-        for k in 1..resolution {
-            let t = k as f64 * dt;
-            let p = self.success_probability(t);
-            if p > best_p {
-                best_t = t;
-                best_p = p;
-            }
-        }
-        // Golden-section search on [best_t − dt, best_t + dt].
-        let (mut a, mut b) = ((best_t - dt).max(0.0), (best_t + dt).min(t_max));
-        let g = (5f64.sqrt() - 1.0) / 2.0;
-        for _ in 0..60 {
-            let c = b - g * (b - a);
-            let d = a + g * (b - a);
-            if self.success_probability(c) > self.success_probability(d) {
-                b = d;
-            } else {
-                a = c;
-            }
-        }
-        let t = 0.5 * (a + b);
-        let p = self.success_probability(t);
-        let (time, success_probability) = if p > best_p { (t, p) } else { (best_t, best_p) };
-        SearchResult {
-            gamma: self.gamma,
-            time,
-            success_probability,
-            expected_time: if success_probability > 0.0 {
-                time / success_probability
-            } else {
-                f64::INFINITY
-            },
-        }
+        optimize_peak(self.gamma, t_max, resolution, |t| {
+            self.success_probability(t)
+        })
     }
 
     /// Scan hopping rates and return the best [`SearchResult`].
@@ -236,32 +203,153 @@ impl SpatialSearch {
         resolution: usize,
     ) -> Result<SearchResult> {
         let gc = Self::critical_gamma(graph)?;
-        let eval = |gamma: f64| -> Result<SearchResult> {
+        optimize_rate(gc, |gamma| {
             Ok(SpatialSearch::new(graph, marked, generator, gamma)?
                 .optimize_time(t_max, resolution))
+        })
+    }
+}
+
+/// Largest grid used by the peak searches (larger resolutions are capped).
+pub const MAX_RESOLUTION: usize = 1 << 24;
+
+/// Peak of `success(t)` over `t ∈ [0, t_max]`: a grid scan with `resolution`
+/// points (at most [`MAX_RESOLUTION`]), then golden-section refinement of
+/// the highest grid peaks (up to 32, all within 10⁻³ of the best). Dynamics
+/// often repeat their best value; of peaks equal to within 10⁻¹⁰ the
+/// earliest is returned. Values that are not finite (from a non-finite or
+/// overflowing `t`) are ignored; with no usable value, the result is `t = 0`.
+pub(crate) fn optimize_peak(
+    gamma: f64,
+    t_max: f64,
+    resolution: usize,
+    success: impl Fn(f64) -> f64,
+) -> SearchResult {
+    let value = |t: f64| {
+        let p = success(t);
+        if p.is_finite() { p } else { f64::NEG_INFINITY }
+    };
+    let resolution = resolution.clamp(2, MAX_RESOLUTION);
+    let t_max = if t_max.is_finite() && t_max > 0.0 {
+        t_max
+    } else {
+        0.0
+    };
+    let dt = t_max / (resolution - 1) as f64;
+    // Stream the grid, keeping the 32 highest local peaks, ranked by the
+    // vertex of the parabola through the three grid values (a better
+    // estimate of the peak height than the grid value itself).
+    const KEEP: usize = 32;
+    let mut peaks: Vec<(f64, usize, f64)> = Vec::with_capacity(KEEP + 1);
+    let (mut prev, mut cur) = (f64::NEG_INFINITY, value(0.0));
+    for k in 0..resolution {
+        let next = if k + 1 < resolution {
+            value((k + 1) as f64 * dt)
+        } else {
+            f64::NEG_INFINITY
         };
-        let grid: Vec<f64> = (0..=20).map(|k| gc * (0.5 + 0.05 * k as f64)).collect();
-        let mut best = Self::scan_gamma(graph, marked, generator, &grid, t_max, resolution)?;
-        let (mut a, mut b) = (best.gamma - 0.05 * gc, best.gamma + 0.05 * gc);
-        let phi = (5f64.sqrt() - 1.0) / 2.0;
-        for _ in 0..30 {
-            let c = b - phi * (b - a);
-            let d = a + phi * (b - a);
-            let (rc, rd) = (eval(c)?, eval(d)?);
-            if rc.success_probability > rd.success_probability {
-                b = d;
-                if rc.success_probability > best.success_probability {
-                    best = rc;
-                }
+        if cur > f64::NEG_INFINITY && cur >= prev && cur >= next {
+            let curvature = prev - 2.0 * cur + next;
+            let height = if curvature < 0.0 && curvature.is_finite() {
+                cur - (prev - next).powi(2) / (8.0 * curvature)
             } else {
-                a = c;
-                if rd.success_probability > best.success_probability {
-                    best = rd;
-                }
+                cur
+            };
+            peaks.push((height, k, cur));
+            if peaks.len() > KEEP {
+                // Drop the lowest (the latest among equals).
+                let worst = (0..peaks.len())
+                    .min_by(|&a, &b| {
+                        peaks[a]
+                            .0
+                            .total_cmp(&peaks[b].0)
+                            .then(peaks[b].1.cmp(&peaks[a].1))
+                    })
+                    .expect("non-empty");
+                peaks.swap_remove(worst);
             }
         }
-        Ok(best)
+        (prev, cur) = (cur, next);
     }
+    let grid_max = peaks.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
+    let phi = (5f64.sqrt() - 1.0) / 2.0;
+    let mut refined: Vec<(usize, f64, f64)> = peaks
+        .iter()
+        .filter(|&&(h, _, _)| h >= grid_max - 1e-3)
+        .map(|&(_, k, v)| {
+            let t_k = k as f64 * dt;
+            let (mut a, mut b) = ((t_k - dt).max(0.0), (t_k + dt).min(t_max));
+            for _ in 0..60 {
+                let c = b - phi * (b - a);
+                let d = a + phi * (b - a);
+                if value(c) > value(d) {
+                    b = d;
+                } else {
+                    a = c;
+                }
+            }
+            let t = 0.5 * (a + b);
+            let p = value(t);
+            if p > v { (k, t, p) } else { (k, t_k, v) }
+        })
+        .collect();
+    refined.sort_by_key(|r| r.0);
+    let best = refined
+        .iter()
+        .map(|r| r.2)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let (time, success_probability) = refined
+        .into_iter()
+        .find(|r| r.2 >= best - 1e-10)
+        .map_or((0.0, success(0.0)), |r| (r.1, r.2));
+    SearchResult {
+        gamma,
+        time,
+        success_probability,
+        expected_time: if success_probability > 0.0 {
+            time / success_probability
+        } else {
+            f64::INFINITY
+        },
+    }
+}
+
+/// Best hopping rate near the critical rate `gc`: scan `[gc/2, 3gc/2]` in
+/// steps of `gc/20`, then refine by golden-section search.
+pub(crate) fn optimize_rate(
+    gc: f64,
+    eval: impl Fn(f64) -> Result<SearchResult>,
+) -> Result<SearchResult> {
+    let mut best: Option<SearchResult> = None;
+    for k in 0..=20 {
+        let r = eval(gc * (0.5 + 0.05 * k as f64))?;
+        if best
+            .as_ref()
+            .is_none_or(|b| r.success_probability > b.success_probability)
+        {
+            best = Some(r);
+        }
+    }
+    let mut best = best.expect("the grid is not empty");
+    let (mut a, mut b) = (best.gamma - 0.05 * gc, best.gamma + 0.05 * gc);
+    let phi = (5f64.sqrt() - 1.0) / 2.0;
+    for _ in 0..30 {
+        let c = b - phi * (b - a);
+        let d = a + phi * (b - a);
+        let (rc, rd) = (eval(c)?, eval(d)?);
+        if rc.success_probability > rd.success_probability {
+            b = d;
+            if rc.success_probability > best.success_probability {
+                best = rc;
+            }
+        } else {
+            a = c;
+            if rd.success_probability > best.success_probability {
+                best = rd;
+            }
+        }
+    }
+    Ok(best)
 }
 
 #[cfg(test)]
@@ -347,6 +435,32 @@ mod tests {
         // K_N: γ_c = (N−1)/N².
         let k = generators::complete(13);
         assert!((SpatialSearch::critical_gamma(&k).unwrap() - 12.0 / 169.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn peak_search_is_robust() {
+        let s = SpatialSearch::new(
+            &generators::complete(9),
+            &[0],
+            Generator::Laplacian,
+            1.0 / 9.0,
+        )
+        .unwrap();
+        // Infinite or overflowing windows and absurd resolutions do not panic.
+        for (t_max, res) in [(f64::INFINITY, 10), (f64::NAN, 10), (1e308, 3), (-1.0, 10)] {
+            let r = s.optimize_time(t_max, res);
+            assert!(r.success_probability.is_finite() && r.time.is_finite());
+        }
+        let r = s.optimize_time(1.0, usize::MAX);
+        assert!(r.success_probability > 0.0);
+        // A later, higher peak beyond the first 32 near-maximal ones is found.
+        // Peaks at kπ, each higher than the one before (by about 1e-7).
+        let f = |t: f64| 1.0 - 1e-1 / (1.0 + t) - 0.1 * t.sin().powi(2);
+        let r = optimize_peak(0.0, 2000.0, 200_000, f);
+        assert!(
+            (r.time - 636.0 * std::f64::consts::PI).abs() < 1e-3,
+            "{r:?}"
+        );
     }
 
     #[test]

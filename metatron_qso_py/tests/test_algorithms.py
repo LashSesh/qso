@@ -233,3 +233,21 @@ def test_variational_classifier_learns_blobs():
 def test_invalid_algorithm_inputs_raise_value_error(call):
     with pytest.raises(ValueError):
         call()
+
+
+def test_batched_expectations_match_single_calls():
+    c = q.efficient_su2(4, 2)
+    h = q.PauliSum("Z0 Z1 + 0.5 X2 - 0.25 Y3")
+    rng = np.random.default_rng(5)
+    thetas = rng.uniform(-np.pi, np.pi, size=(9, c.num_parameters))
+    values = q.expectation_batch(c, h, thetas)
+    vals, grads = q.expectation_and_gradient_batch(c, h, thetas)
+    assert values.shape == (9,) and grads.shape == (9, c.num_parameters)
+    for k in range(9):
+        v, g = q.expectation_and_gradient(c, h, thetas[k])
+        assert vals[k] == v and np.array_equal(grads[k], g)
+        assert values[k] == pytest.approx(v, abs=1e-12)
+    with pytest.raises(ValueError):
+        q.expectation_batch(c, h, thetas[:, :-1])
+    with pytest.raises(ValueError):
+        q.expectation_batch(c, h, np.full((2, c.num_parameters), np.nan))

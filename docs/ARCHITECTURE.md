@@ -10,11 +10,14 @@ the rustdoc (`cargo doc -p metatron-qso-rs --open`).
 algorithms  │ VQE · QAOA · Grover · QFT/QPE · classifier · models│
             │ gradients (adjoint / parameter shift / FD)         │
 optimize    │ L-BFGS · Adam · GD · Nelder–Mead · SPSA            │
-walks       │ CTQW · spatial search · dephasing · classical      │
+walks       │ CTQW · quotients · transfer · coined/Szegedy ·     │
+            │ search · walk circuits · dephasing · classical     │
 backend     │ statevector / density-matrix backends, shot estimates│
-quantum     │ StateVector · Circuit · PauliSum · OpenQASM        │
+quantum     │ StateVector · Circuit · plans (fusion, blocking) · │
+            │ PauliSum · OpenQASM (+ multi-control decomposition)│
 noise       │ DensityMatrix · Kraus channels                      │
-graph       │ Graph · generators · Metatron · automorphisms      │
+graph       │ Graph · generators · Metatron · automorphisms ·    │
+            │ canonical forms · edge-list/GraphML I/O            │
 linalg      │ dense eigh/expm · CSR · Lanczos · Krylov           │
 infra       │ error · rng (xoshiro256++) · parallel (rayon)       │
             └────────────────────────────────────────────────────┘
@@ -61,9 +64,43 @@ The kernels never assume unitarity. The same code therefore applies
   conjugate applied to the column qubits (offset `n`). A one-qubit channel
   `{K_i}` becomes the 4×4 matrix `Σ K_i ⊗ K_i*` on the (row, column) bit pair.
 
-Parallelism starts at 2¹⁶ amplitudes; below that rayon's scheduling
-overhead exceeds the work of a gate (measured, see
+Parallelism inside a gate starts at 2¹⁶ amplitudes; below that rayon's
+scheduling overhead exceeds the work of a gate (measured, see
 [BENCHMARKS.md](BENCHMARKS.md)).
+
+## Execution plans (`quantum/plan.rs`)
+
+`StateVector::apply_circuit` does not apply gates one by one once the
+register exceeds 2¹⁴ amplitudes (256 KiB, a comfortable fit in a per-core L2
+cache). It first fuses runs of uncontrolled single-qubit gates on qubits
+≥ 14 into one matrix, then splits the circuit into runs of *block-local*
+operations: gates whose targets all lie below qubit 14 (their controls may
+lie anywhere — on a block, the high control bits are fixed by the block's
+index), and diagonal gates anywhere (on a block, the high qubits contribute
+a constant phase or select a branch). A run is applied block by block: each
+block of 2¹⁴ amplitudes stays in cache for all gates of the run, and the
+blocks are processed in parallel. Other gates are applied as before, with
+parallelism inside the gate. Registers of at most 2¹⁴ amplitudes are
+simulated gate by gate on one thread.
+
+Two alternatives were measured and dropped: fusing gates *inside* a block
+(the specialised real, diagonal and permutation kernels beat a fused
+complex matrix once the data is in cache), and gathering a few high qubits
+into each block (qHiPSTER-style blocking, with a greedy scheduler: not
+faster on the 4-core test machine). A random-circuit test over the whole
+gate set (every kind, unitaries on up to three targets, controls, symbolic
+angles, fusible runs) compares plans with gate-by-gate simulation, with
+the production block size on 15 and 16 qubits and with small blocks down
+to 2 amplitudes, also under Miri with 8-amplitude blocks.
+
+## Multi-controlled gates in OpenQASM (`quantum/decompose.rs`)
+
+`qelib1.inc` has at most two controls (`ccx`). Export decomposes larger
+controlled gates exactly and without ancillas (Barenco et al. 1995):
+`C^k(X)` with `k − 2` idle qubits as dirty ancillas takes `4(k − 2)`
+Toffolis (Lemma 7.2), with one idle qubit two halves (Lemma 7.3); `C^k(U)`
+becomes `C(V)·C^{k−1}(X)·C(V†)·C^{k−1}(X)·C^{k−1}(V)` with `V² = U`
+(Lemma 7.5), the target serving as idle qubit — `O(k²)` gates in all.
 
 ## Determinism
 
@@ -91,7 +128,13 @@ rotations.
 
 QAOA has its own specialised adjoint pass: the cost layer generator is the
 diagonal cut vector and the mixer generator is `Σ X_q`, both applied in
-O(n·2ⁿ).
+O(n·2ⁿ). Cost phases come from a table over the distinct cut values (at
+most 2¹⁶, always for unweighted graphs), and the cost layer and the
+rotations of the low qubits share one blocked pass.
+
+`expectation_batch` and `expectation_and_gradient_batch` evaluate many
+parameter vectors; below 16 qubits, where one simulation uses at most two
+threads, they run in parallel across the vectors.
 
 ## Krylov methods (`linalg/krylov.rs`)
 
@@ -104,6 +147,13 @@ Hamiltonians and Pauli sums on 2ⁿ amplitudes.
 * Propagation `exp(−iHt)v`: Lanczos basis per sub-step, exact exponential of
   the tridiagonal matrix, step-size control from the a-posteriori error
   estimate `β₀·β_m·|[e^{−iτT}e₁]_m|`.
+* Cyclic subspaces (`cyclic_spectrum`): real Lanczos from a start vector
+  until the next vector vanishes to rounding error, with full
+  re-orthogonalisation (a second pass only when the first removed much of
+  the vector). The subspace is the smallest invariant one containing the
+  start vector; its dimension is the number of distinct eigenvalues the
+  vector sees (21 for a node of the 2²⁰-node hypercube), and its spectral
+  decomposition gives limiting and time-averaged distributions exactly.
 
 ## Automorphism groups (`graph/automorphism.rs`)
 
@@ -119,6 +169,26 @@ basic orbit lengths (orbit–stabiliser theorem), which is exact. Test cases
 cover Kₙ, Cₙ, Pₙ, stars, grids, hypercubes, the Petersen graph, all
 Platonic solids and the Metatron family.
 
+## Canonical labelling (`graph/canonical.rs`)
+
+The search tree of individualisation–refinement (as in nauty): refine,
+individualise each vertex of the smallest non-trivial colour class, refine
+again, until the colouring is discrete. Each leaf numbers the vertices; the
+canonical form is the leaf whose relabelled edge list is smallest.
+Refinement keeps an ordered partition and splits it as in Hopcroft's
+algorithm (`O(m log n)` splitting steps); colours are class positions, so
+every step commutes with relabelling. Two leaves with equal edge lists give
+an automorphism; it fixes the common prefix of their paths, so the search
+jumps back there and prunes children in the same orbit of the automorphisms
+found so far. Twins (vertices with equal neighbourhoods apart from each
+other) are interchangeable, so only one per class is explored, and a colouring
+whose classes are all twin classes is finished directly. K₄₀₀, stars,
+complete bipartite and empty graphs need a single leaf (milliseconds); paths
+and cycles with thousands of vertices take well under a second; random cubic
+graphs with 2000 vertices take seconds. Cospectral strongly regular graphs
+(Shrikhande vs 4×4 rook's graph) are separated, and isomorphism decisions
+agree with brute force on random graphs.
+
 ## Quantum walks (`walks/`)
 
 * Dense path (n ≤ 2048): eigendecomposition of the real symmetric
@@ -127,6 +197,33 @@ Platonic solids and the Metatron family.
   into eigenspaces before computing limiting distributions; v0.1 omitted
   this and produced symmetry-violating results.
 * Sparse path (any n): CSR Hamiltonian and Krylov propagation.
+* Beyond 2048 nodes, limiting and averaged distributions use the start
+  node's cyclic subspace (see Krylov methods).
+* Quotients (`walks/quotient.rs`): for an equitable partition with
+  quotient matrix `B` (weight from a node of cell `i` into cell `j`), the
+  normalised cell states span an invariant subspace on which the adjacency
+  matrix is `A_red[i][j] = √(B_ij·B_ji)` and the Laplacian
+  `diag(d) − A_red`. The coarsest equitable partition with given singletons
+  comes from the same colour refinement as the automorphism search;
+  hypercubes, Hamming, Johnson, complete and complete multipartite graphs
+  have closed-form distance partitions, so their walks never build the
+  graph.
+* State transfer (`walks/transfer.rs`) works on the quotient in which the
+  source is a singleton: perfect transfer needs the target to be a
+  singleton too, strong cospectrality (`E_θ e_v = ±E_θ e_u`) and eigenvalue
+  differences `n_k·g` with `n_k` odd exactly where the signs differ; ratios
+  are matched to fractions with denominators up to 10⁴, and a positive
+  answer is confirmed by evaluating the amplitude.
+* Discrete-time walks (`walks/discrete.rs`) act on arcs (coined walks:
+  coin per node, flip-flop shift; Szegedy: two reflections, with marked
+  nodes made absorbing by a self-arc).
+* Walk circuits (`walks/circuits.rs`): circulant Hamiltonians are diagonal
+  in the Fourier basis (QFT, then a diagonal from its Walsh decomposition —
+  one `RZ` and a `CX` parity chain per coefficient), Cayley graphs of Z₂ⁿ
+  are sums of commuting X-strings, and product formulas rotate each edge
+  in the two-dimensional span of its end nodes (CX gates bring the two
+  basis states to differ in one qubit, then a gate controlled by all other
+  qubits rotates them).
 * Spatial search optimises the hopping rate around the Childs–Goldstone
   critical value `γ_c = (1/N) Σ 1/λ_k` (exactly 1/N on K_N) together with
   the measurement time.

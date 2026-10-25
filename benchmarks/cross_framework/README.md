@@ -30,9 +30,14 @@ ProjectQ, which the 2025 note listed, is not included: its last release
 - value and gradient of the Ising energy above;
 - permanents up to 24 × 24.
 
-Every framework runs with its default threading. Circuit construction and
-Aer's transpilation (at `optimization_level=0`, which keeps the gate list
-unchanged) are not timed. On shared machines timings fluctuate in bursts;
+Every framework runs with its default threading and is warmed up for at
+least 0.25 s (and at least one to three runs) before timing: on virtual
+machines, waking sleeping worker threads is slow, and a thread pool whose
+workers sleep as soon as they are idle (rayon, used by QSO) reaches full
+speed only after tens of milliseconds of sustained work, while OpenMP
+workers (as in Qulacs) spin and are fast at once. Circuit construction
+and Aer's transpilation (at `optimization_level=0`, which keeps the gate
+list unchanged) are not timed. On shared machines timings fluctuate in bursts;
 the interleaved rounds spread the load over all frameworks, and the minimum
 over all runs is reported next to the median.
 

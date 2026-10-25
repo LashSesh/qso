@@ -4,6 +4,113 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] — 2026-10-24
+
+Milestone 1.3 of the [roadmap](docs/ROADMAP.md), which combined the two
+milestones planned as "quantum walks: exact at scale" and "simulation
+performance". Every new feature is tested against a closed form, a
+published result or an independent computation (named below). No
+validated result of earlier releases changed.
+
+### Added
+
+- **Graph library.** Johnson, Kneser, Hamming, rook's, Paley, Shrikhande,
+  circulant and Cayley graphs of Z₂ⁿ (constructors and spec strings such as
+  `johnson:7,3`), Cartesian products and strongly regular parameters
+  (`(10, 6, 3, 4)` for J(5, 2), `(13, 6, 2, 3)` for Paley(13)).
+- **Canonical labelling and isomorphism** (`graph::canonical`,
+  `Graph::canonical_form`, `is_isomorphic`, `isomorphism`): individualisation–
+  refinement with Hopcroft-style colour refinement, automorphism and twin
+  pruning and backjumping. Agrees with brute force on 300 random graphs, is
+  invariant under relabelling and separates the cospectral Shrikhande and
+  4×4 rook's graphs; K₄₀₀ and stars need one leaf, 8000-node cycles take
+  well under a second.
+- **Graph files** (`graph::io`): edge lists and GraphML (common subset,
+  without an XML dependency), with size limits and a new fuzz target;
+  `Graph.from_networkx` in Python by duck typing, without importing NetworkX.
+- **Symmetry-reduced walks** (`walks::quotient`): `Quotient` (coarsest
+  equitable partition by colour refinement, checked user partitions, and
+  the distance partitions of hypercubes, Hamming, Johnson, complete and
+  complete multipartite graphs without building the graph), `QuotientWalk`
+  and `QuotientSearch`. Reduced and full walks agree to 1e-12; the walk on
+  the 2³⁰-node hypercube Q₃₀ runs in 31 dimensions and matches
+  C(30,k)·sin²ᵏ(γt)·cos²⁽³⁰⁻ᵏ⁾(γt).
+- **Walks beyond 2048 nodes:** limiting and time-averaged distributions and
+  mixing times through the start node's cyclic subspace
+  (`linalg::cyclic_spectrum`, `ContinuousWalk::cyclic_dimension`).
+- **State transfer** (`walks::transfer::StateTransfer`): decides perfect
+  state transfer (strong cospectrality and the eigenvalue condition,
+  confirmed numerically) and finds the best transfer in a time window.
+  Paths P₂ and P₃ have perfect transfer and P₄…P₁₂ do not (Christandl et
+  al. 2004); hypercube antipodes at γt = π/2 up to Q₃₀; the Krawtchouk
+  chain for every length.
+- **Discrete-time walks** (`walks::discrete`): `CoinedWalk` (Grover,
+  Fourier, Hadamard or custom coins, flip-flop shift; marked nodes give the
+  Shenvi–Kempe–Whaley search, checked against numpy on Q₁₀), `LineWalk`
+  (Hadamard walk: σ/t → √(1 − 1/√2), Konno) and `SzegedyWalk` with quantum
+  hitting times (n/4 on cycles; √-scaling against the classical hitting
+  times on complete graphs and cycles).
+- **Walks as circuits** (`walks::circuits`): exact circuits for circulant
+  graphs on 2ⁿ nodes (QFT, Walsh-decomposed diagonal, inverse QFT) and for
+  Cayley graphs of Z₂ⁿ, product formulas of order 1 and 2 for any graph
+  (error ∝ steps⁻ᵒʳᵈᵉʳ, checked), exact diagonal unitaries.
+- OpenQASM 2 export of **multi-controlled gates** (X, Z, single-qubit gates
+  and swaps with any number of controls) by an exact, ancilla-free
+  decomposition into singly controlled gates and Toffolis (Barenco et al.
+  1995).
+- **Batched evaluation:** `expectation_batch` and
+  `expectation_and_gradient_batch` (Rust and Python) evaluate many
+  parameter vectors in parallel; 3–4× faster than a loop at 10 qubits
+  on 4 cores.
+- CLI commands `iso`, `reduce`, `transfer`, `coined`, `hitting` and
+  `walk-circuit`; graph arguments accept edge-list and GraphML files;
+  `qso graph` reports strongly regular parameters and can save the graph.
+- Example `metatron_atlas` and tutorial 05 (symmetry, state transfer and
+  discrete walks); guide chapters on symmetry and state transfer and on
+  discrete-time walks and circuits.
+- Python: all of the above, with type stubs.
+
+### Changed
+
+- **Faster state-vector simulation** (`quantum::plan`): gates whose targets
+  lie below qubit 14, and diagonal gates anywhere, are applied block by
+  block to cache-sized blocks of 2¹⁴ amplitudes, the blocks in parallel;
+  runs of single-qubit gates on higher qubits are fused. Against 1.2.0 on
+  the same machine (medians of three alternating runs, see
+  [BENCHMARKS.md](docs/BENCHMARKS.md)), layers of H, RZ and a CX chain run
+  4.7× faster at 16 qubits and 1.6–2.6× faster at 18–24 qubits, single
+  gate types 1.7–2.3× faster at 22 qubits; 10- and 14-qubit registers are
+  unchanged. Planned and gate-by-gate simulation agree to 1e-12 on random
+  circuits over the whole gate set, with controls and symbolic angles
+  (also under Miri).
+- QAOA cost layers use a table of the distinct cut values instead of a
+  complex exponential per amplitude, and share a blocked pass with the
+  mixer: value and gradient 1.15–1.45× faster.
+- `Graph::from_weighted_edges` builds adjacency lists in O(m log m)
+  whatever the edge order (was quadratic for reversed stars);
+  `strongly_regular_parameters` counts 2-paths in O(n·k²) time and O(n)
+  memory.
+- The cross-framework comparison warms every framework up for at least
+  0.25 s: rayon workers sleep when idle and need tens of milliseconds to
+  reach full speed on virtual machines. Results for 1.3.0 (QSO fastest
+  from 20 qubits on, Qulacs 1.3× faster at 16 qubits) are in
+  [BENCHMARKS.md](docs/BENCHMARKS.md) with the raw data.
+
+### Fixed
+
+- Limiting and time-averaged distributions grouped eigenvalues closer than
+  1e-9·max(1, ‖H‖) into one eigenspace. For Hamiltonians of small norm
+  (small hopping rates) this merged distinct eigenvalues and returned
+  wrong distributions. Eigenvalues are now grouped within 1e-11 of the
+  spectral radius, with no absolute floor; results no longer depend on the
+  scale of H (checked for γ from 1e-10 to 1e10).
+- Spatial-search time optimisation refined only the best grid point and
+  could return the lower of two peaks whose heights differ by less than
+  the grid error. Every near-maximal peak is now refined, NaN values are
+  skipped, and the earliest of equal maxima is reported.
+- Lanczos breakdown detection scales with the off-diagonal entries as
+  well (it could miss breakdowns for large hopping rates).
+
 ## [1.2.0] — 2026-10-24
 
 Milestone 1.2 of the [roadmap](docs/ROADMAP.md): trust, supply chain and

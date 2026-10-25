@@ -103,8 +103,12 @@ def test_large_graph_uses_krylov_propagation():
     assert p.sum() == pytest.approx(1.0, abs=1e-9)
     small = q.ContinuousWalk(q.Graph.cycle(200)).probabilities(0, 2.0)
     assert p[:20] == pytest.approx(small[:20], abs=1e-10)
-    with pytest.raises(ValueError):
-        walk.limiting_distribution(0)
+    # Limits come from the start node's cyclic subspace: on C_n a walker
+    # sees n/2 + 1 distinct eigenvalues, and the limit is mirror-symmetric.
+    assert walk.cyclic_dimension(0) == 1051
+    limit = walk.limiting_distribution(0)
+    assert limit.sum() == pytest.approx(1.0, abs=1e-10)
+    assert np.allclose(limit[1:], limit[1:][::-1], atol=1e-12)
 
 
 @pytest.mark.parametrize(
@@ -153,3 +157,114 @@ def test_graph_specifications():
     for bad in ["cycle:2", "nonsense", "complete:0"]:
         with pytest.raises(ValueError):
             q.Graph.from_spec(bad)
+
+
+def test_quotient_walk_matches_full_walk():
+    g = q.Graph.petersen()
+    quotient = q.Quotient.with_singletons(g, 0)
+    assert list(quotient.sizes) == [1, 3, 6]
+    cell = quotient.cell_of[0]
+    reduced = q.QuotientWalk(quotient, "adjacency", 0.8)
+    full = q.ContinuousWalk(g, "adjacency", 0.8)
+    for t in (0.3, 2.0):
+        p = quotient.node_probabilities(reduced.cell_probabilities(cell, t))
+        assert np.allclose(p, full.probabilities(0, t), atol=1e-12)
+    limit = quotient.node_probabilities(reduced.limiting_distribution(cell))
+    assert np.allclose(limit, full.limiting_distribution(0), atol=1e-12)
+    assert np.allclose(np.sort(np.linalg.eigvalsh(quotient.adjacency())), [-2, 1, 3])
+
+
+def test_hypercube_of_dimension_thirty():
+    quotient = q.Quotient.hypercube(30)
+    assert quotient.num_cells == 31 and quotient.num_nodes == 2.0**30
+    walk = q.QuotientWalk(quotient)
+    t = 0.4
+    p = walk.cell_probabilities(0, t)
+    k = np.arange(31)
+    binom = np.array([math.comb(30, int(i)) for i in k], dtype=float)
+    expected = binom * np.sin(t) ** (2 * k) * np.cos(t) ** (2 * (30 - k))
+    assert np.allclose(p, expected, atol=1e-12)
+    assert walk.cell_probabilities(0, math.pi / 2)[30] == pytest.approx(1.0, abs=1e-10)
+    st = q.StateTransfer.from_quotient(quotient, 0, 30)
+    assert st.perfect_transfer_time == pytest.approx(math.pi / 2, abs=1e-9)
+    assert abs(st.amplitude(t)) == pytest.approx(math.sin(t) ** 30, abs=1e-14)
+
+
+def test_quotient_search_and_critical_gamma():
+    g = q.Graph.hypercube(8)
+    quotient = q.Quotient.hypercube(8)
+    gc = q.SpatialSearch.critical_gamma(g)
+    assert q.QuotientSearch.critical_gamma(quotient, 0) == pytest.approx(gc, abs=1e-12)
+    full = q.SpatialSearch(g, 0, "adjacency", gc)
+    reduced = q.QuotientSearch(quotient, 0, "adjacency")
+    assert reduced.gamma == pytest.approx(gc)
+    for t in (5.0, 27.5):
+        assert reduced.success_probability(t) == pytest.approx(full.success_probability(t), abs=1e-12)
+    big = q.QuotientSearch.optimize(q.Quotient.complete(10**6), 0)
+    assert big["success_probability"] == pytest.approx(1.0, abs=1e-6)
+
+
+def test_state_transfer_on_paths():
+    p3 = q.StateTransfer(q.Graph.path(3), 0, 2, "adjacency")
+    assert p3.strongly_cospectral and p3.signs == [1, -1, 1]
+    assert p3.perfect_transfer_time == pytest.approx(math.pi / math.sqrt(2))
+    p4 = q.StateTransfer(q.Graph.path(4), 0, 3, "adjacency")
+    assert p4.perfect_transfer_time is None
+    best = p4.best_transfer(50.0, 20000)
+    assert best["fidelity"] == pytest.approx(0.992356742, abs=1e-6)
+    with pytest.raises(ValueError):
+        q.StateTransfer(q.Graph.path(3), 1, 1)
+
+
+def test_coined_walks():
+    walk = q.CoinedWalk(q.Graph.hypercube(10), marked=[0])
+    result = walk.search(100)
+    assert result["steps"] == 38
+    assert result["success_probability"] == pytest.approx(0.4350064336, abs=1e-9)
+    assert result["history"].shape == (101,)
+    k = q.CoinedWalk(q.Graph.complete(7), "fourier")
+    psi = k.evolve(k.localized_state(0), 5)
+    assert np.linalg.norm(psi) == pytest.approx(1.0)
+    assert np.allclose(k.node_probabilities(psi), k.probabilities(0, 5))
+    x = np.array([[0, 1], [1, 0]])
+    assert q.CoinedWalk(q.Graph.cycle(6), x).num_arcs == 12
+    with pytest.raises(ValueError):
+        q.CoinedWalk(q.Graph.petersen(), "hadamard")
+    with pytest.raises(ValueError):
+        q.CoinedWalk(q.Graph.petersen(), "nope")
+
+
+def test_hadamard_walk_and_szegedy_hitting_time():
+    steps = 400
+    p = q.LineWalk().distribution(steps)
+    x = np.arange(-steps, steps + 1)
+    sigma = math.sqrt((p * x**2).sum() - (p * x).sum() ** 2)
+    assert sigma / steps == pytest.approx(math.sqrt(1 - 1 / math.sqrt(2)), abs=1e-3)
+    assert [q.SzegedyWalk(q.Graph.complete(n), 0).hitting_time(10 * n) for n in (16, 64)] == [3, 6]
+    assert q.SzegedyWalk(q.Graph.cycle(64), 0).hitting_time(1000) == 16
+
+
+def test_walk_circuits_reproduce_the_walk():
+    g = q.Graph.cycle(8)
+    exact = q.ContinuousWalk(g).probabilities(0, 0.9)
+    for circuit in (
+        q.circulant_walk_circuit(g, 0.9),
+        q.trotter_walk_circuit(g, 0.9, 200, order=2),
+    ):
+        state = q.simulate(circuit)
+        assert np.allclose(state.probabilities(), exact, atol=1e-5)
+    cube = q.Graph.hypercube(4)
+    state = q.simulate(q.cayley_walk_circuit(cube, 1.1, "adjacency"))
+    assert np.allclose(state.probabilities(), q.ContinuousWalk(cube, "adjacency").probabilities(0, 1.1))
+    d = q.diagonal_unitary_circuit([0.1, 0.2, -0.4, 1.0])
+    assert q.Circuit.from_qasm(d.to_qasm()).n_qubits == 2
+    with pytest.raises(ValueError):
+        q.circulant_walk_circuit(q.Graph.path(8), 1.0)
+
+
+def test_cyclic_subspace_beyond_dense_limit():
+    walk = q.ContinuousWalk(q.Graph.hypercube(12))
+    assert walk.spectrum is None
+    assert walk.cyclic_dimension(0) == 13
+    limit = walk.limiting_distribution(0)
+    assert limit.sum() == pytest.approx(1.0, abs=1e-10)

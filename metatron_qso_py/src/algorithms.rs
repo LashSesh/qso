@@ -9,7 +9,7 @@ use metatron_qso::algorithms::{Vqe, grover, models, qft};
 use metatron_qso::graph::Graph;
 use metatron_qso::optimize::{Method, Options};
 use metatron_qso::quantum::bitstring;
-use numpy::{IntoPyArray, PyArray1};
+use numpy::{IntoPyArray, PyArray1, PyArray2};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
@@ -217,6 +217,65 @@ fn expectation_and_gradient<'py>(
         .detach(|| gradients::expectation_and_gradient(c, h, &theta, init, m))
         .raise()?;
     Ok((value, real_array(py, grad)))
+}
+
+/// Values `(k,)` and gradients `(k, p)` of a batch.
+type ValuesAndGradients<'py> = (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray2<f64>>);
+
+/// Parameter vectors as the rows of a 2-D array.
+fn rows(thetas: &RealMatrixArg<'_>) -> PyResult<Vec<Vec<f64>>> {
+    let view = thetas.as_array();
+    let out: Vec<Vec<f64>> = view.rows().into_iter().map(|r| r.to_vec()).collect();
+    for row in &out {
+        check_finite("thetas", row)?;
+    }
+    Ok(out)
+}
+
+/// `⟨H⟩` for every row of `thetas` (shape `(k, num_parameters)`); below 16
+/// qubits the rows are evaluated in parallel, one per thread.
+#[pyfunction]
+#[pyo3(signature = (circuit, observable, thetas, initial_state = None))]
+fn expectation_batch<'py>(
+    py: Python<'py>,
+    circuit: &PyCircuit,
+    observable: &PyPauliSum,
+    thetas: RealMatrixArg<'_>,
+    initial_state: Option<&PyStateVector>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let thetas = rows(&thetas)?;
+    let (c, h) = (&circuit.inner, &observable.inner);
+    let init = initial_state.map(|s| &s.inner);
+    let values = py
+        .detach(|| gradients::expectation_batch(c, h, &thetas, init))
+        .raise()?;
+    Ok(real_array(py, values))
+}
+
+/// Values `(k,)` and gradients `(k, num_parameters)` for every row of
+/// `thetas`, in parallel as for `expectation_batch`.
+#[pyfunction]
+#[pyo3(signature = (circuit, observable, thetas, method = "adjoint", step = 1e-5, initial_state = None))]
+fn expectation_and_gradient_batch<'py>(
+    py: Python<'py>,
+    circuit: &PyCircuit,
+    observable: &PyPauliSum,
+    thetas: RealMatrixArg<'_>,
+    method: &str,
+    step: f64,
+    initial_state: Option<&PyStateVector>,
+) -> PyResult<ValuesAndGradients<'py>> {
+    let thetas = rows(&thetas)?;
+    let m = gradient_method(method, step)?;
+    let (c, h) = (&circuit.inner, &observable.inner);
+    let init = initial_state.map(|s| &s.inner);
+    let results = py
+        .detach(|| gradients::expectation_and_gradient_batch(c, h, &thetas, init, m))
+        .raise()?;
+    let p = c.num_parameters();
+    let values: Vec<f64> = results.iter().map(|r| r.0).collect();
+    let grads = numpy::ndarray::Array2::from_shape_fn((results.len(), p), |(k, j)| results[k].1[j]);
+    Ok((real_array(py, values), grads.into_pyarray(py)))
 }
 
 // ---------------------------------------------------------------------------
@@ -920,6 +979,8 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hardware_efficient, m)?)?;
     m.add_function(wrap_pyfunction!(qaoa_maxcut_circuit, m)?)?;
     m.add_function(wrap_pyfunction!(expectation_and_gradient, m)?)?;
+    m.add_function(wrap_pyfunction!(expectation_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(expectation_and_gradient_batch, m)?)?;
     m.add_function(wrap_pyfunction!(run_vqe, m)?)?;
     m.add_class::<PyMaxCutQaoa>()?;
     m.add_class::<PyGraphClassifier>()?;

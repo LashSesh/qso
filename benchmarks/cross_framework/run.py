@@ -40,6 +40,9 @@ PACKAGES = [
 # Worker: one configuration in a fresh process.
 
 
+WARMUP_SECONDS = 0.25
+
+
 def worker(lib: str, kind: str, n: int, reps: int, warmup: int) -> list[float]:
     if kind == "permanent":
         rng = np.random.default_rng(n)
@@ -97,8 +100,15 @@ def worker(lib: str, kind: str, n: int, reps: int, warmup: int) -> list[float]:
             run = lambda: sim.simulate(circuit, qubit_order=list(reversed(qubits)))  # noqa: E731
         else:
             raise ValueError(lib)
-    for _ in range(warmup):
+    # Warm up for a minimum time as well as a minimum count: on virtual
+    # machines, thread pools whose workers sleep when idle (rayon) reach full
+    # speed only after tens of milliseconds of sustained work, while OpenMP
+    # workers spin and are fast at once (see BENCHMARKS.md).
+    end = time.perf_counter() + WARMUP_SECONDS
+    done = 0
+    while done < warmup or time.perf_counter() < end:
         run()
+        done += 1
     times = []
     for _ in range(reps):
         t = time.perf_counter()

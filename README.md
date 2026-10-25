@@ -13,7 +13,10 @@ command-line tool.**
 
 QSO simulates quantum circuits exactly — as pure states or as density
 matrices with noise — and runs variational and textbook algorithms on top of
-them. It also simulates continuous-time quantum walks on arbitrary graphs.
+them. It also simulates continuous- and discrete-time quantum walks on
+arbitrary graphs, reduces them by symmetry to exact low-dimensional problems
+where the graph allows it (a walk on the 2³⁰-node hypercube in 31
+dimensions), decides perfect state transfer, and compiles walks to circuits.
 Its signature geometry is **Metatron's Cube**, treated with mathematical
 precision: the complete graph K₁₃ drawn on the 13 centres of the Fruit of
 Life.
@@ -50,16 +53,16 @@ or by the benchmark report you can run yourself.
 
 | Area | Contents |
 |---|---|
-| **Statevector simulator** | n-qubit pure states (up to 34 qubits) with multi-threaded kernels. Gates: H, X, Y, Z, S, S†, T, T†, √X, √X†, RX, RY, RZ, P, U, SWAP, RXX, RYY, RZZ and custom unitaries on up to 6 qubits, each with any number of control qubits. Sampling, mid-circuit measurement, reduced density matrices, entanglement entropy |
-| **Circuits** | Builder API with symbolic, differentiable parameters (`θ = a·p[i] + b`), inverse, binding, depth and gate counts. OpenQASM 2.0 export *and* import |
+| **Statevector simulator** | n-qubit pure states (up to 34 qubits) with multi-threaded kernels, gate fusion and cache blocking. Gates: H, X, Y, Z, S, S†, T, T†, √X, √X†, RX, RY, RZ, P, U, SWAP, RXX, RYY, RZZ and custom unitaries on up to 6 qubits, each with any number of control qubits. Sampling, mid-circuit measurement, reduced density matrices, entanglement entropy |
+| **Circuits** | Builder API with symbolic, differentiable parameters (`θ = a·p[i] + b`), inverse, binding, depth and gate counts. OpenQASM 2.0 export *and* import; multi-controlled gates are exported by exact, ancilla-free decomposition |
 | **Observables** | Pauli strings and sums with a parser (`"0.5*Z0 Z1 - X2"`), matrix-free expectation values and `H\|ψ⟩`, exact ground states by Lanczos |
 | **Noise** | Density-matrix simulator (up to 14 qubits) on the same kernels. Depolarising (1 and 2 qubits), amplitude damping, phase damping, bit flip, phase flip, thermal relaxation (T₁/T₂), custom Kraus channels, readout error, noise models applied after every gate |
-| **Gradients** | Adjoint differentiation (all partial derivatives for about three circuit runs), parameter-shift rules (2-term, and 4-term for controlled rotations), finite differences |
+| **Gradients** | Adjoint differentiation (all partial derivatives for about three circuit runs), parameter-shift rules (2-term, and 4-term for controlled rotations), finite differences; batched evaluation of many parameter vectors in parallel |
 | **Algorithms** | VQE with seeded parallel restarts; QAOA for weighted MaxCut (fast diagonal simulation, exact optimum by enumeration, INTERP layer-wise initialisation); Grover search with any number of marked items; QFT; phase estimation; variational classifier with data re-uploading; graph classifier with trainable QAOA-type layers |
 | **Models** | Transverse-field Ising, XXZ Heisenberg, MaxCut cost operator, H₂ / STO-3G (2 qubits, with full-CI reference) |
 | **Optimisers** | L-BFGS with strong-Wolfe line search, Adam, gradient descent with momentum, Nelder–Mead, SPSA |
-| **Graphs** | Weighted graphs; complete, cycle, path, star, bipartite, hypercube, grid/torus, Petersen and random graphs; the five Platonic solids; the Metatron's Cube / Fruit-of-Life family; **exact automorphism groups** |
-| **Quantum walks** | Continuous-time walks on any graph — exact on up to 2048 nodes, Krylov propagation beyond — with limiting and time-averaged distributions and mixing times. Childs–Goldstone spatial search with optimised hopping rate, Lindblad dephasing, classical random-walk baselines |
+| **Graphs** | Weighted graphs; complete, cycle, path, star, bipartite, hypercube, grid/torus, Petersen, Heawood, Johnson, Kneser, Hamming, rook's, Paley, Shrikhande, circulant, Cayley (Z₂ⁿ) and random graphs; the five Platonic solids; the Metatron's Cube / Fruit-of-Life family; Cartesian products; **exact automorphism groups, canonical labelling and isomorphism**; edge-list and GraphML files, NetworkX import |
+| **Quantum walks** | Continuous-time walks on any graph — exact on up to 2048 nodes, Krylov propagation and cyclic subspaces beyond — with limiting and time-averaged distributions and mixing times. **Symmetry reduction** by equitable partitions (hypercubes, Hamming and Johnson graphs of any size). Childs–Goldstone spatial search with optimised hopping rate, **perfect state transfer**, Lindblad dephasing, classical baselines. **Discrete-time walks**: coined walks (Grover, Fourier, Hadamard coins; Shenvi–Kempe–Whaley search), the Hadamard walk on the line, Szegedy walks with quantum hitting times. **Walk circuits**: exact for circulant and Cayley graphs, product formulas for any graph |
 | **Boson sampling** | Permanents (Glynn's formula, `O(n·2ⁿ)`), Haar-random interferometers, exact output probabilities for indistinguishable and distinguishable photons, exact sampling (Clifford & Clifford) |
 | **Backends** | Statevector and noisy density-matrix backends, shot-based estimation with qubit-wise-commuting measurement groups |
 | **Interfaces** | Rust library `metatron_qso`, Python package `metatron_qso` (NumPy I/O, type stubs), `qso` command-line tool with JSON output |
@@ -77,12 +80,17 @@ or by the benchmark report you can run yourself.
 | Grover, 10 qubits, 25 iterations | 0.999461 | sin²((2k+1)θ) = 0.999461 |
 | Quantum walk on Metatron's Cube, limiting P(centre) | 0.857988 | 145/169 |
 | Spatial search on Metatron's Cube, γ = 1/13, t = π√13/2 | 1.000000 | 1 |
+| Walk on the hypercube Q₃₀ (2³⁰ nodes, 31 cells), P(antipode, γt = π/2) | 1 (to 2·10⁻¹⁵) | 1, Christandl et al. 2004 |
+| Perfect state transfer between the ends of P₂, P₃ / P₄ … P₁₂ | π/2, π/√2 / none | Christandl et al. 2004 |
+| Hadamard walk on the line, σ(t)/t at t = 1000 | 0.54120 | √(1 − 1/√2) = 0.54120, Konno 2002 |
+| Szegedy quantum hitting time on cycles Cₙ, n = 16 … 128 | n/4 | √ of the classical n²/6 up to a constant, Szegedy 2004 |
+| Shrikhande vs 4 × 4 rook's graph (same spectrum) | not isomorphic, \|Aut\| 192 vs 1152 | — |
 | Automorphism group orders: Metatron's Cube / Fruit of Life / dodecahedron | 6 227 020 800 / 12 / 120 | 13! / D₆ / I_h |
 | Hong–Ou–Mandel: two photons on a 50:50 beam splitter, coincidence probability | 0 (distinguishable: 0.5) | 0, Hong, Ou & Mandel 1987 |
 | Full bunching of n photons, boson / distinguishable probability | n! for n = 1 … 6 | n! |
 | State vectors of random circuits, largest difference to Qiskit Aer, Qulacs, Cirq, PennyLane | ≤ 3 × 10⁻¹⁵ | — |
 
-The test-suite (189 Rust tests and 206 Python tests, run in CI on Linux
+The test-suite (245 Rust tests and 218 Python tests, run in CI on Linux
 (x86_64 and arm64), macOS and Windows) also checks:
 
 - every gate against an independent dense-matrix reference, and the QFT
@@ -265,6 +273,7 @@ search on Q8 for [17]: gamma 0.146868, best time 27.522674, success 0.754627 (ex
 |---|---|
 | [`quickstart`](metatron-qso-rs/examples/quickstart.rs) | The snippet above |
 | [`metatron_walks`](metatron-qso-rs/examples/metatron_walks.rs) | Symmetry groups, line lengths, coherent and dephased walks, spatial search vs. classical hitting times on Metatron's Cube and the Fruit of Life |
+| [`metatron_atlas`](metatron-qso-rs/examples/metatron_atlas.rs) | The Metatron family of 13-node graphs: symmetry, reduction from the centre, state transfer, and continuous-time, coined and Szegedy search |
 | [`qaoa_maxcut`](metatron-qso-rs/examples/qaoa_maxcut.rs) | QAOA depth 1–4 with INTERP on rings, Q₃, Petersen, random 3-regular and Fruit-of-Life graphs |
 | [`vqe_h2`](metatron-qso-rs/examples/vqe_h2.rs) | VQE for H₂ with every optimiser, shot-based and noisy energy estimates |
 | [`circuits`](metatron-qso-rs/examples/circuits.rs) | GHZ state, OpenQASM export, Grover's sine law, phase estimation |
@@ -283,9 +292,15 @@ machine-readable output; `qso <command> --help` lists all options.
 
 | Command | Purpose | Main options |
 |---|---|---|
-| `graph [SPEC]` | Structure, Laplacian spectrum, automorphism group and orbits | — |
+| `graph [SPEC]` | Structure, Laplacian spectrum, automorphism group and orbits, strongly regular parameters | `--save FILE` |
+| `iso A B` | Isomorphism test with a mapping | — |
 | `walk` | Node probabilities at time t and limiting distribution | `--graph`, `--start`, `--time`, `--gamma`, `--generator laplacian\|adjacency` |
 | `search` | Quantum-walk spatial search (rate and time optimised unless `--gamma` is given) | `--graph`, `--marked 3,7`, `--gamma`, `--generator`, `--t-max` |
+| `reduce` | Equitable partition from a start node and the reduced walk | `--graph`, `--start`, `--time` |
+| `transfer` | Perfect state transfer or the best transfer in a window | `--graph`, `--from`, `--to`, `--t-max` |
+| `coined` | Coined-walk search | `--graph`, `--marked`, `--coin`, `--steps` |
+| `hitting` | Szegedy and classical hitting times | `--graph`, `--marked` |
+| `walk-circuit` | A walk as an OpenQASM circuit | `--graph`, `--time`, `--method exact\|trotter`, `--steps`, `--order` |
 | `qaoa` | QAOA for MaxCut with exact optimum and approximation ratio | `--graph`, `--p`, `--restarts`, `--seed`, `--layerwise` |
 | `vqe` | VQE with an EfficientSU2 ansatz, compared with the exact ground energy | `--model h2\|tfim:N,J,H\|heisenberg:N,J,Δ`, `--hamiltonian "<Pauli sum>"`, `--qubits`, `--layers`, `--method`, `--restarts`, `--seed` |
 | `grover` | Grover search, simulated vs. theoretical success | `--qubits`, `--marked`, `--iterations` |
@@ -302,7 +317,13 @@ Graph specifications (also `Graph.from_spec` in Python):
 | `hypercube:D`, `petersen`, `heawood`, `bipartite:A,B` | |
 | `grid:RxC`, `torus:RxC` | Rectangular grid, periodic grid |
 | `platonic:NAME` | `tetrahedron`, `cube`, `octahedron`, `dodecahedron`, `icosahedron` |
+| `johnson:N,K`, `kneser:N,K`, `hamming:D,Q` | Distance-regular families |
+| `paley:Q`, `shrikhande`, `rook:MxN` | Strongly regular graphs |
+| `circulant:N,S1,S2,…` | Circulant graph with jumps ±Sᵢ |
 | `random-regular:N,D[,SEED]`, `erdos-renyi:N,P[,SEED]` | Random graphs |
+
+Every graph argument of the CLI also accepts a file: an edge list, or
+GraphML for `.graphml` and `.xml`.
 
 ## Performance
 
@@ -312,23 +333,27 @@ Measured with `cargo run --release --example benchmark_report` on a
 
 | Workload | Time |
 |---|---:|
-| 24-qubit layer (71 gates: H, RZ, CX chain) | 0.46 s (0.39 ns per gate·amplitude) |
-| Full gradient, 10 qubits, 100 parameters, adjoint | 0.53 ms (52× faster than parameter shift) |
-| QAOA value + gradient, 20 nodes, p = 3 | 0.17 s |
-| Quantum walk on a 100 × 100 torus (10 000 nodes), Krylov | 84 ms |
-| Automorphism group of Metatron's Cube (13!) | 3.0 ms |
-| Permanent of a 24 × 24 complex matrix | 0.14 s |
+| 16-qubit layer (47 gates: H, RZ, CX chain) | 0.55 ms (4.7× faster than 1.2.0) |
+| 24-qubit layer (71 gates) | 0.21 s (0.18 ns per gate·amplitude; 2.3× faster than 1.2.0) |
+| Full gradient, 10 qubits, 100 parameters, adjoint | 0.47 ms (53× faster than parameter shift) |
+| 256 values and gradients of that ansatz, one batch call | 34 ms (3.7× faster than a loop) |
+| QAOA value + gradient, 20 nodes, p = 3 | 0.13 s |
+| Quantum walk on a 100 × 100 torus (10 000 nodes), Krylov | 78 ms |
+| Automorphism group of Metatron's Cube (13!) | 2.7 ms |
+| Permanent of a 24 × 24 complex matrix | 0.18 s (4.8× faster than The Walrus) |
 
 Timings varied between runs on this shared VM (up to 2× for
 sub-millisecond workloads, up to 1.5× for the larger ones).
 
-On the same machine, with every framework at its default settings, QSO
-simulates 20–24-qubit circuits about as fast as Qulacs or up to 1.4× faster
-and 1.7–3.3× faster than Qiskit Aer and PennyLane Lightning; Qulacs is 2×
-faster on 16 qubits. Its adjoint gradient is the fastest of those compared,
-and its permanents are 1.1–6.5× faster than The Walrus. Method and full
-tables:
-[technical note](docs/technical-note/), Section 3.8.
+On the same machine, with every framework at its default settings and
+warmed up, QSO 1.3 simulates 20–24-qubit circuits 1.5–2.6× faster than
+Qulacs, 3.3–4.7× faster than Qiskit Aer and 3.7–9× faster than PennyLane
+Lightning; at 16 qubits Qulacs is 1.3× faster in the median. Its adjoint
+gradient is the fastest of those compared (3.8× faster than Qulacs'
+backprop), and its permanents are 1.8–8.7× faster than The Walrus. On
+virtual machines QSO's worker threads need tens of milliseconds of work to
+reach full speed, so isolated short simulations run slower. Method and
+tables: [docs/BENCHMARKS.md](docs/BENCHMARKS.md#comparison-with-other-simulators-130).
 
 ## Scope and limits
 
@@ -341,8 +366,8 @@ Know its boundaries:
 | Density-matrix register | 14 qubits | 4¹⁴ entries = 4 GiB |
 | Pauli strings | qubits 0–63 | Stored as two 64-bit masks |
 | Custom unitary gates | up to 6 target qubits | Dense kernel |
-| Exact walk analysis | up to 2048 nodes | Dense eigendecomposition. Beyond that, `evolve`/`probabilities` use Krylov; limiting distributions and spatial search need the dense path |
-| Automorphism groups | intended for up to a few hundred nodes | Exact search, worst-case exponential like every known algorithm |
+| Exact walk analysis | up to 2048 nodes, or 2048 cells of an equitable partition | Dense eigendecomposition. Beyond that, `evolve`/`probabilities` use Krylov, and limiting distributions the start node's cyclic subspace when it is small; symmetric graphs of any size reduce to their quotients |
+| Automorphism groups, canonical labelling | intended for up to a few thousand nodes | Exact search, worst-case exponential like every known algorithm |
 | OpenQASM | version 2.0, `qelib1.inc` gates | No custom `gate` definitions, classical control or `reset`; version 3 is not supported |
 
 Not included: GPU acceleration, tensor-network or stabiliser simulation,
@@ -368,8 +393,8 @@ metatron-qso-rs/            Rust library `metatron_qso` and the `qso` CLI
   src/noise/                density matrices, channels, noise models
   src/algorithms/           gradients, ansätze, models, VQE, QAOA, Grover, QFT/QPE, classifiers
   src/optimize/             L-BFGS, Adam, gradient descent, Nelder–Mead, SPSA
-  src/graph/                graphs, generators, Metatron family, automorphisms
-  src/walks/                quantum walks, spatial search, dephasing, classical walks
+  src/graph/                graphs, generators, Metatron family, automorphisms, canonical forms, file I/O
+  src/walks/                continuous- and discrete-time walks, quotients, state transfer, search, circuits
   src/linalg/               Hermitian eigensolvers, Lanczos, Krylov, sparse matrices
   src/photonics/            permanents, interferometers, boson sampling
   src/backend.rs            execution backends and shot-based estimation
@@ -377,7 +402,8 @@ metatron-qso-rs/            Rust library `metatron_qso` and the `qso` CLI
   tests/                    validation, robustness and property tests
   examples/, benches/       runnable examples, criterion benchmarks
 metatron_qso_py/            Python package (PyO3 + NumPy): src/, python/, tests/, examples/
-docs/                       audit of v0.1, 1.0 plan, roadmap, architecture, benchmarks
+docs/                       roadmap, architecture, benchmarks, audit of v0.1, 1.0 plan
+docs/guide/, docs/tutorials/ user guide (mdBook) and executed notebooks of the documentation site
 docs/technical-note/        technical note: source, data and build script
 benchmarks/cross_framework/ comparison with Qiskit Aer, Qulacs, Cirq, PennyLane, The Walrus
 docs/archive/               concept documents of v0.1 (PDF)

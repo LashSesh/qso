@@ -7,8 +7,12 @@
 //! single-qubit gates without a native controlled form are decomposed into
 //! `u1`, `u3` and `cx`. `cu3` is never emitted because the original and
 //! Qiskit's `qelib1.inc` define it differently (by a controlled phase); the
-//! exported circuits are exact under both. Uncontrolled gates are exported
-//! up to a global phase, which OpenQASM 2 cannot express. When *importing*
+//! exported circuits are exact under both. Gates with more controls than
+//! `qelib1.inc` offers (multi-controlled X, Z, single-qubit unitaries and
+//! swaps with any number of controls) are decomposed without ancillas into
+//! singly controlled gates and Toffolis, `O(k²)` gates for `k` controls
+//! (Barenco et al. 1995). Uncontrolled gates are exported up to a global
+//! phase, which OpenQASM 2 cannot express. When *importing*
 //! `cu3`, Qiskit's definition (exact controlled-U3) is assumed.
 //!
 //! Import understands the same set plus the extensions shipped with Qiskit's
@@ -26,6 +30,7 @@ use std::fmt::Write as _;
 use num_complex::Complex64 as C64;
 
 use super::circuit::{Circuit, Instruction};
+use super::decompose;
 use super::gates::{GateKind, matrix_1q};
 use crate::error::{QsoError, Result};
 
@@ -107,8 +112,75 @@ fn emit_1q_controlled(out: &mut String, m: &[C64; 4], c: usize, t: usize) {
     emit_controlled_u3(out, theta, phi, lambda, alpha, c, t);
 }
 
-fn emit_instruction(out: &mut String, inst: &Instruction, angles: &[f64]) -> Result<()> {
+/// Gates with more controls than qelib1 offers, as singly controlled gates
+/// and Toffolis (see [`decompose`](super::decompose)); `None` if the
+/// instruction is not of that kind.
+fn decompose_controls(
+    inst: &Instruction,
+    angles: &[f64],
+    n_qubits: usize,
+) -> Option<Vec<Instruction>> {
     use GateKind::*;
+    let (t, c) = (&inst.targets, &inst.controls);
+    let native = matches!((inst.kind, c.len()), (X | Z, 2));
+    if c.len() < 2 || native {
+        return None;
+    }
+    let idle: Vec<usize> = (0..n_qubits)
+        .filter(|q| !c.contains(q) && !t.contains(q))
+        .collect();
+    let mut out = Vec::new();
+    match inst.kind {
+        Swap => {
+            // CSWAP^k = CX(b→a) · C^{k+1}X(controls, a → b) · CX(b→a).
+            let (a, b) = (t[0], t[1]);
+            let cx = |out: &mut Vec<Instruction>| {
+                out.push(Instruction {
+                    kind: X,
+                    targets: vec![a],
+                    controls: vec![b],
+                    params: Vec::new(),
+                    matrix: None,
+                })
+            };
+            cx(&mut out);
+            let mut controls = c.clone();
+            controls.push(a);
+            if idle.is_empty() {
+                decompose::mcu(matrix_1q(X, &[]), &controls, b, &mut out);
+            } else {
+                decompose::mcx(&controls, b, &idle, &mut out);
+            }
+            cx(&mut out);
+        }
+        X if !idle.is_empty() => decompose::mcx(c, t[0], &idle, &mut out),
+        Unitary if t.len() == 1 => {
+            let m: [C64; 4] = inst.matrix.as_ref().expect("matrix")[..]
+                .try_into()
+                .expect("2x2");
+            decompose::mcu(m, c, t[0], &mut out);
+        }
+        kind if kind.num_targets() == Some(1) => {
+            decompose::mcu(matrix_1q(kind, angles), c, t[0], &mut out);
+        }
+        _ => return None,
+    }
+    Some(out)
+}
+
+fn emit_instruction(
+    out: &mut String,
+    inst: &Instruction,
+    angles: &[f64],
+    n_qubits: usize,
+) -> Result<()> {
+    use GateKind::*;
+    if let Some(gates) = decompose_controls(inst, angles, n_qubits) {
+        for g in &gates {
+            emit_instruction(out, g, &g.angles(&[]), n_qubits)?;
+        }
+        return Ok(());
+    }
     let t = &inst.targets;
     let c = &inst.controls;
     let unsupported = || {
@@ -253,7 +325,7 @@ pub fn to_qasm2(circuit: &Circuit, theta: &[f64], measure_all: bool) -> Result<S
         let _ = writeln!(out, "creg c[{n}];");
     }
     for inst in circuit.instructions() {
-        emit_instruction(&mut out, inst, &inst.angles(theta))?;
+        emit_instruction(&mut out, inst, &inst.angles(theta), n)?;
     }
     if measure_all {
         out.push_str("measure q -> c;\n");
@@ -818,6 +890,42 @@ mod tests {
             let mut b = psi0.clone();
             b.apply_circuit(&parsed, &[]).unwrap();
             assert!(equal_up_to_phase(&a, &b));
+        }
+    }
+
+    #[test]
+    fn multi_controlled_gates_export_exactly() {
+        let mut rng = Rng::seed_from_u64(12);
+        let m = crate::linalg::CMatrix::from_fn(2, 2, |_, _| C64::new(rng.normal(), rng.normal()));
+        let q = m.qr().q();
+        let u = vec![q[(0, 0)], q[(0, 1)], q[(1, 0)], q[(1, 1)]];
+        for n in [4usize, 5, 7] {
+            let mut c = Circuit::new(n);
+            for k in 0..n {
+                c.ry(k, 0.3 + 0.2 * k as f64).rz(k, 0.1 * k as f64);
+            }
+            let all: Vec<usize> = (0..n).collect();
+            c.mcx(&all[..n - 1], n - 1); // no idle qubit
+            c.mcx(&all[1..n - 1], 0); // one idle qubit
+            c.mcz(&all);
+            c.controlled(GateKind::RY, &[1], &[0, 2, 3], &[0.7.into()])
+                .unwrap();
+            c.controlled(GateKind::H, &[n - 1], &all[..n - 1], &[])
+                .unwrap();
+            c.unitary(u.clone(), &[2], &[3, 0, 1]).unwrap();
+            c.controlled(GateKind::Swap, &[0, n - 1], &all[1..n - 1], &[])
+                .unwrap();
+            let qasm = to_qasm2(&c, &[], false).unwrap();
+            let parsed = from_qasm2(&qasm).unwrap();
+            assert!(parsed.instructions().iter().all(|g| g.controls.len() <= 2));
+            for _ in 0..3 {
+                let psi0 = StateVector::random(n, &mut rng);
+                let mut a = psi0.clone();
+                a.apply_circuit(&c, &[]).unwrap();
+                let mut b = psi0.clone();
+                b.apply_circuit(&parsed, &[]).unwrap();
+                assert!(equal_up_to_phase(&a, &b), "n={n}");
+            }
         }
     }
 
