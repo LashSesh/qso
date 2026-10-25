@@ -57,3 +57,9 @@ path = "fuzz_targets/device.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "chemistry"
+path = "fuzz_targets/chemistry.rs"
+test = false
+doc = false
