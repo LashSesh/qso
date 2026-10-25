@@ -100,7 +100,7 @@ or by the benchmark report you can run yourself.
 | Zero-noise extrapolation (Richardson, scales 1, 3, 5), depolarised 3-qubit circuit | error ÷ 380 | — |
 | Classical shadows, single-snapshot variance of a weight-k Pauli string | 3ᵏ − ⟨P⟩² | Huang, Kueng & Preskill 2020 |
 
-The test-suite (245 Rust tests and 218 Python tests, run in CI on Linux
+The test-suite (302 Rust tests and 227 Python tests, run in CI on Linux
 (x86_64 and arm64), macOS and Windows) also checks:
 
 - every gate against an independent dense-matrix reference, and the QFT
