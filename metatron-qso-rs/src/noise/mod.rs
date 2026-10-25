@@ -18,6 +18,12 @@
 //! assert!((rho.probabilities()[1] - 0.75).abs() < 1e-12);
 //! ```
 
+pub mod device;
+pub mod trajectories;
+
+pub use device::{ChannelSpec, DeviceModel, GateRule, QubitProperties};
+pub use trajectories::TrajectorySimulator;
+
 use num_complex::Complex64 as C64;
 use serde::{Deserialize, Serialize};
 
@@ -259,9 +265,175 @@ impl Channel {
         Self::from_kraus(format!("thermal_relaxation({t1},{t2},{time})"), kraus)
     }
 
+    /// Pauli channel `ρ ↦ Σ_P p_P PρP` from the probabilities of
+    /// non-identity Pauli strings, given by labels such as `"X"` or `"ZZ"`
+    /// (the first letter acts on the first qubit of the pair). The identity
+    /// keeps the remaining probability.
+    ///
+    /// ```
+    /// use metatron_qso::noise::Channel;
+    ///
+    /// let crosstalk = Channel::pauli(&[("ZZ", 0.02), ("XI", 0.001)]).unwrap();
+    /// assert_eq!(crosstalk.n_qubits(), 2);
+    /// assert!((crosstalk.pauli_probabilities().unwrap()[15] - 0.02).abs() < 1e-15);
+    /// ```
+    pub fn pauli(probabilities: &[(&str, f64)]) -> Result<Self> {
+        let k = probabilities
+            .first()
+            .map(|(label, _)| label.len())
+            .ok_or_else(|| QsoError::invalid("probabilities", "no Pauli strings given"))?;
+        if !(1..=2).contains(&k) {
+            return Err(QsoError::invalid(
+                "probabilities",
+                "Pauli labels must have one or two letters",
+            ));
+        }
+        let mut p = vec![0.0; 1 << (2 * k)];
+        for &(label, prob) in probabilities {
+            let index = pauli_index(label, k)?;
+            if index == 0 {
+                return Err(QsoError::invalid(
+                    "probabilities",
+                    "the identity keeps the remaining probability; do not list it",
+                ));
+            }
+            check_probability("probability", prob)?;
+            if p[index] != 0.0 {
+                return Err(QsoError::invalid(
+                    "probabilities",
+                    format!("{label} is listed twice"),
+                ));
+            }
+            p[index] = prob;
+        }
+        let rest = 1.0 - p.iter().sum::<f64>();
+        if rest < -1e-12 {
+            return Err(QsoError::invalid(
+                "probabilities",
+                "probabilities sum to more than 1",
+            ));
+        }
+        p[0] = rest.max(0.0);
+        let name = probabilities
+            .iter()
+            .map(|(l, q)| format!("{}:{q}", l.to_ascii_uppercase()))
+            .collect::<Vec<_>>()
+            .join(",");
+        Self::from_pauli_probabilities(format!("pauli({name})"), &p)
+    }
+
+    /// Pauli channel from all `4^k` probabilities (index digits in base 4,
+    /// `I, X, Y, Z`, first qubit most significant).
+    fn from_pauli_probabilities(name: String, p: &[f64]) -> Result<Self> {
+        let k = if p.len() == 4 { 1 } else { 2 };
+        let kraus = p
+            .iter()
+            .enumerate()
+            .filter(|&(_, &q)| q > 0.0)
+            .map(|(index, &q)| {
+                pauli_matrix(k, index)
+                    .into_iter()
+                    .map(|z| z * q.sqrt())
+                    .collect()
+            })
+            .collect();
+        Self::from_kraus(name, kraus)
+    }
+
+    /// Unitary channel `ρ ↦ UρU†` for a 2×2 or 4×4 unitary (row-major), for
+    /// coherent errors.
+    pub fn unitary(name: impl Into<String>, matrix: Vec<C64>) -> Result<Self> {
+        if !crate::quantum::gates::is_unitary(&matrix, 1e-9) {
+            return Err(QsoError::invalid("matrix", "not unitary"));
+        }
+        Self::from_kraus(name, vec![matrix])
+    }
+
+    /// Coherent rotation `exp(−iθP/2)` about a Pauli string such as `"X"`,
+    /// `"Z"` or `"ZZ"` (a systematic over-rotation or a ZZ crosstalk
+    /// term).
+    pub fn rotation(label: &str, angle: f64) -> Result<Self> {
+        if !angle.is_finite() {
+            return Err(QsoError::invalid("angle", "must be finite"));
+        }
+        let k = label.len();
+        let index = pauli_index(label, k)?;
+        let (c, s) = ((angle / 2.0).cos(), (angle / 2.0).sin());
+        let d = 1usize << k;
+        let pm = pauli_matrix(k, index);
+        let matrix = (0..d * d)
+            .map(|i| {
+                let id = if i % (d + 1) == 0 { 1.0 } else { 0.0 };
+                C64::new(c * id, 0.0) - C64::new(0.0, s) * pm[i]
+            })
+            .collect();
+        Self::from_kraus(
+            format!("r{}({angle})", label.to_ascii_lowercase()),
+            vec![matrix],
+        )
+    }
+
+    /// Process (χ) matrix in the Pauli basis: `χ[P][Q] = Σ_i k_iP k_iQ*`
+    /// with `K_i = Σ_P k_iP P`.
+    fn chi_matrix(&self) -> Vec<C64> {
+        let k = self.n_qubits;
+        let d = 1usize << k;
+        let m = d * d;
+        let paulis: Vec<Vec<C64>> = (0..m).map(|p| pauli_matrix(k, p)).collect();
+        let mut chi = vec![ZERO; m * m];
+        for kr in &self.kraus {
+            // k_P = Tr(P K) / d (Paulis are Hermitian).
+            let coeff: Vec<C64> = paulis
+                .iter()
+                .map(|pm| {
+                    let mut t = ZERO;
+                    for r in 0..d {
+                        for cc in 0..d {
+                            t += pm[r * d + cc] * kr[cc * d + r];
+                        }
+                    }
+                    t / d as f64
+                })
+                .collect();
+            for p in 0..m {
+                for q in 0..m {
+                    chi[p * m + q] += coeff[p] * coeff[q].conj();
+                }
+            }
+        }
+        chi
+    }
+
+    /// Probabilities `p_P` (index digits in base 4, first qubit most
+    /// significant) if this is a Pauli channel `ρ ↦ Σ_P p_P PρP`, else
+    /// `None`.
+    pub fn pauli_probabilities(&self) -> Option<Vec<f64>> {
+        let chi = self.chi_matrix();
+        let m = 1usize << (2 * self.n_qubits);
+        for p in 0..m {
+            for q in 0..m {
+                if p != q && chi[p * m + q].norm() > 1e-12 {
+                    return None;
+                }
+            }
+        }
+        Some((0..m).map(|p| chi[p * m + p].re.max(0.0)).collect())
+    }
+
+    /// The Pauli-twirled channel: the Pauli channel with probabilities
+    /// `χ[P][P]`, which is what the channel becomes on average when random
+    /// Paulis are applied before it and undone after it.
+    pub fn twirled(&self) -> Channel {
+        let chi = self.chi_matrix();
+        let m = 1usize << (2 * self.n_qubits);
+        let p: Vec<f64> = (0..m).map(|p| chi[p * m + p].re.max(0.0)).collect();
+        Self::from_pauli_probabilities(format!("twirled({})", self.name), &p)
+            .expect("the diagonal of χ is a probability distribution")
+    }
+
     /// Superoperator `Σ K ⊗ K*` in the local order of the density-matrix
     /// kernels: (row bits, then column bits).
-    fn superoperator(&self) -> Vec<C64> {
+    pub(crate) fn superoperator(&self) -> Vec<C64> {
         let d = 1usize << self.n_qubits;
         let dd = d * d;
         let mut s = vec![ZERO; dd * dd];
@@ -279,6 +451,66 @@ impl Channel {
         }
         s
     }
+}
+
+/// Index of a Pauli label (`"X"`, `"ZZ"`, …) of length `k`: digits in base
+/// 4 (`I, X, Y, Z`), first letter most significant.
+pub(crate) fn pauli_index(label: &str, k: usize) -> Result<usize> {
+    if label.len() != k {
+        return Err(QsoError::invalid(
+            "label",
+            format!("Pauli labels must all have {k} letters, got '{label}'"),
+        ));
+    }
+    label.chars().try_fold(0usize, |acc, ch| {
+        let digit = match ch.to_ascii_uppercase() {
+            'I' => 0,
+            'X' => 1,
+            'Y' => 2,
+            'Z' => 3,
+            _ => {
+                return Err(QsoError::invalid(
+                    "label",
+                    format!("'{label}' is not a Pauli string"),
+                ));
+            }
+        };
+        Ok(acc * 4 + digit)
+    })
+}
+
+/// Row-major matrix of the `k`-qubit Pauli string with base-4 index
+/// `index` (first qubit = most significant local bit).
+pub(crate) fn pauli_matrix(k: usize, index: usize) -> Vec<C64> {
+    let single = |p: usize| -> [C64; 4] {
+        let i = C64::new(0.0, 1.0);
+        match p {
+            0 => [c(1.0), ZERO, ZERO, c(1.0)],
+            1 => [ZERO, c(1.0), c(1.0), ZERO],
+            2 => [ZERO, -i, i, ZERO],
+            _ => [c(1.0), ZERO, ZERO, c(-1.0)],
+        }
+    };
+    let mut m = vec![c(1.0)];
+    let mut d = 1;
+    for j in (0..k).rev() {
+        // Digits from the most significant: qubit j of the string.
+        let p = single((index >> (2 * j)) & 3);
+        let mut next = vec![ZERO; 4 * d * d];
+        let nd = 2 * d;
+        for r in 0..d {
+            for cc in 0..d {
+                for a in 0..2 {
+                    for b in 0..2 {
+                        next[(r * 2 + a) * nd + cc * 2 + b] = m[r * d + cc] * p[a * 2 + b];
+                    }
+                }
+            }
+        }
+        m = next;
+        d = nd;
+    }
+    m
 }
 
 /// Noise applied automatically after every gate of a circuit.
@@ -499,6 +731,68 @@ impl DensityMatrix {
         Ok(())
     }
 
+    /// Density matrix from vectorised data (checked sizes, trusted values).
+    pub(crate) fn from_data(n_qubits: usize, data: Vec<C64>) -> Result<Self> {
+        Self::check_size(n_qubits)?;
+        debug_assert_eq!(data.len(), 1 << (2 * n_qubits));
+        Ok(Self { n_qubits, data })
+    }
+
+    /// Apply `circuit(theta)` with the noise of `device` (gate errors,
+    /// relaxation during gates and idle times; see [`DeviceModel`]). Readout
+    /// errors apply when sampling with [`DensityMatrix::sample_with_readout`].
+    pub fn apply_device(
+        &mut self,
+        circuit: &Circuit,
+        theta: &[f64],
+        device: &DeviceModel,
+    ) -> Result<()> {
+        if circuit.n_qubits() != self.n_qubits {
+            return Err(QsoError::DimensionMismatch {
+                expected: self.n_qubits,
+                actual: circuit.n_qubits(),
+            });
+        }
+        device.validate()?;
+        let program = device::Program::compile(circuit, theta, device)?;
+        self.run_program(&program);
+        Ok(())
+    }
+
+    /// Apply a compiled program (sizes already checked).
+    pub(crate) fn run_program(&mut self, program: &device::Program) {
+        let n = self.n_qubits;
+        for op in &program.ops {
+            match op {
+                device::Op::Gates(c) => {
+                    for inst in c.instructions() {
+                        let angles = inst.angles(&[]);
+                        kernels::apply_instruction(&mut self.data, inst, &angles, false, 0);
+                        kernels::apply_instruction(&mut self.data, inst, &angles, true, n);
+                    }
+                }
+                device::Op::Channel { channel, qubits } => {
+                    self.apply_superoperator(&program.channels[*channel].superoperator, qubits);
+                }
+            }
+        }
+    }
+
+    /// Apply a 1- or 2-qubit superoperator (qubits already checked).
+    fn apply_superoperator(&mut self, s: &[C64], qubits: &[usize]) {
+        let n = self.n_qubits;
+        match qubits {
+            [q] => {
+                let m: [C64; 16] = s.try_into().expect("4x4 superoperator");
+                kernels::apply_2q(&mut self.data, *q, *q + n, 0, &m);
+            }
+            _ => {
+                let targets = [qubits[0], qubits[1], qubits[0] + n, qubits[1] + n];
+                kernels::apply_kq(&mut self.data, &targets, 0, s);
+            }
+        }
+    }
+
     /// Apply a channel to `qubits` (one or two, matching the channel).
     pub fn apply_channel(&mut self, channel: &Channel, qubits: &[usize]) -> Result<()> {
         if qubits.len() != channel.n_qubits {
@@ -521,18 +815,7 @@ impl DensityMatrix {
                 qubit: qubits[0],
             });
         }
-        let s = channel.superoperator();
-        let n = self.n_qubits;
-        match channel.n_qubits {
-            1 => {
-                let m: [C64; 16] = s[..].try_into().expect("4x4 superoperator");
-                kernels::apply_2q(&mut self.data, qubits[0], qubits[0] + n, 0, &m);
-            }
-            _ => {
-                let targets = [qubits[0], qubits[1], qubits[0] + n, qubits[1] + n];
-                kernels::apply_kq(&mut self.data, &targets, 0, &s);
-            }
-        }
+        self.apply_superoperator(&channel.superoperator(), qubits);
         Ok(())
     }
 
@@ -597,6 +880,31 @@ impl DensityMatrix {
             psi[r].conj() * self.data[i] * psi[cc]
         });
         Ok(v.re)
+    }
+
+    /// Sample `shots` measurements of all qubits with per-qubit readout
+    /// errors `(P(read 1 | 0), P(read 0 | 1))` (qubits beyond the list read
+    /// out perfectly).
+    pub fn sample_with_readout(
+        &self,
+        shots: usize,
+        readout: &[(f64, f64)],
+        rng: &mut Rng,
+    ) -> Counts {
+        let probs = self.probabilities();
+        let mut cumulative = Vec::with_capacity(probs.len());
+        let mut acc = 0.0;
+        for p in probs {
+            acc += p;
+            cumulative.push(acc);
+        }
+        let mut counts = Counts::new();
+        for _ in 0..shots {
+            let b = sample_cumulative(&cumulative, rng);
+            let b = trajectories::apply_readout(b, readout, rng);
+            *counts.entry(b).or_insert(0) += 1;
+        }
+        counts
     }
 
     /// Sample `shots` measurements of all qubits, including readout error.

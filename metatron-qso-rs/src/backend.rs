@@ -17,7 +17,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{QsoError, Result};
-use crate::noise::{DensityMatrix, MAX_DENSITY_QUBITS, NoiseModel};
+use crate::noise::{
+    DensityMatrix, DeviceModel, MAX_DENSITY_QUBITS, NoiseModel, TrajectorySimulator,
+};
 use crate::quantum::{Circuit, Counts, MAX_QUBITS, Pauli, PauliString, PauliSum, StateVector};
 use crate::rng::Rng;
 
@@ -77,6 +79,98 @@ impl Backend for DensityMatrixBackend {
         let mut rho = DensityMatrix::zero(circuit.n_qubits())?;
         rho.apply_circuit(circuit, theta, Some(&self.noise))?;
         Ok(rho.sample(shots, self.noise.readout, &mut Rng::seed_from_u64(seed)))
+    }
+}
+
+/// How a [`DeviceBackend`] simulates its device.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NoisyMethod {
+    /// Exact density matrices (up to
+    /// [`MAX_DENSITY_QUBITS`](crate::noise::MAX_DENSITY_QUBITS) qubits).
+    DensityMatrix,
+    /// Quantum trajectories (any register a state vector holds): at most
+    /// `max_trajectories` trajectories per run, the shots spread over them.
+    Trajectories { max_trajectories: usize },
+}
+
+/// A simulated device: a [`DeviceModel`] (gate errors, relaxation,
+/// per-qubit readout errors) executed with density matrices or quantum
+/// trajectories.
+#[derive(Clone, Debug)]
+pub struct DeviceBackend {
+    device: DeviceModel,
+    method: NoisyMethod,
+    name: String,
+}
+
+impl DeviceBackend {
+    /// Exact density-matrix simulation of `device`.
+    pub fn density_matrix(device: DeviceModel) -> Result<Self> {
+        Self::new(device, NoisyMethod::DensityMatrix)
+    }
+
+    /// Trajectory simulation of `device` with at most `max_trajectories`
+    /// trajectories per run (one shot each while shots do not exceed it).
+    pub fn trajectories(device: DeviceModel, max_trajectories: usize) -> Result<Self> {
+        if max_trajectories == 0 {
+            return Err(QsoError::invalid(
+                "max_trajectories",
+                "need at least one trajectory",
+            ));
+        }
+        Self::new(device, NoisyMethod::Trajectories { max_trajectories })
+    }
+
+    fn new(device: DeviceModel, method: NoisyMethod) -> Result<Self> {
+        device.validate()?;
+        let name = match method {
+            NoisyMethod::DensityMatrix => "device (density matrix)",
+            NoisyMethod::Trajectories { .. } => "device (trajectories)",
+        };
+        Ok(Self {
+            device,
+            method,
+            name: name.to_string(),
+        })
+    }
+
+    pub fn device(&self) -> &DeviceModel {
+        &self.device
+    }
+
+    pub fn method(&self) -> NoisyMethod {
+        self.method
+    }
+}
+
+impl Backend for DeviceBackend {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn max_qubits(&self) -> usize {
+        let limit = match self.method {
+            NoisyMethod::DensityMatrix => MAX_DENSITY_QUBITS,
+            NoisyMethod::Trajectories { .. } => MAX_QUBITS,
+        };
+        self.device.num_qubits.map_or(limit, |n| n.min(limit))
+    }
+
+    fn run(&self, circuit: &Circuit, theta: &[f64], shots: usize, seed: u64) -> Result<Counts> {
+        match self.method {
+            NoisyMethod::DensityMatrix => {
+                let mut rho = DensityMatrix::zero(circuit.n_qubits())?;
+                rho.apply_device(circuit, theta, &self.device)?;
+                let readout = self.device.readout_errors(circuit.n_qubits());
+                Ok(rho.sample_with_readout(shots, &readout, &mut Rng::seed_from_u64(seed)))
+            }
+            NoisyMethod::Trajectories { max_trajectories } => {
+                let runs = max_trajectories.min(shots).max(1);
+                TrajectorySimulator::new(self.device.clone(), runs, seed)?
+                    .sample(circuit, theta, shots)
+            }
+        }
     }
 }
 
@@ -218,6 +312,26 @@ mod tests {
         let again =
             estimate_expectation(&StatevectorBackend, &c, &[], &h2.hamiltonian, shots, 1).unwrap();
         assert_eq!(est, again);
+    }
+
+    #[test]
+    fn device_backends_agree() {
+        use crate::noise::{GateRule, QubitProperties};
+        let device = DeviceModel::new("d")
+            .with_default_qubit(QubitProperties::new().with_readout(0.05, 0.1))
+            .with_rule(GateRule::any().with_depolarizing(0.03));
+        let mut c = Circuit::new(2);
+        c.h(0).cx(0, 1);
+        let zz: PauliSum = "Z0 Z1".parse().unwrap();
+        let dm = DeviceBackend::density_matrix(device.clone()).unwrap();
+        let tr = DeviceBackend::trajectories(device, 100_000).unwrap();
+        assert_eq!(dm.max_qubits(), MAX_DENSITY_QUBITS);
+        assert_eq!(tr.max_qubits(), MAX_QUBITS);
+        let a = estimate_expectation(&dm, &c, &[], &zz, 50_000, 1).unwrap();
+        let b = estimate_expectation(&tr, &c, &[], &zz, 50_000, 2).unwrap();
+        // Both sample the same noisy distribution.
+        assert!((a - b).abs() < 0.03, "{a} vs {b}");
+        assert!(a < 0.8 && a > 0.5, "{a}");
     }
 
     #[test]

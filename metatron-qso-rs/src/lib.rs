@@ -50,6 +50,7 @@
 pub mod algorithms;
 pub mod backend;
 pub mod error;
+pub mod estimation;
 pub mod graph;
 pub mod linalg;
 pub mod noise;

@@ -25,7 +25,7 @@ fn insert_zero(k: usize, pos: usize) -> usize {
 
 /// Insert zero bits at all positions listed in `sorted` (ascending).
 #[inline(always)]
-fn insert_zeros(mut k: usize, sorted: &[usize]) -> usize {
+pub(crate) fn insert_zeros(mut k: usize, sorted: &[usize]) -> usize {
     for &p in sorted {
         k = insert_zero(k, p);
     }
