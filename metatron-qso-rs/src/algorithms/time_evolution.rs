@@ -46,9 +46,11 @@
 //! use metatron_qso::algorithms::models::heisenberg_xxz;
 //!
 //! let h = heisenberg_xxz(4, 1.0, 0.5, false);
-//! let c = trotter_circuit(&h, 4, 1.0, 10, 2).unwrap();
-//! let bound = trotter_error_bound(&h, 1.0, 10, 2).unwrap();
-//! assert!(bound < 0.05 && c.len() > 0);
+//! // Second order, 20 steps: ‖U − exp(−iHt)‖ ≤ 0.0229.
+//! let c = trotter_circuit(&h, 4, 1.0, 20, 2).unwrap();
+//! let bound = trotter_error_bound(&h, 1.0, 20, 2).unwrap();
+//! assert!((bound - 0.0229).abs() < 1e-4);
+//! assert_eq!(c.n_qubits(), 4);
 //! ```
 
 use crate::error::{QsoError, Result};
