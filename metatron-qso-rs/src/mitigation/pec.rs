@@ -346,8 +346,9 @@ mod tests {
             .expectation(&StateVector::from_circuit(&c, &[]).unwrap())
             .unwrap();
         let plan = Plan::new(&c, &[], &device()).unwrap();
-        // ry, rz, h: one channel each; cx: depolarising and ZZ on the pair.
-        assert_eq!(plan.noisy.len(), 3 + 2);
+        // ry, rz, h: one channel each; cx: depolarising and ZZ on the pair,
+        // merged into one channel.
+        assert_eq!(plan.noisy.len(), 3 + 1);
         let noisy = plan.evaluate(&plan.program.ops, &h, Rng::seed_from_u64(0));
         assert!((noisy - ideal).abs() > 0.01);
         assert!((pec_exact(&plan, &h) - ideal).abs() < 1e-12);
@@ -367,7 +368,7 @@ mod tests {
             "{:?} vs {ideal}",
             r.estimate
         );
-        assert_eq!(r.noisy_operations, 3 + 2 * 2);
+        assert_eq!(r.noisy_operations, 3 + 2);
         let plan = Plan::new(&c, &[], &device()).unwrap();
         assert!((r.overhead - plan.overhead()).abs() < 1e-15 && r.overhead > 1.1);
         // Trajectories for larger registers give the same (unbiased) mean.

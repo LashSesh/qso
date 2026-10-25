@@ -6,9 +6,18 @@
 //! with probability `‖K_i ψ‖²`, and renormalising. The average of `|ψ⟩⟨ψ|`
 //! over trajectories is the density matrix, so averages of observables and
 //! of measurement outcomes converge to the density-matrix results with the
-//! usual `1/√N` statistical error. Channels that are mixtures of unitaries
-//! (Pauli, depolarising and coherent errors) are sampled without looking at
-//! the state.
+//! usual `1/√N` statistical error.
+//!
+//! The simulation uses the waiting-time form of the method. Channels that
+//! are mixtures of unitaries (Pauli, depolarising, dephasing and coherent
+//! errors) are sampled up front, as their choice does not depend on the
+//! state. Other channels (amplitude damping, relaxation) apply their
+//! dominant Kraus operator without renormalising; the squared norm is then
+//! the probability that no jump has happened, and a jump happens where it
+//! falls below a random threshold. Stretches without jumps run as one
+//! fused, cache-blocked circuit, and jumps are located by bisection, so a
+//! noisy trajectory costs about one to two noiseless simulations (see
+//! `docs/BENCHMARKS.md`).
 //!
 //! Every trajectory has its own random stream derived from the seed, so
 //! results do not depend on the number of threads.
@@ -33,8 +42,10 @@ use super::{DensityMatrix, MAX_DENSITY_QUBITS};
 use crate::error::{QsoError, Result};
 use crate::estimation::Estimate;
 use crate::parallel::{map_tasks, sum_ranges};
-use crate::quantum::kernels::{apply_1q, apply_2q, insert_zeros};
-use crate::quantum::{Circuit, Counts, PauliSum, StateVector, plan};
+use std::sync::Arc;
+
+use crate::quantum::kernels::{apply_instruction, insert_zeros};
+use crate::quantum::{Circuit, Counts, GateKind, Instruction, PauliSum, StateVector, plan};
 use crate::rng::{Rng, sample_cumulative};
 
 const ZERO: C64 = C64::new(0.0, 0.0);
@@ -71,6 +82,25 @@ impl std::iter::Sum for Reduced {
 /// `ρ[a][b] = Σ ψ_a ψ_b*` over the other qubits, for one qubit or an
 /// ordered pair (first = more significant local bit). Row-major `d × d`.
 fn reduced_matrix(amps: &[C64], qubits: &[usize]) -> Reduced {
+    if let [q] = *qubits {
+        let stride = 1usize << q;
+        return sum_ranges((amps.len() / 2) as u64, |start, end| {
+            let (mut p0, mut p1, mut coh) = (0.0, 0.0, ZERO);
+            for k in start as usize..end as usize {
+                let i0 = ((k >> q) << (q + 1)) | (k & (stride - 1));
+                let (a, b) = (amps[i0], amps[i0 | stride]);
+                p0 += a.norm_sqr();
+                p1 += b.norm_sqr();
+                coh += a * b.conj();
+            }
+            let mut m = [ZERO; 16];
+            m[0] = C64::new(p0, 0.0);
+            m[1] = coh;
+            m[2] = coh.conj();
+            m[3] = C64::new(p1, 0.0);
+            Reduced(m)
+        });
+    }
     let k = qubits.len();
     let d = 1usize << k;
     let mut sorted = qubits.to_vec();
@@ -106,89 +136,271 @@ fn reduced_matrix(amps: &[C64], qubits: &[usize]) -> Reduced {
     })
 }
 
-/// Apply a `d × d` matrix to one qubit or an ordered pair.
-fn apply_local(amps: &mut [C64], qubits: &[usize], m: &[C64]) {
-    match qubits {
-        [q] => apply_1q(amps, *q, 0, &[m[0], m[1], m[2], m[3]]),
-        [a, b] => {
-            let m: [C64; 16] = m.try_into().expect("4x4 matrix");
-            apply_2q(amps, *a, *b, 0, &m);
-        }
-        _ => unreachable!("channels act on one or two qubits"),
+/// Kraus weights `‖K_i ψ‖²` (absolute, for unnormalised states).
+fn kraus_weights(amps: &[C64], gram: &[Vec<C64>], qubits: &[usize]) -> Vec<f64> {
+    let d = 1usize << qubits.len();
+    let rho = reduced_matrix(amps, qubits).0;
+    // ‖Kψ‖² = Σ_{r,c} (K†K)[r][c] ρ[c][r].
+    gram.iter()
+        .map(|g| {
+            let mut p = ZERO;
+            for r in 0..d {
+                for c in 0..d {
+                    p += g[r * d + c] * rho[c * d + r];
+                }
+            }
+            p.re.max(0.0)
+        })
+        .collect()
+}
+
+/// A local operator as a (possibly non-unitary) instruction.
+fn local_instruction(qubits: &[usize], matrix: &[C64]) -> Instruction {
+    Instruction {
+        kind: GateKind::Unitary,
+        targets: qubits.to_vec(),
+        controls: Vec::new(),
+        params: Vec::new(),
+        matrix: Some(Arc::new(matrix.to_vec())),
     }
 }
 
-/// Apply one Kraus operator of `ch`, chosen with the Born probabilities.
-pub(crate) fn apply_stochastic(
-    amps: &mut [C64],
-    ch: &CompiledChannel,
-    qubits: &[usize],
-    rng: &mut Rng,
-) {
-    match &ch.unraveling {
-        Unraveling::Mixture {
-            cumulative,
-            unitaries,
-        } => {
-            let i = sample_cumulative(cumulative, rng);
-            if let Some(u) = &unitaries[i] {
-                apply_local(amps, qubits, u);
-            }
-        }
-        Unraveling::General { kraus, gram } => {
-            let d = 1usize << qubits.len();
-            let rho = reduced_matrix(amps, qubits).0;
-            // ‖Kψ‖² = Σ_{r,c} (K†K)[r][c] ρ[c][r].
-            let probs: Vec<f64> = gram
-                .iter()
-                .map(|g| {
-                    let mut p = ZERO;
-                    for r in 0..d {
-                        for c in 0..d {
-                            p += g[r * d + c] * rho[c * d + r];
-                        }
+/// One step of a trajectory.
+#[derive(Debug)]
+enum Step {
+    /// An ideal gate (angles bound).
+    Gate(Instruction),
+    /// A unitary mixture: one instruction per component (`None`: identity);
+    /// `slot` indexes the pre-sampled choices.
+    Mixture {
+        options: Vec<Option<Instruction>>,
+        cumulative: Vec<f64>,
+        slot: usize,
+    },
+    /// A general channel: its no-jump operator as an instruction.
+    Jump {
+        no_jump: Instruction,
+        channel: usize,
+        qubits: Vec<usize>,
+    },
+}
+
+/// A compiled program prepared for trajectories (shared by all of them).
+///
+/// Trajectories use the waiting-time form of the Monte-Carlo wave-function
+/// method. Unitary mixtures are sampled up front, as they do not depend on
+/// the state. General channels apply their dominant ("no-jump") Kraus
+/// operator without renormalising, so the squared norm of the state is the
+/// probability that no jump has happened yet; a jump happens where it
+/// falls below a uniform random threshold. Runs of steps without a jump
+/// therefore execute as one blocked, fused circuit, and a jump is located
+/// by bisection.
+#[derive(Debug)]
+pub(crate) struct Skeleton<'p> {
+    n_qubits: usize,
+    steps: Vec<Step>,
+    channels: &'p [CompiledChannel],
+}
+
+/// Steps simulated one at a time when locating a jump.
+const STEPWISE: usize = 8;
+
+impl<'p> Skeleton<'p> {
+    pub(crate) fn new(n_qubits: usize, ops: &[Op], channels: &'p [CompiledChannel]) -> Self {
+        let mut steps = Vec::new();
+        let mut slot = 0;
+        for op in ops {
+            match op {
+                Op::Gates(c) => steps.extend(c.instructions().iter().cloned().map(Step::Gate)),
+                Op::Channel { channel, qubits } => match &channels[*channel].unraveling {
+                    Unraveling::Mixture {
+                        cumulative,
+                        unitaries,
+                    } => {
+                        steps.push(Step::Mixture {
+                            options: unitaries
+                                .iter()
+                                .map(|u| u.as_ref().map(|u| local_instruction(qubits, u)))
+                                .collect(),
+                            cumulative: cumulative.clone(),
+                            slot,
+                        });
+                        slot += 1;
                     }
-                    p.re.max(0.0)
-                })
-                .collect();
-            let mut cumulative = Vec::with_capacity(probs.len());
-            let mut acc = 0.0;
-            for p in &probs {
-                acc += p;
-                cumulative.push(acc);
+                    Unraveling::General { kraus, no_jump, .. } => steps.push(Step::Jump {
+                        no_jump: local_instruction(qubits, &kraus[*no_jump]),
+                        channel: *channel,
+                        qubits: qubits.clone(),
+                    }),
+                },
             }
-            let i = sample_cumulative(&cumulative, rng);
-            let scale = 1.0 / probs[i].sqrt();
-            let m: Vec<C64> = kraus[i].iter().map(|z| z * scale).collect();
-            apply_local(amps, qubits, &m);
         }
+        Self {
+            n_qubits,
+            steps,
+            channels,
+        }
+    }
+
+    /// Apply steps `a..b` without jumps as one blocked circuit.
+    fn apply_block(&self, amps: &mut [C64], a: usize, b: usize, choices: &[usize]) {
+        let mut c = Circuit::new(self.n_qubits);
+        for step in &self.steps[a..b] {
+            match step {
+                Step::Gate(inst) => c.push_trusted(inst.clone()),
+                Step::Mixture { options, slot, .. } => {
+                    if let Some(inst) = &options[choices[*slot]] {
+                        c.push_trusted(inst.clone());
+                    }
+                }
+                Step::Jump { no_jump, .. } => c.push_trusted(no_jump.clone()),
+            }
+        }
+        if !c.is_empty() {
+            plan::run(amps, &c, &[]);
+        }
+    }
+
+    /// The general channel of a jump step.
+    fn general(&self, channel: usize) -> (&[Vec<C64>], &[Vec<C64>], usize) {
+        match &self.channels[channel].unraveling {
+            Unraveling::General {
+                kraus,
+                gram,
+                no_jump,
+            } => (kraus, gram, *no_jump),
+            Unraveling::Mixture { .. } => unreachable!("jump steps are general channels"),
+        }
+    }
+
+    /// From `state` at step `a` (squared norm at least `threshold`, and below
+    /// it after step `b`), find the jump: returns its step with `state` just
+    /// before it, or `None` (rounding) with `state` after step `b`.
+    fn locate(
+        &self,
+        state: &mut StateVector,
+        mut a: usize,
+        mut b: usize,
+        threshold: f64,
+        choices: &[usize],
+    ) -> Option<usize> {
+        while b - a > STEPWISE {
+            let mid = a + (b - a) / 2;
+            let checkpoint = state.clone();
+            self.apply_block(state.amplitudes_mut(), a, mid, choices);
+            if state.norm().powi(2) >= threshold {
+                a = mid;
+            } else {
+                *state = checkpoint;
+                b = mid;
+            }
+        }
+        for j in a..b {
+            if let Step::Jump {
+                no_jump,
+                channel,
+                qubits,
+            } = &self.steps[j]
+            {
+                let (_, gram, k0) = self.general(*channel);
+                let stay = kraus_weights(state.amplitudes(), &gram[k0..=k0], qubits)[0];
+                if stay < threshold {
+                    return Some(j);
+                }
+                apply_instruction(state.amplitudes_mut(), no_jump, &[], false, 0);
+            } else {
+                self.apply_block(state.amplitudes_mut(), j, j + 1, choices);
+            }
+        }
+        None
+    }
+
+    /// Apply the jump of step `j`: one of the operators other than the
+    /// no-jump one, chosen with the Born weights; the state is normalised.
+    fn jump(&self, state: &mut StateVector, j: usize, rng: &mut Rng) {
+        let Step::Jump {
+            channel, qubits, ..
+        } = &self.steps[j]
+        else {
+            unreachable!("jumps happen at jump steps")
+        };
+        let (kraus, gram, no_jump) = self.general(*channel);
+        let weights = kraus_weights(state.amplitudes(), gram, qubits);
+        let mut cumulative = Vec::with_capacity(weights.len());
+        let mut acc = 0.0;
+        for (i, w) in weights.iter().enumerate() {
+            if i != no_jump {
+                acc += w;
+            }
+            cumulative.push(acc);
+        }
+        // Without weight on the jumps (only through rounding) keep the
+        // no-jump branch.
+        let i = if acc > 0.0 {
+            sample_cumulative(&cumulative, rng)
+        } else {
+            no_jump
+        };
+        let scale = 1.0 / weights[i].sqrt();
+        let m: Vec<C64> = kraus[i].iter().map(|z| z * scale).collect();
+        apply_instruction(
+            state.amplitudes_mut(),
+            &local_instruction(qubits, &m),
+            &[],
+            false,
+            0,
+        );
+    }
+
+    /// Run one trajectory with the random stream `rng`; returns the
+    /// normalised final state and the stream.
+    pub(crate) fn run(&self, mut rng: Rng) -> (StateVector, Rng) {
+        let choices: Vec<usize> = self
+            .steps
+            .iter()
+            .filter_map(|s| match s {
+                Step::Mixture { cumulative, .. } => Some(sample_cumulative(cumulative, &mut rng)),
+                _ => None,
+            })
+            .collect();
+        let mut state = StateVector::zero(self.n_qubits);
+        let end = self.steps.len();
+        let mut start = 0;
+        // Threshold in (0, 1] for the squared norm.
+        let mut threshold = 1.0 - rng.uniform();
+        while start < end {
+            let checkpoint = state.clone();
+            self.apply_block(state.amplitudes_mut(), start, end, &choices);
+            if state.norm().powi(2) >= threshold {
+                break;
+            }
+            state = checkpoint;
+            match self.locate(&mut state, start, end, threshold, &choices) {
+                Some(j) => {
+                    self.jump(&mut state, j, &mut rng);
+                    threshold = 1.0 - rng.uniform();
+                    start = j + 1;
+                }
+                None => break,
+            }
+        }
+        let norm = state.norm();
+        for z in state.amplitudes_mut() {
+            *z /= norm;
+        }
+        (state, rng)
     }
 }
 
-/// Run one trajectory of `program`; returns the final state and the
-/// trajectory's random stream (for sampling from it).
-pub(crate) fn run_trajectory(program: &Program, rng: Rng) -> (StateVector, Rng) {
-    run_ops(program.n_qubits, &program.ops, &program.channels, rng)
-}
-
-/// Run compiled operations on `|0…0⟩` as one trajectory.
+/// Run compiled operations on `|0…0⟩` as one trajectory; returns the final
+/// state and the trajectory's random stream.
 pub(crate) fn run_ops(
     n_qubits: usize,
     ops: &[Op],
     channels: &[CompiledChannel],
-    mut rng: Rng,
+    rng: Rng,
 ) -> (StateVector, Rng) {
-    let mut state = StateVector::zero(n_qubits);
-    let amps = state.amplitudes_mut();
-    for op in ops {
-        match op {
-            Op::Gates(c) => plan::run(amps, c, &[]),
-            Op::Channel { channel, qubits } => {
-                apply_stochastic(amps, &channels[*channel], qubits, &mut rng)
-            }
-        }
-    }
-    (state, rng)
+    Skeleton::new(n_qubits, ops, channels).run(rng)
 }
 
 /// Flip measured bits with the per-qubit readout errors.
@@ -249,8 +461,9 @@ impl TrajectorySimulator {
         f: impl Fn(usize, StateVector, Rng) -> T + Sync + Send,
     ) -> Vec<T> {
         let base = Rng::seed_from_u64(self.seed);
+        let skeleton = Skeleton::new(program.n_qubits, &program.ops, &program.channels);
         let one = |k: usize| {
-            let (state, rng) = run_trajectory(program, base.fork(k as u64));
+            let (state, rng) = skeleton.run(base.fork(k as u64));
             f(k, state, rng)
         };
         if program.n_qubits >= SEQUENTIAL_QUBITS {
@@ -343,11 +556,10 @@ impl TrajectorySimulator {
         let dim = 1usize << n;
         let mut data = vec![ZERO; dim * dim];
         let base = Rng::seed_from_u64(self.seed);
+        let skeleton = Skeleton::new(n, &program.ops, &program.channels);
         for start in (0..self.trajectories).step_by(BATCH) {
             let count = BATCH.min(self.trajectories - start);
-            let states = map_tasks(count, |j| {
-                run_trajectory(&program, base.fork((start + j) as u64)).0
-            });
+            let states = map_tasks(count, |j| skeleton.run(base.fork((start + j) as u64)).0);
             for state in states {
                 let psi = state.amplitudes();
                 for c in 0..dim {
@@ -374,7 +586,8 @@ impl TrajectorySimulator {
     ) -> Result<StateVector> {
         let program = self.program(circuit, theta)?;
         let base = Rng::seed_from_u64(self.seed);
-        Ok(run_trajectory(&program, base.fork(k as u64)).0)
+        let skeleton = Skeleton::new(program.n_qubits, &program.ops, &program.channels);
+        Ok(skeleton.run(base.fork(k as u64)).0)
     }
 }
 
@@ -492,6 +705,41 @@ mod tests {
             let (stat, df) = chi_square(&counts, &wrong, shots);
             assert!(stat > chi_square_quantile(df, 0.999), "n={n}: {stat:.1}");
         }
+    }
+
+    #[test]
+    fn many_jumps_per_trajectory() {
+        // Strong relaxation and damping: several jumps per trajectory, so
+        // the bisection that locates them is exercised throughout.
+        let dev = DeviceModel::new("strong")
+            .with_default_qubit(QubitProperties::new().with_t1_t2(4.0, 3.0))
+            .with_rule(
+                GateRule::any()
+                    .with_duration(0.5)
+                    .with_channel(ChannelSpec::AmplitudeDamping(0.08))
+                    .with_channel(ChannelSpec::Rotation {
+                        pauli: "X".into(),
+                        angle: 0.1,
+                    }),
+            );
+        let n = 4;
+        let c = layered(n, 6);
+        let mut rho = DensityMatrix::zero(n).unwrap();
+        rho.apply_device(&c, &[], &dev).unwrap();
+        let expected = noisy_distribution(&rho, &[]);
+        let shots = 20_000;
+        let sim = TrajectorySimulator::new(dev, shots, 21).unwrap();
+        let counts = sim.sample(&c, &[], shots).unwrap();
+        let (stat, df) = chi_square(&counts, &expected, shots);
+        assert!(
+            stat < chi_square_quantile(df, 0.999),
+            "χ² = {stat:.1} with {df} df"
+        );
+        assert!(
+            rho.purity() < 0.5,
+            "the noise is strong: purity {}",
+            rho.purity()
+        );
     }
 
     #[test]

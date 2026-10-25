@@ -453,10 +453,12 @@ pub(crate) enum Unraveling {
         unitaries: Vec<Option<Vec<C64>>>,
     },
     /// General operators: the probabilities depend on the state through
-    /// `K†K`.
+    /// `K†K`. `no_jump` is the operator with the largest average weight
+    /// `Tr(K†K)`, applied without a jump in the waiting-time method.
     General {
         kraus: Vec<Vec<C64>>,
         gram: Vec<Vec<C64>>,
+        no_jump: usize,
     },
 }
 
@@ -523,9 +525,14 @@ impl CompiledChannel {
                 unitaries,
             }
         } else {
+            let weight = |g: &[C64]| (0..d).map(|i| g[i * (d + 1)].re).sum::<f64>();
+            let no_jump = (0..grams.len())
+                .max_by(|&a, &b| weight(&grams[a]).total_cmp(&weight(&grams[b])))
+                .expect("at least one Kraus operator");
             Unraveling::General {
                 kraus: channel.kraus_operators().to_vec(),
                 gram: grams,
+                no_jump,
             }
         };
         Self {
@@ -584,8 +591,37 @@ impl Compiler<'_> {
         Ok(i)
     }
 
-    fn push_channel(&mut self, channel: usize, qubits: Vec<usize>) {
+    /// Append a channel; a channel directly after another one on the same
+    /// qubits is merged with it into one (fewer passes over the state).
+    fn push_channel(&mut self, channel: usize, qubits: Vec<usize>) -> Result<()> {
+        let mixture = |ch: &CompiledChannel| matches!(ch.unraveling, Unraveling::Mixture { .. });
+        // Only channels of one kind are merged: unitary mixtures stay
+        // mixtures (sampled without looking at the state), general channels
+        // keep a dominant no-jump operator.
+        if let Some(Op::Channel {
+            channel: last,
+            qubits: last_qubits,
+        }) = self.program.ops.last()
+            && *last_qubits == qubits
+            && mixture(&self.program.channels[*last]) == mixture(&self.program.channels[channel])
+        {
+            let (first, then) = (*last, channel);
+            let key = format!("compose:{first}:{then}");
+            let composed = match self.cache.get(&key) {
+                Some(_) => None,
+                None => {
+                    let a = &self.program.channels[first].channel;
+                    Some(a.compose(&self.program.channels[then].channel)?)
+                }
+            };
+            let merged = self.add_channel(key, || Ok(composed.expect("not cached")))?;
+            if let Some(Op::Channel { channel, .. }) = self.program.ops.last_mut() {
+                *channel = merged;
+            }
+            return Ok(());
+        }
         self.program.ops.push(Op::Channel { channel, qubits });
+        Ok(())
     }
 
     fn push_gate(&mut self, inst: Instruction) {
@@ -608,9 +644,22 @@ impl Compiler<'_> {
         let Some((t1, t2)) = self.device.qubit(q).relaxation() else {
             return Ok(());
         };
-        let key = format!("relax:{}:{}:{}", t1.to_bits(), t2.to_bits(), time.to_bits());
-        let i = self.add_channel(key, || Channel::thermal_relaxation(t1, t2, time))?;
-        self.push_channel(i, vec![q]);
+        // Thermal relaxation as amplitude damping followed by a phase flip
+        // (the same channel): the damping has a diagonal no-jump operator,
+        // and the phase flip is a unitary mixture.
+        let gamma = 1.0 - (-time / t1).exp();
+        let rate = (1.0 / t2 - 0.5 / t1).max(0.0);
+        let flip = 0.5 * (1.0 - (-time * rate).exp());
+        if gamma > 0.0 {
+            let key = format!("damp:{}", gamma.to_bits());
+            let i = self.add_channel(key, || Channel::amplitude_damping(gamma))?;
+            self.push_channel(i, vec![q])?;
+        }
+        if flip > 0.0 {
+            let key = format!("dephase:{}", flip.to_bits());
+            let i = self.add_channel(key, || Channel::phase_flip(flip))?;
+            self.push_channel(i, vec![q])?;
+        }
         Ok(())
     }
 
@@ -634,7 +683,7 @@ impl Compiler<'_> {
         match self.program.channels[i].channel.n_qubits() {
             1 => {
                 for &q in qubits {
-                    self.push_channel(i, vec![q]);
+                    self.push_channel(i, vec![q])?;
                 }
             }
             _ => {
@@ -648,7 +697,7 @@ impl Compiler<'_> {
                     ));
                 }
                 for pair in qubits.windows(2) {
-                    self.push_channel(i, pair.to_vec());
+                    self.push_channel(i, pair.to_vec())?;
                 }
             }
         }
@@ -1047,6 +1096,12 @@ mod tests {
             Unraveling::General { .. } => panic!("depolarising is a unitary mixture"),
         }
         let ad = CompiledChannel::new(Channel::amplitude_damping(0.1).unwrap());
-        assert!(matches!(ad.unraveling, Unraveling::General { .. }));
+        match &ad.unraveling {
+            Unraveling::General { no_jump, kraus, .. } => {
+                // The no-jump operator diag(1, √(1−γ)) carries most weight.
+                assert!((kraus[*no_jump][0].re - 1.0).abs() < 1e-15);
+            }
+            Unraveling::Mixture { .. } => panic!("amplitude damping is not a unitary mixture"),
+        }
     }
 }

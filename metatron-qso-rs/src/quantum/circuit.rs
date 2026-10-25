@@ -367,6 +367,14 @@ impl Circuit {
     fn validate(&self, inst: &Instruction) -> Result<()> {
         inst.validate(self.n_qubits)
     }
+
+    /// Append an instruction without validation (for crate-internal
+    /// non-unitary matrices such as the no-jump Kraus operators of quantum
+    /// trajectories; qubits and shapes must be valid).
+    pub(crate) fn push_trusted(&mut self, inst: Instruction) {
+        debug_assert!(inst.qubits().all(|q| q < self.n_qubits));
+        self.instructions.push(inst);
+    }
 }
 
 impl Instruction {

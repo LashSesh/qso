@@ -373,6 +373,74 @@ impl Channel {
         )
     }
 
+    /// The channel `then ∘ self` (first `self`, then `then`, on the same
+    /// qubits), with a minimal set of Kraus operators (at most `4^k`, from
+    /// the eigendecomposition of the Choi matrix).
+    pub fn compose(&self, then: &Channel) -> Result<Channel> {
+        if self.n_qubits != then.n_qubits {
+            return Err(QsoError::DimensionMismatch {
+                expected: self.n_qubits,
+                actual: then.n_qubits,
+            });
+        }
+        let name = format!("{}∘{}", then.name, self.name);
+        // Pauli channels compose to a Pauli channel (Pauli products are
+        // XORs of the base-4 indices up to phase).
+        if let (Some(p), Some(q)) = (self.pauli_probabilities(), then.pauli_probabilities()) {
+            let mut r = vec![0.0; p.len()];
+            for (a, pa) in p.iter().enumerate() {
+                for (b, qb) in q.iter().enumerate() {
+                    r[a ^ b] += pa * qb;
+                }
+            }
+            return Self::from_pauli_probabilities(name, &r);
+        }
+        let d = 1usize << self.n_qubits;
+        let mut products = Vec::with_capacity(self.kraus.len() * then.kraus.len());
+        for b in &then.kraus {
+            for a in &self.kraus {
+                let mut m = vec![ZERO; d * d];
+                for r in 0..d {
+                    for cc in 0..d {
+                        for k in 0..d {
+                            m[r * d + cc] += b[r * d + k] * a[k * d + cc];
+                        }
+                    }
+                }
+                products.push(m);
+            }
+        }
+        // Mixtures of unitaries stay mixtures of unitaries (trajectories
+        // sample them without looking at the state); other channels get a
+        // minimal Kraus set.
+        let kraus = if self.is_unitary_mixture() && then.is_unitary_mixture() {
+            products
+        } else {
+            minimal_kraus(&products, d)
+        };
+        Self::from_kraus(name, kraus)
+    }
+
+    /// Whether every Kraus operator is a multiple of a unitary.
+    fn is_unitary_mixture(&self) -> bool {
+        let d = 1usize << self.n_qubits;
+        self.kraus.iter().all(|k| {
+            let mut g = vec![ZERO; d * d];
+            for r in 0..d {
+                for cc in 0..d {
+                    for m in 0..d {
+                        g[r * d + cc] += k[m * d + r].conj() * k[m * d + cc];
+                    }
+                }
+            }
+            let w = g[0].re;
+            (0..d * d).all(|i| {
+                let expected = if i % (d + 1) == 0 { w } else { 0.0 };
+                (g[i] - c(expected)).norm() <= 1e-12
+            })
+        })
+    }
+
     /// Process (χ) matrix in the Pauli basis: `χ[P][Q] = Σ_i k_iP k_iQ*`
     /// with `K_i = Σ_P k_iP P`.
     fn chi_matrix(&self) -> Vec<C64> {
@@ -451,6 +519,74 @@ impl Channel {
         }
         s
     }
+}
+
+/// Product `a·b` of square row-major matrices.
+fn mat_product(a: &[C64], b: &[C64]) -> Vec<C64> {
+    let d = (a.len() as f64).sqrt().round() as usize;
+    let mut m = vec![ZERO; d * d];
+    for r in 0..d {
+        for k in 0..d {
+            let x = a[r * d + k];
+            if x == ZERO {
+                continue;
+            }
+            for cc in 0..d {
+                m[r * d + cc] += x * b[k * d + cc];
+            }
+        }
+    }
+    m
+}
+
+/// A minimal Kraus representation of the channel `Σ K ρ K†`: the
+/// eigenvectors of the Choi matrix `Σ vec(K) vec(K)†` with non-negligible
+/// eigenvalues.
+fn minimal_kraus(kraus: &[Vec<C64>], d: usize) -> Vec<Vec<C64>> {
+    let m = d * d;
+    if kraus.len() <= 1 {
+        return kraus.to_vec();
+    }
+    let mut choi = CMatrix::zeros(m, m);
+    for k in kraus {
+        for i in 0..m {
+            for j in 0..m {
+                choi[(i, j)] += k[i] * k[j].conj();
+            }
+        }
+    }
+    let (values, vectors) = crate::linalg::eigh(&choi);
+    let top = values.iter().copied().fold(0.0, f64::max);
+    values
+        .iter()
+        .enumerate()
+        .rev()
+        .filter(|&(_, &v)| v > 1e-14 * top)
+        .map(|(j, &v)| {
+            let k: Vec<C64> = (0..m).map(|i| vectors[(i, j)] * v.sqrt()).collect();
+            // Fix the arbitrary phase of the eigenvector (largest entry
+            // real and positive) and drop rounding noise, so that diagonal
+            // operators stay exactly diagonal.
+            let big = k
+                .iter()
+                .copied()
+                .fold(ZERO, |a, z| if z.norm() > a.norm() { z } else { a });
+            let phase = if big.norm() > 0.0 {
+                big.conj() / big.norm()
+            } else {
+                c(1.0)
+            };
+            k.into_iter()
+                .map(|z| {
+                    let z = z * phase;
+                    C64::new(
+                        if z.re.abs() < 1e-15 { 0.0 } else { z.re },
+                        if z.im.abs() < 1e-15 { 0.0 } else { z.im },
+                    )
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// Index of a Pauli label (`"X"`, `"ZZ"`, …) of length `k`: digits in base
@@ -782,12 +918,17 @@ impl DensityMatrix {
         self.run_ops(&program.ops, &program.channels);
     }
 
-    /// Apply compiled operations (sizes already checked).
+    /// Apply compiled operations (sizes already checked). Consecutive
+    /// channels on the same qubits are combined into one superoperator.
     pub(crate) fn run_ops(&mut self, ops: &[device::Op], channels: &[device::CompiledChannel]) {
         let n = self.n_qubits;
+        let mut pending: Option<(Vec<C64>, &[usize])> = None;
         for op in ops {
             match op {
                 device::Op::Gates(c) => {
+                    if let Some((s, q)) = pending.take() {
+                        self.apply_superoperator(&s, q);
+                    }
                     for inst in c.instructions() {
                         let angles = inst.angles(&[]);
                         kernels::apply_instruction(&mut self.data, inst, &angles, false, 0);
@@ -795,9 +936,22 @@ impl DensityMatrix {
                     }
                 }
                 device::Op::Channel { channel, qubits } => {
-                    self.apply_superoperator(&channels[*channel].superoperator, qubits);
+                    let s = &channels[*channel].superoperator;
+                    pending = match pending.take() {
+                        Some((prev, q)) if q == qubits.as_slice() => {
+                            Some((mat_product(s, &prev), q))
+                        }
+                        Some((prev, q)) => {
+                            self.apply_superoperator(&prev, q);
+                            Some((s.clone(), qubits.as_slice()))
+                        }
+                        None => Some((s.clone(), qubits.as_slice())),
+                    };
                 }
             }
+        }
+        if let Some((s, q)) = pending {
+            self.apply_superoperator(&s, q);
         }
     }
 
