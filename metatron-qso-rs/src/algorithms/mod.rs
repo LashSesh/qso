@@ -7,6 +7,7 @@
 //! * [`qaoa`] — QAOA for weighted MaxCut with exact optimum and INTERP
 //! * [`grover`] — Grover search
 //! * [`qft`] — quantum Fourier transform and phase estimation
+//! * [`time_evolution`] — Trotter–Suzuki and qDRIFT circuits with error bounds
 //! * [`classifier`] — variational classifier with data re-uploading
 //! * [`graph_classifier`] — graph classifier with QAOA-type quantum layers
 
@@ -18,6 +19,7 @@ pub mod grover;
 pub mod models;
 pub mod qaoa;
 pub mod qft;
+pub mod time_evolution;
 pub mod vqe;
 
 pub use gradients::GradientMethod;
