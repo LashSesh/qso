@@ -1,0 +1,10 @@
+{
+  "name": "toy-5q",
+  "num_qubits": 5,
+  "qubits": [
+    {"t1": 11090.0, "readout": [0.02, 0.045]}
+  ],
+  "gates": [
+    {"duration": 0.3, "depolarizing": 0.008,
+     "channels": [{"pauli": {"ZZ": 0.0depolarizing": 0.008,
+: 1, "duration": 

@@ -1,0 +1,44 @@
+{
+  "name": "toy-5q",
+  "num_qubits": 5,
+  "qubits": [
+    {"t1": 110.0, "t2": 85.0, "readout": [0.015, 0.04]},
+    {"t1": 95.0,  "t2": 60.0, "readout": [0.025, 0.06]},
+    {"t1": 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+{
+  
+
+
+
+
+
+
+
+name
+
+
+
+
+
+
+
+
+": m_qub0.02,
+     "channels": [{"rotation": {"pauli": "ZZ", "aglne"
+     "chann    {"gate": "cx", "duration": ]
+}

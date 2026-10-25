@@ -10,9 +10,13 @@ use serde_json::{Value, json};
 use metatron_qso::algorithms::ansatz::{self, Entanglement};
 use metatron_qso::algorithms::qaoa::{MaxCutQaoa, QaoaConfig, optimize_layerwise};
 use metatron_qso::algorithms::{grover, models, vqe::Vqe};
-use metatron_qso::backend::{Backend, DensityMatrixBackend, StatevectorBackend};
+use metatron_qso::backend::{Backend, DensityMatrixBackend, DeviceBackend, StatevectorBackend};
+use metatron_qso::estimation::{Estimate, EstimatorOptions, ShotAllocation, estimate};
 use metatron_qso::graph::{Graph, generators, io};
-use metatron_qso::noise::NoiseModel;
+use metatron_qso::mitigation::ReadoutCalibration;
+use metatron_qso::mitigation::pec::pec_expectation;
+use metatron_qso::mitigation::zne::{Extrapolation, Folding, zne};
+use metatron_qso::noise::{DeviceModel, NoiseModel};
 use metatron_qso::optimize::{Method, Options};
 use metatron_qso::quantum::{PauliSum, bitstring, from_qasm2, to_qasm2};
 use metatron_qso::walks::{
@@ -223,7 +227,94 @@ enum Command {
         /// Depolarising noise "p1,p2" (density-matrix backend).
         #[arg(long, value_delimiter = ',')]
         noise: Option<Vec<f64>>,
+        /// Device description (JSON): gate errors, T1/T2, readout errors.
+        #[arg(long, conflicts_with = "noise")]
+        device: Option<std::path::PathBuf>,
+        /// Simulate the device with this many quantum trajectories instead
+        /// of density matrices (any register size).
+        #[arg(long, requires = "device")]
+        trajectories: Option<usize>,
     },
+    /// Estimate ⟨H⟩ of an OpenQASM 2.0 circuit from shots, with standard
+    /// errors and optional error mitigation.
+    Estimate {
+        file: std::path::PathBuf,
+        /// Observable, e.g. "Z0 Z1 + 0.5 X2".
+        #[arg(long)]
+        observable: String,
+        /// Total shots per estimate.
+        #[arg(long, default_value_t = 10000)]
+        shots: usize,
+        #[arg(long, value_enum, default_value_t = AllocationArg::Weighted)]
+        allocation: AllocationArg,
+        /// Device description (JSON); without it the circuit runs noiselessly.
+        #[arg(long)]
+        device: Option<std::path::PathBuf>,
+        /// Simulate the device with quantum trajectories (at most this many
+        /// per run) instead of density matrices.
+        #[arg(long, requires = "device")]
+        trajectories: Option<usize>,
+        /// Mitigate readout errors with a tensored calibration.
+        #[arg(long, requires = "device")]
+        mitigate_readout: bool,
+        /// Zero-noise extrapolation from these scale factors, e.g. 1,3,5.
+        #[arg(long, value_delimiter = ',')]
+        zne: Option<Vec<f64>>,
+        #[arg(long, value_enum, default_value_t = ExtrapolationArg::Richardson)]
+        extrapolation: ExtrapolationArg,
+        /// Probabilistic error cancellation with this many samples (Pauli
+        /// noise only).
+        #[arg(long, requires = "device")]
+        pec: Option<usize>,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum AllocationArg {
+    Uniform,
+    Weighted,
+    Adaptive,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum ExtrapolationArg {
+    Linear,
+    Richardson,
+    Exponential,
+}
+
+fn read_device(path: &std::path::Path) -> Result<DeviceModel> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| QsoError::Parse(format!("cannot read {}: {e}", path.display())))?;
+    DeviceModel::from_json(&text)
+}
+
+/// The backend for an optional device file (density matrices, or
+/// trajectories when given).
+fn device_backend(
+    device: Option<&DeviceModel>,
+    trajectories: Option<usize>,
+) -> Result<Box<dyn Backend>> {
+    Ok(match (device, trajectories) {
+        (Some(d), Some(t)) => Box::new(DeviceBackend::trajectories(d.clone(), t)?),
+        (Some(d), None) => Box::new(DeviceBackend::density_matrix(d.clone())?),
+        (None, _) => Box::new(StatevectorBackend),
+    })
+}
+
+fn estimate_json(e: &Estimate) -> Value {
+    let (lo, hi) = e.confidence_interval(0.95);
+    json!({"value": e.value, "std_error": e.std_error, "samples": e.samples, "ci95": [lo, hi]})
+}
+
+fn estimate_text(e: &Estimate) -> String {
+    let (lo, hi) = e.confidence_interval(0.95);
+    format!(
+        "{:.6} ± {:.6} (95% CI [{lo:.6}, {hi:.6}], {} samples)",
+        e.value, e.std_error, e.samples
+    )
 }
 
 fn read_graph_file(path: &std::path::Path) -> Result<Graph> {
@@ -667,11 +758,20 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             shots,
             seed,
             noise,
+            device,
+            trajectories,
         } => {
             let src = std::fs::read_to_string(file)
                 .map_err(|e| QsoError::Parse(format!("cannot read {}: {e}", file.display())))?;
             let circuit = from_qasm2(&src)?;
+            let device = device.as_deref().map(read_device).transpose()?;
             let counts = match noise {
+                _ if device.is_some() => device_backend(device.as_ref(), *trajectories)?.run(
+                    &circuit,
+                    &[],
+                    *shots,
+                    *seed,
+                )?,
                 Some(p) if p.len() == 2 => DensityMatrixBackend::new(NoiseModel::depolarizing(
                     p[0], p[1],
                 )?)
@@ -705,6 +805,88 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 json!({"qubits": n, "gates": circuit.len(), "depth": circuit.depth(), "counts": labelled}),
                 text,
             ))
+        }
+        Command::Estimate {
+            file,
+            observable,
+            shots,
+            allocation,
+            device,
+            trajectories,
+            mitigate_readout,
+            zne: scales,
+            extrapolation,
+            pec,
+            seed,
+        } => {
+            let src = std::fs::read_to_string(file)
+                .map_err(|e| QsoError::Parse(format!("cannot read {}: {e}", file.display())))?;
+            let circuit = from_qasm2(&src)?;
+            let h: PauliSum = observable.parse()?;
+            let device = device.as_deref().map(read_device).transpose()?;
+            let backend = device_backend(device.as_ref(), *trajectories)?;
+            let n = circuit.n_qubits();
+            let mut options = EstimatorOptions::new(*shots)
+                .with_allocation(match allocation {
+                    AllocationArg::Uniform => ShotAllocation::Uniform,
+                    AllocationArg::Weighted => ShotAllocation::Weighted,
+                    AllocationArg::Adaptive => ShotAllocation::Adaptive { pilot: 0.1 },
+                })
+                .with_seed(*seed);
+            if *mitigate_readout {
+                let cal =
+                    ReadoutCalibration::tensored(backend.as_ref(), n, *shots, *seed ^ 0x5eed)?;
+                options = options.with_readout_mitigation(cal);
+            }
+            let raw = estimate(backend.as_ref(), &circuit, &[], &h, &options)?.estimate;
+            let mut value = json!({"qubits": n, "estimate": estimate_json(&raw)});
+            let mut text = format!("<H> = {}", estimate_text(&raw));
+            if n <= 24 {
+                let exact = h.expectation(&metatron_qso::quantum::StateVector::from_circuit(
+                    &circuit,
+                    &[],
+                )?)?;
+                value["noiseless"] = json!(exact);
+                text.push_str(&format!("\nnoiseless <H> = {exact:.6}"));
+            }
+            if let Some(scales) = scales {
+                let method = match extrapolation {
+                    ExtrapolationArg::Linear => Extrapolation::Linear,
+                    ExtrapolationArg::Richardson => Extrapolation::Richardson,
+                    ExtrapolationArg::Exponential => Extrapolation::Exponential { asymptote: 0.0 },
+                };
+                let mut k = 0;
+                let r = zne(&circuit, scales, Folding::Global, method, |folded| {
+                    k += 1;
+                    let opts = options.clone().with_seed(seed.wrapping_add(k));
+                    Ok(estimate(backend.as_ref(), folded, &[], &h, &opts)?.estimate)
+                })?;
+                value["zne"] = json!({
+                    "estimate": estimate_json(&r.estimate),
+                    "scales": r.scales,
+                    "values": r.values.iter().map(estimate_json).collect::<Vec<_>>(),
+                });
+                text.push_str(&format!(
+                    "\nZNE ({:?}) <H> = {}",
+                    r.scales,
+                    estimate_text(&r.estimate)
+                ));
+            }
+            if let Some(samples) = pec {
+                let d = device.as_ref().expect("clap requires --device");
+                let r = pec_expectation(&circuit, &[], d, &h, *samples, *seed)?;
+                value["pec"] = json!({
+                    "estimate": estimate_json(&r.estimate),
+                    "overhead": r.overhead,
+                    "noisy_operations": r.noisy_operations,
+                });
+                text.push_str(&format!(
+                    "\nPEC (overhead {:.3}) <H> = {}",
+                    r.overhead,
+                    estimate_text(&r.estimate)
+                ));
+            }
+            Ok((value, text))
         }
     }
 }

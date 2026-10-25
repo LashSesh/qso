@@ -1,0 +1,4 @@
+{
+  "name": "toy-5q", "gates": [
+    {"gate": "cx", "qubits": [3, 4], "duration": 0.45, "depolarizing": 0.02,
+     "channels": [{"rotation": {"pauli}

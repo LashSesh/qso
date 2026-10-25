@@ -63,7 +63,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p metatron-qso-rs --features cli --examples --bins
       - run: |
-          for ex in quickstart metatron_walks metatron_atlas circuits qaoa_maxcut vqe_h2; do
+          for ex in quickstart metatron_walks metatron_atlas circuits qaoa_maxcut vqe_h2 noise_mitigation; do
             cargo run --release -p metatron-qso-rs --example "$ex"
           done
           cargo run --release -p metatron-qso-rs --example technical_note -- --quick --out /dev/null
@@ -80,6 +80,8 @@ jobs:
           ./target/release/qso hitting --graph cycle:64
           ./target/release/qso walk-circuit --graph cycle:16 > /tmp/walk.qasm
           ./target/release/qso qasm /tmp/walk.qasm --shots 100
+          ./target/release/qso qasm /tmp/walk.qasm --shots 100 --device metatron-qso-rs/examples/devices/toy_device.json --trajectories 50
+          ./target/release/qso estimate /tmp/walk.qasm --observable "Z0 Z1" --device metatron-qso-rs/examples/devices/toy_device.json --shots 4000 --mitigate-readout --zne 1,3
       - name: Benchmarks compile
         run: cargo bench -p metatron-qso-rs --no-run
 
@@ -158,7 +160,7 @@ jobs:
       - name: Fuzz the parsers and deserialisers
         working-directory: metatron-qso-rs
         run: |
-          for t in qasm pauli graph_spec graph_io json; do
+          for t in qasm pauli graph_spec graph_io json device; do
             mkdir -p "fuzz/corpus/$t"
             # The prebuilt cargo-fuzz is a static musl binary and would
             # default to the musl target, which the sanitizer cannot use.
