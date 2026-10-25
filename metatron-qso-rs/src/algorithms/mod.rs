@@ -12,10 +12,13 @@
 //!   warm-start mixers
 //! * [`grover`] — Grover search
 //! * [`qft`] — quantum Fourier transform and phase estimation
+//! * [`amplitude_estimation`] — canonical, iterative and maximum-likelihood
+//!   amplitude estimation
 //! * [`time_evolution`] — Trotter–Suzuki and qDRIFT circuits with error bounds
 //! * [`classifier`] — variational classifier with data re-uploading
 //! * [`graph_classifier`] — graph classifier with QAOA-type quantum layers
 
+pub mod amplitude_estimation;
 pub mod ansatz;
 pub mod classifier;
 pub mod combinatorial;
