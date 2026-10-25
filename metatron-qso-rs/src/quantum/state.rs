@@ -12,8 +12,16 @@ use crate::linalg::{CMatrix, eigh, inner};
 use crate::parallel::{for_each_mut, sum_f64};
 use crate::rng::{Rng, sample_cumulative};
 
-/// Largest register a [`StateVector`] may hold (2³⁴ amplitudes = 256 GiB).
+/// Largest register a [`StateVector`] may hold: 2³⁴ amplitudes (256 GiB)
+/// on 64-bit targets, 2²⁶ amplitudes (1 GiB) on 32-bit targets such as
+/// WebAssembly, whose address space is 4 GiB.
+#[cfg(target_pointer_width = "64")]
 pub const MAX_QUBITS: usize = 34;
+/// Largest register a [`StateVector`] may hold: 2³⁴ amplitudes (256 GiB)
+/// on 64-bit targets, 2²⁶ amplitudes (1 GiB) on 32-bit targets such as
+/// WebAssembly, whose address space is 4 GiB.
+#[cfg(not(target_pointer_width = "64"))]
+pub const MAX_QUBITS: usize = 26;
 
 /// Measurement histogram: basis index → number of shots.
 pub type Counts = BTreeMap<usize, usize>;

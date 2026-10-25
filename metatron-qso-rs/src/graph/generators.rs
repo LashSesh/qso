@@ -885,6 +885,14 @@ mod tests {
     }
 
     #[test]
+    fn largest_arguments_are_errors() {
+        assert!(hamming(usize::MAX, 2).is_err());
+        assert!(circulant(4, &[usize::MAX]).is_err());
+        assert!(paley(usize::MAX).is_err());
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
     fn huge_arguments_are_errors() {
         assert!(hamming(1 << 40, 3).is_err());
         assert!(hamming(usize::MAX, 2).is_err());

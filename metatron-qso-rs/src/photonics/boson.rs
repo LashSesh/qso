@@ -559,7 +559,7 @@ mod tests {
         }
         assert_eq!(count_patterns(1, 1024), 1024);
         assert_eq!(count_patterns(usize::MAX, 1), 1);
-        assert_eq!(count_patterns(usize::MAX, 2), 1 << 64);
+        assert_eq!(count_patterns(usize::MAX, 2), 1 << usize::BITS);
         // C(119, 60) and C(131, 65) fit; C(132, 66) does not.
         assert_eq!(
             count_patterns(60, 60),
