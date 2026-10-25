@@ -137,6 +137,8 @@ jobs:
         run: >-
           cargo test --release --target wasm32-wasip1 -p metatron-qso-rs --no-default-features
           --lib --test validation --test openqasm --test robustness
+      - name: JSON interface (native)
+        run: cargo test -p metatron_qso_wasm
       - name: npm package
         run: |
           python3 scripts/build_wasm.py
