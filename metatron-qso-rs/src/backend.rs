@@ -87,7 +87,7 @@ impl Backend for DensityMatrixBackend {
 #[non_exhaustive]
 pub enum NoisyMethod {
     /// Exact density matrices (up to
-    /// [`MAX_DENSITY_QUBITS`](crate::noise::MAX_DENSITY_QUBITS) qubits).
+    /// [`MAX_DENSITY_QUBITS`] qubits).
     DensityMatrix,
     /// Quantum trajectories (any register a state vector holds): at most
     /// `max_trajectories` trajectories per run, the shots spread over them.

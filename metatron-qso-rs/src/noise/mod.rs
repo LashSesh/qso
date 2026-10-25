@@ -731,6 +731,24 @@ impl DensityMatrix {
         Ok(())
     }
 
+    /// Multiply every entry by `factor` (for averaging states).
+    pub fn scale(&mut self, factor: f64) {
+        for z in &mut self.data {
+            *z *= factor;
+        }
+    }
+
+    /// Add `factor · other` (for averaging states over runs).
+    ///
+    /// # Panics
+    /// If the registers differ in size.
+    pub fn add_scaled(&mut self, other: &DensityMatrix, factor: f64) {
+        assert_eq!(self.n_qubits, other.n_qubits, "registers differ in size");
+        for (a, b) in self.data.iter_mut().zip(&other.data) {
+            *a += b * factor;
+        }
+    }
+
     /// Density matrix from vectorised data (checked sizes, trusted values).
     pub(crate) fn from_data(n_qubits: usize, data: Vec<C64>) -> Result<Self> {
         Self::check_size(n_qubits)?;
@@ -761,8 +779,13 @@ impl DensityMatrix {
 
     /// Apply a compiled program (sizes already checked).
     pub(crate) fn run_program(&mut self, program: &device::Program) {
+        self.run_ops(&program.ops, &program.channels);
+    }
+
+    /// Apply compiled operations (sizes already checked).
+    pub(crate) fn run_ops(&mut self, ops: &[device::Op], channels: &[device::CompiledChannel]) {
         let n = self.n_qubits;
-        for op in &program.ops {
+        for op in ops {
             match op {
                 device::Op::Gates(c) => {
                     for inst in c.instructions() {
@@ -772,7 +795,7 @@ impl DensityMatrix {
                     }
                 }
                 device::Op::Channel { channel, qubits } => {
-                    self.apply_superoperator(&program.channels[*channel].superoperator, qubits);
+                    self.apply_superoperator(&channels[*channel].superoperator, qubits);
                 }
             }
         }

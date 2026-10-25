@@ -167,14 +167,24 @@ pub(crate) fn apply_stochastic(
 
 /// Run one trajectory of `program`; returns the final state and the
 /// trajectory's random stream (for sampling from it).
-pub(crate) fn run_trajectory(program: &Program, mut rng: Rng) -> (StateVector, Rng) {
-    let mut state = StateVector::zero(program.n_qubits);
+pub(crate) fn run_trajectory(program: &Program, rng: Rng) -> (StateVector, Rng) {
+    run_ops(program.n_qubits, &program.ops, &program.channels, rng)
+}
+
+/// Run compiled operations on `|0…0⟩` as one trajectory.
+pub(crate) fn run_ops(
+    n_qubits: usize,
+    ops: &[Op],
+    channels: &[CompiledChannel],
+    mut rng: Rng,
+) -> (StateVector, Rng) {
+    let mut state = StateVector::zero(n_qubits);
     let amps = state.amplitudes_mut();
-    for op in &program.ops {
+    for op in ops {
         match op {
             Op::Gates(c) => plan::run(amps, c, &[]),
             Op::Channel { channel, qubits } => {
-                apply_stochastic(amps, &program.channels[*channel], qubits, &mut rng)
+                apply_stochastic(amps, &channels[*channel], qubits, &mut rng)
             }
         }
     }
@@ -319,7 +329,7 @@ impl TrajectorySimulator {
 
     /// The density matrix estimated as the average of `|ψ⟩⟨ψ|` over the
     /// trajectories (registers of at most
-    /// [`MAX_DENSITY_QUBITS`](super::MAX_DENSITY_QUBITS) qubits).
+    /// [`MAX_DENSITY_QUBITS`] qubits).
     pub fn density_matrix(&self, circuit: &Circuit, theta: &[f64]) -> Result<DensityMatrix> {
         let n = circuit.n_qubits();
         if n > MAX_DENSITY_QUBITS {

@@ -20,7 +20,8 @@
 //! // 1000 shots of |1⟩ read out as 200 zeros and 800 ones.
 //! let counts: Counts = [(0, 200), (1, 800)].into();
 //! let q = cal.mitigate(&counts).unwrap();
-//! assert!((q[&1] - 1.0).abs() < 1e-12 && q[&0].abs() < 1e-12);
+//! assert!((q[&1] - 1.0).abs() < 1e-12);
+//! assert!(q.get(&0).copied().unwrap_or(0.0).abs() < 1e-12);
 //! ```
 
 use std::collections::BTreeMap;
