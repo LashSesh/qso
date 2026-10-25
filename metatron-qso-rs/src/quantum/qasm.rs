@@ -15,14 +15,16 @@
 //! phase, which OpenQASM 2 cannot express. When *importing*
 //! `cu3`, Qiskit's definition (exact controlled-U3) is assumed.
 //!
-//! Import understands the same set plus the extensions shipped with Qiskit's
-//! `qelib1.inc` (`sx`, `sxdg`, `p`, `cp`, `u`, `swap`, `cswap`, `crx`,
-//! `cry`, `rxx`, `rzz`, `id`, `u2`), several quantum registers, register
-//! broadcasting and arithmetic parameter expressions with `pi`.
-//! `measure` and `barrier` are skipped; custom `gate` definitions,
-//! classical control and `reset` are rejected with an error, as are programs
+//! Import ([`from_qasm2`]) understands the same set plus the extensions
+//! shipped with Qiskit's `qelib1.inc` (`sx`, `sxdg`, `p`, `cp`, `u`,
+//! `swap`, `cswap`, `crx`, `cry`, `rxx`, `rzz`, `id`, `u2`), custom `gate`
+//! definitions, several quantum registers, register broadcasting and
+//! arithmetic parameter expressions with `pi`. `measure` and `barrier` are
+//! skipped; `reset` and classical conditions are rejected, as are programs
 //! beyond [`MAX_QASM_QUBITS`] qubits or [`MAX_QASM_INSTRUCTIONS`] gates and
-//! parameters that are not finite.
+//! parameters that are not finite. Programs with measurements, resets and
+//! conditions are read by [`Program::from_qasm`](super::Program::from_qasm),
+//! which also reads OpenQASM 3.
 
 use std::f64::consts::PI;
 use std::fmt::Write as _;
@@ -41,11 +43,7 @@ pub const MAX_QASM_QUBITS: usize = 1 << 14;
 /// register broadcasting).
 pub const MAX_QASM_INSTRUCTIONS: usize = 1 << 22;
 
-/// Deepest nesting of parentheses and unary operators in a parameter
-/// expression.
-const MAX_EXPR_DEPTH: usize = 64;
-
-fn real(v: f64) -> String {
+pub(crate) fn real(v: f64) -> String {
     let s = format!("{v:?}");
     if s.contains('e') && !s.contains('.') {
         s.replacen('e', ".0e", 1)
@@ -55,7 +53,7 @@ fn real(v: f64) -> String {
 }
 
 /// ZYZ decomposition `M = e^{iα}·U3(θ, φ, λ)` of a 2×2 unitary.
-fn zyz(m: &[C64; 4]) -> (f64, f64, f64, f64) {
+pub(crate) fn zyz(m: &[C64; 4]) -> (f64, f64, f64, f64) {
     // det M = e^{2iα}·det U3 = e^{2iα}·e^{i(φ+λ)}.
     let theta = 2.0 * m[2].norm().atan2(m[0].norm());
     let (alpha, phi, lambda);
@@ -168,7 +166,7 @@ fn decompose_controls(
     Some(out)
 }
 
-fn emit_instruction(
+pub(crate) fn emit_instruction(
     out: &mut String,
     inst: &Instruction,
     angles: &[f64],
@@ -337,494 +335,20 @@ pub fn to_qasm2(circuit: &Circuit, theta: &[f64], measure_all: bool) -> Result<S
 // Parsing
 // ---------------------------------------------------------------------------
 
-/// Recursive-descent evaluator for OpenQASM parameter expressions.
-struct Expr<'a> {
-    s: &'a [u8],
-    pos: usize,
-    depth: usize,
-}
-
-impl<'a> Expr<'a> {
-    fn eval(src: &'a str) -> Result<f64> {
-        let mut e = Expr {
-            s: src.as_bytes(),
-            pos: 0,
-            depth: 0,
-        };
-        let v = e.sum()?;
-        e.ws();
-        if e.pos != e.s.len() {
-            return Err(QsoError::Parse(format!(
-                "trailing input in expression '{src}'"
-            )));
-        }
-        if !v.is_finite() {
-            return Err(QsoError::Parse(format!(
-                "expression '{src}' is not a finite number"
-            )));
-        }
-        Ok(v)
-    }
-
-    /// Run `f` one nesting level deeper; bounds the recursion so that no
-    /// input can overflow the stack.
-    fn nested(&mut self, f: impl FnOnce(&mut Self) -> Result<f64>) -> Result<f64> {
-        if self.depth == MAX_EXPR_DEPTH {
-            return Err(QsoError::Parse(format!(
-                "expression nested deeper than {MAX_EXPR_DEPTH} levels"
-            )));
-        }
-        self.depth += 1;
-        let v = f(self);
-        self.depth -= 1;
-        v
-    }
-
-    fn ws(&mut self) {
-        while self.pos < self.s.len() && self.s[self.pos].is_ascii_whitespace() {
-            self.pos += 1;
-        }
-    }
-
-    fn peek(&mut self) -> Option<u8> {
-        self.ws();
-        self.s.get(self.pos).copied()
-    }
-
-    fn sum(&mut self) -> Result<f64> {
-        let mut v = self.product()?;
-        while let Some(op @ (b'+' | b'-')) = self.peek() {
-            self.pos += 1;
-            let rhs = self.product()?;
-            v = if op == b'+' { v + rhs } else { v - rhs };
-        }
-        Ok(v)
-    }
-
-    fn product(&mut self) -> Result<f64> {
-        let mut v = self.unary()?;
-        while let Some(op @ (b'*' | b'/')) = self.peek() {
-            self.pos += 1;
-            let rhs = self.unary()?;
-            v = if op == b'*' { v * rhs } else { v / rhs };
-        }
-        Ok(v)
-    }
-
-    /// `^` binds tighter than unary minus and is right-associative:
-    /// `-2^2 = −4`, `2^-1 = 0.5`, `2^3^2 = 2^9`.
-    fn power(&mut self) -> Result<f64> {
-        let base = self.atom()?;
-        if self.peek() == Some(b'^') {
-            self.pos += 1;
-            let exp = self.nested(Self::unary)?;
-            return Ok(base.powf(exp));
-        }
-        Ok(base)
-    }
-
-    fn unary(&mut self) -> Result<f64> {
-        match self.peek() {
-            Some(b'-') => {
-                self.pos += 1;
-                Ok(-self.nested(Self::unary)?)
-            }
-            Some(b'+') => {
-                self.pos += 1;
-                self.nested(Self::unary)
-            }
-            _ => self.power(),
-        }
-    }
-
-    fn atom(&mut self) -> Result<f64> {
-        match self.peek() {
-            Some(b'(') => {
-                self.pos += 1;
-                let v = self.nested(Self::sum)?;
-                if self.peek() != Some(b')') {
-                    return Err(QsoError::Parse("missing ')' in expression".into()));
-                }
-                self.pos += 1;
-                Ok(v)
-            }
-            Some(c) if c.is_ascii_digit() || c == b'.' => {
-                let start = self.pos;
-                while self.pos < self.s.len() {
-                    let d = self.s[self.pos];
-                    let prev = if self.pos > start {
-                        self.s[self.pos - 1]
-                    } else {
-                        0
-                    };
-                    let mantissa = d.is_ascii_digit() || d == b'.' || d == b'e' || d == b'E';
-                    let exponent_sign = (d == b'+' || d == b'-') && (prev == b'e' || prev == b'E');
-                    if mantissa || exponent_sign {
-                        self.pos += 1;
-                    } else {
-                        break;
-                    }
-                }
-                let text = std::str::from_utf8(&self.s[start..self.pos]).expect("ascii");
-                text.parse()
-                    .map_err(|_| QsoError::Parse(format!("invalid number '{text}'")))
-            }
-            Some(c) if c.is_ascii_alphabetic() => {
-                let start = self.pos;
-                while self.pos < self.s.len() && self.s[self.pos].is_ascii_alphanumeric() {
-                    self.pos += 1;
-                }
-                let name = std::str::from_utf8(&self.s[start..self.pos]).expect("ascii");
-                if name == "pi" {
-                    return Ok(PI);
-                }
-                let f: fn(f64) -> f64 = match name {
-                    "sin" => f64::sin,
-                    "cos" => f64::cos,
-                    "tan" => f64::tan,
-                    "exp" => f64::exp,
-                    "ln" => f64::ln,
-                    "sqrt" => f64::sqrt,
-                    _ => return Err(QsoError::Parse(format!("unknown identifier '{name}'"))),
-                };
-                if self.peek() != Some(b'(') {
-                    return Err(QsoError::Parse(format!("expected '(' after {name}")));
-                }
-                let arg = self.nested(Self::atom)?;
-                Ok(f(arg))
-            }
-            _ => Err(QsoError::Parse("unexpected end of expression".into())),
-        }
-    }
-}
-
-/// Qubit operand: a single qubit or a whole register (for broadcasting).
-enum Operand {
-    Qubit(usize),
-    Register(usize, usize),
-}
-
-/// Split `name[index]` into name and index text; nothing may follow the
-/// closing bracket.
-fn indexed(text: &str) -> Option<(&str, &str)> {
-    let open = text.find('[')?;
-    let close = open + text[open..].find(']')?;
-    text[close + 1..]
-        .trim()
-        .is_empty()
-        .then(|| (text[..open].trim(), text[open + 1..close].trim()))
-}
-
-fn split_top_level(s: &str, sep: char) -> Vec<&str> {
-    let mut parts = Vec::new();
-    let mut depth = 0i32;
-    let mut start = 0;
-    for (i, ch) in s.char_indices() {
-        match ch {
-            '(' => depth += 1,
-            ')' => depth -= 1,
-            c if c == sep && depth == 0 => {
-                parts.push(&s[start..i]);
-                start = i + 1;
-            }
-            _ => {}
-        }
-    }
-    parts.push(&s[start..]);
-    parts
-}
-
 /// Parse an OpenQASM 2.0 program into a [`Circuit`] (no free parameters).
 ///
-/// Quantum registers are concatenated in declaration order.
+/// Quantum registers are concatenated in declaration order. Gate
+/// definitions are expanded; measurements are dropped and `reset` and
+/// `if` are errors — read such programs with
+/// [`Program::from_qasm`](super::Program::from_qasm).
 pub fn from_qasm2(src: &str) -> Result<Circuit> {
-    let mut cleaned = String::with_capacity(src.len());
-    for line in src.lines() {
-        let code = line.split("//").next().unwrap_or("");
-        cleaned.push_str(code);
-        cleaned.push('\n');
-    }
-    if cleaned.contains('{') {
+    let (program, version) = super::openqasm::parse(src)?;
+    if version != 2 || !src.contains("OPENQASM") {
         return Err(QsoError::Parse(
-            "custom gate definitions are not supported".into(),
+            "missing 'OPENQASM 2.0;' header (use Program::from_qasm for OpenQASM 3)".into(),
         ));
     }
-    let mut registers: Vec<(String, usize, usize)> = Vec::new(); // name, offset, size
-    let mut n_qubits = 0usize;
-    let mut pending: Vec<(String, Vec<f64>, Vec<Operand>)> = Vec::new();
-    let mut saw_header = false;
-
-    let lookup = |registers: &[(String, usize, usize)], operand: &str| -> Result<Operand> {
-        let operand = operand.trim();
-        if operand.contains('[') {
-            let (name, index) = indexed(operand)
-                .ok_or_else(|| QsoError::Parse(format!("malformed operand '{operand}'")))?;
-            let idx: usize = index
-                .parse()
-                .map_err(|_| QsoError::Parse(format!("invalid index in '{operand}'")))?;
-            let (_, off, size) = registers
-                .iter()
-                .find(|(n, _, _)| n == name)
-                .ok_or_else(|| QsoError::Parse(format!("unknown register '{name}'")))?;
-            if idx >= *size {
-                return Err(QsoError::Parse(format!(
-                    "index {idx} out of range for '{name}'"
-                )));
-            }
-            Ok(Operand::Qubit(off + idx))
-        } else {
-            let (_, off, size) = registers
-                .iter()
-                .find(|(n, _, _)| n == operand)
-                .ok_or_else(|| QsoError::Parse(format!("unknown register '{operand}'")))?;
-            Ok(Operand::Register(*off, *size))
-        }
-    };
-
-    for raw in cleaned.split(';') {
-        let stmt = raw.trim();
-        if stmt.is_empty() {
-            continue;
-        }
-        let keyword = stmt.split_whitespace().next().unwrap_or("");
-        match keyword {
-            "OPENQASM" => {
-                let version = stmt["OPENQASM".len()..].trim();
-                if !version.starts_with('2') {
-                    return Err(QsoError::Parse(format!(
-                        "unsupported OpenQASM version {version}"
-                    )));
-                }
-                saw_header = true;
-            }
-            "include" | "creg" | "barrier" | "measure" => {}
-            "qreg" => {
-                let decl = stmt["qreg".len()..].trim();
-                let (name, size) = indexed(decl)
-                    .filter(|(name, _)| !name.is_empty())
-                    .ok_or_else(|| QsoError::Parse(format!("malformed qreg '{stmt}'")))?;
-                let size: usize = size
-                    .parse()
-                    .map_err(|_| QsoError::Parse(format!("invalid size in '{stmt}'")))?;
-                if registers.iter().any(|(n, _, _)| n == name) {
-                    return Err(QsoError::Parse(format!("register '{name}' declared twice")));
-                }
-                let total = n_qubits
-                    .checked_add(size)
-                    .filter(|&t| t <= MAX_QASM_QUBITS)
-                    .ok_or_else(|| {
-                        QsoError::Parse(format!(
-                            "programs may declare at most {MAX_QASM_QUBITS} qubits"
-                        ))
-                    })?;
-                registers.push((name.to_string(), n_qubits, size));
-                n_qubits = total;
-            }
-            "reset" | "if" | "opaque" | "gate" => {
-                return Err(QsoError::Parse(format!("'{keyword}' is not supported")));
-            }
-            _ => {
-                // Gate application: name[(params)] operands
-                let name_end = stmt
-                    .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
-                    .unwrap_or(stmt.len());
-                let rest = &stmt[name_end..];
-                let (head, operands) = if rest.trim_start().starts_with('(') {
-                    // Parameter list: find the matching ')' by depth.
-                    let open = name_end + (rest.len() - rest.trim_start().len());
-                    let mut depth = 0usize;
-                    let mut close = None;
-                    for (i, ch) in stmt[open..].char_indices() {
-                        match ch {
-                            '(' => depth += 1,
-                            ')' => {
-                                depth -= 1;
-                                if depth == 0 {
-                                    close = Some(open + i);
-                                    break;
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    let close = close.ok_or_else(|| {
-                        QsoError::Parse(format!("unbalanced parentheses in '{stmt}'"))
-                    })?;
-                    (&stmt[..=close], &stmt[close + 1..])
-                } else {
-                    if name_end == stmt.len() {
-                        return Err(QsoError::Parse(format!("malformed statement '{stmt}'")));
-                    }
-                    (&stmt[..name_end], rest)
-                };
-                let (name, params) = match head.find('(') {
-                    Some(open) => {
-                        let inner = &head[open + 1..head.len() - 1];
-                        let values = if inner.trim().is_empty() {
-                            Vec::new()
-                        } else {
-                            split_top_level(inner, ',')
-                                .into_iter()
-                                .map(Expr::eval)
-                                .collect::<Result<Vec<f64>>>()?
-                        };
-                        (head[..open].trim().to_string(), values)
-                    }
-                    None => (head.trim().to_string(), Vec::new()),
-                };
-                let ops = operands
-                    .split(',')
-                    .map(|o| lookup(&registers, o))
-                    .collect::<Result<Vec<Operand>>>()?;
-                pending.push((name, params, ops));
-            }
-        }
-    }
-    if !saw_header {
-        return Err(QsoError::Parse("missing 'OPENQASM 2.0;' header".into()));
-    }
-
-    let mut circuit = Circuit::new(n_qubits);
-    for (name, params, ops) in pending {
-        // Broadcast register operands.
-        let width = ops
-            .iter()
-            .filter_map(|o| match o {
-                Operand::Register(_, s) => Some(*s),
-                Operand::Qubit(_) => None,
-            })
-            .max();
-        let reps = width.unwrap_or(1);
-        if circuit.instructions().len() + reps > MAX_QASM_INSTRUCTIONS {
-            return Err(QsoError::Parse(format!(
-                "programs may expand to at most {MAX_QASM_INSTRUCTIONS} gates"
-            )));
-        }
-        for k in 0..reps {
-            let qubits: Vec<usize> = ops
-                .iter()
-                .map(|o| match o {
-                    Operand::Qubit(q) => Ok(*q),
-                    Operand::Register(off, size) if *size == reps => Ok(off + k),
-                    Operand::Register(..) => Err(QsoError::Parse(format!(
-                        "register size mismatch in broadcast of '{name}'"
-                    ))),
-                })
-                .collect::<Result<Vec<usize>>>()?;
-            apply_named(&mut circuit, &name, &params, &qubits)?;
-        }
-    }
-    Ok(circuit)
-}
-
-fn apply_named(c: &mut Circuit, name: &str, p: &[f64], q: &[usize]) -> Result<()> {
-    let arity = |n_q: usize, n_p: usize| -> Result<()> {
-        if q.len() != n_q || p.len() != n_p {
-            return Err(QsoError::Parse(format!(
-                "'{name}' expects {n_q} qubit(s) and {n_p} parameter(s), got {} and {}",
-                q.len(),
-                p.len()
-            )));
-        }
-        Ok(())
-    };
-    let gate =
-        |kind: GateKind, targets: &[usize], controls: &[usize], params: &[f64]| Instruction {
-            kind,
-            targets: targets.to_vec(),
-            controls: controls.to_vec(),
-            params: params.iter().map(|&v| v.into()).collect(),
-            matrix: None,
-        };
-    use GateKind::*;
-    let inst = match name {
-        "id" | "u0" => {
-            arity(1, if name == "u0" { 1 } else { 0 })?;
-            return Ok(());
-        }
-        "h" | "x" | "y" | "z" | "s" | "sdg" | "t" | "tdg" | "sx" | "sxdg" => {
-            arity(1, 0)?;
-            let kind = match name {
-                "h" => H,
-                "x" => X,
-                "y" => Y,
-                "z" => Z,
-                "s" => S,
-                "sdg" => Sdg,
-                "t" => T,
-                "tdg" => Tdg,
-                "sx" => SX,
-                _ => SXdg,
-            };
-            gate(kind, &q[..1], &[], &[])
-        }
-        "rx" | "ry" | "rz" | "u1" | "p" => {
-            arity(1, 1)?;
-            let kind = match name {
-                "rx" => RX,
-                "ry" => RY,
-                "rz" => RZ,
-                _ => P,
-            };
-            gate(kind, &q[..1], &[], p)
-        }
-        "u3" | "u" | "U" => {
-            arity(1, 3)?;
-            gate(U, &q[..1], &[], p)
-        }
-        "u2" => {
-            arity(1, 2)?;
-            gate(U, &q[..1], &[], &[PI / 2.0, p[0], p[1]])
-        }
-        "cx" | "CX" | "cy" | "cz" | "ch" => {
-            arity(2, 0)?;
-            let kind = match name {
-                "cy" => Y,
-                "cz" => Z,
-                "ch" => H,
-                _ => X,
-            };
-            gate(kind, &q[1..2], &q[..1], &[])
-        }
-        "crx" | "cry" | "crz" | "cu1" | "cp" => {
-            arity(2, 1)?;
-            let kind = match name {
-                "crx" => RX,
-                "cry" => RY,
-                "crz" => RZ,
-                _ => P,
-            };
-            gate(kind, &q[1..2], &q[..1], p)
-        }
-        "cu3" => {
-            arity(2, 3)?;
-            gate(U, &q[1..2], &q[..1], p)
-        }
-        "ccx" => {
-            arity(3, 0)?;
-            gate(X, &q[2..3], &q[..2], &[])
-        }
-        "swap" => {
-            arity(2, 0)?;
-            gate(Swap, q, &[], &[])
-        }
-        "cswap" => {
-            arity(3, 0)?;
-            gate(Swap, &q[1..3], &q[..1], &[])
-        }
-        "rxx" | "ryy" | "rzz" => {
-            arity(2, 1)?;
-            let kind = match name {
-                "rxx" => RXX,
-                "ryy" => RYY,
-                _ => RZZ,
-            };
-            gate(kind, q, &[], p)
-        }
-        _ => return Err(QsoError::Parse(format!("unsupported gate '{name}'"))),
-    };
-    c.try_push(inst)?;
-    Ok(())
+    program.gates_skipping_measurements()
 }
 
 #[cfg(test)]
@@ -839,12 +363,18 @@ mod tests {
 
     #[test]
     fn expression_evaluator() {
-        assert!((Expr::eval("pi/2").unwrap() - PI / 2.0).abs() < 1e-15);
-        assert!((Expr::eval("-3*pi/4 + 1e-1").unwrap() - (-3.0 * PI / 4.0 + 0.1)).abs() < 1e-15);
-        assert!((Expr::eval("2^3 - sqrt(4)").unwrap() - 6.0).abs() < 1e-15);
-        assert!((Expr::eval("cos(0)+-(1)").unwrap()).abs() < 1e-15);
-        assert!(Expr::eval("pi pi").is_err());
-        assert!(Expr::eval("foo").is_err());
+        let angle = |e: &str| -> Result<f64> {
+            let c = from_qasm2(&format!("OPENQASM 2.0; qreg q[1]; rz({e}) q[0];"))?;
+            Ok(c.instructions()[0].angles(&[])[0])
+        };
+        assert!((angle("pi/2").unwrap() - PI / 2.0).abs() < 1e-15);
+        assert!((angle("-3*pi/4 + 1e-1").unwrap() - (-3.0 * PI / 4.0 + 0.1)).abs() < 1e-15);
+        assert!((angle("2^3 - sqrt(4)").unwrap() - 6.0).abs() < 1e-15);
+        assert!((angle("cos(0)+-(1)").unwrap()).abs() < 1e-15);
+        assert!((angle("-2^2").unwrap() + 4.0).abs() < 1e-15);
+        assert!((angle("2^-1").unwrap() - 0.5).abs() < 1e-15);
+        assert!(angle("pi pi").is_err());
+        assert!(angle("foo").is_err());
     }
 
     #[test]
@@ -968,7 +498,13 @@ mod tests {
         // a = |++>, b copies a, then u2(0,π) = H on b[1]
         assert!((psi.norm() - 1.0).abs() < 1e-12);
         assert!(from_qasm2("qreg q[1]; h q;").is_err());
-        assert!(from_qasm2("OPENQASM 2.0; qreg q[1]; gate foo a { h a; }").is_err());
+        // Gate definitions are expanded where they are used.
+        let g = from_qasm2("OPENQASM 2.0; qreg q[2]; gate foo(t) a, b { h a; cx a, b; rz(t/2) b; } foo(pi) q[1], q[0];").unwrap();
+        assert_eq!(g.len(), 3);
+        assert_eq!(g.instructions()[1].controls, vec![1]);
+        assert!(from_qasm2("OPENQASM 2.0; qreg q[1]; gate foo a { foo a; } foo q[0];").is_err());
+        assert!(from_qasm2("OPENQASM 2.0; qreg q[1]; opaque foo a;").is_err());
+        assert!(from_qasm2("OPENQASM 2.0; qreg q[1]; creg c[1]; reset q[0];").is_err());
         assert!(from_qasm2("OPENQASM 2.0; qreg q[1]; bogus q[0];").is_err());
     }
 

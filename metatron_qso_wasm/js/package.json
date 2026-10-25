@@ -1,0 +1,45 @@
+{
+  "name": "metatron-qso",
+  "version": "1.4.0",
+  "description": "Validated quantum simulation in WebAssembly: OpenQASM 2/3 programs, graphs and their symmetry, continuous-time quantum walks and spatial search, including Metatron's Cube.",
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./qso.wasm": "./qso.wasm"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "qso.wasm",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": [
+    "quantum",
+    "simulator",
+    "openqasm",
+    "quantum-walk",
+    "webassembly"
+  ],
+  "license": "Apache-2.0",
+  "author": "Sebastian Klemm",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LashSesh/qso.git",
+    "directory": "metatron_qso_wasm/js"
+  },
+  "homepage": "https://lashsesh.github.io/qso/playground/",
+  "bugs": "https://github.com/LashSesh/qso/issues"
+}

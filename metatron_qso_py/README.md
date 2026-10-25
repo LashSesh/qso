@@ -51,7 +51,7 @@ print(state.expectation(q.PauliSum("Z0 Z1"))) # 1.0
 print(state.entanglement_entropy([0]))        # 1.0 (bits)
 ```
 
-Symbolic parameters, exact gradients and OpenQASM 2.0:
+Symbolic parameters, exact gradients and OpenQASM:
 
 ```python
 import numpy as np
@@ -65,8 +65,30 @@ value, grad = q.expectation_and_gradient(c, h, [0.3, 0.1])  # adjoint method
 _, fd = q.expectation_and_gradient(c, h, [0.3, 0.1], method="finite_difference")
 assert np.allclose(grad, fd, atol=1e-6)
 
-text = c.to_qasm([0.3, 0.1], measure=True)
+text = c.to_qasm([0.3, 0.1], measure=True)      # OpenQASM 2.0
 again = q.Circuit.from_qasm(text)
+print(c.to_qasm3([0.3, 0.1]))                     # OpenQASM 3
+```
+
+Programs with mid-circuit measurement and feed-forward, from OpenQASM 2
+or 3, with exact outcome probabilities:
+
+```python
+import metatron_qso as q
+
+p = q.Program.from_qasm('''
+OPENQASM 3.0;
+include "stdgates.inc";
+qubit[2] q;
+bit[2] c;
+h q[0];
+c[0] = measure q[0];
+if (c[0] == 1) x q[1];
+c[1] = measure q[1];
+''')
+print(p.probabilities())        # ≈ {'00': 0.5, '11': 0.5}, bit 0 on the right
+print(p.sample(1000, seed=1))   # {'00': 504, '11': 496}
+print(p.to_qasm3())
 ```
 
 Ground state of H₂ (STO-3G) with VQE:
@@ -136,6 +158,47 @@ energy = q.estimate_expectation(bell, q.PauliSum("Z0 Z1"), shots=10_000,
                                 noise=q.NoiseModel.depolarizing(0.01, 0.02))
 ```
 
+Device models, trajectories and error mitigation (readout mitigation plus
+zero-noise extrapolation):
+
+```python
+import metatron_qso as q
+
+device = (q.DeviceModel("toy")
+          .with_default_qubit(t1=100.0, t2=80.0, readout=(0.02, 0.04))
+          .with_rule(gate="cx", duration=0.3, depolarizing=0.01)
+          .with_rule(duration=0.035, depolarizing=0.001))
+ghz = q.Circuit(3).h(0).cx(0, 1).cx(1, 2)
+h = q.PauliSum("Z0 Z1 + Z1 Z2")                                  # noiseless value 2
+cal = q.ReadoutCalibration.tensored(3, 100_000, seed=1, device=device)
+
+def run(circuit):
+    return q.estimate(circuit, h, 100_000, device=device, readout_calibration=cal, seed=2)[0]
+
+raw, _ = q.estimate(ghz, h, 100_000, device=device, seed=2)
+mitigated = q.zne(ghz, [1.0, 3.0, 5.0], run)["estimate"]
+print(f"{raw.value:.3f} {mitigated.value:.3f} ± {mitigated.std_error:.3f}")  # 1.725 2.001 ± 0.007
+print(q.TrajectorySimulator(device, 2000, seed=3).expectation(ghz, h).value)  # 1.969
+```
+
+Molecules, time evolution and amplitude estimation (run from the
+repository root, which holds the FCIDUMP files):
+
+```python
+import metatron_qso as q
+
+lih = q.MolecularIntegrals.from_file("metatron-qso-rs/examples/molecules/lih_sto3g.fcidump")
+adapt = q.adapt_vqe(lih, "parity", two_qubit_reduction=True)          # 10 qubits
+print(f"{adapt['energy'] - lih.fci_energies()[0]:.1e}", len(adapt["operators"]))  # 1.1e-05 30
+
+h = q.heisenberg_xxz(4, 1.0, 0.5)
+c = q.trotter_circuit(h, 4, 1.0, steps=20, order=2)
+print(len(c), f"{q.trotter_error_bound(h, 1.0, steps=20, order=2):.4f}")  # 321 0.0229
+
+r = q.ml_amplitude_estimation(q.AmplitudeProblem.bernoulli(0.3), levels=8, shots=100, seed=1)
+print(f"{r['estimate']:.4f}", r["oracle_calls"])                        # 0.2998 26200
+```
+
 More complete scripts are in
 [`examples/`](https://github.com/LashSesh/qso/tree/main/metatron_qso_py/examples);
 the [user guide](https://lashsesh.github.io/qso/) has tutorials and the full
@@ -152,7 +215,13 @@ API reference.
 | Variational | `real_amplitudes`, `efficient_su2`, `hardware_efficient`, `qaoa_maxcut_circuit`, `expectation_and_gradient`, `expectation_batch`, `expectation_and_gradient_batch`, `run_vqe`, `MaxCutQaoa`, `optimize_qaoa_layerwise`, `VariationalClassifier`, `GraphClassifier` |
 | Textbook | `grover_search`, `estimate_phase` |
 | Walks | `ContinuousWalk`, `SpatialSearch` (`optimize` tunes rate and time jointly), `DephasingWalk`, `classical_walk_probabilities`, `classical_hitting_times`; `Quotient`, `QuotientWalk`, `QuotientSearch`, `StateTransfer`; `CoinedWalk`, `LineWalk`, `SzegedyWalk`; `circulant_walk_circuit`, `cayley_walk_circuit`, `trotter_walk_circuit`, `diagonal_unitary_circuit` |
-| Noise | `Channel`, `NoiseModel`, `DensityMatrix`, `estimate_expectation` |
+| Noise | `Channel`, `NoiseModel`, `DeviceModel`, `DensityMatrix`, `TrajectorySimulator`, `estimate_expectation` |
+| Estimation | `Estimate`, `estimate` (uniform, weighted, adaptive shot allocation), `ClassicalShadow` |
+| Mitigation | `ReadoutCalibration`, `nearest_probability_distribution`, `fold`, `extrapolate`, `zne`, `pec_expectation`, `twirl`, `twirled_average` |
+| Hamiltonian simulation | `Circuit.pauli_rotation`, `trotter_circuit`, `trotter_error_bound`, `qdrift_circuit`, `qdrift_error_bound` |
+| Chemistry | `FermionOperator`, `QubitOperator`, `MolecularIntegrals`, `uccsd`, `k_upccgsd`, `adapt_vqe` |
+| Excited states and geometry | `vqd`, `ssvqe`, `quantum_fisher_information`, `natural_gradient`, `quantum_natural_gradient`, `imaginary_time_evolution` |
+| Optimisation and estimation | `Qubo`, `Qaoa` (X, XY and warm-start mixers), `AmplitudeProblem`, `canonical_amplitude_estimation`, `iterative_amplitude_estimation`, `ml_amplitude_estimation` |
 | Boson sampling | `BosonSampler`, `permanent`, `haar_unitary`, `beam_splitter` |
 
 `Graph.from_spec` accepts the graph specifications of the `qso` command-line

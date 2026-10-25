@@ -1,0 +1,12 @@
+{
+  "name": "toy-5q",
+  "num_qubits": 5,
+  "qubits": [
+    { "readout": [0.01, 0.03]},
+    {"t1": 80.0, "t2": 60.0, "readout": [0.025, 0.06]},
+    {"t1": 100.0, "t2": 90.0, "readout": [0.02, 0.045]}
+  ],
+  "gates": [
+    {"gate": "cx", "qubits": [3, 4], "duration": 0.002}
+  ]
+}

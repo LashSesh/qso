@@ -212,6 +212,7 @@ impl Vqe {
 
     /// Run all restarts and return the best result.
     pub fn run(&self) -> Result<VqeResult> {
+        crate::optimize::check_restarts(self.restarts)?;
         let dim = self.ansatz.num_parameters();
         // Surface an unsupported gradient method (e.g. parameter shift on a
         // doubly-controlled rotation) instead of silently falling back to

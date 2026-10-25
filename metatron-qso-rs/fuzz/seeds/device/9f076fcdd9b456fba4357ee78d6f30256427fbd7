@@ -1,0 +1,37 @@
+{
+  "name": "toy-5q",
+  "num_qubits": 5,
+  "qubits": [
+    {"t1": 110.0, "t2": 85.0, "readout": [0.015, 0.04]},
+    {"t1": 95.0, "t2": 70.0, "readout": [0.02, 0]}
+  ],
+  "gates": [
+    {"gate": "cx", "qubits": [3, 4], "duration":
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+depolarizing": 0.01,
+     "channels": [{"rotation": {"pauli": "ZZ{"ga", "angle": 0.02}}]},
+    {"gate": "cx", "duratipn": 0.tes":
+
+
+
+3, "depolarizing": 0.008,
+     "c

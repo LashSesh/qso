@@ -10,10 +10,13 @@ Steps:
 2. run every ```python block of the guide, each in a fresh interpreter, and
    compile and run every ```rust block as an example program against the
    crate in this repository, so that no snippet can go stale;
-3. build the guide with mdBook and the Python API reference with pdoc.
+3. build the guide with mdBook and the Python API reference with pdoc;
+4. build the WebAssembly module (scripts/build_wasm.py) and add the
+   playground (docs/playground) with the npm package at /playground/.
 
 Needs the `metatron_qso` package installed in the running interpreter,
-nbconvert, ipykernel, matplotlib and pdoc, and `mdbook` on the PATH.
+nbconvert, ipykernel, matplotlib and pdoc, `mdbook` on the PATH, and the
+Rust target wasm32-unknown-unknown.
 """
 
 from __future__ import annotations
@@ -85,7 +88,20 @@ def site(out: Path) -> None:
     shutil.copytree(GUIDE / "book", out)
     run([sys.executable, "-m", "pdoc", "metatron_qso", "-o", str(out / "python"),
          "--docformat", "markdown"])
+    playground(out / "playground")
     (out / ".nojekyll").write_text("")
+
+
+def playground(out: Path) -> None:
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from build_wasm import build
+
+    package = build()
+    shutil.rmtree(out, ignore_errors=True)
+    shutil.copytree(DOCS / "playground", out)
+    (out / "qso").mkdir()
+    for name in ["index.js", "qso.wasm", "LICENSE"]:
+        shutil.copyfile(package / name, out / "qso" / name)
 
 
 def main() -> None:

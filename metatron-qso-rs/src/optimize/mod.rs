@@ -191,6 +191,20 @@ impl Default for Method {
     }
 }
 
+/// Largest number of random restarts any optimiser in QSO accepts.
+pub const MAX_RESTARTS: usize = 10_000;
+
+/// Reject a restart count above [`MAX_RESTARTS`].
+pub(crate) fn check_restarts(restarts: usize) -> Result<()> {
+    if restarts > MAX_RESTARTS {
+        return Err(QsoError::invalid(
+            "restarts",
+            format!("at most {MAX_RESTARTS} restarts, got {restarts}"),
+        ));
+    }
+    Ok(())
+}
+
 /// Stopping criteria and bookkeeping.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Options {

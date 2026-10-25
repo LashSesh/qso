@@ -37,7 +37,9 @@ serde_json.workspace = true
 thiserror.workspace = true
 clap = { workspace = true, optional = true }
 
-[dev-dependencies]
+# Benchmarks and property tests run natively; the library's unit tests
+# also run as wasm32-wasip1 (see scripts/wasi-runner.mjs).
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 criterion.workspace = true
 proptest.workspace = true
 

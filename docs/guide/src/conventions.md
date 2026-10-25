@@ -25,7 +25,7 @@ comparison reverses the qubits when it compares their states with QSO's.
 | Rotations | `R_P(θ) = exp(−iθP/2)` for P ∈ {X, Y, Z} |
 | Two-qubit rotations | `R_PP(θ) = exp(−iθ P⊗P/2)` |
 | Phase gate | `P(λ) = diag(1, e^{iλ})` |
-| `U(θ, φ, λ)` | as in OpenQASM 2 |
+| `U(θ, φ, λ)` | the U3 matrix `[[cos θ/2, −e^{iλ} sin θ/2], [e^{iφ} sin θ/2, e^{i(φ+λ)} cos θ/2]]`; OpenQASM 2's `U` up to a global phase, OpenQASM 3's `U` divided by `e^{iθ/2}` |
 | Time evolution | `exp(−iHt)` |
 | Quantum walks | `H = γL` (Laplacian) or `H = −γA` (adjacency) |
 
@@ -55,10 +55,10 @@ except ValueError as e:
 
 | Limit | Value |
 |---|---|
-| Pure-state register | 34 qubits (16 bytes per amplitude) |
+| Pure-state register | 34 qubits (16 bytes per amplitude); 26 in WebAssembly |
 | Density-matrix register | 14 qubits |
 | Pauli strings | qubits 0–63 |
 | Custom unitary gates | up to 6 target qubits |
 | Exact walk analysis | up to 2048 nodes (Krylov propagation beyond) |
 | Graphs from specifications and Python constructors | 2²⁰ nodes, 2²² edges (hypercubes up to dimension 20) |
-| OpenQASM import | version 2.0, up to 2¹⁴ qubits and 2²² gates |
+| OpenQASM import | version 2.0 and an OpenQASM 3 subset, up to 2¹⁴ qubits, 64 bits and 2²² operations |

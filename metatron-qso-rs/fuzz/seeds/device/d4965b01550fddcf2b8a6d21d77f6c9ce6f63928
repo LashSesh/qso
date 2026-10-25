@@ -1,0 +1,8 @@
+{
+  "name": "toy-5q",
+  "num_qubits": 5,
+  "qubits": [
+    {"t1": 110.0, "t2": 60.0, "readout": [0.025, 0.06]},
+    {"t1": 1005, "depolarizing": 0.02,
+      ]
+}

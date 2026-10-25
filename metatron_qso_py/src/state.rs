@@ -21,7 +21,7 @@ pub struct PyStateVector {
     pub inner: StateVector,
 }
 
-fn wrap(inner: StateVector) -> PyStateVector {
+pub(crate) fn wrap(inner: StateVector) -> PyStateVector {
     PyStateVector { inner }
 }
 

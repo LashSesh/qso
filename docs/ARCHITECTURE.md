@@ -6,16 +6,23 @@ the rustdoc (`cargo doc -p metatron-qso-rs --open`).
 ## Layers
 
 ```
-            ┌─────────────────────── qso CLI ─── Python (PyO3) ─┐
-algorithms  │ VQE · QAOA · Grover · QFT/QPE · classifier · models│
+            ┌─────── qso CLI ─── Python (PyO3) ─── WebAssembly ─┐
+chemistry   │ fermion operators · mappings · FCIDUMP · full CI · │
+            │ UCCSD / k-UpCCGSD · ADAPT-VQE                      │
+algorithms  │ VQE · QAOA (+ mixers, QUBO) · Grover · QFT/QPE ·   │
+            │ excited states · geometry · time evolution ·       │
+            │ amplitude estimation · classifier · models         │
             │ gradients (adjoint / parameter shift / FD)         │
 optimize    │ L-BFGS · Adam · GD · Nelder–Mead · SPSA            │
 walks       │ CTQW · quotients · transfer · coined/Szegedy ·     │
             │ search · walk circuits · dephasing · classical     │
-backend     │ statevector / density-matrix backends, shot estimates│
+mitigation  │ readout calibration · ZNE · PEC · Pauli twirling    │
+estimation  │ estimates with errors · shot allocation · shadows   │
+backend     │ statevector / density-matrix / device backends      │
 quantum     │ StateVector · Circuit · plans (fusion, blocking) · │
-            │ PauliSum · OpenQASM (+ multi-control decomposition)│
-noise       │ DensityMatrix · Kraus channels                      │
+            │ Program · PauliSum · OpenQASM 2/3 · decompositions │
+noise       │ DensityMatrix · channels · device models ·          │
+            │ compiled noise programs · quantum trajectories      │
 graph       │ Graph · generators · Metatron · automorphisms ·    │
             │ canonical forms · edge-list/GraphML I/O            │
 linalg      │ dense eigh/expm · CSR · Lanczos · Krylov           │
@@ -101,6 +108,138 @@ controlled gates exactly and without ancillas (Barenco et al. 1995):
 Toffolis (Lemma 7.2), with one idle qubit two halves (Lemma 7.3); `C^k(U)`
 becomes `C(V)·C^{k−1}(X)·C(V†)·C^{k−1}(X)·C^{k−1}(V)` with `V² = U`
 (Lemma 7.5), the target serving as idle qubit — `O(k²)` gates in all.
+
+## Programs and OpenQASM (`quantum/program.rs`, `quantum/openqasm.rs`)
+
+A `Program` is a list of operations: gates, measurements into classical
+bits, resets, and blocks conditioned on bits. `probabilities` computes the
+exact distribution of the classical record by carrying a list of branches,
+each a weight, a normalised state and the bits written so far. A
+measurement splits every branch into its two outcomes (dropping outcomes of
+probability zero), a reset splits and flips, and a condition runs its block
+on the branches whose record satisfies it. The number of branches and the
+amplitudes they hold are bounded (4096 branches, 2²⁶ amplitudes). When a
+program is gates followed by final measurements, one state vector suffices
+and no branches are made. Beyond the bounds, `sample` simulates shot by
+shot.
+
+One recursive-descent parser reads both OpenQASM versions; the header
+selects the version-specific rules (built-in gates, `U`'s phase,
+statement forms). Gate definitions are expanded at the call site, with
+modifiers applied while expanding: `inv` reverses and inverts the body,
+`pow(k)` repeats it, and `ctrl`/`negctrl` add controls to every gate of
+the body, turning the body's global phases (`gphase`, and the phases by
+which OpenQASM 3's `U`, `u2` and `u3` differ from QSO's gates) into
+controlled phases. The phase of the whole program is dropped. Expansion
+counts operations and nesting depth, so hostile input fails with an error
+instead of exhausting memory or the stack.
+
+## WebAssembly (`metatron_qso_wasm`)
+
+The core has no platform code beyond optional rayon, so it compiles for
+`wasm32` without the `parallel` feature. `MAX_QUBITS` follows the pointer
+width: 26 qubits (1 GiB of amplitudes) in a 32-bit address space.
+
+The module exposes one function. A JavaScript caller allocates a buffer in
+the module's memory (`qso_alloc`), writes a UTF-8 JSON request, calls
+`qso_call`, reads the response (`qso_response_len`) and frees it
+(`qso_free`). This needs no generated bindings and no imports, so the
+module runs in any WebAssembly host, and the JavaScript wrapper is a page
+of code. Every parameter is validated and unknown parameters are errors.
+A panic aborts the module; the wrapper then replaces the instance.
+
+## Device models and trajectories (`noise/`)
+
+A `DeviceModel` is compiled per circuit into a program of ideal gate
+segments and channels on one or two qubits (`noise/device.rs`). The
+compiler does four things:
+
+* it schedules gates as soon as their qubits are free, inserting
+  relaxation for waiting qubits and for each gate's duration;
+* it applies the first matching gate rule;
+* it splits thermal relaxation into amplitude damping and a phase flip
+  (the same channel);
+* it merges consecutive channels of one kind on the same qubits. Pauli
+  channels merge by convolving their probabilities, other channels get a
+  minimal Kraus set from the Choi matrix.
+
+Density matrices apply the program with the state-vector kernels on the
+vectorised ρ and multiply consecutive superoperators first.
+
+Trajectories (`noise/trajectories.rs`) use the waiting-time form of the
+Monte-Carlo wave-function method.
+
+* **Unitary mixtures** (Pauli, depolarising, dephasing, coherent errors)
+  are sampled before the run, because their choice does not depend on
+  the state.
+* **Other channels** apply their dominant Kraus operator without
+  renormalising. The squared norm of the state is then the probability
+  that no jump has happened. A jump happens where it falls below a
+  uniform random threshold.
+* **Execution.** A stretch without jumps runs as one fused, cache-blocked
+  circuit through the execution plans, with the non-unitary no-jump
+  operators as ordinary local matrices. When the norm ends below the
+  threshold, bisection over checkpoints finds the step of the jump. The
+  last few steps are simulated one by one, with Born weights from the
+  reduced density matrix of the channel's qubits.
+
+Each trajectory owns a stream `Rng::fork(k)`, and results are collected in
+trajectory order, so they do not depend on the number of threads.
+
+## Estimation and mitigation (`estimation/`, `mitigation/`)
+
+Shot-based estimates compute one value per shot for every measurement
+group: the sum of the group's terms on the measured bits. The standard
+error follows from the spread of these values. With a readout
+calibration, every term gets exact per-outcome weights. A tensored
+calibration factorises them over qubits, and a full one gets `A⁻ᵀ s`. The
+mitigated estimate stays a mean over shots, so its standard error
+includes the cost of mitigation.
+
+Each mitigation method returns its estimate with a propagated error:
+
+* zero-noise extrapolation is a linear combination of the folded values
+  (linearised for the exponential fit);
+* probabilistic error cancellation samples Pauli corrections from the
+  quasi-probability inverse of every Pauli channel in the compiled
+  program, and evaluates each sample with a density matrix or one
+  trajectory.
+
+## Hamiltonian simulation and chemistry (`algorithms/time_evolution.rs`, `chemistry/`)
+
+Every exponential of a Pauli string becomes `Circuit::pauli_rotation`: a
+basis change (H for X, H·S† for Y), a CNOT ladder onto the last qubit, one
+`rz` and the reverse. The angle may be a symbolic parameter, so UCC
+generators, QAOA cost layers and Trotter steps differentiate with the
+adjoint method like any other gate. Product formulas list the rotations of
+one step, merge adjacent equal strings (also across steps) and repeat.
+The error bounds are computed in the Pauli algebra with `QubitOperator`
+(a `BTreeMap` from string to complex coefficient, deterministic in order):
+nested commutators of suffix sums, bounded by the coefficient one-norm.
+
+The three fermion mappings are one algorithm. An encoding is a lower
+unitriangular binary matrix `A` with `b = A n`; `a_j† = X_F Z_P (1 + Z_N)/2`
+where `F` is column `j` of `A`, `P` encodes `n_0 ⊕ … ⊕ n_{j−1}` and `N`
+encodes `n_j`, both read off rows of `A⁻¹` (forward substitution over
+GF(2)). Jordan–Wigner, parity and Bravyi–Kitaev differ only in `A`. Since
+`A` is a CNOT circuit, the mappings send Pauli strings to Pauli strings,
+and all of them give the same number of terms.
+
+Full CI does not use the full register: it builds the Hamiltonian's matrix
+in the span of the encoded determinants by applying every Pauli term to
+each basis state and summing the images (single terms leave the sector,
+their sum does not). Up to 4096 determinants the matrix is diagonalised
+densely, beyond that the ground state comes from Lanczos.
+
+## State geometry (`algorithms/geometry.rs`)
+
+`state_derivatives` runs the circuit once and carries one vector per
+parameter: at each parametrised gate it adds `scale · (dU/dφ)|ψ⟩` to that
+parameter's vector, and every later gate is applied to all vectors. This
+costs parameters × gates gate applications and parameters × 2ⁿ memory
+(capped at 2²⁷ amplitudes); from the vectors come the quantum Fisher
+information, the natural gradient and McLachlan's imaginary-time flow.
+VQD reuses the adjoint method with the observable `H + Σ β_j |ψ_j⟩⟨ψ_j|`.
 
 ## Determinism
 

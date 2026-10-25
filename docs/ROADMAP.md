@@ -1,9 +1,12 @@
 # QSO Roadmap (1.x)
 
-Status: October 2026. 1.1, 1.2 and 1.3 delivered — 1.3 combined the
-milestones planned as "quantum walks" and "simulation performance". Noise
-at scale (1.4) is next. Milestone numbers are the release numbers; the
-later milestones moved up by one when the two were merged.
+Status: October 2026. Milestones 1.1 to 1.6 delivered — 1.3 combined the
+milestones planned as "quantum walks" and "simulation performance".
+Milestones 1.4 (noise at scale and error mitigation), 1.5 (algorithms and
+physics) and 1.6 (interoperability) ship together as release 1.4.0. Up to 1.3 milestone and release numbers coincided; from 1.4 on the
+milestone numbers name units of work and releases follow Semantic
+Versioning on their own (the next release after 1.3.0 is 1.4.0, whatever
+it contains).
 
 QSO 1.0 delivers what it documents: every number in the README is reproduced
 by a test against an independent reference, the packages are on crates.io
@@ -35,9 +38,9 @@ which withdraws the results of version 1.
 |---|---|---|
 | Statevector speed | specialised kernels (1.1); gate fusion and cache blocking (1.3.0): 16-qubit layers 4.7× and 18–24-qubit layers 1.6–2.6× faster than in 1.2; batched evaluation | no explicit SIMD, no single precision; the adjoint backward pass is not blocked; worker threads sleep when idle, so short isolated simulations on virtual machines run cold — see [measurements](#measured-performance-against-established-simulators) |
 | Boson sampling | exact probabilities and exact sampling (1.1) | no partial distinguishability, photon loss or Gaussian boson sampling |
-| Noise | density matrices up to 14 qubits; one noise model for all gates and qubits | no trajectories for larger registers, no per-qubit/per-gate models, no error mitigation |
+| Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | no noise learning (PEC needs the Pauli noise given), no leakage or non-Markovian noise, channels on at most two qubits, no virtual distillation or probabilistic error amplification |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0) | no time-dependent Hamiltonians, no open-system discrete-time walks, no pretty-good-transfer decision (only best fidelity in a window) |
-| Physics and chemistry | TFIM, XXZ, MaxCut, H₂ only | no fermion-to-qubit mappings, no product-formula (Trotter) circuits, no excited states |
+| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5) | no integrals of its own (needs FCIDUMP files from a chemistry code), no unrestricted (UHF) integrals, no tight commutator bound for product formulas of order 4 and higher, no time-dependent Hamiltonians |
 | Interoperability | OpenQASM 2 without `gate` definitions; multi-controlled gates exported by exact decomposition (1.3.0); edge lists, GraphML and duck-typed NetworkX import for graphs | no OpenQASM 3, no browser build; no bridges to other frameworks, by decision (see section 2) |
 | Documentation | user guide, executed tutorials and Python reference on GitHub Pages (1.2) | no Rust-specific tutorials; no hosted documentation per released version |
 | Engineering | CI on Linux (x86_64, arm64), macOS and Windows; Miri, fuzzing, API checks, weekly cross-validation and benchmark tracking; Trusted Publishing (1.2) | no coverage measurement; fuzzing only of the parsers and deserialisers |
@@ -113,9 +116,11 @@ theory or physics.
   feature without one is not done.
 * **Performance claims** come only from `benchmark_report` with the machine
   stated, as today.
-* **One minor release per milestone**, published by the release workflow
-  after a dry run; patch releases fix bugs in between. Work that finishes
-  together ships together (1.3 combined two planned milestones).
+* **Minor releases bundle finished milestones**, published by the release
+  workflow after a dry run; patch releases fix bugs in between. Work that
+  finishes together ships together (release 1.3.0 combined two planned
+  milestones; release 1.4.0 carries milestones 1.4 to 1.6). Release
+  numbers never skip a version.
 
 ## 4. Milestones
 
@@ -192,49 +197,108 @@ controls, including blocks of 2–32 amplitudes (also under Miri); batched
 results equal single calls exactly; QAOA phase tables equal direct phases
 to 1e-12. Measurements: [BENCHMARKS.md](BENCHMARKS.md).
 
-### 1.4 — Noise at scale and error mitigation (L, next)
+### 1.4 — Noise at scale and error mitigation (delivered)
 
-| Deliverable | Detail |
-|---|---|
-| Quantum trajectories | Monte-Carlo wavefunction simulation for any register the statevector supports; one seeded stream per trajectory, parallel over trajectories |
-| Device-like noise models | per-qubit and per-gate channels, gate durations with T₁/T₂ idling, coherent over-rotations, correlated two-qubit Pauli noise; JSON device description |
-| Error mitigation | readout calibration (tensored and full), zero-noise extrapolation (unitary folding; Richardson and exponential fits), probabilistic error cancellation for Pauli noise with reported sampling overhead, Pauli twirling |
-| Estimation | classical shadows; variance-optimal shot allocation across measurement groups; confidence intervals in all estimates |
+| Deliverable | Delivered | Not done, and why |
+|---|---|---|
+| Quantum trajectories | `TrajectorySimulator` and a trajectory device backend for any register the state vector holds, one seeded stream per trajectory, parallel over trajectories. Waiting-time method: unitary mixtures sampled up front, jumps found by galloping search and bisection, stretches without jumps run as fused, cache-blocked circuits — 200 trajectories take 1.2–1.3 times as long as 200 noiseless runs at 16 qubits | — |
+| Device-like noise models | `DeviceModel` with per-qubit T₁/T₂ and readout errors, ordered gate rules (name, qubits, size) with durations, depolarising errors, over-rotations and further channels; ASAP scheduling with relaxation of waiting qubits; Pauli channels (correlated two-qubit noise), coherent rotations; JSON descriptions with a fuzz target | channels on three or more qubits: no device data needs them yet |
+| Error mitigation | readout calibration (tensored and full) with exact per-shot mitigated weights; zero-noise extrapolation (global and random folding; linear, Richardson, polynomial and exponential fits with propagated errors); probabilistic error cancellation of Pauli noise with its overhead; Pauli twirling of cx, cy, cz and swap | learning the Pauli noise of a device (cycle benchmarking): QSO simulates devices whose noise it is given |
+| Estimation | `Estimate` (standard error, confidence interval) for every stochastic result; uniform, weighted and adaptive (Neyman) shot allocation; classical shadows with median of means | — |
 
-Validation: trajectories match density-matrix results within statistical
-error (χ² test) up to 10 qubits; mitigated estimates converge to the
-noiseless value within their error bars; PEC is unbiased for known Pauli
-channels; shadow estimates satisfy their variance bounds.
+Validation:
 
-### 1.5 — Algorithms and physics (L)
+* trajectory samples pass χ² tests against density matrices on 3, 6 and
+  10 qubits, also with several jumps per trajectory;
+* readout mitigation plus ZNE recovers a GHZ correlator within its error
+  bars (4.00 ± 0.01 against a raw 3.38);
+* PEC equals the noiseless value to 10⁻¹² when summed over all
+  corrections, and sampled PEC lies within its error bars;
+* the Pauli twirl of a channel equals the exact average over all 16
+  frames;
+* the single-snapshot variance of shadows is 3ᵏ − ⟨P⟩²;
+* 95 % intervals cover the exact value in 91–99 % of repeated estimates;
+* adaptive allocation stays unbiased for nearly deterministic groups.
 
-| Deliverable | Detail |
-|---|---|
-| Hamiltonian simulation | 1st/2nd/4th-order Trotter–Suzuki circuits with commutator error bounds, qDRIFT |
-| Fermions | fermionic operators; Jordan–Wigner, parity (with two-qubit reduction) and Bravyi–Kitaev mappings; molecular Hamiltonians from FCIDUMP files; Hartree–Fock states; UCCSD and k-UpCCGSD ansätze; ADAPT-VQE |
-| Excited states and geometry | VQD, SSVQE; quantum Fisher information and natural gradient; variational imaginary-time evolution |
-| Optimisation problems | QUBO/Ising input; constrained QAOA with XY mixers; warm-start QAOA |
-| Amplitude estimation | canonical, iterative and maximum-likelihood variants |
+An independent review of the new code found two parser-reachable panics,
+a biased adaptive allocation (pilot and main shots were pooled) and
+quadratic trajectory cost in the number of jumps. All were fixed before
+the release.
 
-Validation: Trotter errors stay below their bounds and converge with the
-order of the formula; all three fermion mappings give identical spectra,
-equal to full CI, for H₂, LiH and BeH₂ in STO-3G; QFI agrees with finite
-differences; VQD energies match exact diagonalisation; amplitude-estimation
-error scales as 1/M.
+### 1.5 — Algorithms and physics (delivered)
 
-### 1.6 — Interoperability and reach (M)
+| Deliverable | Delivered | Not done, and why |
+|---|---|---|
+| Hamiltonian simulation | `Circuit::pauli_rotation`; product formulas of order 1, 2, 4, 6, …; `trotter_error_bound` with the commutator bounds of Childs et al. (2021) for orders 1 and 2 and the smaller of a stage-wise and a Taylor-remainder bound above; qDRIFT with Campbell's bound | a tight commutator bound for order ≥ 4 (the paper's Appendix J is heuristic in its constants); the bound QSO gives there is rigorous but loose |
+| Fermions | `FermionOperator` with normal ordering; Jordan–Wigner, parity and Bravyi–Kitaev mappings as binary transforms; two-qubit reduction; `MolecularIntegrals` from FCIDUMP files with Hartree–Fock states and energies and full CI; UCCSD, k-UpCCGSD, ADAPT-VQE; FCIDUMP files of H₂, LiH and BeH₂ with PySCF reference energies | computing integrals (that needs a quantum-chemistry code; FCIDUMP is the exchange format, as OpenQASM is for circuits); unrestricted orbitals |
+| Excited states and geometry | VQD, weighted SSVQE; exact state derivatives, quantum Fisher information, quantum natural gradient; McLachlan imaginary-time evolution (RK4) | — |
+| Optimisation problems | `Qubo`/`Ising` with exact enumeration; QAOA for any diagonal cost with X, ring and complete XY mixers from Dicke states, and the warm-start mixer | a built-in continuous relaxation for warm starts: the user supplies `c ∈ [0, 1]ⁿ` |
+| Amplitude estimation | canonical (exact outcome distribution), iterative (Chernoff–Hoeffding intervals) and maximum-likelihood variants | Clopper–Pearson intervals for iterative estimation |
 
-| Deliverable | Detail |
-|---|---|
-| OpenQASM | `gate` definitions in QASM 2; an OpenQASM 3 subset (gate definitions, parameters, `measure`, `reset`, simple classical conditions) |
-| Browser | `wasm32` build and npm package; interactive Metatron playground (walks, search, symmetry) on GitHub Pages |
+Validation:
+
+* product-formula errors stay below their bounds and fall as `r^{-order}`
+  (orders 1, 2 and 4 on Heisenberg, Ising and random 4-qubit
+  Hamiltonians); the qDRIFT channel converges as `1/N` below its bound;
+* all four encodings give identical determinant-space spectra, equal to
+  PySCF's full CI to 10⁻⁸ Ha, for H₂, LiH and BeH₂ in STO-3G; Hartree–Fock
+  energies agree to 10⁻⁹ Ha;
+* UCCSD and ADAPT-VQE reach the full-CI energy of LiH within 1.1·10⁻⁵ Ha;
+* the quantum Fisher information equals −2 times the Hessian of the
+  fidelity (finite differences); imaginary-time evolution follows the
+  exact normalised evolution to 10⁻⁶;
+* VQD and SSVQE reproduce exact spectra (all levels of H₂, three levels of
+  an Ising chain);
+* XY mixers keep all probability on feasible strings;
+* the RMSE of maximum-likelihood amplitude estimation falls with slope
+  −0.99 in the oracle calls (−0.49 for plain sampling); canonical
+  estimates meet their error bound with probability ≥ 8/π²; iterative
+  intervals cover the true value (1 miss in 200 at α = 0.05).
+
+Two independent reviews (core and Python bindings) found no wrong results
+on the validated paths. They found panics on overflowing angles and
+malformed inputs, unbounded allocations (circuit size, fermion products,
+full-CI spaces, enumeration, restart counts), an error bound that collapsed
+to 0 when its commutators overflowed, a VQD default penalty that equalled
+the largest possible gap instead of exceeding it, and SSVQE accepting
+weights that are not strictly decreasing. All were fixed with regression
+tests before the release.
+
+### 1.6 — Interoperability and reach (delivered)
+
+| Deliverable | Delivered | Not done, and why |
+|---|---|---|
+| OpenQASM | one parser for OpenQASM 2.0 and an OpenQASM 3 subset: `gate` definitions, `ctrl`/`negctrl`/`inv`/integer `pow` modifiers, `gphase`, `measure`, `reset`, conditions with blocks and `else`; `Program` with exact outcome distributions over measurement branches and seeded sampling; export to both versions; Python `Program`, `qso qasm` for programs | OpenQASM 3's classical types and arithmetic, loops, subroutines, calibrations and timing: they turn programs into a classical language, and the exact branch-following simulation would need an interpreter. They are rejected with an error naming the feature |
+| Browser | the core builds for `wasm32`; `metatron_qso_wasm` (a module without imports, JSON interface); npm package `metatron-qso` with types; playground for OpenQASM programs, walks, search and symmetry data at `/playground/` of the documentation site | multi-threading in the browser (needs cross-origin isolation and nightly Rust); the first npm publish is manual, because npm attaches trusted publishers only to existing packages |
 
 Bridges to Qiskit, PennyLane and Cirq are not planned (decision of October
 2026): they would add test dependencies and follow those projects' release
 cycles. OpenQASM 2/3 is the exchange format.
 
-Validation: QASM round trips on the official example files; the wasm build
-passes the same test vectors as the native build.
+Validation:
+
+* the example programs of the OpenQASM project give their known results
+  (adder, phase estimation, teleportation, W state, repetition code,
+  QFT, randomised benchmarking); the six OpenQASM 3 examples in the
+  subset match their OpenQASM 2 versions, the other fifteen are
+  rejected; all round-trip through both exports;
+* a fuzz target checks that the exports of random programs reproduce
+  their outcome distributions;
+* the wasm build passes the same test vectors as the native build: the
+  library's unit, validation, OpenQASM and robustness tests run as
+  `wasm32-wasip1` under Node.js in CI, and the npm package's tests check
+  the OpenQASM examples and graph results.
+
+An independent review confirmed the phase semantics against the
+specification's `stdgates.inc` and found that 3000 random programs
+survive both exports. It found inputs that crashed or hung the reader (a
+50,000-term sum overflowed the stack; doubling definitions of `id` and
+large `ctrl`/`pow` products escaped the operation budget), constructs that
+were misread instead of rejected (`bool(c) == true`, slices with negative
+ends, parameters named `euler`, integers above 2⁵³, odd version numbers),
+register names that made exports unreadable, and records above 32 bits
+truncated in WebAssembly. All were fixed with regression tests before the
+release.
 
 ### Research track (decide after 1.6)
 
@@ -251,9 +315,13 @@ core is close to memory bandwidth.
 2. **1.3: walks and performance together.** Walks are QSO's distinctive
    contribution and build on the refinement, Lanczos and walk code; the
    performance work was independent and finished at the same time.
-3. **1.4 (noise) and 1.5 (algorithms)** enter crowded fields and can swap
-   places depending on whether noise or chemistry users show up first.
-4. **1.6 (interoperability)** without framework bridges.
+3. **1.4: noise before algorithms.** Device models, trajectories and
+   mitigation reuse the kernels and execution plans directly and make
+   every later algorithm testable under realistic noise.
+4. **1.5: algorithms and physics**, on top of the noise and estimation
+   tools.
+5. **1.6: interoperability**, without framework bridges. Milestones 1.4
+   to 1.6 ship as one release, 1.4.0, to keep releases (and CI runs) few.
 
 ## 6. Measures of success
 
@@ -263,7 +331,8 @@ core is close to memory bandwidth.
   tracked per release.
 * Usability: docs site with executed tutorials; every user-facing Rust
   feature is available from Python.
-* Releases: one per milestone, published without stored tokens.
+* Releases: one per milestone, or fewer when milestones finish together;
+  published without stored tokens.
 
 ## 7. Decisions
 
@@ -271,8 +340,14 @@ Taken (October 2026):
 
 * Walks and performance first, shipped together as 1.3.
 * No Qiskit, PennyLane or Cirq bridges.
-
-Open:
-
-* Whether the browser playground is worth its maintenance cost.
-* Whether noise (1.4) or algorithms and physics (1.5) come first.
+* Noise and mitigation (1.4) before algorithms and physics (1.5).
+* Milestones 1.4 to 1.6 ship as release 1.4.0; release numbers follow
+  Semantic Versioning and are no longer tied to milestone numbers.
+* No integral code: molecules come in as FCIDUMP files, written by any
+  quantum-chemistry program (the repository's files by PySCF).
+* The browser playground stays, because it costs little to maintain: it
+  is plain HTML and JavaScript without dependencies or a build step, it
+  uses only the npm package's JSON interface, which the package's tests
+  cover, and the documentation build publishes it. If it ever needs
+  more than that, it is removed from the site rather than given a
+  framework.

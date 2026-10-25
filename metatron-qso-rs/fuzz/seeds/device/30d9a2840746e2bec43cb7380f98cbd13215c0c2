@@ -1,0 +1,12 @@
+{
+  "name": "toy-5q",
+  "num_qubits": 5,
+  "qubits": [
+    {"t1": 1, "readout": [0.02, 0.045]}
+  ],
+  "gates": [
+    {"gate": 			{
+  "name": "toy-5q",
+  "num_qubits": 5,
+  "8,
+     "crotation": {"pauli"hanne: "ZZ", "angle": 0.02}

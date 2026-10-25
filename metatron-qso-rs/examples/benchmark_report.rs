@@ -12,6 +12,7 @@ use metatron_qso::algorithms::gradients::{
     expectation_batch,
 };
 use metatron_qso::algorithms::qaoa::optimize_layerwise;
+use metatron_qso::noise;
 use metatron_qso::prelude::*;
 
 fn median_seconds(repeats: usize, mut f: impl FnMut()) -> f64 {
@@ -209,6 +210,102 @@ fn main() -> Result<()> {
         "| automorphism group of Metatron's Cube (13!) | {} |",
         fmt_time(t)
     );
+
+    println!(
+        "\n## Noisy circuits (device: T1 = 100, T2 = 80, gate durations, depolarising errors)\n"
+    );
+    println!(
+        "Layers of RY on every qubit and a brick of CX, 4 layers; one trajectory against the noiseless circuit.\n"
+    );
+    println!("| qubits | gates | noiseless | one trajectory | ratio |");
+    println!("|---:|---:|---:|---:|---:|");
+    let device = noise::DeviceModel::new("benchmark")
+        .with_default_qubit(noise::QubitProperties::new().with_t1_t2(100.0, 80.0))
+        .with_rule(
+            noise::GateRule::any()
+                .with_num_qubits(2)
+                .with_duration(0.3)
+                .with_depolarizing(0.01),
+        )
+        .with_rule(
+            noise::GateRule::any()
+                .with_duration(0.035)
+                .with_depolarizing(0.001),
+        );
+    let layered = |n: usize| {
+        let mut c = Circuit::new(n);
+        for l in 0..4 {
+            for q in 0..n {
+                c.ry(q, 0.3 + 0.1 * (q + l) as f64);
+            }
+            for q in (l % 2..n - 1).step_by(2) {
+                c.cx(q, q + 1);
+            }
+        }
+        c
+    };
+    for n in [12usize, 16, 20] {
+        let c = layered(n);
+        let ideal = median_seconds(5, || {
+            StateVector::from_circuit(&c, &[]).unwrap();
+        });
+        let mut k = 0;
+        let noisy = median_seconds(5, || {
+            k += 1;
+            noise::TrajectorySimulator::new(device.clone(), 1, k)
+                .unwrap()
+                .trajectory_state(&c, &[], 0)
+                .unwrap();
+        });
+        record(format!("trajectory/qubits={n}"), noisy);
+        println!(
+            "| {n} | {} | {} | {} | {:.1} |",
+            c.len(),
+            fmt_time(ideal),
+            fmt_time(noisy),
+            noisy / ideal
+        );
+    }
+    // Throughput: many trajectories (compiled once, parallel over
+    // trajectories) against as many noiseless runs.
+    println!("\n| 200 runs, 16 qubits | time | per run |");
+    println!("|---|---:|---:|");
+    let c = layered(16);
+    let ideal = median_seconds(3, || {
+        for _ in 0..200 {
+            StateVector::from_circuit(&c, &[]).unwrap();
+        }
+    });
+    let z: PauliSum = "Z0".parse().unwrap();
+    let noisy = median_seconds(3, || {
+        noise::TrajectorySimulator::new(device.clone(), 200, 1)
+            .unwrap()
+            .expectation(&c, &[], &z)
+            .unwrap();
+    });
+    record("trajectories200/qubits=16".into(), noisy);
+    println!(
+        "| noiseless | {} | {} |",
+        fmt_time(ideal),
+        fmt_time(ideal / 200.0)
+    );
+    println!(
+        "| trajectories ({:.1}× the noiseless time) | {} | {} |",
+        noisy / ideal,
+        fmt_time(noisy),
+        fmt_time(noisy / 200.0)
+    );
+    println!("\n| density matrix, same circuit | time |");
+    println!("|---|---:|");
+    for n in [8usize, 10] {
+        let c = layered(n);
+        let t = median_seconds(3, || {
+            let mut rho = noise::DensityMatrix::zero(n).unwrap();
+            rho.apply_device(&c, &[], &device).unwrap();
+        });
+        record(format!("density_matrix_device/qubits={n}"), t);
+        println!("| {n} qubits | {} |", fmt_time(t));
+    }
 
     println!("\n## Validated results (reproduced by this run)\n");
     println!("| quantity | QSO | reference |");

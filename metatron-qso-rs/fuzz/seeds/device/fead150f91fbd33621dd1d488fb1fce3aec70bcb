@@ -1,0 +1,5 @@
+{
+  "name": "toy-5q",
+  "num_qubits": 5,
+  "qubits": [
+    {"t1": 110.0, "t2": 42.0, "readout"	: [0.01 {"t1": 95

@@ -1,8 +1,9 @@
 name: Docs
 
 # Builds the documentation site: the user guide (mdBook, docs/guide), the
-# tutorials (docs/tutorials, executed during the build) and the Python API
-# reference (pdoc). Every code block of the guide is run as part of the
+# tutorials (docs/tutorials, executed during the build), the Python API
+# reference (pdoc) and the playground (docs/playground), which runs QSO
+# compiled to WebAssembly. Every code block of the guide is run as part of the
 # build. Pull requests build the site; pushes to main also deploy it to
 # GitHub Pages (Settings → Pages → Source: GitHub Actions).
 
@@ -31,6 +32,9 @@ jobs:
         with:
           python-version: "3.13"
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          # The playground's WebAssembly module.
+          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:

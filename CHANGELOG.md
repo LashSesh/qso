@@ -4,6 +4,189 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.4.0] — 2026-10-25
+
+Milestones 1.4 (noise at scale and error mitigation), 1.5 (algorithms and
+physics) and 1.6 (interoperability) of the [roadmap](docs/ROADMAP.md),
+released together. Every new feature is tested against an
+independent reference — exact diagonalisation, PySCF's full CI, density
+matrices, exact sums, closed forms or the known results of the OpenQASM
+project's example programs (named below). No validated result of earlier
+releases changed.
+
+### Added — interoperability (milestone 1.6)
+
+- **OpenQASM programs** (`quantum::Program`, `quantum::openqasm`).
+  - One parser for OpenQASM 2.0 and a subset of OpenQASM 3: `gate`
+    definitions with parameters, `U`, `CX` and `gphase`; the modifiers
+    `ctrl @`, `ctrl(n) @`, `negctrl @`, `inv @` and integer `pow(k) @`;
+    `measure`, `reset`, `barrier`; conditions on a register, a bit or
+    `int[n](c)` with `==`/`!=`, blocks and `else`; register broadcasting,
+    slices and parameter expressions. Other OpenQASM 3 features are
+    rejected with an error that names them.
+  - Global phases follow each version's specification: OpenQASM 3's `U`
+    is `e^{iθ/2}` times the standard U3 matrix, and `gphase` and the
+    phases of `u2`/`u3` become relative phases under `ctrl @`.
+  - `Program::probabilities` gives the exact distribution of the
+    classical bits by following every measurement branch (up to 4096);
+    `Program::sample` draws seeded shots, simulating shot by shot beyond
+    that.
+  - Export to OpenQASM 3 (`Program::to_qasm3`, `to_qasm3` for circuits,
+    controlled gates as `ctrl @`) and to OpenQASM 2 where the program
+    allows it.
+  - The example programs of the OpenQASM project
+    (`tests/data/openqasm`, Apache-2.0) give their known results: the
+    adder computes 1 + 15 = 16, phase estimation of `e^{i·3π/8}` gives
+    3/16 exactly, teleportation sends sin²(0.15), the W state has three
+    outcomes of 1/3, the repetition code corrects its error. The six
+    OpenQASM 3 examples in the subset match their OpenQASM 2 versions,
+    the other fifteen are rejected, and all survive round trips through
+    both exports.
+- **WebAssembly and JavaScript.**
+  - The core library builds for `wasm32` (without the `parallel`
+    feature). Its unit, validation, OpenQASM and robustness tests run in
+    CI as `wasm32-wasip1` under Node.js (`scripts/wasi-runner.mjs`).
+  - `metatron_qso_wasm`: a module without imports and with one JSON entry
+    point (`qasm`, `graph`, `walk`, `search`, `isomorphism`, `version`).
+  - npm package `metatron-qso` (`metatron_qso_wasm/js`): a dependency-free
+    wrapper with TypeScript types, tested with Node against the same
+    OpenQASM examples and graph results as the native build. Built by
+    `scripts/build_wasm.py`.
+  - A browser playground (`docs/playground`, published with the
+    documentation site at `/playground/`): OpenQASM programs with
+    histograms and exports, animated quantum walks and spatial search on
+    Metatron's Cube and any graph specification, run in a Web Worker.
+- Python: `Program` (`from_qasm`, `from_circuit`, `probabilities`,
+  `sample`, `to_circuit`, `to_qasm3`, `to_qasm2`) and `Circuit.to_qasm3`.
+- CLI: `qso qasm` runs OpenQASM 2 and 3 programs exactly, mid-circuit
+  measurements and conditions included, and converts them
+  (`--export qasm2|qasm3`); `qso estimate` reads unitary OpenQASM 3
+  programs.
+- Fuzz target `openqasm`: the OpenQASM 2 and 3 exports of a random
+  program reproduce its outcome distribution.
+- Guide chapters "OpenQASM programs" and "WebAssembly and JavaScript".
+
+### Added — algorithms and physics (milestone 1.5)
+
+- **Hamiltonian simulation** (`algorithms::time_evolution`).
+  - `Circuit::pauli_rotation` appends `exp(−iθP/2)` for any Pauli string.
+  - Product-formula circuits of order 1, 2, 4, 6, … (Lie–Trotter, Strang,
+    Suzuki) and `trotter_error_bound`: the commutator bounds of Childs et
+    al. (2021) for orders 1 and 2, the smaller of a stage-wise and a
+    Taylor-remainder bound for higher orders. In the tests the actual
+    errors stay below the bounds (by factors 3.5–13 for orders 1 and 2;
+    the order-4 bound is valid but loose) and fall as `r^{-order}`.
+  - qDRIFT circuits with Campbell's bound; the exact average channel
+    converges as `1/N` and stays below it.
+  - `QubitOperator` for complex combinations of Pauli strings.
+- **Electronic structure** (`chemistry`).
+  - `FermionOperator` with parsing and normal ordering.
+  - Jordan–Wigner, parity and Bravyi–Kitaev mappings as linear binary
+    transforms, and the two-qubit reduction of the parity mapping
+    (`QubitEncoding`).
+  - `MolecularIntegrals`: FCIDUMP reading and writing, qubit
+    Hamiltonians, Hartree–Fock states and energies, full CI in the
+    determinant space (dense up to 4096 determinants, Lanczos above).
+  - FCIDUMP files and PySCF reference energies for H₂, LiH and BeH₂ in
+    STO-3G (`examples/molecules/`). All four encodings give identical
+    determinant-space spectra equal to PySCF's full CI (10⁻⁸ Ha);
+    Hartree–Fock energies agree to 10⁻⁹ Ha.
+  - UCCSD and k-UpCCGSD ansätze and ADAPT-VQE. UCCSD and ADAPT-VQE reach
+    LiH's full-CI energy within 1.1·10⁻⁵ Ha on 10 qubits.
+- **Excited states and state geometry.**
+  - VQD and weighted SSVQE (`algorithms::excited`), checked against exact
+    diagonalisation (all levels of H₂, three levels of an Ising chain).
+  - State derivatives, the quantum Fisher information (checked against
+    finite differences of the fidelity), quantum natural gradient and
+    McLachlan imaginary-time evolution, which follows the exact
+    normalised evolution to 10⁻⁶ (`algorithms::geometry`).
+- **Optimisation problems** (`algorithms::combinatorial`): QUBO and Ising
+  problems with exact enumeration; QAOA for any diagonal cost with X, ring
+  or complete XY (Hamming weight conserved) and warm-start mixers.
+- **Amplitude estimation** (`algorithms::amplitude_estimation`):
+  canonical (exact outcome distribution, error bound met with probability
+  ≥ 8/π²), iterative (Grinko et al.; 1 miss in 200 at α = 0.05) and
+  maximum-likelihood (Suzuki et al.; RMSE slope −0.99 in the oracle calls,
+  against −0.49 for plain sampling).
+- **CLI:** `qso molecule FILE` and `qso trotter`.
+- Example `molecules`, tutorial 07, guide chapters on excited states,
+  Hamiltonian simulation, electronic structure, and optimisation and
+  amplitude estimation; a fuzz target for the new parsers.
+- Python: all of the above, with type stubs.
+
+### Added — noise at scale and error mitigation (milestone 1.4)
+
+
+- **Device models** (`noise::DeviceModel`, JSON via `from_json` /
+  `to_json`).
+  - Per-qubit T₁/T₂ and readout errors. Unset fields follow
+    `default_qubit`.
+  - Ordered gate rules matched by name, qubits or size; the first match
+    applies. A rule sets the duration, a depolarising error, a relative
+    over-rotation and further channels.
+  - Gates are scheduled as early as possible; qubits relax while they
+    wait.
+  - Results agree with hand-built channel sequences to 1e-14, and a
+    `NoiseModel` compiles to the same channels.
+  - New fuzz target `device`.
+- **Channels:** `Channel::pauli` (labels such as `"ZZ"`), `rotation`
+  (coherent errors), `unitary`, `pauli_probabilities`, `twirled` (Pauli
+  twirl) and `compose`.
+- **Quantum trajectories** (`noise::TrajectorySimulator`,
+  `backend::DeviceBackend`).
+  - Monte-Carlo wave functions for any register a state vector holds,
+    seeded per trajectory and parallel over trajectories.
+  - Waiting-time method: unitary mixtures are sampled up front; stretches
+    without a jump run as one fused, cache-blocked circuit; jumps are
+    found by galloping search and bisection.
+  - One trajectory, compilation included, costs 3.0–3.5 noiseless runs at
+    16–20 qubits; 200 trajectories take 1.2–1.3 times as long as 200 noiseless
+    runs at 16 qubits.
+  - Samples pass χ² tests against density matrices on 3, 6 and 10
+    qubits, also with several jumps per trajectory.
+- **Estimates with errors** (`estimation`).
+  - `Estimate` (standard error, confidence interval).
+  - `estimate()` with uniform, weighted and adaptive (Neyman) shot
+    allocation and optional readout mitigation by exact per-shot weights.
+    95 % intervals cover the exact value in 91–99 % of 300 repetitions.
+  - `ClassicalShadow`: random Pauli snapshots, mean and median of means.
+    The single-snapshot variance equals 3ᵏ − ⟨P⟩².
+- **Error mitigation** (`mitigation`).
+  - `ReadoutCalibration`: tensored or full calibration, quasi-probabilities
+    and the nearest probability distribution. Checked against brute force.
+  - Zero-noise extrapolation (`zne`): global and random folding; linear,
+    Richardson, polynomial and exponential fits with propagated errors.
+    Richardson on scales 1, 3, 5 reduces the error of a depolarised test
+    circuit about 380×.
+  - Probabilistic error cancellation of Pauli noise (`pec`) with its
+    overhead. The exact sum over all corrections equals the noiseless
+    value to 1e-12.
+  - Pauli twirling of cx, cy, cz and swap (`twirl`). The average over all
+    16 frames equals the twirled channel.
+  - On a five-qubit toy device, readout mitigation plus ZNE recovers
+    ⟨Σ Z_i Z_{i+1}⟩ = 4.00 ± 0.01 (raw 3.38), and PEC 4.00 ± 0.01.
+- **CLI:** `qso qasm --device FILE [--trajectories N]`, and
+  `qso estimate` with standard errors, readout mitigation, `--zne` and
+  `--pec`.
+- Example `noise_mitigation` with `examples/devices/toy_device.json`;
+  tutorial 06 and the guide chapter "Estimation and error mitigation".
+- Python: all of the above, with type stubs.
+
+### Changed
+
+- `from_qasm2` reads through the new parser: it now accepts `gate`
+  definitions, and still drops measurements; `reset` and
+  conditions remain errors there.
+- `qso qasm` without `--noise`/`--device` samples the program's classical
+  bits (all qubits for a program without bits), where it used to drop
+  measurements and measure every qubit.
+- `MAX_QUBITS` is 26 on 32-bit targets such as WebAssembly (34 on 64-bit
+  targets).
+- The release workflow also publishes the npm package.
+- `DensityMatrix::apply_device`, `sample_with_readout`, `scale` and
+  `add_scaled`. Consecutive channels on the same qubits are applied as
+  one superoperator.
+
 ## [1.3.0] — 2026-10-24
 
 Milestone 1.3 of the [roadmap](docs/ROADMAP.md), which combined the two

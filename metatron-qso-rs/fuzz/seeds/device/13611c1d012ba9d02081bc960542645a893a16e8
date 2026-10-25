@@ -1,0 +1,8 @@
+{
+  "name": "toy-5q",
+  "num_qubits": 5,
+  "qubits": [
+    {"t1": 110.0, "t2": 85.0, "readout": [0.01, 0.03]},
+    {"t1": 80.0, "t2": 60.0, "readout": [0.025,								EEE		"t1": 100.0, over_rotation": 0.002}
+  ]
+}

@@ -1,4 +1,5 @@
 //! Property-based tests on random circuits, observables and graphs.
+#![cfg(not(target_family = "wasm"))]
 
 use metatron_qso::algorithms::gradients::{GradientMethod, expectation_and_gradient};
 use metatron_qso::prelude::*;

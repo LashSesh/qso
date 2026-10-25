@@ -31,6 +31,7 @@ use num_complex::Complex64 as C64;
 use serde::{Deserialize, Serialize};
 
 use super::gates::{GateKind, dagger, is_unitary};
+use super::pauli::{Pauli, PauliString};
 use crate::error::{QsoError, Result};
 
 /// Handle to circuit parameter `index`, optionally scaled and shifted.
@@ -112,9 +113,14 @@ impl Param {
     }
 
     fn negated(self) -> Param {
+        self.scaled(-1.0)
+    }
+
+    /// The angle multiplied by `s`.
+    pub(crate) fn scaled(self, s: f64) -> Param {
         match self {
-            Param::Value(v) => Param::Value(-v),
-            Param::Symbol(p) => Param::Symbol(-p),
+            Param::Value(v) => Param::Value(s * v),
+            Param::Symbol(p) => Param::Symbol(p * s),
         }
     }
 }
@@ -367,6 +373,14 @@ impl Circuit {
     fn validate(&self, inst: &Instruction) -> Result<()> {
         inst.validate(self.n_qubits)
     }
+
+    /// Append an instruction without validation (for crate-internal
+    /// non-unitary matrices such as the no-jump Kraus operators of quantum
+    /// trajectories; qubits and shapes must be valid).
+    pub(crate) fn push_trusted(&mut self, inst: Instruction) {
+        debug_assert!(inst.qubits().all(|q| q < self.n_qubits));
+        self.instructions.push(inst);
+    }
 }
 
 impl Instruction {
@@ -590,6 +604,89 @@ impl Circuit {
     pub fn mcz(&mut self, qubits: &[usize]) -> &mut Self {
         let (target, controls) = qubits.split_last().expect("mcz needs at least one qubit");
         self.push_gate(GateKind::Z, &[*target], controls, &[])
+    }
+
+    /// Append `exp(−iθP/2)` for a Pauli string `P` (the convention of
+    /// `rx`, `rzz`, …). Single-qubit strings and two-qubit `XX`, `YY`, `ZZ`
+    /// become one rotation; longer strings a basis change, a CNOT ladder and
+    /// one `rz`. The identity string is only a global phase and adds no
+    /// gate. A symbolic angle stays differentiable.
+    pub fn pauli_rotation(
+        &mut self,
+        string: &PauliString,
+        angle: impl Into<Param>,
+    ) -> Result<&mut Self> {
+        let angle = angle.into();
+        let finite = match angle {
+            Param::Value(v) => v.is_finite(),
+            Param::Symbol(p) => p.scale.is_finite() && p.offset.is_finite(),
+        };
+        if !finite {
+            return Err(QsoError::invalid("angle", "non-finite gate angle"));
+        }
+        let factors: Vec<(usize, Pauli)> = (0..64)
+            .map(|q| (q, string.get(q)))
+            .filter(|&(_, p)| p != Pauli::I)
+            .collect();
+        if let Some(&(q, _)) = factors.iter().find(|&&(q, _)| q >= self.n_qubits) {
+            return Err(QsoError::QubitOutOfRange {
+                qubit: q,
+                n_qubits: self.n_qubits,
+            });
+        }
+        let kind = |p: Pauli| match p {
+            Pauli::X => GateKind::RX,
+            Pauli::Y => GateKind::RY,
+            _ => GateKind::RZ,
+        };
+        match factors[..] {
+            [] => {}
+            [(q, p)] => {
+                self.push_gate(kind(p), &[q], &[], &[angle]);
+            }
+            [(a, p), (b, r)] if p == r => {
+                let kind = match p {
+                    Pauli::X => GateKind::RXX,
+                    Pauli::Y => GateKind::RYY,
+                    _ => GateKind::RZZ,
+                };
+                self.push_gate(kind, &[a, b], &[], &[angle]);
+            }
+            _ => {
+                // V P V† = Z…Z with V = H (X), H·S† (Y), I (Z).
+                for &(q, p) in &factors {
+                    match p {
+                        Pauli::X => {
+                            self.h(q);
+                        }
+                        Pauli::Y => {
+                            self.sdg(q).h(q);
+                        }
+                        _ => {}
+                    }
+                }
+                for w in factors.windows(2) {
+                    self.cx(w[0].0, w[1].0);
+                }
+                let last = factors[factors.len() - 1].0;
+                self.push_gate(GateKind::RZ, &[last], &[], &[angle]);
+                for w in factors.windows(2).rev() {
+                    self.cx(w[0].0, w[1].0);
+                }
+                for &(q, p) in &factors {
+                    match p {
+                        Pauli::X => {
+                            self.h(q);
+                        }
+                        Pauli::Y => {
+                            self.h(q).s(q);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        Ok(self)
     }
 
     /// Append an arbitrary unitary (row-major, dimension `2^targets.len()`)

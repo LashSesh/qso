@@ -23,3 +23,8 @@ docs/technical-note/build/
 docs/guide/book/
 docs/guide/src/tutorials/
 site/
+
+# npm package contents built by scripts/build_wasm.py
+metatron_qso_wasm/js/qso.wasm
+metatron_qso_wasm/js/LICENSE
+metatron_qso_wasm/js/*.tgz

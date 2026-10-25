@@ -1,0 +1,6 @@
+{
+"gates": [
+       {"gate": "cx", "duration": 0.3, "depolarizing": 0.008,
+     "channels": [{"pauli": {"ZZ":0.0005, "over_rotatum_qubits": 1, "duration": 1.0tru "depolarizin 0.002}
+  ]
+}

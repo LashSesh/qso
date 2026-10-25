@@ -238,3 +238,349 @@ fn shrikhande_and_rook_graph_are_cospectral_but_not_isomorphic() {
     assert_eq!(s.automorphism_group().order(), Some(192));
     assert_eq!(r.automorphism_group().order(), Some(1152));
 }
+
+/// The toy device of `examples/devices/toy_device.json`.
+fn toy_device() -> metatron_qso::noise::DeviceModel {
+    metatron_qso::noise::DeviceModel::from_json(include_str!("../examples/devices/toy_device.json"))
+        .unwrap()
+}
+
+fn ghz(n: usize) -> Circuit {
+    let mut c = Circuit::new(n);
+    c.h(0);
+    for q in 0..n - 1 {
+        c.cx(q, q + 1);
+    }
+    c
+}
+
+fn zz_chain(n: usize) -> PauliSum {
+    let terms: Vec<String> = (0..n - 1).map(|q| format!("Z{q} Z{}", q + 1)).collect();
+    terms.join(" + ").parse().unwrap()
+}
+
+#[test]
+fn trajectories_reproduce_the_noisy_density_matrix() {
+    use metatron_qso::noise::{DensityMatrix, TrajectorySimulator};
+    let (device, c, h) = (toy_device(), ghz(5), zz_chain(5));
+    let mut rho = DensityMatrix::zero(5).unwrap();
+    rho.apply_device(&c, &[], &device).unwrap();
+    let exact = rho.expectation(&h).unwrap();
+    let e = TrajectorySimulator::new(device, 4000, 1)
+        .unwrap()
+        .expectation(&c, &[], &h)
+        .unwrap();
+    assert!((e.value - exact).abs() < 4.0 * e.std_error);
+    assert!(e.std_error < 0.02);
+}
+
+#[test]
+fn readout_mitigation_and_zne_recover_the_noiseless_value() {
+    use metatron_qso::backend::DeviceBackend;
+    use metatron_qso::estimation::{EstimatorOptions, estimate};
+    use metatron_qso::mitigation::ReadoutCalibration;
+    use metatron_qso::mitigation::zne::{Extrapolation, Folding, zne};
+    let (device, c, h) = (toy_device(), ghz(5), zz_chain(5));
+    let backend = DeviceBackend::density_matrix(device).unwrap();
+    let options = EstimatorOptions::new(200_000).with_seed(2);
+    let raw = estimate(&backend, &c, &[], &h, &options).unwrap().estimate;
+    assert!(4.0 - raw.value > 0.5, "raw {}", raw.value);
+    let cal = ReadoutCalibration::tensored(&backend, 5, 200_000, 3).unwrap();
+    let options = options.with_readout_mitigation(cal);
+    let mut k = 10;
+    let r = zne(
+        &c,
+        &[1.0, 3.0, 5.0],
+        Folding::Global,
+        Extrapolation::Richardson,
+        |folded| {
+            k += 1;
+            Ok(estimate(&backend, folded, &[], &h, &options.clone().with_seed(k))?.estimate)
+        },
+    )
+    .unwrap();
+    assert!(
+        (r.estimate.value - 4.0).abs() < 4.0 * r.estimate.std_error + 0.01,
+        "{:?}",
+        r.estimate
+    );
+    assert!(r.estimate.std_error < 0.02);
+}
+
+#[test]
+fn zero_noise_extrapolation_removes_depolarising_error() {
+    use metatron_qso::estimation::Estimate;
+    use metatron_qso::mitigation::zne::{Extrapolation, Folding, zne};
+    use metatron_qso::noise::{DensityMatrix, DeviceModel, GateRule};
+    let device = DeviceModel::new("dep")
+        .with_rule(GateRule::any().with_num_qubits(2).with_depolarizing(0.01))
+        .with_rule(GateRule::any().with_depolarizing(0.002));
+    let mut c = Circuit::new(3);
+    c.h(0)
+        .ry(1, 0.9)
+        .cx(0, 1)
+        .rz(2, 0.4)
+        .cx(1, 2)
+        .rx(0, 0.3)
+        .cx(0, 2)
+        .ry(2, -0.8);
+    let h: PauliSum = "Z0 Z1 + 0.5 X2 - 0.3 Z1".parse().unwrap();
+    let ideal = h
+        .expectation(&StateVector::from_circuit(&c, &[]).unwrap())
+        .unwrap();
+    let run = |f: &Circuit| {
+        let mut rho = DensityMatrix::zero(3)?;
+        rho.apply_device(f, &[], &device)?;
+        Ok(Estimate::exact(rho.expectation(&h)?))
+    };
+    let noisy = run(&c).unwrap().value;
+    let r = zne(
+        &c,
+        &[1.0, 3.0, 5.0],
+        Folding::Global,
+        Extrapolation::Richardson,
+        run,
+    )
+    .unwrap();
+    // The error shrinks by more than a factor of 100 (about 380).
+    assert!(100.0 * (r.estimate.value - ideal).abs() < (noisy - ideal).abs());
+}
+
+#[test]
+fn probabilistic_error_cancellation_is_unbiased() {
+    use metatron_qso::mitigation::pec::pec_expectation;
+    use metatron_qso::noise::{ChannelSpec, DensityMatrix, DeviceModel, GateRule};
+    let device = DeviceModel::new("pauli")
+        .with_rule(
+            GateRule::for_gate("cx")
+                .with_depolarizing(0.008)
+                .with_channel(ChannelSpec::Pauli([("ZZ".to_string(), 0.002)].into())),
+        )
+        .with_rule(GateRule::any().with_num_qubits(1).with_depolarizing(0.0005));
+    let (c, h) = (ghz(5), zz_chain(5));
+    let mut rho = DensityMatrix::zero(5).unwrap();
+    rho.apply_device(&c, &[], &device).unwrap();
+    assert!(4.0 - rho.expectation(&h).unwrap() > 0.05);
+    let r = pec_expectation(&c, &[], &device, &h, 20_000, 4).unwrap();
+    assert!(
+        (r.estimate.value - 4.0).abs() < 4.0 * r.estimate.std_error,
+        "{:?}",
+        r.estimate
+    );
+    assert!(r.overhead > 1.05 && r.overhead < 1.15);
+}
+
+#[test]
+fn classical_shadow_variance_is_three_to_the_weight() {
+    use metatron_qso::estimation::ClassicalShadow;
+    let psi = StateVector::from_circuit(&ghz(4), &[]).unwrap();
+    let snapshots = 60_000;
+    let shadow = ClassicalShadow::from_state(&psi, snapshots, 3).unwrap();
+    for (label, k) in [("Z0 Z1", 2), ("X0 X1 X2 X3", 4)] {
+        let h: PauliSum = label.parse().unwrap();
+        let e = shadow.estimate(&h).unwrap();
+        assert!((e.value - 1.0).abs() < 4.0 * e.std_error, "{label}");
+        let variance = e.std_error.powi(2) * snapshots as f64;
+        let bound = 3f64.powi(k) - 1.0;
+        let tol = 4.0 * ((3f64.powi(k) - 1.0) / snapshots as f64).sqrt();
+        assert!(
+            (variance / bound - 1.0).abs() < tol,
+            "{label}: {variance} vs {bound}"
+        );
+    }
+}
+
+/// Full-CI energies from `examples/molecules/reference.json` (PySCF 2.14,
+/// STO-3G, lowest roots of the neutral molecule with Sz = 0).
+const FCI_REFERENCE: [(&str, &str, &[f64]); 3] = [
+    (
+        "H2",
+        include_str!("../examples/molecules/h2_sto3g.fcidump"),
+        &[
+            -1.1373060357534004,
+            -0.5246155553643471,
+            -0.16275315579588379,
+            0.49505774161810945,
+        ],
+    ),
+    (
+        "LiH",
+        include_str!("../examples/molecules/lih_sto3g.fcidump"),
+        &[
+            -7.882401932290221,
+            -7.766418475107613,
+            -7.749216186506998,
+            -7.716454011441431,
+            -7.716454011441427,
+            -7.696951987758109,
+        ],
+    ),
+    (
+        "BeH2",
+        include_str!("../examples/molecules/beh2_sto3g.fcidump"),
+        &[
+            -15.595182356661681,
+            -15.33255843934909,
+            -15.33255843934906,
+            -15.328335603778719,
+            -15.328335603778708,
+            -15.303332939179398,
+        ],
+    ),
+];
+
+#[test]
+fn fermion_mappings_give_identical_spectra_equal_to_full_ci() {
+    use metatron_qso::chemistry::{Mapping, MolecularIntegrals, QubitEncoding};
+    for (name, fcidump, reference) in FCI_REFERENCE {
+        let mol = MolecularIntegrals::from_fcidump(fcidump).unwrap();
+        let dim = mol.determinants().unwrap().len();
+        let spectra: Vec<Vec<f64>> = [
+            QubitEncoding::new(Mapping::JordanWigner),
+            QubitEncoding::new(Mapping::Parity),
+            QubitEncoding::new(Mapping::BravyiKitaev),
+            QubitEncoding::parity_reduced(),
+        ]
+        .into_iter()
+        .map(|e| mol.fci_energies_with(e, dim).unwrap())
+        .collect();
+        // The whole spectrum of the determinant space agrees between mappings.
+        for other in &spectra[1..] {
+            for (a, b) in spectra[0].iter().zip(other) {
+                assert!(close(*a, *b, 1e-9), "{name}: {a} vs {b}");
+            }
+        }
+        // The lowest roots are PySCF's full-CI energies.
+        for (k, e) in reference.iter().enumerate() {
+            assert!(
+                close(spectra[0][k], *e, 1e-8),
+                "{name} root {k}: {} vs {e}",
+                spectra[0][k]
+            );
+        }
+    }
+}
+
+#[test]
+fn uccsd_and_adapt_vqe_reach_full_ci_for_lih() {
+    use metatron_qso::chemistry::{
+        AdaptOptions, MolecularIntegrals, QubitEncoding, adapt_vqe_molecule, uccsd,
+    };
+    let mol = MolecularIntegrals::from_fcidump(FCI_REFERENCE[1].1).unwrap();
+    let fci = FCI_REFERENCE[1].2[0];
+    let encoding = QubitEncoding::parity_reduced();
+    let h = mol.qubit_hamiltonian(encoding).unwrap();
+    assert_eq!(h.min_qubits(), 10);
+    // UCCSD from the Hartree–Fock point (all parameters zero).
+    let ansatz = uccsd(&mol, encoding).unwrap();
+    let n = ansatz.num_parameters();
+    let res = Vqe::new(h, ansatz)
+        .unwrap()
+        .with_initial_parameters(vec![0.0; n])
+        .unwrap()
+        .run()
+        .unwrap();
+    // Variational, and far within chemical accuracy (1.6 mHa).
+    assert!(
+        res.energy >= fci - 1e-9 && res.energy - fci < 1e-4,
+        "UCCSD {}",
+        res.energy
+    );
+    let adapt = adapt_vqe_molecule(&mol, encoding, false, &AdaptOptions::default()).unwrap();
+    assert!(adapt.converged);
+    assert!(adapt.operators.len() < n);
+    assert!(
+        adapt.energy >= fci - 1e-9 && adapt.energy - fci < 1e-4,
+        "ADAPT {}",
+        adapt.energy
+    );
+    // Energies decrease monotonically.
+    for w in adapt.energies.windows(2) {
+        assert!(w[1] <= w[0] + 1e-9);
+    }
+}
+
+#[test]
+fn product_formulas_converge_with_their_order_below_the_bounds() {
+    use metatron_qso::algorithms::time_evolution::{trotter_circuit, trotter_error_bound};
+    use metatron_qso::linalg::expm_hermitian;
+    let n = 4;
+    let h = models::heisenberg_xxz(n, 1.0, 0.5, false);
+    let exact = expm_hermitian(&h.to_dense(n).unwrap(), 1.0);
+    let error = |steps: usize, order: usize| {
+        let c = trotter_circuit(&h, n, 1.0, steps, order).unwrap();
+        let mut u = metatron_qso::linalg::CMatrix::zeros(1 << n, 1 << n);
+        for col in 0..1 << n {
+            let mut psi = StateVector::basis(n, col).unwrap();
+            psi.apply_circuit(&c, &[]).unwrap();
+            for (row, a) in psi.amplitudes().iter().enumerate() {
+                u[(row, col)] = *a;
+            }
+        }
+        (u - &exact).singular_values().max()
+    };
+    for (order, expected) in [(1usize, 2.0), (2, 4.0), (4, 16.0)] {
+        let (e16, e32) = (error(16, order), error(32, order));
+        assert!(e16 <= trotter_error_bound(&h, 1.0, 16, order).unwrap());
+        assert!(e32 <= trotter_error_bound(&h, 1.0, 32, order).unwrap());
+        // Doubling the steps divides the error by 2^order.
+        assert!(
+            (e16 / e32 / expected - 1.0).abs() < 0.05,
+            "order {order}: {}",
+            e16 / e32
+        );
+    }
+}
+
+#[test]
+fn amplitude_estimation_error_falls_as_one_over_the_oracle_calls() {
+    use metatron_qso::algorithms::amplitude_estimation::{AmplitudeProblem, maximum_likelihood};
+    let a = 0.3;
+    let problem = AmplitudeProblem::bernoulli(a).unwrap();
+    let rmse = |levels: usize, shots: usize| {
+        let mut sq = 0.0;
+        let mut calls = 0;
+        for seed in 0..200 {
+            let r = maximum_likelihood(&problem, levels, shots, 0.95, seed).unwrap();
+            sq += (r.estimate - a).powi(2);
+            calls = r.oracle_calls;
+        }
+        (calls as f64, (sq / 200.0).sqrt())
+    };
+    let slope = |points: Vec<(f64, f64)>| {
+        let n = points.len() as f64;
+        let mx = points.iter().map(|p| p.0.ln()).sum::<f64>() / n;
+        let my = points.iter().map(|p| p.1.ln()).sum::<f64>() / n;
+        let sxy: f64 = points
+            .iter()
+            .map(|p| (p.0.ln() - mx) * (p.1.ln() - my))
+            .sum();
+        let sxx: f64 = points.iter().map(|p| (p.0.ln() - mx).powi(2)).sum();
+        sxy / sxx
+    };
+    let quantum = slope((3..9).map(|levels| rmse(levels, 100)).collect());
+    let classical = slope([100, 400, 1600, 6400].iter().map(|&s| rmse(1, s)).collect());
+    assert!((quantum + 1.0).abs() < 0.05, "{quantum}");
+    assert!((classical + 0.5).abs() < 0.05, "{classical}");
+}
+
+#[test]
+fn vqd_finds_every_level_of_h2() {
+    use metatron_qso::algorithms::ansatz::{Entanglement, efficient_su2};
+    use metatron_qso::algorithms::excited::{ExcitedStateOptions, vqd};
+    use metatron_qso::chemistry::{MolecularIntegrals, QubitEncoding};
+    let mol = MolecularIntegrals::from_fcidump(FCI_REFERENCE[0].1).unwrap();
+    let h = mol
+        .qubit_hamiltonian(QubitEncoding::parity_reduced())
+        .unwrap();
+    let r = vqd(
+        &h,
+        &efficient_su2(2, 2, Entanglement::Linear),
+        4,
+        &ExcitedStateOptions::default().with_restarts(6).with_seed(2),
+    )
+    .unwrap();
+    for (e, reference) in r.energies.iter().zip(FCI_REFERENCE[0].2) {
+        assert!(close(*e, *reference, 1e-6), "{e} vs {reference}");
+    }
+}

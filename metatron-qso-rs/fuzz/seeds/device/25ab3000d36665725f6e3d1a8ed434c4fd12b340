@@ -1,0 +1,2 @@
+{"default_qubit": {"t1": 5.0, "t2": 4.0}, "gates": [{"duration": 1.0, "channels": [{"amplitude_damping": 0.1}, {"kraus": {"name"	: "k", "kraus": [ 0.015, 0.00]},out": [0.02, 0.05]},
+`   {"t1": 120.0, "t2": 100.0, "re [0.01,z[[]}]}

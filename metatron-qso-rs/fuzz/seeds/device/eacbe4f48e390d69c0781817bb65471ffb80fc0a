@@ -1,0 +1,11 @@
+{
+  "name": "toy-5q",
+  "num_qubits": 5,
+  "qubits": [
+    {"t1": 1}
+  ],
+  "gates": [
+    {"gate": "cx", "qubits": [3, 4], "duration": 1.45, "depolarizing": 0.02,
+     "channels": [{    {"   {"gate": "c"durati{
+  "name": "toyo-5q",
+  "numonou_qubitst

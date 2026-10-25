@@ -9,12 +9,22 @@ use serde_json::{Value, json};
 
 use metatron_qso::algorithms::ansatz::{self, Entanglement};
 use metatron_qso::algorithms::qaoa::{MaxCutQaoa, QaoaConfig, optimize_layerwise};
+use metatron_qso::algorithms::time_evolution::{trotter_circuit, trotter_error_bound};
 use metatron_qso::algorithms::{grover, models, vqe::Vqe};
-use metatron_qso::backend::{Backend, DensityMatrixBackend, StatevectorBackend};
+use metatron_qso::backend::{Backend, DensityMatrixBackend, DeviceBackend, StatevectorBackend};
+use metatron_qso::chemistry::adapt::{AdaptOptions, adapt_vqe_molecule};
+use metatron_qso::chemistry::ansatz as chem_ansatz;
+use metatron_qso::chemistry::{Mapping, MolecularIntegrals, QubitEncoding};
+use metatron_qso::estimation::{Estimate, EstimatorOptions, ShotAllocation, estimate};
 use metatron_qso::graph::{Graph, generators, io};
-use metatron_qso::noise::NoiseModel;
+use metatron_qso::mitigation::ReadoutCalibration;
+use metatron_qso::mitigation::pec::pec_expectation;
+use metatron_qso::mitigation::zne::{Extrapolation, Folding, zne};
+use metatron_qso::noise::{DeviceModel, NoiseModel};
 use metatron_qso::optimize::{Method, Options};
-use metatron_qso::quantum::{PauliSum, bitstring, from_qasm2, to_qasm2};
+use metatron_qso::quantum::{
+    Circuit, PauliSum, Program, bitstring, from_qasm2, record_bitstring, to_qasm2,
+};
 use metatron_qso::walks::{
     Coin, CoinedWalk, ContinuousWalk, Generator, Quotient, QuotientWalk, SpatialSearch,
     StateTransfer, SzegedyWalk, circuits, classical_hitting_times,
@@ -39,6 +49,14 @@ struct Cli {
 enum GeneratorArg {
     Laplacian,
     Adjacency,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum QasmVersion {
+    #[value(name = "qasm2")]
+    Qasm2,
+    #[value(name = "qasm3")]
+    Qasm3,
 }
 
 impl From<GeneratorArg> for Generator {
@@ -213,9 +231,16 @@ enum Command {
         #[arg(long)]
         iterations: Option<usize>,
     },
-    /// Simulate an OpenQASM 2.0 file and sample measurement counts.
+    /// Simulate an OpenQASM 2 or 3 program and sample its classical bits
+    /// (all qubits if it has none). Mid-circuit measurements, resets and
+    /// conditions are simulated exactly; with --noise or --device the
+    /// program must be a circuit (OpenQASM 2 measurements are then replaced
+    /// by measuring every qubit at the end).
     Qasm {
         file: std::path::PathBuf,
+        /// Print the program as OpenQASM 2 or 3 instead of running it.
+        #[arg(long, value_enum, conflicts_with_all = ["noise", "device"])]
+        export: Option<QasmVersion>,
         #[arg(long, default_value_t = 1024)]
         shots: usize,
         #[arg(long, default_value_t = 0)]
@@ -223,7 +248,147 @@ enum Command {
         /// Depolarising noise "p1,p2" (density-matrix backend).
         #[arg(long, value_delimiter = ',')]
         noise: Option<Vec<f64>>,
+        /// Device description (JSON): gate errors, T1/T2, readout errors.
+        #[arg(long, conflicts_with = "noise")]
+        device: Option<std::path::PathBuf>,
+        /// Simulate the device with this many quantum trajectories instead
+        /// of density matrices (any register size).
+        #[arg(long, requires = "device")]
+        trajectories: Option<usize>,
     },
+    /// Estimate ⟨H⟩ of an OpenQASM circuit from shots, with standard
+    /// errors and optional error mitigation.
+    Estimate {
+        file: std::path::PathBuf,
+        /// Observable, e.g. "Z0 Z1 + 0.5 X2".
+        #[arg(long)]
+        observable: String,
+        /// Total shots per estimate.
+        #[arg(long, default_value_t = 10000)]
+        shots: usize,
+        #[arg(long, value_enum, default_value_t = AllocationArg::Weighted)]
+        allocation: AllocationArg,
+        /// Device description (JSON); without it the circuit runs noiselessly.
+        #[arg(long)]
+        device: Option<std::path::PathBuf>,
+        /// Simulate the device with quantum trajectories (at most this many
+        /// per run) instead of density matrices.
+        #[arg(long, requires = "device")]
+        trajectories: Option<usize>,
+        /// Mitigate readout errors with a tensored calibration.
+        #[arg(long, requires = "device")]
+        mitigate_readout: bool,
+        /// Zero-noise extrapolation from these scale factors, e.g. 1,3,5.
+        #[arg(long, value_delimiter = ',')]
+        zne: Option<Vec<f64>>,
+        #[arg(long, value_enum, default_value_t = ExtrapolationArg::Richardson)]
+        extrapolation: ExtrapolationArg,
+        /// Probabilistic error cancellation with this many samples (Pauli
+        /// noise only; each sample is evaluated exactly, so --shots,
+        /// --trajectories and readout errors do not apply to it).
+        #[arg(long, requires = "device")]
+        pec: Option<usize>,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+    },
+    /// Molecular Hamiltonian from an FCIDUMP file: qubit Hamiltonian,
+    /// Hartree–Fock and full-CI energies, and a variational solution.
+    Molecule {
+        file: std::path::PathBuf,
+        #[arg(long, value_enum, default_value_t = MappingArg::JordanWigner)]
+        mapping: MappingArg,
+        /// Remove two qubits by symmetry (parity mapping only).
+        #[arg(long)]
+        two_qubit_reduction: bool,
+        /// Variational method: none, uccsd, upccgsd (with --k layers) or adapt.
+        #[arg(long, value_enum, default_value_t = ChemMethodArg::Uccsd)]
+        method: ChemMethodArg,
+        #[arg(long, default_value_t = 1)]
+        k: usize,
+        /// Number of full-CI roots to report.
+        #[arg(long, default_value_t = 1)]
+        roots: usize,
+    },
+    /// Trotter–Suzuki circuit for exp(−iHt) with its error bound.
+    Trotter {
+        /// Hamiltonian, e.g. "Z0 Z1 + 0.5 X0 + 0.5 X1".
+        #[arg(long)]
+        hamiltonian: String,
+        /// Register size (default: smallest that fits).
+        #[arg(long)]
+        qubits: Option<usize>,
+        #[arg(long, default_value_t = 1.0)]
+        time: f64,
+        #[arg(long, default_value_t = 10)]
+        steps: usize,
+        /// 1, 2, 4, 6, …
+        #[arg(long, default_value_t = 2)]
+        order: usize,
+        /// Write the circuit as OpenQASM 2.0.
+        #[arg(long)]
+        output: Option<std::path::PathBuf>,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum MappingArg {
+    JordanWigner,
+    Parity,
+    BravyiKitaev,
+}
+
+#[derive(Clone, Copy, ValueEnum, PartialEq)]
+enum ChemMethodArg {
+    None,
+    Uccsd,
+    Upccgsd,
+    Adapt,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum AllocationArg {
+    Uniform,
+    Weighted,
+    Adaptive,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum ExtrapolationArg {
+    Linear,
+    Richardson,
+    Exponential,
+}
+
+fn read_device(path: &std::path::Path) -> Result<DeviceModel> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| QsoError::Parse(format!("cannot read {}: {e}", path.display())))?;
+    DeviceModel::from_json(&text)
+}
+
+/// The backend for an optional device file (density matrices, or
+/// trajectories when given).
+fn device_backend(
+    device: Option<&DeviceModel>,
+    trajectories: Option<usize>,
+) -> Result<Box<dyn Backend>> {
+    Ok(match (device, trajectories) {
+        (Some(d), Some(t)) => Box::new(DeviceBackend::trajectories(d.clone(), t)?),
+        (Some(d), None) => Box::new(DeviceBackend::density_matrix(d.clone())?),
+        (None, _) => Box::new(StatevectorBackend),
+    })
+}
+
+fn estimate_json(e: &Estimate) -> Value {
+    let (lo, hi) = e.confidence_interval(0.95);
+    json!({"value": e.value, "std_error": e.std_error, "samples": e.samples, "ci95": [lo, hi]})
+}
+
+fn estimate_text(e: &Estimate) -> String {
+    let (lo, hi) = e.confidence_interval(0.95);
+    format!(
+        "{:.6} ± {:.6} (95% CI [{lo:.6}, {hi:.6}], {} samples)",
+        e.value, e.std_error, e.samples
+    )
 }
 
 fn read_graph_file(path: &std::path::Path) -> Result<Graph> {
@@ -251,6 +416,27 @@ fn graph(spec: &str) -> Result<Graph> {
         }
         result => result,
     }
+}
+
+/// A circuit from an OpenQASM 2 or 3 program: its gates if it has only
+/// gates; OpenQASM 2 programs keep their reading with measurements dropped.
+fn circuit_from_qasm(src: &str) -> Result<Circuit> {
+    let program = Program::from_qasm(src)?;
+    if program.is_unitary() {
+        return program.to_circuit();
+    }
+    from_qasm2(src).map_err(|_| {
+        QsoError::invalid(
+            "program",
+            "this needs a circuit: an OpenQASM 3 program without measurements, resets or \
+             conditions, or an OpenQASM 2 program without resets or conditions",
+        )
+    })
+}
+
+fn read_text(path: &std::path::Path) -> Result<String> {
+    std::fs::read_to_string(path)
+        .map_err(|e| QsoError::Parse(format!("cannot read {}: {e}", path.display())))
 }
 
 fn vector(v: &[f64]) -> String {
@@ -664,25 +850,76 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
         }
         Command::Qasm {
             file,
+            export,
             shots,
             seed,
             noise,
+            device,
+            trajectories,
         } => {
-            let src = std::fs::read_to_string(file)
-                .map_err(|e| QsoError::Parse(format!("cannot read {}: {e}", file.display())))?;
-            let circuit = from_qasm2(&src)?;
-            let counts = match noise {
-                Some(p) if p.len() == 2 => DensityMatrixBackend::new(NoiseModel::depolarizing(
-                    p[0], p[1],
-                )?)
-                .run(&circuit, &[], *shots, *seed)?,
-                Some(_) => {
+            let src = read_text(file)?;
+            let program = Program::from_qasm(&src)?;
+            if let Some(version) = export {
+                let text = match version {
+                    QasmVersion::Qasm2 => program.to_qasm2()?,
+                    QasmVersion::Qasm3 => program.to_qasm3()?,
+                };
+                return Ok((json!({ "qasm": text }), text.trim_end().to_string()));
+            }
+            if noise.is_none() && device.is_none() {
+                // Exact simulation of the program; one without classical
+                // bits is measured on every qubit.
+                let (run, width) = if program.n_bits() == 0 {
+                    let c = program.to_circuit()?;
+                    (Program::from_circuit(&c, &[], true)?, program.n_qubits())
+                } else {
+                    (program.clone(), program.n_bits())
+                };
+                let counts = run.sample(*shots, *seed)?;
+                let labelled: std::collections::BTreeMap<String, usize> = counts
+                    .iter()
+                    .map(|(&r, &c)| (record_bitstring(r, width), c))
+                    .collect();
+                let mut sorted: Vec<_> = labelled.iter().collect();
+                sorted.sort_by(|a, b| b.1.cmp(a.1));
+                let text = format!(
+                    "{} qubits, {} bits, {} operations, backend program\n{}",
+                    program.n_qubits(),
+                    program.n_bits(),
+                    program.len(),
+                    sorted
+                        .iter()
+                        .take(16)
+                        .map(|(b, c)| format!("  {b}  {c}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
+                return Ok((
+                    json!({"qubits": program.n_qubits(), "bits": program.n_bits(),
+                           "operations": program.len(), "backend": "program", "counts": labelled}),
+                    text,
+                ));
+            }
+            let circuit = circuit_from_qasm(&src)?;
+            let device = device.as_deref().map(read_device).transpose()?;
+            // Here a device or depolarising noise is given.
+            let (backend_name, counts) = match (&device, noise.as_deref()) {
+                (Some(_), _) => {
+                    let backend = device_backend(device.as_ref(), *trajectories)?;
+                    let counts = backend.run(&circuit, &[], *shots, *seed)?;
+                    (backend.name().to_string(), counts)
+                }
+                (None, Some(&[p1, p2])) => {
+                    let backend = DensityMatrixBackend::new(NoiseModel::depolarizing(p1, p2)?);
+                    let counts = backend.run(&circuit, &[], *shots, *seed)?;
+                    ("density-matrix".to_string(), counts)
+                }
+                _ => {
                     return Err(QsoError::invalid(
                         "noise",
                         "expected two probabilities p1,p2",
                     ));
                 }
-                None => StatevectorBackend.run(&circuit, &[], *shots, *seed)?,
             };
             let n = circuit.n_qubits();
             let labelled: std::collections::BTreeMap<String, usize> =
@@ -690,7 +927,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             let mut sorted: Vec<_> = labelled.iter().collect();
             sorted.sort_by(|a, b| b.1.cmp(a.1));
             let text = format!(
-                "{} qubits, {} gates, depth {}\n{}",
+                "{} qubits, {} gates, depth {}, backend {backend_name}\n{}",
                 n,
                 circuit.len(),
                 circuit.depth(),
@@ -702,9 +939,272 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                     .join("\n")
             );
             Ok((
-                json!({"qubits": n, "gates": circuit.len(), "depth": circuit.depth(), "counts": labelled}),
+                json!({"qubits": n, "gates": circuit.len(), "depth": circuit.depth(), "backend": backend_name, "counts": labelled}),
                 text,
             ))
+        }
+        Command::Molecule {
+            file,
+            mapping,
+            two_qubit_reduction,
+            method,
+            k,
+            roots,
+        } => {
+            let text = std::fs::read_to_string(file)
+                .map_err(|e| QsoError::invalid("file", format!("{}: {e}", file.display())))?;
+            let mol = MolecularIntegrals::from_fcidump(&text)?;
+            let mapping = match mapping {
+                MappingArg::JordanWigner => Mapping::JordanWigner,
+                MappingArg::Parity => Mapping::Parity,
+                MappingArg::BravyiKitaev => Mapping::BravyiKitaev,
+            };
+            if *two_qubit_reduction && mapping != Mapping::Parity {
+                return Err(QsoError::invalid(
+                    "two-qubit-reduction",
+                    "requires --mapping parity",
+                ));
+            }
+            let encoding = QubitEncoding {
+                mapping,
+                two_qubit_reduction: *two_qubit_reduction,
+            };
+            let h = mol.qubit_hamiltonian(encoding)?;
+            let n = encoding.n_qubits(mol.n_spin_orbitals());
+            let hf = mol.hartree_fock_energy();
+            let fci = mol.fci_energies(*roots)?;
+            let mut lines = vec![
+                format!(
+                    "{} orbitals, {} + {} electrons; {} qubits ({}{}), {} Pauli terms",
+                    mol.n_orbitals(),
+                    mol.n_alpha(),
+                    mol.n_beta(),
+                    n,
+                    mapping.name(),
+                    if *two_qubit_reduction {
+                        ", two-qubit reduction"
+                    } else {
+                        ""
+                    },
+                    h.num_terms()
+                ),
+                format!("Hartree–Fock   {hf:.10}"),
+                format!(
+                    "full CI        {}",
+                    fci.iter()
+                        .map(|e| format!("{e:.10}"))
+                        .collect::<Vec<_>>()
+                        .join("  ")
+                ),
+            ];
+            let mut variational = Value::Null;
+            if *method != ChemMethodArg::None {
+                if n > 20 {
+                    return Err(QsoError::invalid(
+                        "method",
+                        format!("{n} qubits are too many for a variational run here"),
+                    ));
+                }
+                let (label, energy, parameters, extra) = match method {
+                    ChemMethodArg::Adapt => {
+                        let r =
+                            adapt_vqe_molecule(&mol, encoding, false, &AdaptOptions::default())?;
+                        (
+                            "ADAPT-VQE".to_string(),
+                            r.energy,
+                            r.parameters.len(),
+                            json!({"operators": r.operators, "converged": r.converged}),
+                        )
+                    }
+                    _ => {
+                        let (label, ansatz) = if *method == ChemMethodArg::Uccsd {
+                            ("UCCSD".to_string(), chem_ansatz::uccsd(&mol, encoding)?)
+                        } else {
+                            (
+                                format!("{k}-UpCCGSD"),
+                                chem_ansatz::k_upccgsd(&mol, *k, encoding)?,
+                            )
+                        };
+                        let p = ansatz.num_parameters();
+                        let r = Vqe::new(h.clone(), ansatz)?
+                            .with_initial_parameters(vec![0.0; p])?
+                            .run()?;
+                        (label, r.energy, p, json!({"converged": r.converged}))
+                    }
+                };
+                lines.push(format!(
+                    "{label:<14} {energy:.10}  ({parameters} parameter{}, error vs full CI {:.2e})",
+                    if parameters == 1 { "" } else { "s" },
+                    energy - fci[0]
+                ));
+                variational = json!({"method": label, "energy": energy, "parameters": parameters, "details": extra});
+            }
+            Ok((
+                json!({
+                    "orbitals": mol.n_orbitals(),
+                    "electrons": [mol.n_alpha(), mol.n_beta()],
+                    "qubits": n,
+                    "mapping": mapping.name(),
+                    "two_qubit_reduction": two_qubit_reduction,
+                    "pauli_terms": h.num_terms(),
+                    "hartree_fock": hf,
+                    "fci": fci,
+                    "variational": variational,
+                }),
+                lines.join("\n"),
+            ))
+        }
+        Command::Trotter {
+            hamiltonian,
+            qubits,
+            time,
+            steps,
+            order,
+            output,
+        } => {
+            let h: PauliSum = hamiltonian.parse()?;
+            let n = qubits.unwrap_or(h.min_qubits().max(1));
+            let c = trotter_circuit(&h, n, *time, *steps, *order)?;
+            let bound = trotter_error_bound(&h, *time, *steps, *order)?;
+            // The actual error when the unitary is small enough to form.
+            let actual = if n <= 10 {
+                let traceless = PauliSum::from_terms(
+                    h.terms().iter().filter(|(_, s)| !s.is_identity()).copied(),
+                );
+                let exact = metatron_qso::linalg::expm_hermitian(&traceless.to_dense(n)?, *time);
+                let mut worst: f64 = 0.0;
+                for col in 0..1usize << n {
+                    let mut psi = metatron_qso::quantum::StateVector::basis(n, col)?;
+                    psi.apply_circuit(&c, &[])?;
+                    let diff: f64 = psi
+                        .amplitudes()
+                        .iter()
+                        .enumerate()
+                        .map(|(row, a)| (a - exact[(row, col)]).norm_sqr())
+                        .sum::<f64>()
+                        .sqrt();
+                    worst = worst.max(diff);
+                }
+                Some(worst)
+            } else {
+                None
+            };
+            if let Some(path) = output {
+                std::fs::write(path, to_qasm2(&c, &[], false)?)
+                    .map_err(|e| QsoError::invalid("output", format!("{}: {e}", path.display())))?;
+            }
+            let text = format!(
+                "order {order}, {steps} steps, t = {time}: {} gates, depth {}, error bound {bound:.3e}{}",
+                c.len(),
+                c.depth(),
+                actual.map_or(String::new(), |a| format!(
+                    ", largest column error {a:.3e} (a lower bound on ‖U − exp(−iHt)‖)"
+                ))
+            );
+            Ok((
+                json!({"qubits": n, "gates": c.len(), "depth": c.depth(), "error_bound": bound, "column_error": actual}),
+                text,
+            ))
+        }
+        Command::Estimate {
+            file,
+            observable,
+            shots,
+            allocation,
+            device,
+            trajectories,
+            mitigate_readout,
+            zne: scales,
+            extrapolation,
+            pec,
+            seed,
+        } => {
+            let circuit = circuit_from_qasm(&read_text(file)?)?;
+            let h: PauliSum = observable.parse()?;
+            let device = device.as_deref().map(read_device).transpose()?;
+            let backend = device_backend(device.as_ref(), *trajectories)?;
+            let n = circuit.n_qubits();
+            // PEC first: it fails fast when the noise is not Pauli noise.
+            let pec_result = match pec {
+                Some(samples) => {
+                    let d = device.as_ref().expect("clap requires --device");
+                    Some(pec_expectation(&circuit, &[], d, &h, *samples, *seed)?)
+                }
+                None => None,
+            };
+            let mut options = EstimatorOptions::new(*shots)
+                .with_allocation(match allocation {
+                    AllocationArg::Uniform => ShotAllocation::Uniform,
+                    AllocationArg::Weighted => ShotAllocation::Weighted,
+                    AllocationArg::Adaptive => ShotAllocation::Adaptive { pilot: 0.1 },
+                })
+                .with_seed(*seed);
+            if *mitigate_readout {
+                let cal =
+                    ReadoutCalibration::tensored(backend.as_ref(), n, *shots, *seed ^ 0x5eed)?;
+                options = options.with_readout_mitigation(cal);
+            }
+            let raw = estimate(backend.as_ref(), &circuit, &[], &h, &options)?.estimate;
+            let mut value = json!({
+                "qubits": n,
+                "backend": backend.name(),
+                "shots": shots,
+                "seed": seed,
+                "allocation": format!("{:?}", options.allocation),
+                "readout_mitigated": mitigate_readout,
+                "calibration_shots": if *mitigate_readout { 2 * shots } else { 0 },
+                "estimate": estimate_json(&raw),
+            });
+            let label = if *mitigate_readout {
+                "<H> (readout mitigated)"
+            } else {
+                "<H>"
+            };
+            let mut text = format!("{label} = {}", estimate_text(&raw));
+            if n <= 24 {
+                let exact = h.expectation(&metatron_qso::quantum::StateVector::from_circuit(
+                    &circuit,
+                    &[],
+                )?)?;
+                value["noiseless"] = json!(exact);
+                text.push_str(&format!("\nnoiseless <H> = {exact:.6}"));
+            }
+            if let Some(scales) = scales {
+                let method = match extrapolation {
+                    ExtrapolationArg::Linear => Extrapolation::Linear,
+                    ExtrapolationArg::Richardson => Extrapolation::Richardson,
+                    ExtrapolationArg::Exponential => Extrapolation::Exponential { asymptote: 0.0 },
+                };
+                let mut k = 0;
+                let r = zne(&circuit, scales, Folding::Global, method, |folded| {
+                    k += 1;
+                    let opts = options.clone().with_seed(seed.wrapping_add(k));
+                    Ok(estimate(backend.as_ref(), folded, &[], &h, &opts)?.estimate)
+                })?;
+                value["zne"] = json!({
+                    "estimate": estimate_json(&r.estimate),
+                    "scales": r.scales,
+                    "values": r.values.iter().map(estimate_json).collect::<Vec<_>>(),
+                });
+                text.push_str(&format!(
+                    "\nZNE ({:?}) <H> = {}",
+                    r.scales,
+                    estimate_text(&r.estimate)
+                ));
+            }
+            if let Some(r) = pec_result {
+                value["pec"] = json!({
+                    "estimate": estimate_json(&r.estimate),
+                    "overhead": r.overhead,
+                    "noisy_operations": r.noisy_operations,
+                });
+                text.push_str(&format!(
+                    "\nPEC (overhead {:.3}) <H> = {}",
+                    r.overhead,
+                    estimate_text(&r.estimate)
+                ));
+            }
+            Ok((value, text))
         }
     }
 }

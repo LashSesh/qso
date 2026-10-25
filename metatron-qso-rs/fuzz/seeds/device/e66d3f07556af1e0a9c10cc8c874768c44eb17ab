@@ -1,0 +1,5 @@
+{"default_qubit": {"t1": 5.0, "t2": 4.0}, "gates": [{"duration": 1.0, "channels": [{"amplitude_damping": 0.1}, {
+  "name": "toy-5q",
+  "num_qubits]},
+}}]},
+    {"num_qubits": 1, "duratio{"krausme:":  

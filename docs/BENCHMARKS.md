@@ -124,6 +124,46 @@ blocks in parallel, and fuses runs of single-qubit gates on higher qubits
 (see [ARCHITECTURE.md](ARCHITECTURE.md)). Registers of 14 qubits or fewer
 fit into one block and run as before.
 
+## Noisy circuits (1.4.0)
+
+Release 1.4.0 adds this section to the report. It was measured in a later
+session on the same machine type, which was slower at the time: in
+alternating runs of the new build and the 1.3.0 build (three each,
+medians), a statevector layer took 0.99 ms (new) and 1.15 ms (1.3.0) at
+16 qubits, 10.1 ms and 10.6 ms at 20 qubits, and 265 ms and 289 ms at
+24 qubits, against 0.55 ms, 8.7 ms and 211 ms in the tables above. The
+statevector kernels did not change after 1.3.0.
+
+Device: T₁ = 100, T₂ = 80, gate durations, depolarising errors. Circuit:
+four layers of RY on every qubit and a brick of CX. "One trajectory"
+compiles the device model for the circuit and runs one trajectory.
+
+| qubits | gates | noiseless | one trajectory | ratio |
+|---:|---:|---:|---:|---:|
+| 12 | 70 | 101.5 µs | 661.6 µs | 6.5 |
+| 16 | 94 | 2.35 ms | 7.11 ms | 3.0 |
+| 20 | 118 | 22.62 ms | 72.03 ms | 3.2 |
+
+| 200 runs, 16 qubits | time | per run |
+|---|---:|---:|
+| noiseless | 375.59 ms | 1.88 ms |
+| trajectories (1.3× the noiseless time) | 481.88 ms | 2.41 ms |
+
+| density matrix, same circuit | time |
+|---|---:|
+| 8 qubits | 46.72 ms |
+| 10 qubits | 268.71 ms |
+
+A single trajectory pays for compiling the device model (scheduling,
+merging channels, Kraus decompositions) and runs stretches of gates
+between jumps as separate fused circuits. Over many trajectories the
+compilation is shared and the trajectories run in parallel, so 200
+trajectories cost only 1.2–1.3 times as much as 200 noiseless runs. In two other runs
+the ratios were 3.1–3.5 at 16–20 qubits and 6–7.5 at 12 qubits, and 200
+trajectories took 1.2 times the noiseless time. The density matrix of
+10 qubits holds as many amplitudes as a 20-qubit state vector and costs
+about ten times as much as one 20-qubit trajectory.
+
 ## Comparison with other simulators (1.3.0)
 
 Measured with [`benchmarks/cross_framework`](../benchmarks/cross_framework/)

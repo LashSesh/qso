@@ -50,3 +50,23 @@ path = "fuzz_targets/graph_io.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "device"
+path = "fuzz_targets/device.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "chemistry"
+path = "fuzz_targets/chemistry.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "openqasm"
+path = "fuzz_targets/openqasm.rs"
+test = false
+doc = false
+bench = false
