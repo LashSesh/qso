@@ -37,7 +37,8 @@ message of the Rust error. The package README lists all parameters.
 The [playground](playground/) runs the package in the browser: it
 simulates OpenQASM programs, animates quantum walks on Metatron's Cube and
 other graphs, and plots spatial search. The module runs in a Web Worker,
-so long computations do not block the page; nothing is sent to a server.
+so long computations do not block the page; one that runs longer than
+30 seconds is stopped. Nothing is sent to a server.
 
 ## How it is checked
 

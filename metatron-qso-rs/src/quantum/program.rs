@@ -44,6 +44,22 @@ use super::state::{MAX_QUBITS, StateVector};
 use crate::error::{QsoError, Result};
 use crate::rng::Rng;
 
+/// A classical record as a bit string of `n_bits` digits, bit 0 on the
+/// right (like [`bitstring`](super::bitstring), but for 64-bit records on
+/// every platform).
+pub fn record_bitstring(record: u64, n_bits: usize) -> String {
+    (0..n_bits)
+        .rev()
+        .map(|k| {
+            if k < 64 && (record >> k) & 1 == 1 {
+                '1'
+            } else {
+                '0'
+            }
+        })
+        .collect()
+}
+
 /// Most measurement branches [`Program::probabilities`] follows.
 pub const MAX_BRANCHES: usize = 1 << 12;
 /// Most amplitudes held over all branches at once.
@@ -537,10 +553,10 @@ fn run_branches(mut branches: Vec<Branch>, ops: &[Operation], n: usize) -> Resul
                 }
             }
             Operation::Measure { qubit, bit } => {
-                branches = split(branches, *qubit, Some(*bit), false);
+                branches = split(branches, *qubit, Some(*bit), false, n).ok_or_else(too_many)?;
             }
             Operation::Reset { qubit } => {
-                branches = split(branches, *qubit, None, true);
+                branches = split(branches, *qubit, None, true, n).ok_or_else(too_many)?;
             }
             Operation::If { condition, body } => {
                 let (hit, miss): (Vec<Branch>, Vec<Branch>) = branches
@@ -562,10 +578,26 @@ fn run_branches(mut branches: Vec<Branch>, ops: &[Operation], n: usize) -> Resul
 
 /// Split every branch on the value of `qubit`: record it in `bit`, and for
 /// a reset flip the |1⟩ branch back to |0⟩.
-fn split(branches: Vec<Branch>, qubit: usize, bit: Option<usize>, reset: bool) -> Vec<Branch> {
-    let mut out = Vec::with_capacity(branches.len() * 2);
-    for b in branches {
-        let p1 = p_one(&b.state, qubit);
+/// Split every branch by the outcome of measuring `qubit`; `None` if the
+/// result would exceed [`MAX_BRANCHES`] or [`MAX_BRANCH_AMPLITUDES`] (checked
+/// before any state is copied).
+fn split(
+    branches: Vec<Branch>,
+    qubit: usize,
+    bit: Option<usize>,
+    reset: bool,
+    n: usize,
+) -> Option<Vec<Branch>> {
+    let p_ones: Vec<f64> = branches.iter().map(|b| p_one(&b.state, qubit)).collect();
+    let count: usize = p_ones
+        .iter()
+        .map(|&p1| if p1 > 1e-15 && 1.0 - p1 > 1e-15 { 2 } else { 1 })
+        .sum();
+    if count > MAX_BRANCHES || count.saturating_mul(1usize << n) > MAX_BRANCH_AMPLITUDES {
+        return None;
+    }
+    let mut out = Vec::with_capacity(count);
+    for (b, p1) in branches.into_iter().zip(p_ones) {
         let p0 = 1.0 - p1;
         let set = |record: u64, v: bool| match bit {
             Some(k) => (record & !(1 << k)) | (u64::from(v) << k),
@@ -602,7 +634,7 @@ fn split(branches: Vec<Branch>, qubit: usize, bit: Option<usize>, reset: bool) -
             });
         }
     }
-    out
+    Some(out)
 }
 
 fn run_shot(

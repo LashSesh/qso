@@ -93,3 +93,17 @@ def test_circuit_conversions() -> None:
         q.simulate(u.to_circuit()).probabilities(), exact
     ).all()
     assert repr(p) == "Program(n_qubits=3, n_bits=3, operations=6)"
+
+
+def test_review_regressions() -> None:
+    p = q.Program.from_qasm(
+        "qubit[2] q; bit[40] c; x q[0]; h q[1]; c[0] = measure q[0]; c[35] = measure q[1];"
+    )
+    assert p.probabilities() == pytest.approx(
+        {"0" * 39 + "1": 0.5, "0" * 4 + "1" + "0" * 34 + "1": 0.5}
+    )
+    with pytest.raises(ValueError, match="at most"):
+        p.sample(10**8)
+    # A long expression is an error, not a crash.
+    with pytest.raises(ValueError, match="deeper"):
+        q.Program.from_qasm("qubit q; rx(" + "+".join(["1"] * 50_000) + ") q;")

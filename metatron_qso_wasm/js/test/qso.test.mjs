@@ -95,6 +95,13 @@ test("graphs, walks and search", () => {
   close(s.gamma, 1 / 13, 1e-8);
 });
 
+test("records wider than 32 bits keep their high bits (wasm32)", () => {
+  const r = qso.qasm("qubit[2] q; bit[40] c; x q[0]; h q[1]; c[0] = measure q[0]; c[35] = measure q[1];");
+  const keys = Object.keys(r.probabilities).sort();
+  assert.deepEqual(keys, ["0".repeat(39) + "1", "0".repeat(4) + "1" + "0".repeat(34) + "1"]);
+  for (const k of keys) close(r.probabilities[k], 0.5);
+});
+
 test("invalid input is a QsoError, and the module stays usable", () => {
   assert.throws(() => qso.call("nope"), /unknown method/);
   assert.throws(() => qso.walk("cycle:5", { times: [1], start: 9 }), QsoError);

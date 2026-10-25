@@ -93,12 +93,19 @@ a program without it is read as OpenQASM 3. Supported are:
 Anything else in OpenQASM 3 is an error that names the feature:
 classical variables and arithmetic, loops, subroutines, `defcal`, timing,
 `opaque`, hardware qubits and non-integer powers. Such a program is
-rejected, never misread.
+rejected with an error, never misread.
 
 The semantics follow each version's specification, including global
-phases where they matter. In OpenQASM 3, the built-in `U(θ, φ, λ)` carries
-the phase `e^{iθ/2}` relative to OpenQASM 2's `U`. That phase and
-`gphase` become relative phases under `ctrl @`.
+phases where they matter. In OpenQASM 3, the built-in `U(θ, φ, λ)` is
+`e^{iθ/2}` times the standard U3 matrix; OpenQASM 2's `U` equals that
+matrix up to a global phase, which OpenQASM 2 cannot observe. That phase
+and `gphase` become relative phases under `ctrl @`.
+
+Conditions follow OpenQASM 3's types: `bool(c)` is true when any bit of
+`c` is set, `int[n](c)` and `uint[n](c)` need `n` to be the size of `c`,
+and only single bits compare with `true` or `false`. Negative slice
+endpoints count from the end, and gate parameters may shadow the
+constants `pi`, `tau` and `euler`.
 
 Exports use only standard gates. OpenQASM 2 export fails with an error
 when a program needs OpenQASM 3: OpenQASM 2 conditions compare a whole

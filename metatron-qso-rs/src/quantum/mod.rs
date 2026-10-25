@@ -27,7 +27,7 @@ pub use circuit::{Circuit, Instruction, Param, Parameter};
 pub use gates::GateKind;
 pub use openqasm::to_qasm3;
 pub use pauli::{Pauli, PauliString, PauliSum};
-pub use program::{Condition, Operation, Program, Register};
+pub use program::{Condition, Operation, Program, Register, record_bitstring};
 pub use qasm::{from_qasm2, to_qasm2};
 pub use qubit_operator::QubitOperator;
 pub use state::{Counts, MAX_QUBITS, StateVector, bitstring};

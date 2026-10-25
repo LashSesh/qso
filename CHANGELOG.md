@@ -25,7 +25,7 @@ releases changed.
     slices and parameter expressions. Other OpenQASM 3 features are
     rejected with an error that names them.
   - Global phases follow each version's specification: OpenQASM 3's `U`
-    carries `e^{iθ/2}` relative to OpenQASM 2's, and `gphase` and the
+    is `e^{iθ/2}` times the standard U3 matrix, and `gphase` and the
     phases of `u2`/`u3` become relative phases under `ctrl @`.
   - `Program::probabilities` gives the exact distribution of the
     classical bits by following every measurement branch (up to 4096);

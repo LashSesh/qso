@@ -20,8 +20,12 @@ export interface QasmResult {
   unitary: boolean;
   qubit_registers: Register[];
   bit_registers: Register[];
-  /** Exact probability of each classical record (bit 0 on the right). */
-  probabilities: Record<string, number>;
+  /**
+   * Exact probability of each classical record (bit 0 on the right), or
+   * null when the program has more than 4096 measurement branches and
+   * `shots` were requested (then only `counts` are computed).
+   */
+  probabilities: Record<string, number> | null;
   /** Sampled records, when `shots` was given. */
   counts: Record<string, number> | null;
   /** Final state of a unitary program (qubit 0 on the right). */

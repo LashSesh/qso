@@ -22,7 +22,9 @@ use metatron_qso::mitigation::pec::pec_expectation;
 use metatron_qso::mitigation::zne::{Extrapolation, Folding, zne};
 use metatron_qso::noise::{DeviceModel, NoiseModel};
 use metatron_qso::optimize::{Method, Options};
-use metatron_qso::quantum::{Circuit, PauliSum, Program, bitstring, from_qasm2, to_qasm2};
+use metatron_qso::quantum::{
+    Circuit, PauliSum, Program, bitstring, from_qasm2, record_bitstring, to_qasm2,
+};
 use metatron_qso::walks::{
     Coin, CoinedWalk, ContinuousWalk, Generator, Quotient, QuotientWalk, SpatialSearch,
     StateTransfer, SzegedyWalk, circuits, classical_hitting_times,
@@ -876,7 +878,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 let counts = run.sample(*shots, *seed)?;
                 let labelled: std::collections::BTreeMap<String, usize> = counts
                     .iter()
-                    .map(|(&r, &c)| (bitstring(r as usize, width), c))
+                    .map(|(&r, &c)| (record_bitstring(r, width), c))
                     .collect();
                 let mut sorted: Vec<_> = labelled.iter().collect();
                 sorted.sort_by(|a, b| b.1.cmp(a.1));

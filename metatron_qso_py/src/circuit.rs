@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use metatron_qso::quantum::{
     Circuit, GateKind, MAX_QUBITS, Param, Parameter, PauliString, PauliSum, Program, Register,
-    bitstring, from_qasm2, to_qasm2, to_qasm3,
+    from_qasm2, record_bitstring, to_qasm2, to_qasm3,
 };
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
@@ -632,12 +632,13 @@ impl PyProgram {
         let dist = py.detach(|| p.probabilities()).raise()?;
         let d = PyDict::new(py);
         for (record, q) in dist {
-            d.set_item(bitstring(record as usize, p.n_bits()), q)?;
+            d.set_item(record_bitstring(record, p.n_bits()), q)?;
         }
         Ok(d)
     }
 
-    /// `shots` seeded samples of the classical record, `{bitstring: count}`.
+    /// `shots` (at most 10⁷) seeded samples of the classical record,
+    /// `{bitstring: count}`.
     #[pyo3(signature = (shots, seed = 0))]
     fn sample<'py>(
         &self,
@@ -645,11 +646,14 @@ impl PyProgram {
         shots: usize,
         seed: u64,
     ) -> PyResult<Bound<'py, PyDict>> {
+        if shots > 10_000_000 {
+            return Err(invalid("shots must be at most 10⁷"));
+        }
         let p = &self.inner;
         let counts = py.detach(|| p.sample(shots, seed)).raise()?;
         let d = PyDict::new(py);
         for (record, n) in counts {
-            d.set_item(bitstring(record as usize, p.n_bits()), n)?;
+            d.set_item(record_bitstring(record, p.n_bits()), n)?;
         }
         Ok(d)
     }

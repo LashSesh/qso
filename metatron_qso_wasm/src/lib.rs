@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::f64::consts::PI;
 
 use metatron_qso::graph::{Graph, generators, io};
-use metatron_qso::quantum::{Program, StateVector, bitstring};
+use metatron_qso::quantum::{Program, StateVector, bitstring, record_bitstring};
 use metatron_qso::walks::{ContinuousWalk, Generator, SpatialSearch};
 use serde_json::{Map, Value, json};
 
@@ -204,13 +204,14 @@ fn qasm(p: &mut Params) -> Outcome {
     }
     let program = Program::from_qasm(&source).map_err(|e| e.to_string())?;
     let (nq, nb) = (program.n_qubits(), program.n_bits());
-    let label = |record: u64| bitstring(record as usize, nb);
-    let probabilities: BTreeMap<String, f64> = program
-        .probabilities()
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(|(r, q)| (label(r), q))
-        .collect();
+    let label = |record: u64| record_bitstring(record, nb);
+    // Beyond the exact limit (too many measurement branches), shots are
+    // still simulated one by one; the exact distribution is then null.
+    let probabilities: Option<BTreeMap<String, f64>> = match program.probabilities() {
+        Ok(d) => Some(d.into_iter().map(|(r, q)| (label(r), q)).collect()),
+        Err(_) if shots > 0 => None,
+        Err(e) => return Err(e.to_string()),
+    };
     let counts = if shots > 0 {
         let c: BTreeMap<String, usize> = program
             .sample(shots, seed)
@@ -536,6 +537,33 @@ mod tests {
             )
             .contains("points")
         );
+    }
+
+    #[test]
+    fn records_wider_than_32_bits_and_many_branches() {
+        // Bit 35 must not wrap onto bit 3 (or bit 32 on wasm32).
+        let src =
+            "qubit[2] q; bit[40] c; x q[0]; h q[1]; c[0] = measure q[0]; c[35] = measure q[1];";
+        let r = ok("qasm", json!({"source": src}));
+        let p = r["probabilities"].as_object().unwrap();
+        assert_eq!(p.len(), 2);
+        let high = format!("{}1{}1", "0".repeat(4), "0".repeat(34));
+        assert!((p[&high].as_f64().unwrap() - 0.5).abs() < 1e-12, "{p:?}");
+        // Beyond 4096 branches: no exact distribution, but shots.
+        let mut src = String::from("qubit q; bit[13] c;");
+        for k in 0..13 {
+            src.push_str(&format!(" reset q; h q; c[{k}] = measure q;"));
+        }
+        assert!(err("qasm", json!({"source": src})).contains("branches"));
+        let r = ok("qasm", json!({"source": src, "shots": 100, "seed": 1}));
+        assert!(r["probabilities"].is_null());
+        let total: u64 = r["counts"]
+            .as_object()
+            .unwrap()
+            .values()
+            .map(|v| v.as_u64().unwrap())
+            .sum();
+        assert_eq!(total, 100);
     }
 
     #[test]

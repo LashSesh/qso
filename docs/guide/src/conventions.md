@@ -25,7 +25,7 @@ comparison reverses the qubits when it compares their states with QSO's.
 | Rotations | `R_P(θ) = exp(−iθP/2)` for P ∈ {X, Y, Z} |
 | Two-qubit rotations | `R_PP(θ) = exp(−iθ P⊗P/2)` |
 | Phase gate | `P(λ) = diag(1, e^{iλ})` |
-| `U(θ, φ, λ)` | as in OpenQASM 2 (OpenQASM 3's `U` differs by the phase `e^{iθ/2}`) |
+| `U(θ, φ, λ)` | the U3 matrix `[[cos θ/2, −e^{iλ} sin θ/2], [e^{iφ} sin θ/2, e^{i(φ+λ)} cos θ/2]]`; OpenQASM 2's `U` up to a global phase, OpenQASM 3's `U` divided by `e^{iθ/2}` |
 | Time evolution | `exp(−iHt)` |
 | Quantum walks | `H = γL` (Laplacian) or `H = −γA` (adjacency) |
 

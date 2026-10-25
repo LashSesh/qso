@@ -26,9 +26,10 @@
 //!
 //! The semantics follow each version's specification exactly, including
 //! global phases where they matter. In OpenQASM 3 the built-in
-//! `U(θ, φ, λ)` carries the phase `e^{iθ/2}` relative to OpenQASM 2's `U`,
-//! and `gphase` and the phases of `u2`/`u3` become relative phases under
-//! `ctrl @`. QSO keeps these phases while expanding gates and drops the
+//! `U(θ, φ, λ)` is `e^{iθ/2}` times the standard U3 matrix (QSO's
+//! [`GateKind::U`]); OpenQASM 2's `U` equals that matrix up to a global
+//! phase, which OpenQASM 2 cannot observe. `gphase` and the phases of
+//! `u2`/`u3` become relative phases under `ctrl @`. QSO keeps these phases while expanding gates and drops the
 //! global phase of the whole program, which is unobservable.
 
 use std::collections::HashMap;
@@ -44,8 +45,10 @@ use crate::error::{QsoError, Result};
 pub const MAX_PROGRAM_QUBITS: usize = super::program::MAX_PROGRAM_QUBITS;
 /// Largest number of operations a program may expand to.
 pub const MAX_PROGRAM_OPERATIONS: usize = 1 << 22;
-/// Deepest nesting of expressions, blocks and gate calls.
+/// Deepest nesting of blocks and gate calls.
 const MAX_DEPTH: usize = 64;
+/// Greatest height of an expression (nesting plus chained operators).
+const MAX_EXPR_DEPTH: usize = 256;
 
 fn err<T>(msg: impl Into<String>) -> Result<T> {
     Err(QsoError::Parse(msg.into()))
@@ -58,7 +61,7 @@ fn err<T>(msg: impl Into<String>) -> Result<T> {
 #[derive(Clone, Debug, PartialEq)]
 enum Tok {
     Ident(String),
-    Num(f64, bool), // value, written as an integer
+    Num(f64, Option<u64>), // value; the exact value of an integer literal
     Str(String),
     Punct(&'static str),
 }
@@ -140,7 +143,13 @@ fn lex(src: &str) -> Result<Vec<(Tok, usize)>> {
             let v: f64 = text
                 .parse()
                 .map_err(|_| QsoError::Parse(format!("line {line}: invalid number '{text}'")))?;
-            out.push((Tok::Num(v, integer), line));
+            // Integers keep their exact value (f64 rounds above 2⁵³).
+            let exact = if integer {
+                text.parse::<u64>().ok()
+            } else {
+                None
+            };
+            out.push((Tok::Num(v, exact), line));
             continue;
         }
         if c == '"' {
@@ -198,13 +207,14 @@ impl Expr {
     fn eval(&self, env: &HashMap<String, f64>) -> Result<f64> {
         Ok(match self {
             Expr::Num(v) => *v,
-            Expr::Var(name) => match name.as_str() {
-                "pi" | "π" => PI,
-                "tau" | "τ" => 2.0 * PI,
-                "euler" | "ℇ" => std::f64::consts::E,
-                _ => *env
-                    .get(name)
-                    .ok_or_else(|| QsoError::Parse(format!("unknown identifier '{name}'")))?,
+            // Gate parameters shadow the constants: `euler` and `tau` are
+            // ordinary names in OpenQASM 2.
+            Expr::Var(name) => match (env.get(name), name.as_str()) {
+                (Some(v), _) => *v,
+                (None, "pi" | "π") => PI,
+                (None, "tau" | "τ") => 2.0 * PI,
+                (None, "euler" | "ℇ") => std::f64::consts::E,
+                _ => return err(format!("unknown identifier '{name}'")),
             },
             Expr::Neg(e) => -e.eval(env)?,
             Expr::Bin(op, a, b) => {
@@ -272,16 +282,29 @@ struct Call {
     line: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Cast {
+    /// No cast: the register's unsigned value, or a bit.
+    None,
+    /// `bool(c)`: whether any bit is set.
+    Bool,
+    /// `int[n](c)` / `uint[n](c)`: `signed`, and the width if given.
+    Int(bool, Option<u64>),
+}
+
 #[derive(Clone, Debug)]
 struct Cond {
     operand: Operand,
+    cast: Cast,
     equal: bool,
     value: u64,
+    /// The value was written `true` or `false`.
+    boolean: bool,
 }
 
 #[derive(Clone, Debug)]
 enum Stmt {
-    Version(String),
+    Version(f64),
     Include(String),
     Qubits(String, usize),
     Bits(String, usize, Option<Operand>), // optional `= measure q`
@@ -334,6 +357,9 @@ struct Parser {
     toks: Vec<(Tok, usize)>,
     pos: usize,
     depth: usize,
+    /// Height of the expression being parsed: nesting plus the length of
+    /// operator chains, which build left-deep trees.
+    expr_depth: usize,
 }
 
 impl Parser {
@@ -394,9 +420,9 @@ impl Parser {
 
     fn integer(&mut self) -> Result<u64> {
         match self.peek() {
-            Some(&Tok::Num(v, true)) if v >= 0.0 && v <= u64::MAX as f64 => {
+            Some(&Tok::Num(_, Some(n))) => {
                 self.pos += 1;
-                Ok(v as u64)
+                Ok(n)
             }
             _ => self.fail("expected a non-negative integer"),
         }
@@ -412,45 +438,74 @@ impl Parser {
         r
     }
 
+    /// Run `f` one level deeper in an expression. Evaluating, cloning and
+    /// dropping an expression recurse once per level, so the height is
+    /// bounded.
+    fn deeper_expr<T>(&mut self, f: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        if self.expr_depth >= MAX_EXPR_DEPTH {
+            return self.fail(format!(
+                "expression nested or chained deeper than {MAX_EXPR_DEPTH} levels"
+            ));
+        }
+        self.expr_depth += 1;
+        let r = f(self);
+        self.expr_depth -= 1;
+        r
+    }
+
+    /// A left-associative chain `first (op next)*` with the operators
+    /// `ops`; each operator adds a level.
+    fn chain(
+        &mut self,
+        ops: [&'static str; 2],
+        next: fn(&mut Self) -> Result<Expr>,
+    ) -> Result<Expr> {
+        let start = self.expr_depth;
+        let mut e = next(self)?;
+        let r = loop {
+            let op = if self.eat(ops[0]) {
+                ops[0]
+            } else if self.eat(ops[1]) {
+                ops[1]
+            } else {
+                break Ok(e);
+            };
+            if self.expr_depth >= MAX_EXPR_DEPTH {
+                break self.fail(format!(
+                    "expression nested or chained deeper than {MAX_EXPR_DEPTH} levels"
+                ));
+            }
+            self.expr_depth += 1;
+            let rhs = match next(self) {
+                Ok(x) => x,
+                Err(x) => break Err(x),
+            };
+            let c = op.chars().next().expect("non-empty operator");
+            e = Expr::Bin(c, Box::new(e), Box::new(rhs));
+        };
+        self.expr_depth = start;
+        r
+    }
+
     // Expressions: sum → product → unary → power → atom.
     fn expr(&mut self) -> Result<Expr> {
-        self.deeper(|p| {
-            let mut e = p.product()?;
-            loop {
-                if p.eat("+") {
-                    e = Expr::Bin('+', Box::new(e), Box::new(p.product()?));
-                } else if p.eat("-") {
-                    e = Expr::Bin('-', Box::new(e), Box::new(p.product()?));
-                } else {
-                    return Ok(e);
-                }
-            }
-        })
+        self.deeper_expr(|p| p.chain(["+", "-"], Self::product))
     }
 
     fn product(&mut self) -> Result<Expr> {
-        let mut e = self.unary()?;
-        loop {
-            if self.eat("*") {
-                e = Expr::Bin('*', Box::new(e), Box::new(self.unary()?));
-            } else if self.eat("/") {
-                e = Expr::Bin('/', Box::new(e), Box::new(self.unary()?));
-            } else {
-                return Ok(e);
-            }
-        }
+        self.chain(["*", "/"], Self::unary)
     }
 
     fn unary(&mut self) -> Result<Expr> {
         if self.eat("-") {
-            return Ok(Expr::Neg(Box::new(self.deeper(Self::unary)?)));
+            return Ok(Expr::Neg(Box::new(self.deeper_expr(Self::unary)?)));
         }
         if self.eat("+") {
-            return self.deeper(Self::unary);
+            return self.deeper_expr(Self::unary);
         }
         let base = self.atom()?;
         if self.eat("^") || self.eat("**") {
-            let exp = self.deeper(Self::unary)?;
+            let exp = self.deeper_expr(Self::unary)?;
             return Ok(Expr::Bin('^', Box::new(base), Box::new(exp)));
         }
         Ok(base)
@@ -606,44 +661,60 @@ impl Parser {
 
     fn condition(&mut self) -> Result<Cond> {
         // Optional cast: int[n](x), uint[n](x), int(x), bool(x).
-        let cast = matches!(self.peek(), Some(Tok::Ident(n)) if ["int", "uint", "bool"].contains(&n.as_str()));
-        let operand = if cast {
+        let kind = match self.peek() {
+            Some(Tok::Ident(n)) if ["int", "uint", "bool"].contains(&n.as_str()) => Some(n.clone()),
+            _ => None,
+        };
+        let (operand, cast) = if let Some(kind) = kind {
             self.pos += 1;
-            if self.eat("[") {
-                self.integer()?;
+            let width = if kind != "bool" && self.eat("[") {
+                let w = self.integer()?;
                 self.expect("]")?;
-            }
+                Some(w)
+            } else {
+                None
+            };
             self.expect("(")?;
             let o = self.operand()?;
             self.expect(")")?;
-            o
+            let cast = if kind == "bool" {
+                Cast::Bool
+            } else {
+                Cast::Int(kind == "int", width)
+            };
+            (o, cast)
         } else {
-            self.operand()?
+            (self.operand()?, Cast::None)
         };
-        let (equal, value) = if self.eat("==") {
-            (true, self.cond_value()?)
-        } else if self.eat("!=") {
-            (false, self.cond_value()?)
+        let (equal, value, boolean) = if self.eat("==") || self.eat("!=") {
+            let equal = matches!(self.toks[self.pos - 1].0, Tok::Punct("=="));
+            let (value, boolean) = self.cond_value()?;
+            (equal, value, boolean)
         } else {
-            (false, 0) // truthy: value != 0
+            (false, 0, false) // truthy: value != 0
         };
+        if cast == Cast::Bool && !boolean && (equal || value != 0) {
+            return self.fail("bool(...) compares with true or false");
+        }
         Ok(Cond {
             operand,
+            cast,
             equal,
             value,
+            boolean,
         })
     }
 
-    fn cond_value(&mut self) -> Result<u64> {
+    fn cond_value(&mut self) -> Result<(u64, bool)> {
         if self.is_ident("true") {
             self.pos += 1;
-            return Ok(1);
+            return Ok((1, true));
         }
         if self.is_ident("false") {
             self.pos += 1;
-            return Ok(0);
+            return Ok((0, true));
         }
-        self.integer()
+        Ok((self.integer()?, false))
     }
 
     fn statement(&mut self, version: u8) -> Result<Stmt> {
@@ -654,7 +725,9 @@ impl Parser {
         let Tok::Ident(word) = tok else {
             return self.fail("expected a statement");
         };
-        if UNSUPPORTED.contains(&word.as_str()) {
+        // OpenQASM 3's keywords are ordinary names in OpenQASM 2 (a gate
+        // may be called `box`); `opaque` is OpenQASM 2's own.
+        if (version == 3 && UNSUPPORTED.contains(&word.as_str())) || word == "opaque" {
             return self.fail(format!("OpenQASM feature '{word}' is not supported"));
         }
         match word.as_str() {
@@ -663,7 +736,7 @@ impl Parser {
                 let v = match self.peek().cloned() {
                     Some(Tok::Num(v, _)) => {
                         self.pos += 1;
-                        format!("{v}")
+                        v
                     }
                     _ => return self.fail("expected a version number"),
                 };
@@ -1078,7 +1151,7 @@ impl Lower {
                     }
                     let base = if k < 0.0 { invert(prims) } else { prims };
                     let reps = k.abs() as usize;
-                    self.spend(base.len().saturating_mul(reps))?;
+                    self.spend(weight(&base).saturating_mul(reps).max(1))?;
                     let mut out = Vec::with_capacity(base.len() * reps);
                     for _ in 0..reps {
                         out.extend(base.iter().cloned());
@@ -1086,6 +1159,8 @@ impl Lower {
                     out
                 }
                 Modifier::Ctrl(_, positive) => {
+                    // Every gate stores the new controls.
+                    self.spend(prims.len().saturating_mul(group.len()))?;
                     let mut out = Vec::with_capacity(prims.len() + 2 * group.len());
                     let flips: Vec<Prim> = if *positive {
                         Vec::new()
@@ -1185,7 +1260,9 @@ impl Lower {
                     ..c.clone()
                 };
                 let prims = self.apply(&inner, &ps, &qs, depth + 1)?;
-                self.spend(prims.len())?;
+                // Every call costs, also one that expands to nothing, so
+                // that doubling definitions of `id` cannot run forever.
+                self.spend(weight(&prims).max(1))?;
                 out.extend(prims);
             }
             return Ok(out);
@@ -1232,7 +1309,9 @@ impl Lower {
             None => Ok((r.offset..r.offset + r.size).collect()),
             Some(Index::One(e)) => Ok(vec![check(int(e)?)?]),
             Some(Index::Slice(a, step, b)) => {
-                let (a, b) = (int(a)?, int(b)?);
+                // Negative endpoints count from the end, each on its own.
+                let from_end = |i: i64| if i < 0 { r.size as i64 + i } else { i };
+                let (a, b) = (from_end(int(a)?), from_end(int(b)?));
                 let s = match step {
                     Some(e) => int(e)?,
                     None => 1,
@@ -1258,11 +1337,9 @@ impl Lower {
         let mut ops = Vec::new();
         for s in stmts {
             match s {
-                Stmt::Version(_) => {
-                    if !top {
-                        return err("'OPENQASM' must come first");
-                    }
-                }
+                // The version line, when present, was read before the
+                // other statements.
+                Stmt::Version(_) => return err("'OPENQASM' must come first"),
                 Stmt::Include(f) => {
                     if !matches!(f.as_str(), "qelib1.inc" | "stdgates.inc") {
                         return err(format!(
@@ -1364,7 +1441,7 @@ impl Lower {
                             .map(|l| if l.len() == 1 { l[0] } else { l[k] })
                             .collect();
                         let prims = self.apply(call, &params, &qs, 0)?;
-                        self.spend(prims.len())?;
+                        self.spend(weight(&prims).max(1))?;
                         for p in prims {
                             if let Prim::Gate(i) = p {
                                 ops.push(Operation::Gate(i));
@@ -1389,14 +1466,39 @@ impl Lower {
                 Stmt::Barrier => {}
                 Stmt::If(cond, then, other) => {
                     let bits = self.resolve(&cond.operand, false)?;
-                    if bits.len() > 64 {
-                        return err("conditions read at most 64 bits");
+                    let line = cond.operand.line;
+                    if bits.is_empty() || bits.len() > 64 {
+                        return err(format!("line {line}: conditions read 1 to 64 bits"));
                     }
-                    if bits.len() < 64 && cond.value >> bits.len() != 0 {
+                    // `bool(c) == b` is `c != 0` or `c == 0`.
+                    let (equal, value) = match cond.cast {
+                        Cast::Bool => (cond.equal != (cond.value == 1), 0),
+                        _ => (cond.equal, cond.value),
+                    };
+                    if let Cast::Int(signed, width) = cond.cast {
+                        if width.is_some_and(|w| w != bits.len() as u64) {
+                            return err(format!(
+                                "line {line}: casting {} bit(s) to an integer of another width",
+                                bits.len()
+                            ));
+                        }
+                        // A signed value with the top bit set is negative;
+                        // only non-negative values can be written here.
+                        if signed && width.is_some() && value >> (bits.len() - 1) != 0 {
+                            return err(format!(
+                                "line {line}: {value} is out of range for int[{}]",
+                                bits.len()
+                            ));
+                        }
+                    }
+                    if cond.boolean && cond.cast != Cast::Bool && bits.len() != 1 {
                         return err(format!(
-                            "line {}: {} does not fit into {} bit(s)",
-                            cond.operand.line,
-                            cond.value,
+                            "line {line}: only single bits compare with true or false"
+                        ));
+                    }
+                    if bits.len() < 64 && value >> bits.len() != 0 {
+                        return err(format!(
+                            "line {line}: {value} does not fit into {} bit(s)",
                             bits.len()
                         ));
                     }
@@ -1410,8 +1512,8 @@ impl Lower {
                     }
                     let condition = Condition {
                         bits: bits.clone(),
-                        value: cond.value,
-                        equal: cond.equal,
+                        value,
+                        equal,
                     };
                     if !then_ops.is_empty() {
                         ops.push(Operation::If {
@@ -1462,6 +1564,18 @@ fn writes_any(ops: &[Operation], bits: &[usize]) -> bool {
     })
 }
 
+/// Size of gate primitives for the operation budget: one per gate and
+/// one per control qubit it stores.
+fn weight(prims: &[Prim]) -> usize {
+    prims
+        .iter()
+        .map(|p| match p {
+            Prim::Gate(i) => 1 + i.controls.len(),
+            Prim::Phase(_) => 1,
+        })
+        .sum()
+}
+
 fn invert(prims: Vec<Prim>) -> Vec<Prim> {
     prims
         .into_iter()
@@ -1481,16 +1595,19 @@ pub fn parse(src: &str) -> Result<(Program, u8)> {
         toks,
         pos: 0,
         depth: 0,
+        expr_depth: 0,
     };
     // The version decides the meaning of `U`, `u2` and `u3`.
     let mut version = 3u8;
     if parser.is_ident("OPENQASM") {
         let line = parser.line();
         if let Stmt::Version(v) = parser.statement(3)? {
-            version = match v.chars().next() {
-                Some('2') => 2,
-                Some('3') => 3,
-                _ => return err(format!("line {line}: unsupported OpenQASM version {v}")),
+            version = if v == 2.0 {
+                2
+            } else if (3.0..4.0).contains(&v) {
+                3
+            } else {
+                return err(format!("line {line}: unsupported OpenQASM version {v}"));
             };
         }
     }
@@ -1543,33 +1660,81 @@ fn uses(ops: &[Operation], kind: GateKind) -> bool {
     })
 }
 
-impl Program {
-    fn qubit_name(&self, q: usize) -> String {
-        let r = self
-            .qubit_registers()
-            .iter()
-            .find(|r| q >= r.offset && q < r.offset + r.size)
-            .expect("qubit in a register");
-        format!("{}[{}]", r.name, q - r.offset)
-    }
+/// Words an exported register may not be called: keywords, built-in
+/// gates and constants of either version.
+const RESERVED: [&str; 26] = [
+    "OPENQASM", "include", "qubit", "bit", "qreg", "creg", "gate", "measure", "reset", "barrier",
+    "if", "else", "ctrl", "negctrl", "inv", "pow", "gphase", "U", "CX", "pi", "tau", "euler",
+    "true", "false", "opaque", "sizeof",
+];
 
-    fn bit_name(&self, b: usize) -> String {
-        let r = self
+/// Register names of an export: the program's, made unique and free of
+/// reserved words by appending `_`.
+struct Names {
+    qubits: Vec<String>,
+    bits: Vec<String>,
+}
+
+impl Program {
+    /// Names for an export; OpenQASM 2 exports have one quantum register
+    /// `q`.
+    fn export_names(&self, version: u8) -> Names {
+        let mut used = std::collections::HashSet::new();
+        let mut fresh = |name: &str| {
+            let mut n = name.to_string();
+            while RESERVED.contains(&n.as_str())
+                || UNSUPPORTED.contains(&n.as_str())
+                || used.contains(&n)
+            {
+                n.push('_');
+            }
+            used.insert(n.clone());
+            n
+        };
+        let qubits = if version == 2 {
+            vec![fresh("q")]
+        } else {
+            self.qubit_registers()
+                .iter()
+                .map(|r| fresh(&r.name))
+                .collect()
+        };
+        let bits = self
             .bit_registers()
             .iter()
-            .find(|r| b >= r.offset && b < r.offset + r.size)
-            .expect("bit in a register");
-        format!("{}[{}]", r.name, b - r.offset)
+            .map(|r| fresh(&r.name))
+            .collect();
+        Names { qubits, bits }
     }
 
-    /// The register whose bits are exactly `bits`, in order.
-    fn register_of(&self, bits: &[usize]) -> Option<&Register> {
-        self.bit_registers().iter().find(|r| {
+    fn qubit_name(&self, names: &Names, q: usize) -> String {
+        let (k, r) = self
+            .qubit_registers()
+            .iter()
+            .enumerate()
+            .find(|(_, r)| q >= r.offset && q < r.offset + r.size)
+            .expect("qubit in a register");
+        format!("{}[{}]", names.qubits[k], q - r.offset)
+    }
+
+    fn bit_name(&self, names: &Names, b: usize) -> String {
+        let (k, r) = self
+            .bit_registers()
+            .iter()
+            .enumerate()
+            .find(|(_, r)| b >= r.offset && b < r.offset + r.size)
+            .expect("bit in a register");
+        format!("{}[{}]", names.bits[k], b - r.offset)
+    }
+
+    /// The index of the register whose bits are exactly `bits`, in order.
+    fn register_of(&self, bits: &[usize]) -> Option<usize> {
+        self.bit_registers().iter().position(|r| {
             r.size == bits.len() && bits.iter().enumerate().all(|(k, &b)| b == r.offset + k)
         })
     }
 
-    fn gate3(&self, out: &mut String, inst: &Instruction) -> Result<()> {
+    fn gate3(&self, names: &Names, out: &mut String, inst: &Instruction) -> Result<()> {
         use GateKind::*;
         let a = inst.angles(&[]);
         let k = inst.controls.len();
@@ -1592,7 +1757,7 @@ impl Program {
             .controls
             .iter()
             .chain(&inst.targets)
-            .map(|&q| self.qubit_name(q))
+            .map(|&q| self.qubit_name(names, q))
             .collect();
         let (head, params): (String, Vec<f64>) = match (inst.kind, k) {
             (X, 1) => ("cx".into(), vec![]),
@@ -1642,30 +1807,38 @@ impl Program {
         Ok(())
     }
 
-    fn ops3(&self, out: &mut String, ops: &[Operation], indent: usize) -> Result<()> {
+    fn ops3(
+        &self,
+        names: &Names,
+        out: &mut String,
+        ops: &[Operation],
+        indent: usize,
+    ) -> Result<()> {
         let pad = "  ".repeat(indent);
         for op in ops {
             match op {
                 Operation::Gate(i) => {
                     out.push_str(&pad);
-                    self.gate3(out, i)?;
+                    self.gate3(names, out, i)?;
                 }
                 Operation::Measure { qubit, bit } => {
                     let _ = writeln!(
                         out,
                         "{pad}{} = measure {};",
-                        self.bit_name(*bit),
-                        self.qubit_name(*qubit)
+                        self.bit_name(names, *bit),
+                        self.qubit_name(names, *qubit)
                     );
                 }
                 Operation::Reset { qubit } => {
-                    let _ = writeln!(out, "{pad}reset {};", self.qubit_name(*qubit));
+                    let _ = writeln!(out, "{pad}reset {};", self.qubit_name(names, *qubit));
                 }
                 Operation::If { condition, body } => {
                     let lhs = match self.register_of(&condition.bits) {
-                        Some(r) if r.size == 1 => r.name.clone(),
-                        Some(r) => format!("int[{}]({})", r.size, r.name),
-                        None if condition.bits.len() == 1 => self.bit_name(condition.bits[0]),
+                        Some(k) if condition.bits.len() == 1 => names.bits[k].clone(),
+                        Some(k) => format!("uint[{}]({})", condition.bits.len(), names.bits[k]),
+                        None if condition.bits.len() == 1 => {
+                            self.bit_name(names, condition.bits[0])
+                        }
                         None => {
                             return Err(QsoError::invalid(
                                 "program",
@@ -1675,7 +1848,7 @@ impl Program {
                     };
                     let op = if condition.equal { "==" } else { "!=" };
                     let _ = writeln!(out, "{pad}if ({lhs} {op} {}) {{", condition.value);
-                    self.ops3(out, body, indent + 1)?;
+                    self.ops3(names, out, body, indent + 1)?;
                     let _ = writeln!(out, "{pad}}}");
                 }
             }
@@ -1697,38 +1870,51 @@ impl Program {
                 let _ = writeln!(out, "{def}");
             }
         }
-        for r in self.qubit_registers() {
-            let _ = writeln!(out, "qubit[{}] {};", r.size, r.name);
+        let names = self.export_names(3);
+        for (r, name) in self.qubit_registers().iter().zip(&names.qubits) {
+            let _ = writeln!(out, "qubit[{}] {name};", r.size);
         }
-        for r in self.bit_registers() {
-            let _ = writeln!(out, "bit[{}] {};", r.size, r.name);
+        for (r, name) in self.bit_registers().iter().zip(&names.bits) {
+            let _ = writeln!(out, "bit[{}] {name};", r.size);
         }
-        self.ops3(&mut out, self.operations(), 0)?;
+        self.ops3(&names, &mut out, self.operations(), 0)?;
         Ok(out)
     }
 
     /// The program as OpenQASM 2.0: one quantum register `q`, the
-    /// classical registers of the program. Conditions must compare a whole
+    /// classical registers of the program (renamed with a trailing `_`
+    /// where a name is taken or reserved). Conditions must compare a whole
     /// register for equality and may not be nested, as OpenQASM 2 requires.
     pub fn to_qasm2(&self) -> Result<String> {
         let n = self.n_qubits();
         let mut out = String::from("OPENQASM 2.0;\ninclude \"qelib1.inc\";\n");
         let _ = writeln!(out, "qreg q[{n}];");
-        for r in self.bit_registers() {
-            let _ = writeln!(out, "creg {}[{}];", r.name, r.size);
+        let names = self.export_names(2);
+        for (r, name) in self.bit_registers().iter().zip(&names.bits) {
+            let _ = writeln!(out, "creg {name}[{}];", r.size);
         }
         for op in self.operations() {
-            self.op2(&mut out, op, None)?;
+            self.op2(&names, &mut out, op, None)?;
         }
         Ok(out)
     }
 
-    fn op2(&self, out: &mut String, op: &Operation, guard: Option<&str>) -> Result<()> {
+    fn op2(
+        &self,
+        names: &Names,
+        out: &mut String,
+        op: &Operation,
+        guard: Option<&str>,
+    ) -> Result<()> {
         let mut text = String::new();
         match op {
             Operation::Gate(i) => emit_instruction(&mut text, i, &i.angles(&[]), self.n_qubits())?,
             Operation::Measure { qubit, bit } => {
-                let _ = writeln!(text, "measure q[{qubit}] -> {};", self.bit_name(*bit));
+                let _ = writeln!(
+                    text,
+                    "measure q[{qubit}] -> {};",
+                    self.bit_name(names, *bit)
+                );
             }
             Operation::Reset { qubit } => {
                 let _ = writeln!(text, "reset q[{qubit}];");
@@ -1751,9 +1937,9 @@ impl Program {
                         "a conditional block that measures into its own condition has no OpenQASM 2 form",
                     ));
                 }
-                let g = format!("if({}=={}) ", reg.name, condition.value);
+                let g = format!("if({}=={}) ", names.bits[reg], condition.value);
                 for o in body {
-                    self.op2(out, o, Some(&g))?;
+                    self.op2(names, out, o, Some(&g))?;
                 }
                 return Ok(());
             }
@@ -2039,5 +2225,105 @@ mod tests {
         }
         src.push_str("g39 q;\n");
         assert!(Program::from_qasm(&src).is_err());
+    }
+
+    /// Regressions of the review of the OpenQASM reader.
+    #[test]
+    fn review_regressions() {
+        use std::collections::BTreeMap;
+        let dist = |src: &str| Program::from_qasm(src).unwrap().probabilities().unwrap();
+        let head = "OPENQASM 3.0; include \"stdgates.inc\";";
+        // Long operator chains are errors, not stack overflows; moderate
+        // ones still parse.
+        let long = vec!["1"; 50_000].join("+");
+        assert!(Program::from_qasm(&format!("{head} qubit q; rx({long}) q;")).is_err());
+        let short = vec!["0.01"; 200].join("+");
+        assert!(Program::from_qasm(&format!("{head} qubit q; rx({short}) q;")).is_ok());
+        // Gates that expand to nothing still cost: 40 doubling levels of
+        // `id` hit the budget instead of running for days.
+        let mut src = String::from("OPENQASM 2.0; include \"qelib1.inc\"; qreg q[1];\n");
+        src.push_str("gate g0 a { id a; id a; }\n");
+        for k in 1..40 {
+            src.push_str(&format!("gate g{k} a {{ g{} a; g{} a; }}\n", k - 1, k - 1));
+        }
+        src.push_str("g39 q[0];");
+        let start = std::time::Instant::now();
+        assert!(Program::from_qasm(&src).is_err());
+        assert!(start.elapsed().as_secs() < 30);
+        // Controls count towards the budget.
+        let qs: Vec<String> = (0..64).map(|k| format!("q[{k}]")).collect();
+        let src = format!(
+            "{head} qubit[64] q; ctrl(63) @ pow(2097000) @ x {};",
+            qs.join(", ")
+        );
+        assert!(Program::from_qasm(&src).is_err());
+        // bool(c) is c != 0, compared with true or false.
+        let cond = |c: &str| {
+            dist(&format!(
+                "{head} qubit[3] q; bit[3] c; x q[1]; c[0] = measure q[0]; c[1] = measure q[1]; if ({c}) x q[2]; c[2] = measure q[2];"
+            ))
+        };
+        let taken: BTreeMap<u64, f64> = [(0b110, 1.0)].into_iter().collect();
+        let not_taken: BTreeMap<u64, f64> = [(0b010, 1.0)].into_iter().collect();
+        assert_eq!(cond("bool(c)"), taken);
+        assert_eq!(cond("bool(c) == true"), taken);
+        assert_eq!(cond("bool(c) != false"), taken);
+        assert_eq!(cond("bool(c) == false"), not_taken);
+        assert_eq!(cond("c[1] == true"), taken);
+        assert_eq!(cond("uint[3](c) == 2"), taken);
+        for bad in [
+            "bool(c) == 1",
+            "c == true",
+            "int[2](c) == 1",
+            "uint[4](c) == 2",
+            "int[3](c) == 5",
+        ] {
+            assert!(
+                Program::from_qasm(&format!("{head} qubit q; bit[3] c; if ({bad}) x q;")).is_err(),
+                "{bad}"
+            );
+        }
+        // Negative slice ends count from the end: q[0:-1] is every qubit.
+        let all: BTreeMap<u64, f64> = [(0b111, 1.0)].into_iter().collect();
+        assert_eq!(
+            dist(&format!(
+                "{head} qubit[3] q; bit[3] c; x q[0:-1]; c = measure q;"
+            )),
+            all
+        );
+        // Gate parameters shadow the constants.
+        let p = dist(
+            "OPENQASM 2.0; include \"qelib1.inc\"; qreg q[1]; creg c[1]; gate g(euler) a { ry(euler) a; } g(0) q[0]; measure q[0] -> c[0];",
+        );
+        assert_eq!(p.into_iter().collect::<Vec<_>>(), vec![(0, 1.0)]);
+        // Integers above 2⁵³ are exact.
+        let big = Program::from_qasm(&format!(
+            "{head} qubit q; bit[63] c; if (uint[63](c) == 9007199254740993) x q;"
+        ))
+        .unwrap();
+        let Operation::If { condition, .. } = &big.operations()[0] else {
+            panic!("a condition");
+        };
+        assert_eq!(condition.value, 9_007_199_254_740_993);
+        let again = Program::from_qasm(&big.to_qasm3().unwrap()).unwrap();
+        assert_eq!(again.operations(), big.operations());
+        // Versions: 2.0 and 3.x only, and only on the first line.
+        for v in ["2.5", "20", "4", "1.0"] {
+            assert!(
+                Program::from_qasm(&format!("OPENQASM {v}; qubit q;")).is_err(),
+                "{v}"
+            );
+        }
+        assert!(Program::from_qasm("OPENQASM 3.1; qubit q;").is_ok());
+        assert!(Program::from_qasm("OPENQASM 3.0; qubit q; OPENQASM 2.0;").is_err());
+        // OpenQASM 3 keywords are names in OpenQASM 2; exports rename
+        // registers that collide with `q` or with keywords.
+        let v2 = "OPENQASM 2.0; include \"qelib1.inc\"; gate box a { x a; } qreg a[2]; creg q[1]; creg output[1]; box a[0]; measure a[0] -> q[0]; measure a[1] -> output[0];";
+        let p = Program::from_qasm(v2).unwrap();
+        let d = p.probabilities().unwrap();
+        for text in [p.to_qasm2().unwrap(), p.to_qasm3().unwrap()] {
+            let back = Program::from_qasm(&text).unwrap_or_else(|e| panic!("{e}\n{text}"));
+            assert_eq!(back.probabilities().unwrap(), d, "{text}");
+        }
     }
 }

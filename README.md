@@ -430,9 +430,10 @@ program to OpenQASM 2 or 3 and submit it with the vendor's SDK.
 * Qubit 0 is the least significant bit of a basis index (as in Qiskit); bit
   strings print qubit n−1 first.
 * Time evolution is `exp(−iHt)`; rotations are `R_P(θ) = exp(−iθP/2)`;
-  `P(λ) = diag(1, e^{iλ})`; `U(θ, φ, λ)` follows OpenQASM 2 (OpenQASM 3's
-  `U` differs by the global phase `e^{iθ/2}`, which QSO keeps where it
-  matters).
+  `P(λ) = diag(1, e^{iλ})`; `U(θ, φ, λ)` is the standard U3 matrix, which
+  OpenQASM 2's `U` equals up to a global phase; OpenQASM 3's `U` is
+  `e^{iθ/2}` times it, a phase QSO keeps where it matters (under
+  control).
 * Quantum walks use `H = γL` (Laplacian) or `H = −γA` (adjacency).
 * Invalid input returns `QsoError` in Rust and raises `ValueError` in
   Python.

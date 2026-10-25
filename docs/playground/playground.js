@@ -6,19 +6,39 @@ const $ = (id) => document.getElementById(id);
 // Worker calls.
 // ---------------------------------------------------------------------------
 
-const worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
+// A call that runs longer than this stops the worker; a fresh one takes
+// over, so one heavy request cannot block the page's later requests.
+const TIMEOUT_MS = 30000;
 const pending = new Map();
 let nextId = 0;
-worker.onmessage = ({ data }) => {
-  const { resolve, reject } = pending.get(data.id);
-  pending.delete(data.id);
-  if ("error" in data) reject(new Error(data.error));
-  else resolve(data.ok);
-};
+let worker;
+
+function startWorker() {
+  worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
+  worker.onmessage = ({ data }) => {
+    const entry = pending.get(data.id);
+    if (!entry) return;
+    pending.delete(data.id);
+    clearTimeout(entry.timer);
+    if ("error" in data) entry.reject(new Error(data.error));
+    else entry.resolve(data.ok);
+  };
+}
+startWorker();
+
 function call(method, params = {}) {
   return new Promise((resolve, reject) => {
     const id = nextId++;
-    pending.set(id, { resolve, reject });
+    const timer = setTimeout(() => {
+      worker.terminate();
+      for (const entry of pending.values()) {
+        clearTimeout(entry.timer);
+        entry.reject(new Error(`Stopped after ${TIMEOUT_MS / 1000} s; try a smaller input.`));
+      }
+      pending.clear();
+      startWorker();
+    }, TIMEOUT_MS);
+    pending.set(id, { resolve, reject, timer });
     worker.postMessage({ id, method, params });
   });
 }
@@ -395,10 +415,15 @@ function runQasm() {
       entries = Object.entries(r.state.probabilities);
       title = `Final state: basis-state probabilities (${r.qubits} qubit${r.qubits === 1 ? "" : "s"})`;
       header = ["state", "probability", "amplitude"];
-    } else {
+    } else if (r.probabilities) {
       entries = Object.entries(r.probabilities);
       title = `Outcome probabilities of ${r.bits} classical bit${r.bits === 1 ? "" : "s"}`;
       header = r.counts ? ["outcome", "probability", "counts"] : ["outcome", "probability"];
+    } else {
+      // Too many measurement branches for the exact distribution: shots only.
+      entries = Object.entries(r.counts).map(([k, c]) => [k, c / shots]);
+      title = `Sampled frequencies of ${r.bits} classical bits (${shots} shots)`;
+      header = ["outcome", "frequency", "counts"];
     }
     entries.sort(([a], [b]) => (a < b ? -1 : 1));
     let shown = entries;
@@ -411,10 +436,11 @@ function runQasm() {
       const a = r.state?.amplitudes?.[parseInt(k, 2)];
       return a ? `${a[0].toFixed(4)}${a[1] < 0 ? "−" : "+"}${Math.abs(a[1]).toFixed(4)}i` : "";
     };
+    const measure = r.probabilities || r.state ? "P" : "frequency";
     barChart($("qasm-chart"), shown.map(([k, p]) => ({
       label: k,
       value: p,
-      tip: `${k}\nP = ${fmt(p)}${r.counts ? `\ncounts ${r.counts[k] ?? 0} of ${shots}` : ""}`,
+      tip: `${k}\n${measure} = ${fmt(p)}${r.counts ? `\ncounts ${r.counts[k] ?? 0} of ${shots}` : ""}`,
     })));
     table($("qasm-table"), header, entries.map(([k, p]) => [
       k, fmt(p), ...(r.state ? [amp(k)] : r.counts ? [r.counts[k] ?? 0] : []),

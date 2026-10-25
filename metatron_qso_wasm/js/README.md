@@ -37,7 +37,7 @@ module in a Web Worker.
 
 | Method | Result |
 | --- | --- |
-| `qasm(source, {shots, seed})` | Exact outcome probabilities of the classical bits, seeded samples, the final state of a program without measurements, and the program as OpenQASM 3 and (when possible) OpenQASM 2 |
+| `qasm(source, {shots, seed})` | Exact outcome probabilities of the classical bits, seeded samples, the final state of a program without measurements, and the program as OpenQASM 3 and (when possible) OpenQASM 2. Beyond 4096 measurement branches the probabilities are `null` and the shots are simulated one by one |
 | `graph(graph)` | Nodes, edges, positions, summary, automorphism group order and orbits, adjacency and Laplacian spectra, strongly regular parameters |
 | `walk(graph, {start, times, gamma, generator})` | Node probabilities of `exp(−iHt)` from `start` at each time, and the limiting distribution |
 | `search(graph, marked, {gamma, generator, tMax, points})` | Best hopping rate (unless given) and time, success probability, and the success curve over `[0, tMax]` |
@@ -52,6 +52,8 @@ and `circulant:N,S1,S2,…`. The generator is `laplacian` (`H = γL`, the
 default) or `adjacency` (`H = −γA`).
 
 The bit strings put bit 0 (or qubit 0) on the right, as Qiskit does.
+Results are plain objects; JavaScript lists keys that look like integers
+(`"10"`) before others, so sort the keys when the order matters.
 
 ## Limits
 
