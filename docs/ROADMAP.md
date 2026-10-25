@@ -253,6 +253,15 @@ Validation:
   estimates meet their error bound with probability ≥ 8/π²; iterative
   intervals cover the true value (1 miss in 200 at α = 0.05).
 
+Two independent reviews (core and Python bindings) found no wrong results
+on the validated paths. They found panics on overflowing angles and
+malformed inputs, unbounded allocations (circuit size, fermion products,
+full-CI spaces, enumeration, restart counts), an error bound that collapsed
+to 0 when its commutators overflowed, a VQD default penalty that equalled
+the largest possible gap instead of exceeding it, and SSVQE accepting
+weights that are not strictly decreasing. All were fixed with regression
+tests before the release.
+
 ### 1.6 — Interoperability and reach (M, next)
 
 | Deliverable | Detail |
