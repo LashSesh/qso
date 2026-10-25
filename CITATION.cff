@@ -8,7 +8,7 @@ authors:
 repository-code: "https://github.com/LashSesh/qso"
 url: "https://github.com/LashSesh/qso"
 license: Apache-2.0
-version: 1.4.0
+version: 1.5.0
 date-released: 2026-10-25
 keywords:
   - quantum computing
@@ -20,6 +20,9 @@ keywords:
   - boson sampling
   - error mitigation
   - quantum trajectories
+  - quantum chemistry
+  - Hamiltonian simulation
+  - amplitude estimation
   - Rust
 abstract: >-
   Statevector and density-matrix simulation of quantum circuits with exact
@@ -29,6 +32,9 @@ abstract: >-
   exact boson sampling, device-like noise models with quantum trajectories,
   and error mitigation (readout calibration, zero-noise extrapolation,
   probabilistic error cancellation, Pauli twirling) with classical shadows
-  and standard errors on every estimate, written in pure Rust with Python
-  bindings.
+  and standard errors on every estimate, Hamiltonian simulation with
+  rigorous Trotter error bounds, electronic structure (fermion-to-qubit
+  mappings, FCIDUMP integrals, UCCSD, ADAPT-VQE), excited states, quantum
+  natural gradient, QUBO/QAOA mixers and amplitude estimation, written in
+  pure Rust with Python bindings.
   Every algorithm is validated against closed-form or published results.

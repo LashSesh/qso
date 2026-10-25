@@ -499,3 +499,88 @@ fn uccsd_and_adapt_vqe_reach_full_ci_for_lih() {
         assert!(w[1] <= w[0] + 1e-9);
     }
 }
+
+#[test]
+fn product_formulas_converge_with_their_order_below_the_bounds() {
+    use metatron_qso::algorithms::time_evolution::{trotter_circuit, trotter_error_bound};
+    use metatron_qso::linalg::expm_hermitian;
+    let n = 4;
+    let h = models::heisenberg_xxz(n, 1.0, 0.5, false);
+    let exact = expm_hermitian(&h.to_dense(n).unwrap(), 1.0);
+    let error = |steps: usize, order: usize| {
+        let c = trotter_circuit(&h, n, 1.0, steps, order).unwrap();
+        let mut u = metatron_qso::linalg::CMatrix::zeros(1 << n, 1 << n);
+        for col in 0..1 << n {
+            let mut psi = StateVector::basis(n, col).unwrap();
+            psi.apply_circuit(&c, &[]).unwrap();
+            for (row, a) in psi.amplitudes().iter().enumerate() {
+                u[(row, col)] = *a;
+            }
+        }
+        (u - &exact).singular_values().max()
+    };
+    for (order, expected) in [(1usize, 2.0), (2, 4.0), (4, 16.0)] {
+        let (e16, e32) = (error(16, order), error(32, order));
+        assert!(e16 <= trotter_error_bound(&h, 1.0, 16, order).unwrap());
+        assert!(e32 <= trotter_error_bound(&h, 1.0, 32, order).unwrap());
+        // Doubling the steps divides the error by 2^order.
+        assert!(
+            (e16 / e32 / expected - 1.0).abs() < 0.05,
+            "order {order}: {}",
+            e16 / e32
+        );
+    }
+}
+
+#[test]
+fn amplitude_estimation_error_falls_as_one_over_the_oracle_calls() {
+    use metatron_qso::algorithms::amplitude_estimation::{AmplitudeProblem, maximum_likelihood};
+    let a = 0.3;
+    let problem = AmplitudeProblem::bernoulli(a).unwrap();
+    let rmse = |levels: usize, shots: usize| {
+        let mut sq = 0.0;
+        let mut calls = 0;
+        for seed in 0..200 {
+            let r = maximum_likelihood(&problem, levels, shots, 0.95, seed).unwrap();
+            sq += (r.estimate - a).powi(2);
+            calls = r.oracle_calls;
+        }
+        (calls as f64, (sq / 200.0).sqrt())
+    };
+    let slope = |points: Vec<(f64, f64)>| {
+        let n = points.len() as f64;
+        let mx = points.iter().map(|p| p.0.ln()).sum::<f64>() / n;
+        let my = points.iter().map(|p| p.1.ln()).sum::<f64>() / n;
+        let sxy: f64 = points
+            .iter()
+            .map(|p| (p.0.ln() - mx) * (p.1.ln() - my))
+            .sum();
+        let sxx: f64 = points.iter().map(|p| (p.0.ln() - mx).powi(2)).sum();
+        sxy / sxx
+    };
+    let quantum = slope((3..9).map(|levels| rmse(levels, 100)).collect());
+    let classical = slope([100, 400, 1600, 6400].iter().map(|&s| rmse(1, s)).collect());
+    assert!((quantum + 1.0).abs() < 0.05, "{quantum}");
+    assert!((classical + 0.5).abs() < 0.05, "{classical}");
+}
+
+#[test]
+fn vqd_finds_every_level_of_h2() {
+    use metatron_qso::algorithms::ansatz::{Entanglement, efficient_su2};
+    use metatron_qso::algorithms::excited::{ExcitedStateOptions, vqd};
+    use metatron_qso::chemistry::{MolecularIntegrals, QubitEncoding};
+    let mol = MolecularIntegrals::from_fcidump(FCI_REFERENCE[0].1).unwrap();
+    let h = mol
+        .qubit_hamiltonian(QubitEncoding::parity_reduced())
+        .unwrap();
+    let r = vqd(
+        &h,
+        &efficient_su2(2, 2, Entanglement::Linear),
+        4,
+        &ExcitedStateOptions::default().with_restarts(6).with_seed(2),
+    )
+    .unwrap();
+    for (e, reference) in r.energies.iter().zip(FCI_REFERENCE[0].2) {
+        assert!(close(*e, *reference, 1e-6), "{e} vs {reference}");
+    }
+}

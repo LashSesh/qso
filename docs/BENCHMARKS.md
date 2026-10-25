@@ -124,15 +124,15 @@ blocks in parallel, and fuses runs of single-qubit gates on higher qubits
 (see [ARCHITECTURE.md](ARCHITECTURE.md)). Registers of 14 qubits or fewer
 fit into one block and run as before.
 
-## Noisy circuits (1.4.0)
+## Noisy circuits (1.5.0)
 
-The report of release 1.4.0 adds this section. It was measured in a later
+Release 1.5.0 adds this section to the report. It was measured in a later
 session on the same machine type, which was slower at the time: in
-alternating runs of both builds (three each, medians), a statevector layer
-took 0.99 ms (1.4.0) and 1.15 ms (1.3.0) at 16 qubits, 10.1 ms and
-10.6 ms at 20 qubits, and 265 ms and 289 ms at 24 qubits, against
-0.55 ms, 8.7 ms and 211 ms in the tables above. Release 1.4.0 does not
-change the statevector kernels.
+alternating runs of the new build and the 1.3.0 build (three each,
+medians), a statevector layer took 0.99 ms (new) and 1.15 ms (1.3.0) at
+16 qubits, 10.1 ms and 10.6 ms at 20 qubits, and 265 ms and 289 ms at
+24 qubits, against 0.55 ms, 8.7 ms and 211 ms in the tables above. The
+statevector kernels did not change after 1.3.0.
 
 Device: T₁ = 100, T₂ = 80, gate durations, depolarising errors. Circuit:
 four layers of RY on every qubit and a brick of CX. "One trajectory"

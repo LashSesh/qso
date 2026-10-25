@@ -1,9 +1,11 @@
 # QSO Roadmap (1.x)
 
-Status: October 2026. 1.1 to 1.4 delivered — 1.3 combined the milestones
-planned as "quantum walks" and "simulation performance", 1.4 brought noise
-at scale and error mitigation. Algorithms and physics (1.5) are next. Milestone numbers are the release numbers; the
-later milestones moved up by one when the two were merged.
+Status: October 2026. 1.1 to 1.5 delivered — 1.3 combined the milestones
+planned as "quantum walks" and "simulation performance"; 1.4 (noise at
+scale and error mitigation) and 1.5 (algorithms and physics) shipped
+together as release 1.5.0. Interoperability (1.6) is next. Milestone
+numbers are the release numbers; the later milestones moved up by one when
+the first two were merged.
 
 QSO 1.0 delivers what it documents: every number in the README is reproduced
 by a test against an independent reference, the packages are on crates.io
@@ -37,7 +39,7 @@ which withdraws the results of version 1.
 | Boson sampling | exact probabilities and exact sampling (1.1) | no partial distinguishability, photon loss or Gaussian boson sampling |
 | Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | no noise learning (PEC needs the Pauli noise given), no leakage or non-Markovian noise, channels on at most two qubits, no virtual distillation or probabilistic error amplification |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0) | no time-dependent Hamiltonians, no open-system discrete-time walks, no pretty-good-transfer decision (only best fidelity in a window) |
-| Physics and chemistry | TFIM, XXZ, MaxCut, H₂ only | no fermion-to-qubit mappings, no product-formula (Trotter) circuits, no excited states |
+| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5) | no integrals of its own (needs FCIDUMP files from a chemistry code), no unrestricted (UHF) integrals, no tight commutator bound for product formulas of order 4 and higher, no time-dependent Hamiltonians |
 | Interoperability | OpenQASM 2 without `gate` definitions; multi-controlled gates exported by exact decomposition (1.3.0); edge lists, GraphML and duck-typed NetworkX import for graphs | no OpenQASM 3, no browser build; no bridges to other frameworks, by decision (see section 2) |
 | Documentation | user guide, executed tutorials and Python reference on GitHub Pages (1.2) | no Rust-specific tutorials; no hosted documentation per released version |
 | Engineering | CI on Linux (x86_64, arm64), macOS and Windows; Miri, fuzzing, API checks, weekly cross-validation and benchmark tracking; Trusted Publishing (1.2) | no coverage measurement; fuzzing only of the parsers and deserialisers |
@@ -115,7 +117,8 @@ theory or physics.
   stated, as today.
 * **One minor release per milestone**, published by the release workflow
   after a dry run; patch releases fix bugs in between. Work that finishes
-  together ships together (1.3 combined two planned milestones).
+  together ships together (1.3 combined two planned milestones, 1.5.0
+  carries 1.4 and 1.5).
 
 ## 4. Milestones
 
@@ -220,23 +223,37 @@ a biased adaptive allocation (pilot and main shots were pooled) and
 quadratic trajectory cost in the number of jumps. All were fixed before
 the release.
 
-### 1.5 — Algorithms and physics (L, next)
+### 1.5 — Algorithms and physics (delivered)
 
-| Deliverable | Detail |
-|---|---|
-| Hamiltonian simulation | 1st/2nd/4th-order Trotter–Suzuki circuits with commutator error bounds, qDRIFT |
-| Fermions | fermionic operators; Jordan–Wigner, parity (with two-qubit reduction) and Bravyi–Kitaev mappings; molecular Hamiltonians from FCIDUMP files; Hartree–Fock states; UCCSD and k-UpCCGSD ansätze; ADAPT-VQE |
-| Excited states and geometry | VQD, SSVQE; quantum Fisher information and natural gradient; variational imaginary-time evolution |
-| Optimisation problems | QUBO/Ising input; constrained QAOA with XY mixers; warm-start QAOA |
-| Amplitude estimation | canonical, iterative and maximum-likelihood variants |
+| Deliverable | Delivered | Not done, and why |
+|---|---|---|
+| Hamiltonian simulation | `Circuit::pauli_rotation`; product formulas of order 1, 2, 4, 6, …; `trotter_error_bound` with the commutator bounds of Childs et al. (2021) for orders 1 and 2 and the smaller of a stage-wise and a Taylor-remainder bound above; qDRIFT with Campbell's bound | a tight commutator bound for order ≥ 4 (the paper's Appendix J is heuristic in its constants); the bound QSO gives there is rigorous but loose |
+| Fermions | `FermionOperator` with normal ordering; Jordan–Wigner, parity and Bravyi–Kitaev mappings as binary transforms; two-qubit reduction; `MolecularIntegrals` from FCIDUMP files with Hartree–Fock states and energies and full CI; UCCSD, k-UpCCGSD, ADAPT-VQE; FCIDUMP files of H₂, LiH and BeH₂ with PySCF reference energies | computing integrals (that needs a quantum-chemistry code; FCIDUMP is the exchange format, as OpenQASM is for circuits); unrestricted orbitals |
+| Excited states and geometry | VQD, weighted SSVQE; exact state derivatives, quantum Fisher information, quantum natural gradient; McLachlan imaginary-time evolution (RK4) | — |
+| Optimisation problems | `Qubo`/`Ising` with exact enumeration; QAOA for any diagonal cost with X, ring and complete XY mixers from Dicke states, and the warm-start mixer | a built-in continuous relaxation for warm starts: the user supplies `c ∈ [0, 1]ⁿ` |
+| Amplitude estimation | canonical (exact outcome distribution), iterative (Chernoff–Hoeffding intervals) and maximum-likelihood variants | Clopper–Pearson intervals for iterative estimation |
 
-Validation: Trotter errors stay below their bounds and converge with the
-order of the formula; all three fermion mappings give identical spectra,
-equal to full CI, for H₂, LiH and BeH₂ in STO-3G; QFI agrees with finite
-differences; VQD energies match exact diagonalisation; amplitude-estimation
-error scales as 1/M.
+Validation:
 
-### 1.6 — Interoperability and reach (M)
+* product-formula errors stay below their bounds and fall as `r^{-order}`
+  (orders 1, 2 and 4 on Heisenberg, Ising and random 4-qubit
+  Hamiltonians); the qDRIFT channel converges as `1/N` below its bound;
+* all four encodings give identical determinant-space spectra, equal to
+  PySCF's full CI to 10⁻⁸ Ha, for H₂, LiH and BeH₂ in STO-3G; Hartree–Fock
+  energies agree to 10⁻⁹ Ha;
+* UCCSD and ADAPT-VQE reach the full-CI energy of LiH within 1.1·10⁻⁵ Ha;
+* the quantum Fisher information equals −2 times the Hessian of the
+  fidelity (finite differences); imaginary-time evolution follows the
+  exact normalised evolution to 10⁻⁶;
+* VQD and SSVQE reproduce exact spectra (all levels of H₂, three levels of
+  an Ising chain);
+* XY mixers keep all probability on feasible strings;
+* the RMSE of maximum-likelihood amplitude estimation falls with slope
+  −0.99 in the oracle calls (−0.49 for plain sampling); canonical
+  estimates meet their error bound with probability ≥ 8/π²; iterative
+  intervals cover the true value (1 miss in 200 at α = 0.05).
+
+### 1.6 — Interoperability and reach (M, next)
 
 | Deliverable | Detail |
 |---|---|
@@ -268,9 +285,10 @@ core is close to memory bandwidth.
 3. **1.4: noise before algorithms.** Device models, trajectories and
    mitigation reuse the kernels and execution plans directly and make
    every later algorithm testable under realistic noise.
-4. **1.5 (algorithms and physics)** next: Hamiltonian simulation and
-   fermions on top of the noise and estimation tools.
-5. **1.6 (interoperability)** without framework bridges.
+4. **1.5: algorithms and physics**, on top of the noise and estimation
+   tools, released together with 1.4 as 1.5.0 to keep releases (and CI
+   runs) few.
+5. **1.6 (interoperability)** next, without framework bridges.
 
 ## 6. Measures of success
 
@@ -280,7 +298,8 @@ core is close to memory bandwidth.
   tracked per release.
 * Usability: docs site with executed tutorials; every user-facing Rust
   feature is available from Python.
-* Releases: one per milestone, published without stored tokens.
+* Releases: one per milestone, or fewer when milestones finish together;
+  published without stored tokens.
 
 ## 7. Decisions
 
@@ -288,7 +307,10 @@ Taken (October 2026):
 
 * Walks and performance first, shipped together as 1.3.
 * No Qiskit, PennyLane or Cirq bridges.
-* Noise and mitigation (1.4) before algorithms and physics (1.5).
+* Noise and mitigation (1.4) before algorithms and physics (1.5); both
+  shipped together as 1.5.0.
+* No integral code: molecules come in as FCIDUMP files, written by any
+  quantum-chemistry program (the repository's files by PySCF).
 
 Open:
 

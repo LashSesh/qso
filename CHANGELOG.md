@@ -4,14 +4,65 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [1.4.0] — 2026-10-25
+## [1.5.0] — 2026-10-25
 
-Milestone 1.4 of the [roadmap](docs/ROADMAP.md): noise at scale and error
-mitigation. Every new feature is tested against an exact computation,
-mostly density matrices or exact sums (named below). No validated result
-of earlier releases changed.
+Milestones 1.4 (noise at scale and error mitigation) and 1.5 (algorithms
+and physics) of the [roadmap](docs/ROADMAP.md), released together; 1.4.0
+was not published on its own. Every new feature is tested against an
+independent reference — exact diagonalisation, PySCF's full CI, density
+matrices, exact sums or closed forms (named below). No validated result of
+earlier releases changed.
 
-### Added
+### Added — algorithms and physics (milestone 1.5)
+
+- **Hamiltonian simulation** (`algorithms::time_evolution`).
+  - `Circuit::pauli_rotation` appends `exp(−iθP/2)` for any Pauli string.
+  - Product-formula circuits of order 1, 2, 4, 6, … (Lie–Trotter, Strang,
+    Suzuki) and `trotter_error_bound`: the commutator bounds of Childs et
+    al. (2021) for orders 1 and 2, the smaller of a stage-wise and a
+    Taylor-remainder bound for higher orders. In the tests the actual
+    errors stay below the bounds (by factors 3.5–13 for orders 1 and 2;
+    the order-4 bound is valid but loose) and fall as `r^{-order}`.
+  - qDRIFT circuits with Campbell's bound; the exact average channel
+    converges as `1/N` and stays below it.
+  - `QubitOperator` for complex combinations of Pauli strings.
+- **Electronic structure** (`chemistry`).
+  - `FermionOperator` with parsing and normal ordering.
+  - Jordan–Wigner, parity and Bravyi–Kitaev mappings as linear binary
+    transforms, and the two-qubit reduction of the parity mapping
+    (`QubitEncoding`).
+  - `MolecularIntegrals`: FCIDUMP reading and writing, qubit
+    Hamiltonians, Hartree–Fock states and energies, full CI in the
+    determinant space (dense up to 4096 determinants, Lanczos above).
+  - FCIDUMP files and PySCF reference energies for H₂, LiH and BeH₂ in
+    STO-3G (`examples/molecules/`). All four encodings give identical
+    determinant-space spectra equal to PySCF's full CI (10⁻⁸ Ha);
+    Hartree–Fock energies agree to 10⁻⁹ Ha.
+  - UCCSD and k-UpCCGSD ansätze and ADAPT-VQE. UCCSD and ADAPT-VQE reach
+    LiH's full-CI energy within 1.1·10⁻⁵ Ha on 10 qubits.
+- **Excited states and state geometry.**
+  - VQD and weighted SSVQE (`algorithms::excited`), checked against exact
+    diagonalisation (all levels of H₂, three levels of an Ising chain).
+  - State derivatives, the quantum Fisher information (checked against
+    finite differences of the fidelity), quantum natural gradient and
+    McLachlan imaginary-time evolution, which follows the exact
+    normalised evolution to 10⁻⁶ (`algorithms::geometry`).
+- **Optimisation problems** (`algorithms::combinatorial`): QUBO and Ising
+  problems with exact enumeration; QAOA for any diagonal cost with X, ring
+  or complete XY (Hamming weight conserved) and warm-start mixers.
+- **Amplitude estimation** (`algorithms::amplitude_estimation`):
+  canonical (exact outcome distribution, error bound met with probability
+  ≥ 8/π²), iterative (Grinko et al.; 1 miss in 200 at α = 0.05) and
+  maximum-likelihood (Suzuki et al.; RMSE slope −0.99 in the oracle calls,
+  against −0.49 for plain sampling).
+- **CLI:** `qso molecule FILE` and `qso trotter`.
+- Example `molecules`, tutorial 07, guide chapters on excited states,
+  Hamiltonian simulation, electronic structure, and optimisation and
+  amplitude estimation; a fuzz target for the new parsers.
+- Python: all of the above, with type stubs.
+
+### Added — noise at scale and error mitigation (milestone 1.4)
+
 
 - **Device models** (`noise::DeviceModel`, JSON via `from_json` /
   `to_json`).
