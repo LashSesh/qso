@@ -460,3 +460,42 @@ fn fermion_mappings_give_identical_spectra_equal_to_full_ci() {
         }
     }
 }
+
+#[test]
+fn uccsd_and_adapt_vqe_reach_full_ci_for_lih() {
+    use metatron_qso::chemistry::{
+        AdaptOptions, MolecularIntegrals, QubitEncoding, adapt_vqe_molecule, uccsd,
+    };
+    let mol = MolecularIntegrals::from_fcidump(FCI_REFERENCE[1].1).unwrap();
+    let fci = FCI_REFERENCE[1].2[0];
+    let encoding = QubitEncoding::parity_reduced();
+    let h = mol.qubit_hamiltonian(encoding).unwrap();
+    assert_eq!(h.min_qubits(), 10);
+    // UCCSD from the Hartree–Fock point (all parameters zero).
+    let ansatz = uccsd(&mol, encoding).unwrap();
+    let n = ansatz.num_parameters();
+    let res = Vqe::new(h, ansatz)
+        .unwrap()
+        .with_initial_parameters(vec![0.0; n])
+        .unwrap()
+        .run()
+        .unwrap();
+    // Variational, and far within chemical accuracy (1.6 mHa).
+    assert!(
+        res.energy >= fci - 1e-9 && res.energy - fci < 1e-4,
+        "UCCSD {}",
+        res.energy
+    );
+    let adapt = adapt_vqe_molecule(&mol, encoding, false, &AdaptOptions::default()).unwrap();
+    assert!(adapt.converged);
+    assert!(adapt.operators.len() < n);
+    assert!(
+        adapt.energy >= fci - 1e-9 && adapt.energy - fci < 1e-4,
+        "ADAPT {}",
+        adapt.energy
+    );
+    // Energies decrease monotonically.
+    for w in adapt.energies.windows(2) {
+        assert!(w[1] <= w[0] + 1e-9);
+    }
+}
