@@ -7,11 +7,12 @@ Two methods find the lowest few eigenstates of `H`.
 - **VQD** (variational quantum deflation; Higgott, Wang and Brierley,
   Quantum 3, 156 (2019)) finds the states one after another. State `k`
   minimises `⟨H⟩ + Σ_{j<k} β_j |⟨ψ_j|ψ⟩|²`. Each penalty `β_j` must exceed
-  the gap `E_k − E_j`. The default, twice the coefficient one-norm of `H`,
-  always does.
+  the gap `E_k − E_j`. Every gap is at most twice the coefficient
+  one-norm of `H`; the default, three times that norm, always exceeds it.
 - **SSVQE** (subspace-search VQE; Nakanishi, Mitarai and Fujii, Phys. Rev.
   Research 1, 033062 (2019)) applies one circuit to `|0⟩, |1⟩, …` and
-  minimises a weighted sum of their energies, with decreasing weights.
+  minimises a weighted sum of their energies. The weights must decrease
+  strictly; with equal weights the result is only the subspace sum.
   It needs a more expressive circuit than VQD, because one unitary must map
   all inputs to eigenstates.
 

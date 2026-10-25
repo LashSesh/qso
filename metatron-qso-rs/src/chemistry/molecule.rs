@@ -158,28 +158,38 @@ impl MolecularIntegrals {
     pub fn from_fcidump(text: &str) -> Result<Self> {
         let bad = |msg: String| QsoError::invalid("FCIDUMP", msg);
         let upper = text.to_ascii_uppercase();
-        let start = upper
-            .find("&FCI")
+        let start = ["&FCI", "$FCI"]
+            .iter()
+            .filter_map(|t| upper.find(t))
+            .min()
             .ok_or_else(|| bad("missing '&FCI' header".into()))?;
-        let header_end = ["&END", "/"]
+        let header_end = ["&END", "$END", "/"]
             .iter()
             .filter_map(|t| upper[start..].find(t).map(|i| (start + i, t.len())))
             .min()
             .ok_or_else(|| bad("missing '&END' or '/' after the header".into()))?;
         let header = &upper[start + 4..header_end.0];
+        // Namelist items are separated by commas or blanks; `KEY = v` may
+        // carry blanks around '='.
+        let mut normalised = String::with_capacity(header.len());
+        for part in header.split('=') {
+            if !normalised.is_empty() {
+                normalised.push('=');
+            }
+            normalised.push_str(part.trim());
+        }
         let mut fields: HashMap<String, Vec<String>> = HashMap::new();
         let mut key = String::new();
-        for token in header.replace('\n', " ").split(',') {
-            let token = token.trim();
+        for token in normalised.split(|c: char| c == ',' || c.is_whitespace()) {
             if token.is_empty() {
                 continue;
             }
             if let Some((k, v)) = token.split_once('=') {
-                key = k.trim().to_string();
-                fields
-                    .entry(key.clone())
-                    .or_default()
-                    .push(v.trim().to_string());
+                key = k.to_string();
+                let entry = fields.entry(key.clone()).or_default();
+                if !v.is_empty() {
+                    entry.push(v.to_string());
+                }
             } else if !key.is_empty() {
                 fields
                     .entry(key.clone())
@@ -206,7 +216,11 @@ impl MolecularIntegrals {
                 "NORB must lie in 1..={MAX_ORBITALS}, got {norb}"
             )));
         }
-        if nelec < 0 || nelec > 2 * norb || ms2.abs() > nelec || (nelec + ms2) % 2 != 0 {
+        if nelec < 0
+            || nelec > 2 * norb
+            || ms2.unsigned_abs() > nelec.unsigned_abs()
+            || (nelec + ms2) % 2 != 0
+        {
             return Err(bad(format!("inconsistent NELEC = {nelec}, MS2 = {ms2}")));
         }
         let m = norb as usize;
@@ -216,16 +230,12 @@ impl MolecularIntegrals {
         let mut two_body = vec![0.0; m * m * m * m];
         let mut core = 0.0;
         let body = &text[header_end.0 + header_end.1..];
-        // The '&END' line may carry nothing else; skip to the next line.
-        for (line_no, line) in body.lines().enumerate() {
+        for line in body.lines() {
             let tokens: Vec<&str> = line.split_whitespace().collect();
             if tokens.is_empty() {
                 continue;
             }
             if tokens.len() != 5 {
-                if line_no == 0 {
-                    continue;
-                }
                 return Err(bad(format!("expected 'value i j k l' in line '{line}'")));
             }
             let value: f64 = tokens[0]
@@ -441,7 +451,7 @@ impl MolecularIntegrals {
         let nq = encoding.n_qubits(n);
         // Validates the encoding for these electron numbers.
         encoding.map(&FermionOperator::new(), n, self.n_alpha, self.n_beta)?;
-        let bits = encoding.encode(self.hartree_fock_occupation(), n);
+        let bits = encoding.encode(self.hartree_fock_occupation(), n)?;
         let mut c = Circuit::new(nq);
         for q in 0..nq {
             if (bits >> q) & 1 == 1 {
@@ -452,8 +462,16 @@ impl MolecularIntegrals {
     }
 
     /// Occupation bit masks of all determinants with `n_α` and `n_β`
-    /// electrons, in increasing order.
-    pub fn determinants(&self) -> Vec<u64> {
+    /// electrons, in increasing order (at most [`MAX_DETERMINANTS`]).
+    pub fn determinants(&self) -> Result<Vec<u64>> {
+        let dim = binomial(self.n_orbitals, self.n_alpha)
+            .saturating_mul(binomial(self.n_orbitals, self.n_beta));
+        if dim > MAX_DETERMINANTS as u128 {
+            return Err(QsoError::invalid(
+                "molecule",
+                format!("{dim} determinants exceed the limit of {MAX_DETERMINANTS}"),
+            ));
+        }
         let m = self.n_orbitals;
         let alpha = combinations(m, self.n_alpha);
         let beta = combinations(m, self.n_beta);
@@ -463,7 +481,7 @@ impl MolecularIntegrals {
                 out.push(a | (b << m));
             }
         }
-        out
+        Ok(out)
     }
 
     /// The lowest `n_roots` full-CI energies (core energy included) in the
@@ -480,21 +498,13 @@ impl MolecularIntegrals {
     /// All encodings give the same energies; comparing them checks the
     /// mappings.
     pub fn fci_energies_with(&self, encoding: QubitEncoding, n_roots: usize) -> Result<Vec<f64>> {
-        let m = self.n_orbitals;
-        let dim = binomial(m, self.n_alpha).saturating_mul(binomial(m, self.n_beta));
-        if dim > MAX_DETERMINANTS as u128 {
-            return Err(QsoError::invalid(
-                "molecule",
-                format!("{dim} determinants exceed the full-CI limit of {MAX_DETERMINANTS}"),
-            ));
-        }
-        let h = self.qubit_hamiltonian(encoding)?;
         let n = self.n_spin_orbitals();
-        let basis: Vec<u64> = self
-            .determinants()
+        let basis = self
+            .determinants()?
             .into_iter()
             .map(|d| encoding.encode(d, n))
-            .collect();
+            .collect::<Result<Vec<u64>>>()?;
+        let h = self.qubit_hamiltonian(encoding)?;
         sector_energies(&h, &basis, n_roots)
     }
 }
@@ -709,6 +719,8 @@ mod tests {
             " &FCI NORB=2,NELEC=2,MS2=1 &END\n".to_string(),
             " &FCI NORB=40,NELEC=2 &END\n".to_string(),
             " &FCI NORB=2,NELEC=2,IUHF=1 &END\n".to_string(),
+            " &FCI NORB=2,NELEC=2,MS2=-9223372036854775808 &END\n".to_string(),
+            " &FCI NORB=2,NELEC=2 &END 1.0 1 1\n".to_string(),
         ] {
             assert!(MolecularIntegrals::from_fcidump(&bad).is_err(), "{bad}");
         }

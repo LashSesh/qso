@@ -4,7 +4,8 @@
 //!   states one after another. State `k` minimises
 //!   `⟨H⟩_θ + Σ_{j<k} β_j |⟨ψ_j|ψ(θ)⟩|²`; with every `β_j` larger than the
 //!   gap `E_k − E_j`, the minimum is the k-th eigenstate. The default
-//!   `β = 2 Σ|c|` (twice the coefficient one-norm of `H`) exceeds every gap.
+//!   `β = 3 Σ|c|` (three times the coefficient one-norm of `H`) exceeds
+//!   every gap, which is at most `2 Σ|c|`.
 //! * Weighted SSVQE (Nakanishi, Mitarai and Fujii, Phys. Rev. Research 1,
 //!   033062 (2019)) applies one circuit to the orthogonal basis states
 //!   `|0⟩, |1⟩, …, |k−1⟩` and minimises `Σ_j w_j ⟨j|U†HU|j⟩` with weights
@@ -32,7 +33,7 @@ pub struct ExcitedStateOptions {
     /// Random restarts per optimisation (the best is kept).
     pub restarts: usize,
     pub seed: u64,
-    /// VQD penalties `β_j` (default `2 Σ|c|` for every state).
+    /// VQD penalties `β_j` (default `3 Σ|c|` for every state).
     pub betas: Option<Vec<f64>>,
     /// SSVQE weights (default `k, k−1, …, 1`).
     pub weights: Option<Vec<f64>>,
@@ -206,7 +207,9 @@ pub fn vqd(
     options: &ExcitedStateOptions,
 ) -> Result<ExcitedStatesResult> {
     check(h, ansatz, n_states, options)?;
-    let default_beta = 2.0
+    // E_k − E_j ≤ 2Σ|c|, with equality for a single Pauli string, so the
+    // default exceeds every gap by a margin.
+    let default_beta = 3.0
         * h.terms()
             .iter()
             .filter(|(_, s)| !s.is_identity())
@@ -355,6 +358,27 @@ mod tests {
                     e
                 );
             }
+        }
+    }
+
+    #[test]
+    fn default_penalty_exceeds_the_largest_gap() {
+        // H = Z0 has the gap 2 = 2Σ|c|; a penalty of exactly 2Σ|c| leaves
+        // the deflated landscape flat.
+        let h: PauliSum = "Z0".parse().unwrap();
+        let ansatz = crate::algorithms::ansatz::real_amplitudes(1, 1, Entanglement::Linear);
+        for seed in 0..4 {
+            let r = vqd(
+                &h,
+                &ansatz,
+                2,
+                &ExcitedStateOptions::default().with_seed(seed),
+            )
+            .unwrap();
+            assert!(
+                (r.energies[0] + 1.0).abs() < 1e-8 && (r.energies[1] - 1.0).abs() < 1e-6,
+                "{r:?}"
+            );
         }
     }
 

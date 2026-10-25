@@ -103,8 +103,14 @@ pub fn pool_gradients(
     pool: &[PoolOperator],
     psi: &StateVector,
 ) -> Result<Vec<f64>> {
-    let h_psi = hamiltonian.apply(psi)?;
     let n = psi.n_qubits();
+    if let Some((_, tau)) = pool.iter().find(|(_, t)| t.min_qubits() > n) {
+        return Err(QsoError::QubitOutOfRange {
+            qubit: tau.min_qubits() - 1,
+            n_qubits: n,
+        });
+    }
+    let h_psi = hamiltonian.apply(psi)?;
     Ok(pool
         .iter()
         .map(|(_, tau)| 2.0 * inner(&h_psi, &apply_operator(tau, psi.amplitudes(), n)).re)
@@ -223,6 +229,13 @@ mod tests {
     use super::*;
     use crate::chemistry::mapping::Mapping;
 
+    fn tau_on(q: usize) -> QubitOperator {
+        QubitOperator::from_terms([(
+            num_complex::Complex64::new(0.0, 1.0),
+            crate::quantum::PauliString::single(q, crate::quantum::Pauli::X),
+        )])
+    }
+
     #[test]
     fn pool_gradients_match_finite_differences() {
         let mol = MolecularIntegrals::from_fcidump(include_str!(
@@ -253,6 +266,9 @@ mod tests {
             assert!((fd - g).abs() < 1e-7, "{fd} vs {g}");
         }
         assert!(grads.iter().all(|g| g.abs() > 1e-3), "{grads:?}");
+        // Operators beyond the state's register are an error, not a panic.
+        let wide = vec![("x3".to_string(), tau_on(3))];
+        assert!(pool_gradients(&h, &wide, &StateVector::zero(2)).is_err());
     }
 
     #[test]

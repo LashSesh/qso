@@ -74,10 +74,17 @@ impl Mapping {
     }
 
     /// The qubit vector `A n` of an occupation vector `n` (bit masks).
-    pub fn encode(self, occupation: u64, n_modes: usize) -> u64 {
-        (0..n_modes).fold(0, |b, j| {
+    pub fn encode(self, occupation: u64, n_modes: usize) -> Result<u64> {
+        check_modes(n_modes)?;
+        if n_modes < 64 && occupation >> n_modes != 0 {
+            return Err(QsoError::invalid(
+                "occupation",
+                format!("occupies modes beyond {n_modes}"),
+            ));
+        }
+        Ok((0..n_modes).fold(0, |b, j| {
             b | (u64::from((self.row(j) & occupation).count_ones() % 2 == 1) << j)
-        })
+        }))
     }
 
     /// The Pauli form of `a_j†` on `n_modes` modes.
@@ -362,15 +369,20 @@ impl QubitEncoding {
     }
 
     /// The qubit basis state (bit mask) of the occupation `occupation`.
-    pub fn encode(self, occupation: u64, n_spin_orbitals: usize) -> u64 {
-        let b = self.mapping.encode(occupation, n_spin_orbitals);
+    /// With the reduction, the occupation must hold `n_α` electrons in the
+    /// first half and `n_β` in the second, matching the tapered parities.
+    pub fn encode(self, occupation: u64, n_spin_orbitals: usize) -> Result<u64> {
+        let b = self.mapping.encode(occupation, n_spin_orbitals)?;
         if !self.two_qubit_reduction {
-            return b;
+            return Ok(b);
         }
         let m = n_spin_orbitals / 2;
+        let alpha = (occupation & low_mask(m)).count_ones() as usize;
+        let beta = (occupation >> m).count_ones() as usize;
+        self.check(n_spin_orbitals, alpha, beta)?;
         let low = b & low_mask(m - 1);
         let mid = (b >> m) & low_mask(m - 1);
-        low | (mid << (m - 1))
+        Ok(low | (mid << (m - 1)))
     }
 }
 
@@ -403,7 +415,7 @@ mod tests {
             for j in 0..n {
                 let c = mapping.creation(j, n).unwrap();
                 for occ in 0..(1u64 << n) {
-                    let out = apply(&c, n, mapping.encode(occ, n) as usize);
+                    let out = apply(&c, n, mapping.encode(occ, n).unwrap() as usize);
                     let mut expected = vec![C64::new(0.0, 0.0); 1 << n];
                     if (occ >> j) & 1 == 0 {
                         let sign = if (occ & ((1 << j) - 1)).count_ones() % 2 == 0 {
@@ -411,7 +423,8 @@ mod tests {
                         } else {
                             -1.0
                         };
-                        expected[mapping.encode(occ | (1 << j), n) as usize] = C64::new(sign, 0.0);
+                        expected[mapping.encode(occ | (1 << j), n).unwrap() as usize] =
+                            C64::new(sign, 0.0);
                     }
                     for (a, b) in out.iter().zip(&expected) {
                         assert!((a - b).norm() < 1e-12, "{mapping:?} j={j} occ={occ:b}");
@@ -446,5 +459,9 @@ mod tests {
         assert!(Mapping::from_name("x").is_err());
         assert!(Mapping::JordanWigner.creation(3, 3).is_err());
         assert!(Mapping::JordanWigner.creation(0, 65).is_err());
+        assert!(Mapping::Parity.encode(0b1000, 3).is_err());
+        assert!(Mapping::Parity.encode(0, 65).is_err());
+        assert!(QubitEncoding::parity_reduced().encode(1, 1).is_err());
+        assert!(QubitEncoding::parity_reduced().encode(0b0101, 4).is_ok());
     }
 }

@@ -434,7 +434,7 @@ fn fermion_mappings_give_identical_spectra_equal_to_full_ci() {
     use metatron_qso::chemistry::{Mapping, MolecularIntegrals, QubitEncoding};
     for (name, fcidump, reference) in FCI_REFERENCE {
         let mol = MolecularIntegrals::from_fcidump(fcidump).unwrap();
-        let dim = mol.determinants().len();
+        let dim = mol.determinants().unwrap().len();
         let spectra: Vec<Vec<f64>> = [
             QubitEncoding::new(Mapping::JordanWigner),
             QubitEncoding::new(Mapping::Parity),

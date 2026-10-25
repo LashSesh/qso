@@ -27,7 +27,8 @@ leaves the strings with exactly `weight` ones, and constraints such as
 "choose k of n" need no penalty terms (Hadfield et al., Algorithms 12, 34
 (2019)). The warm start (Egger, Mareček and Woerner, Quantum 5, 479 (2021))
 begins at a relaxed or heuristic solution `c ∈ [0, 1]ⁿ`. Values are
-clipped to `[ε, 1 − ε]` so that the search can still move. The result
+clipped to `[ε, 1 − ε]` (default ε = 0.25): a qubit with `c_i` exactly 0
+or 1 would never leave |0⟩ or |1⟩. The result
 reports the exact optimum over the feasible strings, the probability of
 measuring it, and the approximation ratio
 `(worst − ⟨C⟩)/(worst − optimum)`.

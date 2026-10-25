@@ -22,7 +22,8 @@
 //!     `c ∈ [0, 1]ⁿ`, mixing with `RY(θ_i) RZ(−2β) RY(−θ_i)`, whose
 //!     generator has that state as its ground state (Egger, Mareček and
 //!     Woerner, Quantum 5, 479 (2021)). Values of `c` are clipped to
-//!     `[ε, 1 − ε]` so the state can still move.
+//!     `[ε, 1 − ε]`: a qubit with `c_i` exactly 0 or 1 would stay in |0⟩
+//!     or |1⟩ for every β, so use `ε > 0` with a rounded solution.
 //!
 //! The circuit is an ordinary parametrised [`Circuit`] (`2p` parameters
 //! `[γ_1 … γ_p, β_1 … β_p]`), optimised with exact adjoint gradients.
@@ -171,7 +172,7 @@ impl Qubo {
 
     /// The diagonal cost Hamiltonian.
     pub fn to_pauli_sum(&self) -> PauliSum {
-        self.to_ising().to_pauli_sum()
+        self.to_ising().pauli_sum_unchecked()
     }
 
     /// Exact minimum and the minimising bit masks (at most
@@ -183,8 +184,38 @@ impl Qubo {
 }
 
 impl Ising {
+    /// Check `h.len() = n ≤ 64`, distinct in-range coupling indices and
+    /// finite coefficients.
+    pub fn validate(&self) -> Result<()> {
+        if self.n == 0 || self.n > 64 || self.h.len() != self.n {
+            return Err(QsoError::invalid(
+                "ising",
+                "need 1 to 64 spins and one field per spin",
+            ));
+        }
+        if self
+            .j
+            .iter()
+            .any(|&(a, b, _)| a >= self.n || b >= self.n || a == b)
+        {
+            return Err(QsoError::invalid("ising", "invalid coupling indices"));
+        }
+        let finite = self.offset.is_finite()
+            && self.h.iter().all(|v| v.is_finite())
+            && self.j.iter().all(|c| c.2.is_finite());
+        if !finite {
+            return Err(QsoError::invalid("ising", "coefficients must be finite"));
+        }
+        Ok(())
+    }
+
     /// `E(s)` for the bit mask `x` with `s_i = 1 − 2x_i`.
-    pub fn energy(&self, x: u64) -> f64 {
+    pub fn energy(&self, x: u64) -> Result<f64> {
+        self.validate()?;
+        Ok(self.energy_unchecked(x))
+    }
+
+    fn energy_unchecked(&self, x: u64) -> f64 {
         let s = |i: usize| if (x >> i) & 1 == 1 { -1.0 } else { 1.0 };
         let mut e = self.offset;
         for (i, h) in self.h.iter().enumerate() {
@@ -197,7 +228,12 @@ impl Ising {
     }
 
     /// `Σ h_i Z_i + Σ J_ij Z_i Z_j + offset`.
-    pub fn to_pauli_sum(&self) -> PauliSum {
+    pub fn to_pauli_sum(&self) -> Result<PauliSum> {
+        self.validate()?;
+        Ok(self.pauli_sum_unchecked())
+    }
+
+    fn pauli_sum_unchecked(&self) -> PauliSum {
         let mut h = PauliSum::new();
         if self.offset != 0.0 {
             h.add_term(self.offset, PauliString::identity());
@@ -220,6 +256,7 @@ impl Ising {
 
     /// The equivalent QUBO (`s_i = 1 − 2x_i`).
     pub fn to_qubo(&self) -> Result<Qubo> {
+        self.validate()?;
         let n = self.n;
         let mut entries = Vec::new();
         let mut offset = self.offset;
@@ -692,7 +729,7 @@ mod tests {
             let back = ising.to_qubo().unwrap();
             for x in 0..64u64 {
                 let f = q.value(x);
-                assert!((ising.energy(x) - f).abs() < 1e-12);
+                assert!((ising.energy(x).unwrap() - f).abs() < 1e-12);
                 assert!((diag[x as usize] - f).abs() < 1e-12);
                 assert!((back.value(x) - f).abs() < 1e-12);
             }
@@ -702,6 +739,18 @@ mod tests {
         }
         assert!(Qubo::new(2, &[1.0, f64::NAN, 0.0, 0.0], 0.0).is_err());
         assert!(Qubo::new(2, &[1e308, 1e308, 1e308, 1e308], 0.0).is_err());
+        let bad = Ising {
+            n: 2,
+            h: vec![0.0, 0.0],
+            j: vec![(1, 1, 1.0)],
+            offset: 0.0,
+        };
+        assert!(bad.to_pauli_sum().is_err() && bad.energy(0).is_err());
+        let far = Ising {
+            j: vec![(0, 70, 1.0)],
+            ..bad
+        };
+        assert!(far.energy(0).is_err() && far.to_qubo().is_err());
         // Enumeration keeps few minimisers: the zero QUBO has 2^20 of them.
         let zero = Qubo::new(20, &vec![0.0; 400], 0.0).unwrap();
         let (best, arg) = zero.brute_force().unwrap();
