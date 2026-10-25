@@ -389,3 +389,74 @@ fn classical_shadow_variance_is_three_to_the_weight() {
         );
     }
 }
+
+/// Full-CI energies from `examples/molecules/reference.json` (PySCF 2.14,
+/// STO-3G, lowest roots of the neutral molecule with Sz = 0).
+const FCI_REFERENCE: [(&str, &str, &[f64]); 3] = [
+    (
+        "H2",
+        include_str!("../examples/molecules/h2_sto3g.fcidump"),
+        &[
+            -1.1373060357534004,
+            -0.5246155553643471,
+            -0.16275315579588379,
+            0.49505774161810945,
+        ],
+    ),
+    (
+        "LiH",
+        include_str!("../examples/molecules/lih_sto3g.fcidump"),
+        &[
+            -7.882401932290221,
+            -7.766418475107613,
+            -7.749216186506998,
+            -7.716454011441431,
+            -7.716454011441427,
+            -7.696951987758109,
+        ],
+    ),
+    (
+        "BeH2",
+        include_str!("../examples/molecules/beh2_sto3g.fcidump"),
+        &[
+            -15.595182356661681,
+            -15.33255843934909,
+            -15.33255843934906,
+            -15.328335603778719,
+            -15.328335603778708,
+            -15.303332939179398,
+        ],
+    ),
+];
+
+#[test]
+fn fermion_mappings_give_identical_spectra_equal_to_full_ci() {
+    use metatron_qso::chemistry::{Mapping, MolecularIntegrals, QubitEncoding};
+    for (name, fcidump, reference) in FCI_REFERENCE {
+        let mol = MolecularIntegrals::from_fcidump(fcidump).unwrap();
+        let dim = mol.determinants().len();
+        let spectra: Vec<Vec<f64>> = [
+            QubitEncoding::new(Mapping::JordanWigner),
+            QubitEncoding::new(Mapping::Parity),
+            QubitEncoding::new(Mapping::BravyiKitaev),
+            QubitEncoding::parity_reduced(),
+        ]
+        .into_iter()
+        .map(|e| mol.fci_energies_with(e, dim).unwrap())
+        .collect();
+        // The whole spectrum of the determinant space agrees between mappings.
+        for other in &spectra[1..] {
+            for (a, b) in spectra[0].iter().zip(other) {
+                assert!(close(*a, *b, 1e-9), "{name}: {a} vs {b}");
+            }
+        }
+        // The lowest roots are PySCF's full-CI energies.
+        for (k, e) in reference.iter().enumerate() {
+            assert!(
+                close(spectra[0][k], *e, 1e-8),
+                "{name} root {k}: {} vs {e}",
+                spectra[0][k]
+            );
+        }
+    }
+}
