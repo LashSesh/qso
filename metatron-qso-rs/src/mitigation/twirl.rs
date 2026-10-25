@@ -108,7 +108,8 @@ pub fn twirl(circuit: &Circuit, rng: &mut Rng) -> Circuit {
 
 /// Average of `execute` over `count` independently twirled copies of
 /// `circuit`. The standard error is the spread over the copies, which
-/// includes the statistical error of each evaluation.
+/// includes the statistical error of each evaluation (for a single copy,
+/// that evaluation's own standard error).
 pub fn twirled_average<F>(
     circuit: &Circuit,
     count: usize,
@@ -127,12 +128,17 @@ where
     let base = Rng::seed_from_u64(seed);
     let mut values = Vec::with_capacity(count);
     let mut samples = 0;
+    let mut last = Estimate::exact(0.0);
     for k in 0..count {
-        let e = execute(&twirl(circuit, &mut base.fork(k as u64)))?;
-        values.push(e.value);
-        samples += e.samples;
+        last = execute(&twirl(circuit, &mut base.fork(k as u64)))?;
+        values.push(last.value);
+        samples += last.samples;
     }
     let mut e = Estimate::from_samples(&values);
+    if count == 1 {
+        // No spread to measure: keep the evaluation's own error.
+        e.std_error = last.std_error;
+    }
     e.samples = samples.max(count);
     Ok(e)
 }

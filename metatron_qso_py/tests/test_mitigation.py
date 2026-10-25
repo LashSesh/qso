@@ -101,7 +101,10 @@ def test_estimates_and_allocation():
     exact = h.expectation(q.simulate(c))
     est, groups = q.estimate(c, h, 6000, allocation="adaptive", pilot=0.2, seed=3)
     assert abs(est.value - exact) < 4 * est.std_error
-    assert sum(g["shots"] for g in groups) == 6000 and len(groups) == 3
+    # Adaptive allocation spends a pilot fraction on choosing the allocation
+    # only; the estimate uses the remaining shots.
+    assert sum(g["shots"] for g in groups) == est.samples == 6000 - 1200
+    assert len(groups) == 3
     assert groups[0]["basis"] == "Z0 Z1"
     with pytest.raises(ValueError):
         q.estimate(c, h, 100, allocation="random")
@@ -182,3 +185,57 @@ def test_pec_and_twirling():
         c, device=q.DeviceModel("tw").with_rule(gate="cx", channels=[q.Channel.rotation("ZZ", 0.5).twirled()])
     ).expectation(z)
     assert abs(avg.value - target) < 4 * avg.std_error
+
+
+def test_review_regressions():
+    # Out-of-range qubits and huge sizes raise instead of crashing.
+    with pytest.raises(ValueError):
+        q.DeviceModel().with_qubit(2**40, t1=1.0)
+    with pytest.raises(ValueError):
+        q.DeviceModel(num_qubits=3).with_qubit(3, t1=1.0)
+    with pytest.raises(ValueError):
+        q.DeviceModel().readout_errors(10**10)
+    with pytest.raises(ValueError):
+        q.DeviceModel(num_qubits=0)
+    with pytest.raises(ValueError):
+        q.extrapolate([1.0, 2.0, 3.0], [1.0, 2.0, 3.0], method="polynomial", degree=2**63)
+    with pytest.raises(ValueError):
+        q.extrapolate([1.0, 3.0], [1.0, 2.0], method="linear", degree=1)
+    with pytest.raises(ValueError):
+        q.fold(bell(), 1e12)
+    calls = []
+    with pytest.raises(ValueError):
+        q.zne(bell(), [1.0, 0.5], lambda c: calls.append(c) or 0.0)
+    assert calls == []
+    # Non-finite Kraus operators are rejected.
+    with pytest.raises(ValueError):
+        q.Channel.unitary([[np.nan, 0], [0, 1]])
+    with pytest.raises(ValueError):
+        q.Channel.from_kraus([np.array([[1, 0], [0, np.nan]])])
+    # PEC refuses over-rotations it cannot see.
+    d = q.DeviceModel().with_rule(over_rotation=0.3)
+    with pytest.raises(ValueError, match="over-rotation"):
+        q.pec_expectation(q.Circuit(1).rx(0, 1.0), q.PauliSum("Z0"), d, 50)
+    # Bit strings must match the register; distributions must be valid.
+    cal = q.ReadoutCalibration.from_errors([(0.1, 0.2)])
+    with pytest.raises(ValueError):
+        cal.mitigate({"0001": 5})
+    with pytest.raises(ValueError):
+        cal.mitigate({"0": 2**63, "1": 2**63})
+    for bad in [{"1": 0.6, "10": 0.6, "00": -0.2}, {"0": 5.0, "1": -1.0}]:
+        with pytest.raises(ValueError):
+            q.nearest_probability_distribution(bad)
+    rho = q.DensityMatrix.simulate(bell())
+    with pytest.raises(ValueError):
+        rho.sample_with_readout(10, [(0.1, 0.1)])
+    sim = q.TrajectorySimulator(q.DeviceModel(), 2)
+    with pytest.raises(ValueError):
+        sim.trajectory_state(bell(), 5)
+    # A single twirl keeps the evaluation's own error.
+    one = q.twirled_average(bell(), 1, lambda c: q.Estimate(0.5, 0.3, 100))
+    assert one.std_error == 0.3
+    assert q.Estimate(1.0) == q.Estimate(1.0)
+    # Builder order does not matter for unset qubit fields.
+    a = q.DeviceModel().with_qubit(1, readout=(0.1, 0.2)).with_default_qubit(t1=50.0, t2=40.0)
+    b = q.DeviceModel().with_default_qubit(t1=50.0, t2=40.0).with_qubit(1, readout=(0.1, 0.2))
+    assert a.to_json() == b.to_json()

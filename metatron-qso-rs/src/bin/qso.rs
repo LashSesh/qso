@@ -263,7 +263,8 @@ enum Command {
         #[arg(long, value_enum, default_value_t = ExtrapolationArg::Richardson)]
         extrapolation: ExtrapolationArg,
         /// Probabilistic error cancellation with this many samples (Pauli
-        /// noise only).
+        /// noise only; each sample is evaluated exactly, so --shots,
+        /// --trajectories and readout errors do not apply to it).
         #[arg(long, requires = "device")]
         pec: Option<usize>,
         #[arg(long, default_value_t = 0)]
@@ -765,6 +766,13 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 .map_err(|e| QsoError::Parse(format!("cannot read {}: {e}", file.display())))?;
             let circuit = from_qasm2(&src)?;
             let device = device.as_deref().map(read_device).transpose()?;
+            let backend_name = match (&device, noise) {
+                (Some(_), _) => device_backend(device.as_ref(), *trajectories)?
+                    .name()
+                    .to_string(),
+                (None, Some(_)) => "density-matrix".to_string(),
+                (None, None) => "statevector".to_string(),
+            };
             let counts = match noise {
                 _ if device.is_some() => device_backend(device.as_ref(), *trajectories)?.run(
                     &circuit,
@@ -790,7 +798,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             let mut sorted: Vec<_> = labelled.iter().collect();
             sorted.sort_by(|a, b| b.1.cmp(a.1));
             let text = format!(
-                "{} qubits, {} gates, depth {}\n{}",
+                "{} qubits, {} gates, depth {}, backend {backend_name}\n{}",
                 n,
                 circuit.len(),
                 circuit.depth(),
@@ -802,7 +810,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                     .join("\n")
             );
             Ok((
-                json!({"qubits": n, "gates": circuit.len(), "depth": circuit.depth(), "counts": labelled}),
+                json!({"qubits": n, "gates": circuit.len(), "depth": circuit.depth(), "backend": backend_name, "counts": labelled}),
                 text,
             ))
         }
@@ -826,6 +834,14 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             let device = device.as_deref().map(read_device).transpose()?;
             let backend = device_backend(device.as_ref(), *trajectories)?;
             let n = circuit.n_qubits();
+            // PEC first: it fails fast when the noise is not Pauli noise.
+            let pec_result = match pec {
+                Some(samples) => {
+                    let d = device.as_ref().expect("clap requires --device");
+                    Some(pec_expectation(&circuit, &[], d, &h, *samples, *seed)?)
+                }
+                None => None,
+            };
             let mut options = EstimatorOptions::new(*shots)
                 .with_allocation(match allocation {
                     AllocationArg::Uniform => ShotAllocation::Uniform,
@@ -839,8 +855,22 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 options = options.with_readout_mitigation(cal);
             }
             let raw = estimate(backend.as_ref(), &circuit, &[], &h, &options)?.estimate;
-            let mut value = json!({"qubits": n, "estimate": estimate_json(&raw)});
-            let mut text = format!("<H> = {}", estimate_text(&raw));
+            let mut value = json!({
+                "qubits": n,
+                "backend": backend.name(),
+                "shots": shots,
+                "seed": seed,
+                "allocation": format!("{:?}", options.allocation),
+                "readout_mitigated": mitigate_readout,
+                "calibration_shots": if *mitigate_readout { 2 * shots } else { 0 },
+                "estimate": estimate_json(&raw),
+            });
+            let label = if *mitigate_readout {
+                "<H> (readout mitigated)"
+            } else {
+                "<H>"
+            };
+            let mut text = format!("{label} = {}", estimate_text(&raw));
             if n <= 24 {
                 let exact = h.expectation(&metatron_qso::quantum::StateVector::from_circuit(
                     &circuit,
@@ -872,9 +902,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                     estimate_text(&r.estimate)
                 ));
             }
-            if let Some(samples) = pec {
-                let d = device.as_ref().expect("clap requires --device");
-                let r = pec_expectation(&circuit, &[], d, &h, *samples, *seed)?;
+            if let Some(r) = pec_result {
                 value["pec"] = json!({
                     "estimate": estimate_json(&r.estimate),
                     "overhead": r.overhead,

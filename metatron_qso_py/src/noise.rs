@@ -6,6 +6,7 @@ use metatron_qso::noise::{
     Channel, ChannelSpec, DensityMatrix, DeviceModel, GateRule, NoiseModel, QubitProperties,
     TrajectorySimulator,
 };
+use metatron_qso::quantum::MAX_QUBITS;
 use numpy::{PyArray1, PyArray2};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -298,7 +299,7 @@ impl PyDeviceModel {
     }
 
     /// Set T1, T2 (≤ 2·T1) and readout errors `(P(1|0), P(0|1))` of qubit
-    /// `q`.
+    /// `q`; values left out follow the default qubit.
     #[pyo3(signature = (q, t1 = None, t2 = None, readout = None))]
     fn with_qubit(
         &self,
@@ -307,6 +308,12 @@ impl PyDeviceModel {
         t2: Option<f64>,
         readout: Option<(f64, f64)>,
     ) -> PyResult<Self> {
+        let limit = self.inner.num_qubits.unwrap_or(MAX_QUBITS);
+        if q >= limit {
+            return Err(invalid(format!(
+                "qubit {q} outside a device of {limit} qubits"
+            )));
+        }
         device(
             self.inner
                 .clone()
@@ -380,14 +387,20 @@ impl PyDeviceModel {
     }
 
     /// Readout errors `(P(1|0), P(0|1))` of qubits `0..n`.
-    fn readout_errors(&self, n: usize) -> Vec<(f64, f64)> {
-        self.inner.readout_errors(n)
+    fn readout_errors(&self, n: usize) -> PyResult<Vec<(f64, f64)>> {
+        if n > MAX_QUBITS {
+            return Err(invalid(format!("at most {MAX_QUBITS} qubits")));
+        }
+        Ok(self.inner.readout_errors(n))
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "DeviceModel(name={:?}, qubits={}, rules={})",
+            "DeviceModel(name={:?}, num_qubits={}, qubit_entries={}, rules={})",
             self.inner.name,
+            self.inner
+                .num_qubits
+                .map_or_else(|| "None".to_string(), |n| n.to_string()),
             self.inner.qubits.len(),
             self.inner.gates.len()
         )
@@ -559,6 +572,13 @@ impl PyDensityMatrix {
         readout: Vec<(f64, f64)>,
         seed: u64,
     ) -> PyResult<Bound<'py, PyDict>> {
+        if readout.len() != self.inner.n_qubits() {
+            return Err(invalid(format!(
+                "need one (P(1|0), P(0|1)) pair per qubit ({}), got {}",
+                self.inner.n_qubits(),
+                readout.len()
+            )));
+        }
         if readout
             .iter()
             .any(|&(a, b)| !((0.0..=1.0).contains(&a) && (0.0..=1.0).contains(&b)))
@@ -698,10 +718,11 @@ impl PyTrajectorySimulator {
     }
 }
 
-/// Estimate ⟨H⟩ of `circuit(theta)` from `shots` measurements per group of
-/// qubit-wise commuting terms — on the exact state-vector backend, with a
-/// `noise` model, or on a `device` (density matrices, or `trajectories`
-/// trajectories per run).
+/// Estimate ⟨H⟩ of `circuit(theta)` from `shots` measurements *per group*
+/// of qubit-wise commuting terms — on the exact state-vector backend, with
+/// a `noise` model, or on a `device` (density matrices, or at most
+/// `trajectories` trajectories per run). See `estimate` for a total shot
+/// budget, allocation and standard errors.
 #[pyfunction]
 #[pyo3(signature = (
     circuit, observable, theta = None, shots = 10000, seed = 0, noise = None, device = None,

@@ -82,7 +82,7 @@ impl Estimate {
             level > 0.0 && level < 1.0,
             "confidence level {level} outside (0, 1)"
         );
-        let z = normal_quantile(0.5 + level / 2.0);
+        let z = -normal_quantile((1.0 - level) / 2.0);
         (
             self.value - z * self.std_error,
             self.value + z * self.std_error,
@@ -112,9 +112,10 @@ pub enum ShotAllocation {
     /// Shots proportional to `Σ|c|` of a group's terms, a bound on the
     /// standard deviation of one shot.
     Weighted,
-    /// A fraction `pilot` of the shots spread uniformly; the rest so that
-    /// shots become proportional to the measured standard deviations
-    /// (Neyman allocation, which minimises the variance of the total).
+    /// A fraction `pilot` of the shots spread uniformly to measure the
+    /// standard deviations; the rest proportional to them (Neyman
+    /// allocation, which minimises the variance of the total). The pilot
+    /// shots only choose the allocation and do not enter the estimate.
     Adaptive { pilot: f64 },
 }
 
@@ -223,7 +224,30 @@ impl GroupWeights {
             .sum()
     }
 
-    /// Mean and standard error over the shots in `counts`.
+    /// Largest magnitude of a per-shot value.
+    fn bound(&self) -> f64 {
+        self.terms
+            .iter()
+            .map(|(c, _, w)| {
+                c.abs()
+                    * match w {
+                        None => 1.0,
+                        Some(ParityWeights::Factors(f)) => {
+                            f.iter().map(|(_, [a, b])| a.abs().max(b.abs())).product()
+                        }
+                        Some(ParityWeights::Dense(d)) => {
+                            d.iter().fold(0.0, |m: f64, x| m.max(x.abs()))
+                        }
+                    }
+            })
+            .sum()
+    }
+
+    /// Mean and standard error over the shots in `counts`. When all shots
+    /// agree (or there is one shot) the sample variance says nothing about
+    /// the spread; the variance is then bounded below by that of a value
+    /// spanning the whole range with probability `1/(n + 2)` (add-one
+    /// smoothing), so no estimate claims to be exact.
     fn estimate(&self, counts: &Counts) -> Estimate {
         let n: usize = counts.values().sum();
         let values: Vec<(f64, f64)> = counts
@@ -231,19 +255,22 @@ impl GroupWeights {
             .map(|(&b, &k)| (self.value(b), k as f64))
             .collect();
         let mean = values.iter().map(|(v, k)| v * k).sum::<f64>() / n as f64;
-        let std_error = if n > 1 {
-            let var = values
+        let mut var = if n > 1 {
+            values
                 .iter()
                 .map(|(v, k)| k * (v - mean).powi(2))
                 .sum::<f64>()
-                / (n - 1) as f64;
-            (var / n as f64).sqrt()
+                / (n - 1) as f64
         } else {
             0.0
         };
+        if var <= 0.0 {
+            let p = 1.0 / (n as f64 + 2.0);
+            var = (2.0 * self.bound()).powi(2) * p * (1.0 - p);
+        }
         Estimate {
             value: mean,
-            std_error,
+            std_error: (var / n as f64).sqrt(),
             samples: n,
         }
     }
@@ -286,10 +313,10 @@ pub fn estimate(
             groups: Vec::new(),
         });
     }
-    if options.shots < g {
+    if options.shots < 2 * g {
         return Err(QsoError::invalid(
             "shots",
-            format!("need at least one shot per measurement group ({g})"),
+            format!("need at least two shots per measurement group ({g} groups)"),
         ));
     }
     let mut rotated = Vec::with_capacity(g);
@@ -337,10 +364,10 @@ pub fn estimate(
         members.iter().map(|(c, _)| c.abs()).sum::<f64>()
     };
     match options.allocation {
-        ShotAllocation::Uniform => run(0, &allocate(options.shots, &vec![1.0; g], 1), &mut counts)?,
+        ShotAllocation::Uniform => run(0, &allocate(options.shots, &vec![1.0; g], 2), &mut counts)?,
         ShotAllocation::Weighted => {
             let w: Vec<f64> = groups.iter().map(|(_, m)| bound(m)).collect();
-            run(0, &allocate(options.shots, &w, 1), &mut counts)?;
+            run(0, &allocate(options.shots, &w, 2), &mut counts)?;
         }
         ShotAllocation::Adaptive { pilot } => {
             if !(pilot > 0.0 && pilot < 1.0) {
@@ -349,37 +376,36 @@ pub fn estimate(
                     "pilot fraction must lie in (0, 1)",
                 ));
             }
-            let min = if options.shots >= 2 * g { 2 } else { 1 };
+            // The pilot only chooses the allocation; the estimate uses the
+            // main shots alone. Pooling both would make the number of main
+            // shots depend on the pilot outcome and bias the result.
             let pilot_shots =
-                ((pilot * options.shots as f64).round() as usize).clamp(min * g, options.shots);
-            run(0, &allocate(pilot_shots, &vec![1.0; g], min), &mut counts)?;
-            let sigma: Vec<f64> = (0..g)
-                .map(|j| {
-                    let e = weights[j].estimate(&counts[j]);
-                    e.std_error * (e.samples as f64).sqrt()
-                })
-                .collect();
-            let rest = options.shots - pilot_shots;
-            if rest > 0 {
-                let total_sigma: f64 = sigma.iter().sum();
-                // Shots each group lacks for the Neyman proportions.
-                let deficit: Vec<f64> = (0..g)
+                ((pilot * options.shots as f64).round() as usize).clamp(2 * g, options.shots);
+            if options.shots - pilot_shots < 2 * g {
+                // Too few shots for two stages: weighted allocation.
+                let w: Vec<f64> = groups.iter().map(|(_, m)| bound(m)).collect();
+                run(0, &allocate(options.shots, &w, 2), &mut counts)?;
+            } else {
+                let mut pilot_counts: Vec<Counts> = vec![Counts::new(); g];
+                run(
+                    0,
+                    &allocate(pilot_shots, &vec![1.0; g], 2),
+                    &mut pilot_counts,
+                )?;
+                // Standard deviations, floored at the bound over √n so that
+                // a pilot whose shots all agree still gets main shots.
+                let sigma: Vec<f64> = (0..g)
                     .map(|j| {
-                        let target = if total_sigma > 0.0 {
-                            options.shots as f64 * sigma[j] / total_sigma
-                        } else {
-                            options.shots as f64 / g as f64
-                        };
-                        let have: usize = counts[j].values().sum();
-                        (target - have as f64).max(0.0)
+                        let e = weights[j].estimate(&pilot_counts[j]);
+                        let n = e.samples as f64;
+                        (e.std_error * n.sqrt()).max(weights[j].bound() / n.sqrt())
                     })
                     .collect();
-                let w = if deficit.iter().sum::<f64>() > 0.0 {
-                    deficit
-                } else {
-                    sigma
-                };
-                run(1, &allocate(rest, &w, 0), &mut counts)?;
+                run(
+                    1,
+                    &allocate(options.shots - pilot_shots, &sigma, 2),
+                    &mut counts,
+                )?;
             }
         }
     }
@@ -504,7 +530,7 @@ mod tests {
             covered += usize::from(lo <= exact && exact <= hi);
             values.push(e.value);
             errors.push(e.std_error);
-            assert_eq!(e.samples, 2000);
+            assert!(e.samples > 1500 && e.samples < 2000);
         }
         let coverage = covered as f64 / repeats as f64;
         assert!((0.91..=0.99).contains(&coverage), "coverage {coverage}");
@@ -585,6 +611,54 @@ mod tests {
             mitigated.value
         );
         assert!(mitigated.std_error > raw.std_error);
+    }
+
+    #[test]
+    fn adaptive_allocation_is_unbiased_for_nearly_deterministic_groups() {
+        // P(Z0 = −1) ≈ 0.01: most pilots see no spread in the Z group.
+        let h: PauliSum = "Z0 + X0".parse().unwrap();
+        let mut c = Circuit::new(1);
+        c.ry(0, 0.2);
+        let exact = h
+            .expectation(&StateVector::from_circuit(&c, &[]).unwrap())
+            .unwrap();
+        let repeats = 2000;
+        let mut values = Vec::with_capacity(repeats);
+        for seed in 0..repeats as u64 {
+            let opts = EstimatorOptions::new(1000)
+                .with_allocation(ShotAllocation::Adaptive { pilot: 0.1 })
+                .with_seed(seed);
+            let r = estimate(&StatevectorBackend, &c, &[], &h, &opts).unwrap();
+            assert!(r.groups.iter().all(|g| g.estimate.std_error > 0.0));
+            values.push(r.estimate.value);
+        }
+        let mean = Estimate::from_samples(&values);
+        assert!(
+            (mean.value - exact).abs() < 4.0 * mean.std_error,
+            "{mean:?} vs {exact}"
+        );
+    }
+
+    #[test]
+    fn extreme_levels_and_tiny_samples() {
+        let e = Estimate {
+            value: 1.0,
+            std_error: 0.1,
+            samples: 10,
+        };
+        let (lo, hi) = e.confidence_interval(1.0 - 1e-17_f64.max(f64::EPSILON / 2.0));
+        assert!(lo < 1.0 && hi > 1.0 && lo.is_finite());
+        // Two shots that agree still carry an error.
+        let h: PauliSum = "Z0 + X0".parse().unwrap();
+        let r = estimate(
+            &StatevectorBackend,
+            &Circuit::new(1),
+            &[],
+            &h,
+            &EstimatorOptions::new(4),
+        )
+        .unwrap();
+        assert!(r.groups.iter().all(|g| g.estimate.std_error > 0.0));
     }
 
     #[test]

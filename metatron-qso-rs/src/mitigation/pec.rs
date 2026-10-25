@@ -34,7 +34,7 @@ use crate::error::{QsoError, Result};
 use crate::estimation::Estimate;
 use crate::noise::DensityMatrix;
 use crate::noise::DeviceModel;
-use crate::noise::device::{CompiledChannel, Op, Program};
+use crate::noise::device::{CompiledChannel, Op, Program, rotation_kind};
 use crate::noise::trajectories::run_ops;
 use crate::parallel::map_tasks;
 use crate::quantum::{Circuit, PauliSum};
@@ -84,7 +84,7 @@ pub fn inverse_pauli_quasi_probabilities(p: &[f64]) -> Result<Vec<f64>> {
     let f: Vec<f64> = (0..m)
         .map(|q| (0..m).map(|pp| p[pp] * chi(pp, q)).sum())
         .collect();
-    if f.iter().any(|&x| x <= 1e-12) {
+    if f.iter().any(|&x| x.abs() <= 1e-12) {
         return Err(QsoError::invalid(
             "probabilities",
             "the channel destroys information (a Pauli fidelity is 0) and cannot be inverted",
@@ -113,6 +113,19 @@ struct Plan {
 impl Plan {
     fn new(circuit: &Circuit, theta: &[f64], device: &DeviceModel) -> Result<Self> {
         device.validate()?;
+        // Over-rotations change the gates themselves, not a channel after
+        // them, so PEC cannot see them.
+        if circuit.instructions().iter().any(|inst| {
+            rotation_kind(inst.kind)
+                && device
+                    .rule_for(inst)
+                    .is_some_and(|r| r.over_rotation != 0.0)
+        }) {
+            return Err(QsoError::invalid(
+                "device",
+                "PEC cannot cancel over-rotations (coherent errors in the gates themselves)",
+            ));
+        }
         let program = Program::compile(circuit, theta, device)?;
         let mut by_channel: Vec<Option<usize>> = vec![None; program.channels.len()];
         let mut inverses = Vec::new();
@@ -128,7 +141,8 @@ impl Plan {
                                 "device",
                                 format!(
                                     "PEC needs Pauli noise, but {} is not a Pauli channel \
-                                     (describe the twirled noise with Pauli channels)",
+                                     (T1/T2 relaxation and coherent errors are not; describe \
+                                     the twirled noise with Pauli channels)",
                                     ch.name()
                                 ),
                             )
@@ -335,6 +349,10 @@ mod tests {
             assert!((fq * gq - 1.0).abs() < 1e-12);
         }
         assert!(inverse_pauli_quasi_probabilities(&[0.25; 4]).is_err());
+        // Negative fidelities are invertible: a certain bit flip, strong
+        // dephasing.
+        assert!(inverse_pauli_quasi_probabilities(&[0.0, 1.0, 0.0, 0.0]).is_ok());
+        assert!(inverse_pauli_quasi_probabilities(&[0.3, 0.0, 0.0, 0.7]).is_ok());
     }
 
     #[test]

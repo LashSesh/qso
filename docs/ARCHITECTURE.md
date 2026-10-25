@@ -12,10 +12,13 @@ algorithms  │ VQE · QAOA · Grover · QFT/QPE · classifier · models│
 optimize    │ L-BFGS · Adam · GD · Nelder–Mead · SPSA            │
 walks       │ CTQW · quotients · transfer · coined/Szegedy ·     │
             │ search · walk circuits · dephasing · classical     │
-backend     │ statevector / density-matrix backends, shot estimates│
+mitigation  │ readout calibration · ZNE · PEC · Pauli twirling    │
+estimation  │ estimates with errors · shot allocation · shadows   │
+backend     │ statevector / density-matrix / device backends      │
 quantum     │ StateVector · Circuit · plans (fusion, blocking) · │
             │ PauliSum · OpenQASM (+ multi-control decomposition)│
-noise       │ DensityMatrix · Kraus channels                      │
+noise       │ DensityMatrix · channels · device models ·          │
+            │ compiled noise programs · quantum trajectories      │
 graph       │ Graph · generators · Metatron · automorphisms ·    │
             │ canonical forms · edge-list/GraphML I/O            │
 linalg      │ dense eigh/expm · CSR · Lanczos · Krylov           │
@@ -101,6 +104,63 @@ controlled gates exactly and without ancillas (Barenco et al. 1995):
 Toffolis (Lemma 7.2), with one idle qubit two halves (Lemma 7.3); `C^k(U)`
 becomes `C(V)·C^{k−1}(X)·C(V†)·C^{k−1}(X)·C^{k−1}(V)` with `V² = U`
 (Lemma 7.5), the target serving as idle qubit — `O(k²)` gates in all.
+
+## Device models and trajectories (`noise/`)
+
+A `DeviceModel` is compiled per circuit into a program of ideal gate
+segments and channels on one or two qubits (`noise/device.rs`). The
+compiler does four things:
+
+* it schedules gates as soon as their qubits are free, inserting
+  relaxation for waiting qubits and for each gate's duration;
+* it applies the first matching gate rule;
+* it splits thermal relaxation into amplitude damping and a phase flip
+  (the same channel);
+* it merges consecutive channels of one kind on the same qubits. Pauli
+  channels merge by convolving their probabilities, other channels get a
+  minimal Kraus set from the Choi matrix.
+
+Density matrices apply the program with the state-vector kernels on the
+vectorised ρ and multiply consecutive superoperators first.
+
+Trajectories (`noise/trajectories.rs`) use the waiting-time form of the
+Monte-Carlo wave-function method.
+
+* **Unitary mixtures** (Pauli, depolarising, dephasing, coherent errors)
+  are sampled before the run, because their choice does not depend on
+  the state.
+* **Other channels** apply their dominant Kraus operator without
+  renormalising. The squared norm of the state is then the probability
+  that no jump has happened. A jump happens where it falls below a
+  uniform random threshold.
+* **Execution.** A stretch without jumps runs as one fused, cache-blocked
+  circuit through the execution plans, with the non-unitary no-jump
+  operators as ordinary local matrices. When the norm ends below the
+  threshold, bisection over checkpoints finds the step of the jump. The
+  last few steps are simulated one by one, with Born weights from the
+  reduced density matrix of the channel's qubits.
+
+Each trajectory owns a stream `Rng::fork(k)`, and results are collected in
+trajectory order, so they do not depend on the number of threads.
+
+## Estimation and mitigation (`estimation/`, `mitigation/`)
+
+Shot-based estimates compute one value per shot for every measurement
+group: the sum of the group's terms on the measured bits. The standard
+error follows from the spread of these values. With a readout
+calibration, every term gets exact per-outcome weights. A tensored
+calibration factorises them over qubits, and a full one gets `A⁻ᵀ s`. The
+mitigated estimate stays a mean over shots, so its standard error
+includes the cost of mitigation.
+
+Each mitigation method returns its estimate with a propagated error:
+
+* zero-noise extrapolation is a linear combination of the folded values
+  (linearised for the exponential fit);
+* probabilistic error cancellation samples Pauli corrections from the
+  quasi-probability inverse of every Pauli channel in the compiled
+  program, and evaluates each sample with a density matrix or one
+  trajectory.
 
 ## Determinism
 

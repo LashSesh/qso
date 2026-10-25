@@ -97,14 +97,16 @@ impl From<&Channel> for ChannelSpec {
     }
 }
 
-/// Properties of one qubit.
+/// Properties of one qubit. In [`DeviceModel::qubits`], fields left unset
+/// take the value of [`DeviceModel::default_qubit`].
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
 pub struct QubitProperties {
     /// Energy relaxation time T₁ (`None`: no relaxation).
     pub t1: Option<f64>,
-    /// Dephasing time T₂ ≤ 2·T₁ (`None`: 2·T₁, no pure dephasing).
+    /// Dephasing time T₂ ≤ 2·T₁ (`None`: 2·T₁, no pure dephasing; for a
+    /// listed qubit, `None` first falls back to `default_qubit`).
     pub t2: Option<f64>,
     /// Readout errors `(P(read 1 | 0), P(read 0 | 1))`.
     pub readout: Option<(f64, f64)>,
@@ -133,6 +135,7 @@ impl QubitProperties {
     fn relaxation(&self) -> Option<(f64, f64)> {
         match (self.t1, self.t2) {
             (None, None) => None,
+            (Some(t1), None) if t1.is_infinite() => None,
             (Some(t1), None) => Some((t1, 2.0 * t1)),
             (None, Some(t2)) => Some((f64::INFINITY, t2)),
             (Some(t1), Some(t2)) => Some((t1, t2)),
@@ -238,7 +241,10 @@ impl GateRule {
     pub fn matches(&self, inst: &Instruction) -> bool {
         let n = inst.controls.len() + inst.targets.len();
         self.num_qubits.is_none_or(|k| k == n)
-            && self.gate.as_deref().is_none_or(|g| g == gate_name(inst))
+            && self
+                .gate
+                .as_deref()
+                .is_none_or(|g| g.eq_ignore_ascii_case(&gate_name(inst)))
             && self
                 .qubits
                 .as_deref()
@@ -277,6 +283,7 @@ impl GateRule {
                 .as_ref()
                 .map(Vec::len)
                 .or(self.num_qubits)
+                .or_else(|| self.gate.as_deref().and_then(name_arity))
                 .unwrap_or(2);
             if ch.n_qubits() == 2 && smallest < 2 {
                 return Err(QsoError::invalid(
@@ -287,6 +294,20 @@ impl GateRule {
         }
         Ok(())
     }
+}
+
+/// Number of qubits of a gate name such as `"cx"` or `"ccrz"` (`None` for
+/// unknown names and custom unitaries).
+fn name_arity(name: &str) -> Option<usize> {
+    let lower = name.to_ascii_lowercase();
+    let base = lower.trim_start_matches('c');
+    let controls = lower.len() - base.len();
+    let targets = match base {
+        "swap" | "rxx" | "ryy" | "rzz" => 2,
+        "unitary" | "" => return None,
+        _ => 1,
+    };
+    Some(controls + targets)
 }
 
 /// Name of an instruction as in [`Circuit::gate_counts`].
@@ -302,8 +323,8 @@ pub struct DeviceModel {
     pub name: String,
     /// Number of qubits of the device (`None`: any circuit size).
     pub num_qubits: Option<usize>,
-    /// Properties of qubits `0, 1, …`; qubits beyond the list use
-    /// `default_qubit`.
+    /// Properties of qubits `0, 1, …`. Unset fields, and qubits beyond the
+    /// list, take the values of `default_qubit`.
     pub qubits: Vec<QubitProperties>,
     /// Properties of qubits not listed in `qubits`.
     pub default_qubit: QubitProperties,
@@ -336,10 +357,11 @@ impl DeviceModel {
         }
     }
 
-    /// Set the properties of qubit `q`.
+    /// Set the properties of qubit `q` (unset fields keep following
+    /// `default_qubit`, whenever that is set).
     pub fn with_qubit(mut self, q: usize, properties: QubitProperties) -> Self {
         if self.qubits.len() <= q {
-            self.qubits.resize(q + 1, self.default_qubit.clone());
+            self.qubits.resize(q + 1, QubitProperties::default());
         }
         self.qubits[q] = properties;
         self
@@ -369,9 +391,18 @@ impl DeviceModel {
         self
     }
 
-    /// Properties of qubit `q`.
-    pub fn qubit(&self, q: usize) -> &QubitProperties {
-        self.qubits.get(q).unwrap_or(&self.default_qubit)
+    /// Properties of qubit `q`, with unset fields taken from
+    /// `default_qubit`.
+    pub fn qubit(&self, q: usize) -> QubitProperties {
+        let d = &self.default_qubit;
+        match self.qubits.get(q) {
+            None => d.clone(),
+            Some(p) => QubitProperties {
+                t1: p.t1.or(d.t1),
+                t2: p.t2.or(d.t2),
+                readout: p.readout.or(d.readout),
+            },
+        }
     }
 
     /// The first rule matching `inst`.
@@ -388,6 +419,18 @@ impl DeviceModel {
 
     /// Check every value and channel.
     pub fn validate(&self) -> Result<()> {
+        if self.num_qubits == Some(0) {
+            return Err(QsoError::invalid(
+                "num_qubits",
+                "a device needs at least one qubit",
+            ));
+        }
+        if self.qubits.len() > crate::quantum::MAX_QUBITS {
+            return Err(QsoError::invalid(
+                "qubits",
+                format!("more than {} qubit entries", crate::quantum::MAX_QUBITS),
+            ));
+        }
         if let Some(n) = self.num_qubits
             && self.qubits.len() > n
         {
@@ -397,8 +440,8 @@ impl DeviceModel {
             ));
         }
         self.default_qubit.validate("default qubit")?;
-        for (q, props) in self.qubits.iter().enumerate() {
-            props.validate(&format!("qubit {q}"))?;
+        for q in 0..self.qubits.len() {
+            self.qubit(q).validate(&format!("qubit {q}"))?;
         }
         for (i, rule) in self.gates.iter().enumerate() {
             rule.validate(i)?;
@@ -561,7 +604,7 @@ pub(crate) struct Program {
     pub readout: Vec<(f64, f64)>,
 }
 
-fn rotation_kind(kind: GateKind) -> bool {
+pub(crate) fn rotation_kind(kind: GateKind) -> bool {
     use GateKind::*;
     matches!(kind, RX | RY | RZ | P | RXX | RYY | RZZ)
 }
@@ -624,16 +667,16 @@ impl Compiler<'_> {
         Ok(())
     }
 
-    fn push_gate(&mut self, inst: Instruction) {
+    /// Append a gate (an over-rotated angle may be invalid, e.g. infinite).
+    fn push_gate(&mut self, inst: Instruction) -> Result<()> {
         if let Some(Op::Gates(c)) = self.program.ops.last_mut() {
-            c.try_push(inst)
-                .expect("instruction validated by its circuit");
+            c.try_push(inst)?;
         } else {
             let mut c = Circuit::new(self.program.n_qubits);
-            c.try_push(inst)
-                .expect("instruction validated by its circuit");
+            c.try_push(inst)?;
             self.program.ops.push(Op::Gates(c));
         }
+        Ok(())
     }
 
     /// Relaxation of qubit `q` for `time`.
@@ -755,7 +798,7 @@ impl Program {
             }
             let mut bound = inst.clone();
             bound.params = angles.into_iter().map(Param::Value).collect();
-            cc.push_gate(bound);
+            cc.push_gate(bound)?;
             if let Some(r) = rule {
                 if let Some(p) = device.gates[r].depolarizing
                     && p > 0.0
@@ -935,6 +978,51 @@ mod tests {
     }
 
     #[test]
+    fn unset_qubit_fields_follow_the_default() {
+        // The order of the builder calls does not matter.
+        let a = DeviceModel::new("a")
+            .with_qubit(3, QubitProperties::new().with_readout(0.1, 0.2))
+            .with_default_qubit(
+                QubitProperties::new()
+                    .with_t1_t2(50.0, 40.0)
+                    .with_readout(0.01, 0.02),
+            );
+        let b = DeviceModel::new("b")
+            .with_default_qubit(
+                QubitProperties::new()
+                    .with_t1_t2(50.0, 40.0)
+                    .with_readout(0.01, 0.02),
+            )
+            .with_qubit(3, QubitProperties::new().with_readout(0.1, 0.2));
+        for d in [&a, &b] {
+            assert_eq!(
+                d.qubit(0),
+                QubitProperties::new()
+                    .with_t1_t2(50.0, 40.0)
+                    .with_readout(0.01, 0.02)
+            );
+            assert_eq!(
+                d.qubit(3),
+                QubitProperties::new()
+                    .with_t1_t2(50.0, 40.0)
+                    .with_readout(0.1, 0.2)
+            );
+            assert_eq!(d.qubit(7).readout, Some((0.01, 0.02)));
+        }
+        // Merged values are validated: T2 = 90 > 2·T1 for qubit 0.
+        let bad = DeviceModel::new("c")
+            .with_default_qubit(QubitProperties::new().with_t1_t2(40.0, 30.0))
+            .with_qubit(
+                0,
+                QubitProperties {
+                    t2: Some(90.0),
+                    ..QubitProperties::default()
+                },
+            );
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
     fn rules_match_in_order() {
         let mut c = Circuit::new(4);
         c.cx(0, 1).cx(1, 0).crz(2, 3, 0.1).mcx(&[0, 1, 2], 3).h(2);
@@ -1079,6 +1167,67 @@ mod tests {
             assert!(max_diff(&r, &expected) < 1e-14, "{label}");
         }
         assert!(Channel::unitary("bad", vec![C64::new(2.0, 0.0); 4]).is_err());
+    }
+
+    #[test]
+    fn review_regressions() {
+        // Over-rotations that overflow the angle are errors, not panics.
+        let dev = DeviceModel::from_json(r#"{"gates":[{"over_rotation":1.0}]}"#).unwrap();
+        let mut c = Circuit::new(1);
+        c.rx(0, 1e308);
+        let mut rho = DensityMatrix::zero(1).unwrap();
+        assert!(rho.apply_device(&c, &[], &dev).is_err());
+        // Long rotation labels are rejected before building matrices.
+        let long =
+            r#"{"gates":[{"channels":[{"rotation":{"pauli":"ZZZZZZZZZZZZZZZZ","angle":0.1}}]}]}"#;
+        assert!(DeviceModel::from_json(long).is_err());
+        assert!(Channel::rotation("ZZZ", 0.1).is_err());
+        // Gate names match regardless of case.
+        let dev =
+            DeviceModel::from_json(r#"{"gates":[{"gate":"CX","depolarizing":0.5}]}"#).unwrap();
+        let mut c = Circuit::new(2);
+        c.cx(0, 1);
+        let mut rho = DensityMatrix::zero(2).unwrap();
+        rho.apply_device(&c, &[], &dev).unwrap();
+        assert!(rho.purity() < 0.9);
+        // Two-qubit channels on named one-qubit gates fail validation.
+        let bad = DeviceModel::new("h")
+            .with_rule(GateRule::for_gate("h").with_channel(ChannelSpec::Depolarizing2q(0.1)));
+        assert!(bad.validate().is_err());
+        // T1 = ∞ alone means no relaxation.
+        let mut q = QubitProperties::new();
+        q.t1 = Some(f64::INFINITY);
+        assert!(q.relaxation().is_none());
+        assert!(
+            DeviceModel::new("inf")
+                .with_default_qubit(q)
+                .validate()
+                .is_ok()
+        );
+        // Composing many unitary mixtures stays bounded.
+        let half = Channel::from_kraus(
+            "half",
+            vec![
+                vec![
+                    C64::new(0.5f64.sqrt(), 0.0),
+                    C64::new(0.0, 0.0),
+                    C64::new(0.0, 0.0),
+                    C64::new(0.5f64.sqrt(), 0.0),
+                ],
+                vec![
+                    C64::new(0.5, 0.0),
+                    C64::new(0.5, 0.0),
+                    C64::new(0.5, 0.0),
+                    C64::new(-0.5, 0.0),
+                ],
+            ],
+        )
+        .unwrap();
+        let mut acc = half.clone();
+        for _ in 0..20 {
+            acc = acc.compose(&half).unwrap();
+            assert!(acc.kraus_operators().len() <= 64);
+        }
     }
 
     #[test]

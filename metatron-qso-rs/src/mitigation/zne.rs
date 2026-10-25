@@ -88,11 +88,24 @@ pub struct ZneResult {
     pub values: Vec<Estimate>,
 }
 
+/// Largest folded circuit (gates).
+pub const MAX_FOLDED_GATES: usize = 1 << 22;
+
 fn check_scale(scale: f64) -> Result<()> {
     if !(scale >= 1.0 && scale.is_finite()) {
         return Err(QsoError::invalid(
             "scale",
             format!("scale factors must be finite and at least 1, got {scale}"),
+        ));
+    }
+    Ok(())
+}
+
+fn check_size(d: usize, scale: f64) -> Result<()> {
+    if d as f64 * scale > MAX_FOLDED_GATES as f64 {
+        return Err(QsoError::invalid(
+            "scale",
+            format!("folding {d} gates by {scale} exceeds {MAX_FOLDED_GATES} gates"),
         ));
     }
     Ok(())
@@ -117,6 +130,7 @@ pub fn fold(circuit: &Circuit, scale: f64, folding: Folding) -> Result<(Circuit,
     if d == 0 {
         return Ok((circuit.clone(), 1.0));
     }
+    check_size(d, scale)?;
     let gates = circuit.instructions();
     let mut out = empty_like(circuit);
     match folding {
@@ -168,7 +182,7 @@ pub fn fold(circuit: &Circuit, scale: f64, folding: Folding) -> Result<(Circuit,
 /// at zero: `p(0) = Σ γ_i y_i`.
 fn zero_coefficients(scales: &[f64], degree: usize) -> Result<Vec<f64>> {
     let n = scales.len();
-    if n < degree + 1 {
+    if degree >= n {
         return Err(QsoError::invalid(
             "scales",
             format!(
@@ -274,12 +288,36 @@ pub fn zne<F>(
 where
     F: FnMut(&Circuit) -> Result<Estimate>,
 {
+    for &s in scales {
+        check_scale(s)?;
+        check_size(circuit.len(), s)?;
+    }
+    if circuit.is_empty() {
+        // Nothing to fold: the value at scale 1 is the zero-noise value.
+        let value = execute(circuit)?;
+        return Ok(ZneResult {
+            estimate: value,
+            scales: vec![1.0],
+            values: vec![value],
+        });
+    }
     let mut realised = Vec::with_capacity(scales.len());
     let mut values = Vec::with_capacity(scales.len());
     for &s in scales {
         let (folded, actual) = fold(circuit, s, folding)?;
         realised.push(actual);
         values.push(execute(&folded)?);
+    }
+    for (i, a) in realised.iter().enumerate() {
+        if realised[..i].contains(a) {
+            return Err(QsoError::invalid(
+                "scales",
+                format!(
+                    "the realised scale factors {realised:?} coincide (folding rounds to whole \
+                     gates); use more distinct, preferably odd, scale factors"
+                ),
+            ));
+        }
     }
     let estimate = extrapolate(&realised, &values, extrapolation)?;
     Ok(ZneResult {
@@ -327,6 +365,27 @@ mod tests {
                 assert!((psi.fidelity(&ideal).unwrap() - 1.0).abs() < 1e-12);
             }
         }
+        // Empty circuits and coinciding realised scales.
+        let empty = Circuit::new(1);
+        let r = zne(
+            &empty,
+            &[1.0, 3.0],
+            Folding::Global,
+            Extrapolation::Richardson,
+            |_| Ok(Estimate::exact(0.7)),
+        )
+        .unwrap();
+        assert_eq!((r.estimate.value, r.scales.clone()), (0.7, vec![1.0]));
+        let mut one = Circuit::new(1);
+        one.h(0);
+        let err = zne(
+            &one,
+            &[1.0, 2.0, 3.0],
+            Folding::Global,
+            Extrapolation::Richardson,
+            |_| Ok(Estimate::exact(0.5)),
+        );
+        assert!(err.unwrap_err().to_string().contains("coincide"));
         let (f3, s3) = fold(&c, 3.0, Folding::Global).unwrap();
         assert_eq!((f3.len(), s3), (3 * c.len(), 3.0));
         assert!(fold(&c, 0.5, Folding::Global).is_err());

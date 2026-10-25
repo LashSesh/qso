@@ -12,6 +12,7 @@ published versions always show the output of the current code.
 | [03_noise](03_noise.ipynb) | Depolarising noise on a Bell state, T₁/T₂ decay against closed forms, shot noise, readout errors |
 | [04_metatron_walks](04_metatron_walks.ipynb) | Symmetry of Metatron's Cube, walks from the centre, spatial search, the transition to classical walks under dephasing |
 | [05_symmetry_transfer_discrete](05_symmetry_transfer_discrete.ipynb) | Isomorphism of cospectral graphs, a walk on the 2³⁰-node hypercube in 31 dimensions, perfect state transfer on paths, the Hadamard walk, coined and Szegedy search, walk circuits and product-formula errors, the Metatron family |
+| [06_noise_mitigation](06_noise_mitigation.ipynb) | A device model with T₁/T₂, gate and readout errors; trajectories converging to the density matrix; shot allocation; readout mitigation, zero-noise extrapolation, probabilistic error cancellation and Pauli twirling against noiseless values; classical shadows; trajectories on 16 qubits |
 
 To run them locally:
 

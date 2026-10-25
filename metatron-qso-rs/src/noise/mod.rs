@@ -67,6 +67,13 @@ impl Channel {
         let first = kraus
             .first()
             .ok_or_else(|| QsoError::invalid("kraus", "at least one Kraus operator required"))?;
+        if kraus
+            .iter()
+            .flatten()
+            .any(|z| !(z.re.is_finite() && z.im.is_finite()))
+        {
+            return Err(QsoError::invalid("kraus", "entries must be finite"));
+        }
         let d = (first.len() as f64).sqrt().round() as usize;
         let n_qubits = match d {
             2 => 1,
@@ -357,6 +364,12 @@ impl Channel {
             return Err(QsoError::invalid("angle", "must be finite"));
         }
         let k = label.len();
+        if !(1..=2).contains(&k) {
+            return Err(QsoError::invalid(
+                "label",
+                "rotations act on one or two qubits",
+            ));
+        }
         let index = pauli_index(label, k)?;
         let (c, s) = ((angle / 2.0).cos(), (angle / 2.0).sin());
         let d = 1usize << k;
@@ -413,7 +426,10 @@ impl Channel {
         // Mixtures of unitaries stay mixtures of unitaries (trajectories
         // sample them without looking at the state); other channels get a
         // minimal Kraus set.
-        let kraus = if self.is_unitary_mixture() && then.is_unitary_mixture() {
+        let kraus = if self.is_unitary_mixture()
+            && then.is_unitary_mixture()
+            && products.len() <= MAX_MIXTURE_TERMS
+        {
             products
         } else {
             minimal_kraus(&products, d)
@@ -520,6 +536,10 @@ impl Channel {
         s
     }
 }
+
+/// Most unitaries kept when composing unitary mixtures; beyond this the
+/// composition gets a minimal Kraus set instead.
+const MAX_MIXTURE_TERMS: usize = 64;
 
 /// Product `a·b` of square row-major matrices.
 fn mat_product(a: &[C64], b: &[C64]) -> Vec<C64> {

@@ -28,10 +28,18 @@ fn parse_bits(key: &str) -> PyResult<usize> {
     Ok(u64::from_str_radix(key, 2).expect("checked digits") as usize)
 }
 
-fn parse_counts(counts: &Bound<'_, PyDict>) -> PyResult<Counts> {
+/// Counts keyed by bit strings of exactly `width` bits (if given).
+fn parse_counts(counts: &Bound<'_, PyDict>, width: Option<usize>) -> PyResult<Counts> {
     let mut out = Counts::new();
     for (k, v) in counts.iter() {
         let key: String = k.extract()?;
+        if let Some(w) = width
+            && key.len() != w
+        {
+            return Err(invalid(format!(
+                "bit string '{key}' does not have {w} bits"
+            )));
+        }
         let n: usize = v
             .extract()
             .map_err(|_| invalid("counts must be non-negative integers"))?;
@@ -139,9 +147,11 @@ impl PyReadoutCalibration {
         py: Python<'py>,
         counts: &Bound<'py, PyDict>,
     ) -> PyResult<Bound<'py, PyDict>> {
-        let counts = parse_counts(counts)?;
-        let q = self.inner.mitigate(&counts).raise()?;
-        quasi_dict(py, &q, self.inner.n_qubits())
+        let n = self.inner.n_qubits();
+        let counts = parse_counts(counts, Some(n))?;
+        let cal = &self.inner;
+        let q = py.detach(|| cal.mitigate(&counts)).raise()?;
+        quasi_dict(py, &q, n)
     }
 
     fn __repr__(&self) -> String {
@@ -149,25 +159,35 @@ impl PyReadoutCalibration {
     }
 }
 
-/// The probability distribution nearest to quasi-probabilities that sum to
-/// one (Smolin, Gambetta and Smith 2012).
+/// The probability distribution nearest to quasi-probabilities (bit strings
+/// of one length, summing to one), Smolin, Gambetta and Smith 2012.
 #[pyfunction]
 fn nearest_probability_distribution<'py>(
     py: Python<'py>,
     quasi: &Bound<'py, PyDict>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let mut map = BTreeMap::new();
-    let mut width = 0;
+    let mut width = None;
     for (k, v) in quasi.iter() {
         let key: String = k.extract()?;
-        width = width.max(key.len());
+        if *width.get_or_insert(key.len()) != key.len() {
+            return Err(invalid("all bit strings must have the same length"));
+        }
         let p: f64 = v.extract()?;
         if !p.is_finite() {
             return Err(invalid("quasi-probabilities must be finite"));
         }
-        map.insert(parse_bits(&key)?, p);
+        if map.insert(parse_bits(&key)?, p).is_some() {
+            return Err(invalid(format!("bit string '{key}' appears twice")));
+        }
     }
-    quasi_dict(py, &nearest(&map), width)
+    let total: f64 = map.values().sum();
+    if (total - 1.0).abs() > 1e-6 {
+        return Err(invalid(format!(
+            "quasi-probabilities must sum to 1, got {total}"
+        )));
+    }
+    quasi_dict(py, &nearest(&map), width.unwrap_or(0))
 }
 
 fn folding(name: &str, seed: u64) -> PyResult<Folding> {
@@ -181,6 +201,9 @@ fn folding(name: &str, seed: u64) -> PyResult<Folding> {
 }
 
 fn extrapolation(method: &str, degree: Option<usize>, asymptote: f64) -> PyResult<Extrapolation> {
+    if degree.is_some() && method != "polynomial" {
+        return Err(invalid("`degree` applies to polynomial extrapolation only"));
+    }
     match (method, degree) {
         ("linear", _) => Ok(Extrapolation::Linear),
         ("richardson", _) => Ok(Extrapolation::Richardson),
@@ -202,13 +225,24 @@ fn extrapolation(method: &str, degree: Option<usize>, asymptote: f64) -> PyResul
 /// circuit and the realised scale. `folding`: "global" or "random".
 #[pyfunction]
 #[pyo3(signature = (circuit, scale, folding = "global", seed = 0))]
-fn fold(circuit: &PyCircuit, scale: f64, folding: &str, seed: u64) -> PyResult<(PyCircuit, f64)> {
-    let (c, s) = fold_core(&circuit.inner, scale, self::folding(folding, seed)?).raise()?;
+fn fold(
+    py: Python<'_>,
+    circuit: &PyCircuit,
+    scale: f64,
+    folding: &str,
+    seed: u64,
+) -> PyResult<(PyCircuit, f64)> {
+    let folding = self::folding(folding, seed)?;
+    let c = &circuit.inner;
+    let (c, s) = py.detach(|| fold_core(c, scale, folding)).raise()?;
     Ok((PyCircuit::wrap(c)?, s))
 }
 
 fn estimates(values: &Bound<'_, PyAny>) -> PyResult<Vec<metatron_qso::estimation::Estimate>> {
-    values.try_iter()?.map(|v| extract_estimate(&v?)).collect()
+    values
+        .try_iter()?
+        .map(|v| extract_estimate(&v?, "each value"))
+        .collect()
 }
 
 /// Extrapolate values (floats or Estimates) at `scales` to zero noise.
@@ -257,7 +291,7 @@ fn zne<'py>(
     let result = zne_core(&circuit.inner, &scales, folding, method, |folded| {
         let call = PyCircuit::wrap(folded.clone())
             .and_then(|c| execute.call1((c,)))
-            .and_then(|v| extract_estimate(&v));
+            .and_then(|v| extract_estimate(&v, "the value returned by `execute`"));
         call.map_err(|e| {
             error = Some(e);
             metatron_qso::QsoError::invalid("execute", "the callable raised an exception")
@@ -322,7 +356,7 @@ fn twirled_average(
     let result = twirled_core(&circuit.inner, count, seed, |t| {
         let call = PyCircuit::wrap(t.clone())
             .and_then(|c| execute.call1((c,)))
-            .and_then(|v| extract_estimate(&v));
+            .and_then(|v| extract_estimate(&v, "the value returned by `execute`"));
         call.map_err(|e| {
             error = Some(e);
             metatron_qso::QsoError::invalid("execute", "the callable raised an exception")

@@ -41,11 +41,39 @@ pub const MAX_FULL_QUBITS: usize = 10;
 /// Largest register whose counts are mitigated (dense 2ⁿ vectors).
 pub const MAX_MITIGATED_QUBITS: usize = 24;
 
-/// A readout calibration (see the module documentation).
+/// A readout calibration (see the module documentation). Deserialisation
+/// re-validates the data like the constructors.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "CalibrationData")]
 pub struct ReadoutCalibration {
     n_qubits: usize,
     model: ReadoutModel,
+}
+
+/// Unvalidated serialised form of a [`ReadoutCalibration`].
+#[derive(Deserialize)]
+struct CalibrationData {
+    n_qubits: usize,
+    model: ReadoutModel,
+}
+
+impl TryFrom<CalibrationData> for ReadoutCalibration {
+    type Error = QsoError;
+
+    fn try_from(raw: CalibrationData) -> Result<Self> {
+        match raw.model {
+            ReadoutModel::Tensored(errors) => {
+                if errors.len() != raw.n_qubits {
+                    return Err(QsoError::DimensionMismatch {
+                        expected: raw.n_qubits,
+                        actual: errors.len(),
+                    });
+                }
+                Self::from_errors(&errors)
+            }
+            ReadoutModel::Full(matrix) => Self::from_matrix(raw.n_qubits, matrix),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -284,7 +312,10 @@ impl ReadoutCalibration {
     /// measured frequencies (entries that vanish are left out).
     pub fn mitigate(&self, counts: &Counts) -> Result<BTreeMap<usize, f64>> {
         self.check_register(counts)?;
-        let shots: usize = counts.values().sum();
+        let shots = counts
+            .values()
+            .try_fold(0usize, |a, &n| a.checked_add(n))
+            .ok_or_else(|| QsoError::invalid("counts", "total number of shots overflows"))?;
         if shots == 0 {
             return Err(QsoError::invalid("counts", "no shots"));
         }
@@ -470,6 +501,25 @@ mod tests {
                 .map(|(&b, &n)| n as f64 / shots as f64 * w.weight(b))
                 .sum();
             assert!((value - 1.0).abs() < 1e-5, "{value}");
+        }
+    }
+
+    #[test]
+    fn deserialisation_validates() {
+        let ok = ReadoutCalibration::from_errors(&[(0.1, 0.2)]).unwrap();
+        let back: ReadoutCalibration =
+            serde_json::from_str(&serde_json::to_string(&ok).unwrap()).unwrap();
+        assert_eq!(back, ok);
+        for bad in [
+            r#"{"n_qubits":2,"model":{"full":[1,0,0,1]}}"#,
+            r#"{"n_qubits":1,"model":{"full":[0.5,0.5,0.5,0.5]}}"#,
+            r#"{"n_qubits":1,"model":{"tensored":[[0.5,0.5]]}}"#,
+            r#"{"n_qubits":3,"model":{"tensored":[[0.1,0.1]]}}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<ReadoutCalibration>(bad).is_err(),
+                "{bad}"
+            );
         }
     }
 

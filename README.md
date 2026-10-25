@@ -13,7 +13,11 @@ command-line tool.**
 
 QSO simulates quantum circuits exactly — as pure states or as density
 matrices with noise — and runs variational and textbook algorithms on top of
-them. It also simulates continuous- and discrete-time quantum walks on
+them. It models noisy devices (relaxation, gate and readout errors) and
+simulates them with quantum trajectories beyond the reach of density
+matrices, and it mitigates their errors: readout mitigation, zero-noise
+extrapolation, probabilistic error cancellation and Pauli twirling, with a
+standard error on every estimate. It also simulates continuous- and discrete-time quantum walks on
 arbitrary graphs, reduces them by symmetry to exact low-dimensional problems
 where the graph allows it (a walk on the 2³⁰-node hypercube in 31
 dimensions), decides perfect state transfer, and compiles walks to circuits.
@@ -56,7 +60,8 @@ or by the benchmark report you can run yourself.
 | **Statevector simulator** | n-qubit pure states (up to 34 qubits) with multi-threaded kernels, gate fusion and cache blocking. Gates: H, X, Y, Z, S, S†, T, T†, √X, √X†, RX, RY, RZ, P, U, SWAP, RXX, RYY, RZZ and custom unitaries on up to 6 qubits, each with any number of control qubits. Sampling, mid-circuit measurement, reduced density matrices, entanglement entropy |
 | **Circuits** | Builder API with symbolic, differentiable parameters (`θ = a·p[i] + b`), inverse, binding, depth and gate counts. OpenQASM 2.0 export *and* import; multi-controlled gates are exported by exact, ancilla-free decomposition |
 | **Observables** | Pauli strings and sums with a parser (`"0.5*Z0 Z1 - X2"`), matrix-free expectation values and `H\|ψ⟩`, exact ground states by Lanczos |
-| **Noise** | Density-matrix simulator (up to 14 qubits) on the same kernels. Depolarising (1 and 2 qubits), amplitude damping, phase damping, bit flip, phase flip, thermal relaxation (T₁/T₂), custom Kraus channels, readout error, noise models applied after every gate |
+| **Noise** | Density-matrix simulator (up to 14 qubits) on the same kernels. Depolarising (1 and 2 qubits), amplitude damping, phase damping, bit flip, phase flip, thermal relaxation (T₁/T₂), Pauli channels (correlated two-qubit noise), coherent rotations, custom Kraus channels, Pauli twirls. **Device models** (JSON): per-qubit T₁/T₂ and readout errors, per-gate durations, depolarising errors, over-rotations and channels, relaxation while qubits wait. **Quantum trajectories** for any register a state vector holds, at one to two times the cost of a noiseless run |
+| **Mitigation and estimation** | Estimates with standard errors and confidence intervals; variance-optimal (Neyman) shot allocation over measurement groups; readout calibration (tensored and full) and mitigation; zero-noise extrapolation (global and random folding; linear, Richardson, polynomial and exponential fits); probabilistic error cancellation of Pauli noise with its sampling overhead; Pauli twirling; classical shadows |
 | **Gradients** | Adjoint differentiation (all partial derivatives for about three circuit runs), parameter-shift rules (2-term, and 4-term for controlled rotations), finite differences; batched evaluation of many parameter vectors in parallel |
 | **Algorithms** | VQE with seeded parallel restarts; QAOA for weighted MaxCut (fast diagonal simulation, exact optimum by enumeration, INTERP layer-wise initialisation); Grover search with any number of marked items; QFT; phase estimation; variational classifier with data re-uploading; graph classifier with trainable QAOA-type layers |
 | **Models** | Transverse-field Ising, XXZ Heisenberg, MaxCut cost operator, H₂ / STO-3G (2 qubits, with full-CI reference) |
@@ -64,7 +69,7 @@ or by the benchmark report you can run yourself.
 | **Graphs** | Weighted graphs; complete, cycle, path, star, bipartite, hypercube, grid/torus, Petersen, Heawood, Johnson, Kneser, Hamming, rook's, Paley, Shrikhande, circulant, Cayley (Z₂ⁿ) and random graphs; the five Platonic solids; the Metatron's Cube / Fruit-of-Life family; Cartesian products; **exact automorphism groups, canonical labelling and isomorphism**; edge-list and GraphML files, NetworkX import |
 | **Quantum walks** | Continuous-time walks on any graph — exact on up to 2048 nodes, Krylov propagation and cyclic subspaces beyond — with limiting and time-averaged distributions and mixing times. **Symmetry reduction** by equitable partitions (hypercubes, Hamming and Johnson graphs of any size). Childs–Goldstone spatial search with optimised hopping rate, **perfect state transfer**, Lindblad dephasing, classical baselines. **Discrete-time walks**: coined walks (Grover, Fourier, Hadamard coins; Shenvi–Kempe–Whaley search), the Hadamard walk on the line, Szegedy walks with quantum hitting times. **Walk circuits**: exact for circulant and Cayley graphs, product formulas for any graph |
 | **Boson sampling** | Permanents (Glynn's formula, `O(n·2ⁿ)`), Haar-random interferometers, exact output probabilities for indistinguishable and distinguishable photons, exact sampling (Clifford & Clifford) |
-| **Backends** | Statevector and noisy density-matrix backends, shot-based estimation with qubit-wise-commuting measurement groups |
+| **Backends** | Statevector, noisy density-matrix and device backends (density matrices or trajectories), shot-based estimation with qubit-wise-commuting measurement groups |
 | **Interfaces** | Rust library `metatron_qso`, Python package `metatron_qso` (NumPy I/O, type stubs), `qso` command-line tool with JSON output |
 | **Reproducibility** | One explicit, portable seeded RNG (xoshiro256++) for all randomness; parallel sums give bit-identical results for any thread count |
 
@@ -89,6 +94,11 @@ or by the benchmark report you can run yourself.
 | Hong–Ou–Mandel: two photons on a 50:50 beam splitter, coincidence probability | 0 (distinguishable: 0.5) | 0, Hong, Ou & Mandel 1987 |
 | Full bunching of n photons, boson / distinguishable probability | n! for n = 1 … 6 | n! |
 | State vectors of random circuits, largest difference to Qiskit Aer, Qulacs, Cirq, PennyLane | ≤ 3 × 10⁻¹⁵ | — |
+| Quantum trajectories vs density matrices, χ² test of 20 000 samples on 3, 6 and 10 qubits | passes at the 0.1 % level | — |
+| GHZ₅ on the toy device, ⟨Σ Z_i Z_{i+1}⟩: raw / readout-mitigated + ZNE (1, 3, 5) | 3.38 / 4.00 ± 0.01 | 4 |
+| Same with Pauli noise: probabilistic error cancellation (overhead 1.08) | 4.00 ± 0.01 | 4 |
+| Zero-noise extrapolation (Richardson, scales 1, 3, 5), depolarised 3-qubit circuit | error ÷ 380 | — |
+| Classical shadows, single-snapshot variance of a weight-k Pauli string | 3ᵏ − ⟨P⟩² | Huang, Kueng & Preskill 2020 |
 
 The test-suite (245 Rust tests and 218 Python tests, run in CI on Linux
 (x86_64 and arm64), macOS and Windows) also checks:
@@ -105,7 +115,11 @@ The test-suite (245 Rust tests and 218 Python tests, run in CI on Linux
   statevector = density matrix) and on random graphs (automorphism orders
   against brute force);
 - robustness: invalid input yields an error, never a panic or a wrong
-  result.
+  result;
+- noise: device models against hand-built channel sequences, Pauli twirls
+  against the exact average over all 16 frames, PEC against the exact sum
+  over all corrections (to 10⁻¹²), and 95 % confidence intervals that cover
+  the exact value in 91–99 % of repeated estimates.
 
 ## Metatron's Cube, precisely
 
@@ -363,7 +377,10 @@ Know its boundaries:
 | Limit | Value | Reason |
 |---|---|---|
 | Pure-state register | 34 qubits | 2³⁴ amplitudes = 256 GiB; practical limit is your RAM (16 bytes per amplitude) |
-| Density-matrix register | 14 qubits | 4¹⁴ entries = 4 GiB |
+| Density-matrix register | 14 qubits | 4¹⁴ entries = 4 GiB. Quantum trajectories reach the pure-state limit at the price of statistical error (and up to three state vectors in memory per running trajectory) |
+| Noise channels | one and two qubits | Kraus operators of channels on more qubits are not supported; noise after larger gates acts on consecutive pairs |
+| Probabilistic error cancellation | Pauli noise; overhead grows as Γ = Π γ | Twirling turns other noise into Pauli noise on average; the standard error grows with Γ, exponentially in the number of noisy gates |
+| Classical shadows | qubits 0–63 | Random Pauli measurements; weight-k observables need ∝ 3ᵏ snapshots |
 | Pauli strings | qubits 0–63 | Stored as two 64-bit masks |
 | Custom unitary gates | up to 6 target qubits | Dense kernel |
 | Exact walk analysis | up to 2048 nodes, or 2048 cells of an equitable partition | Dense eigendecomposition. Beyond that, `evolve`/`probabilities` use Krylov, and limiting distributions the start node's cyclic subspace when it is small; symmetric graphs of any size reduce to their quotients |
@@ -390,7 +407,9 @@ submission to quantum hardware. To run on hardware, export a circuit with
 ```
 metatron-qso-rs/            Rust library `metatron_qso` and the `qso` CLI
   src/quantum/              states, gates, kernels, circuits, Pauli sums, OpenQASM
-  src/noise/                density matrices, channels, noise models
+  src/noise/                density matrices, channels, noise and device models, quantum trajectories
+  src/estimation/           estimates with standard errors, shot allocation, classical shadows
+  src/mitigation/           readout calibration, zero-noise extrapolation, PEC, Pauli twirling
   src/algorithms/           gradients, ansätze, models, VQE, QAOA, Grover, QFT/QPE, classifiers
   src/optimize/             L-BFGS, Adam, gradient descent, Nelder–Mead, SPSA
   src/graph/                graphs, generators, Metatron family, automorphisms, canonical forms, file I/O

@@ -13,6 +13,7 @@
 - [Parameters and gradients](gradients.md)
 - [Variational algorithms](variational.md)
 - [Noise](noise.md)
+- [Estimation and error mitigation](mitigation.md)
 - [Graphs](graphs.md)
 - [Quantum walks](walks.md)
 - [Symmetry and state transfer](symmetry.md)
@@ -27,6 +28,7 @@
 - [Noise and decoherence](tutorials/03_noise.md)
 - [Quantum walks on Metatron's Cube](tutorials/04_metatron_walks.md)
 - [Symmetry, state transfer and discrete walks](tutorials/05_symmetry_transfer_discrete.md)
+- [Noisy devices and error mitigation](tutorials/06_noise_mitigation.md)
 
 # Reference
 

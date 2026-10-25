@@ -15,8 +15,8 @@ use crate::state::{PyPauliSum, PyStateVector};
 use crate::{Raise, RealArg, check_finite, invalid, pydict};
 
 /// A value with its standard error and the number of samples behind it.
-#[pyclass(name = "Estimate", module = "metatron_qso", frozen)]
-#[derive(Clone, Copy)]
+#[pyclass(name = "Estimate", module = "metatron_qso", frozen, eq)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct PyEstimate {
     pub inner: Estimate,
 }
@@ -80,7 +80,8 @@ impl PyEstimate {
 
 /// The backend selected by the common `noise` / `device` / `trajectories`
 /// arguments: exact state vectors, a noise model, or a device simulated
-/// with density matrices (or trajectories when `trajectories` is given).
+/// with density matrices (or with at most `trajectories` trajectories per
+/// run, the shots spread over them).
 pub(crate) fn backend(
     noise: Option<&PyNoiseModel>,
     device: Option<&PyDeviceModel>,
@@ -116,10 +117,11 @@ fn allocation(name: &str, pilot: f64) -> PyResult<ShotAllocation> {
     }
 }
 
-/// Estimate ⟨H⟩ of `circuit(theta)` from `shots` shots in total, spread over
-/// the groups of qubit-wise commuting terms (`allocation`: "uniform",
-/// "weighted" by Σ|c|, or "adaptive" Neyman allocation after a `pilot`
-/// fraction). With `readout_calibration` the measured parities are
+/// Estimate ⟨H⟩ of `circuit(theta)` from `shots` shots in total (at least
+/// two per group), spread over the groups of qubit-wise commuting terms
+/// (`allocation`: "uniform", "weighted" by Σ|c|, or "adaptive" Neyman
+/// allocation chosen with a `pilot` fraction of the shots, which do not
+/// enter the estimate). With `readout_calibration` the measured parities are
 /// mitigated. Returns `(estimate, groups)` where each group is a dict with
 /// `basis`, `terms`, `shots` and `estimate`.
 #[pyfunction]
@@ -255,16 +257,16 @@ impl PyClassicalShadow {
     }
 }
 
-/// Read an `Estimate` or a float returned by a Python callable.
-pub(crate) fn extract_estimate(value: &Bound<'_, PyAny>) -> PyResult<Estimate> {
+/// Read an `Estimate` or a float (`what` names its source in errors).
+pub(crate) fn extract_estimate(value: &Bound<'_, PyAny>, what: &str) -> PyResult<Estimate> {
     if let Ok(e) = value.cast::<PyEstimate>() {
         return Ok(e.get().inner);
     }
     let v: f64 = value
         .extract()
-        .map_err(|_| invalid("the callable must return a float or an Estimate"))?;
+        .map_err(|_| invalid(format!("{what} must be a float or an Estimate")))?;
     if !v.is_finite() {
-        return Err(invalid("the callable returned a non-finite value"));
+        return Err(invalid(format!("{what} must be finite")));
     }
     Ok(Estimate::exact(v))
 }

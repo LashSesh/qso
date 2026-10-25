@@ -226,11 +226,15 @@ impl ClassicalShadow {
             ));
         }
         let values = self.values(observable)?;
-        let size = values.len() / groups;
-        let mut means: Vec<f64> = values
-            .chunks(size)
-            .take(groups)
-            .map(|c| c.iter().sum::<f64>() / c.len() as f64)
+        // Blocks of ⌊n/g⌋ or ⌈n/g⌉ snapshots, using all of them.
+        let (n, mut start) = (values.len(), 0);
+        let mut means: Vec<f64> = (0..groups)
+            .map(|k| {
+                let end = start + n / groups + usize::from(k < n % groups);
+                let block = &values[start..end];
+                start = end;
+                block.iter().sum::<f64>() / block.len() as f64
+            })
             .collect();
         means.sort_by(f64::total_cmp);
         let mid = means.len() / 2;
@@ -290,6 +294,10 @@ mod tests {
         let e = shadow.estimate(&h).unwrap();
         assert!((e.value - exact).abs() < 4.0 * e.std_error);
         let mom = shadow.median_of_means(&h, 10).unwrap();
+        // Uneven blocks use every snapshot: with one group per snapshot but
+        // one, the median of means differs from that over the first blocks.
+        let small = ClassicalShadow::from_state(&psi, 10, 1).unwrap();
+        assert!(small.median_of_means(&h, 6).unwrap().is_finite());
         assert!((mom - exact).abs() < 0.15, "{mom} vs {exact}");
         assert!(shadow.median_of_means(&h, 0).is_err());
     }

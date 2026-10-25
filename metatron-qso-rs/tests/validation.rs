@@ -238,3 +238,154 @@ fn shrikhande_and_rook_graph_are_cospectral_but_not_isomorphic() {
     assert_eq!(s.automorphism_group().order(), Some(192));
     assert_eq!(r.automorphism_group().order(), Some(1152));
 }
+
+/// The toy device of `examples/devices/toy_device.json`.
+fn toy_device() -> metatron_qso::noise::DeviceModel {
+    metatron_qso::noise::DeviceModel::from_json(include_str!("../examples/devices/toy_device.json"))
+        .unwrap()
+}
+
+fn ghz(n: usize) -> Circuit {
+    let mut c = Circuit::new(n);
+    c.h(0);
+    for q in 0..n - 1 {
+        c.cx(q, q + 1);
+    }
+    c
+}
+
+fn zz_chain(n: usize) -> PauliSum {
+    let terms: Vec<String> = (0..n - 1).map(|q| format!("Z{q} Z{}", q + 1)).collect();
+    terms.join(" + ").parse().unwrap()
+}
+
+#[test]
+fn trajectories_reproduce_the_noisy_density_matrix() {
+    use metatron_qso::noise::{DensityMatrix, TrajectorySimulator};
+    let (device, c, h) = (toy_device(), ghz(5), zz_chain(5));
+    let mut rho = DensityMatrix::zero(5).unwrap();
+    rho.apply_device(&c, &[], &device).unwrap();
+    let exact = rho.expectation(&h).unwrap();
+    let e = TrajectorySimulator::new(device, 4000, 1)
+        .unwrap()
+        .expectation(&c, &[], &h)
+        .unwrap();
+    assert!((e.value - exact).abs() < 4.0 * e.std_error);
+    assert!(e.std_error < 0.02);
+}
+
+#[test]
+fn readout_mitigation_and_zne_recover_the_noiseless_value() {
+    use metatron_qso::backend::DeviceBackend;
+    use metatron_qso::estimation::{EstimatorOptions, estimate};
+    use metatron_qso::mitigation::ReadoutCalibration;
+    use metatron_qso::mitigation::zne::{Extrapolation, Folding, zne};
+    let (device, c, h) = (toy_device(), ghz(5), zz_chain(5));
+    let backend = DeviceBackend::density_matrix(device).unwrap();
+    let options = EstimatorOptions::new(200_000).with_seed(2);
+    let raw = estimate(&backend, &c, &[], &h, &options).unwrap().estimate;
+    assert!(4.0 - raw.value > 0.5, "raw {}", raw.value);
+    let cal = ReadoutCalibration::tensored(&backend, 5, 200_000, 3).unwrap();
+    let options = options.with_readout_mitigation(cal);
+    let mut k = 10;
+    let r = zne(
+        &c,
+        &[1.0, 3.0, 5.0],
+        Folding::Global,
+        Extrapolation::Richardson,
+        |folded| {
+            k += 1;
+            Ok(estimate(&backend, folded, &[], &h, &options.clone().with_seed(k))?.estimate)
+        },
+    )
+    .unwrap();
+    assert!(
+        (r.estimate.value - 4.0).abs() < 4.0 * r.estimate.std_error + 0.01,
+        "{:?}",
+        r.estimate
+    );
+    assert!(r.estimate.std_error < 0.02);
+}
+
+#[test]
+fn zero_noise_extrapolation_removes_depolarising_error() {
+    use metatron_qso::estimation::Estimate;
+    use metatron_qso::mitigation::zne::{Extrapolation, Folding, zne};
+    use metatron_qso::noise::{DensityMatrix, DeviceModel, GateRule};
+    let device = DeviceModel::new("dep")
+        .with_rule(GateRule::any().with_num_qubits(2).with_depolarizing(0.01))
+        .with_rule(GateRule::any().with_depolarizing(0.002));
+    let mut c = Circuit::new(3);
+    c.h(0)
+        .ry(1, 0.9)
+        .cx(0, 1)
+        .rz(2, 0.4)
+        .cx(1, 2)
+        .rx(0, 0.3)
+        .cx(0, 2)
+        .ry(2, -0.8);
+    let h: PauliSum = "Z0 Z1 + 0.5 X2 - 0.3 Z1".parse().unwrap();
+    let ideal = h
+        .expectation(&StateVector::from_circuit(&c, &[]).unwrap())
+        .unwrap();
+    let run = |f: &Circuit| {
+        let mut rho = DensityMatrix::zero(3)?;
+        rho.apply_device(f, &[], &device)?;
+        Ok(Estimate::exact(rho.expectation(&h)?))
+    };
+    let noisy = run(&c).unwrap().value;
+    let r = zne(
+        &c,
+        &[1.0, 3.0, 5.0],
+        Folding::Global,
+        Extrapolation::Richardson,
+        run,
+    )
+    .unwrap();
+    // The error shrinks by more than a factor of 100 (about 380).
+    assert!(100.0 * (r.estimate.value - ideal).abs() < (noisy - ideal).abs());
+}
+
+#[test]
+fn probabilistic_error_cancellation_is_unbiased() {
+    use metatron_qso::mitigation::pec::pec_expectation;
+    use metatron_qso::noise::{ChannelSpec, DensityMatrix, DeviceModel, GateRule};
+    let device = DeviceModel::new("pauli")
+        .with_rule(
+            GateRule::for_gate("cx")
+                .with_depolarizing(0.008)
+                .with_channel(ChannelSpec::Pauli([("ZZ".to_string(), 0.002)].into())),
+        )
+        .with_rule(GateRule::any().with_num_qubits(1).with_depolarizing(0.0005));
+    let (c, h) = (ghz(5), zz_chain(5));
+    let mut rho = DensityMatrix::zero(5).unwrap();
+    rho.apply_device(&c, &[], &device).unwrap();
+    assert!(4.0 - rho.expectation(&h).unwrap() > 0.05);
+    let r = pec_expectation(&c, &[], &device, &h, 20_000, 4).unwrap();
+    assert!(
+        (r.estimate.value - 4.0).abs() < 4.0 * r.estimate.std_error,
+        "{:?}",
+        r.estimate
+    );
+    assert!(r.overhead > 1.05 && r.overhead < 1.15);
+}
+
+#[test]
+fn classical_shadow_variance_is_three_to_the_weight() {
+    use metatron_qso::estimation::ClassicalShadow;
+    let psi = StateVector::from_circuit(&ghz(4), &[]).unwrap();
+    let snapshots = 60_000;
+    let shadow = ClassicalShadow::from_state(&psi, snapshots, 3).unwrap();
+    for (label, k) in [("Z0 Z1", 2), ("X0 X1 X2 X3", 4)] {
+        let h: PauliSum = label.parse().unwrap();
+        let e = shadow.estimate(&h).unwrap();
+        assert!((e.value - 1.0).abs() < 4.0 * e.std_error, "{label}");
+        let variance = e.std_error.powi(2) * snapshots as f64;
+        let bound = 3f64.powi(k) - 1.0;
+        let tol = 4.0 * ((3f64.powi(k) - 1.0) / snapshots as f64).sqrt();
+        assert!(
+            (variance / bound - 1.0).abs() < tol,
+            "{label}: {variance} vs {bound}"
+        );
+    }
+}

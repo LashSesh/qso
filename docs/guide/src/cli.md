@@ -17,7 +17,8 @@ machine-readable output; `qso <command> --help` lists all options.
 | `qaoa` | QAOA for MaxCut with exact optimum and approximation ratio | `--graph`, `--p`, `--restarts`, `--seed`, `--layerwise` |
 | `vqe` | VQE with an EfficientSU2 ansatz, compared with the exact ground energy | `--model h2\|tfim:N,J,H\|heisenberg:N,J,Δ`, `--hamiltonian "<Pauli sum>"`, `--layers`, `--method`, `--restarts` |
 | `grover` | Grover search, simulated against theoretical success | `--qubits`, `--marked`, `--iterations` |
-| `qasm FILE` | Simulate an OpenQASM 2.0 file and sample counts | `--shots`, `--seed`, `--noise p1,p2` |
+| `qasm FILE` | Simulate an OpenQASM 2.0 file and sample counts | `--shots`, `--seed`, `--noise p1,p2`, `--device FILE`, `--trajectories N` |
+| `estimate FILE` | ⟨H⟩ of an OpenQASM 2.0 circuit with standard error and 95 % interval, optionally mitigated | `--observable`, `--shots`, `--allocation`, `--device`, `--trajectories`, `--mitigate-readout`, `--zne 1,3,5`, `--extrapolation`, `--pec N` |
 
 Graphs are given as specifications (see [Graphs](graphs.md)), for example
 `metatron`, `fruit-of-life`, `petersen`, `hypercube:8`, `johnson:7,3` or
@@ -45,4 +46,21 @@ p=1  <C>=10.386751  C_max=12  ratio=0.865563  P(optimal)=0.1682  most likely 111
 p=2  <C>=11.105320  C_max=12  ratio=0.925443  P(optimal)=0.4490  most likely 1110001011 (cut 12)
 p=3  <C>=11.648892  C_max=12  ratio=0.970741  P(optimal)=0.7626  most likely 1100110110 (cut 12)
 p=4  <C>=11.936517  C_max=12  ratio=0.994710  P(optimal)=0.9767  most likely 1001101101 (cut 12)
+```
+
+Device files are JSON (see [Noise](noise.md)). With a device, `estimate`
+prints the estimate, the noiseless value for comparison and the mitigated
+estimates. For a three-qubit GHZ state on the example device
+(`metatron-qso-rs/examples/devices/toy_device.json`):
+
+```text
+$ qso estimate ghz.qasm --observable "Z0 Z1 + Z1 Z2" --device toy_device.json --shots 50000
+<H> = 1.738600 ± 0.003859 (95% CI [1.731036, 1.746164], 50000 samples)
+noiseless <H> = 2.000000
+
+$ qso estimate ghz.qasm --observable "Z0 Z1 + Z1 Z2" --device toy_device.json --shots 50000 \
+      --mitigate-readout --zne 1,3,5
+<H> (readout mitigated) = 1.963079 ± 0.004379 (95% CI [1.954496, 1.971662], 50000 samples)
+noiseless <H> = 2.000000
+ZNE ([1.0, 3.0, 5.0]) <H> = 1.998613 ± 0.010336 (95% CI [1.978355, 2.018871], 150000 samples)
 ```

@@ -199,11 +199,18 @@ enum Step {
 pub(crate) struct Skeleton<'p> {
     n_qubits: usize,
     steps: Vec<Step>,
+    /// `jumps[i]`: number of jump steps before step `i`.
+    jumps: Vec<usize>,
     channels: &'p [CompiledChannel],
 }
 
 /// Steps simulated one at a time when locating a jump.
 const STEPWISE: usize = 8;
+
+/// Steps in the first block after the start or a jump; blocks then double
+/// (a galloping search), so locating a jump costs time proportional to its
+/// distance from the previous one.
+const FIRST_BLOCK: usize = 256;
 
 impl<'p> Skeleton<'p> {
     pub(crate) fn new(n_qubits: usize, ops: &[Op], channels: &'p [CompiledChannel]) -> Self {
@@ -235,11 +242,24 @@ impl<'p> Skeleton<'p> {
                 },
             }
         }
+        let mut jumps = Vec::with_capacity(steps.len() + 1);
+        let mut count = 0;
+        jumps.push(0);
+        for step in &steps {
+            count += usize::from(matches!(step, Step::Jump { .. }));
+            jumps.push(count);
+        }
         Self {
             n_qubits,
             steps,
+            jumps,
             channels,
         }
+    }
+
+    /// Whether steps `a..b` contain a jump step.
+    fn has_jump(&self, a: usize, b: usize) -> bool {
+        self.jumps[b] > self.jumps[a]
     }
 
     /// Apply steps `a..b` without jumps as one blocked circuit.
@@ -275,7 +295,8 @@ impl<'p> Skeleton<'p> {
 
     /// From `state` at step `a` (squared norm at least `threshold`, and below
     /// it after step `b`), find the jump: returns its step with `state` just
-    /// before it, or `None` (rounding) with `state` after step `b`.
+    /// before it, or (when only rounding pushed the norm down) `Err(b)` with
+    /// `state` after step `b`.
     fn locate(
         &self,
         state: &mut StateVector,
@@ -283,7 +304,7 @@ impl<'p> Skeleton<'p> {
         mut b: usize,
         threshold: f64,
         choices: &[usize],
-    ) -> Option<usize> {
+    ) -> std::result::Result<usize, usize> {
         while b - a > STEPWISE {
             let mid = a + (b - a) / 2;
             let checkpoint = state.clone();
@@ -305,14 +326,14 @@ impl<'p> Skeleton<'p> {
                 let (_, gram, k0) = self.general(*channel);
                 let stay = kraus_weights(state.amplitudes(), &gram[k0..=k0], qubits)[0];
                 if stay < threshold {
-                    return Some(j);
+                    return Ok(j);
                 }
                 apply_instruction(state.amplitudes_mut(), no_jump, &[], false, 0);
             } else {
                 self.apply_block(state.amplitudes_mut(), j, j + 1, choices);
             }
         }
-        None
+        Err(b)
     }
 
     /// Apply the jump of step `j`: one of the operators other than the
@@ -363,32 +384,52 @@ impl<'p> Skeleton<'p> {
                 _ => None,
             })
             .collect();
+        // Threshold in (0, 1] for the squared norm.
+        let threshold = 1.0 - rng.uniform();
+        let state = self.run_from(&choices, threshold, &mut rng);
+        (state, rng)
+    }
+
+    /// The trajectory for given mixture choices and first threshold.
+    fn run_from(&self, choices: &[usize], mut threshold: f64, rng: &mut Rng) -> StateVector {
         let mut state = StateVector::zero(self.n_qubits);
         let end = self.steps.len();
         let mut start = 0;
-        // Threshold in (0, 1] for the squared norm.
-        let mut threshold = 1.0 - rng.uniform();
+        let mut size = FIRST_BLOCK;
         while start < end {
-            let checkpoint = state.clone();
-            self.apply_block(state.amplitudes_mut(), start, end, &choices);
-            if state.norm().powi(2) >= threshold {
+            if !self.has_jump(start, end) {
+                self.apply_block(state.amplitudes_mut(), start, end, choices);
                 break;
             }
+            let stop = (start + size).min(end);
+            let checkpoint = state.clone();
+            self.apply_block(state.amplitudes_mut(), start, stop, choices);
+            if state.norm().powi(2) >= threshold {
+                start = stop;
+                size *= 2;
+                continue;
+            }
             state = checkpoint;
-            match self.locate(&mut state, start, end, threshold, &choices) {
-                Some(j) => {
-                    self.jump(&mut state, j, &mut rng);
+            match self.locate(&mut state, start, stop, threshold, choices) {
+                Ok(j) => {
+                    self.jump(&mut state, j, rng);
                     threshold = 1.0 - rng.uniform();
                     start = j + 1;
+                    size = FIRST_BLOCK;
                 }
-                None => break,
+                Err(b) => {
+                    // Rounding pushed the norm below the threshold without
+                    // a jump: continue from there with the threshold lowered.
+                    threshold = threshold.min(state.norm().powi(2));
+                    start = b;
+                }
             }
         }
         let norm = state.norm();
         for z in state.amplitudes_mut() {
             *z /= norm;
         }
-        (state, rng)
+        state
     }
 }
 
@@ -584,6 +625,12 @@ impl TrajectorySimulator {
         theta: &[f64],
         k: usize,
     ) -> Result<StateVector> {
+        if k >= self.trajectories {
+            return Err(QsoError::invalid(
+                "k",
+                format!("trajectory {k} of {}", self.trajectories),
+            ));
+        }
         let program = self.program(circuit, theta)?;
         let base = Rng::seed_from_u64(self.seed);
         let skeleton = Skeleton::new(program.n_qubits, &program.ops, &program.channels);
@@ -705,6 +752,30 @@ mod tests {
             let (stat, df) = chi_square(&counts, &wrong, shots);
             assert!(stat > chi_square_quantile(df, 0.999), "n={n}: {stat:.1}");
         }
+    }
+
+    #[test]
+    fn rounding_below_the_threshold_finishes_the_circuit() {
+        // A custom gate that is unitary within tolerance but shrinks the
+        // norm by 4e-10, and a threshold just above the result: the norm
+        // drops below it at a gate, not at a jump step (the damping acts
+        // on a qubit in |0⟩ and loses nothing). The trajectory must still
+        // run every gate.
+        let mut c = Circuit::new(3);
+        c.x(0);
+        let shrink = vec![C64::new(1.0, 0.0), ZERO, ZERO, C64::new(1.0 - 4e-10, 0.0)];
+        c.unitary(shrink, &[0], &[]).unwrap();
+        for _ in 0..41 {
+            c.x(1);
+        }
+        c.s(2).h(0);
+        let dev = DeviceModel::new("damping")
+            .with_rule(GateRule::for_gate("s").with_channel(ChannelSpec::AmplitudeDamping(1e-3)));
+        let program = Program::compile(&c, &[], &dev).unwrap();
+        let skeleton = Skeleton::new(3, &program.ops, &program.channels);
+        let state = skeleton.run_from(&[], 1.0 - 5e-10, &mut Rng::seed_from_u64(0));
+        let psi = StateVector::from_circuit(&c, &[]).unwrap();
+        assert!((state.fidelity(&psi).unwrap() - 1.0).abs() < 1e-9);
     }
 
     #[test]
