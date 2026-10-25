@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use metatron_qso::quantum::{
-    Circuit, GateKind, MAX_QUBITS, Param, Parameter, from_qasm2, to_qasm2,
+    Circuit, GateKind, MAX_QUBITS, Param, Parameter, PauliString, PauliSum, from_qasm2, to_qasm2,
 };
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
@@ -167,6 +167,17 @@ impl PyCircuit {
 
 type Slf<'py> = PyRefMut<'py, PyCircuit>;
 
+/// Parse a single Pauli string with coefficient 1, e.g. `"X0 Y1"`.
+pub(crate) fn single_pauli_string(label: &str) -> PyResult<PauliString> {
+    let sum: PauliSum = label.parse().raise()?;
+    match sum.terms() {
+        [(c, s)] if *c == 1.0 => Ok(*s),
+        _ => Err(invalid(format!(
+            "expected a single Pauli string such as 'X0 Y1', got '{label}'"
+        ))),
+    }
+}
+
 /// Parameter vector for `circuit` (`None` → empty).
 pub(crate) fn theta_or_empty(theta: Option<RealArg<'_>>) -> Vec<f64> {
     theta.map(|t| real_vec(&t)).unwrap_or_default()
@@ -285,6 +296,13 @@ impl PyCircuit {
     /// RZZ(θ) = exp(−iθ Z⊗Z/2).
     fn rzz(mut slf: Slf<'_>, a: usize, b: usize, angle: Angle) -> PyResult<Slf<'_>> {
         slf.push(GateKind::RZZ, &[a, b], &[], &[angle.0])?;
+        Ok(slf)
+    }
+
+    /// exp(−iθP/2) for a Pauli string label such as `"X0 Y1 Z3"`.
+    fn pauli_rotation<'py>(mut slf: Slf<'py>, pauli: &str, angle: Angle) -> PyResult<Slf<'py>> {
+        let string = single_pauli_string(pauli)?;
+        slf.inner.pauli_rotation(&string, angle.0).raise()?;
         Ok(slf)
     }
 

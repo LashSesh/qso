@@ -1,5 +1,6 @@
 """Type stubs for the compiled extension ``metatron_qso._core``."""
 
+import os
 from typing import (
     Any,
     Callable,
@@ -190,6 +191,7 @@ class Circuit:
     def rxx(self, a: int, b: int, angle: Angle) -> Circuit: ...
     def ryy(self, a: int, b: int, angle: Angle) -> Circuit: ...
     def rzz(self, a: int, b: int, angle: Angle) -> Circuit: ...
+    def pauli_rotation(self, pauli: str, angle: Angle) -> Circuit: ...
     def cx(self, control: int, target: int) -> Circuit: ...
     def cy(self, control: int, target: int) -> Circuit: ...
     def cz(self, control: int, target: int) -> Circuit: ...
@@ -1081,3 +1083,295 @@ class GraphClassifier:
     def parameters(self) -> RealArray: ...
     @parameters.setter
     def parameters(self, value: ArrayLike) -> None: ...
+
+# ---------------------------------------------------------------------------
+# Hamiltonian simulation
+
+def trotter_circuit(
+    hamiltonian: PauliSum, n_qubits: int, t: float, steps: int = 1, order: int = 2
+) -> Circuit: ...
+def trotter_error_bound(
+    hamiltonian: PauliSum, t: float, steps: int = 1, order: int = 2
+) -> float: ...
+def qdrift_circuit(
+    hamiltonian: PauliSum, n_qubits: int, t: float, samples: int, seed: int = 0
+) -> Circuit: ...
+def qdrift_error_bound(hamiltonian: PauliSum, t: float, samples: int) -> float: ...
+
+# ---------------------------------------------------------------------------
+# Chemistry
+
+@final
+class QubitOperator:
+    def __new__(cls, sum: PauliSum) -> QubitOperator: ...
+    def terms(self) -> list[Tuple[complex, str]]: ...
+    @property
+    def num_terms(self) -> int: ...
+    def is_hermitian(self, tol: float = 1e-12) -> bool: ...
+    def to_pauli_sum(self, tol: float = 1e-12) -> PauliSum: ...
+    def adjoint(self) -> QubitOperator: ...
+    def commutator(self, other: QubitOperator) -> QubitOperator: ...
+    def one_norm(self) -> float: ...
+    def __add__(self, other: QubitOperator, /) -> QubitOperator: ...
+    def __sub__(self, other: QubitOperator, /) -> QubitOperator: ...
+    def __mul__(self, other: QubitOperator, /) -> QubitOperator: ...
+    def __eq__(self, other: object, /) -> bool: ...
+
+@final
+class FermionOperator:
+    def __new__(cls, text: str) -> FermionOperator: ...
+    def terms(self) -> list[Tuple[complex, list[Tuple[int, bool]]]]: ...
+    @property
+    def num_terms(self) -> int: ...
+    @property
+    def num_modes(self) -> int: ...
+    def adjoint(self) -> FermionOperator: ...
+    def normal_ordered(self) -> FermionOperator: ...
+    def is_hermitian(self, tol: float = 1e-12) -> bool: ...
+    def to_qubit(
+        self, mapping: str = "jordan_wigner", n_modes: Optional[int] = None
+    ) -> QubitOperator: ...
+    def __add__(self, other: FermionOperator, /) -> FermionOperator: ...
+    def __sub__(self, other: FermionOperator, /) -> FermionOperator: ...
+    def __mul__(self, other: FermionOperator, /) -> FermionOperator: ...
+    def __eq__(self, other: object, /) -> bool: ...
+
+@final
+class MolecularIntegrals:
+    @staticmethod
+    def from_fcidump(text: str) -> MolecularIntegrals: ...
+    @staticmethod
+    def from_file(path: Union[str, "os.PathLike[str]"]) -> MolecularIntegrals: ...
+    def to_fcidump(self) -> str: ...
+    @property
+    def n_orbitals(self) -> int: ...
+    @property
+    def n_spin_orbitals(self) -> int: ...
+    @property
+    def n_alpha(self) -> int: ...
+    @property
+    def n_beta(self) -> int: ...
+    @property
+    def core_energy(self) -> float: ...
+    def one_body(self, p: int, q: int) -> float: ...
+    def two_body(self, p: int, q: int, r: int, s: int) -> float: ...
+    def fermion_hamiltonian(self) -> FermionOperator: ...
+    def qubit_hamiltonian(
+        self, mapping: str = "jordan_wigner", two_qubit_reduction: bool = False
+    ) -> PauliSum: ...
+    def hartree_fock_energy(self) -> float: ...
+    def hartree_fock_circuit(
+        self, mapping: str = "jordan_wigner", two_qubit_reduction: bool = False
+    ) -> Circuit: ...
+    def fci_energies(self, n_roots: int = 1) -> list[float]: ...
+
+def uccsd(
+    molecule: MolecularIntegrals, mapping: str = "jordan_wigner", two_qubit_reduction: bool = False
+) -> Circuit: ...
+def k_upccgsd(
+    molecule: MolecularIntegrals,
+    k: int = 1,
+    mapping: str = "jordan_wigner",
+    two_qubit_reduction: bool = False,
+) -> Circuit: ...
+
+@type_check_only
+class AdaptResult(TypedDict):
+    energy: float
+    parameters: RealArray
+    operators: list[str]
+    energies: RealArray
+    max_gradients: RealArray
+    converged: bool
+    circuit: Circuit
+
+def adapt_vqe(
+    molecule: MolecularIntegrals,
+    mapping: str = "jordan_wigner",
+    two_qubit_reduction: bool = False,
+    generalized: bool = False,
+    gradient_tolerance: float = 1e-3,
+    max_operators: int = 40,
+) -> AdaptResult: ...
+
+# ---------------------------------------------------------------------------
+# Geometry and excited states
+
+def quantum_fisher_information(
+    circuit: Circuit, theta: ArrayLike, initial_state: Optional[StateVector] = None
+) -> RealArray: ...
+
+@type_check_only
+class NaturalGradientStep(TypedDict):
+    value: float
+    gradient: RealArray
+    direction: RealArray
+
+def natural_gradient(
+    circuit: Circuit,
+    observable: PauliSum,
+    theta: ArrayLike,
+    initial_state: Optional[StateVector] = None,
+    regularization: float = 1e-3,
+) -> NaturalGradientStep: ...
+
+@type_check_only
+class NaturalGradientResult(TypedDict):
+    energy: float
+    parameters: RealArray
+    iterations: int
+    converged: bool
+    history: RealArray
+
+def quantum_natural_gradient(
+    circuit: Circuit,
+    observable: PauliSum,
+    theta: ArrayLike,
+    initial_state: Optional[StateVector] = None,
+    learning_rate: float = 0.1,
+    regularization: float = 1e-3,
+    max_iterations: int = 500,
+    gradient_tolerance: float = 1e-6,
+) -> NaturalGradientResult: ...
+
+@type_check_only
+class ImaginaryTimeResult(TypedDict):
+    times: RealArray
+    energies: RealArray
+    parameters: RealArray
+
+def imaginary_time_evolution(
+    circuit: Circuit,
+    observable: PauliSum,
+    theta: ArrayLike,
+    time: float,
+    steps: int = 100,
+    initial_state: Optional[StateVector] = None,
+    rcond: float = 1e-8,
+) -> ImaginaryTimeResult: ...
+
+@type_check_only
+class ExcitedStates(TypedDict):
+    energies: RealArray
+    parameters: RealArray
+
+def vqd(
+    hamiltonian: PauliSum,
+    ansatz: Circuit,
+    n_states: int,
+    restarts: int = 4,
+    seed: int = 0,
+    betas: Optional[Sequence[float]] = None,
+) -> ExcitedStates: ...
+def ssvqe(
+    hamiltonian: PauliSum,
+    ansatz: Circuit,
+    n_states: int,
+    restarts: int = 4,
+    seed: int = 0,
+    weights: Optional[Sequence[float]] = None,
+) -> ExcitedStates: ...
+
+# ---------------------------------------------------------------------------
+# QUBO, QAOA mixers and amplitude estimation
+
+@type_check_only
+class IsingForm(TypedDict):
+    h: RealArray
+    j: list[Tuple[int, int, float]]
+    offset: float
+
+@final
+class Qubo:
+    def __new__(cls, matrix: ArrayLike, offset: float = 0.0) -> Qubo: ...
+    @staticmethod
+    def from_entries(
+        n: int, entries: Sequence[Tuple[int, int, float]], offset: float = 0.0
+    ) -> Qubo: ...
+    @property
+    def num_variables(self) -> int: ...
+    @property
+    def offset(self) -> float: ...
+    def value(self, x: Union[int, Sequence[int]]) -> float: ...
+    def to_ising(self) -> IsingForm: ...
+    def to_pauli_sum(self) -> PauliSum: ...
+    def brute_force(self) -> Tuple[float, list[int]]: ...
+
+@type_check_only
+class QaoaAnalysis(TypedDict):
+    gammas: RealArray
+    betas: RealArray
+    expectation: float
+    optimum: float
+    worst: float
+    approximation_ratio: float
+    optimal_probability: float
+    feasible_probability: float
+    most_likely: int
+    most_likely_value: float
+    iterations: int
+    evaluations: int
+    converged: bool
+
+@final
+class Qaoa:
+    def __new__(
+        cls,
+        cost: PauliSum,
+        n_qubits: int,
+        p: int,
+        mixer: str = "x",
+        weight: Optional[int] = None,
+        warm_start: Optional[ArrayLike] = None,
+        epsilon: float = 0.25,
+    ) -> Qaoa: ...
+    @property
+    def n_qubits(self) -> int: ...
+    @property
+    def p(self) -> int: ...
+    def circuit(self) -> Circuit: ...
+    def initial_state(self) -> StateVector: ...
+    def expectation_and_gradient(self, params: ArrayLike) -> Tuple[float, RealArray]: ...
+    def analyze(self, params: ArrayLike) -> QaoaAnalysis: ...
+    def optimize(
+        self, restarts: int = 8, seed: int = 0, initial: Optional[ArrayLike] = None
+    ) -> QaoaAnalysis: ...
+
+@final
+class AmplitudeProblem:
+    def __new__(cls, circuit: Circuit, objective: int) -> AmplitudeProblem: ...
+    @staticmethod
+    def bernoulli(p: float) -> AmplitudeProblem: ...
+    def exact(self) -> float: ...
+    def grover_operator(self) -> Circuit: ...
+    def probabilities(self, powers: Sequence[int]) -> list[float]: ...
+
+@type_check_only
+class CanonicalEstimate(TypedDict):
+    estimate: float
+    distribution: list[Tuple[float, float]]
+    oracle_calls: int
+
+@type_check_only
+class AmplitudeEstimate(TypedDict):
+    estimate: float
+    interval: Tuple[float, float]
+    oracle_calls: int
+    shots: int
+    schedule: list[Tuple[int, int, int]]
+
+def canonical_amplitude_estimation(problem: AmplitudeProblem, m: int) -> CanonicalEstimate: ...
+def iterative_amplitude_estimation(
+    problem: AmplitudeProblem,
+    epsilon: float = 0.01,
+    alpha: float = 0.05,
+    shots: int = 100,
+    seed: int = 0,
+) -> AmplitudeEstimate: ...
+def ml_amplitude_estimation(
+    problem: AmplitudeProblem,
+    levels: int = 6,
+    shots: int = 100,
+    confidence: float = 0.95,
+    seed: int = 0,
+) -> AmplitudeEstimate: ...

@@ -31,12 +31,27 @@ use crate::linalg::{RMatrix, eigh_real, inner};
 use crate::quantum::kernels;
 use crate::quantum::{Circuit, Param, PauliSum, StateVector};
 
+/// Largest number of amplitudes held by [`state_derivatives`]
+/// (parameters × 2ⁿ; 2²⁷ amplitudes are 2 GiB).
+pub const MAX_DERIVATIVE_AMPLITUDES: usize = 1 << 27;
+
 /// The final state and `|∂_kψ⟩` for every parameter `k`.
 pub fn state_derivatives(
     circuit: &Circuit,
     theta: &[f64],
     initial: Option<&StateVector>,
 ) -> Result<(StateVector, Vec<Vec<C64>>)> {
+    let n = circuit.n_qubits().min(usize::BITS as usize - 1);
+    if theta.len().saturating_mul(1usize << n) > MAX_DERIVATIVE_AMPLITUDES {
+        return Err(QsoError::invalid(
+            "circuit",
+            format!(
+                "{} parameters on {} qubits need more than {MAX_DERIVATIVE_AMPLITUDES} amplitudes of state derivatives",
+                theta.len(),
+                circuit.n_qubits()
+            ),
+        ));
+    }
     let mut psi = prepare(circuit, &PauliSum::new(), theta, initial)?.into_amplitudes();
     let dim = psi.len();
     let mut derivatives: Vec<Option<Vec<C64>>> = vec![None; theta.len()];

@@ -12,14 +12,17 @@
 //! * long-running calls release the GIL.
 
 mod algorithms;
+mod chemistry;
 mod circuit;
 mod discrete;
 mod estimation;
 mod graph;
 mod mitigation;
 mod noise;
+mod optimization;
 mod photonics;
 mod reduced;
+mod simulation;
 mod state;
 mod walks;
 
@@ -176,5 +179,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     estimation::register(m)?;
     mitigation::register(m)?;
     photonics::register(m)?;
+    chemistry::register(m)?;
+    simulation::register(m)?;
+    optimization::register(m)?;
     Ok(())
 }

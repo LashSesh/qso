@@ -60,6 +60,8 @@ use num_complex::Complex64 as C64;
 
 /// Largest supported product-formula order.
 pub const MAX_ORDER: usize = 10;
+/// Largest number of Pauli rotations in a generated circuit.
+pub const MAX_ROTATIONS: usize = 1 << 24;
 
 /// Non-identity terms of `h` in order.
 fn nontrivial_terms(h: &PauliSum) -> Vec<(f64, PauliString)> {
@@ -151,6 +153,17 @@ pub fn trotter_circuit(
         });
     }
     let terms = nontrivial_terms(h);
+    let stages = if order == 1 {
+        1
+    } else {
+        2 * 5usize.pow((order / 2 - 1) as u32)
+    };
+    if terms.len().saturating_mul(stages).saturating_mul(steps) > MAX_ROTATIONS {
+        return Err(QsoError::invalid(
+            "steps",
+            format!("the circuit would exceed {MAX_ROTATIONS} rotations"),
+        ));
+    }
     let tau = t / steps as f64;
     let one = step_rotations(&terms, tau, order);
     let mut rotations: Vec<(PauliString, f64)> = Vec::with_capacity(one.len() * steps);
@@ -259,8 +272,11 @@ pub fn qdrift_circuit(
     seed: u64,
 ) -> Result<Circuit> {
     check(h, t, 1)?;
-    if samples == 0 {
-        return Err(QsoError::invalid("samples", "need at least one sample"));
+    if samples == 0 || samples > MAX_ROTATIONS {
+        return Err(QsoError::invalid(
+            "samples",
+            format!("need 1 to {MAX_ROTATIONS} samples"),
+        ));
     }
     if h.min_qubits() > n_qubits {
         return Err(QsoError::DimensionMismatch {
@@ -529,5 +545,7 @@ mod tests {
             assert!((suzuki_stages(order).iter().sum::<f64>() - 1.0).abs() < 1e-14);
         }
         assert!(trotter_error_bound(&h, 1e6, 1, 4).unwrap() <= 2.0);
+        assert!(trotter_circuit(&h, 1, 1.0, MAX_ROTATIONS, 2).is_err());
+        assert!(qdrift_circuit(&h, 1, 1.0, MAX_ROTATIONS + 1, 0).is_err());
     }
 }

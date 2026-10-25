@@ -11,3 +11,11 @@ metatron_qso._core.__all__
 # returns NotImplemented, so `2 / x` is not supported and stays out of the stub.
 metatron_qso._core.Parameter.__rtruediv__
 metatron_qso._core.PauliSum.__rtruediv__
+# PyO3 fills the reflected slots of binary operators whose operand is another
+# instance of the class; they return NotImplemented.
+metatron_qso._core.QubitOperator.__radd__
+metatron_qso._core.QubitOperator.__rsub__
+metatron_qso._core.QubitOperator.__rmul__
+metatron_qso._core.FermionOperator.__radd__
+metatron_qso._core.FermionOperator.__rsub__
+metatron_qso._core.FermionOperator.__rmul__
