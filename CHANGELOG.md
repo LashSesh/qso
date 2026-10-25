@@ -4,6 +4,76 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.4.0] — 2026-10-25
+
+Milestone 1.4 of the [roadmap](docs/ROADMAP.md): noise at scale and error
+mitigation. Every new feature is tested against an exact computation,
+mostly density matrices or exact sums (named below). No validated result
+of earlier releases changed.
+
+### Added
+
+- **Device models** (`noise::DeviceModel`, JSON via `from_json` /
+  `to_json`).
+  - Per-qubit T₁/T₂ and readout errors. Unset fields follow
+    `default_qubit`.
+  - Ordered gate rules matched by name, qubits or size; the first match
+    applies. A rule sets the duration, a depolarising error, a relative
+    over-rotation and further channels.
+  - Gates are scheduled as early as possible; qubits relax while they
+    wait.
+  - Results agree with hand-built channel sequences to 1e-14, and a
+    `NoiseModel` compiles to the same channels.
+  - New fuzz target `device`.
+- **Channels:** `Channel::pauli` (labels such as `"ZZ"`), `rotation`
+  (coherent errors), `unitary`, `pauli_probabilities`, `twirled` (Pauli
+  twirl) and `compose`.
+- **Quantum trajectories** (`noise::TrajectorySimulator`,
+  `backend::DeviceBackend`).
+  - Monte-Carlo wave functions for any register a state vector holds,
+    seeded per trajectory and parallel over trajectories.
+  - Waiting-time method: unitary mixtures are sampled up front; stretches
+    without a jump run as one fused, cache-blocked circuit; jumps are
+    found by galloping search and bisection.
+  - One trajectory, compilation included, costs 3.0–3.5 noiseless runs at
+    16–20 qubits; 200 trajectories take 1.2–1.3 times as long as 200 noiseless
+    runs at 16 qubits.
+  - Samples pass χ² tests against density matrices on 3, 6 and 10
+    qubits, also with several jumps per trajectory.
+- **Estimates with errors** (`estimation`).
+  - `Estimate` (standard error, confidence interval).
+  - `estimate()` with uniform, weighted and adaptive (Neyman) shot
+    allocation and optional readout mitigation by exact per-shot weights.
+    95 % intervals cover the exact value in 91–99 % of 300 repetitions.
+  - `ClassicalShadow`: random Pauli snapshots, mean and median of means.
+    The single-snapshot variance equals 3ᵏ − ⟨P⟩².
+- **Error mitigation** (`mitigation`).
+  - `ReadoutCalibration`: tensored or full calibration, quasi-probabilities
+    and the nearest probability distribution. Checked against brute force.
+  - Zero-noise extrapolation (`zne`): global and random folding; linear,
+    Richardson, polynomial and exponential fits with propagated errors.
+    Richardson on scales 1, 3, 5 reduces the error of a depolarised test
+    circuit about 380×.
+  - Probabilistic error cancellation of Pauli noise (`pec`) with its
+    overhead. The exact sum over all corrections equals the noiseless
+    value to 1e-12.
+  - Pauli twirling of cx, cy, cz and swap (`twirl`). The average over all
+    16 frames equals the twirled channel.
+  - On a five-qubit toy device, readout mitigation plus ZNE recovers
+    ⟨Σ Z_i Z_{i+1}⟩ = 4.00 ± 0.01 (raw 3.38), and PEC 4.00 ± 0.01.
+- **CLI:** `qso qasm --device FILE [--trajectories N]`, and
+  `qso estimate` with standard errors, readout mitigation, `--zne` and
+  `--pec`.
+- Example `noise_mitigation` with `examples/devices/toy_device.json`;
+  tutorial 06 and the guide chapter "Estimation and error mitigation".
+- Python: all of the above, with type stubs.
+
+### Changed
+
+- `DensityMatrix::apply_device`, `sample_with_readout`, `scale` and
+  `add_scaled`. Consecutive channels on the same qubits are applied as
+  one superoperator.
+
 ## [1.3.0] — 2026-10-24
 
 Milestone 1.3 of the [roadmap](docs/ROADMAP.md), which combined the two

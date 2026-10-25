@@ -15,9 +15,10 @@
 //! dominant Kraus operator without renormalising; the squared norm is then
 //! the probability that no jump has happened, and a jump happens where it
 //! falls below a random threshold. Stretches without jumps run as one
-//! fused, cache-blocked circuit, and jumps are located by bisection, so a
-//! noisy trajectory costs about one to two noiseless simulations (see
-//! `docs/BENCHMARKS.md`).
+//! fused, cache-blocked circuit, and jumps are located by bisection. One
+//! trajectory, compilation included, costs about three noiseless runs at
+//! 16–20 qubits; many trajectories share one compilation and cost about
+//! 1.2–1.3 noiseless runs each (see `docs/BENCHMARKS.md`).
 //!
 //! Every trajectory has its own random stream derived from the seed, so
 //! results do not depend on the number of threads.

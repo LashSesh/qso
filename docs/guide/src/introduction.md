@@ -2,7 +2,8 @@
 
 QSO is a quantum simulator written in pure Rust, with a Python package and a
 command-line tool. It simulates quantum circuits exactly, as pure states or as
-density matrices with noise, and runs variational and textbook algorithms on
+density matrices or quantum trajectories with device noise, mitigates errors
+and estimates results with error bars, and runs variational and textbook algorithms on
 top of them. It also simulates continuous- and discrete-time quantum walks on
 arbitrary graphs — reduced by symmetry where possible, with state-transfer
 analysis and compilation to circuits — and samples photons in linear
@@ -23,7 +24,8 @@ reports them in full.
 | [Circuits and states](circuits.md) | Gates, simulation, sampling, observables, OpenQASM |
 | [Parameters and gradients](gradients.md) | Symbolic parameters, adjoint and parameter-shift gradients |
 | [Variational algorithms](variational.md) | VQE, QAOA, variational and graph classifiers |
-| [Noise](noise.md) | Channels, noise models, density matrices, shot estimates |
+| [Noise](noise.md) | Channels, noise models, device models, density matrices, quantum trajectories |
+| [Estimation and error mitigation](mitigation.md) | Estimates with error bars, shot allocation, readout mitigation, ZNE, PEC, twirling, classical shadows |
 | [Graphs](graphs.md) | Graph library, specifications, symmetry groups, isomorphism, files |
 | [Quantum walks](walks.md) | Continuous-time walks, spatial search, dephasing |
 | [Symmetry and state transfer](symmetry.md) | Quotients by equitable partitions, perfect state transfer |

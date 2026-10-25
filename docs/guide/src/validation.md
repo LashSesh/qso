@@ -12,7 +12,9 @@ Every algorithm is checked against an independent reference:
 | Closed forms | Grover's sin²((2k+1)θ); QAOA on rings, (2p+1)/(2p+2); the one-layer QAOA formula of Wang et al.; walk limits such as 145/169; T₁/T₂ decay; n! bunching |
 | Published values | 0.6925 and 0.7559 for QAOA on large-girth cubic graphs; the full-CI energy of H₂/STO-3G; automorphism group orders |
 | Dense matrices | every gate, the QFT against the DFT matrix, Lanczos and Krylov against full diagonalisation |
-| A second method | adjoint, parameter-shift and finite-difference gradients; statevector against density matrix |
+| A second method | adjoint, parameter-shift and finite-difference gradients; statevector against density matrix; quantum trajectories against density matrices (χ² tests) |
+| Exact sums | PEC summed over all corrections, Pauli twirls over all 16 frames, the variance 3ᵏ of classical shadows |
+| Statistics | coverage of confidence intervals over repeated runs; unbiased adaptive shot allocation over 2000 seeds |
 | Other simulators | Qiskit Aer, Qulacs, Cirq, PennyLane Lightning and The Walrus |
 
 These checks live in the test suites, which run on every change on Linux
@@ -38,7 +40,7 @@ deviation above rounding level fails the run.
 
 | Check | What it covers |
 |---|---|
-| Fuzzing | Each parser and deserialiser runs under cargo-fuzz for one minute on every pull request and ten minutes every week. The parsers are OpenQASM, Pauli sums and graph specifications; the JSON forms are those of circuits, states, graphs and Pauli sums. Beyond "no crash", the targets check that exported QASM re-imports to an equivalent circuit and that accepted data are well-formed. Every input that ever failed is replayed on each run. |
+| Fuzzing | Each parser and deserialiser runs under cargo-fuzz for one minute on every pull request and ten minutes every week. The parsers are OpenQASM, Pauli sums and graph specifications; the JSON forms are those of circuits, states, graphs, Pauli sums and device models. Beyond "no crash", the targets check that exported QASM re-imports to an equivalent circuit and that accepted data are well-formed. Every input that ever failed is replayed on each run. |
 | Miri | The `unsafe` statevector kernels run under Miri on multi-threaded paths, which checks them for undefined behaviour and data races. |
 | Hostile input | Tests feed oversized, non-finite and inconsistent input to every public entry point and expect an error. |
 

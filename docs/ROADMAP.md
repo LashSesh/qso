@@ -1,8 +1,8 @@
 # QSO Roadmap (1.x)
 
-Status: October 2026. 1.1, 1.2 and 1.3 delivered — 1.3 combined the
-milestones planned as "quantum walks" and "simulation performance". Noise
-at scale (1.4) is next. Milestone numbers are the release numbers; the
+Status: October 2026. 1.1 to 1.4 delivered — 1.3 combined the milestones
+planned as "quantum walks" and "simulation performance", 1.4 brought noise
+at scale and error mitigation. Algorithms and physics (1.5) are next. Milestone numbers are the release numbers; the
 later milestones moved up by one when the two were merged.
 
 QSO 1.0 delivers what it documents: every number in the README is reproduced
@@ -35,7 +35,7 @@ which withdraws the results of version 1.
 |---|---|---|
 | Statevector speed | specialised kernels (1.1); gate fusion and cache blocking (1.3.0): 16-qubit layers 4.7× and 18–24-qubit layers 1.6–2.6× faster than in 1.2; batched evaluation | no explicit SIMD, no single precision; the adjoint backward pass is not blocked; worker threads sleep when idle, so short isolated simulations on virtual machines run cold — see [measurements](#measured-performance-against-established-simulators) |
 | Boson sampling | exact probabilities and exact sampling (1.1) | no partial distinguishability, photon loss or Gaussian boson sampling |
-| Noise | density matrices up to 14 qubits; one noise model for all gates and qubits | no trajectories for larger registers, no per-qubit/per-gate models, no error mitigation |
+| Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | no noise learning (PEC needs the Pauli noise given), no leakage or non-Markovian noise, channels on at most two qubits, no virtual distillation or probabilistic error amplification |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0) | no time-dependent Hamiltonians, no open-system discrete-time walks, no pretty-good-transfer decision (only best fidelity in a window) |
 | Physics and chemistry | TFIM, XXZ, MaxCut, H₂ only | no fermion-to-qubit mappings, no product-formula (Trotter) circuits, no excited states |
 | Interoperability | OpenQASM 2 without `gate` definitions; multi-controlled gates exported by exact decomposition (1.3.0); edge lists, GraphML and duck-typed NetworkX import for graphs | no OpenQASM 3, no browser build; no bridges to other frameworks, by decision (see section 2) |
@@ -192,21 +192,35 @@ controls, including blocks of 2–32 amplitudes (also under Miri); batched
 results equal single calls exactly; QAOA phase tables equal direct phases
 to 1e-12. Measurements: [BENCHMARKS.md](BENCHMARKS.md).
 
-### 1.4 — Noise at scale and error mitigation (L, next)
+### 1.4 — Noise at scale and error mitigation (delivered)
 
-| Deliverable | Detail |
-|---|---|
-| Quantum trajectories | Monte-Carlo wavefunction simulation for any register the statevector supports; one seeded stream per trajectory, parallel over trajectories |
-| Device-like noise models | per-qubit and per-gate channels, gate durations with T₁/T₂ idling, coherent over-rotations, correlated two-qubit Pauli noise; JSON device description |
-| Error mitigation | readout calibration (tensored and full), zero-noise extrapolation (unitary folding; Richardson and exponential fits), probabilistic error cancellation for Pauli noise with reported sampling overhead, Pauli twirling |
-| Estimation | classical shadows; variance-optimal shot allocation across measurement groups; confidence intervals in all estimates |
+| Deliverable | Delivered | Not done, and why |
+|---|---|---|
+| Quantum trajectories | `TrajectorySimulator` and a trajectory device backend for any register the state vector holds, one seeded stream per trajectory, parallel over trajectories. Waiting-time method: unitary mixtures sampled up front, jumps found by galloping search and bisection, stretches without jumps run as fused, cache-blocked circuits — 200 trajectories take 1.2–1.3 times as long as 200 noiseless runs at 16 qubits | — |
+| Device-like noise models | `DeviceModel` with per-qubit T₁/T₂ and readout errors, ordered gate rules (name, qubits, size) with durations, depolarising errors, over-rotations and further channels; ASAP scheduling with relaxation of waiting qubits; Pauli channels (correlated two-qubit noise), coherent rotations; JSON descriptions with a fuzz target | channels on three or more qubits: no device data needs them yet |
+| Error mitigation | readout calibration (tensored and full) with exact per-shot mitigated weights; zero-noise extrapolation (global and random folding; linear, Richardson, polynomial and exponential fits with propagated errors); probabilistic error cancellation of Pauli noise with its overhead; Pauli twirling of cx, cy, cz and swap | learning the Pauli noise of a device (cycle benchmarking): QSO simulates devices whose noise it is given |
+| Estimation | `Estimate` (standard error, confidence interval) for every stochastic result; uniform, weighted and adaptive (Neyman) shot allocation; classical shadows with median of means | — |
 
-Validation: trajectories match density-matrix results within statistical
-error (χ² test) up to 10 qubits; mitigated estimates converge to the
-noiseless value within their error bars; PEC is unbiased for known Pauli
-channels; shadow estimates satisfy their variance bounds.
+Validation:
 
-### 1.5 — Algorithms and physics (L)
+* trajectory samples pass χ² tests against density matrices on 3, 6 and
+  10 qubits, also with several jumps per trajectory;
+* readout mitigation plus ZNE recovers a GHZ correlator within its error
+  bars (4.00 ± 0.01 against a raw 3.38);
+* PEC equals the noiseless value to 10⁻¹² when summed over all
+  corrections, and sampled PEC lies within its error bars;
+* the Pauli twirl of a channel equals the exact average over all 16
+  frames;
+* the single-snapshot variance of shadows is 3ᵏ − ⟨P⟩²;
+* 95 % intervals cover the exact value in 91–99 % of repeated estimates;
+* adaptive allocation stays unbiased for nearly deterministic groups.
+
+An independent review of the new code found two parser-reachable panics,
+a biased adaptive allocation (pilot and main shots were pooled) and
+quadratic trajectory cost in the number of jumps. All were fixed before
+the release.
+
+### 1.5 — Algorithms and physics (L, next)
 
 | Deliverable | Detail |
 |---|---|
@@ -251,9 +265,12 @@ core is close to memory bandwidth.
 2. **1.3: walks and performance together.** Walks are QSO's distinctive
    contribution and build on the refinement, Lanczos and walk code; the
    performance work was independent and finished at the same time.
-3. **1.4 (noise) and 1.5 (algorithms)** enter crowded fields and can swap
-   places depending on whether noise or chemistry users show up first.
-4. **1.6 (interoperability)** without framework bridges.
+3. **1.4: noise before algorithms.** Device models, trajectories and
+   mitigation reuse the kernels and execution plans directly and make
+   every later algorithm testable under realistic noise.
+4. **1.5 (algorithms and physics)** next: Hamiltonian simulation and
+   fermions on top of the noise and estimation tools.
+5. **1.6 (interoperability)** without framework bridges.
 
 ## 6. Measures of success
 
@@ -271,8 +288,8 @@ Taken (October 2026):
 
 * Walks and performance first, shipped together as 1.3.
 * No Qiskit, PennyLane or Cirq bridges.
+* Noise and mitigation (1.4) before algorithms and physics (1.5).
 
 Open:
 
 * Whether the browser playground is worth its maintenance cost.
-* Whether noise (1.4) or algorithms and physics (1.5) come first.

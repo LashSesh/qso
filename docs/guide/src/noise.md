@@ -164,8 +164,10 @@ density-matrix result with a `1/√N` statistical error.
 
 QSO samples unitary mixtures (Pauli, depolarising, dephasing and coherent
 errors) up front. Damping is handled by the waiting-time method: runs of
-gates without a jump execute as one fused, cache-blocked circuit. A noisy
-trajectory therefore costs one to two noiseless simulations (see
+gates without a jump execute as one fused, cache-blocked circuit. One
+trajectory, compilation included, costs about three noiseless runs at
+16–20 qubits; 200 trajectories share one compilation and take 1.2–1.3 times
+as long as 200 noiseless runs (see
 [benchmarks](https://github.com/LashSesh/qso/blob/main/docs/BENCHMARKS.md)).
 Every trajectory has its own random stream, so results do not depend on the
 number of threads.

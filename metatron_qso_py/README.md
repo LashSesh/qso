@@ -136,6 +136,29 @@ energy = q.estimate_expectation(bell, q.PauliSum("Z0 Z1"), shots=10_000,
                                 noise=q.NoiseModel.depolarizing(0.01, 0.02))
 ```
 
+Device models, trajectories and error mitigation (readout mitigation plus
+zero-noise extrapolation):
+
+```python
+import metatron_qso as q
+
+device = (q.DeviceModel("toy")
+          .with_default_qubit(t1=100.0, t2=80.0, readout=(0.02, 0.04))
+          .with_rule(gate="cx", duration=0.3, depolarizing=0.01)
+          .with_rule(duration=0.035, depolarizing=0.001))
+ghz = q.Circuit(3).h(0).cx(0, 1).cx(1, 2)
+h = q.PauliSum("Z0 Z1 + Z1 Z2")                                  # noiseless value 2
+cal = q.ReadoutCalibration.tensored(3, 100_000, seed=1, device=device)
+
+def run(circuit):
+    return q.estimate(circuit, h, 100_000, device=device, readout_calibration=cal, seed=2)[0]
+
+raw, _ = q.estimate(ghz, h, 100_000, device=device, seed=2)
+mitigated = q.zne(ghz, [1.0, 3.0, 5.0], run)["estimate"]
+print(f"{raw.value:.3f} {mitigated.value:.3f} ± {mitigated.std_error:.3f}")  # 1.725 2.001 ± 0.007
+print(q.TrajectorySimulator(device, 2000, seed=3).expectation(ghz, h).value)  # 1.969
+```
+
 More complete scripts are in
 [`examples/`](https://github.com/LashSesh/qso/tree/main/metatron_qso_py/examples);
 the [user guide](https://lashsesh.github.io/qso/) has tutorials and the full
@@ -152,7 +175,9 @@ API reference.
 | Variational | `real_amplitudes`, `efficient_su2`, `hardware_efficient`, `qaoa_maxcut_circuit`, `expectation_and_gradient`, `expectation_batch`, `expectation_and_gradient_batch`, `run_vqe`, `MaxCutQaoa`, `optimize_qaoa_layerwise`, `VariationalClassifier`, `GraphClassifier` |
 | Textbook | `grover_search`, `estimate_phase` |
 | Walks | `ContinuousWalk`, `SpatialSearch` (`optimize` tunes rate and time jointly), `DephasingWalk`, `classical_walk_probabilities`, `classical_hitting_times`; `Quotient`, `QuotientWalk`, `QuotientSearch`, `StateTransfer`; `CoinedWalk`, `LineWalk`, `SzegedyWalk`; `circulant_walk_circuit`, `cayley_walk_circuit`, `trotter_walk_circuit`, `diagonal_unitary_circuit` |
-| Noise | `Channel`, `NoiseModel`, `DensityMatrix`, `estimate_expectation` |
+| Noise | `Channel`, `NoiseModel`, `DeviceModel`, `DensityMatrix`, `TrajectorySimulator`, `estimate_expectation` |
+| Estimation | `Estimate`, `estimate` (uniform, weighted, adaptive shot allocation), `ClassicalShadow` |
+| Mitigation | `ReadoutCalibration`, `nearest_probability_distribution`, `fold`, `extrapolate`, `zne`, `pec_expectation`, `twirl`, `twirled_average` |
 | Boson sampling | `BosonSampler`, `permanent`, `haar_unitary`, `beam_splitter` |
 
 `Graph.from_spec` accepts the graph specifications of the `qso` command-line
