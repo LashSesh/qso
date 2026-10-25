@@ -289,6 +289,17 @@ Validation:
   `wasm32-wasip1` under Node.js in CI, and the npm package's tests check
   the OpenQASM examples and graph results.
 
+An independent review confirmed the phase semantics against the
+specification's `stdgates.inc` and found that 3000 random programs
+survive both exports. It found inputs that crashed or hung the reader (a
+50,000-term sum overflowed the stack; doubling definitions of `id` and
+large `ctrl`/`pow` products escaped the operation budget), constructs that
+were misread instead of rejected (`bool(c) == true`, slices with negative
+ends, parameters named `euler`, integers above 2⁵³, odd version numbers),
+register names that made exports unreadable, and records above 32 bits
+truncated in WebAssembly. All were fixed with regression tests before the
+release.
+
 ### Research track (decide after 1.6)
 
 Stabilizer simulation (Clifford tableaux for thousands of qubits, as the base
