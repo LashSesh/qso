@@ -14,7 +14,18 @@
 //! assert!(lo < 1.0 && 1.0 < hi);
 //! ```
 
+pub mod shadows;
+
+pub use shadows::ClassicalShadow;
+
 use serde::{Deserialize, Serialize};
+
+use crate::backend::{Backend, measurement_groups};
+use crate::error::{QsoError, Result};
+use crate::mitigation::ReadoutCalibration;
+use crate::mitigation::readout::ParityWeights;
+use crate::quantum::{Circuit, Counts, Pauli, PauliSum};
+use crate::rng::Rng;
 
 /// A value with its standard error.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -92,6 +103,305 @@ impl Estimate {
     }
 }
 
+/// How [`estimate`] spreads its shots over the measurement groups.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum ShotAllocation {
+    /// The same number of shots for every group.
+    Uniform,
+    /// Shots proportional to `Σ|c|` of a group's terms, a bound on the
+    /// standard deviation of one shot.
+    Weighted,
+    /// A fraction `pilot` of the shots spread uniformly; the rest so that
+    /// shots become proportional to the measured standard deviations
+    /// (Neyman allocation, which minimises the variance of the total).
+    Adaptive { pilot: f64 },
+}
+
+/// Options of [`estimate`].
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct EstimatorOptions {
+    /// Total number of shots over all measurement groups.
+    pub shots: usize,
+    pub allocation: ShotAllocation,
+    /// Readout calibration for mitigated parities (`None`: raw counts).
+    pub readout: Option<ReadoutCalibration>,
+    pub seed: u64,
+}
+
+impl EstimatorOptions {
+    /// `shots` shots in total, weighted allocation, no mitigation, seed 0.
+    pub fn new(shots: usize) -> Self {
+        Self {
+            shots,
+            allocation: ShotAllocation::Weighted,
+            readout: None,
+            seed: 0,
+        }
+    }
+
+    pub fn with_allocation(mut self, allocation: ShotAllocation) -> Self {
+        self.allocation = allocation;
+        self
+    }
+
+    /// Mitigate readout errors with `calibration`.
+    pub fn with_readout_mitigation(mut self, calibration: ReadoutCalibration) -> Self {
+        self.readout = Some(calibration);
+        self
+    }
+
+    pub fn with_seed(mut self, seed: u64) -> Self {
+        self.seed = seed;
+        self
+    }
+}
+
+/// The estimate of one measurement group.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GroupEstimate {
+    /// Measurement basis: Pauli per measured qubit.
+    pub basis: Vec<(usize, Pauli)>,
+    /// Number of terms measured in this basis.
+    pub terms: usize,
+    pub shots: usize,
+    /// Sum of the group's terms (coefficients included).
+    pub estimate: Estimate,
+}
+
+/// An observable's estimate and its parts.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ObservableEstimate {
+    /// Constant term plus all groups; standard errors add in quadrature.
+    pub estimate: Estimate,
+    pub groups: Vec<GroupEstimate>,
+}
+
+/// Split `total` into parts proportional to `weights` (largest
+/// remainders), giving every part at least `min`.
+fn allocate(total: usize, weights: &[f64], min: usize) -> Vec<usize> {
+    let g = weights.len();
+    let base = min * g;
+    let rest = total.saturating_sub(base);
+    let sum: f64 = weights.iter().sum();
+    let shares: Vec<f64> = if sum > 0.0 && sum.is_finite() {
+        weights.iter().map(|w| rest as f64 * w / sum).collect()
+    } else {
+        vec![rest as f64 / g as f64; g]
+    };
+    let mut parts: Vec<usize> = shares.iter().map(|s| s.floor() as usize).collect();
+    let mut left = rest - parts.iter().sum::<usize>();
+    let mut order: Vec<usize> = (0..g).collect();
+    order.sort_by(|&a, &b| {
+        (shares[b] - shares[b].floor()).total_cmp(&(shares[a] - shares[a].floor()))
+    });
+    for &i in order.iter().cycle() {
+        if left == 0 {
+            break;
+        }
+        parts[i] += 1;
+        left -= 1;
+    }
+    parts.iter().map(|p| p + min).collect()
+}
+
+/// Per-shot value of a group: `Σ_t w_t(b)`.
+struct GroupWeights {
+    terms: Vec<(f64, usize, Option<ParityWeights>)>,
+}
+
+impl GroupWeights {
+    fn value(&self, b: usize) -> f64 {
+        self.terms
+            .iter()
+            .map(|(c, mask, w)| match w {
+                Some(w) => c * w.weight(b),
+                None if (b & mask).count_ones().is_multiple_of(2) => *c,
+                None => -c,
+            })
+            .sum()
+    }
+
+    /// Mean and standard error over the shots in `counts`.
+    fn estimate(&self, counts: &Counts) -> Estimate {
+        let n: usize = counts.values().sum();
+        let values: Vec<(f64, f64)> = counts
+            .iter()
+            .map(|(&b, &k)| (self.value(b), k as f64))
+            .collect();
+        let mean = values.iter().map(|(v, k)| v * k).sum::<f64>() / n as f64;
+        let std_error = if n > 1 {
+            let var = values
+                .iter()
+                .map(|(v, k)| k * (v - mean).powi(2))
+                .sum::<f64>()
+                / (n - 1) as f64;
+            (var / n as f64).sqrt()
+        } else {
+            0.0
+        };
+        Estimate {
+            value: mean,
+            std_error,
+            samples: n,
+        }
+    }
+}
+
+/// Estimate `⟨H⟩` for `circuit(theta)` on `backend`: terms are grouped
+/// into qubit-wise commuting sets, each set is measured in its rotated
+/// basis with its share of the shots, and every estimate carries its
+/// standard error (from the spread of the per-shot values). With a readout
+/// calibration the parities are mitigated, and the standard error includes
+/// the cost of mitigation.
+pub fn estimate(
+    backend: &dyn Backend,
+    circuit: &Circuit,
+    theta: &[f64],
+    observable: &PauliSum,
+    options: &EstimatorOptions,
+) -> Result<ObservableEstimate> {
+    let n = circuit.n_qubits();
+    if observable.min_qubits() > n {
+        return Err(QsoError::QubitOutOfRange {
+            qubit: observable.min_qubits() - 1,
+            n_qubits: n,
+        });
+    }
+    if let Some(cal) = &options.readout
+        && cal.n_qubits() != n
+    {
+        return Err(QsoError::DimensionMismatch {
+            expected: n,
+            actual: cal.n_qubits(),
+        });
+    }
+    let groups = measurement_groups(observable);
+    let g = groups.len();
+    let constant = Estimate::exact(observable.constant());
+    if g == 0 {
+        return Ok(ObservableEstimate {
+            estimate: constant,
+            groups: Vec::new(),
+        });
+    }
+    if options.shots < g {
+        return Err(QsoError::invalid(
+            "shots",
+            format!("need at least one shot per measurement group ({g})"),
+        ));
+    }
+    let mut rotated = Vec::with_capacity(g);
+    let mut weights = Vec::with_capacity(g);
+    for (basis, members) in &groups {
+        let mut c = circuit.clone();
+        for (&q, &p) in basis {
+            match p {
+                Pauli::X => {
+                    c.h(q);
+                }
+                Pauli::Y => {
+                    c.sdg(q).h(q);
+                }
+                _ => {}
+            }
+        }
+        rotated.push(c);
+        weights.push(GroupWeights {
+            terms: members
+                .iter()
+                .map(|&(coef, s)| {
+                    let mask = (s.x_mask() | s.z_mask()) as usize;
+                    let w = options.readout.as_ref().map(|cal| cal.parity_weights(mask));
+                    (coef, mask, w)
+                })
+                .collect(),
+        });
+    }
+    let base = Rng::seed_from_u64(options.seed);
+    let mut counts: Vec<Counts> = vec![Counts::new(); g];
+    let run = |k: usize, shots: &[usize], counts: &mut Vec<Counts>| -> Result<()> {
+        for (j, &s) in shots.iter().enumerate() {
+            if s == 0 {
+                continue;
+            }
+            let seed = base.fork((k * g + j) as u64).next_u64();
+            for (b, m) in backend.run(&rotated[j], theta, s, seed)? {
+                *counts[j].entry(b).or_insert(0) += m;
+            }
+        }
+        Ok(())
+    };
+    let bound = |members: &Vec<(f64, crate::quantum::PauliString)>| {
+        members.iter().map(|(c, _)| c.abs()).sum::<f64>()
+    };
+    match options.allocation {
+        ShotAllocation::Uniform => run(0, &allocate(options.shots, &vec![1.0; g], 1), &mut counts)?,
+        ShotAllocation::Weighted => {
+            let w: Vec<f64> = groups.iter().map(|(_, m)| bound(m)).collect();
+            run(0, &allocate(options.shots, &w, 1), &mut counts)?;
+        }
+        ShotAllocation::Adaptive { pilot } => {
+            if !(pilot > 0.0 && pilot < 1.0) {
+                return Err(QsoError::invalid(
+                    "pilot",
+                    "pilot fraction must lie in (0, 1)",
+                ));
+            }
+            let min = if options.shots >= 2 * g { 2 } else { 1 };
+            let pilot_shots =
+                ((pilot * options.shots as f64).round() as usize).clamp(min * g, options.shots);
+            run(0, &allocate(pilot_shots, &vec![1.0; g], min), &mut counts)?;
+            let sigma: Vec<f64> = (0..g)
+                .map(|j| {
+                    let e = weights[j].estimate(&counts[j]);
+                    e.std_error * (e.samples as f64).sqrt()
+                })
+                .collect();
+            let rest = options.shots - pilot_shots;
+            if rest > 0 {
+                let total_sigma: f64 = sigma.iter().sum();
+                // Shots each group lacks for the Neyman proportions.
+                let deficit: Vec<f64> = (0..g)
+                    .map(|j| {
+                        let target = if total_sigma > 0.0 {
+                            options.shots as f64 * sigma[j] / total_sigma
+                        } else {
+                            options.shots as f64 / g as f64
+                        };
+                        let have: usize = counts[j].values().sum();
+                        (target - have as f64).max(0.0)
+                    })
+                    .collect();
+                let w = if deficit.iter().sum::<f64>() > 0.0 {
+                    deficit
+                } else {
+                    sigma
+                };
+                run(1, &allocate(rest, &w, 0), &mut counts)?;
+            }
+        }
+    }
+    let parts: Vec<GroupEstimate> = groups
+        .iter()
+        .zip(&weights)
+        .zip(&counts)
+        .map(|(((basis, members), w), c)| GroupEstimate {
+            basis: basis.iter().map(|(&q, &p)| (q, p)).collect(),
+            terms: members.len(),
+            shots: c.values().sum(),
+            estimate: w.estimate(c),
+        })
+        .collect();
+    let mut all: Vec<Estimate> = parts.iter().map(|p| p.estimate).collect();
+    all.push(constant);
+    Ok(ObservableEstimate {
+        estimate: Estimate::sum(&all),
+        groups: parts,
+    })
+}
+
 /// Quantile function of the standard normal distribution (Acklam's
 /// rational approximation, relative error below 1.2e-9).
 ///
@@ -155,6 +465,149 @@ mod tests {
         assert!((normal_quantile(0.5)).abs() < 1e-12);
         assert!((normal_quantile(0.001) + 3.090_232_306_167_813_5).abs() < 1e-8);
         assert!((normal_quantile(0.999_99) - 4.264_890_793_922_602).abs() < 1e-7);
+    }
+
+    use crate::algorithms::models;
+    use crate::backend::{DeviceBackend, StatevectorBackend};
+    use crate::noise::{DeviceModel, QubitProperties};
+    use crate::quantum::StateVector;
+
+    #[test]
+    fn allocation_rounds_to_the_total() {
+        assert_eq!(allocate(10, &[1.0, 1.0, 1.0], 1), vec![4, 3, 3]);
+        assert_eq!(allocate(10, &[0.0, 1.0], 1), vec![1, 9]);
+        assert_eq!(allocate(7, &[0.0, 0.0], 0).iter().sum::<usize>(), 7);
+        let parts = allocate(1000, &[5.0, 0.2, 1.3], 2);
+        assert_eq!(parts.iter().sum::<usize>(), 1000);
+        assert!(parts[0] > parts[2] && parts[2] > parts[1]);
+    }
+
+    #[test]
+    fn confidence_intervals_cover_the_exact_value() {
+        let h2 = models::h2_sto3g();
+        let mut c = Circuit::new(2);
+        c.ry(0, 0.4).ry(1, -1.1).cx(0, 1).ry(1, 0.3);
+        let exact = h2
+            .hamiltonian
+            .expectation(&StateVector::from_circuit(&c, &[]).unwrap())
+            .unwrap();
+        let repeats = 300;
+        let (mut covered, mut values, mut errors) = (0, Vec::new(), Vec::new());
+        for seed in 0..repeats {
+            let opts = EstimatorOptions::new(2000)
+                .with_allocation(ShotAllocation::Adaptive { pilot: 0.2 })
+                .with_seed(seed);
+            let e = estimate(&StatevectorBackend, &c, &[], &h2.hamiltonian, &opts)
+                .unwrap()
+                .estimate;
+            let (lo, hi) = e.confidence_interval(0.95);
+            covered += usize::from(lo <= exact && exact <= hi);
+            values.push(e.value);
+            errors.push(e.std_error);
+            assert_eq!(e.samples, 2000);
+        }
+        let coverage = covered as f64 / repeats as f64;
+        assert!((0.91..=0.99).contains(&coverage), "coverage {coverage}");
+        // Reported standard errors match the spread of the estimates.
+        let spread = Estimate::from_samples(&values).std_error * (repeats as f64).sqrt();
+        let reported = errors.iter().sum::<f64>() / repeats as f64;
+        assert!(
+            (spread / reported - 1.0).abs() < 0.15,
+            "{spread} vs {reported}"
+        );
+    }
+
+    #[test]
+    fn neyman_allocation_reduces_the_error() {
+        // Four groups; on |++⟩ only 5 Z0 Z1 fluctuates (σ = 5), the others
+        // hardly (σ ≤ 0.1). Uniform allocation wastes three quarters of the
+        // shots: its error is √(4·25)/5.2 ≈ 1.9 times the Neyman error.
+        let h: PauliSum = "5 Z0 Z1 + 0.1 X0 X1 + 0.1 Y0 Y1 + 0.1 X0 Y1"
+            .parse()
+            .unwrap();
+        assert_eq!(measurement_groups(&h).len(), 4);
+        let mut c = Circuit::new(2);
+        c.h(0).h(1);
+        let mean_error = |allocation| {
+            (0..20)
+                .map(|seed| {
+                    let opts = EstimatorOptions::new(4000)
+                        .with_allocation(allocation)
+                        .with_seed(seed);
+                    estimate(&StatevectorBackend, &c, &[], &h, &opts)
+                        .unwrap()
+                        .estimate
+                        .std_error
+                })
+                .sum::<f64>()
+                / 20.0
+        };
+        let uniform = mean_error(ShotAllocation::Uniform);
+        let weighted = mean_error(ShotAllocation::Weighted);
+        let adaptive = mean_error(ShotAllocation::Adaptive { pilot: 0.1 });
+        assert!(uniform > 1.6 * adaptive, "{uniform} vs {adaptive}");
+        assert!(uniform > 1.6 * weighted, "{uniform} vs {weighted}");
+    }
+
+    #[test]
+    fn readout_mitigated_estimates_are_unbiased() {
+        let errors = [(0.04, 0.09), (0.07, 0.03)];
+        let mut device = DeviceModel::new("readout");
+        for (q, &(a, b)) in errors.iter().enumerate() {
+            device = device.with_qubit(q, QubitProperties::new().with_readout(a, b));
+        }
+        let backend = DeviceBackend::density_matrix(device).unwrap();
+        let mut c = Circuit::new(2);
+        c.ry(0, 0.5).cx(0, 1).rx(1, 0.3);
+        let h: PauliSum = "Z0 Z1 + 0.5 Z0 - 0.7 X1 + 0.2".parse().unwrap();
+        let exact = h
+            .expectation(&StateVector::from_circuit(&c, &[]).unwrap())
+            .unwrap();
+        let raw = estimate(
+            &backend,
+            &c,
+            &[],
+            &h,
+            &EstimatorOptions::new(400_000).with_seed(1),
+        )
+        .unwrap()
+        .estimate;
+        assert!((raw.value - exact).abs() > 10.0 * raw.std_error);
+        let cal = ReadoutCalibration::tensored(&backend, 2, 200_000, 9).unwrap();
+        let opts = EstimatorOptions::new(400_000)
+            .with_seed(1)
+            .with_readout_mitigation(cal);
+        let mitigated = estimate(&backend, &c, &[], &h, &opts).unwrap().estimate;
+        // The calibration's own error adds a little bias.
+        assert!(
+            (mitigated.value - exact).abs() < 4.0 * mitigated.std_error + 0.005,
+            "{} vs {exact}",
+            mitigated.value
+        );
+        assert!(mitigated.std_error > raw.std_error);
+    }
+
+    #[test]
+    fn estimation_errors() {
+        let h: PauliSum = "Z0 + X0 + 1.5".parse().unwrap();
+        let c = Circuit::new(2);
+        assert!(estimate(&StatevectorBackend, &c, &[], &h, &EstimatorOptions::new(1)).is_err());
+        let constant: PauliSum = "2.5".parse().unwrap();
+        let e = estimate(
+            &StatevectorBackend,
+            &c,
+            &[],
+            &constant,
+            &EstimatorOptions::new(0),
+        )
+        .unwrap();
+        assert_eq!(e.estimate, Estimate::exact(2.5));
+        let bad =
+            EstimatorOptions::new(100).with_allocation(ShotAllocation::Adaptive { pilot: 1.5 });
+        assert!(estimate(&StatevectorBackend, &c, &[], &h, &bad).is_err());
+        let cal = ReadoutCalibration::from_errors(&[(0.1, 0.1)]).unwrap();
+        let wrong = EstimatorOptions::new(100).with_readout_mitigation(cal);
+        assert!(estimate(&StatevectorBackend, &c, &[], &h, &wrong).is_err());
     }
 
     #[test]
