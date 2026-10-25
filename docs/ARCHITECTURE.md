@@ -7,7 +7,11 @@ the rustdoc (`cargo doc -p metatron-qso-rs --open`).
 
 ```
             ┌─────────────────────── qso CLI ─── Python (PyO3) ─┐
-algorithms  │ VQE · QAOA · Grover · QFT/QPE · classifier · models│
+chemistry   │ fermion operators · mappings · FCIDUMP · full CI · │
+            │ UCCSD / k-UpCCGSD · ADAPT-VQE                      │
+algorithms  │ VQE · QAOA (+ mixers, QUBO) · Grover · QFT/QPE ·   │
+            │ excited states · geometry · time evolution ·       │
+            │ amplitude estimation · classifier · models         │
             │ gradients (adjoint / parameter shift / FD)         │
 optimize    │ L-BFGS · Adam · GD · Nelder–Mead · SPSA            │
 walks       │ CTQW · quotients · transfer · coined/Szegedy ·     │
@@ -161,6 +165,42 @@ Each mitigation method returns its estimate with a propagated error:
   quasi-probability inverse of every Pauli channel in the compiled
   program, and evaluates each sample with a density matrix or one
   trajectory.
+
+## Hamiltonian simulation and chemistry (`algorithms/time_evolution.rs`, `chemistry/`)
+
+Every exponential of a Pauli string becomes `Circuit::pauli_rotation`: a
+basis change (H for X, H·S† for Y), a CNOT ladder onto the last qubit, one
+`rz` and the reverse. The angle may be a symbolic parameter, so UCC
+generators, QAOA cost layers and Trotter steps differentiate with the
+adjoint method like any other gate. Product formulas list the rotations of
+one step, merge adjacent equal strings (also across steps) and repeat.
+The error bounds are computed in the Pauli algebra with `QubitOperator`
+(a `BTreeMap` from string to complex coefficient, deterministic in order):
+nested commutators of suffix sums, bounded by the coefficient one-norm.
+
+The three fermion mappings are one algorithm. An encoding is a lower
+unitriangular binary matrix `A` with `b = A n`; `a_j† = X_F Z_P (1 + Z_N)/2`
+where `F` is column `j` of `A`, `P` encodes `n_0 ⊕ … ⊕ n_{j−1}` and `N`
+encodes `n_j`, both read off rows of `A⁻¹` (forward substitution over
+GF(2)). Jordan–Wigner, parity and Bravyi–Kitaev differ only in `A`. Since
+`A` is a CNOT circuit, the mappings send Pauli strings to Pauli strings,
+and all of them give the same number of terms.
+
+Full CI does not use the full register: it builds the Hamiltonian's matrix
+in the span of the encoded determinants by applying every Pauli term to
+each basis state and summing the images (single terms leave the sector,
+their sum does not). Up to 4096 determinants the matrix is diagonalised
+densely, beyond that the ground state comes from Lanczos.
+
+## State geometry (`algorithms/geometry.rs`)
+
+`state_derivatives` runs the circuit once and carries one vector per
+parameter: at each parametrised gate it adds `scale · (dU/dφ)|ψ⟩` to that
+parameter's vector, and every later gate is applied to all vectors. This
+costs parameters × gates gate applications and parameters × 2ⁿ memory
+(capped at 2²⁷ amplitudes); from the vectors come the quantum Fisher
+information, the natural gradient and McLachlan's imaginary-time flow.
+VQD reuses the adjoint method with the observable `H + Σ β_j |ψ_j⟩⟨ψ_j|`.
 
 ## Determinism
 

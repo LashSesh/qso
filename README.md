@@ -17,7 +17,11 @@ them. It models noisy devices (relaxation, gate and readout errors) and
 simulates them with quantum trajectories beyond the reach of density
 matrices, and it mitigates their errors: readout mitigation, zero-noise
 extrapolation, probabilistic error cancellation and Pauli twirling, with a
-standard error on every estimate. It also simulates continuous- and discrete-time quantum walks on
+standard error on every estimate. For chemistry and physics it maps
+molecules from FCIDUMP files to qubits, solves them with UCCSD and
+ADAPT-VQE against full CI, finds excited states, builds Trotter–Suzuki
+circuits with rigorous error bounds, and estimates amplitudes with
+Heisenberg-limited scaling. It also simulates continuous- and discrete-time quantum walks on
 arbitrary graphs, reduces them by symmetry to exact low-dimensional problems
 where the graph allows it (a walk on the 2³⁰-node hypercube in 31
 dimensions), decides perfect state transfer, and compiles walks to circuits.
@@ -64,7 +68,11 @@ or by the benchmark report you can run yourself.
 | **Mitigation and estimation** | Estimates with standard errors and confidence intervals; variance-optimal (Neyman) shot allocation over measurement groups; readout calibration (tensored and full) and mitigation; zero-noise extrapolation (global and random folding; linear, Richardson, polynomial and exponential fits); probabilistic error cancellation of Pauli noise with its sampling overhead; Pauli twirling; classical shadows |
 | **Gradients** | Adjoint differentiation (all partial derivatives for about three circuit runs), parameter-shift rules (2-term, and 4-term for controlled rotations), finite differences; batched evaluation of many parameter vectors in parallel |
 | **Algorithms** | VQE with seeded parallel restarts; QAOA for weighted MaxCut (fast diagonal simulation, exact optimum by enumeration, INTERP layer-wise initialisation); Grover search with any number of marked items; QFT; phase estimation; variational classifier with data re-uploading; graph classifier with trainable QAOA-type layers |
-| **Models** | Transverse-field Ising, XXZ Heisenberg, MaxCut cost operator, H₂ / STO-3G (2 qubits, with full-CI reference) |
+| **Excited states and geometry** | VQD and SSVQE; exact state derivatives, quantum Fisher information, quantum natural gradient; variational imaginary-time evolution |
+| **Hamiltonian simulation** | Pauli rotations for any string; Trotter–Suzuki circuits of order 1, 2, 4, 6, … with rigorous error bounds (commutator bounds for orders 1 and 2); qDRIFT with its error bound |
+| **Electronic structure** | Fermionic operators with normal ordering; Jordan–Wigner, parity (with two-qubit reduction) and Bravyi–Kitaev mappings; molecular integrals from FCIDUMP files (H₂, LiH, BeH₂ bundled with PySCF reference energies); Hartree–Fock states; full CI; UCCSD, k-UpCCGSD and ADAPT-VQE |
+| **Optimisation and estimation** | QUBO and Ising problems with exact enumeration; QAOA for any diagonal cost with X, XY (Hamming-weight conserving) and warm-start mixers; canonical, iterative and maximum-likelihood amplitude estimation |
+| **Models** | Transverse-field Ising, XXZ Heisenberg, MaxCut cost operator, H₂ / STO-3G (2 qubits, with full-CI reference), any molecule given as an FCIDUMP file |
 | **Optimisers** | L-BFGS with strong-Wolfe line search, Adam, gradient descent with momentum, Nelder–Mead, SPSA |
 | **Graphs** | Weighted graphs; complete, cycle, path, star, bipartite, hypercube, grid/torus, Petersen, Heawood, Johnson, Kneser, Hamming, rook's, Paley, Shrikhande, circulant, Cayley (Z₂ⁿ) and random graphs; the five Platonic solids; the Metatron's Cube / Fruit-of-Life family; Cartesian products; **exact automorphism groups, canonical labelling and isomorphism**; edge-list and GraphML files, NetworkX import |
 | **Quantum walks** | Continuous-time walks on any graph — exact on up to 2048 nodes, Krylov propagation and cyclic subspaces beyond — with limiting and time-averaged distributions and mixing times. **Symmetry reduction** by equitable partitions (hypercubes, Hamming and Johnson graphs of any size). Childs–Goldstone spatial search with optimised hopping rate, **perfect state transfer**, Lindblad dephasing, classical baselines. **Discrete-time walks**: coined walks (Grover, Fourier, Hadamard coins; Shenvi–Kempe–Whaley search), the Hadamard walk on the line, Szegedy walks with quantum hitting times. **Walk circuits**: exact for circulant and Cayley graphs, product formulas for any graph |
@@ -99,8 +107,13 @@ or by the benchmark report you can run yourself.
 | Same with Pauli noise: probabilistic error cancellation (overhead 1.08) | 4.00 ± 0.01 | 4 |
 | Zero-noise extrapolation (Richardson, scales 1, 3, 5), depolarised 3-qubit circuit | error ÷ 380 | — |
 | Classical shadows, single-snapshot variance of a weight-k Pauli string | 3ᵏ − ⟨P⟩² | Huang, Kueng & Preskill 2020 |
+| Full CI of H₂ / LiH / BeH₂ (STO-3G), identical under Jordan–Wigner, parity, Bravyi–Kitaev and the reduced parity encoding | −1.1373060 / −7.8824019 / −15.5951824 Ha | PySCF full CI, to 10⁻⁸ Ha |
+| LiH on 10 qubits: UCCSD (92 parameters) / ADAPT-VQE (30 operators), error vs. full CI | 1.1·10⁻⁵ / 1.1·10⁻⁵ Ha | chemical accuracy 1.6·10⁻³ Ha |
+| VQD, all four levels of H₂ (Sz = 0) | equal to full CI to 10⁻⁶ Ha | PySCF full CI |
+| Trotter–Suzuki on a 4-qubit Heisenberg chain: error ratio when the steps double, orders 1 / 2 / 4 | 2.01 / 4.00 / 16.06, always below the error bound | 2, 4, 16 |
+| Maximum-likelihood amplitude estimation: slope of log RMSE against log oracle calls | −0.99 (sampling: −0.49) | −1 (Heisenberg limit), −1/2 |
 
-The test-suite (302 Rust tests and 227 Python tests, run in CI on Linux
+The test-suite (346 Rust tests and 232 Python tests, run in CI on Linux
 (x86_64 and arm64), macOS and Windows) also checks:
 
 - every gate against an independent dense-matrix reference, and the QFT
@@ -291,6 +304,8 @@ search on Q8 for [17]: gamma 0.146868, best time 27.522674, success 0.754627 (ex
 | [`qaoa_maxcut`](metatron-qso-rs/examples/qaoa_maxcut.rs) | QAOA depth 1–4 with INTERP on rings, Q₃, Petersen, random 3-regular and Fruit-of-Life graphs |
 | [`vqe_h2`](metatron-qso-rs/examples/vqe_h2.rs) | VQE for H₂ with every optimiser, shot-based and noisy energy estimates |
 | [`circuits`](metatron-qso-rs/examples/circuits.rs) | GHZ state, OpenQASM export, Grover's sine law, phase estimation |
+| [`noise_mitigation`](metatron-qso-rs/examples/noise_mitigation.rs) | A toy device: trajectories against density matrices, readout mitigation, ZNE, PEC and classical shadows on a GHZ state |
+| [`molecules`](metatron-qso-rs/examples/molecules.rs) | LiH under four encodings against full CI, UCCSD, k-UpCCGSD and ADAPT-VQE; VQD excited states of H₂; Trotter errors against their bounds |
 | [`benchmark_report`](metatron-qso-rs/examples/benchmark_report.rs) | The performance and validation tables of [BENCHMARKS.md](docs/BENCHMARKS.md) |
 | [`technical_note`](metatron-qso-rs/examples/technical_note.rs) | Every number of the [technical note](docs/technical-note/), with its reference, as JSON |
 
@@ -318,7 +333,10 @@ machine-readable output; `qso <command> --help` lists all options.
 | `qaoa` | QAOA for MaxCut with exact optimum and approximation ratio | `--graph`, `--p`, `--restarts`, `--seed`, `--layerwise` |
 | `vqe` | VQE with an EfficientSU2 ansatz, compared with the exact ground energy | `--model h2\|tfim:N,J,H\|heisenberg:N,J,Δ`, `--hamiltonian "<Pauli sum>"`, `--qubits`, `--layers`, `--method`, `--restarts`, `--seed` |
 | `grover` | Grover search, simulated vs. theoretical success | `--qubits`, `--marked`, `--iterations` |
-| `qasm FILE` | Simulate an OpenQASM 2.0 file and sample counts | `--shots`, `--seed`, `--noise p1,p2` |
+| `qasm FILE` | Simulate an OpenQASM 2.0 file and sample counts | `--shots`, `--seed`, `--noise p1,p2`, `--device FILE`, `--trajectories N` |
+| `estimate FILE` | ⟨H⟩ with standard error, optionally mitigated | `--observable`, `--shots`, `--device`, `--mitigate-readout`, `--zne 1,3,5`, `--pec N` |
+| `molecule FILE` | Qubit Hamiltonian, Hartree–Fock and full-CI energies of an FCIDUMP molecule, and a variational solution | `--mapping`, `--two-qubit-reduction`, `--method none\|uccsd\|upccgsd\|adapt`, `--roots` |
+| `trotter` | Trotter–Suzuki circuit for exp(−iHt) with its error bound | `--hamiltonian`, `--time`, `--steps`, `--order`, `--output FILE` |
 
 Graph specifications (also `Graph.from_spec` in Python):
 
@@ -386,10 +404,12 @@ Know its boundaries:
 | Exact walk analysis | up to 2048 nodes, or 2048 cells of an equitable partition | Dense eigendecomposition. Beyond that, `evolve`/`probabilities` use Krylov, and limiting distributions the start node's cyclic subspace when it is small; symmetric graphs of any size reduce to their quotients |
 | Automorphism groups, canonical labelling | intended for up to a few thousand nodes | Exact search, worst-case exponential like every known algorithm |
 | OpenQASM | version 2.0, `qelib1.inc` gates | No custom `gate` definitions, classical control or `reset`; version 3 is not supported |
+| Full CI | 2¹⁸ determinants (dense up to 4096) | Determinant-space diagonalisation; molecules up to 32 spatial orbitals can be mapped to qubits |
+| Product-formula bound, order ≥ 4 | rigorous but loose | Falls only as `r⁻²` with the steps until they are short; the actual error falls as `r⁻⁴` |
 
 Not included: GPU acceleration, tensor-network or stabiliser simulation,
-fermion-to-qubit mappings beyond the bundled H₂ Hamiltonian, and
-submission to quantum hardware. To run on hardware, export a circuit with
+computing molecular integrals (QSO reads them from FCIDUMP files written by
+a quantum-chemistry code), and submission to quantum hardware. To run on hardware, export a circuit with
 `to_qasm2` and submit it with the vendor's SDK.
 
 ## Conventions
@@ -410,7 +430,10 @@ metatron-qso-rs/            Rust library `metatron_qso` and the `qso` CLI
   src/noise/                density matrices, channels, noise and device models, quantum trajectories
   src/estimation/           estimates with standard errors, shot allocation, classical shadows
   src/mitigation/           readout calibration, zero-noise extrapolation, PEC, Pauli twirling
-  src/algorithms/           gradients, ansätze, models, VQE, QAOA, Grover, QFT/QPE, classifiers
+  src/algorithms/           gradients, ansätze, models, VQE, QAOA, Grover, QFT/QPE, classifiers,
+                            excited states, state geometry, time evolution, QUBO/QAOA mixers,
+                            amplitude estimation
+  src/chemistry/            fermionic operators, qubit mappings, FCIDUMP molecules, UCC ansätze, ADAPT-VQE
   src/optimize/             L-BFGS, Adam, gradient descent, Nelder–Mead, SPSA
   src/graph/                graphs, generators, Metatron family, automorphisms, canonical forms, file I/O
   src/walks/                continuous- and discrete-time walks, quotients, state transfer, search, circuits

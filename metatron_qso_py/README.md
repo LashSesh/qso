@@ -159,6 +159,24 @@ print(f"{raw.value:.3f} {mitigated.value:.3f} ± {mitigated.std_error:.3f}")  # 
 print(q.TrajectorySimulator(device, 2000, seed=3).expectation(ghz, h).value)  # 1.969
 ```
 
+Molecules, time evolution and amplitude estimation (run from the
+repository root, which holds the FCIDUMP files):
+
+```python
+import metatron_qso as q
+
+lih = q.MolecularIntegrals.from_file("metatron-qso-rs/examples/molecules/lih_sto3g.fcidump")
+adapt = q.adapt_vqe(lih, "parity", two_qubit_reduction=True)          # 10 qubits
+print(f"{adapt['energy'] - lih.fci_energies()[0]:.1e}", len(adapt["operators"]))  # 1.1e-05 30
+
+h = q.heisenberg_xxz(4, 1.0, 0.5)
+c = q.trotter_circuit(h, 4, 1.0, steps=20, order=2)
+print(len(c), f"{q.trotter_error_bound(h, 1.0, steps=20, order=2):.4f}")  # 321 0.0229
+
+r = q.ml_amplitude_estimation(q.AmplitudeProblem.bernoulli(0.3), levels=8, shots=100, seed=1)
+print(f"{r['estimate']:.4f}", r["oracle_calls"])                        # 0.2998 26200
+```
+
 More complete scripts are in
 [`examples/`](https://github.com/LashSesh/qso/tree/main/metatron_qso_py/examples);
 the [user guide](https://lashsesh.github.io/qso/) has tutorials and the full
@@ -178,6 +196,10 @@ API reference.
 | Noise | `Channel`, `NoiseModel`, `DeviceModel`, `DensityMatrix`, `TrajectorySimulator`, `estimate_expectation` |
 | Estimation | `Estimate`, `estimate` (uniform, weighted, adaptive shot allocation), `ClassicalShadow` |
 | Mitigation | `ReadoutCalibration`, `nearest_probability_distribution`, `fold`, `extrapolate`, `zne`, `pec_expectation`, `twirl`, `twirled_average` |
+| Hamiltonian simulation | `Circuit.pauli_rotation`, `trotter_circuit`, `trotter_error_bound`, `qdrift_circuit`, `qdrift_error_bound` |
+| Chemistry | `FermionOperator`, `QubitOperator`, `MolecularIntegrals`, `uccsd`, `k_upccgsd`, `adapt_vqe` |
+| Excited states and geometry | `vqd`, `ssvqe`, `quantum_fisher_information`, `natural_gradient`, `quantum_natural_gradient`, `imaginary_time_evolution` |
+| Optimisation and estimation | `Qubo`, `Qaoa` (X, XY and warm-start mixers), `AmplitudeProblem`, `canonical_amplitude_estimation`, `iterative_amplitude_estimation`, `ml_amplitude_estimation` |
 | Boson sampling | `BosonSampler`, `permanent`, `haar_unitary`, `beam_splitter` |
 
 `Graph.from_spec` accepts the graph specifications of the `qso` command-line
