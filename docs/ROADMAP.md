@@ -1,11 +1,13 @@
 # QSO Roadmap (1.x)
 
-Status: October 2026. 1.1 to 1.5 delivered — 1.3 combined the milestones
-planned as "quantum walks" and "simulation performance"; 1.4 (noise at
-scale and error mitigation) and 1.5 (algorithms and physics) shipped
-together as release 1.5.0. Interoperability (1.6) is next. Milestone
-numbers are the release numbers; the later milestones moved up by one when
-the first two were merged.
+Status: October 2026. Milestones 1.1 to 1.5 delivered — 1.3 combined the
+milestones planned as "quantum walks" and "simulation performance".
+Milestones 1.4 (noise at scale and error mitigation), 1.5 (algorithms and
+physics) and 1.6 (interoperability, in progress) ship together as release
+1.4.0. Up to 1.3 milestone and release numbers coincided; from 1.4 on the
+milestone numbers name units of work and releases follow Semantic
+Versioning on their own (the next release after 1.3.0 is 1.4.0, whatever
+it contains).
 
 QSO 1.0 delivers what it documents: every number in the README is reproduced
 by a test against an independent reference, the packages are on crates.io
@@ -115,10 +117,11 @@ theory or physics.
   feature without one is not done.
 * **Performance claims** come only from `benchmark_report` with the machine
   stated, as today.
-* **One minor release per milestone**, published by the release workflow
-  after a dry run; patch releases fix bugs in between. Work that finishes
-  together ships together (1.3 combined two planned milestones, 1.5.0
-  carries 1.4 and 1.5).
+* **Minor releases bundle finished milestones**, published by the release
+  workflow after a dry run; patch releases fix bugs in between. Work that
+  finishes together ships together (release 1.3.0 combined two planned
+  milestones; release 1.4.0 carries milestones 1.4 to 1.6). Release
+  numbers never skip a version.
 
 ## 4. Milestones
 
@@ -295,9 +298,9 @@ core is close to memory bandwidth.
    mitigation reuse the kernels and execution plans directly and make
    every later algorithm testable under realistic noise.
 4. **1.5: algorithms and physics**, on top of the noise and estimation
-   tools, released together with 1.4 as 1.5.0 to keep releases (and CI
-   runs) few.
-5. **1.6 (interoperability)** next, without framework bridges.
+   tools.
+5. **1.6: interoperability**, without framework bridges. Milestones 1.4
+   to 1.6 ship as one release, 1.4.0, to keep releases (and CI runs) few.
 
 ## 6. Measures of success
 
@@ -316,8 +319,9 @@ Taken (October 2026):
 
 * Walks and performance first, shipped together as 1.3.
 * No Qiskit, PennyLane or Cirq bridges.
-* Noise and mitigation (1.4) before algorithms and physics (1.5); both
-  shipped together as 1.5.0.
+* Noise and mitigation (1.4) before algorithms and physics (1.5).
+* Milestones 1.4 to 1.6 ship as release 1.4.0; release numbers follow
+  Semantic Versioning and are no longer tied to milestone numbers.
 * No integral code: molecules come in as FCIDUMP files, written by any
   quantum-chemistry program (the repository's files by PySCF).
 

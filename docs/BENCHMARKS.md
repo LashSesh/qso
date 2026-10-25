@@ -124,9 +124,9 @@ blocks in parallel, and fuses runs of single-qubit gates on higher qubits
 (see [ARCHITECTURE.md](ARCHITECTURE.md)). Registers of 14 qubits or fewer
 fit into one block and run as before.
 
-## Noisy circuits (1.5.0)
+## Noisy circuits (1.4.0)
 
-Release 1.5.0 adds this section to the report. It was measured in a later
+Release 1.4.0 adds this section to the report. It was measured in a later
 session on the same machine type, which was slower at the time: in
 alternating runs of the new build and the 1.3.0 build (three each,
 medians), a statevector layer took 0.99 ms (new) and 1.15 ms (1.3.0) at

@@ -4,11 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [1.5.0] — 2026-10-25
+## [1.4.0] — 2026-10-25
 
-Milestones 1.4 (noise at scale and error mitigation) and 1.5 (algorithms
-and physics) of the [roadmap](docs/ROADMAP.md), released together; 1.4.0
-was not published on its own. Every new feature is tested against an
+Milestones 1.4 (noise at scale and error mitigation), 1.5 (algorithms and
+physics) and 1.6 (interoperability) of the [roadmap](docs/ROADMAP.md),
+released together. Every new feature is tested against an
 independent reference — exact diagonalisation, PySCF's full CI, density
 matrices, exact sums or closed forms (named below). No validated result of
 earlier releases changed.
