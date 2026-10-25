@@ -14,7 +14,9 @@
 mod algorithms;
 mod circuit;
 mod discrete;
+mod estimation;
 mod graph;
+mod mitigation;
 mod noise;
 mod photonics;
 mod reduced;
@@ -171,6 +173,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     reduced::register(m)?;
     discrete::register(m)?;
     noise::register(m)?;
+    estimation::register(m)?;
+    mitigation::register(m)?;
     photonics::register(m)?;
     Ok(())
 }

@@ -2,6 +2,7 @@
 
 from typing import (
     Any,
+    Callable,
     Optional,
     Sequence,
     Tuple,
@@ -705,6 +706,15 @@ class Channel:
     def thermal_relaxation(t1: float, t2: float, time: float) -> Channel: ...
     @staticmethod
     def from_kraus(kraus: Sequence[ArrayLike], name: str = "custom") -> Channel: ...
+    @staticmethod
+    def pauli(probabilities: dict[str, float]) -> Channel: ...
+    @staticmethod
+    def unitary(matrix: ArrayLike, name: str = "unitary") -> Channel: ...
+    @staticmethod
+    def rotation(pauli: str, angle: float) -> Channel: ...
+    def pauli_probabilities(self) -> Optional[RealArray]: ...
+    def twirled(self) -> Channel: ...
+    def compose(self, then: Channel) -> Channel: ...
     @property
     def name(self) -> str: ...
     @property
@@ -729,6 +739,68 @@ class NoiseModel:
     def readout(self) -> Optional[Tuple[float, float]]: ...
 
 @final
+class DeviceModel:
+    def __new__(
+        cls, name: str = "device", num_qubits: Optional[int] = None, idle_noise: bool = True
+    ) -> DeviceModel: ...
+    @staticmethod
+    def from_json(text: str) -> DeviceModel: ...
+    @staticmethod
+    def from_noise_model(model: NoiseModel) -> DeviceModel: ...
+    def to_json(self) -> str: ...
+    def with_qubit(
+        self,
+        q: int,
+        t1: Optional[float] = None,
+        t2: Optional[float] = None,
+        readout: Optional[Tuple[float, float]] = None,
+    ) -> DeviceModel: ...
+    def with_default_qubit(
+        self,
+        t1: Optional[float] = None,
+        t2: Optional[float] = None,
+        readout: Optional[Tuple[float, float]] = None,
+    ) -> DeviceModel: ...
+    def with_rule(
+        self,
+        gate: Optional[str] = None,
+        qubits: Optional[Sequence[int]] = None,
+        num_qubits: Optional[int] = None,
+        duration: float = 0.0,
+        depolarizing: Optional[float] = None,
+        over_rotation: float = 0.0,
+        channels: Sequence[Channel] = ...,
+    ) -> DeviceModel: ...
+    @property
+    def name(self) -> str: ...
+    @property
+    def num_qubits(self) -> Optional[int]: ...
+    @property
+    def idle_noise(self) -> bool: ...
+    def readout_errors(self, n: int) -> list[Tuple[float, float]]: ...
+
+@final
+class TrajectorySimulator:
+    def __new__(cls, device: DeviceModel, trajectories: int, seed: int = 0) -> TrajectorySimulator: ...
+    @property
+    def trajectories(self) -> int: ...
+    def expectation(
+        self, circuit: Circuit, observable: PauliSum, theta: Optional[ArrayLike] = None
+    ) -> Estimate: ...
+    def expectations(
+        self, circuit: Circuit, observables: Sequence[PauliSum], theta: Optional[ArrayLike] = None
+    ) -> list[Estimate]: ...
+    def sample(
+        self, circuit: Circuit, shots: int, theta: Optional[ArrayLike] = None
+    ) -> dict[str, int]: ...
+    def density_matrix(
+        self, circuit: Circuit, theta: Optional[ArrayLike] = None
+    ) -> DensityMatrix: ...
+    def trajectory_state(
+        self, circuit: Circuit, k: int, theta: Optional[ArrayLike] = None
+    ) -> StateVector: ...
+
+@final
 class DensityMatrix:
     @staticmethod
     def zero(n_qubits: int) -> DensityMatrix: ...
@@ -741,12 +813,14 @@ class DensityMatrix:
         circuit: Circuit,
         theta: Optional[ArrayLike] = None,
         noise: Optional[NoiseModel] = None,
+        device: Optional[DeviceModel] = None,
     ) -> DensityMatrix: ...
     def apply(
         self,
         circuit: Circuit,
         theta: Optional[ArrayLike] = None,
         noise: Optional[NoiseModel] = None,
+        device: Optional[DeviceModel] = None,
     ) -> DensityMatrix: ...
     def apply_channel(self, channel: Channel, qubits: Sequence[int]) -> DensityMatrix: ...
     @property
@@ -760,6 +834,9 @@ class DensityMatrix:
     def sample(
         self, shots: int, seed: int = 0, readout: Optional[Tuple[float, float]] = None
     ) -> dict[str, int]: ...
+    def sample_with_readout(
+        self, shots: int, readout: Sequence[Tuple[float, float]], seed: int = 0
+    ) -> dict[str, int]: ...
     def copy(self) -> DensityMatrix: ...
 
 def estimate_expectation(
@@ -769,7 +846,148 @@ def estimate_expectation(
     shots: int = 10000,
     seed: int = 0,
     noise: Optional[NoiseModel] = None,
+    device: Optional[DeviceModel] = None,
+    trajectories: Optional[int] = None,
 ) -> float: ...
+
+# ---------------------------------------------------------------------------
+# Estimation
+
+@final
+class Estimate:
+    def __new__(cls, value: float, std_error: float = 0.0, samples: int = 0) -> Estimate: ...
+    @property
+    def value(self) -> float: ...
+    @property
+    def std_error(self) -> float: ...
+    @property
+    def samples(self) -> int: ...
+    def confidence_interval(self, level: float = 0.95) -> Tuple[float, float]: ...
+    def __float__(self) -> float: ...
+
+@type_check_only
+class GroupEstimate(TypedDict):
+    basis: str
+    terms: int
+    shots: int
+    estimate: Estimate
+
+def estimate(
+    circuit: Circuit,
+    observable: PauliSum,
+    shots: int,
+    theta: Optional[ArrayLike] = None,
+    allocation: str = "weighted",
+    pilot: float = 0.1,
+    readout_calibration: Optional[ReadoutCalibration] = None,
+    seed: int = 0,
+    noise: Optional[NoiseModel] = None,
+    device: Optional[DeviceModel] = None,
+    trajectories: Optional[int] = None,
+) -> Tuple[Estimate, list[GroupEstimate]]: ...
+
+@final
+class ClassicalShadow:
+    @staticmethod
+    def from_state(state: StateVector, snapshots: int, seed: int = 0) -> ClassicalShadow: ...
+    @staticmethod
+    def collect(
+        circuit: Circuit,
+        snapshots: int,
+        theta: Optional[ArrayLike] = None,
+        seed: int = 0,
+        noise: Optional[NoiseModel] = None,
+        device: Optional[DeviceModel] = None,
+        trajectories: Optional[int] = None,
+    ) -> ClassicalShadow: ...
+    @property
+    def n_qubits(self) -> int: ...
+    def __len__(self) -> int: ...
+    def estimate(self, observable: PauliSum) -> Estimate: ...
+    def median_of_means(self, observable: PauliSum, groups: int) -> float: ...
+
+# ---------------------------------------------------------------------------
+# Error mitigation
+
+@final
+class ReadoutCalibration:
+    @staticmethod
+    def from_errors(errors: Sequence[Tuple[float, float]]) -> ReadoutCalibration: ...
+    @staticmethod
+    def from_matrix(n_qubits: int, matrix: ArrayLike) -> ReadoutCalibration: ...
+    @staticmethod
+    def tensored(
+        n_qubits: int,
+        shots: int,
+        seed: int = 0,
+        noise: Optional[NoiseModel] = None,
+        device: Optional[DeviceModel] = None,
+        trajectories: Optional[int] = None,
+    ) -> ReadoutCalibration: ...
+    @staticmethod
+    def full(
+        n_qubits: int,
+        shots: int,
+        seed: int = 0,
+        noise: Optional[NoiseModel] = None,
+        device: Optional[DeviceModel] = None,
+        trajectories: Optional[int] = None,
+    ) -> ReadoutCalibration: ...
+    @property
+    def n_qubits(self) -> int: ...
+    def qubit_errors(self) -> list[Tuple[float, float]]: ...
+    def mitigate(self, counts: dict[str, int]) -> dict[str, float]: ...
+
+def nearest_probability_distribution(quasi: dict[str, float]) -> dict[str, float]: ...
+def fold(
+    circuit: Circuit, scale: float, folding: str = "global", seed: int = 0
+) -> Tuple[Circuit, float]: ...
+def extrapolate(
+    scales: Sequence[float],
+    values: Sequence[Union[float, Estimate]],
+    method: str = "richardson",
+    degree: Optional[int] = None,
+    asymptote: float = 0.0,
+) -> Estimate: ...
+
+@type_check_only
+class ZneResult(TypedDict):
+    estimate: Estimate
+    scales: list[float]
+    values: list[Estimate]
+
+def zne(
+    circuit: Circuit,
+    scales: Sequence[float],
+    execute: Callable[[Circuit], Union[float, Estimate]],
+    folding: str = "global",
+    seed: int = 0,
+    method: str = "richardson",
+    degree: Optional[int] = None,
+    asymptote: float = 0.0,
+) -> ZneResult: ...
+
+@type_check_only
+class PecResult(TypedDict):
+    estimate: Estimate
+    overhead: float
+    noisy_operations: int
+
+def pec_expectation(
+    circuit: Circuit,
+    observable: PauliSum,
+    device: DeviceModel,
+    samples: int,
+    theta: Optional[ArrayLike] = None,
+    seed: int = 0,
+) -> PecResult: ...
+def twirl(circuit: Circuit, seed: int = 0) -> Circuit: ...
+def twirled_average(
+    circuit: Circuit,
+    count: int,
+    execute: Callable[[Circuit], Union[float, Estimate]],
+    seed: int = 0,
+) -> Estimate: ...
 
 # ---------------------------------------------------------------------------
 # Classifier

@@ -1,15 +1,17 @@
 //! Channels, noise models, density matrices and shot-based estimation.
 
 use metatron_qso::Rng;
-use metatron_qso::backend::{
-    DensityMatrixBackend, StatevectorBackend, estimate_expectation as estimate,
+use metatron_qso::backend::estimate_expectation as estimate;
+use metatron_qso::noise::{
+    Channel, ChannelSpec, DensityMatrix, DeviceModel, GateRule, NoiseModel, QubitProperties,
+    TrajectorySimulator,
 };
-use metatron_qso::noise::{Channel, DensityMatrix, NoiseModel};
 use numpy::{PyArray1, PyArray2};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use crate::circuit::{PyCircuit, theta_or_empty};
+use crate::estimation::{PyEstimate, backend, wrap_estimate};
 use crate::state::{PyPauliSum, PyStateVector};
 use crate::{
     ComplexMatrixArg, Raise, RealArg, check_finite, cmatrix, counts_dict, invalid, real_array,
@@ -21,7 +23,7 @@ use crate::{
 #[pyclass(name = "Channel", module = "metatron_qso", frozen)]
 #[derive(Clone)]
 pub struct PyChannel {
-    inner: Channel,
+    pub inner: Channel,
 }
 
 fn channel(c: metatron_qso::Result<Channel>) -> PyResult<PyChannel> {
@@ -84,6 +86,50 @@ impl PyChannel {
         channel(Channel::from_kraus(name, ops))
     }
 
+    /// Pauli channel from probabilities of non-identity Pauli strings, e.g.
+    /// `{"ZZ": 0.02, "XI": 0.001}` (first letter on the first qubit).
+    #[staticmethod]
+    fn pauli(probabilities: std::collections::BTreeMap<String, f64>) -> PyResult<Self> {
+        let list: Vec<(&str, f64)> = probabilities
+            .iter()
+            .map(|(k, &v)| (k.as_str(), v))
+            .collect();
+        channel(Channel::pauli(&list))
+    }
+
+    /// Unitary channel `ρ ↦ UρU†` (coherent error) from a 2×2 or 4×4
+    /// unitary.
+    #[staticmethod]
+    #[pyo3(signature = (matrix, name = "unitary"))]
+    fn unitary(matrix: ComplexMatrixArg<'_>, name: &str) -> PyResult<Self> {
+        let (_, data) = square_complex("matrix", &matrix)?;
+        channel(Channel::unitary(name, data))
+    }
+
+    /// Coherent rotation `exp(−iθP/2)` about a Pauli string ("X", "ZZ", …).
+    #[staticmethod]
+    fn rotation(pauli: &str, angle: f64) -> PyResult<Self> {
+        channel(Channel::rotation(pauli, angle))
+    }
+
+    /// Probabilities `p_P` (base-4 index, first qubit most significant) if
+    /// this is a Pauli channel, else `None`.
+    fn pauli_probabilities<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<f64>>> {
+        self.inner.pauli_probabilities().map(|p| real_array(py, p))
+    }
+
+    /// The Pauli-twirled channel.
+    fn twirled(&self) -> Self {
+        Self {
+            inner: self.inner.twirled(),
+        }
+    }
+
+    /// `then ∘ self`: this channel followed by `then` on the same qubits.
+    fn compose(&self, then: &PyChannel) -> PyResult<Self> {
+        channel(self.inner.compose(&then.inner))
+    }
+
     #[getter]
     fn name(&self) -> String {
         self.inner.name().to_string()
@@ -119,7 +165,7 @@ impl PyChannel {
 #[pyclass(name = "NoiseModel", module = "metatron_qso", frozen)]
 #[derive(Clone)]
 pub struct PyNoiseModel {
-    inner: NoiseModel,
+    pub inner: NoiseModel,
 }
 
 #[pymethods]
@@ -193,11 +239,166 @@ impl PyNoiseModel {
     }
 }
 
+/// A device: per-qubit T1, T2 and readout errors, and gate rules (gate
+/// name, qubits, size) with durations, depolarising errors, over-rotations
+/// and further channels. The first matching rule applies to a gate. Builder
+/// methods return a new model.
+#[pyclass(name = "DeviceModel", module = "metatron_qso", frozen)]
+#[derive(Clone)]
+pub struct PyDeviceModel {
+    pub inner: DeviceModel,
+}
+
+fn device(inner: DeviceModel) -> PyResult<PyDeviceModel> {
+    inner.validate().raise()?;
+    Ok(PyDeviceModel { inner })
+}
+
+fn qubit_properties(
+    t1: Option<f64>,
+    t2: Option<f64>,
+    readout: Option<(f64, f64)>,
+) -> QubitProperties {
+    let mut q = QubitProperties::new();
+    q.t1 = t1;
+    q.t2 = t2;
+    q.readout = readout;
+    q
+}
+
+#[pymethods]
+impl PyDeviceModel {
+    #[new]
+    #[pyo3(signature = (name = "device", num_qubits = None, idle_noise = true))]
+    fn new(name: &str, num_qubits: Option<usize>, idle_noise: bool) -> PyResult<Self> {
+        let mut d = DeviceModel::new(name).with_idle_noise(idle_noise);
+        if let Some(n) = num_qubits {
+            d = d.with_num_qubits(n);
+        }
+        device(d)
+    }
+
+    /// Parse a JSON device description.
+    #[staticmethod]
+    fn from_json(text: &str) -> PyResult<Self> {
+        DeviceModel::from_json(text)
+            .raise()
+            .map(|inner| Self { inner })
+    }
+
+    /// The same noise as a `NoiseModel`.
+    #[staticmethod]
+    fn from_noise_model(model: &PyNoiseModel) -> PyResult<Self> {
+        device(DeviceModel::from(&model.inner))
+    }
+
+    /// The description as JSON.
+    fn to_json(&self) -> String {
+        self.inner.to_json()
+    }
+
+    /// Set T1, T2 (≤ 2·T1) and readout errors `(P(1|0), P(0|1))` of qubit
+    /// `q`.
+    #[pyo3(signature = (q, t1 = None, t2 = None, readout = None))]
+    fn with_qubit(
+        &self,
+        q: usize,
+        t1: Option<f64>,
+        t2: Option<f64>,
+        readout: Option<(f64, f64)>,
+    ) -> PyResult<Self> {
+        device(
+            self.inner
+                .clone()
+                .with_qubit(q, qubit_properties(t1, t2, readout)),
+        )
+    }
+
+    /// Set the properties of every qubit not set with `with_qubit`.
+    #[pyo3(signature = (t1 = None, t2 = None, readout = None))]
+    fn with_default_qubit(
+        &self,
+        t1: Option<f64>,
+        t2: Option<f64>,
+        readout: Option<(f64, f64)>,
+    ) -> PyResult<Self> {
+        device(
+            self.inner
+                .clone()
+                .with_default_qubit(qubit_properties(t1, t2, readout)),
+        )
+    }
+
+    /// Append a gate rule. `gate` ("cx", "rz", …), `qubits` (controls
+    /// first) and `num_qubits` select gates (`None`: any); `channels` act
+    /// after the gate (one-qubit channels on each qubit, two-qubit channels
+    /// on consecutive pairs).
+    #[pyo3(signature = (
+        gate = None, qubits = None, num_qubits = None, duration = 0.0, depolarizing = None,
+        over_rotation = 0.0, channels = Vec::new()
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn with_rule(
+        &self,
+        gate: Option<&str>,
+        qubits: Option<Vec<usize>>,
+        num_qubits: Option<usize>,
+        duration: f64,
+        depolarizing: Option<f64>,
+        over_rotation: f64,
+        channels: Vec<PyRef<'_, PyChannel>>,
+    ) -> PyResult<Self> {
+        let mut rule = match gate {
+            Some(g) => GateRule::for_gate(g),
+            None => GateRule::any(),
+        };
+        rule.qubits = qubits;
+        rule.num_qubits = num_qubits;
+        rule.duration = duration;
+        rule.depolarizing = depolarizing;
+        rule.over_rotation = over_rotation;
+        rule.channels = channels
+            .iter()
+            .map(|c| ChannelSpec::from(&c.inner))
+            .collect();
+        device(self.inner.clone().with_rule(rule))
+    }
+
+    #[getter]
+    fn name(&self) -> String {
+        self.inner.name.clone()
+    }
+
+    #[getter]
+    fn num_qubits(&self) -> Option<usize> {
+        self.inner.num_qubits
+    }
+
+    #[getter]
+    fn idle_noise(&self) -> bool {
+        self.inner.idle_noise
+    }
+
+    /// Readout errors `(P(1|0), P(0|1))` of qubits `0..n`.
+    fn readout_errors(&self, n: usize) -> Vec<(f64, f64)> {
+        self.inner.readout_errors(n)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "DeviceModel(name={:?}, qubits={}, rules={})",
+            self.inner.name,
+            self.inner.qubits.len(),
+            self.inner.gates.len()
+        )
+    }
+}
+
 /// Density matrix of up to 14 qubits.
 #[pyclass(name = "DensityMatrix", module = "metatron_qso")]
 #[derive(Clone)]
 pub struct PyDensityMatrix {
-    inner: DensityMatrix,
+    pub inner: DensityMatrix,
 }
 
 fn dm(inner: DensityMatrix) -> PyDensityMatrix {
@@ -225,43 +426,60 @@ impl PyDensityMatrix {
     }
 
     /// Run `circuit(theta)` on |0…0⟩⟨0…0|, inserting `noise` after every
-    /// gate if given.
+    /// gate if given, or with the noise of `device`.
     #[staticmethod]
-    #[pyo3(signature = (circuit, theta = None, noise = None))]
+    #[pyo3(signature = (circuit, theta = None, noise = None, device = None))]
     fn simulate(
         py: Python<'_>,
         circuit: &PyCircuit,
         theta: Option<RealArg<'_>>,
         noise: Option<&PyNoiseModel>,
+        device: Option<&PyDeviceModel>,
     ) -> PyResult<Self> {
         let theta = theta_or_empty(theta);
         check_finite("theta", &theta)?;
+        if noise.is_some() && device.is_some() {
+            return Err(invalid("give either `noise` or `device`, not both"));
+        }
         let c = &circuit.inner;
         let noise = noise.map(|n| &n.inner);
+        let device = device.map(|d| &d.inner);
         py.detach(|| {
             let mut rho = DensityMatrix::zero(c.n_qubits())?;
-            rho.apply_circuit(c, &theta, noise)?;
+            match device {
+                Some(d) => rho.apply_device(c, &theta, d)?,
+                None => rho.apply_circuit(c, &theta, noise)?,
+            }
             Ok(rho)
         })
         .raise()
         .map(dm)
     }
 
-    /// Apply `circuit(theta)` (with optional `noise`) in place.
-    #[pyo3(signature = (circuit, theta = None, noise = None))]
+    /// Apply `circuit(theta)` (with optional `noise` or `device`) in place.
+    #[pyo3(signature = (circuit, theta = None, noise = None, device = None))]
     fn apply<'py>(
         mut slf: PyRefMut<'py, Self>,
         circuit: &PyCircuit,
         theta: Option<RealArg<'_>>,
         noise: Option<&PyNoiseModel>,
+        device: Option<&PyDeviceModel>,
     ) -> PyResult<PyRefMut<'py, Self>> {
         let theta = theta_or_empty(theta);
         check_finite("theta", &theta)?;
+        if noise.is_some() && device.is_some() {
+            return Err(invalid("give either `noise` or `device`, not both"));
+        }
         let py = slf.py();
         let rho = &mut slf.inner;
         let c = &circuit.inner;
         let noise = noise.map(|n| &n.inner);
-        py.detach(|| rho.apply_circuit(c, &theta, noise)).raise()?;
+        let device = device.map(|d| &d.inner);
+        py.detach(|| match device {
+            Some(d) => rho.apply_device(c, &theta, d),
+            None => rho.apply_circuit(c, &theta, noise),
+        })
+        .raise()?;
         Ok(slf)
     }
 
@@ -331,6 +549,28 @@ impl PyDensityMatrix {
         counts_dict(py, &counts, rho.n_qubits())
     }
 
+    /// Measure all qubits with per-qubit readout errors
+    /// `[(P(1|0), P(0|1)), …]` (qubit 0 first).
+    #[pyo3(signature = (shots, readout, seed = 0))]
+    fn sample_with_readout<'py>(
+        &self,
+        py: Python<'py>,
+        shots: usize,
+        readout: Vec<(f64, f64)>,
+        seed: u64,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        if readout
+            .iter()
+            .any(|&(a, b)| !((0.0..=1.0).contains(&a) && (0.0..=1.0).contains(&b)))
+        {
+            return Err(invalid("readout error probabilities must lie in [0, 1]"));
+        }
+        let rho = &self.inner;
+        let counts =
+            py.detach(|| rho.sample_with_readout(shots, &readout, &mut Rng::seed_from_u64(seed)));
+        counts_dict(py, &counts, rho.n_qubits())
+    }
+
     fn copy(&self) -> Self {
         self.clone()
     }
@@ -344,11 +584,130 @@ impl PyDensityMatrix {
     }
 }
 
+/// Simulates noisy circuits by averaging quantum trajectories (Monte-Carlo
+/// wave functions) on state vectors: any register size the state-vector
+/// simulator supports.
+#[pyclass(name = "TrajectorySimulator", module = "metatron_qso", frozen)]
+pub struct PyTrajectorySimulator {
+    inner: TrajectorySimulator,
+}
+
+#[pymethods]
+impl PyTrajectorySimulator {
+    #[new]
+    #[pyo3(signature = (device, trajectories, seed = 0))]
+    fn new(device: &PyDeviceModel, trajectories: usize, seed: u64) -> PyResult<Self> {
+        TrajectorySimulator::new(device.inner.clone(), trajectories, seed)
+            .raise()
+            .map(|inner| Self { inner })
+    }
+
+    #[getter]
+    fn trajectories(&self) -> usize {
+        self.inner.trajectories()
+    }
+
+    /// Average of ⟨ψ|H|ψ⟩ over the trajectories, with its standard error.
+    #[pyo3(signature = (circuit, observable, theta = None))]
+    fn expectation(
+        &self,
+        py: Python<'_>,
+        circuit: &PyCircuit,
+        observable: &PyPauliSum,
+        theta: Option<RealArg<'_>>,
+    ) -> PyResult<PyEstimate> {
+        let theta = theta_or_empty(theta);
+        check_finite("theta", &theta)?;
+        let (s, c, h) = (&self.inner, &circuit.inner, &observable.inner);
+        py.detach(|| s.expectation(c, &theta, h))
+            .raise()
+            .map(wrap_estimate)
+    }
+
+    /// Averages of several observables over the same trajectories.
+    #[pyo3(signature = (circuit, observables, theta = None))]
+    fn expectations(
+        &self,
+        py: Python<'_>,
+        circuit: &PyCircuit,
+        observables: Vec<PyRef<'_, PyPauliSum>>,
+        theta: Option<RealArg<'_>>,
+    ) -> PyResult<Vec<PyEstimate>> {
+        let theta = theta_or_empty(theta);
+        check_finite("theta", &theta)?;
+        let hs: Vec<_> = observables.iter().map(|h| h.inner.clone()).collect();
+        let (s, c) = (&self.inner, &circuit.inner);
+        let es = py.detach(|| s.expectations(c, &theta, &hs)).raise()?;
+        Ok(es.into_iter().map(wrap_estimate).collect())
+    }
+
+    /// Measure all qubits `shots` times with the device's readout errors.
+    #[pyo3(signature = (circuit, shots, theta = None))]
+    fn sample<'py>(
+        &self,
+        py: Python<'py>,
+        circuit: &PyCircuit,
+        shots: usize,
+        theta: Option<RealArg<'_>>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let theta = theta_or_empty(theta);
+        check_finite("theta", &theta)?;
+        let (s, c) = (&self.inner, &circuit.inner);
+        let counts = py.detach(|| s.sample(c, &theta, shots)).raise()?;
+        counts_dict(py, &counts, c.n_qubits())
+    }
+
+    /// Average of |ψ⟩⟨ψ| over the trajectories (up to 14 qubits).
+    #[pyo3(signature = (circuit, theta = None))]
+    fn density_matrix(
+        &self,
+        py: Python<'_>,
+        circuit: &PyCircuit,
+        theta: Option<RealArg<'_>>,
+    ) -> PyResult<PyDensityMatrix> {
+        let theta = theta_or_empty(theta);
+        check_finite("theta", &theta)?;
+        let (s, c) = (&self.inner, &circuit.inner);
+        py.detach(|| s.density_matrix(c, &theta)).raise().map(dm)
+    }
+
+    /// Final state of trajectory `k`.
+    #[pyo3(signature = (circuit, k, theta = None))]
+    fn trajectory_state(
+        &self,
+        py: Python<'_>,
+        circuit: &PyCircuit,
+        k: usize,
+        theta: Option<RealArg<'_>>,
+    ) -> PyResult<PyStateVector> {
+        let theta = theta_or_empty(theta);
+        check_finite("theta", &theta)?;
+        let (s, c) = (&self.inner, &circuit.inner);
+        py.detach(|| s.trajectory_state(c, &theta, k))
+            .raise()
+            .map(crate::state::wrap)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "TrajectorySimulator(device={:?}, trajectories={}, seed={})",
+            self.inner.device().name,
+            self.inner.trajectories(),
+            self.inner.seed()
+        )
+    }
+}
+
 /// Estimate ⟨H⟩ of `circuit(theta)` from `shots` measurements per group of
-/// qubit-wise commuting terms — on the exact state-vector backend, or on
-/// the density-matrix backend when `noise` is given.
+/// qubit-wise commuting terms — on the exact state-vector backend, with a
+/// `noise` model, or on a `device` (density matrices, or `trajectories`
+/// trajectories per run).
 #[pyfunction]
-#[pyo3(signature = (circuit, observable, theta = None, shots = 10000, seed = 0, noise = None))]
+#[pyo3(signature = (
+    circuit, observable, theta = None, shots = 10000, seed = 0, noise = None, device = None,
+    trajectories = None
+))]
+#[allow(clippy::too_many_arguments)]
 fn estimate_expectation(
     py: Python<'_>,
     circuit: &PyCircuit,
@@ -357,24 +716,23 @@ fn estimate_expectation(
     shots: usize,
     seed: u64,
     noise: Option<&PyNoiseModel>,
+    device: Option<&PyDeviceModel>,
+    trajectories: Option<usize>,
 ) -> PyResult<f64> {
     let theta = theta_or_empty(theta);
     check_finite("theta", &theta)?;
+    let backend = backend(noise, device, trajectories)?;
     let (c, h) = (&circuit.inner, &observable.inner);
-    match noise {
-        None => py.detach(|| estimate(&StatevectorBackend, c, &theta, h, shots, seed)),
-        Some(n) => {
-            let backend = DensityMatrixBackend::new(n.inner.clone());
-            py.detach(|| estimate(&backend, c, &theta, h, shots, seed))
-        }
-    }
-    .raise()
+    py.detach(|| estimate(backend.as_ref(), c, &theta, h, shots, seed))
+        .raise()
 }
 
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyChannel>()?;
     m.add_class::<PyNoiseModel>()?;
     m.add_class::<PyDensityMatrix>()?;
+    m.add_class::<PyDeviceModel>()?;
+    m.add_class::<PyTrajectorySimulator>()?;
     m.add_function(wrap_pyfunction!(estimate_expectation, m)?)?;
     Ok(())
 }
