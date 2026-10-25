@@ -51,7 +51,7 @@ print(state.expectation(q.PauliSum("Z0 Z1"))) # 1.0
 print(state.entanglement_entropy([0]))        # 1.0 (bits)
 ```
 
-Symbolic parameters, exact gradients and OpenQASM 2.0:
+Symbolic parameters, exact gradients and OpenQASM:
 
 ```python
 import numpy as np
@@ -65,8 +65,30 @@ value, grad = q.expectation_and_gradient(c, h, [0.3, 0.1])  # adjoint method
 _, fd = q.expectation_and_gradient(c, h, [0.3, 0.1], method="finite_difference")
 assert np.allclose(grad, fd, atol=1e-6)
 
-text = c.to_qasm([0.3, 0.1], measure=True)
+text = c.to_qasm([0.3, 0.1], measure=True)      # OpenQASM 2.0
 again = q.Circuit.from_qasm(text)
+print(c.to_qasm3([0.3, 0.1]))                     # OpenQASM 3
+```
+
+Programs with mid-circuit measurement and feed-forward, from OpenQASM 2
+or 3, with exact outcome probabilities:
+
+```python
+import metatron_qso as q
+
+p = q.Program.from_qasm('''
+OPENQASM 3.0;
+include "stdgates.inc";
+qubit[2] q;
+bit[2] c;
+h q[0];
+c[0] = measure q[0];
+if (c[0] == 1) x q[1];
+c[1] = measure q[1];
+''')
+print(p.probabilities())        # ≈ {'00': 0.5, '11': 0.5}, bit 0 on the right
+print(p.sample(1000, seed=1))   # {'00': 504, '11': 496}
+print(p.to_qasm3())
 ```
 
 Ground state of H₂ (STO-3G) with VQE:

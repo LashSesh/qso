@@ -24,6 +24,7 @@ reports them in full.
 | Chapter | Topics |
 |---|---|
 | [Circuits and states](circuits.md) | Gates, simulation, sampling, observables, OpenQASM |
+| [OpenQASM programs](programs.md) | OpenQASM 2 and 3, mid-circuit measurement, reset, feed-forward |
 | [Parameters and gradients](gradients.md) | Symbolic parameters, adjoint and parameter-shift gradients |
 | [Variational algorithms](variational.md) | VQE, QAOA, variational and graph classifiers |
 | [Excited states and state geometry](excited.md) | VQD, SSVQE, quantum Fisher information, natural gradient, imaginary-time evolution |
@@ -37,6 +38,7 @@ reports them in full.
 | [Symmetry and state transfer](symmetry.md) | Quotients by equitable partitions, perfect state transfer |
 | [Discrete-time walks and circuits](discrete.md) | Coined, line and Szegedy walks; walks as circuits |
 | [Boson sampling](photonics.md) | Permanents, interferometers, exact sampling |
+| [WebAssembly and JavaScript](webassembly.md) | The npm package and the browser playground |
 | [Command line](cli.md) | The `qso` tool |
 
 The **tutorials** are Jupyter notebooks from

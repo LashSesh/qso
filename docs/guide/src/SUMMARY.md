@@ -10,6 +10,7 @@
 # Guide
 
 - [Circuits and states](circuits.md)
+- [OpenQASM programs](programs.md)
 - [Parameters and gradients](gradients.md)
 - [Variational algorithms](variational.md)
 - [Excited states and state geometry](excited.md)
@@ -23,6 +24,7 @@
 - [Symmetry and state transfer](symmetry.md)
 - [Discrete-time walks and circuits](discrete.md)
 - [Boson sampling](photonics.md)
+- [WebAssembly and JavaScript](webassembly.md)
 - [Command line](cli.md)
 
 # Tutorials

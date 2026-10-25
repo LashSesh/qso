@@ -17,8 +17,8 @@ machine-readable output; `qso <command> --help` lists all options.
 | `qaoa` | QAOA for MaxCut with exact optimum and approximation ratio | `--graph`, `--p`, `--restarts`, `--seed`, `--layerwise` |
 | `vqe` | VQE with an EfficientSU2 ansatz, compared with the exact ground energy | `--model h2\|tfim:N,J,H\|heisenberg:N,J,Δ`, `--hamiltonian "<Pauli sum>"`, `--layers`, `--method`, `--restarts` |
 | `grover` | Grover search, simulated against theoretical success | `--qubits`, `--marked`, `--iterations` |
-| `qasm FILE` | Simulate an OpenQASM 2.0 file and sample counts | `--shots`, `--seed`, `--noise p1,p2`, `--device FILE`, `--trajectories N` |
-| `estimate FILE` | ⟨H⟩ of an OpenQASM 2.0 circuit with standard error and 95 % interval, optionally mitigated | `--observable`, `--shots`, `--allocation`, `--device`, `--trajectories`, `--mitigate-readout`, `--zne 1,3,5`, `--extrapolation`, `--pec N` |
+| `qasm FILE` | Run an OpenQASM 2 or 3 program (mid-circuit measurement, reset, conditions) and sample its bits; or convert it | `--shots`, `--seed`, `--export qasm2\|qasm3`, `--noise p1,p2`, `--device FILE`, `--trajectories N` |
+| `estimate FILE` | ⟨H⟩ of an OpenQASM circuit with standard error and 95 % interval, optionally mitigated | `--observable`, `--shots`, `--allocation`, `--device`, `--trajectories`, `--mitigate-readout`, `--zne 1,3,5`, `--extrapolation`, `--pec N` |
 | `molecule FILE` | Qubit Hamiltonian, Hartree–Fock and full-CI energies of an FCIDUMP molecule, and a variational solution | `--mapping jordan-wigner\|parity\|bravyi-kitaev`, `--two-qubit-reduction`, `--method none\|uccsd\|upccgsd\|adapt`, `--k`, `--roots` |
 | `trotter` | Trotter–Suzuki circuit for exp(−iHt) with its error bound | `--hamiltonian`, `--qubits`, `--time`, `--steps`, `--order`, `--output FILE` |
 
@@ -49,6 +49,29 @@ p=2  <C>=11.105320  C_max=12  ratio=0.925443  P(optimal)=0.4490  most likely 111
 p=3  <C>=11.648892  C_max=12  ratio=0.970741  P(optimal)=0.7626  most likely 1100110110 (cut 12)
 p=4  <C>=11.936517  C_max=12  ratio=0.994710  P(optimal)=0.9767  most likely 1001101101 (cut 12)
 ```
+
+`qasm` runs a program exactly, mid-circuit measurements and conditions
+included, and samples its classical bits (every qubit if it has none).
+The OpenQASM 3 teleportation example of the OpenQASM project sends
+`U(0.3, 0.2, 0.1)|0⟩`, so bit 2 (the left digit) reads 1 with probability
+sin²(0.15) = 0.022:
+
+```text
+$ qso qasm teleport.qasm --shots 1000 --seed 2
+3 qubits, 3 bits, 15 operations, backend program
+  000  258
+  001  245
+  011  245
+  010  239
+  111  5
+  100  4
+  101  2
+  110  2
+```
+
+With `--noise` or `--device` the program must be a circuit; `--export
+qasm2` or `--export qasm3` prints the program in that version instead of
+running it.
 
 Device files are JSON (see [Noise](noise.md)). With a device, `estimate`
 prints the estimate, the noiseless value for comparison and the mitigated

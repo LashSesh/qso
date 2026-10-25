@@ -10,8 +10,61 @@ Milestones 1.4 (noise at scale and error mitigation), 1.5 (algorithms and
 physics) and 1.6 (interoperability) of the [roadmap](docs/ROADMAP.md),
 released together. Every new feature is tested against an
 independent reference — exact diagonalisation, PySCF's full CI, density
-matrices, exact sums or closed forms (named below). No validated result of
-earlier releases changed.
+matrices, exact sums, closed forms or the known results of the OpenQASM
+project's example programs (named below). No validated result of earlier
+releases changed.
+
+### Added — interoperability (milestone 1.6)
+
+- **OpenQASM programs** (`quantum::Program`, `quantum::openqasm`).
+  - One parser for OpenQASM 2.0 and a subset of OpenQASM 3: `gate`
+    definitions with parameters, `U`, `CX` and `gphase`; the modifiers
+    `ctrl @`, `ctrl(n) @`, `negctrl @`, `inv @` and integer `pow(k) @`;
+    `measure`, `reset`, `barrier`; conditions on a register, a bit or
+    `int[n](c)` with `==`/`!=`, blocks and `else`; register broadcasting,
+    slices and parameter expressions. Other OpenQASM 3 features are
+    rejected with an error that names them.
+  - Global phases follow each version's specification: OpenQASM 3's `U`
+    carries `e^{iθ/2}` relative to OpenQASM 2's, and `gphase` and the
+    phases of `u2`/`u3` become relative phases under `ctrl @`.
+  - `Program::probabilities` gives the exact distribution of the
+    classical bits by following every measurement branch (up to 4096);
+    `Program::sample` draws seeded shots, simulating shot by shot beyond
+    that.
+  - Export to OpenQASM 3 (`Program::to_qasm3`, `to_qasm3` for circuits,
+    controlled gates as `ctrl @`) and to OpenQASM 2 where the program
+    allows it.
+  - The example programs of the OpenQASM project
+    (`tests/data/openqasm`, Apache-2.0) give their known results: the
+    adder computes 1 + 15 = 16, phase estimation of `e^{i·3π/8}` gives
+    3/16 exactly, teleportation sends sin²(0.15), the W state has three
+    outcomes of 1/3, the repetition code corrects its error. The six
+    OpenQASM 3 examples in the subset match their OpenQASM 2 versions,
+    the other fifteen are rejected, and all survive round trips through
+    both exports.
+- **WebAssembly and JavaScript.**
+  - The core library builds for `wasm32` (without the `parallel`
+    feature). Its unit, validation, OpenQASM and robustness tests run in
+    CI as `wasm32-wasip1` under Node.js (`scripts/wasi-runner.mjs`).
+  - `metatron_qso_wasm`: a module without imports and with one JSON entry
+    point (`qasm`, `graph`, `walk`, `search`, `isomorphism`, `version`).
+  - npm package `metatron-qso` (`metatron_qso_wasm/js`): a dependency-free
+    wrapper with TypeScript types, tested with Node against the same
+    OpenQASM examples and graph results as the native build. Built by
+    `scripts/build_wasm.py`.
+  - A browser playground (`docs/playground`, published with the
+    documentation site at `/playground/`): OpenQASM programs with
+    histograms and exports, animated quantum walks and spatial search on
+    Metatron's Cube and any graph specification, run in a Web Worker.
+- Python: `Program` (`from_qasm`, `from_circuit`, `probabilities`,
+  `sample`, `to_circuit`, `to_qasm3`, `to_qasm2`) and `Circuit.to_qasm3`.
+- CLI: `qso qasm` runs OpenQASM 2 and 3 programs exactly, mid-circuit
+  measurements and conditions included, and converts them
+  (`--export qasm2|qasm3`); `qso estimate` reads unitary OpenQASM 3
+  programs.
+- Fuzz target `openqasm`: the OpenQASM 2 and 3 exports of a random
+  program reproduce its outcome distribution.
+- Guide chapters "OpenQASM programs" and "WebAssembly and JavaScript".
 
 ### Added — algorithms and physics (milestone 1.5)
 
@@ -121,6 +174,15 @@ earlier releases changed.
 
 ### Changed
 
+- `from_qasm2` reads through the new parser: it now accepts `gate`
+  definitions, and still drops measurements; `reset` and
+  conditions remain errors there.
+- `qso qasm` without `--noise`/`--device` samples the program's classical
+  bits (all qubits for a program without bits), where it used to drop
+  measurements and measure every qubit.
+- `MAX_QUBITS` is 26 on 32-bit targets such as WebAssembly (34 on 64-bit
+  targets).
+- The release workflow also publishes the npm package.
 - `DensityMatrix::apply_device`, `sample_with_readout`, `scale` and
   `add_scaled`. Consecutive channels on the same qubits are applied as
   one superoperator.

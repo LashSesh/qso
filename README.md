@@ -3,13 +3,15 @@
 [![CI](https://github.com/LashSesh/qso/actions/workflows/ci.yml/badge.svg)](https://github.com/LashSesh/qso/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/metatron-qso-rs.svg)](https://crates.io/crates/metatron-qso-rs)
 [![PyPI](https://img.shields.io/pypi/v/metatron-qso.svg)](https://pypi.org/project/metatron-qso/)
+[![npm](https://img.shields.io/npm/v/metatron-qso.svg)](https://www.npmjs.com/package/metatron-qso)
 [![docs.rs](https://img.shields.io/docsrs/metatron-qso-rs)](https://docs.rs/metatron-qso-rs)
 [![Rust 1.89+](https://img.shields.io/badge/rust-1.89%2B-orange.svg)](https://www.rust-lang.org/)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](metatron_qso_py/README.md)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-**Validated quantum simulation in pure Rust, with Python bindings and a
-command-line tool.**
+**Validated quantum simulation in pure Rust, with Python bindings, a
+command-line tool and a WebAssembly build for JavaScript and the
+browser.**
 
 QSO simulates quantum circuits exactly — as pure states or as density
 matrices with noise — and runs variational and textbook algorithms on top of
@@ -27,7 +29,9 @@ where the graph allows it (a walk on the 2³⁰-node hypercube in 31
 dimensions), decides perfect state transfer, and compiles walks to circuits.
 Its signature geometry is **Metatron's Cube**, treated with mathematical
 precision: the complete graph K₁₃ drawn on the 13 centres of the Fruit of
-Life.
+Life. It reads and writes OpenQASM 2 and 3, including mid-circuit
+measurement and feed-forward, and runs in the browser: try the
+[playground](https://lashsesh.github.io/qso/playground/).
 
 The rule of the project: **no claim without a test.** Every number in this
 README is reproduced by
@@ -62,7 +66,8 @@ or by the benchmark report you can run yourself.
 | Area | Contents |
 |---|---|
 | **Statevector simulator** | n-qubit pure states (up to 34 qubits) with multi-threaded kernels, gate fusion and cache blocking. Gates: H, X, Y, Z, S, S†, T, T†, √X, √X†, RX, RY, RZ, P, U, SWAP, RXX, RYY, RZZ and custom unitaries on up to 6 qubits, each with any number of control qubits. Sampling, mid-circuit measurement, reduced density matrices, entanglement entropy |
-| **Circuits** | Builder API with symbolic, differentiable parameters (`θ = a·p[i] + b`), inverse, binding, depth and gate counts. OpenQASM 2.0 export *and* import; multi-controlled gates are exported by exact, ancilla-free decomposition |
+| **Circuits** | Builder API with symbolic, differentiable parameters (`θ = a·p[i] + b`), inverse, binding, depth and gate counts. OpenQASM 2.0 and 3 export *and* import; multi-controlled gates are exported by exact, ancilla-free decomposition |
+| **Programs** | OpenQASM 2 and an OpenQASM 3 subset: gate definitions, `ctrl`/`negctrl`/`inv`/`pow` modifiers, mid-circuit measurement, reset and conditions. Exact outcome distributions by following every measurement branch, seeded sampling; checked against the OpenQASM project's example programs |
 | **Observables** | Pauli strings and sums with a parser (`"0.5*Z0 Z1 - X2"`), matrix-free expectation values and `H\|ψ⟩`, exact ground states by Lanczos |
 | **Noise** | Density-matrix simulator (up to 14 qubits) on the same kernels. Depolarising (1 and 2 qubits), amplitude damping, phase damping, bit flip, phase flip, thermal relaxation (T₁/T₂), Pauli channels (correlated two-qubit noise), coherent rotations, custom Kraus channels, Pauli twirls. **Device models** (JSON): per-qubit T₁/T₂ and readout errors, per-gate durations, depolarising errors, over-rotations and channels, relaxation while qubits wait. **Quantum trajectories** for any register a state vector holds: one trajectory, compilation included, costs about three noiseless runs at 16–20 qubits, and 200 trajectories take 1.2–1.3 times as long as 200 noiseless runs |
 | **Mitigation and estimation** | Estimates with standard errors and confidence intervals; variance-optimal (Neyman) shot allocation over measurement groups; readout calibration (tensored and full) and mitigation; zero-noise extrapolation (global and random folding; linear, Richardson, polynomial and exponential fits); probabilistic error cancellation of Pauli noise with its sampling overhead; Pauli twirling; classical shadows |
@@ -78,7 +83,7 @@ or by the benchmark report you can run yourself.
 | **Quantum walks** | Continuous-time walks on any graph — exact on up to 2048 nodes, Krylov propagation and cyclic subspaces beyond — with limiting and time-averaged distributions and mixing times. **Symmetry reduction** by equitable partitions (hypercubes, Hamming and Johnson graphs of any size). Childs–Goldstone spatial search with optimised hopping rate, **perfect state transfer**, Lindblad dephasing, classical baselines. **Discrete-time walks**: coined walks (Grover, Fourier, Hadamard coins; Shenvi–Kempe–Whaley search), the Hadamard walk on the line, Szegedy walks with quantum hitting times. **Walk circuits**: exact for circulant and Cayley graphs, product formulas for any graph |
 | **Boson sampling** | Permanents (Glynn's formula, `O(n·2ⁿ)`), Haar-random interferometers, exact output probabilities for indistinguishable and distinguishable photons, exact sampling (Clifford & Clifford) |
 | **Backends** | Statevector, noisy density-matrix and device backends (density matrices or trajectories), shot-based estimation with qubit-wise-commuting measurement groups |
-| **Interfaces** | Rust library `metatron_qso`, Python package `metatron_qso` (NumPy I/O, type stubs), `qso` command-line tool with JSON output |
+| **Interfaces** | Rust library `metatron_qso`, Python package `metatron_qso` (NumPy I/O, type stubs), `qso` command-line tool with JSON output, npm package `metatron-qso` (WebAssembly, no dependencies) and a browser playground |
 | **Reproducibility** | One explicit, portable seeded RNG (xoshiro256++) for all randomness; parallel sums give bit-identical results for any thread count |
 
 ## Validated results
@@ -193,6 +198,13 @@ cargo add metatron-qso-rs
 
 The library is imported as `metatron_qso`. Features: `parallel` (default;
 multi-threading via rayon) and `cli`.
+
+**JavaScript** ([npm](https://www.npmjs.com/package/metatron-qso); Node.js
+18+, browsers)
+
+```bash
+npm install metatron-qso
+```
 
 **Command-line tool**
 
@@ -333,7 +345,7 @@ machine-readable output; `qso <command> --help` lists all options.
 | `qaoa` | QAOA for MaxCut with exact optimum and approximation ratio | `--graph`, `--p`, `--restarts`, `--seed`, `--layerwise` |
 | `vqe` | VQE with an EfficientSU2 ansatz, compared with the exact ground energy | `--model h2\|tfim:N,J,H\|heisenberg:N,J,Δ`, `--hamiltonian "<Pauli sum>"`, `--qubits`, `--layers`, `--method`, `--restarts`, `--seed` |
 | `grover` | Grover search, simulated vs. theoretical success | `--qubits`, `--marked`, `--iterations` |
-| `qasm FILE` | Simulate an OpenQASM 2.0 file and sample counts | `--shots`, `--seed`, `--noise p1,p2`, `--device FILE`, `--trajectories N` |
+| `qasm FILE` | Run an OpenQASM 2 or 3 program and sample its bits, or convert it | `--shots`, `--seed`, `--export qasm2\|qasm3`, `--noise p1,p2`, `--device FILE`, `--trajectories N` |
 | `estimate FILE` | ⟨H⟩ with standard error, optionally mitigated | `--observable`, `--shots`, `--device`, `--mitigate-readout`, `--zne 1,3,5`, `--pec N` |
 | `molecule FILE` | Qubit Hamiltonian, Hartree–Fock and full-CI energies of an FCIDUMP molecule, and a variational solution | `--mapping`, `--two-qubit-reduction`, `--method none\|uccsd\|upccgsd\|adapt`, `--roots` |
 | `trotter` | Trotter–Suzuki circuit for exp(−iHt) with its error bound | `--hamiltonian`, `--time`, `--steps`, `--order`, `--output FILE` |
@@ -403,21 +415,24 @@ Know its boundaries:
 | Custom unitary gates | up to 6 target qubits | Dense kernel |
 | Exact walk analysis | up to 2048 nodes, or 2048 cells of an equitable partition | Dense eigendecomposition. Beyond that, `evolve`/`probabilities` use Krylov, and limiting distributions the start node's cyclic subspace when it is small; symmetric graphs of any size reduce to their quotients |
 | Automorphism groups, canonical labelling | intended for up to a few thousand nodes | Exact search, worst-case exponential like every known algorithm |
-| OpenQASM | version 2.0, `qelib1.inc` gates | No custom `gate` definitions, classical control or `reset`; version 3 is not supported |
+| OpenQASM | version 2.0 and an OpenQASM 3 subset | OpenQASM 3's classical variables and arithmetic, loops, subroutines, calibrations and timing are rejected with an error naming the feature. Exact distributions follow up to 4096 measurement branches; beyond that, sampling simulates shot by shot |
+| WebAssembly | 26 qubits; graphs and walks up to 2048 nodes | 4 GiB address space; single-threaded |
 | Full CI | 2¹⁸ determinants (dense up to 4096) | Determinant-space diagonalisation; molecules up to 32 spatial orbitals can be mapped to qubits |
 | Product-formula bound, order ≥ 4 | rigorous but loose | Falls only as `r⁻²` with the steps until they are short; the actual error falls as `r⁻⁴` |
 
 Not included: GPU acceleration, tensor-network or stabiliser simulation,
 computing molecular integrals (QSO reads them from FCIDUMP files written by
-a quantum-chemistry code), and submission to quantum hardware. To run on hardware, export a circuit with
-`to_qasm2` and submit it with the vendor's SDK.
+a quantum-chemistry code), and submission to quantum hardware. To run on hardware, export a circuit or
+program to OpenQASM 2 or 3 and submit it with the vendor's SDK.
 
 ## Conventions
 
 * Qubit 0 is the least significant bit of a basis index (as in Qiskit); bit
   strings print qubit n−1 first.
 * Time evolution is `exp(−iHt)`; rotations are `R_P(θ) = exp(−iθP/2)`;
-  `P(λ) = diag(1, e^{iλ})`; `U(θ, φ, λ)` follows OpenQASM.
+  `P(λ) = diag(1, e^{iλ})`; `U(θ, φ, λ)` follows OpenQASM 2 (OpenQASM 3's
+  `U` differs by the global phase `e^{iθ/2}`, which QSO keeps where it
+  matters).
 * Quantum walks use `H = γL` (Laplacian) or `H = −γA` (adjacency).
 * Invalid input returns `QsoError` in Rust and raises `ValueError` in
   Python.
@@ -444,8 +459,10 @@ metatron-qso-rs/            Rust library `metatron_qso` and the `qso` CLI
   tests/                    validation, robustness and property tests
   examples/, benches/       runnable examples, criterion benchmarks
 metatron_qso_py/            Python package (PyO3 + NumPy): src/, python/, tests/, examples/
+metatron_qso_wasm/          WebAssembly module (JSON interface) and the npm package in js/
 docs/                       roadmap, architecture, benchmarks, audit of v0.1, 1.0 plan
 docs/guide/, docs/tutorials/ user guide (mdBook) and executed notebooks of the documentation site
+docs/playground/            browser playground (part of the documentation site)
 docs/technical-note/        technical note: source, data and build script
 benchmarks/cross_framework/ comparison with Qiskit Aer, Qulacs, Cirq, PennyLane, The Walrus
 docs/archive/               concept documents of v0.1 (PDF)
@@ -464,13 +481,20 @@ cargo bench -p metatron-qso-rs                    # criterion benchmarks
 pip install maturin numpy pytest
 maturin develop --release -m metatron_qso_py/Cargo.toml
 pytest metatron_qso_py/tests
+
+# WebAssembly and the npm package (Node.js 18+)
+rustup target add wasm32-unknown-unknown
+python scripts/build_wasm.py
+(cd metatron_qso_wasm/js && npm test)
 ```
 
 CI runs formatting, Clippy and rustdoc; tests on Linux, macOS and Windows; a
 build without multi-threading; the minimum Rust version; all examples and
-CLI smoke tests; and the Python tests on 3.9 and 3.13. Pushing a tag
-`vX.Y.Z` builds and tests the wheels and the source distribution and
-publishes the release to crates.io, PyPI and GitHub
+CLI smoke tests; the Python tests on 3.9 and 3.13; and the core tests
+built for WebAssembly and run under Node.js, with the npm package's
+tests. Pushing a tag `vX.Y.Z` builds and tests the wheels, the source
+distribution and the npm package and publishes the release to crates.io,
+PyPI, npm and GitHub
 ([CONTRIBUTING.md](CONTRIBUTING.md#releasing)).
 
 New features follow one rule ([CONTRIBUTING.md](CONTRIBUTING.md)): a claim
@@ -481,6 +505,8 @@ needs a test against an independent reference.
 | Document | Content |
 |---|---|
 | [User guide](https://lashsesh.github.io/qso/) | Guide, executed tutorials and Python API reference (sources in [docs/guide](docs/guide/) and [docs/tutorials](docs/tutorials/)) |
+| [Playground](https://lashsesh.github.io/qso/playground/) | OpenQASM programs, quantum walks and spatial search in the browser ([source](docs/playground/)) |
+| [metatron_qso_wasm/js/README.md](metatron_qso_wasm/js/README.md) | JavaScript API of the npm package |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the simulator works: kernels, determinism, gradients, Krylov methods, automorphism search, walks |
 | [Technical note](docs/technical-note/QSO_Technical_Note_v2.pdf) | Validated benchmarks of every algorithm family, comparison with Qiskit Aer, Qulacs, Cirq and PennyLane, correction of the 2025 note ([source and data](docs/technical-note/); DOI [10.5281/zenodo.23623226](https://doi.org/10.5281/zenodo.23623226)) |
 | [docs/BENCHMARKS.md](docs/BENCHMARKS.md) | Measured performance with method and variance |

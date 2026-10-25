@@ -70,11 +70,14 @@ Sums can be added, subtracted and scaled. The models `transverse_field_ising`,
 `heisenberg_xxz`, `maxcut_cost` and `h2_sto3g` build common Hamiltonians.
 Expectation values are computed without building a matrix.
 
-## OpenQASM 2.0
+## OpenQASM
 
-Circuits export to OpenQASM 2.0, using only gates of the original
-`qelib1.inc`. Gates outside that set are decomposed exactly.
-Import reads the same gates plus Qiskit's extensions:
+Circuits export to OpenQASM 2.0 (`to_qasm`), using only gates of the
+original `qelib1.inc`, and to OpenQASM 3 (`to_qasm3`), using the gates of
+`stdgates.inc` and `ctrl @` modifiers. Gates outside those sets are
+decomposed exactly. `Circuit.from_qasm` reads OpenQASM 2.0, including
+`gate` definitions and Qiskit's extensions of `qelib1.inc`, and drops
+measurements:
 
 ```python
 import metatron_qso as q
@@ -85,11 +88,10 @@ again = q.Circuit.from_qasm(text)
 assert abs(q.simulate(c).fidelity(q.simulate(again)) - 1) < 1e-12
 ```
 
-Import rejects, with an error, the following:
-
-- custom `gate` definitions, `reset` and classical conditions;
-- parameters that are not finite;
-- programs larger than 2¹⁴ qubits or 2²² gates.
+`Circuit.from_qasm` rejects `reset` and classical conditions, parameters
+that are not finite, and programs larger than 2¹⁴ qubits or 2²² gates.
+Programs with mid-circuit measurements, resets, conditions or OpenQASM 3
+syntax are read as a `Program` ([OpenQASM programs](programs.md)).
 
 ## In Rust
 

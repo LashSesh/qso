@@ -6,7 +6,7 @@ the rustdoc (`cargo doc -p metatron-qso-rs --open`).
 ## Layers
 
 ```
-            ┌─────────────────────── qso CLI ─── Python (PyO3) ─┐
+            ┌─────── qso CLI ─── Python (PyO3) ─── WebAssembly ─┐
 chemistry   │ fermion operators · mappings · FCIDUMP · full CI · │
             │ UCCSD / k-UpCCGSD · ADAPT-VQE                      │
 algorithms  │ VQE · QAOA (+ mixers, QUBO) · Grover · QFT/QPE ·   │
@@ -20,7 +20,7 @@ mitigation  │ readout calibration · ZNE · PEC · Pauli twirling    │
 estimation  │ estimates with errors · shot allocation · shadows   │
 backend     │ statevector / density-matrix / device backends      │
 quantum     │ StateVector · Circuit · plans (fusion, blocking) · │
-            │ PauliSum · OpenQASM (+ multi-control decomposition)│
+            │ Program · PauliSum · OpenQASM 2/3 · decompositions │
 noise       │ DensityMatrix · channels · device models ·          │
             │ compiled noise programs · quantum trajectories      │
 graph       │ Graph · generators · Metatron · automorphisms ·    │
@@ -108,6 +108,45 @@ controlled gates exactly and without ancillas (Barenco et al. 1995):
 Toffolis (Lemma 7.2), with one idle qubit two halves (Lemma 7.3); `C^k(U)`
 becomes `C(V)·C^{k−1}(X)·C(V†)·C^{k−1}(X)·C^{k−1}(V)` with `V² = U`
 (Lemma 7.5), the target serving as idle qubit — `O(k²)` gates in all.
+
+## Programs and OpenQASM (`quantum/program.rs`, `quantum/openqasm.rs`)
+
+A `Program` is a list of operations: gates, measurements into classical
+bits, resets, and blocks conditioned on bits. `probabilities` computes the
+exact distribution of the classical record by carrying a list of branches,
+each a weight, a normalised state and the bits written so far. A
+measurement splits every branch into its two outcomes (dropping outcomes of
+probability zero), a reset splits and flips, and a condition runs its block
+on the branches whose record satisfies it. The number of branches and the
+amplitudes they hold are bounded (4096 branches, 2²⁶ amplitudes). When a
+program is gates followed by final measurements, one state vector suffices
+and no branches are made. Beyond the bounds, `sample` simulates shot by
+shot.
+
+One recursive-descent parser reads both OpenQASM versions; the header
+selects the version-specific rules (built-in gates, `U`'s phase,
+statement forms). Gate definitions are expanded at the call site, with
+modifiers applied while expanding: `inv` reverses and inverts the body,
+`pow(k)` repeats it, and `ctrl`/`negctrl` add controls to every gate of
+the body, turning the body's global phases (`gphase`, and the phases by
+which OpenQASM 3's `U`, `u2` and `u3` differ from QSO's gates) into
+controlled phases. The phase of the whole program is dropped. Expansion
+counts operations and nesting depth, so hostile input fails with an error
+instead of exhausting memory or the stack.
+
+## WebAssembly (`metatron_qso_wasm`)
+
+The core has no platform code beyond optional rayon, so it compiles for
+`wasm32` without the `parallel` feature. `MAX_QUBITS` follows the pointer
+width: 26 qubits (1 GiB of amplitudes) in a 32-bit address space.
+
+The module exposes one function. A JavaScript caller allocates a buffer in
+the module's memory (`qso_alloc`), writes a UTF-8 JSON request, calls
+`qso_call`, reads the response (`qso_response_len`) and frees it
+(`qso_free`). This needs no generated bindings and no imports, so the
+module runs in any WebAssembly host, and the JavaScript wrapper is a page
+of code. Every parameter is validated and unknown parameters are errors.
+A panic aborts the module; the wrapper then replaces the instance.
 
 ## Device models and trajectories (`noise/`)
 

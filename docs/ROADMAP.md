@@ -1,10 +1,9 @@
 # QSO Roadmap (1.x)
 
-Status: October 2026. Milestones 1.1 to 1.5 delivered — 1.3 combined the
+Status: October 2026. Milestones 1.1 to 1.6 delivered — 1.3 combined the
 milestones planned as "quantum walks" and "simulation performance".
 Milestones 1.4 (noise at scale and error mitigation), 1.5 (algorithms and
-physics) and 1.6 (interoperability, in progress) ship together as release
-1.4.0. Up to 1.3 milestone and release numbers coincided; from 1.4 on the
+physics) and 1.6 (interoperability) ship together as release 1.4.0. Up to 1.3 milestone and release numbers coincided; from 1.4 on the
 milestone numbers name units of work and releases follow Semantic
 Versioning on their own (the next release after 1.3.0 is 1.4.0, whatever
 it contains).
@@ -265,19 +264,30 @@ the largest possible gap instead of exceeding it, and SSVQE accepting
 weights that are not strictly decreasing. All were fixed with regression
 tests before the release.
 
-### 1.6 — Interoperability and reach (M, next)
+### 1.6 — Interoperability and reach (delivered)
 
-| Deliverable | Detail |
-|---|---|
-| OpenQASM | `gate` definitions in QASM 2; an OpenQASM 3 subset (gate definitions, parameters, `measure`, `reset`, simple classical conditions) |
-| Browser | `wasm32` build and npm package; interactive Metatron playground (walks, search, symmetry) on GitHub Pages |
+| Deliverable | Delivered | Not done, and why |
+|---|---|---|
+| OpenQASM | one parser for OpenQASM 2.0 and an OpenQASM 3 subset: `gate` definitions, `ctrl`/`negctrl`/`inv`/integer `pow` modifiers, `gphase`, `measure`, `reset`, conditions with blocks and `else`; `Program` with exact outcome distributions over measurement branches and seeded sampling; export to both versions; Python `Program`, `qso qasm` for programs | OpenQASM 3's classical types and arithmetic, loops, subroutines, calibrations and timing: they turn programs into a classical language, and the exact branch-following simulation would need an interpreter. They are rejected with an error naming the feature |
+| Browser | the core builds for `wasm32`; `metatron_qso_wasm` (a module without imports, JSON interface); npm package `metatron-qso` with types; playground for OpenQASM programs, walks, search and symmetry data at `/playground/` of the documentation site | multi-threading in the browser (needs cross-origin isolation and nightly Rust); the first npm publish is manual, because npm attaches trusted publishers only to existing packages |
 
 Bridges to Qiskit, PennyLane and Cirq are not planned (decision of October
 2026): they would add test dependencies and follow those projects' release
 cycles. OpenQASM 2/3 is the exchange format.
 
-Validation: QASM round trips on the official example files; the wasm build
-passes the same test vectors as the native build.
+Validation:
+
+* the example programs of the OpenQASM project give their known results
+  (adder, phase estimation, teleportation, W state, repetition code,
+  QFT, randomised benchmarking); the six OpenQASM 3 examples in the
+  subset match their OpenQASM 2 versions, the other fifteen are
+  rejected; all round-trip through both exports;
+* a fuzz target checks that the exports of random programs reproduce
+  their outcome distributions;
+* the wasm build passes the same test vectors as the native build: the
+  library's unit, validation, OpenQASM and robustness tests run as
+  `wasm32-wasip1` under Node.js in CI, and the npm package's tests check
+  the OpenQASM examples and graph results.
 
 ### Research track (decide after 1.6)
 
@@ -324,7 +334,9 @@ Taken (October 2026):
   Semantic Versioning and are no longer tied to milestone numbers.
 * No integral code: molecules come in as FCIDUMP files, written by any
   quantum-chemistry program (the repository's files by PySCF).
-
-Open:
-
-* Whether the browser playground is worth its maintenance cost.
+* The browser playground stays, because it costs little to maintain: it
+  is plain HTML and JavaScript without dependencies or a build step, it
+  uses only the npm package's JSON interface, which the package's tests
+  cover, and the documentation build publishes it. If it ever needs
+  more than that, it is removed from the site rather than given a
+  framework.
