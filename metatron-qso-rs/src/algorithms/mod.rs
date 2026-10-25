@@ -8,6 +8,8 @@
 //! * [`vqe`] — variational eigensolver
 //! * [`excited`] — excited states by VQD and SSVQE
 //! * [`qaoa`] — QAOA for weighted MaxCut with exact optimum and INTERP
+//! * [`combinatorial`] — QUBO and Ising problems; QAOA with X, XY and
+//!   warm-start mixers
 //! * [`grover`] — Grover search
 //! * [`qft`] — quantum Fourier transform and phase estimation
 //! * [`time_evolution`] — Trotter–Suzuki and qDRIFT circuits with error bounds
@@ -16,6 +18,7 @@
 
 pub mod ansatz;
 pub mod classifier;
+pub mod combinatorial;
 pub mod excited;
 pub mod geometry;
 pub mod gradients;
