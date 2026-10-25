@@ -114,6 +114,34 @@ jobs:
             --allowlist metatron_qso_py/stubtest-allowlist.txt
           python -m mypy metatron_qso_py/examples metatron_qso_py/tests
 
+  wasm:
+    name: WebAssembly (core tests under WASI, npm package)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1, wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      # The library's unit, validation, OpenQASM and robustness tests, built
+      # for wasm32 and run under Node's WASI: the same test vectors as the
+      # native build (property tests and benchmarks need native threads).
+      - name: Core tests as wasm32-wasip1
+        env:
+          CARGO_TARGET_WASM32_WASIP1_RUNNER: node --no-warnings ${{ github.workspace }}/scripts/wasi-runner.mjs
+        run: >-
+          cargo test --release --target wasm32-wasip1 -p metatron-qso-rs --no-default-features
+          --lib --test validation --test openqasm --test robustness
+      - name: npm package
+        run: |
+          python3 scripts/build_wasm.py
+          cd metatron_qso_wasm/js
+          npm test
+          npm pack --dry-run
+
   semver:
     name: API compatibility
     runs-on: ubuntu-latest
@@ -127,7 +155,7 @@ jobs:
           release-type: minor
 
   miri:
-    name: Miri (unsafe kernels)
+    name: Miri (unsafe kernels and exports)
     runs-on: ubuntu-latest
     env:
       # Nightly lints are not the subject of this job.
@@ -145,6 +173,8 @@ jobs:
       # Under Miri the parallel thresholds are lowered (src/parallel.rs), so
       # the multi-threaded kernel paths run on 7-qubit registers.
       - run: "cargo miri test -p metatron-qso-rs --lib -- quantum::kernels:: quantum::plan:: parallel::"
+      # The WebAssembly module's exports pass buffers as raw pointers.
+      - run: cargo miri test -p metatron_qso_wasm --lib -- buffers_round_trip
 
   fuzz:
     name: fuzz (60 s per target)

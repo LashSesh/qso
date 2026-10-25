@@ -1,5 +1,5 @@
 [workspace]
-members = ["metatron-qso-rs", "metatron_qso_py"]
+members = ["metatron-qso-rs", "metatron_qso_py", "metatron_qso_wasm"]
 exclude = ["metatron-qso-rs/fuzz"]
 resolver = "3"
 

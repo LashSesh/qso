@@ -539,6 +539,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "metatron_qso_wasm"
+version = "1.4.0"
+dependencies = [
+ "metatron-qso-rs",
+ "serde_json",
+]
+
+[[package]]
 name = "nalgebra"
 version = "0.35.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

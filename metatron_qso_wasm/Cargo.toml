@@ -1,0 +1,19 @@
+[package]
+name = "metatron_qso_wasm"
+description = "WebAssembly module of QSO (metatron-qso-rs) with a JSON interface, published to npm as metatron-qso."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "js/README.md"
+publish = false
+
+[lib]
+name = "metatron_qso_wasm"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+metatron-qso-rs.workspace = true
+serde_json.workspace = true

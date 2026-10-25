@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>QSO Playground</title>
+  <meta name="description" content="Run OpenQASM programs, quantum walks and spatial search in the browser with QSO compiled to WebAssembly.">
+  <link rel="stylesheet" href="playground.css">
+  <script type="module" src="playground.js"></script>
+</head>
+<body>
+  <header>
+    <h1>QSO Playground</h1>
+    <p class="lede">QSO compiled to WebAssembly, running in your browser. Nothing is sent to a server.
+      <span id="version" class="muted"></span></p>
+    <nav>
+      <a href="../">User guide</a> · <a href="https://www.npmjs.com/package/metatron-qso">npm package</a> ·
+      <a href="https://github.com/LashSesh/qso">Source</a>
+    </nav>
+  </header>
+
+  <div class="tabs" role="tablist">
+    <button role="tab" id="tab-circuits" aria-controls="circuits" aria-selected="true">Circuits</button>
+    <button role="tab" id="tab-walks" aria-controls="walks" aria-selected="false">Quantum walks</button>
+    <button role="tab" id="tab-search" aria-controls="search" aria-selected="false">Spatial search</button>
+  </div>
+
+  <main>
+    <section id="circuits" role="tabpanel" aria-labelledby="tab-circuits">
+      <p>An OpenQASM 2 or 3 program. QSO computes the exact distribution of the classical bits, including
+        mid-circuit measurements and conditions, and samples shots from it.</p>
+      <div class="controls">
+        <label>Example <select id="example"></select></label>
+        <label>Shots <input id="shots" type="number" min="0" max="1000000" value="1000"></label>
+        <label>Seed <input id="seed" type="number" min="0" value="1"></label>
+        <button id="run-qasm" class="primary">Run</button>
+      </div>
+      <textarea id="source" spellcheck="false" rows="14" aria-label="OpenQASM program"></textarea>
+      <p id="qasm-status" class="status" role="status"></p>
+      <div id="qasm-result" hidden>
+        <h2 id="qasm-chart-title">Outcome probabilities</h2>
+        <div id="qasm-chart" class="chart"></div>
+        <details>
+          <summary>Table</summary>
+          <div id="qasm-table" class="table-wrap"></div>
+        </details>
+        <details>
+          <summary>Exported as OpenQASM 3</summary>
+          <pre id="qasm3"></pre>
+        </details>
+        <details id="qasm2-box">
+          <summary>Exported as OpenQASM 2</summary>
+          <pre id="qasm2"></pre>
+        </details>
+      </div>
+    </section>
+
+    <section id="walks" role="tabpanel" aria-labelledby="tab-walks" hidden>
+      <p>A continuous-time quantum walk <code>exp(−iHt)</code> from one node. The colour of a node is the
+        probability of finding the walker there. Click a node to start from it.</p>
+      <div class="controls">
+        <label>Graph <input id="walk-graph" list="graphs" value="metatron:2"></label>
+        <label>Generator <select id="walk-generator">
+          <option value="laplacian">Laplacian H = γL</option>
+          <option value="adjacency">adjacency H = −γA</option>
+        </select></label>
+        <label>γ <input id="walk-gamma" type="number" step="0.05" value="1"></label>
+        <label>Up to t = <input id="walk-tmax" type="number" min="0.1" step="0.5" value="6"></label>
+        <button id="run-walk" class="primary">Run</button>
+      </div>
+      <p id="walk-status" class="status" role="status"></p>
+      <div id="walk-result" hidden>
+        <p id="walk-info" class="info"></p>
+        <div class="controls">
+          <button id="walk-play" aria-label="Play">▶</button>
+          <label class="grow"><span>t&nbsp;=</span> <output id="walk-t">0</output>
+            <input id="walk-time" type="range" min="0" max="200" value="0"></label>
+        </div>
+        <div class="split">
+          <div id="walk-graph-view" class="chart graph"></div>
+          <div>
+            <h2>Node probabilities</h2>
+            <div id="walk-chart" class="chart"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="search" role="tabpanel" aria-labelledby="tab-search" hidden>
+      <p>Spatial search: a walk under <code>H = γL − Σ|w⟩⟨w|</code> from the uniform state. QSO optimises the
+        hopping rate γ and the measurement time. Click nodes to mark them.</p>
+      <div class="controls">
+        <label>Graph <input id="search-graph" list="graphs" value="metatron"></label>
+        <label>Marked <input id="search-marked" value="0"></label>
+        <button id="run-search" class="primary">Search</button>
+      </div>
+      <p id="search-status" class="status" role="status"></p>
+      <div id="search-result" hidden>
+        <p id="search-info" class="info"></p>
+        <div class="split">
+          <div id="search-graph-view" class="chart graph"></div>
+          <div>
+            <h2>Success probability over time</h2>
+            <div id="search-chart" class="chart"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <datalist id="graphs">
+    <option value="metatron">Metatron's Cube (K13)</option>
+    <option value="metatron:2">Metatron's Cube, lines up to length 2</option>
+    <option value="fruit-of-life">Fruit of Life</option>
+    <option value="cycle:12"></option>
+    <option value="path:9"></option>
+    <option value="hypercube:4"></option>
+    <option value="petersen"></option>
+    <option value="platonic:dodecahedron"></option>
+    <option value="grid:5x5"></option>
+    <option value="paley:13"></option>
+    <option value="johnson:6,3"></option>
+    <option value="circulant:16,1,4"></option>
+  </datalist>
+
+  <div id="tooltip" class="tooltip" hidden></div>
+  <footer class="muted">QSO is Apache-2.0 licensed. Bit strings put bit 0 (qubit 0) on the right.</footer>
+</body>
+</html>

@@ -2,16 +2,19 @@ name: Release
 
 # Pushing a tag `vX.Y.Z` publishes version X.Y.Z:
 #
-#   1. preflight  – tag, Cargo and pyproject versions agree, the CHANGELOG has
-#                   an entry, and the crate packages and builds on its own
-#                   (`cargo publish --dry-run`);
+#   1. preflight  – tag, Cargo, pyproject and npm versions agree, the
+#                   CHANGELOG has an entry, and the crate packages and builds
+#                   on its own (`cargo publish --dry-run`);
 #   2. wheels     – abi3 wheels for Linux (manylinux and musllinux, x86_64 and
 #                   aarch64), macOS (universal2) and Windows (x86_64, arm64),
 #                   each built on its own architecture, installed and tested
 #                   with the Python test-suite;
 #      sdist      – source distribution, built and tested the same way;
+#      npm-package – the WebAssembly module and its JavaScript package,
+#                   tested with Node and packed;
 #   3. crates.io  – `metatron-qso-rs`;
 #   4. PyPI       – `metatron-qso` (wheels + sdist, with attestations);
+#      npm        – `metatron-qso` (with provenance);
 #   5. GitHub     – release with notes from CHANGELOG.md and all artefacts.
 #
 # Publishing steps skip versions that are already on the registry, so a
@@ -28,6 +31,13 @@ name: Release
 #   crates.io  – crate `metatron-qso-rs` → Settings → Trusted Publishing →
 #                GitHub: owner LashSesh, repository qso, workflow
 #                release.yml, environment release
+#   npm        – package `metatron-qso` → Settings → Trusted Publisher →
+#                GitHub Actions: owner LashSesh, repository qso, workflow
+#                release.yml, environment release. npm attaches a trusted
+#                publisher only to an existing package: publish the first
+#                version once by hand (`npm publish` in metatron_qso_wasm/js
+#                after `python scripts/build_wasm.py`); until then the npm
+#                job fails and the rest of the release goes ahead.
 #   GitHub     – Settings → Environments → `release`: required reviewer
 #                (the maintainer) and deployment tags `v*`
 
@@ -50,13 +60,16 @@ jobs:
       - name: Versions agree
         run: |
           python3 - <<'EOF'
-          import os, re, sys, tomllib
+          import json, os, re, sys, tomllib
 
           cargo = tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"]
           py = tomllib.load(open("metatron_qso_py/pyproject.toml", "rb"))["project"]["version"]
+          npm = json.load(open("metatron_qso_wasm/js/package.json"))["version"]
           errors = []
           if cargo != py:
               errors.append(f"Cargo.toml has {cargo}, pyproject.toml has {py}")
+          if cargo != npm:
+              errors.append(f"Cargo.toml has {cargo}, package.json has {npm}")
           if not re.search(rf"^## \[{re.escape(cargo)}\]", open("CHANGELOG.md").read(), re.M):
               errors.append(f"CHANGELOG.md has no '## [{cargo}]' section")
           if os.environ["GITHUB_REF_TYPE"] == "tag" and os.environ["GITHUB_REF_NAME"] != f"v{cargo}":
@@ -154,8 +167,30 @@ jobs:
           name: sdist
           path: dist/*.tar.gz
 
+  npm-package:
+    needs: preflight
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Build, test and pack
+        run: |
+          python3 scripts/build_wasm.py
+          cd metatron_qso_wasm/js
+          npm test
+          npm pack
+      - uses: actions/upload-artifact@v7
+        with:
+          name: npm-package
+          path: metatron_qso_wasm/js/*.tgz
+
   crates-io:
-    needs: [wheels, sdist]
+    needs: [wheels, sdist, npm-package]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     environment:
@@ -196,13 +231,44 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - run: ls -l dist
+      # The npm tarball is not a Python distribution.
+      - run: rm -f dist/*.tgz && ls -l dist
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           skip-existing: true
 
+  npm:
+    needs: crates-io
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+      url: https://www.npmjs.com/package/metatron-qso
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          # npm 11 (bundled with Node 24) publishes with OIDC trusted publishing.
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@v8
+        with:
+          name: npm-package
+          path: npm
+      - name: Publish metatron-qso
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if npm view "metatron-qso@$version" version >/dev/null 2>&1; then
+            echo "metatron-qso $version is already on npm"
+          else
+            npm publish npm/metatron-qso-"$version".tgz --access public --provenance
+          fi
+
   github-release:
-    needs: pypi
+    needs: [pypi, npm]
+    # A failed npm publish (see the note above) does not hold back the release.
+    if: ${{ !cancelled() && needs.pypi.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -216,7 +282,7 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           {
-            echo "\`pip install metatron-qso==$version\` · \`cargo add metatron-qso-rs@$version\`"
+            echo "\`pip install metatron-qso==$version\` · \`cargo add metatron-qso-rs@$version\` · \`npm install metatron-qso@$version\`"
             echo
             # The section of this version, without its heading; repository
             # links made absolute so that they work on the release page.
