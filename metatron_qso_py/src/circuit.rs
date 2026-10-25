@@ -1,13 +1,14 @@
-//! `Parameter` and `Circuit`.
+//! `Parameter`, `Circuit` and `Program`.
 
 use std::collections::BTreeMap;
 
 use metatron_qso::quantum::{
-    Circuit, GateKind, MAX_QUBITS, Param, Parameter, PauliString, PauliSum, from_qasm2, to_qasm2,
+    Circuit, GateKind, MAX_QUBITS, Param, Parameter, PauliString, PauliSum, Program, Register,
+    bitstring, from_qasm2, to_qasm2, to_qasm3,
 };
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
-use pyo3::types::PyTuple;
+use pyo3::types::{PyDict, PyTuple};
 
 use crate::{
     ComplexMatrixArg, Raise, RealArg, check_finite, check_qubits, invalid, real_vec, square_complex,
@@ -510,7 +511,15 @@ impl PyCircuit {
         to_qasm2(&self.inner, &theta_or_empty(theta), measure).raise()
     }
 
-    /// Parse an OpenQASM 2.0 program.
+    /// OpenQASM 3.0 text with parameters `theta` bound.
+    #[pyo3(signature = (theta = None, measure = false))]
+    fn to_qasm3(&self, theta: Option<RealArg<'_>>, measure: bool) -> PyResult<String> {
+        to_qasm3(&self.inner, &theta_or_empty(theta), measure).raise()
+    }
+
+    /// Parse an OpenQASM 2.0 program; measurements are dropped. Use
+    /// `Program.from_qasm` for OpenQASM 3 and for programs with mid-circuit
+    /// measurements, resets or conditions.
     #[staticmethod]
     fn from_qasm(text: &str) -> PyResult<Self> {
         let c = from_qasm2(text).raise()?;
@@ -538,8 +547,143 @@ impl PyCircuit {
     }
 }
 
+/// A quantum program: gates, measurements into classical bits, resets and
+/// gates conditioned on bits, read from OpenQASM 2 or 3.
+///
+/// Bit strings put bit 0 on the right, like `Circuit` puts qubit 0.
+#[pyclass(name = "Program", module = "metatron_qso", frozen)]
+pub struct PyProgram {
+    inner: Program,
+}
+
+fn registers<'py>(py: Python<'py>, regs: &[Register]) -> PyResult<Vec<Bound<'py, PyDict>>> {
+    regs.iter()
+        .map(|r| {
+            let d = PyDict::new(py);
+            d.set_item("name", &r.name)?;
+            d.set_item("offset", r.offset)?;
+            d.set_item("size", r.size)?;
+            Ok(d)
+        })
+        .collect()
+}
+
+#[pymethods]
+impl PyProgram {
+    /// Parse an OpenQASM 2 or 3 program (the version is read from its
+    /// header).
+    #[staticmethod]
+    fn from_qasm(py: Python<'_>, text: &str) -> PyResult<Self> {
+        let inner = py.detach(|| Program::from_qasm(text)).raise()?;
+        Ok(Self { inner })
+    }
+
+    /// The program of `circuit` with parameters `theta` bound, measuring
+    /// every qubit into the bit of the same index if `measure`.
+    #[staticmethod]
+    #[pyo3(signature = (circuit, theta = None, measure = false))]
+    fn from_circuit(
+        circuit: &PyCircuit,
+        theta: Option<RealArg<'_>>,
+        measure: bool,
+    ) -> PyResult<Self> {
+        let inner =
+            Program::from_circuit(&circuit.inner, &theta_or_empty(theta), measure).raise()?;
+        Ok(Self { inner })
+    }
+
+    #[getter]
+    fn n_qubits(&self) -> usize {
+        self.inner.n_qubits()
+    }
+
+    #[getter]
+    fn n_bits(&self) -> usize {
+        self.inner.n_bits()
+    }
+
+    /// Whether the program has only gates.
+    #[getter]
+    fn is_unitary(&self) -> bool {
+        self.inner.is_unitary()
+    }
+
+    /// Qubit registers as `{"name", "offset", "size"}` dictionaries.
+    #[getter]
+    fn qubit_registers<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyDict>>> {
+        registers(py, self.inner.qubit_registers())
+    }
+
+    /// Bit registers as `{"name", "offset", "size"}` dictionaries.
+    #[getter]
+    fn bit_registers<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyDict>>> {
+        registers(py, self.inner.bit_registers())
+    }
+
+    fn __len__(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Exact probabilities of the classical records, `{bitstring: p}`
+    /// (records with probability below 1e-15 are left out). Mid-circuit
+    /// measurements are followed branch by branch.
+    fn probabilities<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let p = &self.inner;
+        let dist = py.detach(|| p.probabilities()).raise()?;
+        let d = PyDict::new(py);
+        for (record, q) in dist {
+            d.set_item(bitstring(record as usize, p.n_bits()), q)?;
+        }
+        Ok(d)
+    }
+
+    /// `shots` seeded samples of the classical record, `{bitstring: count}`.
+    #[pyo3(signature = (shots, seed = 0))]
+    fn sample<'py>(
+        &self,
+        py: Python<'py>,
+        shots: usize,
+        seed: u64,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let p = &self.inner;
+        let counts = py.detach(|| p.sample(shots, seed)).raise()?;
+        let d = PyDict::new(py);
+        for (record, n) in counts {
+            d.set_item(bitstring(record as usize, p.n_bits()), n)?;
+        }
+        Ok(d)
+    }
+
+    /// The gates as a `Circuit`; a `ValueError` unless the program is
+    /// unitary.
+    fn to_circuit(&self) -> PyResult<PyCircuit> {
+        PyCircuit::wrap(self.inner.to_circuit().raise()?)
+    }
+
+    /// OpenQASM 3.0 text of the program.
+    fn to_qasm3(&self) -> PyResult<String> {
+        self.inner.to_qasm3().raise()
+    }
+
+    /// OpenQASM 2.0 text of the program; a `ValueError` if it needs
+    /// OpenQASM 3 (for example a condition on part of a register).
+    fn to_qasm2(&self) -> PyResult<String> {
+        self.inner.to_qasm2().raise()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Program(n_qubits={}, n_bits={}, operations={})",
+            self.inner.n_qubits(),
+            self.inner.n_bits(),
+            self.inner.len()
+        )
+    }
+}
+
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyParameter>()?;
     m.add_class::<PyCircuit>()?;
+    m.add_class::<PyProgram>()?;
     Ok(())
 }

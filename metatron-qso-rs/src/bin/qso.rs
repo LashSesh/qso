@@ -22,7 +22,7 @@ use metatron_qso::mitigation::pec::pec_expectation;
 use metatron_qso::mitigation::zne::{Extrapolation, Folding, zne};
 use metatron_qso::noise::{DeviceModel, NoiseModel};
 use metatron_qso::optimize::{Method, Options};
-use metatron_qso::quantum::{PauliSum, bitstring, from_qasm2, to_qasm2};
+use metatron_qso::quantum::{Circuit, PauliSum, Program, bitstring, from_qasm2, to_qasm2};
 use metatron_qso::walks::{
     Coin, CoinedWalk, ContinuousWalk, Generator, Quotient, QuotientWalk, SpatialSearch,
     StateTransfer, SzegedyWalk, circuits, classical_hitting_times,
@@ -47,6 +47,14 @@ struct Cli {
 enum GeneratorArg {
     Laplacian,
     Adjacency,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum QasmVersion {
+    #[value(name = "qasm2")]
+    Qasm2,
+    #[value(name = "qasm3")]
+    Qasm3,
 }
 
 impl From<GeneratorArg> for Generator {
@@ -221,9 +229,16 @@ enum Command {
         #[arg(long)]
         iterations: Option<usize>,
     },
-    /// Simulate an OpenQASM 2.0 file and sample measurement counts.
+    /// Simulate an OpenQASM 2 or 3 program and sample its classical bits
+    /// (all qubits if it has none). Mid-circuit measurements, resets and
+    /// conditions are simulated exactly; with --noise or --device the
+    /// program must be a circuit (OpenQASM 2 measurements are then replaced
+    /// by measuring every qubit at the end).
     Qasm {
         file: std::path::PathBuf,
+        /// Print the program as OpenQASM 2 or 3 instead of running it.
+        #[arg(long, value_enum, conflicts_with_all = ["noise", "device"])]
+        export: Option<QasmVersion>,
         #[arg(long, default_value_t = 1024)]
         shots: usize,
         #[arg(long, default_value_t = 0)]
@@ -239,7 +254,7 @@ enum Command {
         #[arg(long, requires = "device")]
         trajectories: Option<usize>,
     },
-    /// Estimate ⟨H⟩ of an OpenQASM 2.0 circuit from shots, with standard
+    /// Estimate ⟨H⟩ of an OpenQASM circuit from shots, with standard
     /// errors and optional error mitigation.
     Estimate {
         file: std::path::PathBuf,
@@ -399,6 +414,27 @@ fn graph(spec: &str) -> Result<Graph> {
         }
         result => result,
     }
+}
+
+/// A circuit from an OpenQASM 2 or 3 program: its gates if it has only
+/// gates; OpenQASM 2 programs keep their reading with measurements dropped.
+fn circuit_from_qasm(src: &str) -> Result<Circuit> {
+    let program = Program::from_qasm(src)?;
+    if program.is_unitary() {
+        return program.to_circuit();
+    }
+    from_qasm2(src).map_err(|_| {
+        QsoError::invalid(
+            "program",
+            "this needs a circuit: an OpenQASM 3 program without measurements, resets or \
+             conditions, or an OpenQASM 2 program without resets or conditions",
+        )
+    })
+}
+
+fn read_text(path: &std::path::Path) -> Result<String> {
+    std::fs::read_to_string(path)
+        .map_err(|e| QsoError::Parse(format!("cannot read {}: {e}", path.display())))
 }
 
 fn vector(v: &[f64]) -> String {
@@ -812,41 +848,76 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
         }
         Command::Qasm {
             file,
+            export,
             shots,
             seed,
             noise,
             device,
             trajectories,
         } => {
-            let src = std::fs::read_to_string(file)
-                .map_err(|e| QsoError::Parse(format!("cannot read {}: {e}", file.display())))?;
-            let circuit = from_qasm2(&src)?;
+            let src = read_text(file)?;
+            let program = Program::from_qasm(&src)?;
+            if let Some(version) = export {
+                let text = match version {
+                    QasmVersion::Qasm2 => program.to_qasm2()?,
+                    QasmVersion::Qasm3 => program.to_qasm3()?,
+                };
+                return Ok((json!({ "qasm": text }), text.trim_end().to_string()));
+            }
+            if noise.is_none() && device.is_none() {
+                // Exact simulation of the program; one without classical
+                // bits is measured on every qubit.
+                let (run, width) = if program.n_bits() == 0 {
+                    let c = program.to_circuit()?;
+                    (Program::from_circuit(&c, &[], true)?, program.n_qubits())
+                } else {
+                    (program.clone(), program.n_bits())
+                };
+                let counts = run.sample(*shots, *seed)?;
+                let labelled: std::collections::BTreeMap<String, usize> = counts
+                    .iter()
+                    .map(|(&r, &c)| (bitstring(r as usize, width), c))
+                    .collect();
+                let mut sorted: Vec<_> = labelled.iter().collect();
+                sorted.sort_by(|a, b| b.1.cmp(a.1));
+                let text = format!(
+                    "{} qubits, {} bits, {} operations, backend program\n{}",
+                    program.n_qubits(),
+                    program.n_bits(),
+                    program.len(),
+                    sorted
+                        .iter()
+                        .take(16)
+                        .map(|(b, c)| format!("  {b}  {c}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
+                return Ok((
+                    json!({"qubits": program.n_qubits(), "bits": program.n_bits(),
+                           "operations": program.len(), "backend": "program", "counts": labelled}),
+                    text,
+                ));
+            }
+            let circuit = circuit_from_qasm(&src)?;
             let device = device.as_deref().map(read_device).transpose()?;
-            let backend_name = match (&device, noise) {
-                (Some(_), _) => device_backend(device.as_ref(), *trajectories)?
-                    .name()
-                    .to_string(),
-                (None, Some(_)) => "density-matrix".to_string(),
-                (None, None) => "statevector".to_string(),
-            };
-            let counts = match noise {
-                _ if device.is_some() => device_backend(device.as_ref(), *trajectories)?.run(
-                    &circuit,
-                    &[],
-                    *shots,
-                    *seed,
-                )?,
-                Some(p) if p.len() == 2 => DensityMatrixBackend::new(NoiseModel::depolarizing(
-                    p[0], p[1],
-                )?)
-                .run(&circuit, &[], *shots, *seed)?,
-                Some(_) => {
+            // Here a device or depolarising noise is given.
+            let (backend_name, counts) = match (&device, noise.as_deref()) {
+                (Some(_), _) => {
+                    let backend = device_backend(device.as_ref(), *trajectories)?;
+                    let counts = backend.run(&circuit, &[], *shots, *seed)?;
+                    (backend.name().to_string(), counts)
+                }
+                (None, Some(&[p1, p2])) => {
+                    let backend = DensityMatrixBackend::new(NoiseModel::depolarizing(p1, p2)?);
+                    let counts = backend.run(&circuit, &[], *shots, *seed)?;
+                    ("density-matrix".to_string(), counts)
+                }
+                _ => {
                     return Err(QsoError::invalid(
                         "noise",
                         "expected two probabilities p1,p2",
                     ));
                 }
-                None => StatevectorBackend.run(&circuit, &[], *shots, *seed)?,
             };
             let n = circuit.n_qubits();
             let labelled: std::collections::BTreeMap<String, usize> =
@@ -1046,9 +1117,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             pec,
             seed,
         } => {
-            let src = std::fs::read_to_string(file)
-                .map_err(|e| QsoError::Parse(format!("cannot read {}: {e}", file.display())))?;
-            let circuit = from_qasm2(&src)?;
+            let circuit = circuit_from_qasm(&read_text(file)?)?;
             let h: PauliSum = observable.parse()?;
             let device = device.as_deref().map(read_device).transpose()?;
             let backend = device_backend(device.as_ref(), *trajectories)?;

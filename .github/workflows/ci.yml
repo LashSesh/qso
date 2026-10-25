@@ -80,6 +80,8 @@ jobs:
           ./target/release/qso hitting --graph cycle:64
           ./target/release/qso walk-circuit --graph cycle:16 > /tmp/walk.qasm
           ./target/release/qso qasm /tmp/walk.qasm --shots 100
+          ./target/release/qso qasm metatron-qso-rs/tests/data/openqasm/v3/teleport.qasm --shots 100
+          ./target/release/qso qasm metatron-qso-rs/tests/data/openqasm/v2/qec.qasm --export qasm3
           ./target/release/qso qasm /tmp/walk.qasm --shots 100 --device metatron-qso-rs/examples/devices/toy_device.json --trajectories 50
           ./target/release/qso estimate /tmp/walk.qasm --observable "Z0 Z1" --device metatron-qso-rs/examples/devices/toy_device.json --shots 4000 --mitigate-readout --zne 1,3
           ./target/release/qso molecule metatron-qso-rs/examples/molecules/lih_sto3g.fcidump --mapping parity --two-qubit-reduction --method adapt
@@ -193,7 +195,7 @@ jobs:
       - name: Fuzz the parsers and deserialisers
         working-directory: metatron-qso-rs
         run: |
-          for t in qasm pauli graph_spec graph_io json device chemistry; do
+          for t in qasm openqasm pauli graph_spec graph_io json device chemistry; do
             mkdir -p "fuzz/corpus/$t"
             # The prebuilt cargo-fuzz is a static musl binary and would
             # default to the musl target, which the sanitizer cannot use.
