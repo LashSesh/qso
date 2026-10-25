@@ -33,6 +33,7 @@
 - [Quantum walks on Metatron's Cube](tutorials/04_metatron_walks.md)
 - [Symmetry, state transfer and discrete walks](tutorials/05_symmetry_transfer_discrete.md)
 - [Noisy devices and error mitigation](tutorials/06_noise_mitigation.md)
+- [Molecules, dynamics and amplitude estimation](tutorials/07_chemistry_dynamics_estimation.md)
 
 # Reference
 
