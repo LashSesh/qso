@@ -1,9 +1,12 @@
 //! Quantum algorithms built on the simulators.
 //!
 //! * [`gradients`] — adjoint, parameter-shift and finite-difference gradients
+//! * [`geometry`] — quantum Fisher information, natural gradient,
+//!   variational imaginary-time evolution
 //! * [`ansatz`] — hardware-efficient templates and the explicit QAOA circuit
 //! * [`models`] — Ising, Heisenberg, MaxCut and H₂ Hamiltonians
 //! * [`vqe`] — variational eigensolver
+//! * [`excited`] — excited states by VQD and SSVQE
 //! * [`qaoa`] — QAOA for weighted MaxCut with exact optimum and INTERP
 //! * [`grover`] — Grover search
 //! * [`qft`] — quantum Fourier transform and phase estimation
@@ -13,6 +16,8 @@
 
 pub mod ansatz;
 pub mod classifier;
+pub mod excited;
+pub mod geometry;
 pub mod gradients;
 pub mod graph_classifier;
 pub mod grover;

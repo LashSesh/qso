@@ -32,7 +32,7 @@ pub enum GradientMethod {
     },
 }
 
-fn prepare(
+pub(crate) fn prepare(
     circuit: &Circuit,
     observable: &PauliSum,
     theta: &[f64],
@@ -173,9 +173,28 @@ fn adjoint(
 ) -> Result<(f64, Vec<f64>)> {
     let mut phi = prepare(circuit, observable, theta, initial)?;
     phi.apply_circuit(circuit, theta)?;
-    let mut phi = phi.into_amplitudes();
+    Ok(adjoint_with(
+        circuit,
+        theta,
+        phi.into_amplitudes(),
+        |x, y| observable.apply_amplitudes(x, y),
+    ))
+}
+
+/// Adjoint differentiation of `⟨ψ|O|ψ⟩` for any Hermitian `O` given by
+/// `apply(x, y)`: `y = O x`. `phi` is the final state `U(θ)|ψ₀⟩` (checked
+/// by the caller).
+pub(crate) fn adjoint_with<F>(
+    circuit: &Circuit,
+    theta: &[f64],
+    mut phi: Vec<C64>,
+    apply: F,
+) -> (f64, Vec<f64>)
+where
+    F: Fn(&[C64], &mut [C64]),
+{
     let mut lambda = vec![C64::new(0.0, 0.0); phi.len()];
-    observable.apply_amplitudes(&phi, &mut lambda);
+    apply(&phi, &mut lambda);
     let value = inner(&phi, &lambda).re;
     let mut grad = vec![0.0; theta.len()];
     let mut mu = vec![C64::new(0.0, 0.0); phi.len()];
@@ -197,7 +216,7 @@ fn adjoint(
         // λ ← U_k† λ
         kernels::apply_instruction(&mut lambda, &inverse, &inv_angles, false, 0);
     }
-    Ok((value, grad))
+    (value, grad)
 }
 
 fn parameter_shift(
