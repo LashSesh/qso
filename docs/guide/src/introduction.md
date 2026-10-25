@@ -3,12 +3,14 @@
 QSO is a quantum simulator written in pure Rust, with a Python package and a
 command-line tool. It simulates quantum circuits exactly, as pure states or as
 density matrices or quantum trajectories with device noise, mitigates errors
-and estimates results with error bars, and runs variational and textbook algorithms on
-top of them. It also simulates continuous- and discrete-time quantum walks on
-arbitrary graphs — reduced by symmetry where possible, with state-transfer
-analysis and compilation to circuits — and samples photons in linear
-interferometers. Its signature geometry is **Metatron's
-Cube**, the complete graph K₁₃ on the 13 centres of the Fruit of Life.
+and estimates results with error bars, and runs variational and textbook
+algorithms on top of them: VQE and QAOA, excited states, Hamiltonian
+simulation, electronic structure and amplitude estimation. It also
+simulates continuous- and discrete-time quantum walks on arbitrary graphs —
+reduced by symmetry where possible, with state-transfer analysis and
+compilation to circuits — and samples photons in linear interferometers.
+Its signature geometry is **Metatron's Cube**, the complete graph K₁₃ on the
+13 centres of the Fruit of Life.
 
 The rule of the project is **no claim without a test**. Every algorithm is
 compared with an independent reference: a closed form, a published value, a
@@ -24,6 +26,10 @@ reports them in full.
 | [Circuits and states](circuits.md) | Gates, simulation, sampling, observables, OpenQASM |
 | [Parameters and gradients](gradients.md) | Symbolic parameters, adjoint and parameter-shift gradients |
 | [Variational algorithms](variational.md) | VQE, QAOA, variational and graph classifiers |
+| [Excited states and state geometry](excited.md) | VQD, SSVQE, quantum Fisher information, natural gradient, imaginary-time evolution |
+| [Hamiltonian simulation](simulation.md) | Trotter–Suzuki circuits with error bounds, qDRIFT |
+| [Electronic structure](chemistry.md) | Fermionic operators, qubit mappings, FCIDUMP molecules, full CI, UCCSD, k-UpCCGSD, ADAPT-VQE |
+| [Optimisation problems and amplitude estimation](optimization.md) | QUBO/Ising, QAOA mixers, canonical, iterative and maximum-likelihood amplitude estimation |
 | [Noise](noise.md) | Channels, noise models, device models, density matrices, quantum trajectories |
 | [Estimation and error mitigation](mitigation.md) | Estimates with error bars, shot allocation, readout mitigation, ZNE, PEC, twirling, classical shadows |
 | [Graphs](graphs.md) | Graph library, specifications, symmetry groups, isomorphism, files |

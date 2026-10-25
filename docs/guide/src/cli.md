@@ -19,6 +19,8 @@ machine-readable output; `qso <command> --help` lists all options.
 | `grover` | Grover search, simulated against theoretical success | `--qubits`, `--marked`, `--iterations` |
 | `qasm FILE` | Simulate an OpenQASM 2.0 file and sample counts | `--shots`, `--seed`, `--noise p1,p2`, `--device FILE`, `--trajectories N` |
 | `estimate FILE` | ⟨H⟩ of an OpenQASM 2.0 circuit with standard error and 95 % interval, optionally mitigated | `--observable`, `--shots`, `--allocation`, `--device`, `--trajectories`, `--mitigate-readout`, `--zne 1,3,5`, `--extrapolation`, `--pec N` |
+| `molecule FILE` | Qubit Hamiltonian, Hartree–Fock and full-CI energies of an FCIDUMP molecule, and a variational solution | `--mapping jordan-wigner\|parity\|bravyi-kitaev`, `--two-qubit-reduction`, `--method none\|uccsd\|upccgsd\|adapt`, `--k`, `--roots` |
+| `trotter` | Trotter–Suzuki circuit for exp(−iHt) with its error bound | `--hamiltonian`, `--qubits`, `--time`, `--steps`, `--order`, `--output FILE` |
 
 Graphs are given as specifications (see [Graphs](graphs.md)), for example
 `metatron`, `fruit-of-life`, `petersen`, `hypercube:8`, `johnson:7,3` or
@@ -63,4 +65,19 @@ $ qso estimate ghz.qasm --observable "Z0 Z1 + Z1 Z2" --device toy_device.json --
 <H> (readout mitigated) = 1.963079 ± 0.004379 (95% CI [1.954496, 1.971662], 50000 samples)
 noiseless <H> = 2.000000
 ZNE ([1.0, 3.0, 5.0]) <H> = 1.998613 ± 0.010336 (95% CI [1.978355, 2.018871], 150000 samples)
+```
+
+`molecule` reads an FCIDUMP file (see [Electronic structure](chemistry.md))
+and `trotter` builds a product-formula circuit (see
+[Hamiltonian simulation](simulation.md)):
+
+```text
+$ qso molecule beh2_sto3g.fcidump --mapping parity --two-qubit-reduction --method adapt
+7 orbitals, 3 + 3 electrons; 12 qubits (parity, two-qubit reduction), 666 Pauli terms
+Hartree–Fock   -15.5603349360
+full CI        -15.5951823567
+ADAPT-VQE      -15.5948030942  (36 parameters, error vs full CI 3.79e-4)
+
+$ qso trotter --hamiltonian "Z0 Z1 + Z1 Z2 + 0.7 X0 + 0.7 X1 + 0.7 X2" --time 2 --steps 20 --order 4
+order 4, 20 steps, t = 2: 801 gates, depth 501, error bound 2.286e-2, largest column error 5.687e-6 (a lower bound on ‖U − exp(−iHt)‖)
 ```
