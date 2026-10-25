@@ -289,14 +289,9 @@ where
 
     fn dot(a: &[f64], b: &[f64]) -> f64 {
         let mut acc = [0.0; 4];
-        let (ca, cb) = (a.chunks_exact(4), b.chunks_exact(4));
-        let tail: f64 = ca
-            .remainder()
-            .iter()
-            .zip(cb.remainder())
-            .map(|(x, y)| x * y)
-            .sum();
-        for (x, y) in ca.zip(cb) {
+        let ((ca, ta), (cb, tb)) = (a.as_chunks::<4>(), b.as_chunks::<4>());
+        let tail: f64 = ta.iter().zip(tb).map(|(x, y)| x * y).sum();
+        for (x, y) in ca.iter().zip(cb) {
             for k in 0..4 {
                 acc[k] += x[k] * y[k];
             }
