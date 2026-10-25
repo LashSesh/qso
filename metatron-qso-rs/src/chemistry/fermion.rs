@@ -10,11 +10,14 @@
 //! ```
 //! use metatron_qso::chemistry::FermionOperator;
 //!
-//! let a: FermionOperator = "[0] + [1^ 0]".parse().unwrap();
+//! let a: FermionOperator = "[0]".parse().unwrap();
 //! let b: FermionOperator = "[0^]".parse().unwrap();
-//! // {a_0, a_0†} = 1, and the second term contributes a_1† a_0 a_0† + a_0† a_1† a_0.
+//! // {a_0, a_0†} = 1
 //! let anti = (&(&a * &b) + &(&b * &a)).normal_ordered();
-//! assert_eq!(anti, "1 []".parse::<FermionOperator>().unwrap().normal_ordered());
+//! assert_eq!(anti, "1 []".parse::<FermionOperator>().unwrap());
+//! // a_1† a_0 = −a_0 a_1†
+//! let hop: FermionOperator = "[1^ 0]".parse().unwrap();
+//! assert_eq!(hop.normal_ordered(), "-1 [0 1^]".parse::<FermionOperator>().unwrap().normal_ordered());
 //! ```
 
 use std::collections::BTreeMap;
