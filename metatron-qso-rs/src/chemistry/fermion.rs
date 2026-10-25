@@ -13,11 +13,12 @@
 //! let a: FermionOperator = "[0]".parse().unwrap();
 //! let b: FermionOperator = "[0^]".parse().unwrap();
 //! // {a_0, a_0†} = 1
-//! let anti = (&(&a * &b) + &(&b * &a)).normal_ordered();
+//! let anti = (&(&a * &b) + &(&b * &a)).normal_ordered().unwrap();
 //! assert_eq!(anti, "1 []".parse::<FermionOperator>().unwrap());
 //! // a_1† a_0 = −a_0 a_1†
 //! let hop: FermionOperator = "[1^ 0]".parse().unwrap();
-//! assert_eq!(hop.normal_ordered(), "-1 [0 1^]".parse::<FermionOperator>().unwrap().normal_ordered());
+//! let swapped: FermionOperator = "-1 [0 1^]".parse().unwrap();
+//! assert_eq!(hop.normal_ordered().unwrap(), swapped.normal_ordered().unwrap());
 //! ```
 
 use std::collections::BTreeMap;
@@ -31,6 +32,24 @@ use crate::error::{QsoError, Result};
 
 /// Largest mode index + 1 (Pauli strings hold 64 qubits).
 pub const MAX_MODES: usize = 64;
+/// Longest product of ladder operators in a term. Normal ordering and the
+/// qubit mappings expand a product of length L into up to 2^L terms.
+pub const MAX_PRODUCT_LENGTH: usize = 16;
+
+fn check_lengths<'a>(products: impl IntoIterator<Item = &'a Vec<Ladder>>) -> Result<()> {
+    if products
+        .into_iter()
+        .any(|ops| ops.len() > MAX_PRODUCT_LENGTH)
+    {
+        return Err(QsoError::invalid(
+            "fermion operator",
+            format!(
+                "products of more than {MAX_PRODUCT_LENGTH} ladder operators are not supported"
+            ),
+        ));
+    }
+    Ok(())
+}
 
 /// One ladder operator: `a_mode†` if `dagger`, else `a_mode`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -85,6 +104,7 @@ impl FermionOperator {
         if !(c.re.is_finite() && c.im.is_finite()) {
             return Err(QsoError::invalid("coefficient", "must be finite"));
         }
+        check_lengths([&ops.to_vec()])?;
         *self.terms.entry(ops.to_vec()).or_default() += c;
         Ok(self)
     }
@@ -159,8 +179,10 @@ impl FermionOperator {
     /// The canonical form: every product ordered with creators first and
     /// indices descending within each kind, using the anticommutation
     /// relations; products with a repeated creator or annihilator vanish,
-    /// and zero terms are removed.
-    pub fn normal_ordered(&self) -> Self {
+    /// and zero terms are removed. Products longer than
+    /// [`MAX_PRODUCT_LENGTH`] (from multiplication) are an error.
+    pub fn normal_ordered(&self) -> Result<Self> {
+        check_lengths(self.terms.keys())?;
         let mut out = Self::new();
         let mut stack: Vec<(C64, Vec<Ladder>)> =
             self.terms.iter().map(|(o, &c)| (c, o.clone())).collect();
@@ -202,13 +224,13 @@ impl FermionOperator {
             }
         }
         out.simplify(0.0);
-        out
+        Ok(out)
     }
 
     /// Whether `F = F†` up to `tol` after normal ordering.
-    pub fn is_hermitian(&self, tol: f64) -> bool {
-        let mut d = (self - &self.adjoint()).normal_ordered();
-        d.simplify(tol).is_empty()
+    pub fn is_hermitian(&self, tol: f64) -> Result<bool> {
+        let mut d = (self - &self.adjoint()).normal_ordered()?;
+        Ok(d.simplify(tol).is_empty())
     }
 }
 
@@ -370,21 +392,32 @@ mod tests {
             for q in 0..3 {
                 let a = f(&format!("[{p}]"));
                 let b = f(&format!("[{q}^]"));
-                let anti = (&(&a * &b) + &(&b * &a)).normal_ordered();
+                let anti = (&(&a * &b) + &(&b * &a)).normal_ordered().unwrap();
                 if p == q {
                     assert_eq!(anti, f("[]"));
                 } else {
                     assert!(anti.is_empty(), "{p} {q}: {anti}");
                 }
                 let aa = (&(&a * &f(&format!("[{q}]"))) + &(&f(&format!("[{q}]")) * &a))
-                    .normal_ordered();
+                    .normal_ordered()
+                    .unwrap();
                 assert!(aa.is_empty());
             }
         }
         // Repeated creators vanish.
-        assert!(f("[1^ 1^]").normal_ordered().is_empty());
+        assert!(f("[1^ 1^]").normal_ordered().unwrap().is_empty());
         // Canonical order: a_0† a_1† = −a_1† a_0†.
-        assert_eq!(f("[0^ 1^]").normal_ordered(), f("-1 [1^ 0^]"));
+        assert_eq!(f("[0^ 1^]").normal_ordered().unwrap(), f("-1 [1^ 0^]"));
+        // Long products are rejected instead of expanding exponentially.
+        let long = (0..17)
+            .map(|i| format!("{i}^"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(format!("[{long}]").parse::<FermionOperator>().is_err());
+        let sixteen: Vec<String> = (0..8).map(|i| format!("{i} {i}^")).collect();
+        let eight = f(&format!("[{}]", sixteen.join(" ")));
+        assert!(eight.normal_ordered().is_ok());
+        assert!((&eight * &eight).normal_ordered().is_err());
     }
 
     #[test]
@@ -392,9 +425,9 @@ mod tests {
         let h = f("0.5 [2^ 0] + 0.5 [0^ 2] - [1^ 1] + (0+2j) [3^ 2^ 1 0]");
         assert_eq!(h.num_terms(), 4);
         assert_eq!(h.num_modes(), 4);
-        assert!(!h.is_hermitian(1e-12));
+        assert!(!h.is_hermitian(1e-12).unwrap());
         let herm = f("0.5 [2^ 0] + 0.5 [0^ 2] - [1^ 1]");
-        assert!(herm.is_hermitian(1e-12));
+        assert!(herm.is_hermitian(1e-12).unwrap());
         let round: FermionOperator = h.to_string().parse().unwrap();
         assert_eq!(round, h);
         assert_eq!(h.adjoint().adjoint(), h);

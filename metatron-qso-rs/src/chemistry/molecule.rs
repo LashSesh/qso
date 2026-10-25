@@ -46,6 +46,21 @@ pub const MAX_ORBITALS: usize = 32;
 /// [`MolecularIntegrals::fci_energies`]; larger spaces use Lanczos for the
 /// ground state only.
 pub const DENSE_FCI_LIMIT: usize = 4096;
+/// Largest determinant space [`MolecularIntegrals::fci_energies`] accepts.
+pub const MAX_DETERMINANTS: usize = 1 << 18;
+
+/// `C(n, k)`, saturating.
+fn binomial(n: usize, k: usize) -> u128 {
+    if k > n {
+        return 0;
+    }
+    let k = k.min(n - k);
+    let mut c: u128 = 1;
+    for i in 0..k {
+        c = c.saturating_mul((n - i) as u128) / (i + 1) as u128;
+    }
+    c
+}
 
 /// One- and two-electron integrals of a molecule with its electron count.
 #[derive(Clone, Debug, PartialEq)]
@@ -454,7 +469,8 @@ impl MolecularIntegrals {
     /// The lowest `n_roots` full-CI energies (core energy included) in the
     /// space of determinants with `n_α` and `n_β` electrons. Spaces up to
     /// [`DENSE_FCI_LIMIT`] determinants are diagonalised densely; larger
-    /// ones give the ground state by Lanczos (`n_roots` must then be 1).
+    /// ones, up to [`MAX_DETERMINANTS`], give the ground state by Lanczos
+    /// (`n_roots` must then be 1).
     pub fn fci_energies(&self, n_roots: usize) -> Result<Vec<f64>> {
         self.fci_energies_with(QubitEncoding::default(), n_roots)
     }
@@ -464,6 +480,14 @@ impl MolecularIntegrals {
     /// All encodings give the same energies; comparing them checks the
     /// mappings.
     pub fn fci_energies_with(&self, encoding: QubitEncoding, n_roots: usize) -> Result<Vec<f64>> {
+        let m = self.n_orbitals;
+        let dim = binomial(m, self.n_alpha).saturating_mul(binomial(m, self.n_beta));
+        if dim > MAX_DETERMINANTS as u128 {
+            return Err(QsoError::invalid(
+                "molecule",
+                format!("{dim} determinants exceed the full-CI limit of {MAX_DETERMINANTS}"),
+            ));
+        }
         let h = self.qubit_hamiltonian(encoding)?;
         let n = self.n_spin_orbitals();
         let basis: Vec<u64> = self
@@ -608,6 +632,11 @@ mod tests {
 
     #[test]
     fn combinations_are_complete() {
+        assert_eq!(binomial(7, 3), 35);
+        assert_eq!(binomial(64, 32), 1_832_624_140_942_590_534);
+        let big = MolecularIntegrals::from_fcidump(" &FCI NORB=32,NELEC=32 &END\n 1.0 1 1 0 0\n")
+            .unwrap();
+        assert!(big.fci_energies(1).is_err());
         assert_eq!(
             combinations(4, 2),
             vec![0b0011, 0b0101, 0b0110, 0b1001, 0b1010, 0b1100]

@@ -115,6 +115,18 @@ fn check(
     if options.restarts == 0 {
         return Err(QsoError::invalid("restarts", "need at least one"));
     }
+    crate::optimize::check_restarts(options.restarts)?;
+    if let Some(w) = &options.weights
+        && w.iter()
+            .take(n_states)
+            .zip(w.iter().skip(1).take(n_states.saturating_sub(1)))
+            .any(|(a, b)| a <= b)
+    {
+        return Err(QsoError::invalid(
+            "weights",
+            "SSVQE needs strictly decreasing weights; with equal weights the energies are not eigenvalues",
+        ));
+    }
     for (what, v) in [("betas", &options.betas), ("weights", &options.weights)] {
         if let Some(v) = v
             && (v.len() < n_states || v.iter().any(|x| !(x.is_finite() && *x > 0.0)))

@@ -57,6 +57,7 @@ fn trotter_error_bound(
 #[pyfunction]
 #[pyo3(signature = (hamiltonian, n_qubits, t, samples, seed = 0))]
 fn qdrift_circuit(
+    py: Python<'_>,
     hamiltonian: &PyPauliSum,
     n_qubits: usize,
     t: f64,
@@ -67,8 +68,10 @@ fn qdrift_circuit(
     if samples > 10_000_000 {
         return Err(invalid("samples must be at most 10^7"));
     }
+    let h = &hamiltonian.inner;
     PyCircuit::wrap(
-        time_evolution::qdrift_circuit(&hamiltonian.inner, n_qubits, t, samples, seed).raise()?,
+        py.detach(|| time_evolution::qdrift_circuit(h, n_qubits, t, samples, seed))
+            .raise()?,
     )
 }
 

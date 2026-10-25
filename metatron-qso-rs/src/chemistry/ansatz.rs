@@ -28,6 +28,9 @@ use super::molecule::MolecularIntegrals;
 use crate::error::{QsoError, Result};
 use crate::quantum::{Circuit, Parameter, QubitOperator};
 
+/// Largest number of excitations in one circuit.
+pub const MAX_EXCITATIONS: usize = 100_000;
+
 /// A fermionic excitation generator `Σ_j c_j T_j − h.c.` (several products
 /// share one parameter in spin-adapted generators).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -181,8 +184,22 @@ pub fn excitation_circuit(
     excitations: &[Excitation],
     encoding: QubitEncoding,
 ) -> Result<Circuit> {
-    let mut c = mol.hartree_fock_circuit(encoding)?;
     let n = mol.n_spin_orbitals();
+    let nq = encoding.n_qubits(n);
+    if nq > crate::quantum::MAX_QUBITS {
+        return Err(QsoError::TooManyQubits {
+            what: "excitation ansatz",
+            max: crate::quantum::MAX_QUBITS,
+            requested: nq,
+        });
+    }
+    if excitations.len() > MAX_EXCITATIONS {
+        return Err(QsoError::invalid(
+            "excitations",
+            format!("at most {MAX_EXCITATIONS} excitations"),
+        ));
+    }
+    let mut c = mol.hartree_fock_circuit(encoding)?;
     for e in excitations {
         let tau = e.qubit_generator(encoding, n, mol.n_alpha(), mol.n_beta())?;
         let theta = c.new_parameter();
@@ -204,6 +221,12 @@ pub fn k_upccgsd(mol: &MolecularIntegrals, k: usize, encoding: QubitEncoding) ->
         return Err(QsoError::invalid("k", "need at least one layer"));
     }
     let layer = upccgsd_excitations(mol.n_orbitals());
+    if layer.len().saturating_mul(k) > MAX_EXCITATIONS {
+        return Err(QsoError::invalid(
+            "k",
+            format!("{k} layers exceed {MAX_EXCITATIONS} excitations"),
+        ));
+    }
     let ex: Vec<Excitation> = (0..k).flat_map(|_| layer.iter().cloned()).collect();
     excitation_circuit(mol, &ex, encoding)
 }
@@ -338,6 +361,7 @@ mod tests {
             }
         }
         assert!(k_upccgsd(&mol, 0, QubitEncoding::default()).is_err());
+        assert!(k_upccgsd(&mol, usize::MAX, QubitEncoding::default()).is_err());
         assert!(Excitation::new(&[0], &[1, 2]).is_err());
     }
 }

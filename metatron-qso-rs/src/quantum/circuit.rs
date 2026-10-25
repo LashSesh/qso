@@ -617,6 +617,13 @@ impl Circuit {
         angle: impl Into<Param>,
     ) -> Result<&mut Self> {
         let angle = angle.into();
+        let finite = match angle {
+            Param::Value(v) => v.is_finite(),
+            Param::Symbol(p) => p.scale.is_finite() && p.offset.is_finite(),
+        };
+        if !finite {
+            return Err(QsoError::invalid("angle", "non-finite gate angle"));
+        }
         let factors: Vec<(usize, Pauli)> = (0..64)
             .map(|q| (q, string.get(q)))
             .filter(|&(_, p)| p != Pauli::I)

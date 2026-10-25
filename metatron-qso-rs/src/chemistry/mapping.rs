@@ -114,6 +114,18 @@ impl Mapping {
                 format!("acts on {} modes, more than {n_modes}", op.num_modes()),
             ));
         }
+        if op
+            .terms()
+            .any(|(_, ops)| ops.len() > super::fermion::MAX_PRODUCT_LENGTH)
+        {
+            return Err(QsoError::invalid(
+                "fermion operator",
+                format!(
+                    "products of more than {} ladder operators are not supported",
+                    super::fermion::MAX_PRODUCT_LENGTH
+                ),
+            ));
+        }
         let ladders = self.ladder_operators(n_modes)?;
         let mut out = QubitOperator::new();
         for (c, ops) in op.terms() {

@@ -40,6 +40,8 @@ use crate::rng::Rng;
 
 /// Largest problem solved by enumeration.
 pub const MAX_BRUTE_FORCE: usize = 30;
+/// Most minimisers returned by enumeration (the smallest bit masks).
+pub const MAX_MINIMISERS: usize = 1024;
 
 /// Quadratic unconstrained binary optimisation, minimised.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -82,6 +84,12 @@ impl Qubo {
                 let (a, b) = if i <= j { (i, j) } else { (j, i) };
                 q[a * n + b] += matrix[i * n + j];
             }
+        }
+        if q.iter().any(|v| !v.is_finite()) {
+            return Err(QsoError::invalid(
+                "qubo",
+                "symmetrised coefficients overflow",
+            ));
         }
         Ok(Self { n, q, offset })
     }
@@ -166,7 +174,8 @@ impl Qubo {
         self.to_ising().to_pauli_sum()
     }
 
-    /// Exact minimum and all minimising bit masks, by enumeration
+    /// Exact minimum and the minimising bit masks (at most
+    /// [`MAX_MINIMISERS`], the smallest), by enumeration
     /// (`n ≤` [`MAX_BRUTE_FORCE`]).
     pub fn brute_force(&self) -> Result<(f64, Vec<u64>)> {
         brute_force(self.n, |x| self.value(x))
@@ -240,13 +249,38 @@ fn brute_force(n: usize, f: impl Fn(u64) -> f64 + Sync) -> Result<(f64, Vec<u64>
             format!("enumeration is limited to {MAX_BRUTE_FORCE} variables"),
         ));
     }
-    let values = crate::parallel::map_collect(1usize << n, |x| f(x as u64));
-    let best = values.iter().copied().fold(f64::INFINITY, f64::min);
+    // Chunks keep their minimum and its first minimisers, so memory stays
+    // small for any n.
+    let total = 1u64 << n;
+    let chunks = 256u64.min(total);
+    let size = total.div_ceil(chunks);
+    let parts = crate::parallel::map_tasks(chunks as usize, |c| {
+        let (lo, hi) = (c as u64 * size, ((c as u64 + 1) * size).min(total));
+        let mut best = f64::INFINITY;
+        let mut values = Vec::new();
+        for x in lo..hi {
+            let v = f(x);
+            if v < best {
+                best = v;
+            }
+            values.push((v, x));
+            if values.len() > 4 * MAX_MINIMISERS {
+                values.retain(|&(w, _)| w - best <= 1e-9 * best.abs().max(1.0));
+                values.truncate(MAX_MINIMISERS);
+            }
+        }
+        (best, values)
+    });
+    let best = parts.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
     let tol = 1e-9 * best.abs().max(1.0);
-    let arg = (0..values.len())
-        .filter(|&x| values[x] - best <= tol)
-        .map(|x| x as u64)
+    let mut arg: Vec<u64> = parts
+        .into_iter()
+        .flat_map(|p| p.1)
+        .filter(|&(v, _)| v - best <= tol)
+        .map(|(_, x)| x)
         .collect();
+    arg.sort_unstable();
+    arg.truncate(MAX_MINIMISERS);
     Ok((best, arg))
 }
 
@@ -573,6 +607,7 @@ impl Qaoa {
     /// Minimise `⟨C⟩` from seeded random starts (γ in `[−π, π]`, β in
     /// `[−π/2, π/2]`).
     pub fn optimize(&self, options: &QaoaOptions) -> Result<QaoaAnalysis> {
+        crate::optimize::check_restarts(options.restarts)?;
         if let Some(x) = &options.initial
             && x.len() != 2 * self.p
         {
@@ -666,6 +701,13 @@ mod tests {
             assert!((0..64).all(|x| q.value(x) >= best - 1e-12));
         }
         assert!(Qubo::new(2, &[1.0, f64::NAN, 0.0, 0.0], 0.0).is_err());
+        assert!(Qubo::new(2, &[1e308, 1e308, 1e308, 1e308], 0.0).is_err());
+        // Enumeration keeps few minimisers: the zero QUBO has 2^20 of them.
+        let zero = Qubo::new(20, &vec![0.0; 400], 0.0).unwrap();
+        let (best, arg) = zero.brute_force().unwrap();
+        assert_eq!(best, 0.0);
+        assert_eq!(arg.len(), MAX_MINIMISERS);
+        assert_eq!(arg[..3], [0, 1, 2]);
         assert!(Qubo::from_entries(2, &[(0, 2, 1.0)], 0.0).is_err());
     }
 

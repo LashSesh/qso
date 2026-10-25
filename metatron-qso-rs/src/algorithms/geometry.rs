@@ -31,6 +31,10 @@ use crate::linalg::{RMatrix, eigh_real, inner};
 use crate::quantum::kernels;
 use crate::quantum::{Circuit, Param, PauliSum, StateVector};
 
+/// Most steps of [`imaginary_time_evolution`] and iterations of
+/// [`minimize_natural_gradient`].
+pub const MAX_STEPS: usize = 1_000_000;
+
 /// Largest number of amplitudes held by [`state_derivatives`]
 /// (parameters × 2ⁿ; 2²⁷ amplitudes are 2 GiB).
 pub const MAX_DERIVATIVE_AMPLITUDES: usize = 1 << 27;
@@ -250,6 +254,18 @@ pub fn minimize_natural_gradient(
             "must be positive and finite",
         ));
     }
+    if !(options.gradient_tolerance >= 0.0 && options.gradient_tolerance.is_finite()) {
+        return Err(QsoError::invalid(
+            "gradient_tolerance",
+            "must be finite and non-negative",
+        ));
+    }
+    if options.max_iterations > MAX_STEPS {
+        return Err(QsoError::invalid(
+            "max_iterations",
+            format!("at most {MAX_STEPS}"),
+        ));
+    }
     let mut theta = theta0.to_vec();
     let mut history = Vec::new();
     let mut converged = false;
@@ -304,10 +320,10 @@ pub fn imaginary_time_evolution(
     steps: usize,
     rcond: f64,
 ) -> Result<ImaginaryTimeResult> {
-    if !(time >= 0.0 && time.is_finite()) || steps == 0 {
+    if !(time >= 0.0 && time.is_finite()) || steps == 0 || steps > MAX_STEPS {
         return Err(QsoError::invalid(
             "time",
-            "need a finite non-negative time and at least one step",
+            format!("need a finite non-negative time and 1 to {MAX_STEPS} steps"),
         ));
     }
     if !(0.0..1.0).contains(&rcond) {

@@ -36,6 +36,11 @@ use crate::rng::Rng;
 
 /// Largest power `k` of `Q` simulated.
 pub const MAX_POWER: usize = 1 << 20;
+/// Most levels of [`maximum_likelihood`] (largest power `2^{14}`).
+pub const MAX_LEVELS: usize = 16;
+/// Smallest `epsilon` of [`iterative`]; powers up to [`MAX_POWER`] resolve
+/// θ to about 10⁻⁶.
+pub const MIN_EPSILON: f64 = 1e-6;
 
 /// `A` and the objective qubit.
 #[derive(Clone, Debug)]
@@ -249,10 +254,10 @@ pub fn iterative(
     seed: u64,
 ) -> Result<AmplitudeEstimate> {
     use std::f64::consts::{FRAC_PI_2, PI};
-    if !(epsilon > 0.0 && epsilon < 0.5) || !(alpha > 0.0 && alpha < 1.0) || shots == 0 {
+    if !(MIN_EPSILON..0.5).contains(&epsilon) || !(alpha > 0.0 && alpha < 1.0) || shots == 0 {
         return Err(QsoError::invalid(
             "iterative amplitude estimation",
-            "need 0 < epsilon < 0.5, 0 < alpha < 1 and shots > 0",
+            format!("need {MIN_EPSILON} <= epsilon < 0.5, 0 < alpha < 1 and shots > 0"),
         ));
     }
     let rounds = (PI / (8.0 * epsilon)).log2().ceil().max(1.0);
@@ -357,10 +362,10 @@ pub fn maximum_likelihood(
     seed: u64,
 ) -> Result<AmplitudeEstimate> {
     use std::f64::consts::FRAC_PI_2;
-    if levels == 0 || levels > 21 || shots == 0 || !(confidence > 0.0 && confidence < 1.0) {
+    if levels == 0 || levels > MAX_LEVELS || shots == 0 || !(confidence > 0.0 && confidence < 1.0) {
         return Err(QsoError::invalid(
             "maximum-likelihood amplitude estimation",
-            "need 1 to 21 levels, shots > 0 and a confidence in (0, 1)",
+            format!("need 1 to {MAX_LEVELS} levels, shots > 0 and a confidence in (0, 1)"),
         ));
     }
     let powers: Vec<usize> = (0..levels)

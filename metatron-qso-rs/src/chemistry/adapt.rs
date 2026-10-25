@@ -22,6 +22,9 @@ use crate::linalg::inner;
 use crate::optimize::Options;
 use crate::quantum::{Circuit, PauliSum, QubitOperator, StateVector};
 
+/// Largest `max_operators` accepted.
+pub const MAX_OPERATORS: usize = 1000;
+
 /// Settings of [`adapt_vqe`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -129,6 +132,12 @@ pub fn adapt_vqe(
             "operators act on more qubits than the reference circuit",
         ));
     }
+    if options.max_operators > MAX_OPERATORS {
+        return Err(QsoError::invalid(
+            "max_operators",
+            format!("at most {MAX_OPERATORS}"),
+        ));
+    }
     if options.gradient_tolerance.is_nan() || options.gradient_tolerance < 0.0 {
         return Err(QsoError::invalid(
             "gradient_tolerance",
@@ -191,6 +200,14 @@ pub fn adapt_vqe_molecule(
     generalized: bool,
     options: &AdaptOptions,
 ) -> Result<AdaptResult> {
+    let nq = encoding.n_qubits(mol.n_spin_orbitals());
+    if nq > crate::quantum::MAX_QUBITS {
+        return Err(QsoError::TooManyQubits {
+            what: "ADAPT-VQE",
+            max: crate::quantum::MAX_QUBITS,
+            requested: nq,
+        });
+    }
     let h = mol.qubit_hamiltonian(encoding)?;
     let excitations = if generalized {
         upccgsd_excitations(mol.n_orbitals())

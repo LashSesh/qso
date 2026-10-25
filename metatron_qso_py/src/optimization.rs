@@ -138,7 +138,9 @@ pub struct PyQaoa {
 impl PyQaoa {
     #[new]
     #[pyo3(signature = (cost, n_qubits, p, mixer = "x", weight = None, warm_start = None, epsilon = 0.25))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
+        py: Python<'_>,
         cost: &PyPauliSum,
         n_qubits: usize,
         p: usize,
@@ -148,6 +150,12 @@ impl PyQaoa {
         epsilon: f64,
     ) -> PyResult<Self> {
         let need_weight = || weight.ok_or_else(|| invalid("XY mixers need `weight`"));
+        if weight.is_some() && !mixer.starts_with("xy_") {
+            return Err(invalid("`weight` applies only to the XY mixers"));
+        }
+        if warm_start.is_some() && mixer != "warm_start" {
+            return Err(invalid("`warm_start` applies only to mixer='warm_start'"));
+        }
         let mixer = match mixer {
             "x" => Mixer::X,
             "xy_ring" => Mixer::XyRing {
@@ -175,7 +183,8 @@ impl PyQaoa {
         if p > 1000 {
             return Err(invalid("p must be at most 1000"));
         }
-        Qaoa::new(&cost.inner, n_qubits, p, mixer)
+        let c = &cost.inner;
+        py.detach(|| Qaoa::new(c, n_qubits, p, mixer))
             .raise()
             .map(|inner| Self { inner })
     }
@@ -207,7 +216,8 @@ impl PyQaoa {
     ) -> PyResult<(f64, Bound<'py, numpy::PyArray1<f64>>)> {
         let x = real_vec(&params);
         check_finite("params", &x)?;
-        let (v, g) = self.inner.expectation_and_gradient(&x).raise()?;
+        let q = &self.inner;
+        let (v, g) = py.detach(|| q.expectation_and_gradient(&x)).raise()?;
         Ok((v, g.into_pyarray(py)))
     }
 
@@ -220,7 +230,8 @@ impl PyQaoa {
                 2 * self.inner.depth()
             )));
         }
-        analysis(py, self.inner.analyze(&x).raise()?)
+        let q = &self.inner;
+        analysis(py, py.detach(|| q.analyze(&x)).raise()?)
     }
 
     /// Minimise ⟨C⟩ from seeded random starts.

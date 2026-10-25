@@ -60,8 +60,14 @@ use num_complex::Complex64 as C64;
 
 /// Largest supported product-formula order.
 pub const MAX_ORDER: usize = 10;
-/// Largest number of Pauli rotations in a generated circuit.
-pub const MAX_ROTATIONS: usize = 1 << 24;
+/// Largest number of gates in a generated circuit (a rotation of a
+/// weight-w string takes at most 6w gates).
+pub const MAX_GATES: usize = 1 << 22;
+
+/// Upper bound on the gates of `Circuit::pauli_rotation` for `s`.
+fn rotation_cost(s: &PauliString) -> usize {
+    6 * s.weight() as usize
+}
 
 /// Non-identity terms of `h` in order.
 fn nontrivial_terms(h: &PauliSum) -> Vec<(f64, PauliString)> {
@@ -158,10 +164,11 @@ pub fn trotter_circuit(
     } else {
         2 * 5usize.pow((order / 2 - 1) as u32)
     };
-    if terms.len().saturating_mul(stages).saturating_mul(steps) > MAX_ROTATIONS {
+    let per_pass: usize = terms.iter().map(|(_, s)| rotation_cost(s)).sum();
+    if per_pass.saturating_mul(stages).saturating_mul(steps) > MAX_GATES {
         return Err(QsoError::invalid(
             "steps",
-            format!("the circuit would exceed {MAX_ROTATIONS} rotations"),
+            format!("the circuit would exceed {MAX_GATES} gates"),
         ));
     }
     let tau = t / steps as f64;
@@ -246,6 +253,11 @@ pub fn trotter_error_bound(h: &PauliSum, t: f64, steps: usize, order: usize) -> 
         return Err(QsoError::invalid("steps", "need at least one step"));
     }
     let terms = nontrivial_terms(h);
+    // Nested commutators multiply three coefficients; beyond 1e100 they
+    // could overflow, and the trivial bound 2 is all that is left anyway.
+    if terms.iter().any(|(c, _)| c.abs() > 1e100) {
+        return Ok(2.0);
+    }
     let tau = t.abs() / steps as f64;
     let (first, bba, aab) = commutator_sums(&terms, order > 1);
     let lambda: f64 = terms.iter().map(|(c, _)| c.abs()).sum();
@@ -258,7 +270,8 @@ pub fn trotter_error_bound(h: &PauliSum, t: f64, steps: usize, order: usize) -> 
         let mass: f64 = stages.iter().map(|s| s.abs()).sum::<f64>() * lambda;
         cubic.min(taylor_tail(mass * tau, order))
     };
-    Ok((steps as f64 * per_step).min(2.0))
+    let bound = steps as f64 * per_step;
+    Ok(if bound.is_nan() { 2.0 } else { bound.min(2.0) })
 }
 
 /// One random qDRIFT circuit for `exp(−iHt)` with `samples` rotations,
@@ -272,11 +285,8 @@ pub fn qdrift_circuit(
     seed: u64,
 ) -> Result<Circuit> {
     check(h, t, 1)?;
-    if samples == 0 || samples > MAX_ROTATIONS {
-        return Err(QsoError::invalid(
-            "samples",
-            format!("need 1 to {MAX_ROTATIONS} samples"),
-        ));
+    if samples == 0 {
+        return Err(QsoError::invalid("samples", "need at least one sample"));
     }
     if h.min_qubits() > n_qubits {
         return Err(QsoError::DimensionMismatch {
@@ -285,6 +295,17 @@ pub fn qdrift_circuit(
         });
     }
     let terms = nontrivial_terms(h);
+    let widest = terms
+        .iter()
+        .map(|(_, s)| rotation_cost(s))
+        .max()
+        .unwrap_or(0);
+    if samples.saturating_mul(widest) > MAX_GATES {
+        return Err(QsoError::invalid(
+            "samples",
+            format!("the circuit would exceed {MAX_GATES} gates"),
+        ));
+    }
     let mut c = Circuit::new(n_qubits);
     let lambda: f64 = terms.iter().map(|(c, _)| c.abs()).sum();
     if terms.is_empty() || t == 0.0 {
@@ -545,7 +566,17 @@ mod tests {
             assert!((suzuki_stages(order).iter().sum::<f64>() - 1.0).abs() < 1e-14);
         }
         assert!(trotter_error_bound(&h, 1e6, 1, 4).unwrap() <= 2.0);
-        assert!(trotter_circuit(&h, 1, 1.0, MAX_ROTATIONS, 2).is_err());
-        assert!(qdrift_circuit(&h, 1, 1.0, MAX_ROTATIONS + 1, 0).is_err());
+        assert!(trotter_circuit(&h, 1, 1.0, MAX_GATES, 2).is_err());
+        assert!(qdrift_circuit(&h, 1, 1.0, MAX_GATES, 0).is_err());
+        // Overflowing angles are errors, not panics.
+        let big: PauliSum = "1e308 X0 + 1e308 Z0".parse().unwrap();
+        assert!(trotter_circuit(&big, 1, 10.0, 1, 1).is_err());
+        assert!(qdrift_circuit(&big, 1, 1.0, 10, 0).is_err());
+        assert!(qdrift_circuit(&h, 1, 1e308, 1, 0).is_err());
+        // Coefficients whose commutators overflow give the trivial bound.
+        let huge: PauliSum = "1e160 X0 + 1e160 Z0".parse().unwrap();
+        for order in [1, 2, 4] {
+            assert_eq!(trotter_error_bound(&huge, 1.0, 1, order).unwrap(), 2.0);
+        }
     }
 }

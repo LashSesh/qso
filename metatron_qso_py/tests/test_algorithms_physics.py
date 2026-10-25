@@ -155,3 +155,36 @@ def test_qubo_qaoa_and_amplitude_estimation():
     assert abs(ml["estimate"] - 0.3) < 0.01
     with pytest.raises(ValueError):
         q.AmplitudeProblem(q.Circuit(1), 2)
+
+
+def test_review_regressions():
+    """Inputs that once panicked, aborted or hung must raise ValueError."""
+    bad = [
+        lambda: q.Circuit(2).pauli_rotation("X0", float("nan")),
+        lambda: q.Circuit(3).pauli_rotation("X0 Y1 Z2", float("inf")),
+        lambda: q.trotter_circuit(q.PauliSum("1e308 X0"), 1, 10.0, order=1),
+        lambda: q.qdrift_circuit(q.PauliSum("1e308 X0 + 1e308 Z0"), 1, 1.0, 10),
+        lambda: q.qdrift_circuit(q.PauliSum("X0 + Z0"), 1, 1e308, 1),
+        lambda: q.Qaoa(q.PauliSum("1e308 Z0"), 1, 1),
+        lambda: q.qdrift_circuit(q.PauliSum("X0 Y1 Z2 X3 Y4 Z5 X6 Y7 Z8 X9 + Z0"), 10, 1.0, 10**7),
+        lambda: q.FermionOperator("[" + " ".join(f"{i}^" for i in range(30)) + "]"),
+        lambda: q.Qaoa(q.PauliSum("Z0 + Z1"), 2, 1).optimize(restarts=2**64 - 1),
+        lambda: q.vqd(q.PauliSum("Z0"), q.real_amplitudes(1, 1), 1, restarts=2**64 - 1),
+        lambda: q.ml_amplitude_estimation(q.AmplitudeProblem.bernoulli(0.3), levels=21),
+        lambda: q.iterative_amplitude_estimation(q.AmplitudeProblem.bernoulli(0.3), epsilon=1e-300),
+        lambda: q.Qubo([[1e308, 1e308], [1e308, 1e308]]),
+        lambda: q.Qaoa(q.PauliSum("Z0 + Z1"), 2, 1, weight=1),
+        lambda: q.Qaoa(q.PauliSum("Z0 + Z1"), 2, 1, warm_start=[0.5, 0.5]),
+        lambda: q.quantum_natural_gradient(q.real_amplitudes(1, 1), q.PauliSum("Z0"), [0.1, 0.2],
+                                           gradient_tolerance=float("nan")),
+        lambda: q.ssvqe(q.PauliSum("Z0"), q.real_amplitudes(1, 1), 2, weights=[1.0, 1.0]),
+        lambda: q.MolecularIntegrals.from_fcidump(" &FCI NORB=32,NELEC=32 &END\n 1.0 1 1 0 0\n").fci_energies(),
+        lambda: q.uccsd(q.MolecularIntegrals.from_fcidump(" &FCI NORB=32,NELEC=32 &END\n 1.0 1 1 0 0\n")),
+        lambda: q.k_upccgsd(q.MolecularIntegrals.from_file(MOLECULES / "h2_sto3g.fcidump"), k=10**12),
+    ]
+    for k, call in enumerate(bad):
+        with pytest.raises(ValueError):
+            call()
+    assert q.trotter_error_bound(q.PauliSum("1e160 X0 + 1e160 Z0"), 1.0, 1, 2) == 2.0
+    best, arg = q.Qubo(np.zeros((20, 20))).brute_force()
+    assert best == 0.0 and len(arg) == 1024

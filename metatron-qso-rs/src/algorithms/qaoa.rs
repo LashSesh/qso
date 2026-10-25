@@ -377,6 +377,7 @@ impl MaxCutQaoa {
 
     /// Maximise `⟨C⟩` from several seeded random starts.
     pub fn optimize(&self, config: &QaoaConfig) -> Result<QaoaResult> {
+        crate::optimize::check_restarts(config.restarts)?;
         let objective = NegativeCut { qaoa: self };
         let base = Rng::seed_from_u64(config.seed);
         let p = self.p;

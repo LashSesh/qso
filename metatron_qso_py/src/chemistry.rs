@@ -156,24 +156,32 @@ impl PyFermionOperator {
     }
 
     /// Canonical form: creators first, indices descending.
-    fn normal_ordered(&self) -> Self {
-        Self {
-            inner: self.inner.normal_ordered(),
-        }
+    fn normal_ordered(&self, py: Python<'_>) -> PyResult<Self> {
+        let f = &self.inner;
+        py.detach(|| f.normal_ordered())
+            .raise()
+            .map(|inner| Self { inner })
     }
 
     #[pyo3(signature = (tol = 1e-12))]
-    fn is_hermitian(&self, tol: f64) -> bool {
-        self.inner.is_hermitian(tol)
+    fn is_hermitian(&self, py: Python<'_>, tol: f64) -> PyResult<bool> {
+        let f = &self.inner;
+        py.detach(|| f.is_hermitian(tol)).raise()
     }
 
     /// Map to qubits: `mapping` is "jordan_wigner", "parity" or
     /// "bravyi_kitaev"; `n_modes` defaults to `num_modes`.
     #[pyo3(signature = (mapping = "jordan_wigner", n_modes = None))]
-    fn to_qubit(&self, mapping: &str, n_modes: Option<usize>) -> PyResult<PyQubitOperator> {
+    fn to_qubit(
+        &self,
+        py: Python<'_>,
+        mapping: &str,
+        n_modes: Option<usize>,
+    ) -> PyResult<PyQubitOperator> {
         let m = Mapping::from_name(mapping).raise()?;
         let n = n_modes.unwrap_or_else(|| self.inner.num_modes().max(1));
-        m.map(&self.inner, n)
+        let f = &self.inner;
+        py.detach(|| m.map(f, n))
             .raise()
             .map(|inner| PyQubitOperator { inner })
     }
@@ -190,10 +198,20 @@ impl PyFermionOperator {
         }
     }
 
-    fn __mul__(&self, other: &PyFermionOperator) -> Self {
-        Self {
-            inner: &self.inner * &other.inner,
+    fn __mul__(&self, py: Python<'_>, other: &PyFermionOperator) -> PyResult<Self> {
+        let terms = self
+            .inner
+            .num_terms()
+            .saturating_mul(other.inner.num_terms());
+        if terms > 1 << 22 {
+            return Err(invalid(format!(
+                "the product would have up to {terms} terms"
+            )));
         }
+        let (a, b) = (&self.inner, &other.inner);
+        Ok(Self {
+            inner: py.detach(|| a * b),
+        })
     }
 
     fn __eq__(&self, other: &PyFermionOperator) -> bool {
@@ -338,25 +356,29 @@ impl PyMolecularIntegrals {
 #[pyfunction(name = "uccsd")]
 #[pyo3(signature = (molecule, mapping = "jordan_wigner", two_qubit_reduction = false))]
 fn py_uccsd(
+    py: Python<'_>,
     molecule: &PyMolecularIntegrals,
     mapping: &str,
     two_qubit_reduction: bool,
 ) -> PyResult<PyCircuit> {
     let e = encoding(mapping, two_qubit_reduction)?;
-    PyCircuit::wrap(uccsd(&molecule.inner, e).raise()?)
+    let m = &molecule.inner;
+    PyCircuit::wrap(py.detach(|| uccsd(m, e)).raise()?)
 }
 
 /// k-UpCCGSD circuit with `k` layers.
 #[pyfunction(name = "k_upccgsd")]
 #[pyo3(signature = (molecule, k = 1, mapping = "jordan_wigner", two_qubit_reduction = false))]
 fn py_k_upccgsd(
+    py: Python<'_>,
     molecule: &PyMolecularIntegrals,
     k: usize,
     mapping: &str,
     two_qubit_reduction: bool,
 ) -> PyResult<PyCircuit> {
     let e = encoding(mapping, two_qubit_reduction)?;
-    PyCircuit::wrap(k_upccgsd(&molecule.inner, k, e).raise()?)
+    let m = &molecule.inner;
+    PyCircuit::wrap(py.detach(|| k_upccgsd(m, k, e)).raise()?)
 }
 
 /// ADAPT-VQE from the Hartree–Fock state with the UCCSD pool (or the
