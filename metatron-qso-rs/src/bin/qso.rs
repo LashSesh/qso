@@ -9,8 +9,12 @@ use serde_json::{Value, json};
 
 use metatron_qso::algorithms::ansatz::{self, Entanglement};
 use metatron_qso::algorithms::qaoa::{MaxCutQaoa, QaoaConfig, optimize_layerwise};
+use metatron_qso::algorithms::time_evolution::{trotter_circuit, trotter_error_bound};
 use metatron_qso::algorithms::{grover, models, vqe::Vqe};
 use metatron_qso::backend::{Backend, DensityMatrixBackend, DeviceBackend, StatevectorBackend};
+use metatron_qso::chemistry::adapt::{AdaptOptions, adapt_vqe_molecule};
+use metatron_qso::chemistry::ansatz as chem_ansatz;
+use metatron_qso::chemistry::{Mapping, MolecularIntegrals, QubitEncoding};
 use metatron_qso::estimation::{Estimate, EstimatorOptions, ShotAllocation, estimate};
 use metatron_qso::graph::{Graph, generators, io};
 use metatron_qso::mitigation::ReadoutCalibration;
@@ -270,6 +274,58 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         seed: u64,
     },
+    /// Molecular Hamiltonian from an FCIDUMP file: qubit Hamiltonian,
+    /// Hartree–Fock and full-CI energies, and a variational solution.
+    Molecule {
+        file: std::path::PathBuf,
+        #[arg(long, value_enum, default_value_t = MappingArg::JordanWigner)]
+        mapping: MappingArg,
+        /// Remove two qubits by symmetry (parity mapping only).
+        #[arg(long)]
+        two_qubit_reduction: bool,
+        /// Variational method: none, uccsd, upccgsd (with --k layers) or adapt.
+        #[arg(long, value_enum, default_value_t = ChemMethodArg::Uccsd)]
+        method: ChemMethodArg,
+        #[arg(long, default_value_t = 1)]
+        k: usize,
+        /// Number of full-CI roots to report.
+        #[arg(long, default_value_t = 1)]
+        roots: usize,
+    },
+    /// Trotter–Suzuki circuit for exp(−iHt) with its error bound.
+    Trotter {
+        /// Hamiltonian, e.g. "Z0 Z1 + 0.5 X0 + 0.5 X1".
+        #[arg(long)]
+        hamiltonian: String,
+        /// Register size (default: smallest that fits).
+        #[arg(long)]
+        qubits: Option<usize>,
+        #[arg(long, default_value_t = 1.0)]
+        time: f64,
+        #[arg(long, default_value_t = 10)]
+        steps: usize,
+        /// 1, 2, 4, 6, …
+        #[arg(long, default_value_t = 2)]
+        order: usize,
+        /// Write the circuit as OpenQASM 2.0.
+        #[arg(long)]
+        output: Option<std::path::PathBuf>,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum MappingArg {
+    JordanWigner,
+    Parity,
+    BravyiKitaev,
+}
+
+#[derive(Clone, Copy, ValueEnum, PartialEq)]
+enum ChemMethodArg {
+    None,
+    Uccsd,
+    Upccgsd,
+    Adapt,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -811,6 +867,169 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             );
             Ok((
                 json!({"qubits": n, "gates": circuit.len(), "depth": circuit.depth(), "backend": backend_name, "counts": labelled}),
+                text,
+            ))
+        }
+        Command::Molecule {
+            file,
+            mapping,
+            two_qubit_reduction,
+            method,
+            k,
+            roots,
+        } => {
+            let text = std::fs::read_to_string(file)
+                .map_err(|e| QsoError::invalid("file", format!("{}: {e}", file.display())))?;
+            let mol = MolecularIntegrals::from_fcidump(&text)?;
+            let mapping = match mapping {
+                MappingArg::JordanWigner => Mapping::JordanWigner,
+                MappingArg::Parity => Mapping::Parity,
+                MappingArg::BravyiKitaev => Mapping::BravyiKitaev,
+            };
+            if *two_qubit_reduction && mapping != Mapping::Parity {
+                return Err(QsoError::invalid(
+                    "two-qubit-reduction",
+                    "requires --mapping parity",
+                ));
+            }
+            let encoding = QubitEncoding {
+                mapping,
+                two_qubit_reduction: *two_qubit_reduction,
+            };
+            let h = mol.qubit_hamiltonian(encoding)?;
+            let n = encoding.n_qubits(mol.n_spin_orbitals());
+            let hf = mol.hartree_fock_energy();
+            let fci = mol.fci_energies(*roots)?;
+            let mut lines = vec![
+                format!(
+                    "{} orbitals, {} + {} electrons; {} qubits ({}{}), {} Pauli terms",
+                    mol.n_orbitals(),
+                    mol.n_alpha(),
+                    mol.n_beta(),
+                    n,
+                    mapping.name(),
+                    if *two_qubit_reduction {
+                        ", two-qubit reduction"
+                    } else {
+                        ""
+                    },
+                    h.num_terms()
+                ),
+                format!("Hartree–Fock   {hf:.10}"),
+                format!(
+                    "full CI        {}",
+                    fci.iter()
+                        .map(|e| format!("{e:.10}"))
+                        .collect::<Vec<_>>()
+                        .join("  ")
+                ),
+            ];
+            let mut variational = Value::Null;
+            if *method != ChemMethodArg::None {
+                if n > 20 {
+                    return Err(QsoError::invalid(
+                        "method",
+                        format!("{n} qubits are too many for a variational run here"),
+                    ));
+                }
+                let (label, energy, parameters, extra) = match method {
+                    ChemMethodArg::Adapt => {
+                        let r =
+                            adapt_vqe_molecule(&mol, encoding, false, &AdaptOptions::default())?;
+                        (
+                            "ADAPT-VQE".to_string(),
+                            r.energy,
+                            r.parameters.len(),
+                            json!({"operators": r.operators, "converged": r.converged}),
+                        )
+                    }
+                    _ => {
+                        let (label, ansatz) = if *method == ChemMethodArg::Uccsd {
+                            ("UCCSD".to_string(), chem_ansatz::uccsd(&mol, encoding)?)
+                        } else {
+                            (
+                                format!("{k}-UpCCGSD"),
+                                chem_ansatz::k_upccgsd(&mol, *k, encoding)?,
+                            )
+                        };
+                        let p = ansatz.num_parameters();
+                        let r = Vqe::new(h.clone(), ansatz)?
+                            .with_initial_parameters(vec![0.0; p])?
+                            .run()?;
+                        (label, r.energy, p, json!({"converged": r.converged}))
+                    }
+                };
+                lines.push(format!(
+                    "{label:<14} {energy:.10}  ({parameters} parameter{}, error vs full CI {:.2e})",
+                    if parameters == 1 { "" } else { "s" },
+                    energy - fci[0]
+                ));
+                variational = json!({"method": label, "energy": energy, "parameters": parameters, "details": extra});
+            }
+            Ok((
+                json!({
+                    "orbitals": mol.n_orbitals(),
+                    "electrons": [mol.n_alpha(), mol.n_beta()],
+                    "qubits": n,
+                    "mapping": mapping.name(),
+                    "two_qubit_reduction": two_qubit_reduction,
+                    "pauli_terms": h.num_terms(),
+                    "hartree_fock": hf,
+                    "fci": fci,
+                    "variational": variational,
+                }),
+                lines.join("\n"),
+            ))
+        }
+        Command::Trotter {
+            hamiltonian,
+            qubits,
+            time,
+            steps,
+            order,
+            output,
+        } => {
+            let h: PauliSum = hamiltonian.parse()?;
+            let n = qubits.unwrap_or(h.min_qubits().max(1));
+            let c = trotter_circuit(&h, n, *time, *steps, *order)?;
+            let bound = trotter_error_bound(&h, *time, *steps, *order)?;
+            // The actual error when the unitary is small enough to form.
+            let actual = if n <= 10 {
+                let traceless = PauliSum::from_terms(
+                    h.terms().iter().filter(|(_, s)| !s.is_identity()).copied(),
+                );
+                let exact = metatron_qso::linalg::expm_hermitian(&traceless.to_dense(n)?, *time);
+                let mut worst: f64 = 0.0;
+                for col in 0..1usize << n {
+                    let mut psi = metatron_qso::quantum::StateVector::basis(n, col)?;
+                    psi.apply_circuit(&c, &[])?;
+                    let diff: f64 = psi
+                        .amplitudes()
+                        .iter()
+                        .enumerate()
+                        .map(|(row, a)| (a - exact[(row, col)]).norm_sqr())
+                        .sum::<f64>()
+                        .sqrt();
+                    worst = worst.max(diff);
+                }
+                Some(worst)
+            } else {
+                None
+            };
+            if let Some(path) = output {
+                std::fs::write(path, to_qasm2(&c, &[], false)?)
+                    .map_err(|e| QsoError::invalid("output", format!("{}: {e}", path.display())))?;
+            }
+            let text = format!(
+                "order {order}, {steps} steps, t = {time}: {} gates, depth {}, error bound {bound:.3e}{}",
+                c.len(),
+                c.depth(),
+                actual.map_or(String::new(), |a| format!(
+                    ", largest column error {a:.3e} (a lower bound on ‖U − exp(−iHt)‖)"
+                ))
+            );
+            Ok((
+                json!({"qubits": n, "gates": c.len(), "depth": c.depth(), "error_bound": bound, "column_error": actual}),
                 text,
             ))
         }
