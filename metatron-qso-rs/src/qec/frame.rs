@@ -20,7 +20,7 @@ use crate::stabilizer::{CliffordTarget, apply_clifford};
 
 /// Most bits of results one call returns, shots × (detectors + 64) with
 /// one 64-bit observable mask per shot (1 GiB).
-pub const MAX_SAMPLED_EVENTS: usize = 1 << 33;
+pub const MAX_SAMPLED_EVENTS: u64 = 1 << 33;
 
 /// Shots per batch, as 64-bit words.
 const BATCH_WORDS: usize = 16;
@@ -191,7 +191,7 @@ pub fn sample_detectors(
     shots: usize,
     seed: u64,
 ) -> Result<DetectorSamples> {
-    if shots.saturating_mul(circuit.n_detectors() + 64) > MAX_SAMPLED_EVENTS {
+    if (shots as u64).saturating_mul(circuit.n_detectors() as u64 + 64) > MAX_SAMPLED_EVENTS {
         return Err(QsoError::invalid(
             "shots",
             format!("shots × (detectors + 64) must be at most {MAX_SAMPLED_EVENTS}"),
