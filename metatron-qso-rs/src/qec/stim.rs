@@ -277,10 +277,12 @@ fn parse_items(
                 }
                 Target::Record(k)
             } else {
-                let q: usize = t.strip_prefix('!').unwrap_or(t).parse().map_err(|_| {
+                // Parsed as u64, so that the limit, not the width of usize,
+                // decides on every platform.
+                let q: u64 = t.strip_prefix('!').unwrap_or(t).parse().map_err(|_| {
                     parse_error(line, format!("{name} target {t} is not supported"))
                 })?;
-                if q >= MAX_QEC_QUBITS {
+                if q >= MAX_QEC_QUBITS as u64 {
                     return Err(parse_error(
                         line,
                         format!(
@@ -288,7 +290,7 @@ fn parse_items(
                         ),
                     ));
                 }
-                Target::Qubit(q)
+                Target::Qubit(q as usize)
             };
             targets.push(target);
         }
