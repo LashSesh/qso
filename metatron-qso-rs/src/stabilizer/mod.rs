@@ -104,12 +104,42 @@ impl Row {
 }
 
 /// An n-qubit stabilizer state (Aaronson–Gottesman tableau).
+///
+/// The 2n generators (rows `0..n` destabilizers, `n..2n` stabilizers) are
+/// stored by qubit: column `q` of the X part is a bit vector over the
+/// rows, so a gate touches two or four contiguous columns. Measurements
+/// work on rows and transpose the tableau in 64 × 64 blocks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StabilizerState {
     n: usize,
+    /// Words per row (n bits).
     words: usize,
-    /// Rows `0..n`: destabilizers; `n..2n`: stabilizers.
-    rows: Vec<Row>,
+    /// Words per column (2n bits, one per row).
+    rw: usize,
+    /// X and Z parts, column-major: `x[q * rw + w]`.
+    x: Vec<u64>,
+    z: Vec<u64>,
+    /// Signs, one bit per row.
+    r: Vec<u64>,
+}
+
+/// Transpose a 64 × 64 bit matrix in place (`a[k]` bit `j` ↔ `a[j]` bit `k`).
+fn transpose64(a: &mut [u64; 64]) {
+    let masks = [
+        (32, 0x0000_0000_FFFF_FFFFu64),
+        (16, 0x0000_FFFF_0000_FFFF),
+        (8, 0x00FF_00FF_00FF_00FF),
+        (4, 0x0F0F_0F0F_0F0F_0F0F),
+        (2, 0x3333_3333_3333_3333),
+        (1, 0x5555_5555_5555_5555),
+    ];
+    for (j, m) in masks {
+        for k in (0..64).filter(|k| k & j == 0) {
+            let t = ((a[k] >> j) ^ a[k + j]) & m;
+            a[k] ^= t << j;
+            a[k + j] ^= t;
+        }
+    }
 }
 
 fn quarter_turns(theta: f64, what: &str) -> Result<u32> {
@@ -134,13 +164,86 @@ impl StabilizerState {
                 requested: n,
             });
         }
-        let words = n.div_ceil(64);
-        let mut rows = vec![Row::zero(words); 2 * n];
+        let (words, rw) = (n.div_ceil(64), (2 * n).div_ceil(64));
+        let mut s = StabilizerState {
+            n,
+            words,
+            rw,
+            x: vec![0; n * rw],
+            z: vec![0; n * rw],
+            r: vec![0; rw],
+        };
         for q in 0..n {
-            rows[q].set(q, true, false); // destabilizer X_q
-            rows[n + q].set(q, false, true); // stabilizer Z_q
+            s.x[q * rw + q / 64] |= 1 << (q % 64); // destabilizer X_q
+            s.z[q * rw + (n + q) / 64] |= 1 << ((n + q) % 64); // stabilizer Z_q
         }
-        Ok(StabilizerState { n, words, rows })
+        Ok(s)
+    }
+
+    /// The 2n generators as rows.
+    fn rows(&self) -> Vec<Row> {
+        let (n, words, rw) = (self.n, self.words, self.rw);
+        let mut rows = vec![Row::zero(words); 2 * n];
+        let mut block = [0u64; 64];
+        for (cols, part) in [(&self.x, 0), (&self.z, 1)] {
+            for rb in 0..rw {
+                for cb in 0..words {
+                    for (j, b) in block.iter_mut().enumerate() {
+                        let q = cb * 64 + j;
+                        *b = if q < n { cols[q * rw + rb] } else { 0 };
+                    }
+                    transpose64(&mut block);
+                    for (k, &b) in block.iter().enumerate() {
+                        let i = rb * 64 + k;
+                        if i < 2 * n {
+                            if part == 0 {
+                                rows[i].x[cb] = b;
+                            } else {
+                                rows[i].z[cb] = b;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for (i, row) in rows.iter_mut().enumerate() {
+            row.neg = (self.r[i / 64] >> (i % 64)) & 1 == 1;
+        }
+        rows
+    }
+
+    /// Store the 2n generators `rows`.
+    fn set_rows(&mut self, rows: &[Row]) {
+        let (n, words, rw) = (self.n, self.words, self.rw);
+        let mut block = [0u64; 64];
+        for part in 0..2 {
+            for rb in 0..rw {
+                for cb in 0..words {
+                    for (k, b) in block.iter_mut().enumerate() {
+                        let i = rb * 64 + k;
+                        *b = match rows.get(i) {
+                            Some(row) if part == 0 => row.x[cb],
+                            Some(row) => row.z[cb],
+                            None => 0,
+                        };
+                    }
+                    transpose64(&mut block);
+                    let cols = if part == 0 { &mut self.x } else { &mut self.z };
+                    for (j, &b) in block.iter().enumerate() {
+                        let q = cb * 64 + j;
+                        if q < n {
+                            cols[q * rw + rb] = b;
+                        }
+                    }
+                }
+            }
+        }
+        self.r.iter_mut().for_each(|w| *w = 0);
+        for (i, row) in rows.iter().enumerate() {
+            if row.neg {
+                self.r[i / 64] |= 1 << (i % 64);
+            }
+        }
     }
 
     /// The graph state `|G⟩ = Π_{(u,v)∈E} CZ_{uv} |+⟩^{⊗n}` of an
@@ -154,16 +257,16 @@ impl StabilizerState {
         }
         let mut s = Self::zero(graph.num_nodes())?;
         let n = s.n;
+        let mut rows = vec![Row::zero(s.words); 2 * n];
         for v in 0..n {
-            s.rows[v] = Row::zero(s.words);
-            s.rows[v].set(v, false, true); // destabilizer Z_v
-            let mut k = Row::zero(s.words);
+            rows[v].set(v, false, true); // destabilizer Z_v
+            let k = &mut rows[n + v];
             k.set(v, true, false);
             for &(w, _) in graph.neighbors(v) {
                 k.set(w, false, true);
             }
-            s.rows[n + v] = k;
         }
+        s.set_rows(&rows);
         Ok(s)
     }
 
@@ -195,19 +298,20 @@ impl StabilizerState {
 
     // -- Primitive gates (conjugation rules of Aaronson and Gottesman) ----
 
-    fn for_rows(&mut self, mut f: impl FnMut(&mut Row)) {
-        for row in &mut self.rows {
-            f(row);
+    /// Apply `f(x, z, r)` to every word of column `q` and of the signs.
+    fn column(&mut self, q: usize, f: impl Fn(&mut u64, &mut u64, &mut u64)) {
+        let o = q * self.rw;
+        for w in 0..self.rw {
+            f(&mut self.x[o + w], &mut self.z[o + w], &mut self.r[w]);
         }
     }
 
     /// Hadamard.
     pub fn h(&mut self, q: usize) -> Result<&mut Self> {
         self.check(q)?;
-        self.for_rows(|r| {
-            let (x, z) = r.get(q);
-            r.neg ^= x & z;
-            r.set(q, z, x);
+        self.column(q, |x, z, r| {
+            *r ^= *x & *z;
+            std::mem::swap(x, z);
         });
         Ok(self)
     }
@@ -215,10 +319,9 @@ impl StabilizerState {
     /// Phase gate `S = diag(1, i)`.
     pub fn s(&mut self, q: usize) -> Result<&mut Self> {
         self.check(q)?;
-        self.for_rows(|r| {
-            let (x, z) = r.get(q);
-            r.neg ^= x & z;
-            r.set(q, x, z ^ x);
+        self.column(q, |x, z, r| {
+            *r ^= *x & *z;
+            *z ^= *x;
         });
         Ok(self)
     }
@@ -226,32 +329,28 @@ impl StabilizerState {
     /// `S† = diag(1, −i)`.
     pub fn sdg(&mut self, q: usize) -> Result<&mut Self> {
         self.check(q)?;
-        self.for_rows(|r| {
-            let (x, z) = r.get(q);
-            r.neg ^= x & !z;
-            r.set(q, x, z ^ x);
+        self.column(q, |x, z, r| {
+            *r ^= *x & !*z;
+            *z ^= *x;
         });
         Ok(self)
     }
 
     pub fn x(&mut self, q: usize) -> Result<&mut Self> {
         self.check(q)?;
-        self.for_rows(|r| r.neg ^= r.get(q).1);
+        self.column(q, |_, z, r| *r ^= *z);
         Ok(self)
     }
 
     pub fn y(&mut self, q: usize) -> Result<&mut Self> {
         self.check(q)?;
-        self.for_rows(|r| {
-            let (x, z) = r.get(q);
-            r.neg ^= x ^ z;
-        });
+        self.column(q, |x, z, r| *r ^= *x ^ *z);
         Ok(self)
     }
 
     pub fn z(&mut self, q: usize) -> Result<&mut Self> {
         self.check(q)?;
-        self.for_rows(|r| r.neg ^= r.get(q).0);
+        self.column(q, |x, _, r| *r ^= *x);
         Ok(self)
     }
 
@@ -268,13 +367,14 @@ impl StabilizerState {
     /// CNOT with control `c` and target `t`.
     pub fn cx(&mut self, c: usize, t: usize) -> Result<&mut Self> {
         self.check_pair(c, t)?;
-        self.for_rows(|r| {
-            let (xc, zc) = r.get(c);
-            let (xt, zt) = r.get(t);
-            r.neg ^= xc & zt & !(xt ^ zc);
-            r.set(t, xt ^ xc, zt);
-            r.set(c, xc, zc ^ zt);
-        });
+        let (oc, ot) = (c * self.rw, t * self.rw);
+        for w in 0..self.rw {
+            let (xc, zc) = (self.x[oc + w], self.z[oc + w]);
+            let (xt, zt) = (self.x[ot + w], self.z[ot + w]);
+            self.r[w] ^= xc & zt & !(xt ^ zc);
+            self.x[ot + w] = xt ^ xc;
+            self.z[oc + w] = zc ^ zt;
+        }
         Ok(self)
     }
 
@@ -290,12 +390,11 @@ impl StabilizerState {
 
     pub fn swap(&mut self, a: usize, b: usize) -> Result<&mut Self> {
         self.check_pair(a, b)?;
-        self.for_rows(|r| {
-            let (xa, za) = r.get(a);
-            let (xb, zb) = r.get(b);
-            r.set(a, xb, zb);
-            r.set(b, xa, za);
-        });
+        let (oa, ob) = (a * self.rw, b * self.rw);
+        for w in 0..self.rw {
+            self.x.swap(oa + w, ob + w);
+            self.z.swap(oa + w, ob + w);
+        }
         Ok(self)
     }
 
@@ -425,26 +524,15 @@ impl StabilizerState {
         Ok(row)
     }
 
-    /// The product of the stabilizers that equals `±p`, for `p` in the
-    /// stabilizer group (up to sign): its sign.
-    fn stabilizer_sign(&self, p: &Row) -> bool {
-        let mut acc = Row::zero(self.words);
-        for i in 0..self.n {
-            if self.rows[i].anticommutes(p) {
-                acc.left_multiply(&self.rows[self.n + i]);
-            }
-        }
-        debug_assert_eq!((&acc.x, &acc.z), (&p.x, &p.z));
-        acc.neg
-    }
-
     /// ⟨P⟩ for a Pauli operator: +1, −1 or 0.
     pub fn expectation(&self, ops: &[(usize, Pauli)]) -> Result<f64> {
         let p = self.pauli_row(ops)?;
-        if self.rows[self.n..].iter().any(|s| s.anticommutes(&p)) {
-            return Ok(0.0);
-        }
-        Ok(if self.stabilizer_sign(&p) { -1.0 } else { 1.0 })
+        let rows = self.rows();
+        Ok(match expectation_of(&rows, self.n, &p) {
+            None => 0.0,
+            Some(true) => -1.0,
+            Some(false) => 1.0,
+        })
     }
 
     /// ⟨P⟩ for a Pauli operator written `"X0 Z1"` (optionally signed).
@@ -455,9 +543,15 @@ impl StabilizerState {
 
     /// ⟨H⟩ for a sum of Pauli strings (on qubits below 64).
     pub fn expectation_sum(&self, h: &PauliSum) -> Result<f64> {
+        let rows = self.rows();
         let mut total = 0.0;
         for (c, p) in h.terms() {
-            total += c * self.expectation(&pauli_ops(p))?;
+            let row = self.pauli_row(&pauli_ops(p))?;
+            total += c * match expectation_of(&rows, self.n, &row) {
+                None => 0.0,
+                Some(true) => -1.0,
+                Some(false) => 1.0,
+            };
         }
         Ok(total)
     }
@@ -470,22 +564,24 @@ impl StabilizerState {
             return Ok(false);
         }
         let n = self.n;
-        let Some(k) = (n..2 * n).find(|&i| self.rows[i].anticommutes(&p)) else {
-            return Ok(self.stabilizer_sign(&p));
+        let mut rows = self.rows();
+        let Some(k) = (n..2 * n).find(|&i| rows[i].anticommutes(&p)) else {
+            return Ok(stabilizer_sign(&rows, n, &p));
         };
         // Random outcome: make every other row commute with P, then
         // replace the anticommuting stabilizer by ±P.
-        let pivot = self.rows[k].clone();
-        for i in 0..2 * n {
+        let pivot = rows[k].clone();
+        for (i, row) in rows.iter_mut().enumerate() {
             // Destabilizer k − n anticommutes with the pivot and is replaced
             // below; every other row commutes with it.
-            if i != k && i != k - n && self.rows[i].anticommutes(&p) {
-                self.rows[i].left_multiply(&pivot);
+            if i != k && i != k - n && row.anticommutes(&p) {
+                row.left_multiply(&pivot);
             }
         }
         let outcome = rng.next_u64() & 1 == 1;
-        self.rows[k - n] = pivot;
-        self.rows[k] = Row { neg: outcome, ..p };
+        rows[k - n] = pivot;
+        rows[k] = Row { neg: outcome, ..p };
+        self.set_rows(&rows);
         Ok(outcome)
     }
 
@@ -510,7 +606,7 @@ impl StabilizerState {
         let (n, words) = (self.n, self.words);
         // Gaussian elimination of the stabilizers on their X parts; the
         // rows left without X are signed Z strings: parity constraints.
-        let mut rows: Vec<Row> = self.rows[n..].to_vec();
+        let mut rows: Vec<Row> = self.rows().split_off(n);
         let mut rank = 0;
         for q in 0..n {
             let Some(j) = (rank..n).find(|&j| rows[j].get(q).0) else {
@@ -603,7 +699,7 @@ impl StabilizerState {
         let start = self.sampler().offset[0] as usize;
         let mut amps = vec![C64::new(0.0, 0.0); 1 << n];
         amps[start] = C64::new(1.0, 0.0);
-        for s in &self.rows[n..] {
+        for s in &self.rows()[n..] {
             let (xm, zm) = (s.x[0] as usize, s.z[0] as usize);
             let mut phase = C64::new(if s.neg { -1.0 } else { 1.0 }, 0.0);
             for _ in 0..(xm & zm).count_ones() {
@@ -628,7 +724,7 @@ impl StabilizerState {
 
     /// Stabilizer generators as signed Pauli strings, `"+X0 Z1"`.
     pub fn stabilizers(&self) -> Vec<String> {
-        self.rows[self.n..]
+        self.rows()[self.n..]
             .iter()
             .map(|r| row_string(r, self.n))
             .collect()
@@ -652,7 +748,7 @@ impl StabilizerState {
         // Each generator restricted to `part`: 2|part| bits.
         let k = part.len();
         let words = (2 * k).div_ceil(64).max(1);
-        let mut m: Vec<Vec<u64>> = self.rows[self.n..]
+        let mut m: Vec<Vec<u64>> = self.rows()[self.n..]
             .iter()
             .map(|r| {
                 let mut v = vec![0u64; words];
@@ -674,11 +770,13 @@ impl StabilizerState {
     /// Whether `other` is the same state (up to a global phase): every
     /// stabilizer of `other` stabilizes `self`.
     pub fn same_state(&self, other: &StabilizerState) -> bool {
-        self.n == other.n
-            && other.rows[other.n..].iter().all(|g| {
-                !self.rows[self.n..].iter().any(|s| s.anticommutes(g))
-                    && self.stabilizer_sign(g) == g.neg
-            })
+        if self.n != other.n {
+            return false;
+        }
+        let mine = self.rows();
+        other.rows()[other.n..]
+            .iter()
+            .all(|g| expectation_of(&mine, self.n, g) == Some(false))
     }
 
     /// Local complementation at node `v` of a graph state: the local
@@ -734,7 +832,29 @@ pub fn local_complementation(graph: &Graph, v: usize) -> Result<Graph> {
     Ok(Graph::from_edges(n, &edges)?.with_name(format!("{} * {v}", graph.name())))
 }
 
-fn not_clifford(inst: &Instruction) -> QsoError {
+/// The sign of the product of stabilizers that equals `±p`, for `p` in
+/// the stabilizer group up to sign (`rows`: destabilizers, stabilizers).
+fn stabilizer_sign(rows: &[Row], n: usize, p: &Row) -> bool {
+    let mut acc = Row::zero(p.x.len());
+    for i in 0..n {
+        if rows[i].anticommutes(p) {
+            acc.left_multiply(&rows[n + i]);
+        }
+    }
+    debug_assert_eq!((&acc.x, &acc.z), (&p.x, &p.z));
+    acc.neg
+}
+
+/// `None` if `p` anticommutes with a stabilizer (⟨P⟩ = 0); otherwise
+/// whether `−P` (rather than `P`) is in the stabilizer group.
+fn expectation_of(rows: &[Row], n: usize, p: &Row) -> Option<bool> {
+    if rows[n..].iter().any(|s| s.anticommutes(p)) {
+        return None;
+    }
+    Some(stabilizer_sign(rows, n, p) != p.neg)
+}
+
+pub(crate) fn not_clifford(inst: &Instruction) -> QsoError {
     QsoError::invalid(
         "gate",
         format!(

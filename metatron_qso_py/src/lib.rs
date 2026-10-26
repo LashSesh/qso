@@ -23,6 +23,7 @@ mod optimization;
 mod photonics;
 mod reduced;
 mod simulation;
+mod stabilizer;
 mod state;
 mod walks;
 
@@ -182,5 +183,6 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     chemistry::register(m)?;
     simulation::register(m)?;
     optimization::register(m)?;
+    stabilizer::register(m)?;
     Ok(())
 }

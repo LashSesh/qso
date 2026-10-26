@@ -584,3 +584,53 @@ fn vqd_finds_every_level_of_h2() {
         assert!(close(*e, *reference, 1e-6), "{e} vs {reference}");
     }
 }
+
+#[test]
+fn stabilizer_states_at_scale() {
+    use metatron_qso::graph::generators::from_spec;
+    use metatron_qso::stabilizer::{StabilizerState, local_complementation};
+    // GHZ state on 10 000 qubits: every ZZ correlation is +1, single Z
+    // expectations vanish, and X^⊗n stabilizes it.
+    let n = 10_000;
+    let mut ghz = StabilizerState::zero(n).unwrap();
+    ghz.h(0).unwrap();
+    for q in 1..n {
+        ghz.cx(q - 1, q).unwrap();
+    }
+    assert_eq!(ghz.expectation_str("Z0 Z9999").unwrap(), 1.0);
+    assert_eq!(ghz.expectation_str("Z4321").unwrap(), 0.0);
+    let all_x: String = (0..n).map(|q| format!("X{q} ")).collect();
+    assert_eq!(ghz.expectation_str(&all_x).unwrap(), 1.0);
+    // Graph-state entanglement equals the cut-rank over GF(2): the
+    // hypercube Q10 split into two Q9 halves is joined by a perfect
+    // matching (rank 512); a cycle split into two arcs by two edges.
+    let q10 = StabilizerState::graph_state(&from_spec("hypercube:10").unwrap()).unwrap();
+    assert_eq!(
+        q10.entanglement_entropy(&(0..512).collect::<Vec<_>>())
+            .unwrap(),
+        512
+    );
+    let c1000 = StabilizerState::graph_state(&from_spec("cycle:1000").unwrap()).unwrap();
+    assert_eq!(
+        c1000
+            .entanglement_entropy(&(0..500).collect::<Vec<_>>())
+            .unwrap(),
+        2
+    );
+    // Metatron's Cube (K13) is a GHZ state up to local Cliffords: local
+    // complementation at a node leaves the star.
+    let k13 = from_spec("metatron").unwrap();
+    let star = local_complementation(&k13, 0).unwrap();
+    assert_eq!((star.num_edges(), star.degree(0)), (12, 12));
+    let mut s = StabilizerState::graph_state(&k13).unwrap();
+    s.local_complement(&k13, 0).unwrap();
+    assert!(s.same_state(&StabilizerState::graph_state(&star).unwrap()));
+    // Every bipartition of the K13 graph state carries exactly one ebit.
+    assert_eq!(
+        StabilizerState::graph_state(&k13)
+            .unwrap()
+            .entanglement_entropy(&[0, 1, 2, 3, 4, 5])
+            .unwrap(),
+        1
+    );
+}

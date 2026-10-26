@@ -335,6 +335,9 @@ fn clifford_programs() {
     assert_eq!(counts.keys().copied().collect::<Vec<_>>(), vec![0b00, 0b11]);
     let mut rng = Rng::seed_from_u64(2);
     assert!(matches!(run_program(&ghz, &mut rng).unwrap(), 0b00 | 0b11));
+    // A program without qubits writes no bits.
+    let empty = Program::from_qasm("bit[2] c;").unwrap();
+    assert_eq!(sample_program(&empty, 3, 0).unwrap().into_iter().collect::<Vec<_>>(), vec![(0, 3)]);
     // Non-Clifford programs are rejected.
     let t = Program::from_qasm("qubit q; bit c; t q; c = measure q;").unwrap();
     assert!(!is_clifford_program(&t));
@@ -386,4 +389,28 @@ fn identities_and_signs() {
     let h: PauliSum = "0.5*Z0 + 2*Y1 - X1".parse().unwrap();
     assert!((s.expectation_sum(&h).unwrap() - 2.5).abs() < 1e-12);
     assert!(s.measure_pauli(&[], &mut rng).is_ok_and(|v| !v));
+}
+
+#[test]
+fn transposition_round_trips() {
+    let mut rng = Rng::seed_from_u64(9);
+    let mut a = [0u64; 64];
+    for v in a.iter_mut() {
+        *v = rng.next_u64();
+    }
+    let mut t = a;
+    transpose64(&mut t);
+    for (k, row) in a.iter().enumerate() {
+        for (j, col) in t.iter().enumerate() {
+            assert_eq!((row >> j) & 1, (col >> k) & 1);
+        }
+    }
+    // Rows and columns of a tableau convert back and forth exactly.
+    for n in [1, 63, 64, 65, 130] {
+        let c = random_clifford(n, 3 * n, &mut rng);
+        let s = StabilizerState::from_circuit(&c, &[]).unwrap();
+        let mut t = s.clone();
+        t.set_rows(&s.rows());
+        assert_eq!(s, t);
+    }
 }

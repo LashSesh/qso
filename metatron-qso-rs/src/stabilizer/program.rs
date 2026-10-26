@@ -49,10 +49,30 @@ impl StabilizerState {
     /// Run `circuit(theta)` on `|0…0⟩`.
     pub fn from_circuit(circuit: &Circuit, theta: &[f64]) -> Result<Self> {
         let mut s = StabilizerState::zero(circuit.n_qubits())?;
-        for inst in circuit.instructions() {
-            s.apply_instruction(inst, theta)?;
-        }
+        s.apply_circuit(circuit, theta)?;
         Ok(s)
+    }
+
+    /// Apply `circuit(theta)` (on the first `circuit.n_qubits()` qubits).
+    /// The state is unchanged if a gate is not Clifford.
+    pub fn apply_circuit(&mut self, circuit: &Circuit, theta: &[f64]) -> Result<()> {
+        if circuit.n_qubits() > self.n_qubits() {
+            return Err(QsoError::DimensionMismatch {
+                expected: self.n_qubits(),
+                actual: circuit.n_qubits(),
+            });
+        }
+        if let Some(bad) = circuit
+            .instructions()
+            .iter()
+            .find(|i| !is_clifford_instruction(i, theta))
+        {
+            return Err(super::not_clifford(bad));
+        }
+        for inst in circuit.instructions() {
+            self.apply_instruction(inst, theta)?;
+        }
+        Ok(())
     }
 }
 
@@ -83,7 +103,8 @@ fn run_ops(
 /// One shot of a Clifford program: its classical record (bit `k` of the
 /// result is bit `k` of the program).
 pub fn run_program(program: &Program, rng: &mut Rng) -> Result<u64> {
-    let mut s = StabilizerState::zero(program.n_qubits())?;
+    // A program without qubits (only bits) runs on a one-qubit dummy.
+    let mut s = StabilizerState::zero(program.n_qubits().max(1))?;
     let mut record = 0;
     run_ops(&mut s, &mut record, program.operations(), rng)?;
     Ok(record)
@@ -111,7 +132,8 @@ pub fn sample_program(program: &Program, shots: usize, seed: u64) -> Result<BTre
         .iter()
         .all(|o| matches!(o, Operation::Measure { .. }));
     if terminal {
-        let mut s = StabilizerState::zero(program.n_qubits())?;
+        // A program without qubits (only bits) runs on a one-qubit dummy.
+    let mut s = StabilizerState::zero(program.n_qubits().max(1))?;
         for op in &ops[..first_measure] {
             if let Operation::Gate(inst) = op {
                 s.apply_instruction(inst, &[])?;
