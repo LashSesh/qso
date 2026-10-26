@@ -3,7 +3,9 @@
 Status: October 2026. Milestones 1.1 to 1.6 delivered — 1.3 combined the
 milestones planned as "quantum walks" and "simulation performance".
 Milestones 1.4 (noise at scale and error mitigation), 1.5 (algorithms and
-physics) and 1.6 (interoperability) ship together as release 1.4.0. Up to 1.3 milestone and release numbers coincided; from 1.4 on the
+physics) and 1.6 (interoperability) shipped together as release 1.4.0.
+Next: 1.7, stabilizer simulation and graph states, then 1.8,
+error-correction experiments, both from the research track. Up to 1.3 milestone and release numbers coincided; from 1.4 on the
 milestone numbers name units of work and releases follow Semantic
 Versioning on their own (the next release after 1.3.0 is 1.4.0, whatever
 it contains).
@@ -300,13 +302,40 @@ register names that made exports unreadable, and records above 32 bits
 truncated in WebAssembly. All were fixed with regression tests before the
 release.
 
-### Research track (decide after 1.6)
+### 1.7 — Stabilizer simulation and graph states (M, next)
 
-Stabilizer simulation (Clifford tableaux for thousands of qubits, as the base
-for error-correction experiments), matrix-product-state simulation for
-low-entanglement circuits, and a GPU backend through `wgpu`. Each is a
-project of its own; they start only with a clear use case and after the CPU
-core is close to memory bandwidth.
+| Deliverable | Detail |
+|---|---|
+| Tableau simulator | Aaronson–Gottesman tableaux, bit-packed: Clifford gates (including rotations by multiples of π/2), Z and Pauli measurements, reset, Pauli expectation values, seeded sampling; thousands of qubits |
+| Clifford programs | OpenQASM programs and circuits made of Clifford gates run on the tableau simulator, mid-circuit measurement and feed-forward included; `qso qasm` and the WebAssembly module choose it when a program is Clifford and too large for a state vector |
+| Graph states | the graph state of any QSO graph, its stabilizer generators, local complementation as a local Clifford operation, entanglement entropy of any bipartition from the cut-rank over GF(2) |
+
+Validation: random Clifford circuits on up to 12 qubits agree with the
+state-vector simulator (states up to phase, Pauli expectation values,
+outcome distributions); GHZ and graph states of thousands of qubits have
+their known stabilizers and correlations; graph-state entanglement equals
+the state-vector entropy on small graphs; local complementation equals the
+local Clifford operation of Hein, Eisert and Briegel (2004).
+
+### 1.8 — Error-correction experiments (M–L)
+
+| Deliverable | Detail |
+|---|---|
+| Detector circuits | Clifford circuits with Pauli noise channels, measurement records, detectors and logical observables |
+| Pauli-frame sampler | 64 shots per machine word, for millions of shots of noisy Clifford circuits |
+| Codes | repetition code and rotated surface code memory experiments with circuit-level noise |
+| Decoding | detector error models from circuits, matching graphs, a union-find decoder |
+
+Validation: frame sampling against the tableau simulator; logical error
+rates against exact enumeration for distance 3; error rates that fall with
+distance below threshold.
+
+### Research track (later)
+
+Matrix-product-state simulation for low-entanglement circuits and a GPU
+backend through `wgpu`. Each is a project of its own; they start only with
+a clear use case, and a GPU backend only after the CPU core is close to
+memory bandwidth.
 
 ## 5. Order and reasoning
 
@@ -322,6 +351,9 @@ core is close to memory bandwidth.
    tools.
 5. **1.6: interoperability**, without framework bridges. Milestones 1.4
    to 1.6 ship as one release, 1.4.0, to keep releases (and CI runs) few.
+6. **1.7 and 1.8: stabilizers before error correction.** Error-correction
+   experiments need the stabilizer simulator; graph states connect it to
+   QSO's graphs.
 
 ## 6. Measures of success
 
@@ -345,6 +377,11 @@ Taken (October 2026):
   Semantic Versioning and are no longer tied to milestone numbers.
 * No integral code: molecules come in as FCIDUMP files, written by any
   quantum-chemistry program (the repository's files by PySCF).
+* From the research track, stabilizer simulation comes first (1.7, 1.8):
+  it needs no dependency, it has exact references (the state-vector
+  simulator, closed forms, enumeration), and graph states and
+  error-correcting codes are graph-structured quantum computing.
+  Matrix-product states and a GPU backend wait.
 * The browser playground stays, because it costs little to maintain: it
   is plain HTML and JavaScript without dependencies or a build step, it
   uses only the npm package's JSON interface, which the package's tests
