@@ -16,6 +16,11 @@ use crate::stabilizer::apply_clifford;
 
 /// Most elementary error components a model propagates.
 pub const MAX_COMPONENTS: usize = 1 << 22;
+/// Most detector entries over all propagated components (1 GiB).
+pub const MAX_SIGNATURE_ENTRIES: usize = 1 << 27;
+/// Most word operations of propagation, passes × operations × words
+/// (about a minute and a half at the limit).
+pub const MAX_MODEL_WORK: u64 = 1 << 34;
 
 /// One independent error mechanism of a detector error model.
 #[derive(Clone, Debug, PartialEq)]
@@ -90,8 +95,10 @@ fn independent(p: f64, qubits: u32) -> f64 {
     0.5 - 0.5 * (1.0 - d * p / k).powf(2.0 / d)
 }
 
-/// The detector error model of `circuit`. With `decompose`, an error that
-/// flips more than two detectors is split into its single-qubit X and Z
+/// The detector error model of `circuit`; its detectors and observables
+/// must be deterministic without noise, as for
+/// [`sample_detectors`](super::sample_detectors). With `decompose`, an
+/// error that flips more than two detectors is split into its single-qubit X and Z
 /// parts (each must flip at most two), so that the model is a matching
 /// graph; this keeps every part's probability and so overestimates
 /// correlated errors slightly, as decoders do.
@@ -99,6 +106,7 @@ pub fn detector_error_model(
     circuit: &DetectorCircuit,
     decompose: bool,
 ) -> Result<DetectorErrorModel> {
+    super::frame::check_deterministic(circuit)?;
     // Elementary components.
     let mut components: Vec<Component> = Vec::new();
     for (i, op) in circuit.operations().iter().enumerate() {
@@ -255,6 +263,19 @@ fn propagate(circuit: &DetectorCircuit, components: &[Component]) -> Result<Vec<
     let (n_det, n_obs) = (circuit.n_detectors(), circuit.n_observables());
     let per_word = circuit.n_measurements() + 2 * n + n_det + n_obs;
     let max_words = (PASS_MEMORY_WORDS / per_word.max(1)).clamp(1, 64);
+    let passes = components.len().div_ceil(64 * max_words) as u64;
+    let work = passes
+        .saturating_mul(circuit.operations().len() as u64)
+        .saturating_mul(max_words.min(components.len().div_ceil(64)) as u64);
+    if work > MAX_MODEL_WORK {
+        return Err(QsoError::invalid(
+            "circuit",
+            format!(
+                "the error model needs about {work} word operations, more than {MAX_MODEL_WORK}"
+            ),
+        ));
+    }
+    let mut entries = 0usize;
     let mut out: Vec<Signature> = Vec::with_capacity(components.len());
     for chunk in components.chunks(64 * max_words) {
         let w = chunk.len().div_ceil(64);
@@ -314,6 +335,15 @@ fn propagate(circuit: &DetectorCircuit, components: &[Component]) -> Result<Vec<
         // Signatures: the set bits of each detector and observable row.
         let base = out.len();
         out.resize(base + chunk.len(), (Vec::new(), 0));
+        entries += det.iter().map(|b| b.count_ones() as usize).sum::<usize>();
+        if entries > MAX_SIGNATURE_ENTRIES {
+            return Err(QsoError::invalid(
+                "circuit",
+                format!(
+                    "the errors flip more than {MAX_SIGNATURE_ENTRIES} detectors in all before merging"
+                ),
+            ));
+        }
         for d in 0..n_det {
             for k in 0..w {
                 let mut bits = det[d * w + k];

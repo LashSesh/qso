@@ -42,9 +42,10 @@ pub struct LogicalErrorRate {
 
 /// Sample `shots` shots of `circuit`, decode each with the union-find
 /// decoder of its (decomposed) detector error model, and count the shots
-/// whose observables it predicts wrongly. Shots are sampled in blocks, so
-/// memory does not grow with `shots`; the shots are those of
-/// [`sample_detectors`] with the same seed.
+/// whose observables it predicts wrongly. Shots are sampled in blocks of at
+/// most 65 536 shots and 1 GiB of results, so memory does not grow with
+/// `shots`; the shots are those of [`sample_detectors`] with the same
+/// seed.
 pub fn logical_error_rate(
     circuit: &DetectorCircuit,
     shots: usize,
@@ -54,7 +55,11 @@ pub fn logical_error_rate(
     let mut decoder = UnionFindDecoder::new(MatchingGraph::from_dem(&dem)?);
     frame::check_deterministic(circuit)?;
     let mut rng = Rng::seed_from_u64(seed);
-    let block = 64 * frame::BATCH_SHOTS;
+    // Blocks of whole batches, with at most MAX_SAMPLED_EVENTS bits of
+    // results, so the stream equals one call.
+    let batch = frame::batch_shots(circuit);
+    let per_shot = circuit.n_detectors() as u64 + 64;
+    let block = batch * ((frame::MAX_SAMPLED_EVENTS / per_shot) as usize / batch).clamp(1, 64);
     let mut errors = 0;
     let mut done = 0;
     while done < shots {

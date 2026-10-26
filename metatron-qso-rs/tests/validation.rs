@@ -650,18 +650,18 @@ fn surface_codes_suppress_logical_errors_below_threshold() {
     };
     // Rotated surface code, d rounds, circuit-level depolarizing noise
     // p = 0.001 on every gate, reset, measurement and idle data qubit:
-    // the union-find decoder's logical error rate falls with the distance.
+    // the union-find decoder's logical error rate falls with the distance
+    // (10⁶ shots, seed 7).
     let below: Vec<_> = [3, 5, 7]
         .iter()
-        .map(|&d| surface(d, 0.001, 100_000))
+        .map(|&d| surface(d, 0.001, 1_000_000))
         .collect();
-    assert!((1.0e-3..1.6e-3).contains(&below[0].rate), "{:?}", below[0]);
-    assert!((1.2e-4..3.0e-4).contains(&below[1].rate), "{:?}", below[1]);
-    assert!(
-        below[1].rate + 3.0 * below[1].standard_error
-            < below[0].rate - 3.0 * below[0].standard_error
-    );
-    assert!(below[2].rate <= below[1].rate);
+    assert!((7.5e-4..9.5e-4).contains(&below[0].rate), "{:?}", below[0]);
+    assert!((1.15e-4..1.7e-4).contains(&below[1].rate), "{:?}", below[1]);
+    assert!((1.2e-5..3.2e-5).contains(&below[2].rate), "{:?}", below[2]);
+    for w in below.windows(2) {
+        assert!(w[1].rate + 3.0 * w[1].standard_error < w[0].rate - 3.0 * w[0].standard_error);
+    }
     // Above the threshold (p = 0.01) larger codes fail more often.
     let above: Vec<_> = [3, 5, 7]
         .iter()
@@ -670,7 +670,7 @@ fn surface_codes_suppress_logical_errors_below_threshold() {
     for w in above.windows(2) {
         assert!(w[0].rate + 3.0 * w[0].standard_error < w[1].rate - 3.0 * w[1].standard_error);
     }
-    assert!((0.065..0.085).contains(&above[0].rate), "{:?}", above[0]);
+    assert!((0.055..0.07).contains(&above[0].rate), "{:?}", above[0]);
     // The repetition code at p = 0.01 (bit flips only matter).
     let rep: Vec<f64> = [3, 5, 9]
         .iter()

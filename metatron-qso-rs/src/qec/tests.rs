@@ -370,7 +370,7 @@ fn invalid_input_is_an_error() {
 fn logical_error_rate_streams_the_samples_of_one_call() {
     // More shots than one block, so the streaming path runs twice.
     let c = repetition_code_memory(3, 2, &CircuitNoise::uniform(0.05)).unwrap();
-    let shots = 64 * frame::BATCH_SHOTS + 1000;
+    let shots = 64 * frame::batch_shots(&c) + 1000;
     let r = logical_error_rate(&c, shots, 9).unwrap();
     let samples = sample_detectors(&c, shots, 9).unwrap();
     let dem = detector_error_model(&c, true).unwrap();
@@ -414,4 +414,116 @@ fn appended_circuits_and_the_stim_export() {
     let mut big = crate::quantum::Circuit::new(4);
     big.h(3);
     assert!(c.append_circuit(&big, &[]).is_err());
+}
+
+#[test]
+fn limits_fail_early_with_an_error() {
+    // Error models need deterministic detectors, as sampling does.
+    let mut r = DetectorCircuit::new(1).unwrap();
+    r.noise(Noise::XError(0.1), &[0]).unwrap();
+    r.h(0).unwrap();
+    let m = r.measure(0, 0.0).unwrap();
+    r.detector(&[m]).unwrap();
+    assert!(detector_error_model(&r, false).is_err());
+    // An error that flips every one of 100 000 detectors, 2000 times
+    // before merging: too many signature entries.
+    let n = 2001;
+    let mut c = DetectorCircuit::new(n).unwrap();
+    c.noise(Noise::XError(0.01), &(1..n).collect::<Vec<_>>())
+        .unwrap();
+    for q in 1..n {
+        c.cx(q, 0).unwrap();
+    }
+    let m = c.measure(0, 0.0).unwrap();
+    for _ in 0..100_000 {
+        c.detector(&[m]).unwrap();
+    }
+    assert!(detector_error_model(&c, false).is_err());
+    // Two million noisy measurements: too much propagation work.
+    let mut w = DetectorCircuit::new(1).unwrap();
+    for _ in 0..2_000_000 {
+        w.measure(0, 0.01).unwrap();
+    }
+    w.detector(&[0]).unwrap();
+    assert!(detector_error_model(&w, false).is_err());
+    // Memory experiments beyond the operation limit fail before building.
+    let start = std::time::Instant::now();
+    assert!(surface_code_memory(101, 10_000, &CircuitNoise::uniform(0.001)).is_err());
+    assert!(start.elapsed().as_secs_f64() < 2.0);
+    // Matching graphs check their detectors.
+    let bad = DetectorErrorModel {
+        n_detectors: 3,
+        n_observables: 0,
+        errors: vec![ErrorMechanism {
+            probability: 0.1,
+            detectors: vec![0, 5],
+            observables: 0,
+        }],
+    };
+    assert!(MatchingGraph::from_dem(&bad).is_err());
+    // Tiny probabilities are exported with an exponent.
+    let mut t = DetectorCircuit::new(1).unwrap();
+    t.noise(Noise::XError(1e-62), &[0]).unwrap();
+    assert_eq!(t.to_stim().unwrap(), "X_ERROR(1e-62) 0\n");
+}
+
+#[test]
+fn edges_more_likely_than_not_are_grown_at_once() {
+    // A model with an edge of p > 1/2: decoding still terminates and
+    // explains the syndrome.
+    let dem = DetectorErrorModel {
+        n_detectors: 2,
+        n_observables: 1,
+        errors: vec![
+            ErrorMechanism {
+                probability: 0.7,
+                detectors: vec![0, 1],
+                observables: 1,
+            },
+            ErrorMechanism {
+                probability: 0.01,
+                detectors: vec![0],
+                observables: 0,
+            },
+            ErrorMechanism {
+                probability: 0.01,
+                detectors: vec![1],
+                observables: 0,
+            },
+        ],
+    };
+    let mut decoder = UnionFindDecoder::new(MatchingGraph::from_dem(&dem).unwrap());
+    assert_eq!(decoder.decode(&[0, 1]).unwrap(), 1);
+    assert_eq!(decoder.decode(&[0]).unwrap(), 0);
+}
+
+#[test]
+fn weighted_growth_corrects_random_low_weight_errors() {
+    // The syndrome of three errors at distance 7 that step-wise growth
+    // misdecoded (edges [43, 47], [38, 43] and [2, 30], no observable).
+    let c = surface_code_memory(7, 7, &CircuitNoise::uniform(0.001)).unwrap();
+    let dem = detector_error_model(&c, true).unwrap();
+    let graph = MatchingGraph::from_dem(&dem).unwrap();
+    let (nd, edges) = (graph.n_detectors(), graph.edges().to_vec());
+    let mut decoder = UnionFindDecoder::new(graph);
+    assert_eq!(decoder.decode(&[2, 30, 38, 47]).unwrap(), 0);
+    // 20 000 random sets of (d − 1)/2 = 3 errors are all corrected.
+    let mut rng = Rng::seed_from_u64(5);
+    for _ in 0..20_000 {
+        let mut fired = vec![false; nd + 1];
+        let mut flips = 0;
+        for _ in 0..3 {
+            let e = &edges[rng.below(edges.len() as u64) as usize];
+            fired[e.a] ^= true;
+            fired[e.b] ^= true;
+            flips ^= e.observables;
+        }
+        let f: Vec<usize> = (0..nd).filter(|&d| fired[d]).collect();
+        let predicted = if f.is_empty() {
+            0
+        } else {
+            decoder.decode(&f).unwrap()
+        };
+        assert_eq!(predicted, flips, "{f:?}");
+    }
 }

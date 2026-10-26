@@ -13,19 +13,20 @@ use metatron_qso::qec::{
 };
 
 fn main() -> Result<()> {
-    let shots = 100_000;
-    println!("rotated surface code, d rounds, circuit-level noise p, {shots} shots");
+    println!("rotated surface code, d rounds, circuit-level noise p");
     println!(
-        "{:>7} {:>3} {:>12} {:>10} {:>8}",
-        "p", "d", "logical", "± (1σ)", "time"
+        "{:>7} {:>3} {:>9} {:>12} {:>10} {:>8}",
+        "p", "d", "shots", "logical", "± (1σ)", "time"
     );
     for p in [0.001, 0.003, 0.01, 0.02] {
+        // Rare failures need more shots.
+        let shots = if p <= 0.001 { 1_000_000 } else { 100_000 };
         for d in [3, 5, 7] {
             let circuit = surface_code_memory(d, d, &CircuitNoise::uniform(p))?;
             let start = Instant::now();
             let r = logical_error_rate(&circuit, shots, 7)?;
             println!(
-                "{p:>7} {d:>3} {:>12.5} {:>10.5} {:>7.2}s",
+                "{p:>7} {d:>3} {shots:>9} {:>12.6} {:>10.6} {:>7.2}s",
                 r.rate,
                 r.standard_error,
                 start.elapsed().as_secs_f64()
@@ -33,6 +34,7 @@ fn main() -> Result<()> {
         }
     }
 
+    let shots = 100_000;
     println!("\nrepetition code, d rounds, circuit-level noise p, {shots} shots");
     for p in [0.01, 0.05] {
         for d in [3, 5, 9, 15] {

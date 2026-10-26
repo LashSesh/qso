@@ -1,7 +1,7 @@
 //! Memory experiments: repetition and rotated surface codes with
 //! circuit-level noise.
 
-use super::circuit::{DetectorCircuit, Noise};
+use super::circuit::{DetectorCircuit, MAX_QEC_OPERATIONS, Noise};
 use crate::error::{QsoError, Result};
 
 /// Largest code distance the generators build.
@@ -66,6 +66,28 @@ fn check(distance: usize, rounds: usize, odd: bool) -> Result<()> {
     Ok(())
 }
 
+/// Fail before building if `rounds` rounds would exceed
+/// [`MAX_QEC_OPERATIONS`]: every round adds the same operations, so one
+/// and two rounds give the count.
+fn check_size(rounds: usize, build: impl Fn(usize) -> Result<DetectorCircuit>) -> Result<()> {
+    if rounds <= 2 {
+        return Ok(());
+    }
+    let one = build(1)?.operations().len();
+    let two = build(2)?.operations().len();
+    let total = (two - one).saturating_mul(rounds - 1).saturating_add(one);
+    if total > MAX_QEC_OPERATIONS {
+        return Err(QsoError::invalid(
+            "rounds",
+            format!(
+                "{rounds} rounds need {total} operations, more than {MAX_QEC_OPERATIONS}; at most {} rounds fit",
+                (MAX_QEC_OPERATIONS - one) / (two - one) + 1
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// A builder that adds the noise of [`CircuitNoise`] around operations.
 struct Noisy<'a> {
     c: DetectorCircuit,
@@ -122,6 +144,15 @@ pub fn repetition_code_memory(
     noise: &CircuitNoise,
 ) -> Result<DetectorCircuit> {
     check(distance, rounds, false)?;
+    check_size(rounds, |r| build_repetition(distance, r, noise))?;
+    build_repetition(distance, rounds, noise)
+}
+
+fn build_repetition(
+    distance: usize,
+    rounds: usize,
+    noise: &CircuitNoise,
+) -> Result<DetectorCircuit> {
     let d = distance;
     let data: Vec<usize> = (0..d).collect();
     let anc: Vec<usize> = (d..2 * d - 1).collect();
@@ -172,6 +203,11 @@ pub fn surface_code_memory(
     noise: &CircuitNoise,
 ) -> Result<DetectorCircuit> {
     check(distance, rounds, true)?;
+    check_size(rounds, |r| build_surface(distance, r, noise))?;
+    build_surface(distance, rounds, noise)
+}
+
+fn build_surface(distance: usize, rounds: usize, noise: &CircuitNoise) -> Result<DetectorCircuit> {
     let d = distance as i64;
     let data = |r: i64, c: i64| (r * d + c) as usize;
     // Plaquette (i, j) covers data (i, j), (i, j+1), (i+1, j), (i+1, j+1)

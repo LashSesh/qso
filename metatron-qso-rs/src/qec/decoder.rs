@@ -7,11 +7,15 @@
 //!
 //! The union-find decoder of Delfosse and Nickerson (Quantum 5, 595
 //! (2021)), with weighted growth (Huang, Newman and Brown, Phys. Rev. A
-//! 102, 012419 (2020)): clusters around fired detectors grow along edges
-//! in steps until each holds an even number of fired detectors or touches
-//! the boundary; a spanning forest of each cluster is then peeled from the
-//! leaves to choose the correction. It corrects every error of weight at
-//! most (d − 1)/2 on a code of distance d, in almost linear time.
+//! 102, 012419 (2020)): clusters around fired detectors grow along edges,
+//! whose lengths are the weights ln((1 − p)/p), until each holds an even
+//! number of fired detectors or touches the boundary; a spanning forest of
+//! each cluster is then peeled from the leaves to choose the correction.
+//! Growth is event-driven: every round advances all growing clusters to
+//! the next edge they complete, so weights are used exactly, not rounded
+//! to steps. Union-find runs in almost linear time but is not a
+//! minimum-weight decoder, and with unequal weights it can fail on some
+//! errors of weight below d/2.
 
 use super::dem::DetectorErrorModel;
 use crate::error::{QsoError, Result};
@@ -25,8 +29,9 @@ pub struct MatchingEdge {
     pub probability: f64,
     /// Observables the error flips.
     pub observables: u64,
-    /// Growth steps to cover the edge (from its weight ln((1 − p)/p)).
-    steps: u32,
+    /// Length of the edge in growth: its weight ln((1 − p)/p), or 0 for
+    /// p ≥ 1/2.
+    length: f64,
 }
 
 /// Detectors as nodes (plus a boundary node), errors as edges.
@@ -39,24 +44,12 @@ pub struct MatchingGraph {
     undetectable: Vec<(f64, u64)>,
 }
 
-/// Growth resolution: the lightest edge takes this many steps.
-const STEPS_PER_LIGHTEST: f64 = 2.0;
-/// Heaviest edge in steps (caps the growth rounds).
-const MAX_STEPS: f64 = 64.0;
-
 impl MatchingGraph {
     /// The matching graph of a detector error model; every error must
     /// flip at most two detectors (see the `decompose` option of
     /// [`detector_error_model`](super::dem::detector_error_model)).
     pub fn from_dem(dem: &DetectorErrorModel) -> Result<Self> {
         let n = dem.n_detectors;
-        let weight = |p: f64| ((1.0 - p) / p).ln().max(1e-6);
-        let lightest = dem
-            .errors
-            .iter()
-            .filter(|e| !e.detectors.is_empty())
-            .map(|e| weight(e.probability.min(0.5)))
-            .fold(f64::INFINITY, f64::min);
         let mut edges = Vec::new();
         let mut undetectable = Vec::new();
         for e in &dem.errors {
@@ -77,16 +70,26 @@ impl MatchingGraph {
                     ));
                 }
             };
-            let w = weight(e.probability.min(0.5));
-            let steps = (STEPS_PER_LIGHTEST * w / lightest)
-                .round()
-                .clamp(1.0, MAX_STEPS) as u32;
+            if a >= n || b > n || a == b {
+                return Err(QsoError::invalid(
+                    "dem",
+                    format!("an error flips detectors {a} and {b} of {n}"),
+                ));
+            }
+            let p = e.probability;
+            if !(0.0..=1.0).contains(&p) {
+                return Err(QsoError::invalid(
+                    "dem",
+                    format!("{p} is not a probability"),
+                ));
+            }
+            let length = if p >= 0.5 { 0.0 } else { ((1.0 - p) / p).ln() };
             edges.push(MatchingEdge {
                 a,
                 b,
-                probability: e.probability,
+                probability: p,
                 observables: e.observables,
-                steps,
+                length,
             });
         }
         let mut adjacency = vec![Vec::new(); n + 1];
@@ -126,7 +129,13 @@ pub struct UnionFindDecoder {
     odd: Vec<bool>,
     boundary: Vec<bool>,
     members: Vec<Vec<usize>>,
-    support: Vec<u32>,
+    /// Growth covered so far, and growing clusters at each end this round.
+    support: Vec<f64>,
+    rate: Vec<u32>,
+    frontier: Vec<usize>,
+    /// Nodes whose edges are all grown or inside their cluster; they stay
+    /// so, and growth skips them.
+    interior: Vec<bool>,
     grown: Vec<bool>,
     /// Grown edges at each node.
     grown_at: Vec<Vec<usize>>,
@@ -152,7 +161,10 @@ impl UnionFindDecoder {
             odd: vec![false; nodes],
             boundary: (0..nodes).map(|v| v == graph.n_detectors).collect(),
             members: (0..nodes).map(|v| vec![v]).collect(),
-            support: vec![0; e],
+            support: vec![0.0; e],
+            rate: vec![0; e],
+            frontier: Vec::new(),
+            interior: vec![false; nodes],
             grown: vec![false; e],
             grown_at: vec![Vec::new(); nodes],
             defect: vec![false; nodes],
@@ -221,42 +233,63 @@ impl UnionFindDecoder {
         active.extend(fired.iter().copied().filter(|&d| self.odd[d]));
         active.sort_unstable();
         active.dedup();
-        // Growth: every odd cluster that does not touch the boundary
-        // supports each edge leaving it by one step; an edge is grown when
-        // its support reaches its length, and its ends merge.
+        let mut frontier = std::mem::take(&mut self.frontier);
+        // Growth: every odd cluster that does not touch the boundary grows
+        // along each edge leaving it at unit rate (an edge between two
+        // growing clusters at rate 2). Each round advances to the next
+        // completed edge; its ends merge.
         while !active.is_empty() {
-            let mut progress = false;
+            frontier.clear();
             for &root in &active {
                 for i in 0..self.members[root].len() {
                     let v = self.members[root][i];
+                    if self.interior[v] {
+                        continue;
+                    }
+                    let mut outward = false;
                     for k in 0..self.graph.adjacency[v].len() {
                         let e = self.graph.adjacency[v][k];
                         if self.grown[e] {
                             continue;
                         }
-                        let (ea, eb, steps) = {
-                            let edge = &self.graph.edges[e];
-                            (edge.a, edge.b, edge.steps)
-                        };
-                        let other = if ea == v { eb } else { ea };
+                        let edge = &self.graph.edges[e];
+                        let other = if edge.a == v { edge.b } else { edge.a };
                         if self.find(other) == root {
                             continue;
                         }
-                        if self.support[e] == 0 {
-                            self.touched_edges.push(e);
+                        outward = true;
+                        if self.rate[e] == 0 {
+                            frontier.push(e);
                         }
-                        self.support[e] += 1;
-                        progress = true;
-                        if self.support[e] >= steps {
-                            self.grown[e] = true;
-                            newly.push(e);
-                        }
+                        self.rate[e] += 1;
                     }
+                    self.interior[v] = !outward;
                 }
+            }
+            let progress = !frontier.is_empty();
+            let left = |d: &Self, e: usize| {
+                (d.graph.edges[e].length - d.support[e]).max(0.0) / f64::from(d.rate[e])
+            };
+            let delta = frontier
+                .iter()
+                .map(|&e| left(self, e))
+                .fold(f64::INFINITY, f64::min);
+            for &e in &frontier {
+                if self.support[e] == 0.0 {
+                    self.touched_edges.push(e);
+                }
+                if left(self, e) <= delta {
+                    self.grown[e] = true;
+                    self.support[e] = self.graph.edges[e].length;
+                    newly.push(e);
+                } else {
+                    self.support[e] += delta * f64::from(self.rate[e]);
+                }
+                self.rate[e] = 0;
             }
             if !progress {
                 // A cluster without edges to grow: no error explains it.
-                (self.active, self.newly) = (active, newly);
+                (self.active, self.newly, self.frontier) = (active, newly, frontier);
                 self.reset();
                 return Err(QsoError::invalid(
                     "fired",
@@ -277,7 +310,7 @@ impl UnionFindDecoder {
             active.dedup();
             active.retain(|&r| self.odd[r] && !self.boundary[r]);
         }
-        (self.active, self.newly) = (active, newly);
+        (self.active, self.newly, self.frontier) = (active, newly, frontier);
         let correction = self.peel();
         self.reset();
         Ok(correction)
@@ -416,10 +449,11 @@ impl UnionFindDecoder {
             self.members[v].clear();
             self.members[v].push(v);
             self.defect[v] = false;
+            self.interior[v] = false;
             self.grown_at[v].clear();
         }
         for &e in &self.touched_edges {
-            self.support[e] = 0;
+            self.support[e] = 0.0;
             self.grown[e] = false;
         }
         self.touched_nodes.clear();

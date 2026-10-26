@@ -22,10 +22,17 @@ use crate::stabilizer::{CliffordTarget, apply_clifford};
 /// one 64-bit observable mask per shot (1 GiB).
 pub const MAX_SAMPLED_EVENTS: u64 = 1 << 33;
 
-/// Shots per batch, as 64-bit words.
+/// Most shots per batch, as 64-bit words.
 const BATCH_WORDS: usize = 16;
-/// Shots per batch.
-pub(crate) const BATCH_SHOTS: usize = 64 * BATCH_WORDS;
+/// Words of frames and records one batch may use (128 MiB).
+const BATCH_MEMORY_WORDS: usize = 1 << 24;
+
+/// Shots per batch of `circuit`: up to 1024, fewer when frames and
+/// measurement records would exceed [`BATCH_MEMORY_WORDS`].
+pub(crate) fn batch_shots(circuit: &DetectorCircuit) -> usize {
+    let per_word = circuit.n_measurements() + 2 * circuit.n_qubits() + circuit.n_detectors();
+    64 * (BATCH_MEMORY_WORDS / per_word.max(1)).clamp(1, BATCH_WORDS)
+}
 
 /// Pauli frames of 64·w shots: `x[q * w + k]` holds the X bits of qubit `q`
 /// for shots `64k .. 64k + 63`.
@@ -202,7 +209,7 @@ pub fn sample_detectors(
 }
 
 /// [`sample_detectors`] without the checks, drawing from `rng`: samples
-/// of consecutive calls whose shots are multiples of [`BATCH_SHOTS`]
+/// of consecutive calls whose shots are multiples of [`batch_shots`]
 /// equal those of one call.
 pub(crate) fn sample_with(
     circuit: &DetectorCircuit,
@@ -218,9 +225,10 @@ pub(crate) fn sample_with(
         n_detectors: n_det,
         observables: vec![0; shots],
     };
+    let batch_size = batch_shots(circuit);
     let mut done = 0;
     while done < shots {
-        let batch = (shots - done).min(BATCH_SHOTS);
+        let batch = (shots - done).min(batch_size);
         let w = batch.div_ceil(64);
         let (det, obs) = run_batch(circuit, batch, w, rng)?;
         let first_word = done / 64;

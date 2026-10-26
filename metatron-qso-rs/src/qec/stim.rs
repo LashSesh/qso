@@ -64,8 +64,9 @@ impl DetectorCircuit {
     /// The circuit in Stim's text format (Gidney, Quantum 5, 497 (2021)),
     /// one operation per line. Gates are written as H, S, S_DAG, X, Y, Z,
     /// CX and SWAP; measurement records are relative (`rec[-k]`), as Stim
-    /// requires. Probabilities are written exactly (shortest round-trip
-    /// decimal).
+    /// requires. Probabilities are written exactly, as the shortest
+    /// decimal that reads back to the same number (with an exponent for
+    /// very small ones).
     pub fn to_stim(&self) -> Result<String> {
         let mut out = String::new();
         let mut measured = 0;
@@ -74,7 +75,7 @@ impl DetectorCircuit {
                 QecOp::Gate(inst) => apply_clifford(&mut Writer(&mut out), inst, &[])?,
                 QecOp::Measure { qubit, flip } => {
                     if *flip > 0.0 {
-                        let _ = writeln!(out, "M({flip}) {qubit}");
+                        let _ = writeln!(out, "M({flip:?}) {qubit}");
                     } else {
                         let _ = writeln!(out, "M {qubit}");
                     }
@@ -91,7 +92,7 @@ impl DetectorCircuit {
                         Noise::Depolarize1(_) => "DEPOLARIZE1",
                         Noise::Depolarize2(_) => "DEPOLARIZE2",
                     };
-                    Writer(&mut out).line(&format!("{name}({})", noise.probability()), qubits);
+                    Writer(&mut out).line(&format!("{name}({:?})", noise.probability()), qubits);
                 }
                 QecOp::Detector { records: recs } => {
                     out.push_str("DETECTOR");
