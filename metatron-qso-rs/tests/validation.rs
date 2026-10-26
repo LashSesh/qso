@@ -726,3 +726,93 @@ fn union_find_decodes_the_repetition_code_by_majority_vote() {
         }
     }
 }
+
+#[test]
+fn matrix_product_states_follow_free_fermions_and_qaoa_rings() {
+    use metatron_qso::C64;
+    use metatron_qso::algorithms::ansatz::qaoa_maxcut_circuit;
+    use metatron_qso::mps::{Mps, MpsOptions};
+    // A Trotterized XX chain on 100 qubits from the Néel state. Each gate
+    // exp(−iθ(XX + YY)/2) on (j, j + 1) is a hopping rotation of the
+    // Jordan–Wigner fermions, so the circuit's single-particle unitary U
+    // is the product of 2 × 2 rotations, and ⟨Z_j⟩ = 1 − 2 Σ_{k∈S} |U_jk|²
+    // and ⟨Z_i Z_j⟩ (Wick) are exact for the circuit, Trotter error and all.
+    let n = 100;
+    let theta: f64 = 0.25;
+    let steps = 6;
+    let mut c = Circuit::new(n);
+    for q in (0..n).step_by(2) {
+        c.x(q);
+    }
+    let mut u = vec![vec![C64::new(0.0, 0.0); n]; n];
+    for (i, row) in u.iter_mut().enumerate() {
+        row[i] = C64::new(1.0, 0.0);
+    }
+    let (cs, sn) = (theta.cos(), theta.sin());
+    for _ in 0..steps {
+        for start in [0, 1] {
+            for j in (start..n - 1).step_by(2) {
+                c.rxx(j, j + 1, theta).ryy(j, j + 1, theta);
+                // Rows j, j + 1 of U ← [[cos, −i sin], [−i sin, cos]]·rows.
+                let (top, bottom) = u.split_at_mut(j + 1);
+                for (a, b) in top[j].iter_mut().zip(bottom[0].iter_mut()) {
+                    let (x, y) = (*a, *b);
+                    *a = x * cs + y * C64::new(0.0, -sn);
+                    *b = x * C64::new(0.0, -sn) + y * cs;
+                }
+            }
+        }
+    }
+    let occupied: Vec<usize> = (0..n).step_by(2).collect();
+    let corr =
+        |i: usize, j: usize| -> C64 { occupied.iter().map(|&k| u[i][k].conj() * u[j][k]).sum() };
+    let opts = MpsOptions {
+        max_bond: 256,
+        cutoff: 1e-16,
+    };
+    let mut mps = Mps::from_circuit(&c, &[], opts).unwrap();
+    // Bond dimension 52 suffices; only rounding-level weight is dropped.
+    assert!(mps.max_bond_dimension() < 64);
+    assert!(mps.fidelity_lower_bound().unwrap() > 1.0 - 1e-7);
+    for j in [0, 1, 37, 50, 98, 99] {
+        let nj = corr(j, j).re;
+        let z = mps.expectation_str(&format!("Z{j}")).unwrap();
+        assert!(
+            close(z, 1.0 - 2.0 * nj, 1e-8),
+            "site {j}: {z} vs {}",
+            1.0 - 2.0 * nj
+        );
+    }
+    for (i, j) in [(10, 11), (49, 50), (20, 23), (0, 99)] {
+        let (ni, nj) = (corr(i, i).re, corr(j, j).re);
+        let ninj = ni * nj - corr(i, j).norm_sqr();
+        let zz = 1.0 - 2.0 * ni - 2.0 * nj + 4.0 * ninj;
+        let got = mps.expectation_str(&format!("Z{i} Z{j}")).unwrap();
+        assert!(close(got, zz, 1e-8), "({i}, {j}): {got} vs {zz}");
+    }
+
+    // QAOA on a ring of 100 nodes with the angles optimized on a ring of
+    // 10: every edge sees the same light cone for n ≥ 2p + 2, so the ratio
+    // is the proven optimum (2p + 1)/(2p + 2) (Mbeng, Fazio & Santoro).
+    let results = optimize_layerwise(&generators::cycle(10), 3, &QaoaConfig::default()).unwrap();
+    let ring = generators::cycle(n);
+    for r in &results {
+        let mut theta = r.gammas.clone();
+        theta.extend(&r.betas);
+        let circuit = qaoa_maxcut_circuit(&ring, r.p).unwrap();
+        let mut s = Mps::from_circuit(&circuit, &theta, MpsOptions::default()).unwrap();
+        let cut: f64 = ring
+            .edges()
+            .iter()
+            .map(|&(a, b, _)| (1.0 - s.expectation_str(&format!("Z{a} Z{b}")).unwrap()) / 2.0)
+            .sum();
+        let expected = (2 * r.p + 1) as f64 / (2 * r.p + 2) as f64;
+        assert!(
+            close(cut / n as f64, expected, 1e-6),
+            "p = {}: {}",
+            r.p,
+            cut / n as f64
+        );
+        assert!(s.fidelity_lower_bound().unwrap() > 1.0 - 1e-9);
+    }
+}

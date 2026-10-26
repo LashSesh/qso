@@ -55,6 +55,7 @@ pub mod estimation;
 pub mod graph;
 pub mod linalg;
 pub mod mitigation;
+pub mod mps;
 pub mod noise;
 pub mod optimize;
 pub(crate) mod parallel;

@@ -5,7 +5,8 @@ milestones planned as "quantum walks" and "simulation performance".
 Milestones 1.4 (noise at scale and error mitigation), 1.5 (algorithms and
 physics) and 1.6 (interoperability) shipped together as release 1.4.0.
 Milestones 1.7 (stabilizer simulation and graph states) and 1.8
-(error-correction experiments) ship together as release 1.5.0. Up to 1.3
+(error-correction experiments) ship together as release 1.5.0 (1.5.1
+fixes its npm publication). Next is 1.9, matrix-product states. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -383,12 +384,31 @@ random circuits, and found no wrong result there. It found:
 * generators that allocated gigabytes before reaching the operation
   limit.
 
+### 1.9 — Matrix-product states (M–L)
+
+Use case: circuits with little entanglement on far more qubits than a
+state vector holds — Trotterized dynamics of spin chains, shallow QAOA on
+rings and other sparse graphs, walk and Hamiltonian-simulation circuits —
+with a stated bound on the truncation error instead of a silent
+approximation.
+
+| Deliverable | Detail |
+|---|---|
+| MPS simulator | states of up to 65 536 qubits as matrix-product states with a bond-dimension limit and a truncation cutoff; any gate of the gate set, controls included, routed by swaps to adjacent sites |
+| Error accounting | discarded weight of every truncation and a rigorous lower bound on the fidelity with the exact state |
+| Readout | Pauli expectation values, exact sampling of all qubits, amplitudes, measurement and reset, entanglement entropy at every bond, conversion to a state vector for small registers |
+| Interfaces | circuits and OpenQASM programs on the MPS from Rust, Python and the CLI |
+
+Validation: random circuits against the state-vector simulator (exact when
+no truncation occurs; within the fidelity bound when it does);
+Trotterized XX chains of 100 and more qubits against the exact free-fermion
+evolution of the same circuit; QAOA on rings of 100 and more nodes against
+(2p + 1)/(2p + 2); GHZ states on thousands of qubits with bond dimension 2.
+
 ### Research track (later)
 
-Matrix-product-state simulation for low-entanglement circuits and a GPU
-backend through `wgpu`. Each is a project of its own; they start only with
-a clear use case, and a GPU backend only after the CPU core is close to
-memory bandwidth.
+A GPU backend through `wgpu`: it starts only with a clear use case and
+after the CPU core is close to memory bandwidth.
 
 ## 5. Order and reasoning
 
@@ -407,6 +427,10 @@ memory bandwidth.
 6. **1.7 and 1.8: stabilizers before error correction.** Error-correction
    experiments need the stabilizer simulator; graph states connect it to
    QSO's graphs. Both ship as one release.
+7. **1.9: matrix-product states** from the research track: they need no
+   new dependency (the SVD is nalgebra's), they reach the large chains and
+   sparse graphs that QSO's walks and QAOA work on, and free fermions and
+   the QAOA ring formula give exact references far beyond 34 qubits.
 
 ## 6. Measures of success
 
