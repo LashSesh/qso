@@ -22,10 +22,16 @@ export interface QasmResult {
   bit_registers: Register[];
   /**
    * Exact probability of each classical record (bit 0 on the right), or
-   * null when the program has more than 4096 measurement branches and
-   * `shots` were requested (then only `counts` are computed).
+   * null when only `counts` are computed: beyond 4096 measurement
+   * branches, or on the stabilizer simulator.
    */
   probabilities: Record<string, number> | null;
+  /**
+   * "statevector", or "stabilizer" for a Clifford program with more qubits
+   * than a state vector holds (26 in WebAssembly); it samples, so it needs
+   * `shots`, and a program without bits returns every qubit.
+   */
+  method: "statevector" | "stabilizer";
   /** Sampled records, when `shots` was given. */
   counts: Record<string, number> | null;
   /** Final state of a unitary program (qubit 0 on the right). */

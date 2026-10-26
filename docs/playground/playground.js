@@ -142,7 +142,9 @@ function barChart(container, items, { max } = {}) {
     });
     if (items.length <= 64) {
       const lx = x + barW / 2, ly = H - bottom + 14;
-      text(svg, lx, ly, d.label, rotate
+      // Long bit strings (thousands of qubits) show their last digits.
+      const label = d.label.length > 16 ? `…${d.label.slice(-12)}` : d.label;
+      text(svg, lx, ly, label, rotate
         ? { transform: `rotate(-60 ${lx} ${ly})`, "text-anchor": "end" }
         : { "text-anchor": "middle" });
     }
@@ -388,6 +390,23 @@ measure cout[0] -> ans[2];
 `,
 };
 
+// A GHZ state on 1000 qubits: Clifford, so it runs on the stabilizer
+// simulator (a state vector would need 2¹⁰⁰⁰ amplitudes).
+EXAMPLES["GHZ on 1000 qubits (stabilizer simulator)"] = (() => {
+  const lines = [
+    "OPENQASM 3.0;",
+    'include "stdgates.inc";',
+    "// Clifford programs too large for a state vector run on the",
+    "// stabilizer simulator; the two ends always agree.",
+    "qubit[1000] q;",
+    "bit[2] c;",
+    "h q[0];",
+  ];
+  for (let k = 1; k < 1000; k++) lines.push(`cx q[${k - 1}], q[${k}];`);
+  lines.push("c[0] = measure q[0];", "c[1] = measure q[999];");
+  return lines.join("\n") + "\n";
+})();
+
 const exampleSelect = $("example");
 for (const name of Object.keys(EXAMPLES)) exampleSelect.add(new Option(name, name));
 exampleSelect.addEventListener("change", () => {
@@ -422,7 +441,7 @@ function runQasm() {
     } else {
       // Too many measurement branches for the exact distribution: shots only.
       entries = Object.entries(r.counts).map(([k, c]) => [k, c / shots]);
-      title = `Sampled frequencies of ${r.bits} classical bits (${shots} shots)`;
+      title = `Sampled frequencies of ${r.bits} classical bit${r.bits === 1 ? "" : "s"} (${shots} shots)`;
       header = ["outcome", "frequency", "counts"];
     }
     entries.sort(([a], [b]) => (a < b ? -1 : 1));
@@ -448,7 +467,8 @@ function runQasm() {
     $("qasm3").textContent = r.qasm3;
     $("qasm2-box").hidden = r.qasm2 === null;
     $("qasm2").textContent = r.qasm2 ?? "";
-    return `${r.qubits} qubits, ${r.bits} bits, ${r.operations} operations`;
+    const method = r.method === "stabilizer" ? ", stabilizer simulator" : "";
+    return `${r.qubits} qubits, ${r.bits} bits, ${r.operations} operations${method}`;
   });
 }
 $("run-qasm").addEventListener("click", runQasm);

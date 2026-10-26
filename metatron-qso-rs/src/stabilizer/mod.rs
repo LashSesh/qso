@@ -1,0 +1,877 @@
+//! Stabilizer simulation: Clifford circuits on thousands of qubits.
+//!
+//! A [`StabilizerState`] stores an n-qubit stabilizer state as the
+//! tableau of Aaronson and Gottesman (Phys. Rev. A 70, 052328 (2004)):
+//! n destabilizer and n stabilizer generators, each a Pauli string with a
+//! sign, bit-packed into 64-bit words. Clifford gates update the tableau in
+//! O(n) time, measurements in O(n²/64), so circuits on thousands of qubits
+//! run in milliseconds to seconds.
+//!
+//! Clifford gates are H, S, S†, X, Y, Z, √X, √X†, SWAP, CX, CY and CZ, and
+//! the rotations RX, RY, RZ, P, RXX, RYY, RZZ and U whose angles are
+//! multiples of π/2. Global phases are not tracked: a stabilizer state is
+//! defined up to one.
+//!
+//! [`graph_state`](StabilizerState::graph_state) builds the graph state of
+//! any [`Graph`](crate::graph::Graph); [`program`] runs OpenQASM programs
+//! made of Clifford gates, mid-circuit measurements and conditions
+//! included.
+//!
+//! Pauli operators are written sparsely, `"X0 Z1 Y1000"`, with an optional
+//! sign `+` or `-` in front.
+
+pub mod program;
+
+use std::collections::BTreeMap;
+use std::f64::consts::FRAC_PI_2;
+
+use num_complex::Complex64 as C64;
+
+use crate::error::{QsoError, Result};
+use crate::graph::Graph;
+use crate::quantum::{GateKind, Instruction, Pauli, PauliString, PauliSum, StateVector};
+use crate::rng::Rng;
+
+/// Largest register a [`StabilizerState`] may hold. Memory grows as n²/2
+/// bytes (128 MiB at the limit), measurements as n² and sampling all
+/// qubits as n³.
+pub const MAX_STABILIZER_QUBITS: usize = 1 << 14;
+
+/// Largest register [`StabilizerState::to_statevector`] converts.
+pub const MAX_STATEVECTOR_QUBITS: usize = 20;
+
+/// Sign and Pauli string, bit-packed: bit `q` of `x`/`z` is qubit `q`
+/// (`X` = x, `Z` = z, `Y` = both).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Row {
+    x: Vec<u64>,
+    z: Vec<u64>,
+    /// −1 sign.
+    neg: bool,
+}
+
+impl Row {
+    fn zero(words: usize) -> Self {
+        Row {
+            x: vec![0; words],
+            z: vec![0; words],
+            neg: false,
+        }
+    }
+
+    fn get(&self, q: usize) -> (bool, bool) {
+        let (w, b) = (q / 64, q % 64);
+        ((self.x[w] >> b) & 1 == 1, (self.z[w] >> b) & 1 == 1)
+    }
+
+    fn set(&mut self, q: usize, x: bool, z: bool) {
+        let (w, b) = (q / 64, 1u64 << (q % 64));
+        self.x[w] = if x { self.x[w] | b } else { self.x[w] & !b };
+        self.z[w] = if z { self.z[w] | b } else { self.z[w] & !b };
+    }
+
+    /// Whether the two Pauli strings anticommute.
+    fn anticommutes(&self, other: &Row) -> bool {
+        let mut parity = 0u32;
+        for w in 0..self.x.len() {
+            parity ^= ((self.x[w] & other.z[w]) ^ (self.z[w] & other.x[w])).count_ones();
+        }
+        parity & 1 == 1
+    }
+
+    /// `self ← other · self`, with the sign of the product (both must
+    /// commute, so the product is Hermitian).
+    fn left_multiply(&mut self, other: &Row) {
+        // Σ_q g(other_q, self_q): the power of i of the single-qubit
+        // products (Aaronson and Gottesman's function g), word by word.
+        let (mut pos, mut neg) = (0u32, 0u32);
+        for w in 0..self.x.len() {
+            let (x1, z1, x2, z2) = (other.x[w], other.z[w], self.x[w], self.z[w]);
+            let y1 = x1 & z1;
+            let xo = x1 & !z1;
+            let zo = !x1 & z1;
+            pos += ((y1 & z2 & !x2) | (xo & z2 & x2) | (zo & x2 & !z2)).count_ones();
+            neg += ((y1 & x2 & !z2) | (xo & z2 & !x2) | (zo & x2 & z2)).count_ones();
+            self.x[w] = x2 ^ x1;
+            self.z[w] = z2 ^ z1;
+        }
+        let total = (2 * i64::from(self.neg) + 2 * i64::from(other.neg) + i64::from(pos)
+            - i64::from(neg))
+        .rem_euclid(4);
+        debug_assert!(total % 2 == 0, "product of commuting Paulis is Hermitian");
+        self.neg = total == 2;
+    }
+}
+
+/// An n-qubit stabilizer state (Aaronson–Gottesman tableau).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StabilizerState {
+    n: usize,
+    words: usize,
+    /// Rows `0..n`: destabilizers; `n..2n`: stabilizers.
+    rows: Vec<Row>,
+}
+
+fn quarter_turns(theta: f64, what: &str) -> Result<u32> {
+    let k = theta / FRAC_PI_2;
+    let r = k.round();
+    if !theta.is_finite() || (k - r).abs() > 1e-9 * k.abs().max(1.0) {
+        return Err(QsoError::invalid(
+            "gate",
+            format!("{what}({theta}) is not a Clifford gate (angles must be multiples of π/2)"),
+        ));
+    }
+    Ok((r.rem_euclid(4.0)) as u32)
+}
+
+impl StabilizerState {
+    /// `|0…0⟩` on `n` qubits.
+    pub fn zero(n: usize) -> Result<Self> {
+        if n == 0 || n > MAX_STABILIZER_QUBITS {
+            return Err(QsoError::TooManyQubits {
+                what: "stabilizer simulation (1 or more)",
+                max: MAX_STABILIZER_QUBITS,
+                requested: n,
+            });
+        }
+        let words = n.div_ceil(64);
+        let mut rows = vec![Row::zero(words); 2 * n];
+        for q in 0..n {
+            rows[q].set(q, true, false); // destabilizer X_q
+            rows[n + q].set(q, false, true); // stabilizer Z_q
+        }
+        Ok(StabilizerState { n, words, rows })
+    }
+
+    /// The graph state `|G⟩ = Π_{(u,v)∈E} CZ_{uv} |+⟩^{⊗n}` of an
+    /// unweighted graph: stabilized by `K_v = X_v Π_{w∈N(v)} Z_w`.
+    pub fn graph_state(graph: &Graph) -> Result<Self> {
+        if !graph.is_unweighted() {
+            return Err(QsoError::invalid(
+                "graph",
+                "graph states are defined for unweighted graphs",
+            ));
+        }
+        let mut s = Self::zero(graph.num_nodes())?;
+        let n = s.n;
+        for v in 0..n {
+            s.rows[v] = Row::zero(s.words);
+            s.rows[v].set(v, false, true); // destabilizer Z_v
+            let mut k = Row::zero(s.words);
+            k.set(v, true, false);
+            for &(w, _) in graph.neighbors(v) {
+                k.set(w, false, true);
+            }
+            s.rows[n + v] = k;
+        }
+        Ok(s)
+    }
+
+    pub fn n_qubits(&self) -> usize {
+        self.n
+    }
+
+    fn check(&self, q: usize) -> Result<()> {
+        if q >= self.n {
+            return Err(QsoError::QubitOutOfRange {
+                qubit: q,
+                n_qubits: self.n,
+            });
+        }
+        Ok(())
+    }
+
+    fn check_pair(&self, a: usize, b: usize) -> Result<()> {
+        self.check(a)?;
+        self.check(b)?;
+        if a == b {
+            return Err(QsoError::DuplicateQubit {
+                gate: "two-qubit Clifford",
+                qubit: a,
+            });
+        }
+        Ok(())
+    }
+
+    // -- Primitive gates (conjugation rules of Aaronson and Gottesman) ----
+
+    fn for_rows(&mut self, mut f: impl FnMut(&mut Row)) {
+        for row in &mut self.rows {
+            f(row);
+        }
+    }
+
+    /// Hadamard.
+    pub fn h(&mut self, q: usize) -> Result<&mut Self> {
+        self.check(q)?;
+        self.for_rows(|r| {
+            let (x, z) = r.get(q);
+            r.neg ^= x & z;
+            r.set(q, z, x);
+        });
+        Ok(self)
+    }
+
+    /// Phase gate `S = diag(1, i)`.
+    pub fn s(&mut self, q: usize) -> Result<&mut Self> {
+        self.check(q)?;
+        self.for_rows(|r| {
+            let (x, z) = r.get(q);
+            r.neg ^= x & z;
+            r.set(q, x, z ^ x);
+        });
+        Ok(self)
+    }
+
+    /// `S† = diag(1, −i)`.
+    pub fn sdg(&mut self, q: usize) -> Result<&mut Self> {
+        self.check(q)?;
+        self.for_rows(|r| {
+            let (x, z) = r.get(q);
+            r.neg ^= x & !z;
+            r.set(q, x, z ^ x);
+        });
+        Ok(self)
+    }
+
+    pub fn x(&mut self, q: usize) -> Result<&mut Self> {
+        self.check(q)?;
+        self.for_rows(|r| r.neg ^= r.get(q).1);
+        Ok(self)
+    }
+
+    pub fn y(&mut self, q: usize) -> Result<&mut Self> {
+        self.check(q)?;
+        self.for_rows(|r| {
+            let (x, z) = r.get(q);
+            r.neg ^= x ^ z;
+        });
+        Ok(self)
+    }
+
+    pub fn z(&mut self, q: usize) -> Result<&mut Self> {
+        self.check(q)?;
+        self.for_rows(|r| r.neg ^= r.get(q).0);
+        Ok(self)
+    }
+
+    /// `√X` (up to a global phase, `H S H`).
+    pub fn sx(&mut self, q: usize) -> Result<&mut Self> {
+        self.h(q)?.s(q)?.h(q)
+    }
+
+    /// `√X†`.
+    pub fn sxdg(&mut self, q: usize) -> Result<&mut Self> {
+        self.h(q)?.sdg(q)?.h(q)
+    }
+
+    /// CNOT with control `c` and target `t`.
+    pub fn cx(&mut self, c: usize, t: usize) -> Result<&mut Self> {
+        self.check_pair(c, t)?;
+        self.for_rows(|r| {
+            let (xc, zc) = r.get(c);
+            let (xt, zt) = r.get(t);
+            r.neg ^= xc & zt & !(xt ^ zc);
+            r.set(t, xt ^ xc, zt);
+            r.set(c, xc, zc ^ zt);
+        });
+        Ok(self)
+    }
+
+    pub fn cz(&mut self, a: usize, b: usize) -> Result<&mut Self> {
+        self.check_pair(a, b)?;
+        self.h(b)?.cx(a, b)?.h(b)
+    }
+
+    pub fn cy(&mut self, c: usize, t: usize) -> Result<&mut Self> {
+        self.check_pair(c, t)?;
+        self.sdg(t)?.cx(c, t)?.s(t)
+    }
+
+    pub fn swap(&mut self, a: usize, b: usize) -> Result<&mut Self> {
+        self.check_pair(a, b)?;
+        self.for_rows(|r| {
+            let (xa, za) = r.get(a);
+            let (xb, zb) = r.get(b);
+            r.set(a, xb, zb);
+            r.set(b, xa, za);
+        });
+        Ok(self)
+    }
+
+    fn rz_quarters(&mut self, q: usize, k: u32) -> Result<()> {
+        match k {
+            1 => self.s(q)?,
+            2 => self.z(q)?,
+            3 => self.sdg(q)?,
+            _ => self,
+        };
+        Ok(())
+    }
+
+    fn rx_quarters(&mut self, q: usize, k: u32) -> Result<()> {
+        if k != 0 {
+            self.h(q)?;
+            self.rz_quarters(q, k)?;
+            self.h(q)?;
+        }
+        Ok(())
+    }
+
+    fn ry_quarters(&mut self, q: usize, k: u32) -> Result<()> {
+        // RY(θ) = S RX(θ) S†.
+        if k != 0 {
+            self.sdg(q)?;
+            self.rx_quarters(q, k)?;
+            self.s(q)?;
+        }
+        Ok(())
+    }
+
+    fn rzz_quarters(&mut self, a: usize, b: usize, k: u32) -> Result<()> {
+        if k != 0 {
+            self.cx(a, b)?;
+            self.rz_quarters(b, k)?;
+            self.cx(a, b)?;
+        }
+        Ok(())
+    }
+
+    /// Apply a Clifford instruction (parameters bound to `theta`); an error
+    /// for gates outside the Clifford group (T, rotations by other angles,
+    /// most multi-controlled gates, custom unitaries).
+    pub fn apply_instruction(&mut self, inst: &Instruction, theta: &[f64]) -> Result<()> {
+        use GateKind::*;
+        let a = inst.angles(theta);
+        let t = &inst.targets;
+        for &q in inst.qubits().collect::<Vec<_>>().iter() {
+            self.check(q)?;
+        }
+        let name = inst.kind.name();
+        match (inst.kind, inst.controls.as_slice()) {
+            (H, []) => drop(self.h(t[0])?),
+            (X, []) => drop(self.x(t[0])?),
+            (Y, []) => drop(self.y(t[0])?),
+            (Z, []) => drop(self.z(t[0])?),
+            (S, []) => drop(self.s(t[0])?),
+            (Sdg, []) => drop(self.sdg(t[0])?),
+            (SX, []) => drop(self.sx(t[0])?),
+            (SXdg, []) => drop(self.sxdg(t[0])?),
+            (Swap, []) => drop(self.swap(t[0], t[1])?),
+            (X, [c]) => drop(self.cx(*c, t[0])?),
+            (Y, [c]) => drop(self.cy(*c, t[0])?),
+            (Z, [c]) => drop(self.cz(*c, t[0])?),
+            (RZ | P, []) => self.rz_quarters(t[0], quarter_turns(a[0], name)?)?,
+            (RX, []) => self.rx_quarters(t[0], quarter_turns(a[0], name)?)?,
+            (RY, []) => self.ry_quarters(t[0], quarter_turns(a[0], name)?)?,
+            (RZZ, []) => self.rzz_quarters(t[0], t[1], quarter_turns(a[0], name)?)?,
+            (RXX, []) => {
+                let k = quarter_turns(a[0], name)?;
+                self.h(t[0])?.h(t[1])?;
+                self.rzz_quarters(t[0], t[1], k)?;
+                self.h(t[0])?.h(t[1])?;
+            }
+            (RYY, []) => {
+                // RYY = (S⊗S) RXX (S†⊗S†).
+                let k = quarter_turns(a[0], name)?;
+                self.sdg(t[0])?.sdg(t[1])?.h(t[0])?.h(t[1])?;
+                self.rzz_quarters(t[0], t[1], k)?;
+                self.h(t[0])?.h(t[1])?.s(t[0])?.s(t[1])?;
+            }
+            (U, []) => {
+                // U(θ, φ, λ) = RZ(φ) RY(θ) RZ(λ) up to a global phase.
+                let (kt, kp, kl) = (
+                    quarter_turns(a[0], "U θ")?,
+                    quarter_turns(a[1], "U φ")?,
+                    quarter_turns(a[2], "U λ")?,
+                );
+                self.rz_quarters(t[0], kl)?;
+                self.ry_quarters(t[0], kt)?;
+                self.rz_quarters(t[0], kp)?;
+            }
+            // Controlled phases: CP(0) = I, CP(π) = CZ.
+            (P, [c]) => match quarter_turns(a[0], "controlled P")? {
+                0 => {}
+                2 => drop(self.cz(*c, t[0])?),
+                _ => return Err(not_clifford(inst)),
+            },
+            _ => return Err(not_clifford(inst)),
+        }
+        Ok(())
+    }
+
+    // -- Measurement -------------------------------------------------------
+
+    /// A Pauli operator as a row; qubits must be in range and distinct.
+    fn pauli_row(&self, ops: &[(usize, Pauli)]) -> Result<Row> {
+        let mut row = Row::zero(self.words);
+        let mut seen = std::collections::BTreeSet::new();
+        for &(q, p) in ops {
+            self.check(q)?;
+            if !seen.insert(q) {
+                return Err(QsoError::invalid(
+                    "pauli",
+                    format!("qubit {q} appears twice"),
+                ));
+            }
+            let (x, z) = match p {
+                Pauli::I => (false, false),
+                Pauli::X => (true, false),
+                Pauli::Y => (true, true),
+                Pauli::Z => (false, true),
+            };
+            row.set(q, x, z);
+        }
+        Ok(row)
+    }
+
+    /// The product of the stabilizers that equals `±p`, for `p` in the
+    /// stabilizer group (up to sign): its sign.
+    fn stabilizer_sign(&self, p: &Row) -> bool {
+        let mut acc = Row::zero(self.words);
+        for i in 0..self.n {
+            if self.rows[i].anticommutes(p) {
+                acc.left_multiply(&self.rows[self.n + i]);
+            }
+        }
+        debug_assert_eq!((&acc.x, &acc.z), (&p.x, &p.z));
+        acc.neg
+    }
+
+    /// ⟨P⟩ for a Pauli operator: +1, −1 or 0.
+    pub fn expectation(&self, ops: &[(usize, Pauli)]) -> Result<f64> {
+        let p = self.pauli_row(ops)?;
+        if self.rows[self.n..].iter().any(|s| s.anticommutes(&p)) {
+            return Ok(0.0);
+        }
+        Ok(if self.stabilizer_sign(&p) { -1.0 } else { 1.0 })
+    }
+
+    /// ⟨P⟩ for a Pauli operator written `"X0 Z1"` (optionally signed).
+    pub fn expectation_str(&self, pauli: &str) -> Result<f64> {
+        let (sign, ops) = parse_pauli(pauli)?;
+        Ok(sign * self.expectation(&ops)?)
+    }
+
+    /// ⟨H⟩ for a sum of Pauli strings (on qubits below 64).
+    pub fn expectation_sum(&self, h: &PauliSum) -> Result<f64> {
+        let mut total = 0.0;
+        for (c, p) in h.terms() {
+            total += c * self.expectation(&pauli_ops(p))?;
+        }
+        Ok(total)
+    }
+
+    /// Measure the Pauli operator `P` (projectively): `true` for the
+    /// eigenvalue −1.
+    pub fn measure_pauli(&mut self, ops: &[(usize, Pauli)], rng: &mut Rng) -> Result<bool> {
+        let p = self.pauli_row(ops)?;
+        if p.x.iter().chain(&p.z).all(|&w| w == 0) {
+            return Ok(false);
+        }
+        let n = self.n;
+        let Some(k) = (n..2 * n).find(|&i| self.rows[i].anticommutes(&p)) else {
+            return Ok(self.stabilizer_sign(&p));
+        };
+        // Random outcome: make every other row commute with P, then
+        // replace the anticommuting stabilizer by ±P.
+        let pivot = self.rows[k].clone();
+        for i in 0..2 * n {
+            // Destabilizer k − n anticommutes with the pivot and is replaced
+            // below; every other row commutes with it.
+            if i != k && i != k - n && self.rows[i].anticommutes(&p) {
+                self.rows[i].left_multiply(&pivot);
+            }
+        }
+        let outcome = rng.next_u64() & 1 == 1;
+        self.rows[k - n] = pivot;
+        self.rows[k] = Row { neg: outcome, ..p };
+        Ok(outcome)
+    }
+
+    /// Measure qubit `q` in the computational basis.
+    pub fn measure(&mut self, q: usize, rng: &mut Rng) -> Result<bool> {
+        self.measure_pauli(&[(q, Pauli::Z)], rng)
+    }
+
+    /// Reset qubit `q` to `|0⟩` (measure, then flip a 1).
+    pub fn reset(&mut self, q: usize, rng: &mut Rng) -> Result<()> {
+        if self.measure(q, rng)? {
+            self.x(q)?;
+        }
+        Ok(())
+    }
+
+    // -- Sampling and conversion ------------------------------------------
+
+    /// The distribution of measuring every qubit: uniform over an affine
+    /// subspace of {0,1}ⁿ.
+    pub fn sampler(&self) -> ZSampler {
+        let (n, words) = (self.n, self.words);
+        // Gaussian elimination of the stabilizers on their X parts; the
+        // rows left without X are signed Z strings: parity constraints.
+        let mut rows: Vec<Row> = self.rows[n..].to_vec();
+        let mut rank = 0;
+        for q in 0..n {
+            let Some(j) = (rank..n).find(|&j| rows[j].get(q).0) else {
+                continue;
+            };
+            rows.swap(rank, j);
+            let pivot = rows[rank].clone();
+            for (m, row) in rows.iter_mut().enumerate() {
+                if m != rank && row.get(q).0 {
+                    row.left_multiply(&pivot);
+                }
+            }
+            rank += 1;
+        }
+        // Constraints z·b = sign for rows rank..n, reduced to echelon form.
+        let mut eqs: Vec<(Vec<u64>, bool)> =
+            rows[rank..].iter().map(|r| (r.z.clone(), r.neg)).collect();
+        let mut pivots = Vec::new();
+        let mut done = 0;
+        for q in 0..n {
+            let bit = |v: &Vec<u64>| (v[q / 64] >> (q % 64)) & 1 == 1;
+            let Some(j) = (done..eqs.len()).find(|&j| bit(&eqs[j].0)) else {
+                continue;
+            };
+            eqs.swap(done, j);
+            let (pz, pr) = eqs[done].clone();
+            for (m, (z, r)) in eqs.iter_mut().enumerate() {
+                if m != done && bit(z) {
+                    for w in 0..words {
+                        z[w] ^= pz[w];
+                    }
+                    *r ^= pr;
+                }
+            }
+            pivots.push(q);
+            done += 1;
+        }
+        let set = |v: &mut Vec<u64>, q: usize| v[q / 64] ^= 1 << (q % 64);
+        let mut offset = vec![0u64; words];
+        for (k, &q) in pivots.iter().enumerate() {
+            if eqs[k].1 {
+                set(&mut offset, q);
+            }
+        }
+        let is_pivot: Vec<bool> = {
+            let mut v = vec![false; n];
+            for &q in &pivots {
+                v[q] = true;
+            }
+            v
+        };
+        let mut basis = Vec::new();
+        for f in (0..n).filter(|&f| !is_pivot[f]) {
+            let mut v = vec![0u64; words];
+            set(&mut v, f);
+            for (k, &q) in pivots.iter().enumerate() {
+                if (eqs[k].0[f / 64] >> (f % 64)) & 1 == 1 {
+                    set(&mut v, q);
+                }
+            }
+            basis.push(v);
+        }
+        ZSampler { n, offset, basis }
+    }
+
+    /// Measure every qubit `shots` times (on copies of the state):
+    /// `{bitstring: count}` with qubit n−1 first.
+    pub fn sample_counts(&self, shots: usize, rng: &mut Rng) -> BTreeMap<String, usize> {
+        let sampler = self.sampler();
+        let mut counts = BTreeMap::new();
+        for _ in 0..shots {
+            *counts.entry(sampler.sample_string(rng)).or_default() += 1;
+        }
+        counts
+    }
+
+    /// The state vector (up to a global phase) for at most
+    /// [`MAX_STATEVECTOR_QUBITS`] qubits.
+    pub fn to_statevector(&self) -> Result<StateVector> {
+        let n = self.n;
+        if n > MAX_STATEVECTOR_QUBITS {
+            return Err(QsoError::TooManyQubits {
+                what: "stabilizer to state-vector conversion",
+                max: MAX_STATEVECTOR_QUBITS,
+                requested: n,
+            });
+        }
+        // Project a basis state in the support onto the stabilized space:
+        // |ψ⟩ ∝ Π_i (1 + S_i)/2 |b⟩.
+        let start = self.sampler().offset[0] as usize;
+        let mut amps = vec![C64::new(0.0, 0.0); 1 << n];
+        amps[start] = C64::new(1.0, 0.0);
+        for s in &self.rows[n..] {
+            let (xm, zm) = (s.x[0] as usize, s.z[0] as usize);
+            let mut phase = C64::new(if s.neg { -1.0 } else { 1.0 }, 0.0);
+            for _ in 0..(xm & zm).count_ones() {
+                phase *= C64::new(0.0, 1.0);
+            }
+            let mut out = amps.clone();
+            for (v, a) in amps.iter().enumerate() {
+                if a.norm_sqr() == 0.0 {
+                    continue;
+                }
+                let sign = if (zm & v).count_ones() % 2 == 1 {
+                    -1.0
+                } else {
+                    1.0
+                };
+                out[v ^ xm] += phase * sign * a;
+            }
+            amps = out;
+        }
+        StateVector::from_amplitudes(amps)
+    }
+
+    /// Stabilizer generators as signed Pauli strings, `"+X0 Z1"`.
+    pub fn stabilizers(&self) -> Vec<String> {
+        self.rows[self.n..]
+            .iter()
+            .map(|r| row_string(r, self.n))
+            .collect()
+    }
+
+    /// Entanglement entropy (in bits) between the qubits `part` and the
+    /// rest: `rank(generators restricted to part) − |part|` (Fattal et
+    /// al., arXiv:quant-ph/0406168). For graph states it equals the
+    /// cut-rank of the adjacency matrix over GF(2).
+    pub fn entanglement_entropy(&self, part: &[usize]) -> Result<usize> {
+        let mut seen = vec![false; self.n];
+        for &q in part {
+            self.check(q)?;
+            if std::mem::replace(&mut seen[q], true) {
+                return Err(QsoError::invalid(
+                    "part",
+                    format!("qubit {q} appears twice"),
+                ));
+            }
+        }
+        // Each generator restricted to `part`: 2|part| bits.
+        let k = part.len();
+        let words = (2 * k).div_ceil(64).max(1);
+        let mut m: Vec<Vec<u64>> = self.rows[self.n..]
+            .iter()
+            .map(|r| {
+                let mut v = vec![0u64; words];
+                for (j, &q) in part.iter().enumerate() {
+                    let (x, z) = r.get(q);
+                    if x {
+                        v[j / 64] |= 1 << (j % 64);
+                    }
+                    if z {
+                        v[(k + j) / 64] |= 1 << ((k + j) % 64);
+                    }
+                }
+                v
+            })
+            .collect();
+        Ok(gf2_rank(&mut m, 2 * k) - k)
+    }
+
+    /// Whether `other` is the same state (up to a global phase): every
+    /// stabilizer of `other` stabilizes `self`.
+    pub fn same_state(&self, other: &StabilizerState) -> bool {
+        self.n == other.n
+            && other.rows[other.n..].iter().all(|g| {
+                !self.rows[self.n..].iter().any(|s| s.anticommutes(g))
+                    && self.stabilizer_sign(g) == g.neg
+            })
+    }
+
+    /// Local complementation at node `v` of a graph state: the local
+    /// Clifford `√(−iX_v) Π_{w∈N(v)} √(iZ_w)` (Hein, Eisert and Briegel,
+    /// Phys. Rev. A 69, 062311 (2004)) maps `|G⟩` to `|G * v⟩`.
+    pub fn local_complement(&mut self, graph: &Graph, v: usize) -> Result<()> {
+        if graph.num_nodes() != self.n || v >= self.n {
+            return Err(QsoError::invalid(
+                "graph",
+                "the graph must have one node per qubit, and v must be one of them",
+            ));
+        }
+        // √(−iX) = RX(π/2); √(iZ) = RZ(−π/2) = S† up to phase.
+        self.rx_quarters(v, 1)?;
+        for &(w, _) in graph.neighbors(v) {
+            self.sdg(w)?;
+        }
+        Ok(())
+    }
+}
+
+/// The local complement `G * v`: the neighbourhood of `v` is
+/// complemented (edges between neighbours of `v` are toggled).
+pub fn local_complementation(graph: &Graph, v: usize) -> Result<Graph> {
+    let n = graph.num_nodes();
+    if v >= n {
+        return Err(QsoError::NodeOutOfRange {
+            node: v,
+            n_nodes: n,
+        });
+    }
+    if !graph.is_unweighted() {
+        return Err(QsoError::invalid(
+            "graph",
+            "local complementation is defined for unweighted graphs",
+        ));
+    }
+    let nbrs: Vec<usize> = graph.neighbors(v).iter().map(|e| e.0).collect();
+    let mut edges: std::collections::BTreeSet<(usize, usize)> = graph
+        .edges()
+        .iter()
+        .map(|&(a, b, _)| (a.min(b), a.max(b)))
+        .collect();
+    for (i, &a) in nbrs.iter().enumerate() {
+        for &b in &nbrs[i + 1..] {
+            let e = (a.min(b), a.max(b));
+            if !edges.remove(&e) {
+                edges.insert(e);
+            }
+        }
+    }
+    let edges: Vec<(usize, usize)> = edges.into_iter().collect();
+    Ok(Graph::from_edges(n, &edges)?.with_name(format!("{} * {v}", graph.name())))
+}
+
+fn not_clifford(inst: &Instruction) -> QsoError {
+    QsoError::invalid(
+        "gate",
+        format!(
+            "{} with {} control(s) is not a Clifford gate the stabilizer simulator supports",
+            inst.kind.name(),
+            inst.controls.len()
+        ),
+    )
+}
+
+fn row_string(r: &Row, n: usize) -> String {
+    let mut out = String::from(if r.neg { "-" } else { "+" });
+    let mut first = true;
+    for q in 0..n {
+        let p = match r.get(q) {
+            (false, false) => continue,
+            (true, false) => 'X',
+            (true, true) => 'Y',
+            (false, true) => 'Z',
+        };
+        if !first {
+            out.push(' ');
+        }
+        out.push_str(&format!("{p}{q}"));
+        first = false;
+    }
+    if first {
+        out.push('I');
+    }
+    out
+}
+
+/// Rank over GF(2) of the rows of `m` (`bits` columns); `m` is reduced.
+pub(crate) fn gf2_rank(m: &mut [Vec<u64>], bits: usize) -> usize {
+    let mut rank = 0;
+    for c in 0..bits {
+        let (w, b) = (c / 64, 1u64 << (c % 64));
+        let Some(j) = (rank..m.len()).find(|&j| m[j][w] & b != 0) else {
+            continue;
+        };
+        m.swap(rank, j);
+        let pivot = m[rank].clone();
+        for (i, row) in m.iter_mut().enumerate() {
+            if i != rank && row[w] & b != 0 {
+                for (a, p) in row.iter_mut().zip(&pivot) {
+                    *a ^= p;
+                }
+            }
+        }
+        rank += 1;
+    }
+    rank
+}
+
+/// The non-identity factors of a Pauli string.
+fn pauli_ops(p: &PauliString) -> Vec<(usize, Pauli)> {
+    (0..64)
+        .map(|q| (q, p.get(q)))
+        .filter(|&(_, p)| p != Pauli::I)
+        .collect()
+}
+
+/// Parse `"[+|-] X0 Z1 Y12"` (also `"I"`); returns the sign and factors.
+pub fn parse_pauli(text: &str) -> Result<(f64, Vec<(usize, Pauli)>)> {
+    let t = text.trim();
+    let (sign, rest) = match t.strip_prefix('-') {
+        Some(r) => (-1.0, r),
+        None => (1.0, t.strip_prefix('+').unwrap_or(t)),
+    };
+    let mut ops = Vec::new();
+    for tok in rest.split_whitespace() {
+        if tok == "I" {
+            continue;
+        }
+        let mut chars = tok.chars();
+        let p = match chars.next() {
+            Some('X') => Pauli::X,
+            Some('Y') => Pauli::Y,
+            Some('Z') => Pauli::Z,
+            _ => return Err(QsoError::Parse(format!("bad Pauli factor '{tok}'"))),
+        };
+        let q: usize = chars
+            .as_str()
+            .parse()
+            .map_err(|_| QsoError::Parse(format!("bad Pauli factor '{tok}'")))?;
+        ops.push((q, p));
+    }
+    Ok((sign, ops))
+}
+
+/// Outcomes of measuring every qubit of a stabilizer state: uniform over
+/// `offset ⊕ span(basis)`.
+#[derive(Clone, Debug)]
+pub struct ZSampler {
+    n: usize,
+    offset: Vec<u64>,
+    basis: Vec<Vec<u64>>,
+}
+
+impl ZSampler {
+    /// Number of random bits: the outcome has `2^k` equally likely values.
+    pub fn random_bits(&self) -> usize {
+        self.basis.len()
+    }
+
+    /// One outcome, bit `q` of word `q / 64` for qubit `q`.
+    pub fn sample_words(&self, rng: &mut Rng) -> Vec<u64> {
+        let mut v = self.offset.clone();
+        let mut bits = 0u64;
+        for (k, b) in self.basis.iter().enumerate() {
+            if k % 64 == 0 {
+                bits = rng.next_u64();
+            }
+            if (bits >> (k % 64)) & 1 == 1 {
+                for (a, c) in v.iter_mut().zip(b) {
+                    *a ^= c;
+                }
+            }
+        }
+        v
+    }
+
+    /// One outcome as a bit string, qubit n−1 first.
+    pub fn sample_string(&self, rng: &mut Rng) -> String {
+        let v = self.sample_words(rng);
+        (0..self.n)
+            .rev()
+            .map(|q| {
+                if (v[q / 64] >> (q % 64)) & 1 == 1 {
+                    '1'
+                } else {
+                    '0'
+                }
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests;

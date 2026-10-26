@@ -25,6 +25,9 @@ use metatron_qso::optimize::{Method, Options};
 use metatron_qso::quantum::{
     Circuit, PauliSum, Program, bitstring, from_qasm2, record_bitstring, to_qasm2,
 };
+use metatron_qso::rng::Rng;
+use metatron_qso::stabilizer::StabilizerState;
+use metatron_qso::stabilizer::program::{is_clifford_program, sample_program};
 use metatron_qso::walks::{
     Coin, CoinedWalk, ContinuousWalk, Generator, Quotient, QuotientWalk, SpatialSearch,
     StateTransfer, SzegedyWalk, circuits, classical_hitting_times,
@@ -255,6 +258,10 @@ enum Command {
         /// of density matrices (any register size).
         #[arg(long, requires = "device")]
         trajectories: Option<usize>,
+        /// Run on the stabilizer simulator (Clifford programs only; chosen
+        /// automatically for Clifford programs too large for a state vector).
+        #[arg(long, conflicts_with_all = ["noise", "device"])]
+        stabilizer: bool,
     },
     /// Estimate ⟨H⟩ of an OpenQASM circuit from shots, with standard
     /// errors and optional error mitigation.
@@ -856,6 +863,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             noise,
             device,
             trajectories,
+            stabilizer,
         } => {
             let src = read_text(file)?;
             let program = Program::from_qasm(&src)?;
@@ -869,21 +877,36 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             if noise.is_none() && device.is_none() {
                 // Exact simulation of the program; one without classical
                 // bits is measured on every qubit.
-                let (run, width) = if program.n_bits() == 0 {
-                    let c = program.to_circuit()?;
-                    (Program::from_circuit(&c, &[], true)?, program.n_qubits())
+                let tableau = *stabilizer
+                    || (program.n_qubits() > metatron_qso::quantum::MAX_QUBITS
+                        && is_clifford_program(&program));
+                let labelled: std::collections::BTreeMap<String, usize> = if tableau {
+                    if program.n_bits() == 0 {
+                        let state = StabilizerState::from_circuit(&program.to_circuit()?, &[])?;
+                        state.sample_counts(*shots, &mut Rng::seed_from_u64(*seed))
+                    } else {
+                        sample_program(&program, *shots, *seed)?
+                            .iter()
+                            .map(|(&r, &c)| (record_bitstring(r, program.n_bits()), c))
+                            .collect()
+                    }
                 } else {
-                    (program.clone(), program.n_bits())
+                    let (run, width) = if program.n_bits() == 0 {
+                        let c = program.to_circuit()?;
+                        (Program::from_circuit(&c, &[], true)?, program.n_qubits())
+                    } else {
+                        (program.clone(), program.n_bits())
+                    };
+                    run.sample(*shots, *seed)?
+                        .iter()
+                        .map(|(&r, &c)| (record_bitstring(r, width), c))
+                        .collect()
                 };
-                let counts = run.sample(*shots, *seed)?;
-                let labelled: std::collections::BTreeMap<String, usize> = counts
-                    .iter()
-                    .map(|(&r, &c)| (record_bitstring(r, width), c))
-                    .collect();
+                let backend = if tableau { "stabilizer" } else { "program" };
                 let mut sorted: Vec<_> = labelled.iter().collect();
                 sorted.sort_by(|a, b| b.1.cmp(a.1));
                 let text = format!(
-                    "{} qubits, {} bits, {} operations, backend program\n{}",
+                    "{} qubits, {} bits, {} operations, backend {backend}\n{}",
                     program.n_qubits(),
                     program.n_bits(),
                     program.len(),
@@ -896,7 +919,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 );
                 return Ok((
                     json!({"qubits": program.n_qubits(), "bits": program.n_bits(),
-                           "operations": program.len(), "backend": "program", "counts": labelled}),
+                           "operations": program.len(), "backend": backend, "counts": labelled}),
                     text,
                 ));
             }

@@ -13,7 +13,10 @@ use std::collections::BTreeMap;
 use std::f64::consts::PI;
 
 use metatron_qso::graph::{Graph, generators, io};
-use metatron_qso::quantum::{Program, StateVector, bitstring, record_bitstring};
+use metatron_qso::quantum::{MAX_QUBITS, Program, StateVector, bitstring, record_bitstring};
+use metatron_qso::rng::Rng;
+use metatron_qso::stabilizer::StabilizerState;
+use metatron_qso::stabilizer::program::{is_clifford_program, sample_program};
 use metatron_qso::walks::{ContinuousWalk, Generator, SpatialSearch};
 use serde_json::{Map, Value, json};
 
@@ -28,6 +31,9 @@ pub const MAX_SHOTS: usize = 1_000_000;
 pub const MAX_LISTED_STATES: usize = 1024;
 /// Largest register whose amplitudes are returned.
 pub const MAX_AMPLITUDE_QUBITS: usize = 10;
+/// Most bits of output (shots × qubits) for sampled programs without
+/// classical bits, which return every qubit.
+pub const MAX_LISTED_BITS: usize = 1 << 26;
 /// Points on a search's success-probability curve.
 pub const MAX_CURVE_POINTS: usize = 10_000;
 
@@ -205,6 +211,9 @@ fn qasm(p: &mut Params) -> Outcome {
     let program = Program::from_qasm(&source).map_err(|e| e.to_string())?;
     let (nq, nb) = (program.n_qubits(), program.n_bits());
     let label = |record: u64| record_bitstring(record, nb);
+    if nq > MAX_QUBITS && is_clifford_program(&program) {
+        return clifford_qasm(&program, shots, seed);
+    }
     // Beyond the exact limit (too many measurement branches), shots are
     // still simulated one by one; the exact distribution is then null.
     let probabilities: Option<BTreeMap<String, f64>> = match program.probabilities() {
@@ -258,6 +267,49 @@ fn qasm(p: &mut Params) -> Outcome {
         "state": state,
         "qasm3": program.to_qasm3().map_err(|e| e.to_string())?,
         "qasm2": program.to_qasm2().ok(),
+        "method": "statevector",
+    }))
+}
+
+/// A Clifford program too large for a state vector, sampled on the
+/// stabilizer simulator (a program without bits measures every qubit).
+fn clifford_qasm(program: &Program, shots: usize, seed: u64) -> Outcome {
+    let (nq, nb) = (program.n_qubits(), program.n_bits());
+    if shots == 0 {
+        return Err(format!(
+            "{nq} qubits are too many for a state vector; this Clifford program runs on the stabilizer simulator, which needs shots"
+        ));
+    }
+    let counts: BTreeMap<String, usize> = if nb == 0 {
+        if shots.saturating_mul(nq) > MAX_LISTED_BITS {
+            return Err(format!(
+                "shots × qubits must be at most {MAX_LISTED_BITS} for a program without bits"
+            ));
+        }
+        let circuit = program.to_circuit().map_err(|e| e.to_string())?;
+        StabilizerState::from_circuit(&circuit, &[])
+            .map_err(|e| e.to_string())?
+            .sample_counts(shots, &mut Rng::seed_from_u64(seed))
+    } else {
+        sample_program(program, shots, seed)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|(r, c)| (record_bitstring(r, nb), c))
+            .collect()
+    };
+    Ok(json!({
+        "qubits": nq,
+        "bits": nb,
+        "operations": program.len(),
+        "unitary": program.is_unitary(),
+        "qubit_registers": program.qubit_registers(),
+        "bit_registers": program.bit_registers(),
+        "probabilities": null,
+        "counts": counts,
+        "state": null,
+        "qasm3": program.to_qasm3().map_err(|e| e.to_string())?,
+        "qasm2": program.to_qasm2().ok(),
+        "method": "stabilizer",
     }))
 }
 
@@ -564,6 +616,30 @@ mod tests {
             .map(|v| v.as_u64().unwrap())
             .sum();
         assert_eq!(total, 100);
+    }
+
+    #[test]
+    fn large_clifford_programs_use_the_stabilizer_simulator() {
+        let n = MAX_QUBITS + 100;
+        let mut src = format!("qubit[{n}] q; bit[2] c; h q[0];");
+        for k in 1..n {
+            src.push_str(&format!(" cx q[{}], q[{k}];", k - 1));
+        }
+        src.push_str(&format!(
+            " c[0] = measure q[0]; c[1] = measure q[{}];",
+            n - 1
+        ));
+        let r = ok("qasm", json!({"source": src, "shots": 200, "seed": 3}));
+        assert_eq!(r["method"], "stabilizer");
+        assert!(r["probabilities"].is_null());
+        let keys: Vec<&String> = r["counts"].as_object().unwrap().keys().collect();
+        assert_eq!(keys, vec!["00", "11"]);
+        assert!(err("qasm", json!({"source": src})).contains("needs shots"));
+        let small = ok(
+            "qasm",
+            json!({"source": "qubit q; bit c; h q; c = measure q;"}),
+        );
+        assert_eq!(small["method"], "statevector");
     }
 
     #[test]

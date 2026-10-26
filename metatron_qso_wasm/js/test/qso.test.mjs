@@ -102,6 +102,19 @@ test("records wider than 32 bits keep their high bits (wasm32)", () => {
   for (const k of keys) close(r.probabilities[k], 0.5);
 });
 
+test("Clifford programs beyond 26 qubits run on the stabilizer simulator", () => {
+  const n = 500;
+  let src = `qubit[${n}] q; bit[2] c; h q[0];`;
+  for (let k = 1; k < n; k++) src += ` cx q[${k - 1}], q[${k}];`;
+  src += ` c[0] = measure q[0]; c[1] = measure q[${n - 1}];`;
+  const r = qso.qasm(src, { shots: 300, seed: 1 });
+  assert.equal(r.method, "stabilizer");
+  assert.equal(r.probabilities, null);
+  assert.deepEqual(Object.keys(r.counts).sort(), ["00", "11"]);
+  assert.throws(() => qso.qasm(src), /needs shots/);
+  assert.throws(() => qso.qasm(src.replace("h q[0];", "t q[0];"), { shots: 10 }), /qubits/);
+});
+
 test("invalid input is a QsoError, and the module stays usable", () => {
   assert.throws(() => qso.call("nope"), /unknown method/);
   assert.throws(() => qso.walk("cycle:5", { times: [1], start: 9 }), QsoError);
