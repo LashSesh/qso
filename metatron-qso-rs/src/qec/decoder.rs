@@ -128,9 +128,19 @@ pub struct UnionFindDecoder {
     members: Vec<Vec<usize>>,
     support: Vec<u32>,
     grown: Vec<bool>,
+    /// Grown edges at each node.
+    grown_at: Vec<Vec<usize>>,
+    /// Fired detectors; peeling consumes them.
     defect: Vec<bool>,
+    /// Traversal marks: node `v` is seen when `seen[v] == generation`.
+    seen: Vec<u32>,
+    generation: u32,
     touched_nodes: Vec<usize>,
     touched_edges: Vec<usize>,
+    /// Scratch space kept across shots.
+    active: Vec<usize>,
+    newly: Vec<usize>,
+    order: Vec<(usize, usize)>,
 }
 
 impl UnionFindDecoder {
@@ -144,9 +154,15 @@ impl UnionFindDecoder {
             members: (0..nodes).map(|v| vec![v]).collect(),
             support: vec![0; e],
             grown: vec![false; e],
+            grown_at: vec![Vec::new(); nodes],
             defect: vec![false; nodes],
+            seen: vec![0; nodes],
+            generation: 0,
             touched_nodes: Vec::new(),
             touched_edges: Vec::new(),
+            active: Vec::new(),
+            newly: Vec::new(),
+            order: Vec::new(),
             graph,
         }
     }
@@ -163,10 +179,6 @@ impl UnionFindDecoder {
         v
     }
 
-    fn touch(&mut self, v: usize) {
-        self.touched_nodes.push(v);
-    }
-
     fn union(&mut self, a: usize, b: usize) -> usize {
         let (ra, rb) = (self.find(a), self.find(b));
         if ra == rb {
@@ -178,8 +190,11 @@ impl UnionFindDecoder {
             (rb, ra)
         };
         self.parent[small] = big;
-        let moved = std::mem::take(&mut self.members[small]);
-        self.members[big].extend(moved);
+        // Move the members but keep both allocations for later shots.
+        let mut moved = std::mem::take(&mut self.members[small]);
+        self.members[big].extend_from_slice(&moved);
+        moved.clear();
+        self.members[small] = moved;
         self.odd[big] ^= self.odd[small];
         self.boundary[big] |= self.boundary[small];
         big
@@ -188,28 +203,32 @@ impl UnionFindDecoder {
     /// Predicted observable flips for the fired detectors.
     pub fn decode(&mut self, fired: &[usize]) -> Result<u64> {
         let n = self.graph.n_detectors;
+        if let Some(&d) = fired.iter().find(|&&d| d >= n) {
+            return Err(QsoError::invalid(
+                "fired",
+                format!("detector {d} does not exist ({n} detectors)"),
+            ));
+        }
         for &d in fired {
-            if d >= n {
-                return Err(QsoError::invalid(
-                    "fired",
-                    format!("detector {d} does not exist ({n} detectors)"),
-                ));
-            }
             // A detector listed twice cancels.
             self.defect[d] ^= true;
             self.odd[d] ^= true;
-            self.touch(d);
+            self.touched_nodes.push(d);
         }
-        let mut active: Vec<usize> = fired.iter().copied().filter(|&d| self.odd[d]).collect();
+        let mut active = std::mem::take(&mut self.active);
+        let mut newly = std::mem::take(&mut self.newly);
+        active.clear();
+        active.extend(fired.iter().copied().filter(|&d| self.odd[d]));
         active.sort_unstable();
         active.dedup();
-        // Growth.
+        // Growth: every odd cluster that does not touch the boundary
+        // supports each edge leaving it by one step; an edge is grown when
+        // its support reaches its length, and its ends merge.
         while !active.is_empty() {
-            let mut newly = Vec::new();
             let mut progress = false;
             for &root in &active {
-                let nodes = self.members[root].clone();
-                for v in nodes {
+                for i in 0..self.members[root].len() {
+                    let v = self.members[root][i];
                     for k in 0..self.graph.adjacency[v].len() {
                         let e = self.graph.adjacency[v][k];
                         if self.grown[e] {
@@ -237,88 +256,155 @@ impl UnionFindDecoder {
             }
             if !progress {
                 // A cluster without edges to grow: no error explains it.
+                (self.active, self.newly) = (active, newly);
                 self.reset();
                 return Err(QsoError::invalid(
                     "fired",
                     "no combination of errors in the graph explains these detectors",
                 ));
             }
-            for e in newly {
+            for e in newly.drain(..) {
                 let (a, b) = (self.graph.edges[e].a, self.graph.edges[e].b);
-                self.touch(a);
-                self.touch(b);
+                self.touched_nodes.extend([a, b]);
+                self.grown_at[a].push(e);
+                self.grown_at[b].push(e);
                 self.union(a, b);
             }
-            let mut next: Vec<usize> = active.iter().map(|&r| self.find(r)).collect();
-            next.sort_unstable();
-            next.dedup();
-            next.retain(|&r| self.odd[r] && !self.boundary[r]);
-            active = next;
+            for k in 0..active.len() {
+                active[k] = self.find(active[k]);
+            }
+            active.sort_unstable();
+            active.dedup();
+            active.retain(|&r| self.odd[r] && !self.boundary[r]);
         }
-        // Peeling: a spanning forest of the grown edges of each cluster,
-        // rooted at the boundary if the cluster touches it; leaves first.
+        (self.active, self.newly) = (active, newly);
         let correction = self.peel();
         self.reset();
         Ok(correction)
     }
 
+    /// Peeling: a spanning forest of the grown edges of each cluster,
+    /// rooted at the boundary if the cluster needs it; leaves first.
     fn peel(&mut self) -> u64 {
         let boundary_node = self.graph.n_detectors;
-        let mut grown_adj: std::collections::HashMap<usize, Vec<usize>> =
-            std::collections::HashMap::new();
-        for &e in &self.touched_edges {
-            if self.grown[e] {
-                let edge = &self.graph.edges[e];
-                grown_adj.entry(edge.a).or_default().push(e);
-                grown_adj.entry(edge.b).or_default().push(e);
-            }
-        }
-        let mut syndrome: std::collections::HashMap<usize, bool> = self
-            .touched_nodes
-            .iter()
-            .map(|&v| (v, self.defect[v]))
-            .collect();
         let mut prediction = 0u64;
-        let mut done = std::collections::HashSet::new();
-        let mut nodes: Vec<usize> = self.touched_nodes.clone();
-        nodes.sort_unstable();
-        nodes.dedup();
-        for v in nodes {
-            let root = self.find(v);
-            if !done.insert(root) {
-                continue;
-            }
-            let members = self.members[root].clone();
-            let with_boundary = members.contains(&boundary_node);
+        let mut roots = std::mem::take(&mut self.active);
+        roots.clear();
+        for i in 0..self.touched_nodes.len() {
+            let v = self.touched_nodes[i];
+            roots.push(self.find(v));
+        }
+        roots.sort_unstable();
+        roots.dedup();
+        for &root in &roots {
+            let members = std::mem::take(&mut self.members[root]);
+            let mut done = false;
             // A cluster that holds an even number of fired detectors does
             // not need the boundary: peel it without, if every part of it
             // still holds an even number.
-            if with_boundary {
-                let defects = members.iter().filter(|&&u| self.defect[u]).count();
-                if defects % 2 == 0 {
-                    let parts = components(&members, &grown_adj, &self.graph, Some(boundary_node));
-                    if parts
-                        .iter()
-                        .all(|p| p.iter().filter(|&&u| self.defect[u]).count() % 2 == 0)
-                    {
-                        for part in parts {
-                            prediction ^= peel_tree(
-                                part[0],
-                                &grown_adj,
-                                &self.graph,
-                                Some(boundary_node),
-                                &mut syndrome,
-                            );
-                        }
-                        continue;
+            if members.contains(&boundary_node)
+                && members.iter().filter(|&&u| self.defect[u]).count() % 2 == 0
+            {
+                let parts = self.components(&members, boundary_node);
+                if parts
+                    .iter()
+                    .all(|p| p.iter().filter(|&&u| self.defect[u]).count() % 2 == 0)
+                {
+                    for part in parts {
+                        prediction ^= self.peel_tree(part[0], Some(boundary_node));
+                    }
+                    done = true;
+                }
+            }
+            if !done {
+                let start = if members.contains(&boundary_node) {
+                    boundary_node
+                } else {
+                    members[0]
+                };
+                prediction ^= self.peel_tree(start, None);
+            }
+            self.members[root] = members;
+        }
+        self.active = roots;
+        prediction
+    }
+
+    fn next_generation(&mut self) -> u32 {
+        self.generation = self.generation.wrapping_add(1);
+        if self.generation == 0 {
+            self.seen.iter_mut().for_each(|s| *s = 0);
+            self.generation = 1;
+        }
+        self.generation
+    }
+
+    /// Connected parts of `members` over grown edges, avoiding `skip`.
+    fn components(&mut self, members: &[usize], skip: usize) -> Vec<Vec<usize>> {
+        let g = self.next_generation();
+        self.seen[skip] = g;
+        let mut parts = Vec::new();
+        for &start in members {
+            if self.seen[start] == g {
+                continue;
+            }
+            self.seen[start] = g;
+            let mut part = vec![start];
+            let mut i = 0;
+            while i < part.len() {
+                let v = part[i];
+                i += 1;
+                for &e in &self.grown_at[v] {
+                    let edge = &self.graph.edges[e];
+                    let w = if edge.a == v { edge.b } else { edge.a };
+                    if self.seen[w] != g {
+                        self.seen[w] = g;
+                        part.push(w);
                     }
                 }
-                prediction ^=
-                    peel_tree(boundary_node, &grown_adj, &self.graph, None, &mut syndrome);
-            } else {
-                prediction ^= peel_tree(members[0], &grown_adj, &self.graph, None, &mut syndrome);
+            }
+            parts.push(part);
+        }
+        parts
+    }
+
+    /// Peel a breadth-first spanning tree of grown edges from `root`
+    /// (avoiding `skip`), leaves first: a fired leaf takes the edge to its
+    /// parent into the correction and passes its parity up. Returns the
+    /// observables the correction flips.
+    fn peel_tree(&mut self, root: usize, skip: Option<usize>) -> u64 {
+        let g = self.next_generation();
+        if let Some(s) = skip {
+            self.seen[s] = g;
+        }
+        self.seen[root] = g;
+        let mut order = std::mem::take(&mut self.order);
+        order.clear();
+        order.push((root, usize::MAX));
+        let mut i = 0;
+        while i < order.len() {
+            let v = order[i].0;
+            i += 1;
+            for &e in &self.grown_at[v] {
+                let edge = &self.graph.edges[e];
+                let w = if edge.a == v { edge.b } else { edge.a };
+                if self.seen[w] != g {
+                    self.seen[w] = g;
+                    order.push((w, e));
+                }
             }
         }
+        let mut prediction = 0;
+        for &(v, e) in order.iter().skip(1).rev() {
+            if self.defect[v] {
+                let edge = &self.graph.edges[e];
+                let parent = if edge.a == v { edge.b } else { edge.a };
+                self.defect[v] = false;
+                self.defect[parent] ^= true;
+                prediction ^= edge.observables;
+            }
+        }
+        self.order = order;
         prediction
     }
 
@@ -330,6 +416,7 @@ impl UnionFindDecoder {
             self.members[v].clear();
             self.members[v].push(v);
             self.defect[v] = false;
+            self.grown_at[v].clear();
         }
         for &e in &self.touched_edges {
             self.support[e] = 0;
@@ -338,74 +425,4 @@ impl UnionFindDecoder {
         self.touched_nodes.clear();
         self.touched_edges.clear();
     }
-}
-
-/// Connected parts of `members` over grown edges, avoiding node `skip`.
-fn components(
-    members: &[usize],
-    adj: &std::collections::HashMap<usize, Vec<usize>>,
-    graph: &MatchingGraph,
-    skip: Option<usize>,
-) -> Vec<Vec<usize>> {
-    let mut seen = std::collections::HashSet::new();
-    let mut parts = Vec::new();
-    for &start in members {
-        if Some(start) == skip || !seen.insert(start) {
-            continue;
-        }
-        let mut part = vec![start];
-        let mut i = 0;
-        while i < part.len() {
-            let v = part[i];
-            i += 1;
-            for &e in adj.get(&v).into_iter().flatten() {
-                let edge = &graph.edges[e];
-                let w = if edge.a == v { edge.b } else { edge.a };
-                if Some(w) != skip && seen.insert(w) {
-                    part.push(w);
-                }
-            }
-        }
-        parts.push(part);
-    }
-    parts
-}
-
-/// Peel a breadth-first spanning tree of grown edges from `root`
-/// (avoiding node `skip`), leaves first: a fired leaf takes the edge to
-/// its parent into the correction and passes its parity up. Returns the
-/// observables the correction flips.
-fn peel_tree(
-    root: usize,
-    adj: &std::collections::HashMap<usize, Vec<usize>>,
-    graph: &MatchingGraph,
-    skip: Option<usize>,
-    syndrome: &mut std::collections::HashMap<usize, bool>,
-) -> u64 {
-    let mut order = vec![(root, usize::MAX)];
-    let mut seen = std::collections::HashSet::from([root]);
-    let mut i = 0;
-    while i < order.len() {
-        let v = order[i].0;
-        i += 1;
-        for &e in adj.get(&v).into_iter().flatten() {
-            let edge = &graph.edges[e];
-            let w = if edge.a == v { edge.b } else { edge.a };
-            if Some(w) != skip && seen.insert(w) {
-                order.push((w, e));
-            }
-        }
-    }
-    let mut prediction = 0;
-    for &(v, e) in order.iter().skip(1).rev() {
-        if syndrome.get(&v).copied().unwrap_or(false) {
-            let edge = &graph.edges[e];
-            let parent = if edge.a == v { edge.b } else { edge.a };
-            syndrome.insert(v, false);
-            let p = syndrome.entry(parent).or_insert(false);
-            *p = !*p;
-            prediction ^= edge.observables;
-        }
-    }
-    prediction
 }

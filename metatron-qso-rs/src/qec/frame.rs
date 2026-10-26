@@ -155,6 +155,25 @@ impl DetectorSamples {
         self.observables[shot]
     }
 
+    /// The fired detectors of every shot, ascending; faster than
+    /// [`fired_detectors`](Self::fired_detectors) shot by shot.
+    pub fn fired_by_shot(&self) -> Vec<Vec<usize>> {
+        let mut out = vec![Vec::new(); self.shots];
+        for d in 0..self.n_detectors {
+            for (k, &word) in self.detectors[d * self.words..(d + 1) * self.words]
+                .iter()
+                .enumerate()
+            {
+                let mut bits = word;
+                while bits != 0 {
+                    out[64 * k + bits.trailing_zeros() as usize].push(d);
+                    bits &= bits - 1;
+                }
+            }
+        }
+        out
+    }
+
     /// How often detector `d` fired.
     pub fn count(&self, d: usize) -> usize {
         let row = &self.detectors[d * self.words..(d + 1) * self.words];

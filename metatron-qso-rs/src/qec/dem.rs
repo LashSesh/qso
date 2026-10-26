@@ -5,9 +5,9 @@
 //! a depolarizing channel equals independent X, Y and Z errors, or the 15
 //! two-qubit Paulis, with adjusted probabilities). Each error is
 //! propagated through the noiseless circuit as a Pauli frame, 64 errors
-//! per machine word; errors with the same effect are merged.
+//! per machine word and up to 4096 per pass; errors with the same effect are merged.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use super::circuit::{DetectorCircuit, Noise, QecOp};
 use super::frame::Frames;
@@ -36,11 +36,19 @@ pub struct DetectorErrorModel {
 }
 
 /// An elementary component: X or Z on a qubit at a noise operation, or a
-/// measurement flip.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-enum Component {
-    Pauli { op: usize, qubit: usize, x: bool },
-    Flip { op: usize },
+/// measurement flip. Ordered by operation first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Component {
+    op: usize,
+    qubit: usize,
+    kind: Kind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Kind {
+    X,
+    Z,
+    Flip,
 }
 
 /// Effect of an error: flipped detectors (sorted) and observables.
@@ -96,21 +104,18 @@ pub fn detector_error_model(
     for (i, op) in circuit.operations().iter().enumerate() {
         match op {
             QecOp::Noise { qubits, .. } => {
-                for &q in qubits {
-                    components.push(Component::Pauli {
-                        op: i,
-                        qubit: q,
-                        x: true,
-                    });
-                    components.push(Component::Pauli {
-                        op: i,
-                        qubit: q,
-                        x: false,
-                    });
+                for &qubit in qubits {
+                    for kind in [Kind::X, Kind::Z] {
+                        components.push(Component { op: i, qubit, kind });
+                    }
                 }
             }
             QecOp::Measure { flip, .. } if *flip > 0.0 => {
-                components.push(Component::Flip { op: i });
+                components.push(Component {
+                    op: i,
+                    qubit: 0,
+                    kind: Kind::Flip,
+                });
             }
             _ => {}
         }
@@ -124,12 +129,11 @@ pub fn detector_error_model(
     components.sort();
     components.dedup();
     let signatures = propagate(circuit, &components)?;
-    let index: HashMap<Component, usize> = components
-        .iter()
-        .enumerate()
-        .map(|(k, c)| (*c, k))
-        .collect();
-    let sig = |c: Component| -> &Signature { &signatures[index[&c]] };
+    let sig = |c: Component| -> &Signature {
+        &signatures[components
+            .binary_search(&c)
+            .expect("every component was propagated")]
+    };
 
     // Independent error terms and their effects.
     let mut merged: BTreeMap<Signature, f64> = BTreeMap::new();
@@ -166,15 +170,15 @@ pub fn detector_error_model(
     for (i, op) in circuit.operations().iter().enumerate() {
         match op {
             QecOp::Noise { noise, qubits } => {
-                let xq = |q: usize| Component::Pauli {
+                let xq = |qubit: usize| Component {
                     op: i,
-                    qubit: q,
-                    x: true,
+                    qubit,
+                    kind: Kind::X,
                 };
-                let zq = |q: usize| Component::Pauli {
+                let zq = |qubit: usize| Component {
                     op: i,
-                    qubit: q,
-                    x: false,
+                    qubit,
+                    kind: Kind::Z,
                 };
                 match *noise {
                     Noise::XError(p) => qubits.iter().try_for_each(|&q| term(vec![xq(q)], p))?,
@@ -214,7 +218,14 @@ pub fn detector_error_model(
                 }
             }
             QecOp::Measure { flip, .. } if *flip > 0.0 => {
-                term(vec![Component::Flip { op: i }], *flip)?;
+                term(
+                    vec![Component {
+                        op: i,
+                        qubit: 0,
+                        kind: Kind::Flip,
+                    }],
+                    *flip,
+                )?;
             }
             _ => {}
         }
@@ -234,70 +245,94 @@ pub fn detector_error_model(
     })
 }
 
-/// The effect of each component, 64 components per pass.
+/// Words of frame and record memory one propagation pass may use.
+const PASS_MEMORY_WORDS: usize = 1 << 24;
+
+/// The effect of each component (sorted by operation), up to 64 words of
+/// 64 components per pass through the circuit.
 fn propagate(circuit: &DetectorCircuit, components: &[Component]) -> Result<Vec<Signature>> {
     let n = circuit.n_qubits();
-    let mut out = Vec::with_capacity(components.len());
-    for chunk in components.chunks(64) {
-        // Components of this chunk by operation index.
-        let mut at: HashMap<usize, Vec<(usize, Component)>> = HashMap::new();
-        for (lane, c) in chunk.iter().enumerate() {
-            let op = match c {
-                Component::Pauli { op, .. } | Component::Flip { op } => *op,
-            };
-            at.entry(op).or_default().push((lane, *c));
-        }
-        let mut f = Frames::new(n, 1);
-        let mut records: Vec<u64> = Vec::with_capacity(circuit.n_measurements());
-        let mut det: Vec<u64> = Vec::with_capacity(circuit.n_detectors());
-        let mut obs = vec![0u64; circuit.n_observables()];
+    let (n_det, n_obs) = (circuit.n_detectors(), circuit.n_observables());
+    let per_word = circuit.n_measurements() + 2 * n + n_det + n_obs;
+    let max_words = (PASS_MEMORY_WORDS / per_word.max(1)).clamp(1, 64);
+    let mut out: Vec<Signature> = Vec::with_capacity(components.len());
+    for chunk in components.chunks(64 * max_words) {
+        let w = chunk.len().div_ceil(64);
+        let first = chunk[0].op;
+        let mut f = Frames::new(n, w);
+        let mut records: Vec<u64> = Vec::with_capacity(circuit.n_measurements() * w);
+        let mut det: Vec<u64> = Vec::with_capacity(n_det * w);
+        let mut obs = vec![0u64; n_obs * w];
+        let mut next = 0;
         for (i, op) in circuit.operations().iter().enumerate() {
-            let here = at.get(&i);
             match op {
-                QecOp::Gate(inst) => apply_clifford(&mut f, inst, &[])?,
+                // Frames are zero before the first component.
+                QecOp::Gate(inst) if i > first => apply_clifford(&mut f, inst, &[])?,
+                QecOp::Gate(_) => {}
                 QecOp::Noise { .. } => {
-                    for &(lane, c) in here.into_iter().flatten() {
-                        if let Component::Pauli { qubit, x, .. } = c {
-                            let v = if x { &mut f.x } else { &mut f.z };
-                            v[qubit] ^= 1 << lane;
-                        }
+                    while next < chunk.len() && chunk[next].op == i {
+                        let c = chunk[next];
+                        let v = if c.kind == Kind::X {
+                            &mut f.x
+                        } else {
+                            &mut f.z
+                        };
+                        v[c.qubit * w + next / 64] ^= 1 << (next % 64);
+                        next += 1;
                     }
                 }
                 QecOp::Measure { qubit, .. } => {
-                    let mut bits = f.x[*qubit];
-                    for &(lane, _) in here.into_iter().flatten() {
-                        bits ^= 1 << lane;
+                    let start = records.len();
+                    records.extend_from_slice(&f.x[qubit * w..(qubit + 1) * w]);
+                    while next < chunk.len() && chunk[next].op == i {
+                        records[start + next / 64] ^= 1 << (next % 64);
+                        next += 1;
                     }
-                    records.push(bits);
                     // The qubit is now in a Z eigenstate: Z errors on it
                     // have no effect.
-                    f.z[*qubit] = 0;
+                    f.z[qubit * w..(qubit + 1) * w].fill(0);
                 }
                 QecOp::Reset { qubit } => {
-                    f.x[*qubit] = 0;
-                    f.z[*qubit] = 0;
+                    f.x[qubit * w..(qubit + 1) * w].fill(0);
+                    f.z[qubit * w..(qubit + 1) * w].fill(0);
                 }
                 QecOp::Detector { records: recs } => {
-                    det.push(recs.iter().fold(0, |a, &r| a ^ records[r]));
+                    for k in 0..w {
+                        det.push(recs.iter().fold(0, |a, &r| a ^ records[r * w + k]));
+                    }
                 }
                 QecOp::Observable {
                     index,
                     records: recs,
                 } => {
-                    obs[*index] ^= recs.iter().fold(0, |a, &r| a ^ records[r]);
+                    for k in 0..w {
+                        obs[index * w + k] ^= recs.iter().fold(0, |a, &r| a ^ records[r * w + k]);
+                    }
                 }
             }
         }
-        for lane in 0..chunk.len() {
-            let detectors = (0..det.len())
-                .filter(|&d| (det[d] >> lane) & 1 == 1)
-                .collect();
-            let observables = obs
-                .iter()
-                .enumerate()
-                .filter(|(_, o)| (**o >> lane) & 1 == 1)
-                .fold(0u64, |m, (i, _)| m | (1 << i));
-            out.push((detectors, observables));
+        // Signatures: the set bits of each detector and observable row.
+        let base = out.len();
+        out.resize(base + chunk.len(), (Vec::new(), 0));
+        for d in 0..n_det {
+            for k in 0..w {
+                let mut bits = det[d * w + k];
+                while bits != 0 {
+                    out[base + 64 * k + bits.trailing_zeros() as usize]
+                        .0
+                        .push(d);
+                    bits &= bits - 1;
+                }
+            }
+        }
+        for i in 0..n_obs {
+            for k in 0..w {
+                let mut bits = obs[i * w + k];
+                while bits != 0 {
+                    out[base + 64 * k + bits.trailing_zeros() as usize].1 |= 1 << i;
+                    bits &= bits - 1;
+                }
+            }
         }
     }
     Ok(out)

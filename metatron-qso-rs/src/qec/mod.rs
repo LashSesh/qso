@@ -60,8 +60,7 @@ pub fn logical_error_rate(
     while done < shots {
         let k = (shots - done).min(block);
         let samples = frame::sample_with(circuit, k, &mut rng)?;
-        for s in 0..k {
-            let fired = samples.fired_detectors(s);
+        for (s, fired) in samples.fired_by_shot().into_iter().enumerate() {
             let predicted = if fired.is_empty() {
                 0
             } else {
