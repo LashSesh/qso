@@ -7,7 +7,9 @@ physics) and 1.6 (interoperability) shipped together as release 1.4.0.
 Milestones 1.7 (stabilizer simulation and graph states) and 1.8
 (error-correction experiments) ship together as release 1.5.0 (1.5.1
 fixes its npm publication). Milestone 1.9 (matrix-product states) is
-delivered. Up to 1.3
+delivered. The second stage, milestones 1.10 to 1.13, starts with exact
+decoding; finished milestones are released together, not one by one.
+Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -46,7 +48,9 @@ which withdraws the results of version 1.
 | Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | no noise learning (PEC needs the Pauli noise given), no leakage or non-Markovian noise, channels on at most two qubits, no virtual distillation or probabilistic error amplification |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0) | no time-dependent Hamiltonians, no open-system discrete-time walks, no pretty-good-transfer decision (only best fidelity in a window) |
 | Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5) | no integrals of its own (needs FCIDUMP files from a chemistry code), no unrestricted (UHF) integrals, no tight commutator bound for product formulas of order 4 and higher, no time-dependent Hamiltonians |
-| Interoperability | OpenQASM 2 without `gate` definitions; multi-controlled gates exported by exact decomposition (1.3.0); edge lists, GraphML and duck-typed NetworkX import for graphs | no OpenQASM 3, no browser build; no bridges to other frameworks, by decision (see section 2) |
+| Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's text format for detector circuits and error models, written only (1.8); edge lists, GraphML and duck-typed NetworkX import for graphs | no Stim circuit import; no bridges to other frameworks, by decision (see section 2) |
+| Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8) | no exact matching decoder (union-find is up to 6% above PyMatching), no X-basis memory experiments |
+| Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9) | no MPS in the browser build |
 | Documentation | user guide, executed tutorials and Python reference on GitHub Pages (1.2) | no Rust-specific tutorials; no hosted documentation per released version |
 | Engineering | CI on Linux (x86_64, arm64), macOS and Windows; Miri, fuzzing, API checks, weekly cross-validation and benchmark tracking; Trusted Publishing (1.2) | no coverage measurement; fuzzing only of the parsers and deserialisers |
 
@@ -435,6 +439,74 @@ and found no wrong amplitude and no violated bound there. It found:
 * a gate's tensor was checked against the memory limit only after it was
   built, and a failing split left the state half written.
 
+## 4b. Second stage (1.10 to 1.13)
+
+The first stage made every area QSO covers correct and validated. The
+second closes the gaps that the first stage measured but left open,
+in the order of what they block.
+
+### 1.10 — Exact decoding and Stim circuits (M)
+
+Use case: logical error rates that are those of minimum-weight matching,
+not an approximation of them, on circuits written by Stim or by QSO.
+
+| Deliverable | Detail |
+|---|---|
+| Matching decoder | exact minimum-weight perfect matching on the detection events of each shot: shortest paths in the matching graph, Edmonds' blossom algorithm on the events and their boundary copies; usable everywhere the union-find decoder is |
+| Stim circuits | an importer for Stim's circuit format (the gates QSO's detector circuits know, noise channels, `DETECTOR`, `OBSERVABLE_INCLUDE`, `REPEAT`, measurement records); errors name the unsupported instruction |
+| Codes | X-basis memory experiments for the rotated surface code |
+
+Validation: matchings against enumeration of every perfect matching on
+random small graphs; every fault pattern of weight up to (d − 1)/2
+corrected; in the scheduled cross-validation, the decoder's predictions
+against PyMatching's shot by shot (equal up to ties) and imported Stim
+circuits' error models against Stim's; `to_stim` followed by the importer
+reproduces every circuit.
+
+### 1.11 — The state-vector core at memory bandwidth (M)
+
+Use case: the precondition the roadmap sets for a GPU backend, measured
+instead of assumed.
+
+| Deliverable | Detail |
+|---|---|
+| Bandwidth reference | `benchmark_report` measures the machine's copy bandwidth and reports each kernel's throughput as a fraction of it |
+| Kernels | explicit SIMD for the one- and two-qubit kernels through `std::arch` with run-time detection (x86-64 AVX2/FMA, aarch64 NEON) and the portable kernels as fallback |
+| Gradients | the adjoint backward pass blocked like the forward pass |
+
+Validation: the SIMD kernels agree bit for bit with the portable ones on
+random states (or to the last bit where FMA changes rounding, stated per
+kernel); Miri covers the fallback; the benchmark report states each
+kernel's fraction of bandwidth on its machine.
+
+### 1.12 — Noise learning (M)
+
+Use case: error mitigation whose noise model comes from data, as on a
+device, not from the simulator's own model.
+
+| Deliverable | Detail |
+|---|---|
+| Pauli-channel learning | the sparse Pauli–Lindblad model of a twirled layer (van den Berg et al., Nat. Phys. 19, 1116 (2023)) fitted from fidelities of repeated layers, with standard errors |
+| Mitigation | PEC and probabilistic error amplification with the learned model |
+
+Validation: learned rates recover the rates of a known device model
+within their standard errors; PEC with the learned model is unbiased on
+circuits whose exact value is known.
+
+### 1.13 — Walks beyond static Hamiltonians (S–M)
+
+Use case: adiabatic and driven walks, and decoherent discrete-time walks.
+
+| Deliverable | Detail |
+|---|---|
+| Time-dependent walks | continuous-time walks with a time-dependent Hamiltonian by fourth-order commutator-free Magnus integrators with step-size control |
+| Open discrete-time walks | coined walks with coin and position dephasing on density matrices |
+
+Validation: the local adiabatic search on the complete graph against its
+closed-form running time (Roland and Cerf 2002); the Magnus integrators'
+order of convergence; decoherent coined walks against the classical walk
+in the fully dephased limit.
+
 ### Research track (later)
 
 A GPU backend through `wgpu`: it starts only with a clear use case and
@@ -458,9 +530,17 @@ after the CPU core is close to memory bandwidth.
    experiments need the stabilizer simulator; graph states connect it to
    QSO's graphs. Both ship as one release.
 7. **1.9: matrix-product states** from the research track: they need no
-   new dependency (splits use nalgebra's Hermitian eigensolver), they reach the large chains and
-   sparse graphs that QSO's walks and QAOA work on, and free fermions and
-   the QAOA ring formula give exact references far beyond 34 qubits.
+   new dependency (splits use nalgebra's Hermitian eigensolver), they
+   reach the large chains and sparse graphs that QSO's walks and QAOA
+   work on, and free fermions and the QAOA ring formula give exact
+   references far beyond 34 qubits.
+8. **1.10: exact decoding first in the second stage.** The accuracy cost
+   of union-find is measured and visible; matching removes it, and
+   PyMatching gives a shot-by-shot reference. Importing Stim circuits
+   lets the cross-validation use Stim's own generated circuits.
+9. **1.11: performance** next, because a GPU backend waits for it.
+10. **1.12 and 1.13: noise learning and driven walks**, each closing a gap
+    of the first stage's table.
 
 ## 6. Measures of success
 
@@ -494,6 +574,9 @@ Taken (October 2026):
   error rates are reported beside PyMatching's, so its accuracy cost is
   visible. Error models and circuits interoperate with Stim through its
   text format, not through a binding.
+* Second stage (October 2026): exact decoding (1.10), the state-vector
+  core at memory bandwidth (1.11), noise learning (1.12), driven and open
+  walks (1.13). Finished milestones are released together.
 * The browser playground stays, because it costs little to maintain: it
   is plain HTML and JavaScript without dependencies or a build step, it
   uses only the npm package's JSON interface, which the package's tests
