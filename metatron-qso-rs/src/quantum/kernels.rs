@@ -16,7 +16,7 @@ use super::circuit::Instruction;
 use super::gates::{GateKind, dmatrix_1q, dmatrix_2q, matrix_1q, matrix_2q};
 use super::simd::{
     mat2_runs, mat2_runs_real, mat2_strided, mat2_strided_real, mat4_runs, scale_run,
-    scale2_strided,
+    scale_upper_strided, scale2_strided,
 };
 use crate::parallel::{
     CHUNK, SyncPtr, for_each_chunk, for_each_chunk_pair, for_each_index, for_each_item,
@@ -108,15 +108,10 @@ pub(crate) fn apply_1q(amps: &mut [C64], target: usize, controls: usize, m: &[C6
             1usize << target < amps.len(),
             "target {target} outside the register"
         );
-        // Contiguous, vectorisable fast paths for uncontrolled gates:
-        // diagonal matrices (RZ) scale each half without branching, real
-        // matrices (H, RY) need two real products per amplitude instead of
-        // two complex ones.
         // Contiguous runs for uncontrolled gates (target 0: adjacent
         // pairs): diagonal matrices (RZ) scale each half, real matrices
         // (H, RY) need two real products per amplitude instead of two
-        // complex ones.
-        // Below CHUNK, every chunk holds whole blocks and is handled in
+        // complex ones. Below CHUNK, every chunk holds whole blocks and is handled in
         // one call; above, runs of both halves are handled in step.
         let stride = 1usize << target;
         let small = stride < CHUNK;
@@ -370,9 +365,8 @@ pub(crate) fn apply_phase_on_mask(amps: &mut [C64], mask: usize, phase: C64) {
     if mask.is_power_of_two() {
         // Uncontrolled phase gate: scale the upper half of every block.
         assert!(mask < amps.len(), "qubit outside the register");
-        let one = C64::new(1.0, 0.0);
         if mask < CHUNK {
-            for_each_chunk(amps, move |_, c| scale2_strided(c, mask, one, phase));
+            for_each_chunk(amps, move |_, c| scale_upper_strided(c, mask, phase));
         } else {
             for_each_pair_runs(amps, mask, move |_, b| scale_run(b, phase));
         }
@@ -622,6 +616,25 @@ mod tests {
                 }
             }
         };
+        // Large registers: the parallel paths, runs longer than CHUNK
+        // (strides from 2¹²), and the two-stream diagonal.
+        let large = |amps: &mut [C64], n: usize| {
+            for t in [0, 1, 5, 12, 13, 16] {
+                apply_1q(amps, t, 0, &m2);
+                apply_1q(amps, t, 0, &real);
+                apply_1q(amps, t, 0, &diag);
+                apply_phase_on_mask(amps, 1 << t, phase);
+                apply_1q(amps, t, 1 << ((t + 3) % n), &m2);
+                apply_2q(amps, t, (t + 1) % n, 0, &m4);
+                let inst = Instruction {
+                    targets: vec![t, (t + 5) % n],
+                    ..rzz.clone()
+                };
+                if !cfg!(miri) {
+                    apply_instruction(amps, &inst, &[0.7], false, 0);
+                }
+            }
+        };
         // Under Miri (portable only) small registers exercise the same
         // run code; 17 qubits reach the parallel paths natively.
         let sizes: &[(usize, u64)] = if cfg!(miri) {
@@ -637,22 +650,13 @@ mod tests {
             if n < 17 {
                 cases(&mut fast, n);
             } else {
-                // Large registers: the parallel paths, a few gates only.
-                for t in [0, 1, 5, 13, 16] {
-                    apply_1q(&mut fast, t, 0, &m2);
-                    apply_1q(&mut fast, t, 1 << ((t + 3) % n), &m2);
-                    apply_2q(&mut fast, t, (t + 1) % n, 0, &m4);
-                }
+                large(&mut fast, n);
             }
             crate::quantum::set_simd(false);
             if n < 17 {
                 cases(&mut slow, n);
             } else {
-                for t in [0, 1, 5, 13, 16] {
-                    apply_1q(&mut slow, t, 0, &m2);
-                    apply_1q(&mut slow, t, 1 << ((t + 3) % n), &m2);
-                    apply_2q(&mut slow, t, (t + 1) % n, 0, &m4);
-                }
+                large(&mut slow, n);
             }
             crate::quantum::set_simd(true);
             for (a, b) in fast.iter().zip(&slow) {
@@ -661,6 +665,25 @@ mod tests {
                     (b.re.to_bits(), b.im.to_bits()),
                     "n = {n}"
                 );
+            }
+        }
+    }
+
+    /// A phase gate leaves the amplitudes it does not touch exactly as they
+    /// were, signs of zero included, on low and high qubits alike.
+    #[test]
+    fn phase_gates_leave_the_other_half_untouched() {
+        let phase = C64::new(0.6, 0.8);
+        for n in [1usize, 14] {
+            for t in [0, n - 1] {
+                let mut amps = vec![C64::new(-0.0, -0.6); 1 << n];
+                apply_phase_on_mask(&mut amps, 1 << t, phase);
+                for (i, a) in amps.iter().enumerate() {
+                    if i & (1 << t) == 0 {
+                        assert!(a.re == 0.0 && a.re.is_sign_negative(), "n {n}, t {t}");
+                        assert_eq!(a.im, -0.6);
+                    }
+                }
             }
         }
     }

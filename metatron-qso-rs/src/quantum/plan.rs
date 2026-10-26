@@ -363,7 +363,8 @@ pub(crate) fn run_with_block(amps: &mut [C64], circuit: &Circuit, theta: &[f64],
     let ops = fuse(circuit, theta, c);
     // Runs of local operations, as ranges of `ops`; a run of one gains
     // nothing from blocking, and the whole-register kernel streams memory
-    // better, with the same arithmetic.
+    // better. Its result is the same up to the sign of zero amplitudes (a
+    // controlled phase may go through the general 2×2 kernel there).
     let mut run: Vec<Local<'_>> = Vec::new();
     let mut first = 0;
     let flush = |amps: &mut [C64], run: &mut Vec<Local<'_>>, op: &Op<'_>| {

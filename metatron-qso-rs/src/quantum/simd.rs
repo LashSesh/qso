@@ -158,6 +158,26 @@ pub(crate) fn scale2_strided(x: &mut [C64], stride: usize, d0: C64, d1: C64) {
     portable::scale2_strided(x, stride, d0, d1);
 }
 
+/// `x[i + stride] ← x[i + stride]·z` for every pair of [`mat2_strided`],
+/// leaving the lower amplitudes untouched (a phase gate on a low qubit).
+#[inline]
+pub(crate) fn scale_upper_strided(x: &mut [C64], stride: usize, z: C64) {
+    debug_assert!(x.len().is_multiple_of(2 * stride));
+    #[cfg(target_arch = "aarch64")]
+    if level() == NEON {
+        // SAFETY: NEON is available (detected).
+        unsafe { neon::scale_upper_strided(x, stride, z) };
+        return;
+    }
+    #[cfg(target_arch = "x86_64")]
+    if level() == AVX {
+        // SAFETY: AVX is available (detected).
+        unsafe { avx::scale_upper_strided(x, stride, z) };
+        return;
+    }
+    portable::scale_upper_strided(x, stride, z);
+}
+
 /// `x ← x·z` over a run.
 #[inline]
 pub(crate) fn scale_run(x: &mut [C64], z: C64) {
@@ -262,6 +282,13 @@ mod portable {
         for block in x.chunks_exact_mut(2 * stride) {
             let (lo, hi) = block.split_at_mut(stride);
             mat2_runs_real(lo, hi, m);
+        }
+    }
+
+    #[inline]
+    pub(super) fn scale_upper_strided(x: &mut [C64], stride: usize, z: C64) {
+        for block in x.chunks_exact_mut(2 * stride) {
+            scale_run(&mut block[stride..], z);
         }
     }
 
@@ -462,6 +489,29 @@ mod avx {
     /// # Safety
     /// AVX is available.
     #[target_feature(enable = "avx")]
+    pub(super) unsafe fn scale_upper_strided(x: &mut [C64], stride: usize, z: C64) {
+        if stride == 1 {
+            // Scale both lanes, then keep the lower one as it was.
+            let (zr, zi) = split(z);
+            let p = x.as_mut_ptr();
+            for i in (0..x.len() & !1).step_by(2) {
+                // SAFETY: i + 1 < x.len().
+                unsafe {
+                    let w = load(p.add(i));
+                    store(p.add(i), _mm256_blend_pd::<0b1100>(w, cmul(zr, zi, w)));
+                }
+            }
+            return;
+        }
+        for block in x.chunks_exact_mut(2 * stride) {
+            // SAFETY: AVX is available (by the caller).
+            unsafe { scale_run(&mut block[stride..], z) };
+        }
+    }
+
+    /// # Safety
+    /// AVX is available.
+    #[target_feature(enable = "avx")]
     pub(super) unsafe fn scale2_strided(x: &mut [C64], stride: usize, d0: C64, d1: C64) {
         if stride == 1 {
             // Lanes [d₀, d₁] times each adjacent pair.
@@ -654,6 +704,16 @@ mod neon {
         for i in 0..x.len() {
             // SAFETY: i < x.len().
             unsafe { store(p.add(i), cmul(zr, zi, s, load(p.add(i)))) };
+        }
+    }
+
+    /// # Safety
+    /// NEON is available.
+    #[target_feature(enable = "neon")]
+    pub(super) unsafe fn scale_upper_strided(x: &mut [C64], stride: usize, z: C64) {
+        for block in x.chunks_exact_mut(2 * stride) {
+            // SAFETY: NEON is available (by the caller).
+            unsafe { scale_run(&mut block[stride..], z) };
         }
     }
 

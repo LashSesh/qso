@@ -52,9 +52,13 @@ register, and NEON on aarch64 with one. A complex product is
 `(a·c − b·d, a·d + b·c)` with separate multiplications and additions (AVX
 `mul` and `addsub`; NEON adds the negated term), in the same order as
 the scalar code, so every version gives the same bits. `set_simd(false)`
-forces the portable path, and a test compares the two on every kernel.
-Runs shorter than four amplitudes (gates on qubits 0 and 1) keep the
-element loops, where a call per run would cost more than it saves.
+forces the portable path, and a test compares the two on the one- and
+two-qubit kernels, phases and RZZ, on small registers and on 17 qubits.
+Uncontrolled one-qubit gates on low qubits are handled a chunk at a time
+(adjacent pairs for qubit 0). Controlled gates, multi-qubit phases and
+two-qubit gates whose lowest qubit (target or control) is 0 or 1 have runs
+shorter than four amplitudes and keep the element loops, where a call per
+run would cost more than it saves.
 
 Specialised paths:
 
@@ -62,9 +66,11 @@ Specialised paths:
   their stride is small and pairs of runs otherwise; diagonal matrices
   (`RZ`) scale each half without branching, and real matrices (`H`,
   `RY`) use real instead of complex products;
-* diagonal gates read the lower and upper halves of the register in step
-  (pieces of 512 amplitudes): the memory system serves two streams
-  faster than one, about 64 against 44 GB/s on the test machine;
+* `RZZ` reads the lower and upper halves of the register in step, and
+  `RZ` on a high qubit the two halves of each block (pieces of 512
+  amplitudes): the memory system serves two streams faster than one,
+  about 64 against 44 GB/s on the test machine; `Z, S, T, P` scale only
+  the half they act on;
 * `X`, `SWAP` and their controlled forms are permutations (no arithmetic);
   a singly controlled `X` swaps contiguous runs of `2^min(c, t)`
   amplitudes, split into fixed pieces so that gates on high qubits
