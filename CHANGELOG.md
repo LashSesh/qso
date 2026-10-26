@@ -6,8 +6,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-Milestones 1.9 (matrix-product states) and 1.10 (exact decoding and Stim
-circuits) of the [roadmap](docs/ROADMAP.md). Results are checked against
+Milestones 1.9 (matrix-product states), 1.10 (exact decoding and Stim
+circuits) and 1.11 (the state-vector core at memory bandwidth) of the
+[roadmap](docs/ROADMAP.md). Results are checked against
 the state-vector simulator, exact free-fermion evolution, the QAOA ring
 optimum, enumeration, Stim and PyMatching (named below).
 
@@ -75,6 +76,26 @@ optimum, enumeration, Stim and PyMatching (named below).
   originals; the X-basis surface code.
 - **Fuzzing:** a target for the Stim importer; the detector-circuit
   target also checks the Stim round trip and the matching decoder.
+- **Vector kernels** (`quantum::set_simd`, `quantum::simd_level`, and
+  the same in Python). The state-vector kernels work on contiguous runs
+  of amplitudes, with primitives in AVX on x86-64 (detected at run time)
+  and NEON on aarch64. They round exactly as the portable code, so the
+  results are the same bit for bit. A test compares the two on every
+  kernel natively, and under Miri for aarch64.
+- **Blocked adjoint gradients:** on registers beyond a cache block, runs
+  of gates inside a block are undone and differentiated block by block.
+  The gradient terms are summed in block order, independent of the thread
+  count.
+- **Benchmark report:** every gate on 24 qubits against the fastest
+  in-place pass over the state, the kernels' instruction set, and the
+  adjoint gradient on 20 qubits.
+
+### Changed
+
+- Diagonal gates read the two halves of the register in step (two
+  memory streams), and diagonal gates inside cache blocks are
+  vectorised. A run of a single block-local gate goes straight to the
+  whole-register kernel.
 
 ### Notes
 
