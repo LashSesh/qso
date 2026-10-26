@@ -1,5 +1,6 @@
 //! Detector circuits from bytes: building, sampling, error models and
-//! export never panic, and the union-find decoder explains every syndrome
+//! export never panic, an error model exists exactly when sampling
+//! accepts the circuit, and the union-find decoder explains every syndrome
 //! that some set of matching-graph edges produces.
 #![no_main]
 
@@ -39,8 +40,10 @@ fuzz_target!(|data: &[u8]| {
         };
     }
     let _ = c.to_stim().expect("every circuit exports");
-    let _ = sample_detectors(&c, 100, 1);
-    let _ = detector_error_model(&c, false).expect("every circuit has a model");
+    // Small circuits stay within every limit: a model exists exactly when
+    // the detectors and observables are deterministic, as for sampling.
+    let sampled = sample_detectors(&c, 100, 1).is_ok();
+    assert_eq!(detector_error_model(&c, false).is_ok(), sampled);
     let Ok(dem) = detector_error_model(&c, true) else {
         return;
     };
