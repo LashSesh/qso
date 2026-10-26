@@ -198,6 +198,22 @@ frame update for each gate is derived once.
   arrays across shots and resets only what a shot touched, so a shot
   costs time in proportion to its clusters, not to the graph. Peeling
   roots a cluster at the boundary only when its parity needs it.
+- **Matching.** The matching decoder pairs events by savings
+  s_ij = b_i + b_j − d_ij against the boundary (b: distance to the
+  boundary, precomputed by one Dijkstra from the boundary node). A
+  maximum-weight matching on the positive savings is a minimum-weight
+  correction, and pairs with d_ij ≥ b_i + b_j are never needed, which
+  bounds each search. Events without a path to the boundary pay a
+  stand-in cost larger than all their pairs together, so they are matched
+  whenever possible. Distance rows are cached per detector up to 2²¹
+  entries. The blossom algorithm is van Rantwijk's O(n³) primal-dual
+  method on integer weights (largest edge 2²⁰), so its dual updates are
+  exact.
+- **Stim import.** The text is parsed into a tree of instructions and
+  REPEAT blocks. The expanded operation count and the largest qubit are
+  computed before anything is built, so a short text cannot expand
+  beyond the limits. Other bases are rotated to Z around measurements
+  and resets.
 - **Logical error rates.** `logical_error_rate` samples in blocks of
   whole batches (at most 65 536 shots and 1 GiB of results) from one
   random stream, so it returns the same result as one call of
