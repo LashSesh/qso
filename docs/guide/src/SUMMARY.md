@@ -11,6 +11,7 @@
 
 - [Circuits and states](circuits.md)
 - [OpenQASM programs](programs.md)
+- [Stabilizer simulation and graph states](stabilizers.md)
 - [Parameters and gradients](gradients.md)
 - [Variational algorithms](variational.md)
 - [Excited states and state geometry](excited.md)

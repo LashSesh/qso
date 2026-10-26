@@ -4,6 +4,54 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+Milestone 1.7 of the [roadmap](docs/ROADMAP.md): stabilizer simulation
+and graph states. Every result is checked against the state-vector
+simulator, a closed form or the exact outcome distribution (named
+below).
+
+### Added
+
+- **Stabilizer simulation** (`stabilizer::StabilizerState`).
+  - Aaronson–Gottesman tableaux, bit-packed and stored by qubit, for up to
+    16 384 qubits.
+  - Clifford gates: H, S, S†, X, Y, Z, √X, √X†, SWAP, CX, CY, CZ, and
+    RX, RY, RZ, P, RXX, RYY, RZZ and U at multiples of π/2.
+  - Pauli and computational-basis measurements, reset, expectation
+    values of Pauli strings and sums, sampling every qubit from the
+    affine outcome space, conversion to a state vector up to 20 qubits.
+  - 200 random Clifford circuits on 1–8 qubits match the state-vector
+    simulator: states to fidelity 1 − 10⁻¹⁰, Pauli expectation values,
+    collapse after measurement, outcome supports. A GHZ state on 10 000
+    qubits has its known correlations.
+- **Graph states.** `graph_state` for any unweighted graph,
+  `local_complement` and `local_complementation`, and
+  `entanglement_entropy` from the GF(2) rank of the generators.
+  - The entropy equals the state-vector entropy and the cut-rank on six
+    graphs, and the cut-ranks of Q₁₀ (512) and C₁₀₀₀ (2).
+  - Local complementation equals the local Clifford of Hein, Eisert and
+    Briegel (2004).
+  - The graph state of Metatron's Cube (K₁₃) is a GHZ state up to local
+    Cliffords.
+- **Clifford programs** (`stabilizer::program`): OpenQASM programs made
+  of Clifford gates, mid-circuit measurement, reset and conditions
+  included, sampled on the tableau.
+  - `qso qasm --stabilizer`.
+  - The CLI, the WebAssembly module and the playground choose the
+    stabilizer simulator for Clifford programs too large for a state
+    vector.
+- **Python:** `StabilizerState`, `local_complementation`, `is_clifford`,
+  `Program.is_clifford` and `Program.sample(method=…)`.
+- **Tests:** the `openqasm` fuzz target also runs Clifford programs on
+  the stabilizer simulator against the exact distribution.
+- **Docs:** example `stabilizers` and the guide chapter "Stabilizer
+  simulation and graph states".
+
+### Changed
+
+- `quantum::Condition::holds` is public.
+
 ## [1.4.0] — 2026-10-25
 
 Milestones 1.4 (noise at scale and error mitigation), 1.5 (algorithms and

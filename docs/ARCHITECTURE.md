@@ -134,6 +134,33 @@ controlled phases. The phase of the whole program is dropped. Expansion
 counts operations and nesting depth, so hostile input fails with an error
 instead of exhausting memory or the stack.
 
+## Stabilizer tableaux (`stabilizer/`)
+
+A stabilizer state of n qubits is stored as Aaronson and Gottesman's
+tableau: n destabilizer and n stabilizer generators, each a signed Pauli
+string. The bits are stored by qubit: column `q` of the X part (and of
+the Z part) is a bit vector over the 2n rows, and the signs are one more
+such vector. A gate on qubits `a` and `b` is then a handful of word
+operations on two or four contiguous columns, O(n/32) words in all.
+
+Measurements need whole rows. `measure_pauli` transposes the tableau to
+rows in 64 × 64 bit blocks, runs the Aaronson–Gottesman update (row
+products with their phases summed word by word), and transposes back:
+O(n²/64) word operations.
+
+Sampling every qubit uses the structure of stabilizer states. Gaussian
+elimination of the stabilizers on their X parts leaves signed Z strings,
+which are parity constraints on the outcome. The outcomes are uniform
+over the solutions: a particular solution plus the span of a null-space
+basis. This is computed once, O(n³/64), and each shot is then a random
+combination of basis vectors.
+
+Graph states are built directly from their generators
+`X_v Π_{w∈N(v)} Z_w`, with destabilizers `Z_v`. Entanglement entropy
+across a bipartition is the GF(2) rank of the generators restricted to
+one side minus its size (Fattal et al. 2004); for graph states this is
+the cut-rank of the adjacency matrix.
+
 ## WebAssembly (`metatron_qso_wasm`)
 
 The core has no platform code beyond optional rayon, so it compiles for

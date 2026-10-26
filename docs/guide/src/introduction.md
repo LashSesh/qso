@@ -25,6 +25,7 @@ reports them in full.
 |---|---|
 | [Circuits and states](circuits.md) | Gates, simulation, sampling, observables, OpenQASM |
 | [OpenQASM programs](programs.md) | OpenQASM 2 and 3, mid-circuit measurement, reset, feed-forward |
+| [Stabilizer simulation and graph states](stabilizers.md) | Clifford circuits on thousands of qubits, graph states, local complementation, entanglement from cut-ranks |
 | [Parameters and gradients](gradients.md) | Symbolic parameters, adjoint and parameter-shift gradients |
 | [Variational algorithms](variational.md) | VQE, QAOA, variational and graph classifiers |
 | [Excited states and state geometry](excited.md) | VQD, SSVQE, quantum Fisher information, natural gradient, imaginary-time evolution |

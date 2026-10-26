@@ -28,7 +28,9 @@ These checks live in the test suites, which run on every change on Linux
   against the same OpenQASM examples and graph results.
 
 The OpenQASM reader runs the example programs of the OpenQASM project and
-checks their known results ([OpenQASM programs](programs.md)).
+checks their known results ([OpenQASM programs](programs.md)). The
+stabilizer simulator is checked against the state-vector simulator on
+random Clifford circuits ([Stabilizer simulation](stabilizers.md)).
 
 ## Cross-validation with other frameworks
 
