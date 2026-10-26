@@ -1,6 +1,6 @@
 {
   "name": "metatron-qso",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Validated quantum simulation in WebAssembly: OpenQASM 2/3 programs, graphs and their symmetry, continuous-time quantum walks and spatial search, including Metatron's Cube.",
   "type": "module",
   "main": "./index.js",

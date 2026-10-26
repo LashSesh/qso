@@ -8,7 +8,7 @@ authors:
 repository-code: "https://github.com/LashSesh/qso"
 url: "https://github.com/LashSesh/qso"
 license: Apache-2.0
-version: 1.5.0
+version: 1.5.1
 date-released: 2026-10-26
 keywords:
   - quantum computing

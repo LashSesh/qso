@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.5.1] — 2026-10-26
+
+### Fixed
+
+- **Release workflow:** the npm package was not published. `npm publish`
+  read the tarball path `npm/metatron-qso-X.Y.Z.tgz` as a GitHub
+  repository; the path is now `./npm/…`. The library is unchanged from
+  1.5.0, which is on crates.io and PyPI but not on npm.
+
 ## [1.5.0] — 2026-10-26
 
 Milestones 1.7 (stabilizer simulation and graph states) and 1.8
