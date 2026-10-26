@@ -361,10 +361,26 @@ Validation:
   reports PyMatching's logical error rates beside QSO's.
 
 Profiling during the milestone made error models of large circuits about
-13 times faster and decoding about 4 times faster. The error model now
-propagates up to 4096 errors per pass, walks the operations with a cursor
-instead of hash lookups, and reads signatures from set bits. The decoder
-keeps its allocations across shots.
+13 times faster: the error model now propagates up to 4096 errors per
+pass, walks the operations with a cursor instead of hash lookups, and
+reads signatures from set bits.
+
+An independent review compared the error models with Stim on 1495 random
+circuits and tested the sampler's joint outcome distribution on about 300
+random circuits, and found no wrong result there. It found:
+
+* union-find with weights rounded to integer steps misdecoded some
+  syndromes of (d − 1)/2 errors, and its logical error rate at d = 7 was
+  3.8 times PyMatching's; growth is now event-driven with exact weights,
+  and on the cross-validation circuits the rate is at most 6% above
+  PyMatching's;
+* unbounded memory in `logical_error_rate` for circuits with many
+  detectors, and in error models whose errors flip many detectors before
+  merging, and unbounded time for error models of long circuits;
+* error models of circuits with random detectors returned silently;
+* `to_stim` wrote tiny probabilities that Stim cannot read;
+* generators that allocated gigabytes before reaching the operation
+  limit.
 
 ### Research track (later)
 

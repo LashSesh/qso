@@ -38,14 +38,21 @@ Stim (named below).
     more than d/2 flips (all 2ᵈ patterns, d = 3 … 9).
   - Every single fault of the repetition code (d = 5) and of the surface
     code (d = 3, 5) is corrected, and every pair of faults at d = 5.
-  - Logical error rates are 10–28% above PyMatching's
+  - Growth is event-driven with exact weights.
+  - Logical error rates are at most 6% above PyMatching's
     (minimum-weight matching) on the cross-validation circuits.
+  - The weight-3 syndrome at d = 7 that a review found misdecoded by
+    rounded weights, and 20 000 random weight-3 sets, are corrected.
 - **Memory experiments** (`qec::repetition_code_memory`,
   `qec::surface_code_memory`) with circuit-level noise (`CircuitNoise`),
   and `qec::logical_error_rate`.
   - Rotated surface code under circuit-level noise p = 0.001: logical
-    error rates of 1.3·10⁻³, 1.9·10⁻⁴ and 1.0·10⁻⁴ at d = 3, 5, 7. At
-    p = 0.01, they rise with d. Both directions are validation tests.
+    error rates of 8.4·10⁻⁴, 1.4·10⁻⁴ and 2.1·10⁻⁵ at d = 3, 5, 7 (10⁶
+    shots). At p = 0.01, they rise with d. Both directions are validation
+    tests.
+- **Limits:** sampling, error models (signature entries, propagation
+  work) and the memory-experiment generators fail with an error before
+  they exhaust memory or run for hours.
 - **CLI:** `qso qec`.
 - **Python:** `DetectorCircuit`, `CircuitNoise`, `DetectorErrorModel`,
   `UnionFindDecoder` (with `decode_batch`), `LogicalErrorRate`,

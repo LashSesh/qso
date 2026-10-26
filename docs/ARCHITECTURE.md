@@ -189,14 +189,20 @@ frame update for each gate is derived once.
   of depolarizing channels into Paulis) take the XOR of their components'
   signatures, and terms with equal signatures merge.
 - **Decoding.** The matching graph has a node per detector plus one
-  boundary node. Union-find growth uses integer steps proportional to the
-  edge weights (the lightest edge takes two). The decoder keeps all its
+  boundary node. Union-find growth is event-driven: each round finds the
+  frontier edges of the growing clusters, advances all of them by the
+  smallest remaining length (divided by the number of clusters growing
+  into the edge) and merges along the edges that complete, so weights are
+  exact. Nodes whose edges are all inside their cluster are skipped from
+  then on. The decoder keeps all its
   arrays across shots and resets only what a shot touched, so a shot
   costs time in proportion to its clusters, not to the graph. Peeling
   roots a cluster at the boundary only when its parity needs it.
 - **Logical error rates.** `logical_error_rate` samples in blocks of
-  65 536 shots from one random stream, so it returns the same result as
-  one call of `sample_detectors` with the same seed, in bounded memory.
+  whole batches (at most 65 536 shots and 1 GiB of results) from one
+  random stream, so it returns the same result as one call of
+  `sample_detectors` with the same seed, in bounded memory. A batch is
+  1024 shots, or fewer when its frames and records would exceed 128 MiB.
 
 ## WebAssembly (`metatron_qso_wasm`)
 

@@ -28,8 +28,8 @@ ProjectQ, which the 2025 note listed, is not included: its last release
 - detector error models of repetition and surface-code memory experiments
   (exported with `DetectorCircuit.to_stim()`), term by term against Stim's,
   and their detection-event rates against Stim's sampler; QSO's union-find
-  logical error rate is reported next to PyMatching's, which is lower
-  (minimum-weight matching is the more accurate decoder).
+  logical error rate is reported next to PyMatching's (minimum-weight
+  matching).
 
 **Speed** (interleaved rounds, fresh process per measurement)
 - one layer (H and RZ on every qubit, CX chain) at 16–24 qubits;

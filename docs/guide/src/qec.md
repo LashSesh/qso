@@ -104,8 +104,11 @@ Nickerson (Quantum 5, 595 (2021)). It works on the matching graph:
 1. **Graph.** Detectors are nodes, plus one node for the boundary. Every
    error is an edge of weight ln((1 − p)/p).
 2. **Growth.** Every cluster with an odd number of detection events grows
-   along its edges, in steps proportional to their weights. A cluster
-   stops when it holds an even number of events or touches the boundary.
+   at unit rate along the edges leaving it, and an edge is covered when
+   the growth along it reaches its weight. A cluster stops when it holds
+   an even number of events or touches the boundary. Growth is
+   event-driven: every round advances all clusters to the next covered
+   edge, so the weights are used exactly rather than rounded to steps.
 3. **Peeling.** A spanning forest of each cluster is peeled from the
    leaves: an event at a leaf takes the edge to its parent into the
    correction.
@@ -125,11 +128,16 @@ assert r.errors == int((predicted != observables[:, 0]).sum())
 print(f"{r.rate:.4f} ± {r.standard_error:.4f}")
 ```
 
-Union-find runs in almost linear time, but it is less accurate than
-minimum-weight perfect matching. On the four circuits of the
-cross-validation, its logical error rate is 10–28% higher than
-PyMatching's. `logical_error_rate` samples in blocks of 65 536 shots, so
-its memory does not grow with the number of shots.
+Union-find runs in almost linear time. It is not a minimum-weight
+decoder, and with unequal weights it is not guaranteed to correct every
+error of weight below d/2. On the four circuits of the cross-validation,
+its logical error rate is at most 6% above PyMatching's (minimum-weight
+perfect matching). An earlier version rounded the weights to integer
+steps, and an independent review found syndromes of three errors at
+d = 7 that it misdecoded; exact growth fixed them, and a unit test keeps
+them fixed. `logical_error_rate` samples in blocks of at most 65 536
+shots and 1 GiB of results, so its memory does not grow with the number
+of shots.
 
 ## Memory experiments
 
@@ -157,18 +165,17 @@ detectors are the Z-type stabilizers, so the model is a matching graph
 for bit flips, and observable 0 is the logical Z, Z on the first row of
 data qubits.
 
-Under uniform circuit-level noise p (d rounds, 100 000 shots, seed 7;
-`cargo run --release --example surface_code`):
+Under uniform circuit-level noise p (d rounds, seed 7, 10⁶ shots at
+p = 0.001 and 10⁵ otherwise; `cargo run --release --example surface_code`):
 
 | p | d = 3 | d = 5 | d = 7 |
 |---|---|---|---|
-| 0.001 | 1.27·10⁻³ | 1.9·10⁻⁴ | 1.0·10⁻⁴ |
-| 0.003 | 9.2·10⁻³ | 4.6·10⁻³ | 3.3·10⁻³ |
-| 0.01 | 0.074 | 0.101 | 0.145 |
+| 0.001 | 8.4·10⁻⁴ | 1.4·10⁻⁴ | 2.1·10⁻⁵ |
+| 0.003 | 7.0·10⁻³ | 3.8·10⁻³ | 1.6·10⁻³ |
+| 0.01 | 0.062 | 0.086 | 0.109 |
 
 Below the threshold, larger codes fail less often. Above it, they fail
-more often. With union-find decoding, the threshold lies between 0.3% and
-1% (about 0.6% in the literature). The test
+more often. Here the threshold lies between 0.3% and 1%. The test
 `surface_codes_suppress_logical_errors_below_threshold` in
 `tests/validation.rs` checks both directions.
 
@@ -213,12 +220,14 @@ qso qec --code repetition --distance 9 --p 0.05 --stim rep9.stim
 | Operations | 2²⁴ |
 | Observables | 64 |
 | Results of one `sample` call | shots × (detectors + 64) ≤ 2³³ bits (1 GiB); in Python, shots × (detectors + observables) ≤ 2³⁰ |
-| Error components of a model | 2²² |
-| Code distance, rounds | 101, 10 000 |
+| Error components of a model | 2²²; their detector lists before merging, 2²⁷ entries (1 GiB); propagation, 2³⁴ word operations |
+| Code distance, rounds | 101, 10 000, and at most 2²⁴ operations (checked before building) |
 
 - **Sampling.** Each operation costs one word operation per 64 shots.
 - **Error model.** The model takes one pass through the circuit per 4096
-  error components.
+  error components, or more when the circuit has more than 4096
+  measurements (each pass holds its records).
 - **Example timing.** On one core, a distance-21 surface code with 21
-  rounds (881 qubits, 4840 detectors) needs about 0.4 s for its error
-  model and 9 s for 100 000 decoded shots at p = 0.001.
+  rounds (881 qubits, 4840 detectors) needs about 0.5 s for its error
+  model and 15 s for 100 000 decoded shots at p = 0.001. The error model
+  of d = 41 with 41 rounds (35 280 detectors) takes 30 s.

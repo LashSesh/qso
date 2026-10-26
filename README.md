@@ -123,11 +123,11 @@ or by the benchmark report you can run yourself.
 | GHZ state on 10 000 qubits (stabilizer simulator): ⟨Z₀Z₉₉₉₉⟩ / ⟨Z₄₃₂₁⟩ / ⟨X^⊗n⟩ | 1 / 0 / 1 | 1 / 0 / 1 |
 | Graph-state entanglement across the two halves of the hypercube Q₁₀ / of the cycle C₁₀₀₀ | 512 / 2 ebits | cut-rank over GF(2): 512 / 2 |
 | Random Clifford circuits (200, 1–8 qubits): stabilizer vs. state-vector simulator | fidelity 1 to 10⁻¹⁰ | — |
-| Rotated surface code, d rounds, circuit-level noise p = 0.001, union-find decoding: logical error rate at d = 3 / 5 / 7 | 1.3·10⁻³ / 1.9·10⁻⁴ / 1.0·10⁻⁴ (falls with d; rises with d at p = 0.01) | below threshold ⇔ falls with d |
+| Rotated surface code, d rounds, circuit-level noise p = 0.001, union-find decoding: logical error rate at d = 3 / 5 / 7 | 8.4·10⁻⁴ / 1.4·10⁻⁴ / 2.1·10⁻⁵ (10⁶ shots; falls with d; rises with d at p = 0.01) | below threshold ⇔ falls with d |
 | Repetition code, one round of bit flips, union-find decoding, all 2ᵈ error patterns (d = 3 … 9) | fails exactly on the patterns with more than d/2 flips | majority vote |
 | Detector error models of memory experiments vs. Stim | identical terms, probabilities to 10⁻¹⁵ relative | Stim 1.16 |
 
-The test-suite (376 Rust tests and 249 Python tests, run in CI on Linux
+The test-suite (379 Rust tests and 249 Python tests, run in CI on Linux
 (x86_64 and arm64), macOS and Windows) also checks:
 
 - every gate against an independent dense-matrix reference, and the QFT
@@ -427,7 +427,7 @@ Know its boundaries:
 |---|---|---|
 | Pure-state register | 34 qubits | 2³⁴ amplitudes = 256 GiB; practical limit is your RAM (16 bytes per amplitude) |
 | Stabilizer register | 16 384 qubits, Clifford gates only | n²/2 bytes, about twice that while measuring. A gate costs n/32 word operations, a measurement O(n²) (about a second at the limit), sampling every qubit O(n³/64) once (about two minutes at the limit) |
-| Detector circuit | 65 536 qubits, 2²⁴ operations, 64 observables | Pauli-frame sampling: one word operation per operation and 64 shots. Surface code d = 21 with 21 rounds (881 qubits, 4840 detectors): error model 0.4 s, 100 000 decoded shots 9 s on one core |
+| Detector circuit | 65 536 qubits, 2²⁴ operations, 64 observables | Pauli-frame sampling: one word operation per operation and 64 shots. Surface code d = 21 with 21 rounds (881 qubits, 4840 detectors): error model 0.5 s, 100 000 decoded shots 15 s on one core |
 | Density-matrix register | 14 qubits | 4¹⁴ entries = 4 GiB. Quantum trajectories reach the pure-state limit at the price of statistical error (and up to three state vectors in memory per running trajectory) |
 | Noise channels | one and two qubits | Kraus operators of channels on more qubits are not supported; noise after larger gates acts on consecutive pairs |
 | Probabilistic error cancellation | Pauli noise; overhead grows as Γ = Π γ | Twirling turns other noise into Pauli noise on average; the standard error grows with Γ, exponentially in the number of noisy gates |
