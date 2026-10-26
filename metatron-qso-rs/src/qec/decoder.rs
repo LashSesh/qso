@@ -270,8 +270,8 @@ impl UnionFindDecoder {
                 self.grown_at[b].push(e);
                 self.union(a, b);
             }
-            for k in 0..active.len() {
-                active[k] = self.find(active[k]);
+            for r in &mut active {
+                *r = self.find(*r);
             }
             active.sort_unstable();
             active.dedup();
