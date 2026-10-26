@@ -351,6 +351,9 @@ enum Command {
         code: CodeArg,
         #[arg(long, value_enum, default_value_t = DecoderArg::UnionFind)]
         decoder: DecoderArg,
+        /// Basis of the surface-code memory: z protects |0⟩_L, x |+⟩_L.
+        #[arg(long, value_enum, default_value_t = BasisArg::Z)]
+        basis: BasisArg,
         /// Code distances (odd for the surface code), e.g. 3,5,7.
         #[arg(long, value_delimiter = ',', default_value = "3,5")]
         distance: Vec<usize>,
@@ -373,6 +376,12 @@ enum Command {
         #[arg(long, conflicts_with = "stim")]
         circuit: Option<std::path::PathBuf>,
     },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum BasisArg {
+    Z,
+    X,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -1165,6 +1174,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
         Command::Qec {
             code,
             decoder,
+            basis,
             distance,
             rounds,
             p,
@@ -1217,7 +1227,15 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                     let noise = qec::CircuitNoise::uniform(prob);
                     let r = rounds.unwrap_or(d);
                     let circuit = match code {
-                        CodeArg::Surface => qec::surface_code_memory(d, r, &noise)?,
+                        CodeArg::Surface => qec::surface_code_memory_with(
+                            d,
+                            r,
+                            &noise,
+                            match basis {
+                                BasisArg::Z => qec::MemoryBasis::Z,
+                                BasisArg::X => qec::MemoryBasis::X,
+                            },
+                        )?,
                         CodeArg::Repetition => qec::repetition_code_memory(d, r, &noise)?,
                     };
                     if let Some(path) = stim.as_ref().filter(|_| rows.is_empty()) {

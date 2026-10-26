@@ -80,6 +80,18 @@ def test_matching_decodes_at_least_as_well_as_union_find() -> None:
     assert repr(matching).startswith("MatchingDecoder(detectors=")
 
 
+def test_x_basis_memory() -> None:
+    noise = q.CircuitNoise.uniform(0.003)
+    x = q.surface_code_memory(5, 5, noise, basis="x")
+    z = q.surface_code_memory(5, 5, noise)
+    assert x.n_detectors == z.n_detectors and x.to_stim() != z.to_stim()
+    rx = q.logical_error_rate(x, 20_000, seed=1, decoder="matching")
+    rz = q.logical_error_rate(z, 20_000, seed=1, decoder="matching")
+    assert 0.5 * rz.rate < rx.rate < 2 * rz.rate
+    with pytest.raises(ValueError, match="unknown basis"):
+        q.surface_code_memory(3, 3, basis="y")  # type: ignore[arg-type]
+
+
 def test_stim_circuits_import() -> None:
     c = q.surface_code_memory(3, 3, 0.002)
     back = q.DetectorCircuit.from_stim(c.to_stim())

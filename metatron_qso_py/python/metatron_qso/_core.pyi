@@ -1562,7 +1562,10 @@ def repetition_code_memory(
     distance: int, rounds: int, noise: Union[CircuitNoise, float, None] = None
 ) -> DetectorCircuit: ...
 def surface_code_memory(
-    distance: int, rounds: int, noise: Union[CircuitNoise, float, None] = None
+    distance: int,
+    rounds: int,
+    noise: Union[CircuitNoise, float, None] = None,
+    basis: Literal["z", "x", "Z", "X"] = "z",
 ) -> DetectorCircuit: ...
 def logical_error_rate(
     circuit: DetectorCircuit,

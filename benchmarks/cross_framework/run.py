@@ -216,6 +216,7 @@ def qec_vs_stim(quick: bool) -> dict:
         "repetition d=5, 4 rounds, p=0.02": q.repetition_code_memory(5, 4, 0.02),
         "surface d=3, 3 rounds, p=0.01": q.surface_code_memory(3, 3, 0.01),
         "surface d=5, 5 rounds, p=0.003": q.surface_code_memory(5, 5, 0.003),
+        "surface X basis d=5, 5 rounds, p=0.003": q.surface_code_memory(5, 5, 0.003, basis="x"),
         "surface d=5, 2 rounds, mixed noise": q.surface_code_memory(
             5,
             2,

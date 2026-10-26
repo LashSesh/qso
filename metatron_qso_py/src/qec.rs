@@ -3,7 +3,7 @@
 
 use metatron_qso::qec::{
     self, CircuitNoise, Decoder, DecoderKind, DetectorCircuit, DetectorErrorModel, MatchingDecoder,
-    MatchingGraph, Noise, UnionFindDecoder,
+    MatchingGraph, MemoryBasis, Noise, UnionFindDecoder,
 };
 use numpy::ndarray::Array2;
 use numpy::{AllowTypeChange, IntoPyArray, PyArray1, PyArray2, PyArrayLike2};
@@ -581,17 +581,28 @@ fn repetition_code_memory(
 }
 
 /// A rotated surface-code memory experiment of odd `distance` protecting
-/// `|0⟩_L`, with Z-type detectors and the logical Z as observable 0.
+/// `|0⟩_L` (`basis="z"`: Z-type detectors, the logical Z as observable 0)
+/// or `|+⟩_L` (`basis="x"`: X-type detectors, the logical X).
 #[pyfunction]
-#[pyo3(signature = (distance, rounds, noise = None))]
+#[pyo3(signature = (distance, rounds, noise = None, basis = "z"))]
 fn surface_code_memory(
     distance: usize,
     rounds: usize,
     noise: Option<NoiseArg>,
+    basis: &str,
 ) -> PyResult<PyDetectorCircuit> {
+    let basis = match basis {
+        "z" | "Z" => MemoryBasis::Z,
+        "x" | "X" => MemoryBasis::X,
+        other => {
+            return Err(invalid(format!(
+                "unknown basis {other:?}; use \"z\" or \"x\""
+            )));
+        }
+    };
     let noise = noise.map(NoiseArg::model).unwrap_or_default();
     Ok(PyDetectorCircuit {
-        inner: qec::surface_code_memory(distance, rounds, &noise).raise()?,
+        inner: qec::surface_code_memory_with(distance, rounds, &noise, basis).raise()?,
     })
 }
 

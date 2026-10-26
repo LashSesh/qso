@@ -8,8 +8,9 @@
 //! * [`MatchingGraph`], [`UnionFindDecoder`] and [`MatchingDecoder`]:
 //!   decoding by weighted union-find with peeling, or by exact
 //!   minimum-weight perfect matching;
-//! * [`repetition_code_memory`] and [`surface_code_memory`]: memory
-//!   experiments with circuit-level noise;
+//! * [`repetition_code_memory`] and [`surface_code_memory`]
+//!   ([`surface_code_memory_with`] for the X basis): memory experiments
+//!   with circuit-level noise;
 //! * [`logical_error_rate`] and [`logical_error_rate_with`]: sample,
 //!   decode and count;
 //! * [`DetectorCircuit::to_stim`]: export in Stim's text format.
@@ -23,7 +24,10 @@ pub mod matching;
 mod stim;
 
 pub use circuit::{DetectorCircuit, MAX_OBSERVABLES, Noise, QecOp};
-pub use codes::{CircuitNoise, repetition_code_memory, surface_code_memory};
+pub use codes::{
+    CircuitNoise, MemoryBasis, repetition_code_memory, surface_code_memory,
+    surface_code_memory_with,
+};
 pub use decoder::{MatchingEdge, MatchingGraph, UnionFindDecoder};
 pub use dem::{DetectorErrorModel, ErrorMechanism, detector_error_model};
 pub use frame::{DetectorSamples, sample_detectors};

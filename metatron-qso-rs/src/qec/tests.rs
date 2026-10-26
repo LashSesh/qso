@@ -848,3 +848,64 @@ fn stim_import_reads_blocks_bases_and_rejects_the_rest() {
         assert!(err.contains(what), "{bad:?}: {err}");
     }
 }
+
+#[test]
+fn x_basis_memory_corrects_low_weight_faults_and_has_a_threshold() {
+    let x = |d, r, p| {
+        surface_code_memory_with(d, r, &CircuitNoise::uniform(p), MemoryBasis::X).unwrap()
+    };
+    for d in [3, 5] {
+        let c = x(d, 3, 0.001);
+        assert_eq!(
+            c.n_detectors(),
+            surface_code_memory(d, 3, &CircuitNoise::uniform(0.001))
+                .unwrap()
+                .n_detectors()
+        );
+        let dem = detector_error_model(&c, true).unwrap();
+        let graph = MatchingGraph::from_dem(&dem).unwrap();
+        assert!(graph.undetectable().is_empty());
+        let mut uf = UnionFindDecoder::new(graph.clone());
+        let mut mwpm = MatchingDecoder::new(graph);
+        for e in &dem.errors {
+            assert_eq!(
+                uf.decode(&e.detectors).unwrap(),
+                e.observables,
+                "d={d}: {e:?}"
+            );
+            assert_eq!(
+                mwpm.decode(&e.detectors).unwrap(),
+                e.observables,
+                "d={d}: {e:?}"
+            );
+        }
+        if d == 5 {
+            let errs = &dem.errors;
+            for i in 0..errs.len() {
+                for j in i + 1..errs.len() {
+                    let mut fired = errs[i].detectors.clone();
+                    fired.extend(&errs[j].detectors);
+                    assert_eq!(
+                        mwpm.decode(&fired).unwrap(),
+                        errs[i].observables ^ errs[j].observables
+                    );
+                }
+            }
+        }
+    }
+    // Below threshold the rate falls with the distance; under uniform
+    // depolarizing noise it is close to the Z basis's.
+    let shots = 40_000;
+    let r3 = logical_error_rate_with(&x(3, 3, 0.003), shots, 2, DecoderKind::Matching).unwrap();
+    let r5 = logical_error_rate_with(&x(5, 5, 0.003), shots, 2, DecoderKind::Matching).unwrap();
+    assert!(
+        r5.rate + 3.0 * r5.standard_error < r3.rate - 3.0 * r3.standard_error,
+        "{r3:?} {r5:?}"
+    );
+    let z5 = surface_code_memory(5, 5, &CircuitNoise::uniform(0.003)).unwrap();
+    let z5 = logical_error_rate_with(&z5, shots, 2, DecoderKind::Matching).unwrap();
+    assert!(
+        r5.rate < 2.0 * z5.rate && z5.rate < 2.0 * r5.rate,
+        "{r5:?} vs {z5:?}"
+    );
+}
