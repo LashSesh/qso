@@ -634,3 +634,50 @@ fn stabilizer_states_at_scale() {
         1
     );
 }
+
+#[test]
+fn surface_codes_suppress_logical_errors_below_threshold() {
+    use metatron_qso::qec::{
+        CircuitNoise, logical_error_rate, repetition_code_memory, surface_code_memory,
+    };
+    let surface = |d: usize, p: f64, shots: usize| {
+        logical_error_rate(
+            &surface_code_memory(d, d, &CircuitNoise::uniform(p)).unwrap(),
+            shots,
+            7,
+        )
+        .unwrap()
+    };
+    // Rotated surface code, d rounds, circuit-level depolarizing noise
+    // p = 0.001 on every gate, reset, measurement and idle data qubit:
+    // the union-find decoder's logical error rate falls with the distance.
+    let below: Vec<_> = [3, 5, 7]
+        .iter()
+        .map(|&d| surface(d, 0.001, 100_000))
+        .collect();
+    assert!((1.0e-3..1.6e-3).contains(&below[0].rate), "{:?}", below[0]);
+    assert!((1.2e-4..3.0e-4).contains(&below[1].rate), "{:?}", below[1]);
+    assert!(
+        below[1].rate + 3.0 * below[1].standard_error
+            < below[0].rate - 3.0 * below[0].standard_error
+    );
+    assert!(below[2].rate <= below[1].rate);
+    // Above the threshold (p = 0.01) larger codes fail more often.
+    let above: Vec<_> = [3, 5, 7]
+        .iter()
+        .map(|&d| surface(d, 0.01, 20_000))
+        .collect();
+    for w in above.windows(2) {
+        assert!(w[0].rate + 3.0 * w[0].standard_error < w[1].rate - 3.0 * w[1].standard_error);
+    }
+    assert!((0.065..0.085).contains(&above[0].rate), "{:?}", above[0]);
+    // The repetition code at p = 0.01 (bit flips only matter).
+    let rep: Vec<f64> = [3, 5, 9]
+        .iter()
+        .map(|&d| {
+            let c = repetition_code_memory(d, d, &CircuitNoise::uniform(0.01)).unwrap();
+            logical_error_rate(&c, 100_000, 7).unwrap().rate
+        })
+        .collect();
+    assert!(rep[0] > 3.0 * rep[1] && rep[1] > 3.0 * rep[2], "{rep:?}");
+}

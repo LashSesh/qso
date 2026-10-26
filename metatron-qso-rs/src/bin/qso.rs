@@ -22,6 +22,7 @@ use metatron_qso::mitigation::pec::pec_expectation;
 use metatron_qso::mitigation::zne::{Extrapolation, Folding, zne};
 use metatron_qso::noise::{DeviceModel, NoiseModel};
 use metatron_qso::optimize::{Method, Options};
+use metatron_qso::qec;
 use metatron_qso::quantum::{
     Circuit, PauliSum, Program, bitstring, from_qasm2, record_bitstring, to_qasm2,
 };
@@ -335,6 +336,36 @@ enum Command {
         #[arg(long)]
         output: Option<std::path::PathBuf>,
     },
+    /// Memory experiment of a repetition or rotated surface code under
+    /// circuit-level depolarizing noise: sampled with Pauli frames and
+    /// decoded by union-find.
+    Qec {
+        #[arg(long, value_enum, default_value_t = CodeArg::Surface)]
+        code: CodeArg,
+        /// Code distances (odd for the surface code), e.g. 3,5,7.
+        #[arg(long, value_delimiter = ',', default_value = "3,5")]
+        distance: Vec<usize>,
+        /// Rounds of syndrome extraction (default: the distance).
+        #[arg(long)]
+        rounds: Option<usize>,
+        /// Noise probabilities, e.g. 0.001,0.01.
+        #[arg(long, value_delimiter = ',', default_value = "0.001")]
+        p: Vec<f64>,
+        #[arg(long, default_value_t = 100_000)]
+        shots: usize,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        /// Write the circuit (first distance and probability) in Stim's
+        /// text format.
+        #[arg(long)]
+        stim: Option<std::path::PathBuf>,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum CodeArg {
+    Surface,
+    Repetition,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -1076,6 +1107,52 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 }),
                 lines.join("\n"),
             ))
+        }
+        Command::Qec {
+            code,
+            distance,
+            rounds,
+            p,
+            shots,
+            seed,
+            stim,
+        } => {
+            let mut rows = Vec::new();
+            let mut lines = Vec::new();
+            for &prob in p {
+                for &d in distance {
+                    let noise = qec::CircuitNoise::uniform(prob);
+                    let r = rounds.unwrap_or(d);
+                    let circuit = match code {
+                        CodeArg::Surface => qec::surface_code_memory(d, r, &noise)?,
+                        CodeArg::Repetition => qec::repetition_code_memory(d, r, &noise)?,
+                    };
+                    if let Some(path) = stim.as_ref().filter(|_| rows.is_empty()) {
+                        std::fs::write(path, circuit.to_stim()?).map_err(|e| {
+                            QsoError::invalid("stim", format!("{}: {e}", path.display()))
+                        })?;
+                    }
+                    let rate = qec::logical_error_rate(&circuit, *shots, *seed)?;
+                    lines.push(format!(
+                        "p = {prob}, d = {d}, {r} rounds: {} qubits, {} detectors; logical error rate {:.3e} ± {:.1e} ({} of {} shots)",
+                        circuit.n_qubits(),
+                        circuit.n_detectors(),
+                        rate.rate,
+                        rate.standard_error,
+                        rate.errors,
+                        rate.shots
+                    ));
+                    rows.push(json!({
+                        "p": prob,
+                        "distance": d,
+                        "rounds": r,
+                        "qubits": circuit.n_qubits(),
+                        "detectors": circuit.n_detectors(),
+                        "logical_error_rate": rate,
+                    }));
+                }
+            }
+            Ok((json!(rows), lines.join("\n")))
         }
         Command::Trotter {
             hamiltonian,

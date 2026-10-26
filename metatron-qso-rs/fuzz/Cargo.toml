@@ -70,3 +70,10 @@ path = "fuzz_targets/openqasm.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "qec"
+path = "fuzz_targets/qec.rs"
+test = false
+doc = false
+bench = false

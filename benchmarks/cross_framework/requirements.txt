@@ -9,3 +9,5 @@ pennylane==0.45.1
 pennylane-lightning==0.45.0
 thewalrus==0.22.0
 numpy==2.5.4
+stim==1.16.0
+pymatching==2.4.0

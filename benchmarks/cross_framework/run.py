@@ -33,7 +33,7 @@ import frameworks as fw  # noqa: E402
 
 PACKAGES = [
     "metatron-qso", "qiskit", "qiskit-aer", "qulacs", "cirq-core", "pennylane",
-    "pennylane-lightning", "thewalrus", "numpy", "projectq",
+    "pennylane-lightning", "thewalrus", "numpy", "projectq", "stim", "pymatching",
 ]
 
 # ----------------------------------------------------------------------------
@@ -194,7 +194,71 @@ def correctness(quick: bool) -> dict:
             "noise_models": noise_models,
             "max_density_matrix_difference_vs_qiskit_aer": density_diff,
         },
+        "qec_vs_stim": qec_vs_stim(quick),
     }
+
+
+def qec_vs_stim(quick: bool) -> dict:
+    """Detector error models and detection-event rates of QSO's memory
+    experiments against Stim on the exported circuits, and QSO's union-find
+    logical error rate next to PyMatching's (minimum-weight matching)."""
+    import pymatching
+    import stim
+
+    import metatron_qso as q
+
+    shots = 100_000 if quick else 1_000_000
+    cases = {
+        "repetition d=5, 4 rounds, p=0.02": q.repetition_code_memory(5, 4, 0.02),
+        "surface d=3, 3 rounds, p=0.01": q.surface_code_memory(3, 3, 0.01),
+        "surface d=5, 5 rounds, p=0.003": q.surface_code_memory(5, 5, 0.003),
+        "surface d=5, 2 rounds, mixed noise": q.surface_code_memory(
+            5,
+            2,
+            q.CircuitNoise(
+                after_gate1=0.004, after_gate2=0.01, measurement=0.02, after_reset=0.003, before_round=0.005
+            ),
+        ),
+    }
+
+    def merge(model: dict, key: tuple, p: float) -> None:
+        e = model.get(key, 0.0)
+        model[key] = e * (1 - p) + p * (1 - e)
+
+    out = {}
+    for name, c in cases.items():
+        sc = stim.Circuit(c.to_stim())
+        theirs: dict = {}
+        for inst in sc.detector_error_model(decompose_errors=False).flattened():
+            if inst.type != "error":
+                continue
+            targets = inst.targets_copy()
+            dets = tuple(sorted(t.val for t in targets if t.is_relative_detector_id()))
+            obs = sum(1 << t.val for t in targets if t.is_logical_observable_id())
+            merge(theirs, (dets, obs), inst.args_copy()[0])
+        ours: dict = {}
+        for p, dets, obs in c.detector_error_model().errors:
+            merge(ours, (tuple(dets), obs), p)
+        keys = set(theirs) | set(ours)
+        dem_diff = max(abs(theirs.get(k, 0.0) - ours.get(k, 0.0)) / max(theirs.get(k, 0.0), ours.get(k, 0.0)) for k in keys)
+        det, _ = c.sample(shots, seed=1)
+        ref = sc.compile_detector_sampler(seed=2).sample(shots)
+        a, b = det.mean(axis=0), ref.mean(axis=0)
+        sigma = np.sqrt(np.maximum(a * (1 - a) + b * (1 - b), 1e-300) / shots)
+        matching = pymatching.Matching.from_detector_error_model(sc.detector_error_model(decompose_errors=True))
+        d2, o2 = sc.compile_detector_sampler(seed=3).sample(shots, separate_observables=True)
+        mwpm = float(np.mean(np.any(matching.decode_batch(d2) != o2, axis=1)))
+        out[name] = {
+            "detectors": c.n_detectors,
+            "error_mechanisms": len(ours),
+            "error_mechanisms_only_one_side": sum(1 for k in keys if k not in theirs or k not in ours),
+            "max_relative_probability_difference": dem_diff,
+            "max_detector_rate_z_score": float(np.max(np.abs(a - b) / sigma)),
+            "shots": shots,
+            "logical_error_rate_union_find": q.logical_error_rate(c, shots, seed=4).rate,
+            "logical_error_rate_pymatching": mwpm,
+        }
+    return out
 
 
 # Largest accepted deviations for --check (all are rounding-level).
@@ -203,6 +267,9 @@ TOLERANCES = {
     "gradient": 1e-12,
     "permanent": 1e-10,
     "density_matrix": 1e-12,
+    "error_model": 1e-12,
+    # Detection-event rates are sampled: |z| over up to 72 detectors.
+    "detector_rate_z": 5.0,
 }
 
 
@@ -220,6 +287,11 @@ def check(c: dict) -> list[str]:
     d = c["noisy_circuits"]["max_density_matrix_difference_vs_qiskit_aer"]
     if not d <= TOLERANCES["density_matrix"]:
         failures.append(f"noisy density matrices differ from Qiskit Aer by {d:.3g}")
+    for name, r in c["qec_vs_stim"].items():
+        if r["error_mechanisms_only_one_side"] or not r["max_relative_probability_difference"] <= TOLERANCES["error_model"]:
+            failures.append(f"detector error model of {name} differs from Stim's: {r}")
+        if not r["max_detector_rate_z_score"] <= TOLERANCES["detector_rate_z"]:
+            failures.append(f"detection-event rates of {name} differ from Stim's: {r}")
     return failures
 
 
