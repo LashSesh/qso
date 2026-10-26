@@ -90,7 +90,8 @@ pub struct Condition {
 }
 
 impl Condition {
-    fn holds(&self, record: u64) -> bool {
+    /// Whether the condition holds for the classical record `record`.
+    pub fn holds(&self, record: u64) -> bool {
         let v = self
             .bits
             .iter()

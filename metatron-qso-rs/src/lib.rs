@@ -59,8 +59,10 @@ pub mod noise;
 pub mod optimize;
 pub(crate) mod parallel;
 pub mod photonics;
+pub mod qec;
 pub mod quantum;
 pub mod rng;
+pub mod stabilizer;
 pub mod walks;
 
 pub use error::{QsoError, Result};

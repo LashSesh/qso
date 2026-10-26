@@ -4,6 +4,108 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.5.0] — 2026-10-26
+
+Milestones 1.7 (stabilizer simulation and graph states) and 1.8
+(error-correction experiments) of the [roadmap](docs/ROADMAP.md). Every
+result is checked against an independent reference — the state-vector
+simulator, the tableau simulator, a closed form, exact enumeration or
+Stim (named below). No validated result of earlier releases changed.
+
+### Added — error-correction experiments (milestone 1.8)
+
+- **Detector circuits** (`qec::DetectorCircuit`): Clifford gates, X/Y/Z
+  errors, one- and two-qubit depolarizing noise, noisy measurements,
+  resets, detectors and up to 64 logical observables; `append_circuit`
+  for any Clifford `Circuit`; `to_stim` writes Stim's text format.
+- **Pauli-frame sampling** (`qec::sample_detectors`): 64 shots per word;
+  rejects detectors and observables that are not deterministic without
+  noise.
+  - Detection events and observable flips match shot-by-shot simulation
+    on the tableau, with explicitly sampled errors, on random noisy
+    Clifford circuits and on memory experiments.
+- **Detector error models** (`qec::detector_error_model`): the exact
+  decomposition of depolarizing channels into independent Pauli errors,
+  propagation of every error, merging of equal effects, and an optional
+  decomposition into graphlike parts.
+  - On four repetition and surface-code memory experiments, the models
+    equal Stim 1.16's term by term (probabilities to 10⁻¹⁵ relative), and
+    detection-event rates agree with Stim's sampler; this is part of the
+    scheduled cross-validation.
+- **Union-find decoder** (`qec::UnionFindDecoder`, `qec::MatchingGraph`):
+  weighted growth and peeling (Delfosse and Nickerson 2021).
+  - On the repetition code, it fails on exactly the error patterns with
+    more than d/2 flips (all 2ᵈ patterns, d = 3 … 9).
+  - Every single fault of the repetition code (d = 5) and of the surface
+    code (d = 3, 5) is corrected, and every pair of faults at d = 5.
+  - Growth is event-driven with exact weights.
+  - Logical error rates are at most 6% above PyMatching's
+    (minimum-weight matching) on the cross-validation circuits.
+  - The weight-3 syndrome at d = 7 that a review found misdecoded by
+    rounded weights, and 20 000 random weight-3 sets, are corrected.
+- **Memory experiments** (`qec::repetition_code_memory`,
+  `qec::surface_code_memory`) with circuit-level noise (`CircuitNoise`),
+  and `qec::logical_error_rate`.
+  - Rotated surface code under circuit-level noise p = 0.001: logical
+    error rates of 8.4·10⁻⁴, 1.4·10⁻⁴ and 2.1·10⁻⁵ at d = 3, 5, 7 (10⁶
+    shots). At p = 0.01, they rise with d. Both directions are validation
+    tests.
+- **Limits:** sampling, error models (signature entries, propagation
+  work) and the memory-experiment generators fail with an error before
+  they exhaust memory or run for hours.
+- **CLI:** `qso qec`.
+- **Python:** `DetectorCircuit`, `CircuitNoise`, `DetectorErrorModel`,
+  `UnionFindDecoder` (with `decode_batch`), `LogicalErrorRate`,
+  `repetition_code_memory`, `surface_code_memory`, `logical_error_rate`.
+- **Tests:** fuzz target `qec`. It builds circuits from random bytes,
+  samples them, builds their models, and checks that the decoder
+  explains every syndrome of matching-graph edges.
+- **Docs:** example `surface_code`, guide chapter "Error-correction
+  experiments", and a Stim and PyMatching section in the cross-framework
+  comparison.
+
+### Added — stabilizer simulation (milestone 1.7)
+
+- **Stabilizer simulation** (`stabilizer::StabilizerState`).
+  - Aaronson–Gottesman tableaux, bit-packed and stored by qubit, for up to
+    16 384 qubits.
+  - Clifford gates: H, S, S†, X, Y, Z, √X, √X†, SWAP, CX, CY, CZ, and
+    RX, RY, RZ, P, RXX, RYY, RZZ and U at multiples of π/2.
+  - Pauli and computational-basis measurements, reset, expectation
+    values of Pauli strings and sums, sampling every qubit from the
+    affine outcome space, conversion to a state vector up to 20 qubits.
+  - 200 random Clifford circuits on 1–8 qubits match the state-vector
+    simulator: states to fidelity 1 − 10⁻¹⁰, Pauli expectation values,
+    collapse after measurement, outcome supports. A GHZ state on 10 000
+    qubits has its known correlations.
+- **Graph states.** `graph_state` for any unweighted graph,
+  `local_complement` and `local_complementation`, and
+  `entanglement_entropy` from the GF(2) rank of the generators.
+  - The entropy equals the state-vector entropy and the cut-rank on six
+    graphs, and the cut-ranks of Q₁₀ (512) and C₁₀₀₀ (2).
+  - Local complementation equals the local Clifford of Hein, Eisert and
+    Briegel (2004).
+  - The graph state of Metatron's Cube (K₁₃) is a GHZ state up to local
+    Cliffords.
+- **Clifford programs** (`stabilizer::program`): OpenQASM programs made
+  of Clifford gates, mid-circuit measurement, reset and conditions
+  included, sampled on the tableau.
+  - `qso qasm --stabilizer`.
+  - The CLI, the WebAssembly module and the playground choose the
+    stabilizer simulator for Clifford programs too large for a state
+    vector.
+- **Python:** `StabilizerState`, `local_complementation`, `is_clifford`,
+  `Program.is_clifford` and `Program.sample(method=…)`.
+- **Tests:** the `openqasm` fuzz target also runs Clifford programs on
+  the stabilizer simulator; every record must have non-zero exact
+  probability.
+- **Docs:** example `stabilizers` and the guide chapter "Stabilizer
+  simulation and graph states".
+
+### Changed
+
+- `quantum::Condition::holds` is public.
+
 ## [1.4.0] — 2026-10-25
 
 Milestones 1.4 (noise at scale and error mitigation), 1.5 (algorithms and

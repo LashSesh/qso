@@ -6,6 +6,7 @@ use metatron_qso::quantum::{
     Circuit, GateKind, MAX_QUBITS, Param, Parameter, PauliString, PauliSum, Program, Register,
     from_qasm2, record_bitstring, to_qasm2, to_qasm3,
 };
+use metatron_qso::stabilizer::program::{is_clifford_program, sample_program};
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
@@ -637,20 +638,44 @@ impl PyProgram {
         Ok(d)
     }
 
+    /// Whether every gate is a Clifford gate (the program then runs on the
+    /// stabilizer simulator).
+    #[getter]
+    fn is_clifford(&self) -> bool {
+        is_clifford_program(&self.inner)
+    }
+
     /// `shots` (at most 10⁷) seeded samples of the classical record,
-    /// `{bitstring: count}`.
-    #[pyo3(signature = (shots, seed = 0))]
+    /// `{bitstring: count}`. `method` is `"statevector"`, `"stabilizer"`
+    /// (Clifford programs, up to 16384 qubits) or `"auto"`: the stabilizer
+    /// simulator for Clifford programs too large for a state vector.
+    #[pyo3(signature = (shots, seed = 0, method = "auto"))]
     fn sample<'py>(
         &self,
         py: Python<'py>,
         shots: usize,
         seed: u64,
+        method: &str,
     ) -> PyResult<Bound<'py, PyDict>> {
         if shots > 10_000_000 {
             return Err(invalid("shots must be at most 10⁷"));
         }
         let p = &self.inner;
-        let counts = py.detach(|| p.sample(shots, seed)).raise()?;
+        let tableau = match method {
+            "statevector" => false,
+            "stabilizer" => true,
+            "auto" => p.n_qubits() > MAX_QUBITS && is_clifford_program(p),
+            other => {
+                return Err(invalid(format!(
+                    "unknown method '{other}' (use auto, statevector or stabilizer)"
+                )));
+            }
+        };
+        let counts = if tableau {
+            py.detach(|| sample_program(p, shots, seed)).raise()?
+        } else {
+            py.detach(|| p.sample(shots, seed)).raise()?
+        };
         let d = PyDict::new(py);
         for (record, n) in counts {
             d.set_item(record_bitstring(record, p.n_bits()), n)?;

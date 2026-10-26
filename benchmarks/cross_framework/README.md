@@ -11,6 +11,8 @@ same workloads. The results enter the technical note
 | Cirq 1.7 (built-in simulator) | state vectors, timing up to 20 qubits |
 | PennyLane Lightning 0.45 | state vectors, adjoint gradients, timing |
 | The Walrus 0.22 | permanents |
+| Stim 1.16 | detector error models, detection-event rates |
+| PyMatching 2.4 | logical error rates (minimum-weight matching, for reference) |
 
 ProjectQ, which the 2025 note listed, is not included: its last release
 (0.8.0, 2022) does not build on current CPython.
@@ -22,7 +24,12 @@ ProjectQ, which the 2025 note listed, is not included: its last release
   H, X, Y, Z, S, T, RX, RY, RZ, CX, CZ, SWAP);
 - energy and gradient of a 10-qubit transverse-field Ising model with a
   100-parameter ansatz;
-- permanents of random complex matrices up to 12 × 12.
+- permanents of random complex matrices up to 12 × 12;
+- detector error models of repetition and surface-code memory experiments
+  (exported with `DetectorCircuit.to_stim()`), term by term against Stim's,
+  and their detection-event rates against Stim's sampler; QSO's union-find
+  logical error rate is reported next to PyMatching's (minimum-weight
+  matching).
 
 **Speed** (interleaved rounds, fresh process per measurement)
 - one layer (H and RZ on every qubit, CX chain) at 16–24 qubits;

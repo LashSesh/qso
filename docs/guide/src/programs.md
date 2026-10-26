@@ -133,7 +133,7 @@ round trip on random programs.
 
 | Limit | Value |
 |---|---|
-| Declared qubits | 2¹⁴ (simulation: 34 qubits, 26 in WebAssembly) |
+| Declared qubits | 2¹⁴ (simulation: 34 qubits, 26 in WebAssembly; all 2¹⁴ for Clifford programs on the [stabilizer simulator](stabilizers.md)) |
 | Classical bits | 64 |
 | Operations after expanding gate definitions | 2²² |
 | Exact distribution | up to 4096 measurement branches and 2²⁶ amplitudes held at once |

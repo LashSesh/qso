@@ -584,3 +584,145 @@ fn vqd_finds_every_level_of_h2() {
         assert!(close(*e, *reference, 1e-6), "{e} vs {reference}");
     }
 }
+
+#[test]
+fn stabilizer_states_at_scale() {
+    use metatron_qso::graph::generators::from_spec;
+    use metatron_qso::stabilizer::{StabilizerState, local_complementation};
+    // GHZ state on 10 000 qubits: every ZZ correlation is +1, single Z
+    // expectations vanish, and X^⊗n stabilizes it.
+    let n = 10_000;
+    let mut ghz = StabilizerState::zero(n).unwrap();
+    ghz.h(0).unwrap();
+    for q in 1..n {
+        ghz.cx(q - 1, q).unwrap();
+    }
+    assert_eq!(ghz.expectation_str("Z0 Z9999").unwrap(), 1.0);
+    assert_eq!(ghz.expectation_str("Z4321").unwrap(), 0.0);
+    let all_x: String = (0..n).map(|q| format!("X{q} ")).collect();
+    assert_eq!(ghz.expectation_str(&all_x).unwrap(), 1.0);
+    // Graph-state entanglement equals the cut-rank over GF(2): the
+    // hypercube Q10 split into two Q9 halves is joined by a perfect
+    // matching (rank 512); a cycle split into two arcs by two edges.
+    let q10 = StabilizerState::graph_state(&from_spec("hypercube:10").unwrap()).unwrap();
+    assert_eq!(
+        q10.entanglement_entropy(&(0..512).collect::<Vec<_>>())
+            .unwrap(),
+        512
+    );
+    let c1000 = StabilizerState::graph_state(&from_spec("cycle:1000").unwrap()).unwrap();
+    assert_eq!(
+        c1000
+            .entanglement_entropy(&(0..500).collect::<Vec<_>>())
+            .unwrap(),
+        2
+    );
+    // Metatron's Cube (K13) is a GHZ state up to local Cliffords: local
+    // complementation at a node leaves the star.
+    let k13 = from_spec("metatron").unwrap();
+    let star = local_complementation(&k13, 0).unwrap();
+    assert_eq!((star.num_edges(), star.degree(0)), (12, 12));
+    let mut s = StabilizerState::graph_state(&k13).unwrap();
+    s.local_complement(&k13, 0).unwrap();
+    assert!(s.same_state(&StabilizerState::graph_state(&star).unwrap()));
+    // Every bipartition of the K13 graph state carries exactly one ebit.
+    assert_eq!(
+        StabilizerState::graph_state(&k13)
+            .unwrap()
+            .entanglement_entropy(&[0, 1, 2, 3, 4, 5])
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn surface_codes_suppress_logical_errors_below_threshold() {
+    use metatron_qso::qec::{
+        CircuitNoise, logical_error_rate, repetition_code_memory, surface_code_memory,
+    };
+    let surface = |d: usize, p: f64, shots: usize| {
+        logical_error_rate(
+            &surface_code_memory(d, d, &CircuitNoise::uniform(p)).unwrap(),
+            shots,
+            7,
+        )
+        .unwrap()
+    };
+    // Rotated surface code, d rounds, circuit-level depolarizing noise
+    // p = 0.001 on every gate, reset, measurement and idle data qubit:
+    // the union-find decoder's logical error rate falls with the distance
+    // (10⁶ shots, seed 7).
+    let below: Vec<_> = [3, 5, 7]
+        .iter()
+        .map(|&d| surface(d, 0.001, 1_000_000))
+        .collect();
+    assert!((7.5e-4..9.5e-4).contains(&below[0].rate), "{:?}", below[0]);
+    assert!((1.15e-4..1.7e-4).contains(&below[1].rate), "{:?}", below[1]);
+    assert!((1.2e-5..3.2e-5).contains(&below[2].rate), "{:?}", below[2]);
+    for w in below.windows(2) {
+        assert!(w[1].rate + 3.0 * w[1].standard_error < w[0].rate - 3.0 * w[0].standard_error);
+    }
+    // Above the threshold (p = 0.01) larger codes fail more often.
+    let above: Vec<_> = [3, 5, 7]
+        .iter()
+        .map(|&d| surface(d, 0.01, 20_000))
+        .collect();
+    for w in above.windows(2) {
+        assert!(w[0].rate + 3.0 * w[0].standard_error < w[1].rate - 3.0 * w[1].standard_error);
+    }
+    assert!((0.055..0.07).contains(&above[0].rate), "{:?}", above[0]);
+    // The repetition code at p = 0.01 (bit flips only matter).
+    let rep: Vec<f64> = [3, 5, 9]
+        .iter()
+        .map(|&d| {
+            let c = repetition_code_memory(d, d, &CircuitNoise::uniform(0.01)).unwrap();
+            logical_error_rate(&c, 100_000, 7).unwrap().rate
+        })
+        .collect();
+    assert!(rep[0] > 3.0 * rep[1] && rep[1] > 3.0 * rep[2], "{rep:?}");
+}
+
+#[test]
+fn union_find_decodes_the_repetition_code_by_majority_vote() {
+    use metatron_qso::qec::{
+        CircuitNoise, MatchingGraph, UnionFindDecoder, detector_error_model, repetition_code_memory,
+    };
+    // One round with bit flips on the data only: every error pattern of
+    // d bits is enumerated, and the decoder fails exactly when more than
+    // half of the bits flipped.
+    for d in [3usize, 5, 7, 9] {
+        let c = repetition_code_memory(d, 1, &CircuitNoise::data_only(0.3)).unwrap();
+        let dem = detector_error_model(&c, true).unwrap();
+        assert_eq!(dem.errors.len(), d);
+        let mut decoder = UnionFindDecoder::new(MatchingGraph::from_dem(&dem).unwrap());
+        let mut failures_by_weight = vec![0usize; d + 1];
+        for pattern in 0u32..(1 << d) {
+            let mut fired = std::collections::BTreeSet::new();
+            let mut flips = 0;
+            for (k, e) in dem.errors.iter().enumerate() {
+                if (pattern >> k) & 1 == 1 {
+                    for &det in &e.detectors {
+                        if !fired.remove(&det) {
+                            fired.insert(det);
+                        }
+                    }
+                    flips ^= e.observables;
+                }
+            }
+            let fired: Vec<usize> = fired.into_iter().collect();
+            let predicted = if fired.is_empty() {
+                0
+            } else {
+                decoder.decode(&fired).unwrap()
+            };
+            if predicted != flips {
+                failures_by_weight[pattern.count_ones() as usize] += 1;
+            }
+        }
+        // Weight k fails for all C(d, k) patterns if k > d/2, never otherwise.
+        for (k, &f) in failures_by_weight.iter().enumerate() {
+            let binom = (0..k).fold(1usize, |b, i| b * (d - i) / (i + 1));
+            assert_eq!(f, if 2 * k > d { binom } else { 0 }, "d = {d}, weight {k}");
+        }
+    }
+}

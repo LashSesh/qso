@@ -37,7 +37,7 @@ module in a Web Worker.
 
 | Method | Result |
 | --- | --- |
-| `qasm(source, {shots, seed})` | Exact outcome probabilities of the classical bits, seeded samples, the final state of a program without measurements, and the program as OpenQASM 3 and (when possible) OpenQASM 2. Beyond 4096 measurement branches the probabilities are `null` and the shots are simulated one by one |
+| `qasm(source, {shots, seed})` | Exact outcome probabilities of the classical bits, seeded samples, the final state of a program without measurements, and the program as OpenQASM 3 and (when possible) OpenQASM 2. Beyond 4096 measurement branches the probabilities are `null` and the shots are simulated one by one. Clifford programs with more than 26 qubits run on the stabilizer simulator (thousands of qubits; `method: "stabilizer"`, shots only) |
 | `graph(graph)` | Nodes, edges, positions, summary, automorphism group order and orbits, adjacency and Laplacian spectra, strongly regular parameters |
 | `walk(graph, {start, times, gamma, generator})` | Node probabilities of `exp(−iHt)` from `start` at each time, and the limiting distribution |
 | `search(graph, marked, {gamma, generator, tMax, points})` | Best hopping rate (unless given) and time, success probability, and the success curve over `[0, tMax]` |
@@ -59,7 +59,8 @@ Results are plain objects; JavaScript lists keys that look like integers
 
 - Programs: OpenQASM 2, and the OpenQASM 3 subset of QSO (gates and
   gate definitions, modifiers, measurement, reset and simple
-  conditions); at most 26 qubits in WebAssembly's 4 GiB address space.
+  conditions); at most 26 qubits in WebAssembly's 4 GiB address space,
+  and up to 16384 for Clifford programs (stabilizer simulator).
 - Graphs: at most 2048 nodes, because spectra and walks use dense
   eigendecompositions.
 - At most 10⁶ shots and 10⁴ times or curve points per call.

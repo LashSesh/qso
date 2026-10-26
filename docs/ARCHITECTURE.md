@@ -134,6 +134,76 @@ controlled phases. The phase of the whole program is dropped. Expansion
 counts operations and nesting depth, so hostile input fails with an error
 instead of exhausting memory or the stack.
 
+## Stabilizer tableaux (`stabilizer/`)
+
+A stabilizer state of n qubits is stored as Aaronson and Gottesman's
+tableau: n destabilizer and n stabilizer generators, each a signed Pauli
+string. The bits are stored by qubit: column `q` of the X part (and of
+the Z part) is a bit vector over the 2n rows, and the signs are one more
+such vector. A gate on qubits `a` and `b` is then a handful of word
+operations on two or four contiguous columns, O(n/32) words in all.
+
+Measurements need whole rows. `measure_pauli` transposes the tableau to
+rows in 64 × 64 bit blocks, runs the Aaronson–Gottesman update (row
+products with their phases summed word by word), and transposes back.
+The transpositions dominate: O(n²) per measurement, about a second at
+16 384 qubits. Programs that end in measurements avoid them per shot: the
+record is a linear function of the outcomes, so QSO samples the image of
+the outcome space, at most 64 basis vectors.
+
+Sampling every qubit uses the structure of stabilizer states. Gaussian
+elimination of the stabilizers on their X parts leaves signed Z strings,
+which are parity constraints on the outcome. The outcomes are uniform
+over the solutions: a particular solution plus the span of a null-space
+basis. This is computed once, O(n³/64), and each shot is then a random
+combination of basis vectors.
+
+Graph states are built directly from their generators
+`X_v Π_{w∈N(v)} Z_w`, with destabilizers `Z_v`. Entanglement entropy
+across a bipartition is the GF(2) rank of the generators restricted to
+one side minus its size (Fattal et al. 2004); for graph states this is
+the cut-rank of the adjacency matrix.
+
+## Error-correction experiments (`qec/`)
+
+A `DetectorCircuit` is a list of operations: Clifford gates, Pauli noise,
+measurements (each appends one bit to the record), resets, detectors and
+observables (parities of record bits). Three components share one
+representation of Pauli frames, `Frames`: X and Z bits by qubit, `w`
+words per qubit, bit s of word k belonging to frame 64k + s. `Frames`
+implements the same `CliffordTarget` trait as the tableau, so both run
+every Clifford gate through one function, `apply_clifford`, and the
+frame update for each gate is derived once.
+
+- **Sampling.** Each shot's frame is its error relative to a noiseless
+  run. Detectors are deterministic, so detection events are parities of
+  measurement flips, and the reference run is never needed. The Z part
+  of every fresh or measured qubit is randomized, which turns the random
+  outcomes of the reference into random flips. Noise is applied by
+  geometric skipping, at a cost proportional to the number of errors.
+- **Error models.** Every noise operation contributes an X and a Z
+  component per qubit, and every noisy measurement a flip. The components
+  are propagated, without randomization, as up to 4096 frames per pass;
+  the detector and observable rows of the pass are read back as each
+  component's signature. Independent error terms (the exact decomposition
+  of depolarizing channels into Paulis) take the XOR of their components'
+  signatures, and terms with equal signatures merge.
+- **Decoding.** The matching graph has a node per detector plus one
+  boundary node. Union-find growth is event-driven: each round finds the
+  frontier edges of the growing clusters, advances all of them by the
+  smallest remaining length (divided by the number of clusters growing
+  into the edge) and merges along the edges that complete, so weights are
+  exact. Nodes whose edges are all inside their cluster are skipped from
+  then on. The decoder keeps all its
+  arrays across shots and resets only what a shot touched, so a shot
+  costs time in proportion to its clusters, not to the graph. Peeling
+  roots a cluster at the boundary only when its parity needs it.
+- **Logical error rates.** `logical_error_rate` samples in blocks of
+  whole batches (at most 65 536 shots and 1 GiB of results) from one
+  random stream, so it returns the same result as one call of
+  `sample_detectors` with the same seed, in bounded memory. A batch is
+  1024 shots, or fewer when its frames and records would exceed 128 MiB.
+
 ## WebAssembly (`metatron_qso_wasm`)
 
 The core has no platform code beyond optional rayon, so it compiles for

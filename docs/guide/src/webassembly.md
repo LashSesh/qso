@@ -54,7 +54,9 @@ examples and graph results against the native values.
 ## Limits
 
 WebAssembly has a 4 GiB address space, so a state vector holds at most
-26 qubits (1 GiB). The graph and walk methods accept up to 2048 nodes,
+26 qubits (1 GiB). Clifford programs with more qubits run on the
+[stabilizer simulator](stabilizers.md) (up to 16384 qubits); they are
+sampled, so they need `shots`. The graph and walk methods accept up to 2048 nodes,
 because they use dense eigendecompositions. One call samples at most
 10⁶ shots and evaluates at most 10⁴ times.
 

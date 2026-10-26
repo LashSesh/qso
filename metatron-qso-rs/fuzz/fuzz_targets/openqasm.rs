@@ -1,13 +1,16 @@
 //! OpenQASM 2 and 3 programs: no input may panic, and every accepted
 //! program small enough to simulate must have a normalised outcome
 //! distribution that its OpenQASM 3 (and, when possible, OpenQASM 2)
-//! export reproduces.
+//! export reproduces, and that the stabilizer simulator agrees with when
+//! the program is Clifford.
 #![no_main]
 
 use std::collections::BTreeMap;
 
 use libfuzzer_sys::fuzz_target;
+use metatron_qso::Rng;
 use metatron_qso::quantum::{Operation, Program};
+use metatron_qso::stabilizer::program::{is_clifford_program, run_program};
 
 fn close(a: &BTreeMap<u64, f64>, b: &BTreeMap<u64, f64>) -> bool {
     let keys: std::collections::BTreeSet<_> = a.keys().chain(b.keys()).collect();
@@ -46,6 +49,18 @@ fuzz_target!(|src: &str| {
     };
     let total: f64 = dist.values().sum();
     assert!((total - 1.0).abs() < 1e-9, "total probability {total}");
+    // Clifford programs also run on the stabilizer simulator: every
+    // record it produces has non-zero probability.
+    if is_clifford_program(&program) {
+        let mut rng = Rng::seed_from_u64(src.len() as u64);
+        for _ in 0..4 {
+            let record = run_program(&program, &mut rng).expect("Clifford programs run");
+            assert!(
+                dist.get(&record).is_some_and(|&p| p > 1e-9),
+                "stabilizer record {record:b} outside the exact distribution"
+            );
+        }
+    }
     if !moderate {
         return;
     }

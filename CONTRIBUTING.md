@@ -68,7 +68,8 @@ Releases are published by [`.github/workflows/release.yml`](.github/workflows/re
 
 1. Set the new version in `Cargo.toml` (`[workspace.package]` and the
    `metatron-qso-rs` entry in `[workspace.dependencies]`) and in
-   `metatron_qso_py/pyproject.toml`, and add a `## [X.Y.Z]` section to
+   `metatron_qso_py/pyproject.toml` and `metatron_qso_wasm/js/package.json`,
+   and add a `## [X.Y.Z]` section to
    `CHANGELOG.md`. Merge this into `main`.
 2. Optional dry run: start the *Release* workflow manually (Actions →
    Release → Run workflow). It runs every check and build and publishes
@@ -80,12 +81,19 @@ Releases are published by [`.github/workflows/release.yml`](.github/workflows/re
    ```
 
    The workflow checks that tag, versions and changelog agree, builds and
-   tests the wheels and the source distribution, then publishes
-   `metatron-qso-rs` to crates.io and `metatron-qso` to PyPI and creates the
-   GitHub release with the changelog section as notes.
+   tests the wheels, the source distribution and the npm package, then
+   publishes `metatron-qso-rs` to crates.io, `metatron-qso` to PyPI and
+   `metatron-qso` to npm, and creates the GitHub release with the
+   changelog section as notes.
 
 Publishing uses Trusted Publishing (OpenID Connect); no registry tokens are
 stored. The publishing jobs run in the GitHub environment `release`, which
 must be approved by the maintainer, and PyPI and crates.io each trust
 `release.yml` in that environment (setup in the header of the workflow).
 Versions already on a registry are skipped, so a failed run can be re-run.
+
+npm validates a new trusted-publisher entry only with a publish from the
+workflow within 48 hours; an entry that was not validated in time must be
+added again. Before a release, check the package settings on npmjs.com
+(Trusted Publisher: GitHub Actions, `LashSesh/qso`, `release.yml`,
+environment `release`) and push the tag within 48 hours of adding it.

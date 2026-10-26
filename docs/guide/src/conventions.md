@@ -56,6 +56,7 @@ except ValueError as e:
 | Limit | Value |
 |---|---|
 | Pure-state register | 34 qubits (16 bytes per amplitude); 26 in WebAssembly |
+| Stabilizer register (Clifford circuits) | 16384 qubits |
 | Density-matrix register | 14 qubits |
 | Pauli strings | qubits 0–63 |
 | Custom unitary gates | up to 6 target qubits |
