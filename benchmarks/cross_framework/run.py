@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import importlib.metadata as md
 import json
+import math
 import os
 import platform
 import statistics
@@ -200,8 +201,10 @@ def correctness(quick: bool) -> dict:
 
 def qec_vs_stim(quick: bool) -> dict:
     """Detector error models and detection-event rates of QSO's memory
-    experiments against Stim on the exported circuits, and QSO's union-find
-    logical error rate next to PyMatching's (minimum-weight matching)."""
+    experiments against Stim on the exported circuits; QSO's matching
+    decoder against PyMatching shot by shot on the same error model and
+    syndromes; and QSO's union-find logical error rate next to PyMatching's
+    (minimum-weight matching)."""
     import pymatching
     import stim
 
@@ -248,6 +251,26 @@ def qec_vs_stim(quick: bool) -> dict:
         matching = pymatching.Matching.from_detector_error_model(sc.detector_error_model(decompose_errors=True))
         d2, o2 = sc.compile_detector_sampler(seed=3).sample(shots, separate_observables=True)
         mwpm = float(np.mean(np.any(matching.decode_batch(d2) != o2, axis=1)))
+        # The same syndromes through both matching decoders, on QSO's
+        # decomposed model (parallel edges keep the lighter, as in QSO).
+        dem = c.detector_error_model(decompose=True)
+        reference = pymatching.Matching()
+        for p, dets, obs in dem.errors:
+            faults = {k for k in range(64) if obs >> k & 1}
+            weight = math.log((1 - p) / p) if p < 0.5 else 0.0
+            if len(dets) == 1:
+                reference.add_boundary_edge(
+                    dets[0], fault_ids=faults, weight=weight, error_probability=p, merge_strategy="smallest-weight"
+                )
+            elif len(dets) == 2:
+                reference.add_edge(
+                    dets[0], dets[1], fault_ids=faults, weight=weight, error_probability=p, merge_strategy="smallest-weight"
+                )
+        bits = reference.decode_batch(det)
+        reference_flips = np.zeros(shots, dtype=np.uint64)
+        for k in range(bits.shape[1]):
+            reference_flips |= bits[:, k].astype(np.uint64) << np.uint64(k)
+        qso_flips = q.MatchingDecoder(dem).decode_batch(det)
         out[name] = {
             "detectors": c.n_detectors,
             "error_mechanisms": len(ours),
@@ -256,7 +279,9 @@ def qec_vs_stim(quick: bool) -> dict:
             "max_detector_rate_z_score": float(np.max(np.abs(a - b) / sigma)),
             "shots": shots,
             "logical_error_rate_union_find": q.logical_error_rate(c, shots, seed=4).rate,
+            "logical_error_rate_matching": q.logical_error_rate(c, shots, seed=4, decoder="matching").rate,
             "logical_error_rate_pymatching": mwpm,
+            "matching_disagreement_with_pymatching": float(np.mean(qso_flips != reference_flips)),
         }
     return out
 
@@ -270,6 +295,9 @@ TOLERANCES = {
     "error_model": 1e-12,
     # Detection-event rates are sampled: |z| over up to 72 detectors.
     "detector_rate_z": 5.0,
+    # Two exact matching decoders differ only on ties and on rounded
+    # weights.
+    "matching_disagreement": 1e-3,
 }
 
 
@@ -292,6 +320,8 @@ def check(c: dict) -> list[str]:
             failures.append(f"detector error model of {name} differs from Stim's: {r}")
         if not r["max_detector_rate_z_score"] <= TOLERANCES["detector_rate_z"]:
             failures.append(f"detection-event rates of {name} differ from Stim's: {r}")
+        if not r["matching_disagreement_with_pymatching"] <= TOLERANCES["matching_disagreement"]:
+            failures.append(f"matching predictions on {name} differ from PyMatching's: {r}")
     return failures
 
 
