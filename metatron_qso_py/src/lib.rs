@@ -18,6 +18,7 @@ mod discrete;
 mod estimation;
 mod graph;
 mod mitigation;
+mod mps;
 mod noise;
 mod optimization;
 mod photonics;
@@ -186,5 +187,6 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     optimization::register(m)?;
     stabilizer::register(m)?;
     qec::register(m)?;
+    mps::register(m)?;
     Ok(())
 }

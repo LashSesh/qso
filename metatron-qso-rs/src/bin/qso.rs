@@ -263,6 +263,13 @@ enum Command {
         /// automatically for Clifford programs too large for a state vector).
         #[arg(long, conflicts_with_all = ["noise", "device"])]
         stabilizer: bool,
+        /// Run on a matrix-product state (any program; exact up to the
+        /// reported fidelity bound).
+        #[arg(long, conflicts_with_all = ["noise", "device", "stabilizer"])]
+        mps: bool,
+        /// Largest bond dimension of the matrix-product state.
+        #[arg(long, default_value_t = 256, requires = "mps")]
+        max_bond: usize,
     },
     /// Estimate ⟨H⟩ of an OpenQASM circuit from shots, with standard
     /// errors and optional error mitigation.
@@ -895,6 +902,8 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             device,
             trajectories,
             stabilizer,
+            mps,
+            max_bond,
         } => {
             let src = read_text(file)?;
             let program = Program::from_qasm(&src)?;
@@ -909,9 +918,34 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 // Exact simulation of the program; one without classical
                 // bits is measured on every qubit.
                 let tableau = *stabilizer
-                    || (program.n_qubits() > metatron_qso::quantum::MAX_QUBITS
+                    || (!*mps
+                        && program.n_qubits() > metatron_qso::quantum::MAX_QUBITS
                         && is_clifford_program(&program));
-                let labelled: std::collections::BTreeMap<String, usize> = if tableau {
+                let mut bound = None;
+                let labelled: std::collections::BTreeMap<String, usize> = if *mps {
+                    let options = metatron_qso::mps::MpsOptions {
+                        max_bond: *max_bond,
+                        ..Default::default()
+                    };
+                    if program.n_bits() == 0 {
+                        let mut state = metatron_qso::mps::Mps::from_circuit(
+                            &program.to_circuit()?,
+                            &[],
+                            options,
+                        )?;
+                        bound = state.fidelity_lower_bound();
+                        state.sample_counts(*shots, &mut Rng::seed_from_u64(*seed))?
+                    } else {
+                        let (counts, b) = metatron_qso::mps::program::sample_program(
+                            &program, *shots, *seed, options,
+                        )?;
+                        bound = b;
+                        counts
+                            .iter()
+                            .map(|(&r, &c)| (record_bitstring(r, program.n_bits()), c))
+                            .collect()
+                    }
+                } else if tableau {
                     if program.n_bits() == 0 {
                         let state = StabilizerState::from_circuit(&program.to_circuit()?, &[])?;
                         state.sample_counts(*shots, &mut Rng::seed_from_u64(*seed))?
@@ -933,14 +967,21 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                         .map(|(&r, &c)| (record_bitstring(r, width), c))
                         .collect()
                 };
-                let backend = if tableau { "stabilizer" } else { "program" };
+                let backend = if *mps {
+                    "mps"
+                } else if tableau {
+                    "stabilizer"
+                } else {
+                    "program"
+                };
                 let mut sorted: Vec<_> = labelled.iter().collect();
                 sorted.sort_by(|a, b| b.1.cmp(a.1));
                 let text = format!(
-                    "{} qubits, {} bits, {} operations, backend {backend}\n{}",
+                    "{} qubits, {} bits, {} operations, backend {backend}{}\n{}",
                     program.n_qubits(),
                     program.n_bits(),
                     program.len(),
+                    bound.map_or(String::new(), |b| format!(", fidelity ≥ {b:.12}")),
                     sorted
                         .iter()
                         .take(16)
@@ -950,7 +991,8 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 );
                 return Ok((
                     json!({"qubits": program.n_qubits(), "bits": program.n_bits(),
-                           "operations": program.len(), "backend": backend, "counts": labelled}),
+                           "operations": program.len(), "backend": backend, "counts": labelled,
+                           "fidelity_lower_bound": bound}),
                     text,
                 ));
             }

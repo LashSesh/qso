@@ -15,7 +15,8 @@ quantum Fisher information, natural gradient and imaginary-time evolution;
 QUBO/Ising problems with QAOA mixers; amplitude estimation; stabilizer
 simulation and graph states; and quantum error correction (detector
 circuits, Pauli-frame sampling, detector error models, union-find
-decoding, repetition and surface-code memory experiments).
+decoding, repetition and surface-code memory experiments); and
+matrix-product states for circuits with little entanglement on many qubits.
 
 Conventions: qubit 0 is the least significant bit of a basis index; bit
 strings print qubit n-1 first; time evolution is exp(-iHt); rotations are
@@ -43,8 +44,10 @@ from ._core import (
     LineWalk,
     LogicalErrorRate,
     MAX_DENSITY_QUBITS,
+    MAX_MPS_QUBITS,
     MAX_QUBITS,
     MAX_STABILIZER_QUBITS,
+    MatrixProductState,
     MaxCutQaoa,
     MolecularIntegrals,
     NoiseModel,
@@ -150,8 +153,10 @@ __all__ = [
     "LineWalk",
     "LogicalErrorRate",
     "MAX_DENSITY_QUBITS",
+    "MAX_MPS_QUBITS",
     "MAX_QUBITS",
     "MAX_STABILIZER_QUBITS",
+    "MatrixProductState",
     "MaxCutQaoa",
     "MolecularIntegrals",
     "NoiseModel",

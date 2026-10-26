@@ -647,34 +647,45 @@ impl PyProgram {
 
     /// `shots` (at most 10⁷) seeded samples of the classical record,
     /// `{bitstring: count}`. `method` is `"statevector"`, `"stabilizer"`
-    /// (Clifford programs, up to 16384 qubits) or `"auto"`: the stabilizer
-    /// simulator for Clifford programs too large for a state vector.
-    #[pyo3(signature = (shots, seed = 0, method = "auto"))]
+    /// (Clifford programs, up to 16384 qubits), `"mps"` (a matrix-product
+    /// state with bond dimension up to `max_bond`) or `"auto"`: the
+    /// stabilizer simulator for Clifford programs too large for a state
+    /// vector, otherwise the state vector.
+    #[pyo3(signature = (shots, seed = 0, method = "auto", max_bond = 256))]
     fn sample<'py>(
         &self,
         py: Python<'py>,
         shots: usize,
         seed: u64,
         method: &str,
+        max_bond: usize,
     ) -> PyResult<Bound<'py, PyDict>> {
         if shots > 10_000_000 {
             return Err(invalid("shots must be at most 10⁷"));
         }
         let p = &self.inner;
-        let tableau = match method {
-            "statevector" => false,
-            "stabilizer" => true,
-            "auto" => p.n_qubits() > MAX_QUBITS && is_clifford_program(p),
+        let method = match method {
+            "auto" if p.n_qubits() > MAX_QUBITS && is_clifford_program(p) => "stabilizer",
+            "auto" => "statevector",
+            m @ ("statevector" | "stabilizer" | "mps") => m,
             other => {
                 return Err(invalid(format!(
-                    "unknown method '{other}' (use auto, statevector or stabilizer)"
+                    "unknown method '{other}' (use auto, statevector, stabilizer or mps)"
                 )));
             }
         };
-        let counts = if tableau {
-            py.detach(|| sample_program(p, shots, seed)).raise()?
-        } else {
-            py.detach(|| p.sample(shots, seed)).raise()?
+        let counts = match method {
+            "stabilizer" => py.detach(|| sample_program(p, shots, seed)).raise()?,
+            "mps" => {
+                let options = metatron_qso::mps::MpsOptions {
+                    max_bond,
+                    ..Default::default()
+                };
+                py.detach(|| metatron_qso::mps::program::sample_program(p, shots, seed, options))
+                    .raise()?
+                    .0
+            }
+            _ => py.detach(|| p.sample(shots, seed)).raise()?,
         };
         let d = PyDict::new(py);
         for (record, n) in counts {

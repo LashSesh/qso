@@ -622,6 +622,17 @@ impl Mps {
 
     /// Apply one instruction with parameters `theta`.
     pub fn apply_instruction(&mut self, inst: &Instruction, theta: &[f64]) -> Result<()> {
+        let (qubits, m) = self.instruction_unitary(inst, theta)?;
+        self.apply_unitary(&m, &qubits)
+    }
+
+    /// The validated qubits (controls, then targets) and matrix of an
+    /// instruction.
+    fn instruction_unitary(
+        &self,
+        inst: &Instruction,
+        theta: &[f64],
+    ) -> Result<(Vec<usize>, Vec<C64>)> {
         inst.validate(self.n_qubits())?;
         for p in &inst.params {
             if let crate::quantum::Param::Symbol(s) = p
@@ -648,7 +659,7 @@ impl Mps {
             ));
         }
         let m = instruction_matrix(inst, &inst.angles(theta));
-        self.apply_unitary(&m, &qubits)
+        Ok((qubits, m))
     }
 
     fn gate(
@@ -733,8 +744,37 @@ impl Mps {
             });
         }
         circuit.check_parameters(theta)?;
+        // Consecutive gates on the same one or two qubits are multiplied
+        // into one matrix first: one split instead of several.
+        let mut pending: Option<(Vec<usize>, Vec<C64>)> = None;
         for inst in circuit.instructions() {
-            self.apply_instruction(inst, theta)?;
+            let (q, m) = self.instruction_unitary(inst, theta)?;
+            pending = match pending.take() {
+                Some((pq, pm)) if q.len() <= 2 && q.iter().all(|x| pq.contains(x)) => {
+                    let m = embed(&m, &q, &pq);
+                    Some((pq.clone(), square_product(&m, &pm, 1 << pq.len())))
+                }
+                Some((pq, pm)) if pq.len() == 1 && q.len() == 2 && q.contains(&pq[0]) => {
+                    let pm = embed(&pm, &pq, &q);
+                    let d = 1 << q.len();
+                    Some((q, square_product(&m, &pm, d)))
+                }
+                Some((pq, pm)) => {
+                    self.apply_unitary(&pm, &pq)?;
+                    Some((q, m))
+                }
+                None => Some((q, m)),
+            };
+            if let Some((pq, pm)) = pending.take() {
+                if pq.len() > 2 {
+                    self.apply_unitary(&pm, &pq)?;
+                } else {
+                    pending = Some((pq, pm));
+                }
+            }
+        }
+        if let Some((pq, pm)) = pending {
+            self.apply_unitary(&pm, &pq)?;
         }
         Ok(())
     }
@@ -1004,6 +1044,49 @@ impl Mps {
         }
         Ok(counts)
     }
+}
+
+/// `a · b` for row-major `d × d` matrices.
+fn square_product(a: &[C64], b: &[C64], d: usize) -> Vec<C64> {
+    let mut out = vec![ZERO; d * d];
+    for i in 0..d {
+        for k in 0..d {
+            let aik = a[i * d + k];
+            if aik == ZERO {
+                continue;
+            }
+            for j in 0..d {
+                out[i * d + j] += aik * b[k * d + j];
+            }
+        }
+    }
+    out
+}
+
+/// The matrix `m` on the qubits `sub` (first most significant) as a
+/// matrix on `full ⊇ sub`, identity on the others.
+fn embed(m: &[C64], sub: &[usize], full: &[usize]) -> Vec<C64> {
+    let (k, n) = (sub.len(), full.len());
+    let (ds, d) = (1usize << k, 1usize << n);
+    // Bit position (from the most significant) of each sub qubit in full.
+    let pos: Vec<usize> = sub
+        .iter()
+        .map(|q| full.iter().position(|x| x == q).expect("subset"))
+        .collect();
+    let sub_index = |x: usize| {
+        pos.iter()
+            .fold(0, |acc, &p| (acc << 1) | ((x >> (n - 1 - p)) & 1))
+    };
+    let rest_mask = (d - 1) & !pos.iter().fold(0, |m, &p| m | (1 << (n - 1 - p)));
+    let mut out = vec![ZERO; d * d];
+    for x in 0..d {
+        for y in 0..d {
+            if x & rest_mask == y & rest_mask {
+                out[x * d + y] = m[sub_index(x) * ds + sub_index(y)];
+            }
+        }
+    }
+    out
 }
 
 fn pauli_matrix(p: Pauli) -> [C64; 4] {

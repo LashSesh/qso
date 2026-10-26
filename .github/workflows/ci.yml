@@ -63,7 +63,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p metatron-qso-rs --features cli --examples --bins
       - run: |
-          for ex in quickstart metatron_walks metatron_atlas circuits qaoa_maxcut vqe_h2 noise_mitigation molecules stabilizers surface_code; do
+          for ex in quickstart metatron_walks metatron_atlas circuits qaoa_maxcut vqe_h2 noise_mitigation molecules stabilizers surface_code mps; do
             cargo run --release -p metatron-qso-rs --example "$ex"
           done
           cargo run --release -p metatron-qso-rs --example technical_note -- --quick --out /dev/null
@@ -80,6 +80,7 @@ jobs:
           ./target/release/qso hitting --graph cycle:64
           ./target/release/qso walk-circuit --graph cycle:16 > /tmp/walk.qasm
           ./target/release/qso qasm /tmp/walk.qasm --shots 100
+          ./target/release/qso qasm /tmp/walk.qasm --shots 100 --mps --max-bond 64
           ./target/release/qso qasm metatron-qso-rs/tests/data/openqasm/v3/teleport.qasm --shots 100
           ./target/release/qso qasm metatron-qso-rs/tests/data/openqasm/v2/qec.qasm --export qasm3
           ./target/release/qso qasm metatron-qso-rs/tests/data/openqasm/v2/qec.qasm --stabilizer --shots 100
