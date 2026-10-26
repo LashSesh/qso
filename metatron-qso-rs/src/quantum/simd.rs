@@ -240,7 +240,7 @@ mod portable {
 
     #[inline]
     pub(super) fn mat2_adjacent(x: &mut [C64], m: &[C64; 4]) {
-        for p in x.chunks_exact_mut(2) {
+        for p in x.as_chunks_mut::<2>().0 {
             let (u, v) = (p[0], p[1]);
             p[0] = m[0] * u + m[1] * v;
             p[1] = m[2] * u + m[3] * v;
@@ -249,7 +249,7 @@ mod portable {
 
     #[inline]
     pub(super) fn mat2_adjacent_real(x: &mut [C64], m: &[f64; 4]) {
-        for p in x.chunks_exact_mut(2) {
+        for p in x.as_chunks_mut::<2>().0 {
             let (u, v) = (p[0], p[1]);
             p[0] = u * m[0] + v * m[1];
             p[1] = u * m[2] + v * m[3];
