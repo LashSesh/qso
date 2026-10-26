@@ -9,13 +9,15 @@
 //!   union-find with peeling;
 //! * [`repetition_code_memory`] and [`surface_code_memory`]: memory
 //!   experiments with circuit-level noise;
-//! * [`logical_error_rate`]: sample, decode and count.
+//! * [`logical_error_rate`]: sample, decode and count;
+//! * [`DetectorCircuit::to_stim`]: export in Stim's text format.
 
 pub mod circuit;
 pub mod codes;
 pub mod decoder;
 pub mod dem;
 pub mod frame;
+mod stim;
 
 pub use circuit::{DetectorCircuit, MAX_OBSERVABLES, Noise, QecOp};
 pub use codes::{CircuitNoise, repetition_code_memory, surface_code_memory};
@@ -24,6 +26,7 @@ pub use dem::{DetectorErrorModel, ErrorMechanism, detector_error_model};
 pub use frame::{DetectorSamples, sample_detectors};
 
 use crate::error::Result;
+use crate::rng::Rng;
 use serde::{Deserialize, Serialize};
 
 /// Logical failures of a decoder on sampled shots.
@@ -39,7 +42,9 @@ pub struct LogicalErrorRate {
 
 /// Sample `shots` shots of `circuit`, decode each with the union-find
 /// decoder of its (decomposed) detector error model, and count the shots
-/// whose observables it predicts wrongly.
+/// whose observables it predicts wrongly. Shots are sampled in blocks, so
+/// memory does not grow with `shots`; the shots are those of
+/// [`sample_detectors`] with the same seed.
 pub fn logical_error_rate(
     circuit: &DetectorCircuit,
     shots: usize,
@@ -47,18 +52,26 @@ pub fn logical_error_rate(
 ) -> Result<LogicalErrorRate> {
     let dem = detector_error_model(circuit, true)?;
     let mut decoder = UnionFindDecoder::new(MatchingGraph::from_dem(&dem)?);
-    let samples = sample_detectors(circuit, shots, seed)?;
+    frame::check_deterministic(circuit)?;
+    let mut rng = Rng::seed_from_u64(seed);
+    let block = 64 * frame::BATCH_SHOTS;
     let mut errors = 0;
-    for s in 0..shots {
-        let fired = samples.fired_detectors(s);
-        let predicted = if fired.is_empty() {
-            0
-        } else {
-            decoder.decode(&fired)?
-        };
-        if predicted != samples.observable_flips(s) {
-            errors += 1;
+    let mut done = 0;
+    while done < shots {
+        let k = (shots - done).min(block);
+        let samples = frame::sample_with(circuit, k, &mut rng)?;
+        for s in 0..k {
+            let fired = samples.fired_detectors(s);
+            let predicted = if fired.is_empty() {
+                0
+            } else {
+                decoder.decode(&fired)?
+            };
+            if predicted != samples.observable_flips(s) {
+                errors += 1;
+            }
         }
+        done += k;
     }
     let rate = if shots == 0 {
         0.0

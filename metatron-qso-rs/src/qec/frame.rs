@@ -5,7 +5,7 @@
 //! frame, noise multiplies it, and a measurement is flipped relative to
 //! the reference when the frame has an X (or Y) on the measured qubit.
 //! Bit `s` of a word belongs to shot `s`, so a gate updates 64 shots with
-//! one word operation (Aaronson and Gottesman's frame idea, as in Stim).
+//! one word operation, as in Stim (Gidney, Quantum 5, 497 (2021)).
 //!
 //! Detectors are deterministic without noise, so a detection event is the
 //! parity of the flips of its records, and no reference run is needed.
@@ -18,11 +18,14 @@ use crate::error::{QsoError, Result};
 use crate::rng::Rng;
 use crate::stabilizer::{CliffordTarget, apply_clifford};
 
-/// Most shots × detectors one call samples (16 GiB of results).
-pub const MAX_SAMPLED_EVENTS: usize = 1 << 37;
+/// Most bits of results one call returns, shots × (detectors + 64) with
+/// one 64-bit observable mask per shot (1 GiB).
+pub const MAX_SAMPLED_EVENTS: usize = 1 << 33;
 
 /// Shots per batch, as 64-bit words.
 const BATCH_WORDS: usize = 16;
+/// Shots per batch.
+pub(crate) const BATCH_SHOTS: usize = 64 * BATCH_WORDS;
 
 /// Pauli frames of 64·w shots: `x[q * w + k]` holds the X bits of qubit `q`
 /// for shots `64k .. 64k + 63`.
@@ -169,14 +172,25 @@ pub fn sample_detectors(
     shots: usize,
     seed: u64,
 ) -> Result<DetectorSamples> {
-    let n_det = circuit.n_detectors();
-    if shots.saturating_mul(n_det.max(1)) > MAX_SAMPLED_EVENTS {
+    if shots.saturating_mul(circuit.n_detectors() + 64) > MAX_SAMPLED_EVENTS {
         return Err(QsoError::invalid(
             "shots",
-            format!("shots × detectors must be at most {MAX_SAMPLED_EVENTS}"),
+            format!("shots × (detectors + 64) must be at most {MAX_SAMPLED_EVENTS}"),
         ));
     }
     check_deterministic(circuit)?;
+    sample_with(circuit, shots, &mut Rng::seed_from_u64(seed))
+}
+
+/// [`sample_detectors`] without the checks, drawing from `rng`: samples
+/// of consecutive calls whose shots are multiples of [`BATCH_SHOTS`]
+/// equal those of one call.
+pub(crate) fn sample_with(
+    circuit: &DetectorCircuit,
+    shots: usize,
+    rng: &mut Rng,
+) -> Result<DetectorSamples> {
+    let n_det = circuit.n_detectors();
     let words = shots.div_ceil(64);
     let mut out = DetectorSamples {
         shots,
@@ -185,12 +199,11 @@ pub fn sample_detectors(
         n_detectors: n_det,
         observables: vec![0; shots],
     };
-    let mut rng = Rng::seed_from_u64(seed);
     let mut done = 0;
     while done < shots {
-        let batch = (shots - done).min(64 * BATCH_WORDS);
+        let batch = (shots - done).min(BATCH_SHOTS);
         let w = batch.div_ceil(64);
-        let (det, obs) = run_batch(circuit, batch, w, &mut rng)?;
+        let (det, obs) = run_batch(circuit, batch, w, rng)?;
         let first_word = done / 64;
         for d in 0..n_det {
             out.detectors[d * words + first_word..d * words + first_word + w]
@@ -208,7 +221,7 @@ pub fn sample_detectors(
     Ok(out)
 }
 
-fn check_deterministic(circuit: &DetectorCircuit) -> Result<()> {
+pub(crate) fn check_deterministic(circuit: &DetectorCircuit) -> Result<()> {
     let quiet = circuit.without_noise();
     let mut rng = Rng::seed_from_u64(0x5eed);
     let (det, obs) = run_batch(&quiet, 64, 1, &mut rng)?;

@@ -315,3 +315,53 @@ fn invalid_input_is_an_error() {
     assert!(decoder.decode(&[0]).is_err());
     assert!(decoder.decode(&[99]).is_err());
 }
+
+#[test]
+fn logical_error_rate_streams_the_samples_of_one_call() {
+    // More shots than one block, so the streaming path runs twice.
+    let c = repetition_code_memory(3, 2, &CircuitNoise::uniform(0.05)).unwrap();
+    let shots = 64 * frame::BATCH_SHOTS + 1000;
+    let r = logical_error_rate(&c, shots, 9).unwrap();
+    let samples = sample_detectors(&c, shots, 9).unwrap();
+    let dem = detector_error_model(&c, true).unwrap();
+    let mut decoder = UnionFindDecoder::new(MatchingGraph::from_dem(&dem).unwrap());
+    let errors = (0..shots)
+        .filter(|&s| {
+            let fired = samples.fired_detectors(s);
+            let p = if fired.is_empty() {
+                0
+            } else {
+                decoder.decode(&fired).unwrap()
+            };
+            p != samples.observable_flips(s)
+        })
+        .count();
+    assert_eq!(r.errors, errors);
+    assert_eq!(r.shots, shots);
+}
+
+#[test]
+fn appended_circuits_and_the_stim_export() {
+    let mut t = crate::quantum::Circuit::new(2);
+    t.h(0).cx(0, 1);
+    let theta = t.new_parameter();
+    t.rz(1, theta);
+    let mut c = DetectorCircuit::new(3).unwrap();
+    c.append_circuit(&t, &[std::f64::consts::FRAC_PI_2])
+        .unwrap();
+    assert!(c.append_circuit(&t, &[0.3]).is_err());
+    assert_eq!(c.operations().len(), 3);
+    let m0 = c.measure(0, 0.01).unwrap();
+    let m1 = c.measure(1, 0.0).unwrap();
+    c.noise(Noise::Depolarize2(0.02), &[0, 2]).unwrap();
+    c.detector(&[m0, m1]).unwrap();
+    c.observable(0, &[m1]).unwrap();
+    let text = c.to_stim().unwrap();
+    assert_eq!(
+        text,
+        "H 0\nCX 0 1\nS 1\nM(0.01) 0\nM 1\nDEPOLARIZE2(0.02) 0 2\nDETECTOR rec[-2] rec[-1]\nOBSERVABLE_INCLUDE(0) rec[-1]\n"
+    );
+    let mut big = crate::quantum::Circuit::new(4);
+    big.h(3);
+    assert!(c.append_circuit(&big, &[]).is_err());
+}

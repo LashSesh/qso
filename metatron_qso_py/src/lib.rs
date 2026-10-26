@@ -21,6 +21,7 @@ mod mitigation;
 mod noise;
 mod optimization;
 mod photonics;
+mod qec;
 mod reduced;
 mod simulation;
 mod stabilizer;
@@ -184,5 +185,6 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     simulation::register(m)?;
     optimization::register(m)?;
     stabilizer::register(m)?;
+    qec::register(m)?;
     Ok(())
 }

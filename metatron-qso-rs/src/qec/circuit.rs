@@ -2,8 +2,8 @@
 //! observables.
 
 use crate::error::{QsoError, Result};
-use crate::quantum::{GateKind, Instruction};
-use crate::stabilizer::program::is_clifford_instruction;
+use crate::quantum::{Circuit, GateKind, Instruction};
+use crate::stabilizer::program::{is_clifford_circuit, is_clifford_instruction};
 use crate::stabilizer::validate_instruction;
 
 /// Largest register of a detector circuit.
@@ -161,6 +161,39 @@ impl DetectorCircuit {
             ));
         }
         self.push(QecOp::Gate(inst))?;
+        Ok(self)
+    }
+
+    /// Append every gate of a Clifford circuit (parameters bound to
+    /// `theta`) on the first qubits of this one. Nothing is appended if
+    /// any gate is not Clifford.
+    pub fn append_circuit(&mut self, circuit: &Circuit, theta: &[f64]) -> Result<&mut Self> {
+        if circuit.n_qubits() > self.n {
+            return Err(QsoError::invalid(
+                "circuit",
+                format!(
+                    "{} qubits do not fit a detector circuit of {}",
+                    circuit.n_qubits(),
+                    self.n
+                ),
+            ));
+        }
+        let bound = circuit.bind(theta)?;
+        if !is_clifford_circuit(&bound, &[]) {
+            return Err(QsoError::invalid(
+                "circuit",
+                "every gate must be a Clifford gate",
+            ));
+        }
+        if self.ops.len() + bound.instructions().len() > MAX_QEC_OPERATIONS {
+            return Err(QsoError::invalid(
+                "circuit",
+                format!("more than {MAX_QEC_OPERATIONS} operations"),
+            ));
+        }
+        for inst in bound.instructions() {
+            self.gate(inst.clone())?;
+        }
         Ok(self)
     }
 
