@@ -1,13 +1,14 @@
 # QSO Roadmap (1.x)
 
-Status: October 2026. Milestones 1.1 to 1.6 delivered — 1.3 combined the
+Status: October 2026. Milestones 1.1 to 1.8 delivered — 1.3 combined the
 milestones planned as "quantum walks" and "simulation performance".
 Milestones 1.4 (noise at scale and error mitigation), 1.5 (algorithms and
 physics) and 1.6 (interoperability) shipped together as release 1.4.0.
 Milestones 1.7 (stabilizer simulation and graph states) and 1.8
-(error-correction experiments) are delivered and unreleased. Up to 1.3 milestone and release numbers coincided; from 1.4 on the
-milestone numbers name units of work and releases follow Semantic
-Versioning on their own (the next release after 1.3.0 is 1.4.0, whatever
+(error-correction experiments) ship together as release 1.5.0. Up to 1.3
+milestone and release numbers coincided; from 1.4 on the milestone
+numbers name units of work and releases follow Semantic Versioning on
+their own (the next release after 1.3.0 is 1.4.0, whatever
 it contains).
 
 QSO 1.0 delivers what it documents: every number in the README is reproduced
@@ -302,7 +303,7 @@ register names that made exports unreadable, and records above 32 bits
 truncated in WebAssembly. All were fixed with regression tests before the
 release.
 
-### 1.7 — Stabilizer simulation and graph states (delivered, unreleased)
+### 1.7 — Stabilizer simulation and graph states (delivered, release 1.5.0)
 
 | Deliverable | Delivered | Not done, and why |
 |---|---|---|
@@ -335,7 +336,7 @@ found no wrong result on these paths. It found:
 All were fixed with regression tests. Programs that end in measurements
 are now sampled from their record bits alone.
 
-### 1.8 — Error-correction experiments (delivered, unreleased)
+### 1.8 — Error-correction experiments (delivered, release 1.5.0)
 
 | Deliverable | Delivered | Left for later |
 |---|---|---|
