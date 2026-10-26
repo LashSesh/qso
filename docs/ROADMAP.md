@@ -1,15 +1,15 @@
 # QSO Roadmap (1.x)
 
-Status: October 2026. Milestones 1.1 to 1.10 delivered — 1.3 combined the
+Status: October 2026. Milestones 1.1 to 1.11 delivered — 1.3 combined the
 milestones planned as "quantum walks" and "simulation performance".
 Milestones 1.4 (noise at scale and error mitigation), 1.5 (algorithms and
 physics) and 1.6 (interoperability) shipped together as release 1.4.0.
 Milestones 1.7 (stabilizer simulation and graph states) and 1.8
 (error-correction experiments) ship together as release 1.5.0 (1.5.1
 fixes its npm publication). Milestone 1.9 (matrix-product states) is
-delivered, and so is 1.10 (exact decoding and Stim circuits), the first
-of the second stage (1.10 to 1.13); finished milestones are released
-together, not one by one.
+delivered, and so are 1.10 (exact decoding and Stim circuits) and 1.11
+(the state-vector core at memory bandwidth) of the second stage (1.10 to
+1.13); finished milestones are released together, not one by one.
 Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
@@ -44,7 +44,7 @@ which withdraws the results of version 1.
 
 | Area | Now | Gap |
 |---|---|---|
-| Statevector speed | specialised kernels (1.1); gate fusion and cache blocking (1.3.0): 16-qubit layers 4.7× and 18–24-qubit layers 1.6–2.6× faster than in 1.2; batched evaluation | no explicit SIMD, no single precision; the adjoint backward pass is not blocked; worker threads sleep when idle, so short isolated simulations on virtual machines run cold — see [measurements](#measured-performance-against-established-simulators) |
+| Statevector speed | specialised kernels (1.1); gate fusion and cache blocking (1.3.0): 16-qubit layers 4.7× and 18–24-qubit layers 1.6–2.6× faster than in 1.2; batched evaluation; AVX and NEON kernels close to memory bandwidth and a blocked adjoint pass (1.11) | no single precision; worker threads sleep when idle, so short isolated simulations on virtual machines run cold — see [measurements](#measured-performance-against-established-simulators) |
 | Boson sampling | exact probabilities and exact sampling (1.1) | no partial distinguishability, photon loss or Gaussian boson sampling |
 | Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | no noise learning (PEC needs the Pauli noise given), no leakage or non-Markovian noise, channels on at most two qubits, no virtual distillation or probabilistic error amplification |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0) | no time-dependent Hamiltonians, no open-system discrete-time walks, no pretty-good-transfer decision (only best fidelity in a window) |
@@ -489,21 +489,50 @@ random circuits. It found no wrong result there. It found:
 * noise without a probability was read as noiseless, and gate arguments
   were ignored; both are errors now, as in Stim.
 
-### 1.11 — The state-vector core at memory bandwidth (M)
+### 1.11 — The state-vector core at memory bandwidth (delivered)
 
 Use case: the precondition the roadmap sets for a GPU backend, measured
 instead of assumed.
 
-| Deliverable | Detail |
-|---|---|
-| Bandwidth reference | `benchmark_report` measures the machine's copy bandwidth and reports each kernel's throughput as a fraction of it |
-| Kernels | explicit SIMD for the one- and two-qubit kernels through `std::arch` with run-time detection (x86-64 AVX2/FMA, aarch64 NEON) and the portable kernels as fallback |
-| Gradients | the adjoint backward pass blocked like the forward pass |
+| Deliverable | Delivered | Left for later |
+|---|---|---|
+| Bandwidth reference | `benchmark_report` times every gate on 24 qubits against the fastest in-place pass over the state (one, two or four memory streams per thread) and names the kernels' instruction set | per-kernel numbers on other machines |
+| Kernels | the kernels work on contiguous runs through primitives in AVX (x86-64, detected at run time) and NEON (aarch64), without FMA so that every version rounds as the portable one; diagonal gates read two memory streams; `set_simd` and `simd_level` in Rust and Python | AVX-512; vector paths for two-qubit gates on qubits 0 and 1, which keep element loops |
+| Gradients | the adjoint backward pass blocked like the forward pass, with per-block terms summed in block order | blocked parameter-shift and finite differences |
 
-Validation: the SIMD kernels agree bit for bit with the portable ones on
-random states (or to the last bit where FMA changes rounding, stated per
-kernel); Miri covers the fallback; the benchmark report states each
-kernel's fraction of bandwidth on its machine.
+Measured on the 4-core test machine (BENCHMARKS.md):
+
+* on high qubits, H, RZ, RZZ, the complex U and a dense 4×4 matrix take
+  0.97–1.32 times the reference pass; on qubits 0 and 1, 1.2–1.8 times
+  (the dense 4×4 matrix 2.9 times);
+* circuits of H, RZ and CX layers run 1.2–1.5 times faster than with the
+  1.10 code at 20–24 qubits, layers with RY, RZ, CX and RZZ 1.5–1.9
+  times;
+* an adjoint gradient is 2–3 times faster at 16–20 qubits.
+
+The cores are therefore close to memory bandwidth on whole-register
+gates. Inside cache blocks, the arithmetic now runs in vector registers.
+
+Validation:
+
+* the vector and portable kernels agree bit for bit on every kernel, on
+  small registers and on 17 qubits (native, and for NEON under Miri's
+  aarch64 interpretation; CI also runs the tests on arm64);
+* phase gates leave the amplitudes they do not touch unchanged, signs of
+  zero included;
+* the blocked backward pass equals the plain one to 10⁻¹² on circuits with
+  gates inside and across blocks and controls above them, and Miri checks
+  its unsafe code.
+
+An independent review compared the vector paths with the portable ones
+on random circuits of 1 to 20 qubits over the whole gate set (no bit
+differed), compared states with a dense reference simulator and with the
+1.10 code (bit-identical on 72 random circuits), checked gradients
+against finite differences at 15–17 qubits and determinism for 1 to 7
+threads. It found no memory-safety bug or wrong result. It found that
+phase gates on low qubits multiplied the other half by 1, flipping the
+sign of some zeros (fixed), and descriptions that overstated what the
+equality test covered (corrected, and the test extended).
 
 ### 1.12 — Noise learning (M)
 
