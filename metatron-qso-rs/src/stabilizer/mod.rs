@@ -13,7 +13,7 @@
 //! defined up to one.
 //!
 //! [`graph_state`](StabilizerState::graph_state) builds the graph state of
-//! any [`Graph`](crate::graph::Graph); [`program`] runs OpenQASM programs
+//! any [`Graph`]; [`program`] runs OpenQASM programs
 //! made of Clifford gates, mid-circuit measurements and conditions
 //! included.
 //!
