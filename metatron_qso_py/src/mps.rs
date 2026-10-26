@@ -56,6 +56,18 @@ fn options(max_bond: usize, cutoff: f64) -> MpsOptions {
     MpsOptions { max_bond, cutoff }
 }
 
+/// Run `f` on the state without holding the GIL: one distant gate on a
+/// long chain takes seconds.
+fn run<'py>(
+    mut slf: Slf<'py>,
+    f: impl FnOnce(&mut Mps) -> metatron_qso::Result<()> + Send,
+) -> PyResult<Slf<'py>> {
+    let py = slf.py();
+    let s = &mut slf.inner;
+    py.detach(|| f(s)).raise()?;
+    Ok(slf)
+}
+
 #[pymethods]
 impl PyMps {
     /// `|0…0⟩` on `n_qubits` qubits.
@@ -104,75 +116,62 @@ impl PyMps {
         self.inner.options().cutoff
     }
 
-    fn h(mut slf: Slf<'_>, qubit: usize) -> PyResult<Slf<'_>> {
-        slf.inner.h(qubit).raise()?;
-        Ok(slf)
+    fn h(slf: Slf<'_>, qubit: usize) -> PyResult<Slf<'_>> {
+        run(slf, |s| s.h(qubit).map(drop))
     }
 
-    fn x(mut slf: Slf<'_>, qubit: usize) -> PyResult<Slf<'_>> {
-        slf.inner.x(qubit).raise()?;
-        Ok(slf)
+    fn x(slf: Slf<'_>, qubit: usize) -> PyResult<Slf<'_>> {
+        run(slf, |s| s.x(qubit).map(drop))
     }
 
-    fn y(mut slf: Slf<'_>, qubit: usize) -> PyResult<Slf<'_>> {
-        slf.inner.y(qubit).raise()?;
-        Ok(slf)
+    fn y(slf: Slf<'_>, qubit: usize) -> PyResult<Slf<'_>> {
+        run(slf, |s| s.y(qubit).map(drop))
     }
 
-    fn z(mut slf: Slf<'_>, qubit: usize) -> PyResult<Slf<'_>> {
-        slf.inner.z(qubit).raise()?;
-        Ok(slf)
+    fn z(slf: Slf<'_>, qubit: usize) -> PyResult<Slf<'_>> {
+        run(slf, |s| s.z(qubit).map(drop))
     }
 
-    fn s(mut slf: Slf<'_>, qubit: usize) -> PyResult<Slf<'_>> {
-        slf.inner.s(qubit).raise()?;
-        Ok(slf)
+    fn s(slf: Slf<'_>, qubit: usize) -> PyResult<Slf<'_>> {
+        run(slf, |s| s.s(qubit).map(drop))
     }
 
-    fn t(mut slf: Slf<'_>, qubit: usize) -> PyResult<Slf<'_>> {
-        slf.inner.t(qubit).raise()?;
-        Ok(slf)
+    fn t(slf: Slf<'_>, qubit: usize) -> PyResult<Slf<'_>> {
+        run(slf, |s| s.t(qubit).map(drop))
     }
 
-    fn rx(mut slf: Slf<'_>, qubit: usize, angle: f64) -> PyResult<Slf<'_>> {
-        slf.inner.rx(qubit, angle).raise()?;
-        Ok(slf)
+    fn rx(slf: Slf<'_>, qubit: usize, angle: f64) -> PyResult<Slf<'_>> {
+        run(slf, |s| s.rx(qubit, angle).map(drop))
     }
 
-    fn ry(mut slf: Slf<'_>, qubit: usize, angle: f64) -> PyResult<Slf<'_>> {
-        slf.inner.ry(qubit, angle).raise()?;
-        Ok(slf)
+    fn ry(slf: Slf<'_>, qubit: usize, angle: f64) -> PyResult<Slf<'_>> {
+        run(slf, |s| s.ry(qubit, angle).map(drop))
     }
 
-    fn rz(mut slf: Slf<'_>, qubit: usize, angle: f64) -> PyResult<Slf<'_>> {
-        slf.inner.rz(qubit, angle).raise()?;
-        Ok(slf)
+    fn rz(slf: Slf<'_>, qubit: usize, angle: f64) -> PyResult<Slf<'_>> {
+        run(slf, |s| s.rz(qubit, angle).map(drop))
     }
 
-    fn cx(mut slf: Slf<'_>, control: usize, target: usize) -> PyResult<Slf<'_>> {
-        slf.inner.cx(control, target).raise()?;
-        Ok(slf)
+    fn cx(slf: Slf<'_>, control: usize, target: usize) -> PyResult<Slf<'_>> {
+        run(slf, |s| s.cx(control, target).map(drop))
     }
 
-    fn cz(mut slf: Slf<'_>, a: usize, b: usize) -> PyResult<Slf<'_>> {
-        slf.inner.cz(a, b).raise()?;
-        Ok(slf)
+    fn cz(slf: Slf<'_>, a: usize, b: usize) -> PyResult<Slf<'_>> {
+        run(slf, |s| s.cz(a, b).map(drop))
     }
 
-    fn swap(mut slf: Slf<'_>, a: usize, b: usize) -> PyResult<Slf<'_>> {
-        slf.inner.swap(a, b).raise()?;
-        Ok(slf)
+    fn swap(slf: Slf<'_>, a: usize, b: usize) -> PyResult<Slf<'_>> {
+        run(slf, |s| s.swap(a, b).map(drop))
     }
 
-    fn rzz(mut slf: Slf<'_>, a: usize, b: usize, angle: f64) -> PyResult<Slf<'_>> {
-        slf.inner.rzz(a, b, angle).raise()?;
-        Ok(slf)
+    fn rzz(slf: Slf<'_>, a: usize, b: usize, angle: f64) -> PyResult<Slf<'_>> {
+        run(slf, |s| s.rzz(a, b, angle).map(drop))
     }
 
     /// Apply a unitary matrix (`qubits[0]` most significant) to up to 8
     /// distinct qubits.
     fn apply_matrix<'py>(
-        mut slf: Slf<'py>,
+        slf: Slf<'py>,
         matrix: ComplexMatrixArg<'_>,
         qubits: Vec<usize>,
     ) -> PyResult<Slf<'py>> {
@@ -181,8 +180,7 @@ impl PyMps {
             return Err(invalid("the matrix must be square"));
         }
         let flat: Vec<C64> = m.iter().copied().collect();
-        slf.inner.apply_matrix(&flat, &qubits).raise()?;
-        Ok(slf)
+        run(slf, |s| s.apply_matrix(&flat, &qubits))
     }
 
     /// Apply a circuit (parameters bound to `theta`).
@@ -201,15 +199,16 @@ impl PyMps {
     }
 
     /// Measure `qubit` in the computational basis: 0 or 1.
-    fn measure(&mut self, qubit: usize) -> PyResult<u8> {
+    fn measure(&mut self, py: Python<'_>, qubit: usize) -> PyResult<u8> {
         let Self { inner, rng } = self;
-        Ok(u8::from(inner.measure(qubit, rng).raise()?))
+        Ok(u8::from(py.detach(|| inner.measure(qubit, rng)).raise()?))
     }
 
     /// Reset `qubit` to `|0⟩`.
     fn reset(mut slf: Slf<'_>, qubit: usize) -> PyResult<Slf<'_>> {
-        let this = &mut *slf;
-        this.inner.reset(qubit, &mut this.rng).raise()?;
+        let py = slf.py();
+        let PyMps { inner, rng } = &mut *slf;
+        py.detach(|| inner.reset(qubit, rng)).raise()?;
         Ok(slf)
     }
 
@@ -315,11 +314,14 @@ impl PyMps {
     }
 
     fn __repr__(&self) -> String {
+        let bound = self
+            .inner
+            .fidelity_lower_bound()
+            .map_or_else(|| "None".to_string(), |b| format!("{b:?}"));
         format!(
-            "MatrixProductState(n_qubits={}, max_bond_dimension={}, fidelity_lower_bound={:?})",
+            "MatrixProductState(n_qubits={}, max_bond_dimension={}, fidelity_lower_bound={bound})",
             self.inner.n_qubits(),
             self.inner.max_bond_dimension(),
-            self.inner.fidelity_lower_bound()
         )
     }
 }

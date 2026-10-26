@@ -1,10 +1,12 @@
 //! OpenQASM 2 import: no input may panic, and every accepted program must
 //! export and re-import to an equivalent circuit (the exporter decomposes
-//! gates outside `qelib1.inc`, up to a global phase).
+//! gates outside `qelib1.inc`, up to a global phase), and every small
+//! program must prepare the same state on a matrix-product state.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
 use metatron_qso::Rng;
+use metatron_qso::mps::{Mps, MpsOptions};
 use metatron_qso::quantum::{StateVector, from_qasm2, to_qasm2};
 
 fuzz_target!(|src: &str| {
@@ -30,6 +32,14 @@ fuzz_target!(|src: &str| {
             assert!((a.norm() - 1.0).abs() < 1e-9, "norm {}", a.norm());
             let f = a.fidelity(&b).unwrap();
             assert!(!moderate || f > 1.0 - 1e-9, "fidelity {f} after export of\n{text}");
+        }
+        if circuit.n_qubits() > 0 {
+            let mut exact = StateVector::zero(circuit.n_qubits());
+            exact.apply_circuit(&circuit, &[]).expect("imported circuits simulate");
+            let mps = Mps::from_circuit(&circuit, &[], MpsOptions::exact())
+                .expect("imported circuits run on an MPS");
+            let f = mps.to_statevector().unwrap().fidelity(&exact).unwrap();
+            assert!(!moderate || f > 1.0 - 1e-9, "MPS fidelity {f} for\n{src}");
         }
     }
 });

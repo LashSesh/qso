@@ -225,9 +225,13 @@ moving the centre right and for contracting with the next site) and the
   of the smaller Gram matrix (MM† or M†M) and chooses the kept subspace
   by the options. It orthonormalises the subspace's basis by Householder
   QR into an isometry Q and keeps F = Q†M. The discarded weight is
-  1 − ‖F‖²/‖M‖², measured rather than estimated, so the error accounting
-  is exact even when the eigenvectors are not. nalgebra's complex SVD
-  was not used because it fails on rank-deficient matrices.
+  ‖M − QF‖²/‖M‖², measured rather than estimated, so the error accounting
+  is exact even when the eigenvectors are not; computing it from the
+  residual instead of as 1 − ‖F‖²/‖M‖² avoids a cancellation that would
+  charge every exact split 10⁻¹⁶. A split computes all new tensors before
+  it writes any, so a split beyond the memory limit leaves the state as
+  it was. nalgebra's complex SVD was not used because it fails on
+  rank-deficient matrices.
 - **Fast products.** Complex matrix products run as three real products
   (Gauss's trick) on nalgebra's optimised real kernels; this is about
   five times faster than nalgebra's generic complex product.

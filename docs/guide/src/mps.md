@@ -95,12 +95,18 @@ for max_bond in (6, 8, 12):
 
 | `max_bond` | discarded weight | `fidelity_lower_bound` | true fidelity |
 |---|---|---|---|
-| 6 | 2.3·10⁻³ | 0.945 | 0.9941 |
-| 8 | 4.4·10⁻⁵ | 0.99936 | 0.99988 |
-| 12 | 2.5·10⁻⁷ | 0.9999974 | 0.9999995 |
+| 6 | 4.0·10⁻³ | 0.949 | 0.9941 |
+| 8 | 7.5·10⁻⁵ | 0.99937 | 0.99988 |
+| 12 | 3.9·10⁻⁷ | 0.9999975 | 0.9999995 |
 
 The bound is conservative, since it adds the distances of all
-truncations, but it is never violated.
+truncations. It holds up to floating-point rounding: the weight a split
+discards is computed from its residual, accurate to about 10⁻³⁰, and
+splits that keep everything add nothing. Exact circuits therefore keep a
+bound of 1 even after many routing swaps; discarded weights up to 10⁻²⁰
+count as rounding, not as truncations. In a program with mid-circuit
+measurements, the bound is `None` as soon as one shot measured after a
+truncation.
 
 ## Readout
 
@@ -168,13 +174,21 @@ prints how the entanglement of the XX chain grows.
 | `max_bond` | 4096 |
 | Tensor entries in all | 2²⁸ (4 GiB) |
 | Qubits per gate (controls included) | 8 |
-| Sampling | shots × tensor entries ≤ 2³⁶ |
+| Sampling | shots × tensor entries ≤ 2³⁶; shots × qubits ≤ 2²⁸ returned bits |
 
 - **Two-qubit gates.** A gate between neighbours costs O(χ³). On one core
   that is about 15 ms at χ = 64, 0.13 s at χ = 128 and 0.9 s at χ = 256.
 - **Distant gates.** A gate between distant qubits costs one swap per site
   in between, twice. A ring edge from qubit n − 1 to qubit 0 crosses the
   whole chain.
+- **Large gates.** A gate on k qubits contracts a tensor of
+  χ² · 2ᵏ entries and splits it k − 1 times; at large χ and k one gate
+  takes minutes. Nothing bounds this time beyond `max_bond` and the
+  limit of 8 qubits per gate.
+- **Errors.** A gate that would exceed the limits fails before it changes
+  the state. In `apply_circuit`, every instruction is checked first, so
+  invalid input changes nothing; a limit reached part of the way leaves
+  the gates before it applied.
 - **When not to use an MPS.** Circuits that entangle many qubits across a
   cut (deep random circuits, the QFT on a superposition) need χ = 2^(n/2)
   and belong on the state vector.

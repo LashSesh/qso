@@ -418,6 +418,23 @@ Validation:
 * GHZ states on 2000 qubits with bond dimension 2;
 * sampling, measurement and reset follow the Born rule.
 
+An independent review checked 600 random circuits with every gate kind
+against the state vector and 4200 truncated runs against their bounds,
+and found no wrong amplitude and no violated bound there. It found:
+
+* programs that measured after a truncation in some shots and not in
+  others reported the bound of the others;
+* the discarded weight, computed as 1 − ‖F‖²/‖M‖², charged every exact
+  split about 10⁻⁸ in distance, so long exact circuits reported bounds
+  below 1 (0.99998 for a star of CNOTs on 2000 qubits); it is now
+  computed from the residual, and the distance without cancellation;
+* angles that overflowed after scaling (θ · 10³⁰⁰) produced a NaN state
+  with a bound of 1;
+* sampling memory grew with shots × qubits beyond any limit, and the
+  work limit of programs ignored the bodies of `if` statements;
+* a gate's tensor was checked against the memory limit only after it was
+  built, and a failing split left the state half written.
+
 ### Research track (later)
 
 A GPU backend through `wgpu`: it starts only with a clear use case and

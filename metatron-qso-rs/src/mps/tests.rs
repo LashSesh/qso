@@ -70,7 +70,10 @@ fn random_circuits_match_the_state_vector() {
             // The truncation distance bounds the error, phase included.
             assert!(
                 (got - a).norm() <= mps.distance + 1e-12,
-                "trial {trial} k {k}"
+                "trial {trial} k {k}: {} vs {} ({} truncations)",
+                (got - a).norm(),
+                mps.distance,
+                mps.truncations
             );
         }
         // Pauli expectation values.
@@ -217,6 +220,7 @@ fn ghz_states_have_bond_dimension_two() {
 #[test]
 fn invalid_input_is_an_error() {
     assert!(Mps::zero(0, MpsOptions::default()).is_err());
+    assert!(Mps::from_circuit(&Circuit::new(0), &[], MpsOptions::default()).is_err());
     assert!(
         Mps::zero(
             2,
@@ -259,4 +263,63 @@ fn invalid_input_is_an_error() {
             .to_statevector()
             .is_err()
     );
+    // Angles are checked after evaluation, and before any gate runs.
+    let mut huge = Circuit::new(2);
+    let t = huge.new_parameter();
+    huge.h(0).rx(0, t * 1e300).cx(0, 1);
+    let mut m = Mps::zero(2, MpsOptions::default()).unwrap();
+    assert!(m.apply_circuit(&huge, &[1e300]).is_err());
+    assert!((m.expectation_str("Z0").unwrap() - 1.0).abs() < 1e-15);
+    // Samples are bounded by their bits, not only by the work.
+    let mut wide = Mps::zero(1 << 16, MpsOptions::default()).unwrap();
+    assert!(wide.sample(1 << 13, &mut rng).is_err());
+    assert!(wide.sample_counts(1 << 13, &mut rng).is_err());
+}
+
+#[test]
+fn exact_routing_keeps_the_bound_at_one() {
+    // 20 CZ gates between the ends of |+⟩^2000 (the identity in all): every
+    // split is exact, so rounding must not add up to a loss of fidelity.
+    let n = 2000;
+    let mut m = Mps::zero(n, MpsOptions::default()).unwrap();
+    for q in 0..n {
+        m.h(q).unwrap();
+    }
+    for _ in 0..20 {
+        m.cz(0, n - 1).unwrap();
+    }
+    assert_eq!(m.truncations(), 0);
+    assert_eq!(m.max_bond_dimension(), 1);
+    assert!(m.fidelity_lower_bound().unwrap() > 1.0 - 1e-12);
+    assert!((m.expectation_str("X0").unwrap() - 1.0).abs() < 1e-12);
+}
+
+#[test]
+fn programs_void_the_bound_and_count_their_bodies() {
+    use crate::quantum::Program;
+    // A truncation after the first measurement, then more measurements:
+    // the exact state depends on the outcomes, so there is no bound.
+    let p = Program::from_qasm(
+        "OPENQASM 2.0; include \"qelib1.inc\"; qreg q[3]; creg c[3]; h q[0]; \
+         measure q[0] -> c[0]; if(c==1) h q[1]; if(c==1) cx q[1],q[2]; \
+         measure q[1] -> c[1]; measure q[2] -> c[2];",
+    )
+    .unwrap();
+    let options = MpsOptions {
+        max_bond: 1,
+        cutoff: 0.0,
+    };
+    let (counts, bound) = program::sample_program(&p, 200, 1, options).unwrap();
+    assert_eq!(counts.values().sum::<usize>(), 200);
+    assert_eq!(bound, None);
+    let (_, exact) = program::sample_program(&p, 200, 1, MpsOptions::default()).unwrap();
+    assert!(exact.unwrap() > 1.0 - 1e-12);
+    // The work limit counts the operations inside `if` bodies.
+    let body = "x q[0]; ".repeat(2000);
+    let p = Program::from_qasm(&format!(
+        "OPENQASM 3.0; include \"stdgates.inc\"; qubit[1] q; bit[1] c; \
+         c[0] = measure q[0]; if (c[0] == false) {{ {body} }}"
+    ))
+    .unwrap();
+    assert!(program::sample_program(&p, 600_000, 1, MpsOptions::default()).is_err());
 }

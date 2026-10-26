@@ -47,6 +47,14 @@ pub const MAX_GATE_QUBITS: usize = 8;
 pub const MAX_STATEVECTOR_QUBITS: usize = 24;
 /// Most work (shots × tensor entries) one sampling call does.
 pub const MAX_SAMPLING_WORK: u128 = 1 << 36;
+/// Most bits (shots × qubits) [`Mps::sample`] and [`Mps::sample_counts`]
+/// return.
+pub const MAX_SAMPLED_BITS: usize = 1 << 28;
+
+/// Discarded weights up to this size are rounding: the residual of an
+/// exact split is of the order of the machine epsilon squared. Larger
+/// ones count as truncations.
+const ROUNDING_WEIGHT: f64 = 1e-20;
 
 const ZERO: C64 = C64::new(0.0, 0.0);
 const ONE: C64 = C64::new(1.0, 0.0);
@@ -115,6 +123,8 @@ pub struct Mps {
     qubit_at: Vec<usize>,
     site_of: Vec<usize>,
     center: usize,
+    /// Σ of the sites' entries.
+    entries: usize,
     options: MpsOptions,
     /// Σ of the discarded weights, and Σ of the distances they cause.
     discarded: f64,
@@ -212,6 +222,7 @@ impl Mps {
             qubit_at: (0..n_qubits).collect(),
             site_of: (0..n_qubits).collect(),
             center: 0,
+            entries: 2 * n_qubits,
             options,
             discarded: 0.0,
             distance: 0.0,
@@ -220,9 +231,10 @@ impl Mps {
         })
     }
 
-    /// Run `circuit` (parameters bound to `theta`) on `|0…0⟩`.
+    /// Run `circuit` (parameters bound to `theta`) on `|0…0⟩`; the
+    /// circuit needs at least one qubit.
     pub fn from_circuit(circuit: &Circuit, theta: &[f64], options: MpsOptions) -> Result<Self> {
-        let mut s = Mps::zero(circuit.n_qubits().max(1), options)?;
+        let mut s = Mps::zero(circuit.n_qubits(), options)?;
         s.apply_circuit(circuit, theta)?;
         Ok(s)
     }
@@ -276,7 +288,15 @@ impl Mps {
     }
 
     fn entries(&self) -> usize {
-        self.sites.iter().map(|s| s.data.len()).sum()
+        self.entries
+    }
+
+    /// Replace the site tensors from `p` on, keeping the entry count.
+    fn set_sites(&mut self, p: usize, new: Vec<Site>) {
+        for (j, site) in new.into_iter().enumerate() {
+            self.entries = self.entries - self.sites[p + j].data.len() + site.data.len();
+            self.sites[p + j] = site;
+        }
     }
 
     fn check_qubit(&self, q: usize) -> Result<()> {
@@ -298,18 +318,19 @@ impl Mps {
         let qr = DMatrix::from_row_slice(2 * l, r, data).qr();
         let (q, rm) = (qr.q(), qr.r());
         let m = q.ncols();
-        self.sites[c] = Site {
-            l,
-            r: m,
-            data: row_major(&q),
-        };
         let next = &self.sites[c + 1];
         let data = matmul(&row_major(&rm), m, r, &next.data, 2 * next.r);
-        self.sites[c + 1] = Site {
+        let next = Site {
             l: m,
             r: next.r,
             data,
         };
+        let here = Site {
+            l,
+            r: m,
+            data: row_major(&q),
+        };
+        self.set_sites(c, vec![here, next]);
         self.center = c + 1;
     }
 
@@ -321,18 +342,19 @@ impl Mps {
         let qr = a.adjoint().qr();
         let (q, rm) = (qr.q(), qr.r()); // A = R† Q†
         let m = q.ncols();
-        self.sites[c] = Site {
-            l: m,
-            r,
-            data: row_major(&q.adjoint()),
-        };
         let prev = &self.sites[c - 1];
         let data = matmul(&prev.data, 2 * prev.l, l, &row_major(&rm.adjoint()), m);
-        self.sites[c - 1] = Site {
+        let prev = Site {
             l: prev.l,
             r: m,
             data,
         };
+        let here = Site {
+            l: m,
+            r,
+            data: row_major(&q.adjoint()),
+        };
+        self.set_sites(c - 1, vec![prev, here]);
         self.center = c - 1;
     }
 
@@ -383,14 +405,15 @@ impl Mps {
     /// Factor the row-major `rows × cols` matrix `m` as `Q·F` with `Q` an
     /// isometry (`rows × keep`, orthonormal columns) and `F` normalised;
     /// returns `Q`, `keep`, `F` and the discarded weight fraction
-    /// `1 − ‖Q†m‖²/‖m‖²`.
+    /// `‖m − Q·Q†m‖²/‖m‖²`.
     ///
     /// The kept subspace comes from the Hermitian eigendecomposition of
     /// the Gram matrix on the smaller side (nalgebra's complex SVD is not
     /// reliable for rank-deficient matrices, which are the rule here), and
     /// `Q` from a Householder QR of its basis. The discarded weight is
-    /// measured from `F` itself, so it is exact whatever the accuracy of
-    /// the eigenvectors.
+    /// measured from the residual itself, so it holds whatever the
+    /// accuracy of the eigenvectors, and without the cancellation of
+    /// `1 − ‖Q†m‖²/‖m‖²`, which would make every split lose 10⁻¹⁶.
     fn factor(&self, m: &[C64], rows: usize, cols: usize) -> (Vec<C64>, usize, Vec<C64>, f64) {
         let a = DMatrix::from_row_slice(rows, cols, m);
         let total = a.norm_squared();
@@ -410,8 +433,10 @@ impl Mps {
         let q = basis.qr().q();
         let f = cmul(&q.adjoint(), &a);
         let kept = f.norm_squared();
-        let eps = if total > 0.0 {
-            (1.0 - kept / total).max(0.0)
+        // Keeping the whole smaller side keeps everything: Q spans the
+        // range of m.
+        let eps = if total > 0.0 && keep < dim {
+            ((a - cmul(&q, &f)).norm_squared() / total).min(1.0)
         } else {
             0.0
         };
@@ -426,34 +451,34 @@ impl Mps {
 
     /// Split `θ` back into sites `p..p + k`, the centre ending at
     /// `p + k − 1`.
+    ///
+    /// The state stays unchanged if the result would exceed
+    /// [`MAX_MPS_ENTRIES`].
     fn split(&mut self, p: usize, k: usize, l: usize, r: usize, mut theta: Vec<C64>) -> Result<()> {
         let mut left = l;
-        for j in 0..k - 1 {
+        let mut new = Vec::with_capacity(k);
+        let mut weights = Vec::with_capacity(k - 1);
+        for _ in 0..k - 1 {
             let rows = 2 * left;
             let cols = theta.len() / rows;
             let (site, keep, rest, eps) = self.factor(&theta, rows, cols);
-            if eps > 0.0 {
-                self.discarded += eps;
-                self.distance += (2.0 - 2.0 * (1.0 - eps).max(0.0).sqrt()).max(0.0).sqrt();
-                if eps > 1e-14 {
-                    self.truncations += 1;
-                }
-            }
-            self.sites[p + j] = Site {
+            new.push(Site {
                 l: left,
                 r: keep,
                 data: site,
-            };
+            });
+            weights.push(eps);
             theta = rest;
             left = keep;
         }
-        self.sites[p + k - 1] = Site {
+        new.push(Site {
             l: left,
             r,
             data: theta,
-        };
-        self.center = p + k - 1;
-        if self.entries() > MAX_MPS_ENTRIES {
+        });
+        let old: usize = self.sites[p..p + k].iter().map(|s| s.data.len()).sum();
+        let added: usize = new.iter().map(|s| s.data.len()).sum();
+        if self.entries - old + added > MAX_MPS_ENTRIES {
             return Err(QsoError::invalid(
                 "mps",
                 format!(
@@ -461,6 +486,18 @@ impl Mps {
                 ),
             ));
         }
+        for eps in weights {
+            if eps > 0.0 {
+                self.discarded += eps;
+                // √(2 − 2√(1 − ε)), without cancellation for small ε.
+                self.distance += (2.0 * eps / (1.0 + (1.0 - eps).sqrt())).sqrt();
+                if eps > ROUNDING_WEIGHT {
+                    self.truncations += 1;
+                }
+            }
+        }
+        self.set_sites(p, new);
+        self.center = p + k - 1;
         Ok(())
     }
 
@@ -471,14 +508,18 @@ impl Mps {
         } else if self.center >= p + k {
             self.move_center(p + k - 1);
         }
-        let (l, r, theta) = self.theta(p, k);
-        let d = 1usize << k;
-        if l * d * r > MAX_MPS_ENTRIES / 4 {
+        // θ and its partial contractions, (l · 2^(j+1)) × r_j, must fit
+        // before they are built.
+        let l = self.sites[p].l;
+        if (0..k).any(|j| (l << (j + 1)).saturating_mul(self.sites[p + j].r) > MAX_MPS_ENTRIES / 4)
+        {
             return Err(QsoError::invalid(
                 "mps",
                 "a gate's tensor is too large; lower max_bond or use fewer qubits per gate",
             ));
         }
+        let (l, r, theta) = self.theta(p, k);
+        let d = 1usize << k;
         let mut out = vec![ZERO; theta.len()];
         for a in 0..l {
             let block = &theta[a * d * r..(a + 1) * d * r];
@@ -514,14 +555,37 @@ impl Mps {
     }
 
     /// Move `qubits` to adjacent sites around their median; returns the
-    /// first site and the swaps made (their left sites, in order).
+    /// first site and the swaps made (their left sites, in order). On an
+    /// error the swaps made are undone.
     fn gather(&mut self, qubits: &[usize]) -> Result<(usize, Vec<usize>)> {
+        let mut swaps = Vec::new();
+        match self.gather_into(qubits, &mut swaps) {
+            Ok(p) => Ok((p, swaps)),
+            Err(e) => {
+                self.unswap(&swaps);
+                Err(e)
+            }
+        }
+    }
+
+    /// Undo `swaps`, as far as the limits allow. Results stay correct
+    /// either way, since every readout goes through `site_of`; only the
+    /// order of the qubits along the chain, which the bond quantities
+    /// refer to, depends on it.
+    fn unswap(&mut self, swaps: &[usize]) {
+        for &s in swaps.iter().rev() {
+            if self.swap_sites(s).is_err() {
+                break;
+            }
+        }
+    }
+
+    fn gather_into(&mut self, qubits: &[usize], swaps: &mut Vec<usize>) -> Result<usize> {
         let mut sites: Vec<usize> = qubits.iter().map(|&q| self.site_of[q]).collect();
         sites.sort_unstable();
         let k = sites.len();
         let m = k / 2;
         let anchor = sites[m];
-        let mut swaps = Vec::new();
         for j in (0..m).rev() {
             let target = anchor - (m - j);
             let mut s = sites[j];
@@ -540,7 +604,7 @@ impl Mps {
                 s -= 1;
             }
         }
-        Ok((anchor - m, swaps))
+        Ok(anchor - m)
     }
 
     /// Apply a unitary (row-major, dimension `2^qubits.len()`, `qubits[0]`
@@ -612,12 +676,10 @@ impl Mps {
                 m[x * d + y] = matrix[perm[x] * d + perm[y]];
             }
         }
-        self.apply_sites(p, k, &m)?;
+        let applied = self.apply_sites(p, k, &m);
         // Swap back, so that qubit q stays at site q.
-        for &s in swaps.iter().rev() {
-            self.swap_sites(s)?;
-        }
-        Ok(())
+        self.unswap(&swaps);
+        applied
     }
 
     /// Apply one instruction with parameters `theta`.
@@ -633,6 +695,16 @@ impl Mps {
         inst: &Instruction,
         theta: &[f64],
     ) -> Result<(Vec<usize>, Vec<C64>)> {
+        let (qubits, angles) = self.check_instruction(inst, theta)?;
+        Ok((qubits, instruction_matrix(inst, &angles)))
+    }
+
+    /// The validated qubits and angles of an instruction.
+    fn check_instruction(
+        &self,
+        inst: &Instruction,
+        theta: &[f64],
+    ) -> Result<(Vec<usize>, Vec<f64>)> {
         inst.validate(self.n_qubits())?;
         for p in &inst.params {
             if let crate::quantum::Param::Symbol(s) = p
@@ -658,8 +730,14 @@ impl Mps {
                 ),
             ));
         }
-        let m = instruction_matrix(inst, &inst.angles(theta));
-        Ok((qubits, m))
+        let angles = inst.angles(theta);
+        if angles.iter().any(|a| !a.is_finite()) {
+            return Err(QsoError::invalid(
+                "theta",
+                format!("{} has a non-finite angle", inst.kind.name()),
+            ));
+        }
+        Ok((qubits, angles))
     }
 
     fn gate(
@@ -744,6 +822,11 @@ impl Mps {
             });
         }
         circuit.check_parameters(theta)?;
+        // Every instruction is checked before the first is applied; only
+        // the limits can still stop the circuit part of the way.
+        for inst in circuit.instructions() {
+            self.check_instruction(inst, theta)?;
+        }
         // Consecutive gates on the same one or two qubits are multiplied
         // into one matrix first: one split instead of several.
         let mut pending: Option<(Vec<usize>, Vec<C64>)> = None;
@@ -985,8 +1068,32 @@ impl Mps {
     }
 
     /// Sample every qubit `shots` times without changing the state; bit
-    /// `q` of each sample is qubit `q`.
+    /// `q` of each sample is qubit `q`. At most [`MAX_SAMPLED_BITS`] bits.
     pub fn sample(&mut self, shots: usize, rng: &mut Rng) -> Result<Vec<Vec<bool>>> {
+        self.check_sampled_bits(shots)?;
+        let mut out = Vec::with_capacity(shots);
+        self.sample_each(shots, rng, |bits| out.push(bits.to_vec()))?;
+        Ok(out)
+    }
+
+    fn check_sampled_bits(&self, shots: usize) -> Result<()> {
+        if shots.saturating_mul(self.n_qubits()) > MAX_SAMPLED_BITS {
+            return Err(QsoError::invalid(
+                "shots",
+                format!("shots × qubits must be at most {MAX_SAMPLED_BITS}"),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Draw `shots` samples, handing each to `f`; bounded by
+    /// [`MAX_SAMPLING_WORK`] only.
+    pub(crate) fn sample_each(
+        &mut self,
+        shots: usize,
+        rng: &mut Rng,
+        mut f: impl FnMut(&[bool]),
+    ) -> Result<()> {
         let work = shots as u128 * self.entries() as u128;
         if work > MAX_SAMPLING_WORK {
             return Err(QsoError::invalid(
@@ -997,10 +1104,8 @@ impl Mps {
         // With the centre at site 0, every other site is right-canonical:
         // the probability of a prefix is the norm² of its left vector.
         self.move_center(0);
-        let n = self.n_qubits();
-        let mut out = Vec::with_capacity(shots);
+        let mut bits = vec![false; self.n_qubits()];
         for _ in 0..shots {
-            let mut bits = vec![false; n];
             let mut v = vec![ONE];
             for (s, site) in self.sites.iter().enumerate() {
                 let r = site.r;
@@ -1022,26 +1127,28 @@ impl Mps {
                 let scale = 1.0 / p[sig].sqrt();
                 v = w[sig].iter().map(|z| z * scale).collect();
             }
-            out.push(bits);
+            f(&bits);
         }
-        Ok(out)
+        Ok(())
     }
 
-    /// Sample `shots` times: `{bitstring: count}`, qubit n − 1 first.
+    /// Sample `shots` times: `{bitstring: count}`, qubit n − 1 first. At
+    /// most [`MAX_SAMPLED_BITS`] bits.
     pub fn sample_counts(
         &mut self,
         shots: usize,
         rng: &mut Rng,
     ) -> Result<BTreeMap<String, usize>> {
+        self.check_sampled_bits(shots)?;
         let mut counts = BTreeMap::new();
-        for bits in self.sample(shots, rng)? {
+        self.sample_each(shots, rng, |bits| {
             let s: String = bits
                 .iter()
                 .rev()
                 .map(|&b| if b { '1' } else { '0' })
                 .collect();
             *counts.entry(s).or_insert(0) += 1;
-        }
+        })?;
         Ok(counts)
     }
 }

@@ -28,7 +28,9 @@ free-fermion evolution and the QAOA ring optimum (named below).
     - random circuits on 1–12 qubits match the state vector, amplitudes
       included, within the bound;
     - truncated circuits never fall below their bound;
-    - a GHZ state on 2000 qubits keeps bond dimension 2;
+    - a GHZ state on 2000 qubits keeps bond dimension 2, and 20 gates
+      between the ends of a 2000-qubit chain keep the bound at 1;
+    - a program that measures after a truncation reports no bound;
     - a Trotterized XX chain on 100 qubits matches the exact
       free-fermion evolution of the same circuit (⟨Z⟩, ⟨ZZ⟩ to 10⁻⁸);
     - QAOA on a ring of 100 nodes reaches (2p + 1)/(2p + 2) for
@@ -44,6 +46,8 @@ free-fermion evolution and the QAOA ring optimum (named below).
 - Splits use the Hermitian eigendecomposition of a Gram matrix and a
   Householder QR, not nalgebra's complex SVD: nalgebra 0.35's complex SVD
   reconstructs rank-deficient matrices with errors of up to 20%.
+- Fuzzing: the OpenQASM 2 target also runs every imported circuit of up
+  to 8 qubits on an MPS and compares it with the state vector.
 
 ## [1.5.1] — 2026-10-26
 
