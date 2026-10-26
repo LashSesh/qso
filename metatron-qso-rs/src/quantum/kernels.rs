@@ -607,11 +607,15 @@ mod tests {
                     apply_1q(amps, t, 1 << u, &m2);
                     apply_2q(amps, t, u, 0, &m4);
                     apply_phase_on_mask(amps, (1 << t) | (1 << u), phase);
-                    let inst = Instruction {
-                        targets: vec![t, u],
-                        ..rzz.clone()
-                    };
-                    apply_instruction(amps, &inst, &[0.7], false, 0);
+                    // Miri perturbs cos and sin (the RZZ phases) on every
+                    // call, so the two runs would differ there.
+                    if !cfg!(miri) {
+                        let inst = Instruction {
+                            targets: vec![t, u],
+                            ..rzz.clone()
+                        };
+                        apply_instruction(amps, &inst, &[0.7], false, 0);
+                    }
                     if let Some(w) = (0..n).find(|&w| w != t && w != u) {
                         apply_2q(amps, t, u, 1 << w, &m4);
                     }

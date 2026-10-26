@@ -42,12 +42,29 @@ The kernels enumerate those groups by *inserting zero bits*: for
 then OR in the control mask. Distinct `k` give disjoint groups, so the loop
 parallelises without locks (`SyncPtr` documents this safety contract).
 
+Since 1.11 the arithmetic runs on *runs*: amplitudes whose bits at the
+gate's positions are fixed form contiguous runs of `2^p` amplitudes, `p`
+the lowest position. The kernels hand pairs of runs (a 2×2 matrix),
+single runs (a phase) or four runs (a 4×4 matrix) to the primitives of
+`quantum/simd.rs`. Those have a portable version and vector versions:
+AVX on x86-64, detected once at run time, with two amplitudes per
+register, and NEON on aarch64 with one. A complex product is
+`(a·c − b·d, a·d + b·c)` with separate multiplications and additions (AVX
+`mul` and `addsub`; NEON adds the negated term), in the same order as
+the scalar code, so every version gives the same bits. `set_simd(false)`
+forces the portable path, and a test compares the two on every kernel.
+Runs shorter than four amplitudes (gates on qubits 0 and 1) keep the
+element loops, where a call per run would cost more than it saves.
+
 Specialised paths:
 
-* uncontrolled single-qubit gates iterate over contiguous half-blocks
-  (`parallel::for_each_pair`), which the compiler vectorises; diagonal
-  matrices (`RZ`) scale each half without branching, and real matrices
-  (`H`, `RY`) use real instead of complex products, about twice as fast;
+* uncontrolled single-qubit gates process a whole chunk per call when
+  their stride is small and pairs of runs otherwise; diagonal matrices
+  (`RZ`) scale each half without branching, and real matrices (`H`,
+  `RY`) use real instead of complex products;
+* diagonal gates read the lower and upper halves of the register in step
+  (pieces of 512 amplitudes): the memory system serves two streams
+  faster than one, about 64 against 44 GB/s on the test machine;
 * `X`, `SWAP` and their controlled forms are permutations (no arithmetic);
   a singly controlled `X` swaps contiguous runs of `2^min(c, t)`
   amplitudes, split into fixed pieces so that gates on high qubits
@@ -380,7 +397,13 @@ VQD reuses the adjoint method with the observable `H + Σ β_j |ψ_j⟩⟨ψ_j|`
 Adjoint differentiation (Jones & Gacon 2020) keeps three vectors: the state
 `φ`, the co-state `λ = H|ψ⟩`, and a scratch copy. Walking the circuit
 backwards, each gate is undone on `φ` and `λ`, and every parameter of the
-gate contributes `2·Re⟨λ|∂U φ⟩·scale`. The cost is about three circuit
+gate contributes `2·Re⟨λ|∂U φ⟩·scale`. On registers larger than a cache
+block, runs of gates whose targets lie inside a block are undone and
+differentiated block by block, like the forward plans: the block of `φ`
+and `λ` stays in cache through the whole run, and the contributions of
+each gate are summed over the blocks in block order, so the result does
+not depend on the number of threads. At 16–20 qubits this makes a
+gradient 2–3 times faster. The cost is about three circuit
 simulations regardless of the parameter count (0.53 ms vs 28 ms for
 parameter shift with 100 parameters, see BENCHMARKS.md). Parameter-shift rules are provided for
 hardware-faithful gradients and as an independent check: two terms for
