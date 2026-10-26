@@ -4,6 +4,47 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+Milestone 1.9 of the [roadmap](docs/ROADMAP.md): matrix-product states.
+Results are checked against the state-vector simulator, exact
+free-fermion evolution and the QAOA ring optimum (named below).
+
+### Added
+
+- **Matrix-product states** (`mps::Mps`, Python `MatrixProductState`).
+  - States of up to 65 536 qubits in mixed canonical form.
+  - Any gate of the gate set, controls included, on up to 8 qubits,
+    routed by swaps to adjacent sites and swapped back. Consecutive gates
+    on the same one or two qubits are merged into one matrix first.
+  - Truncation by a bond-dimension limit and a weight cutoff
+    (`MpsOptions`).
+  - Every truncation is measured exactly, and `fidelity_lower_bound`
+    gives a rigorous lower bound on the fidelity with the exact state.
+  - Pauli expectation values (strings, `PauliSum`, term lists), exact
+    sampling, amplitudes, measurement and reset, entanglement entropy at
+    every bond, conversion to a state vector up to 24 qubits.
+  - Validation:
+    - random circuits on 1–12 qubits match the state vector, amplitudes
+      included, within the bound;
+    - truncated circuits never fall below their bound;
+    - a GHZ state on 2000 qubits keeps bond dimension 2;
+    - a Trotterized XX chain on 100 qubits matches the exact
+      free-fermion evolution of the same circuit (⟨Z⟩, ⟨ZZ⟩ to 10⁻⁸);
+    - QAOA on a ring of 100 nodes reaches (2p + 1)/(2p + 2) for
+      p = 1, 2, 3.
+- **Programs:** `mps::program::sample_program`,
+  `Program.sample(method="mps", max_bond=…)` and
+  `qso qasm FILE --mps --max-bond N`, which reports the fidelity bound.
+- **Docs:** example `mps` (200 qubits) and the guide chapter
+  "Matrix-product states".
+
+### Notes
+
+- Splits use the Hermitian eigendecomposition of a Gram matrix and a
+  Householder QR, not nalgebra's complex SVD: nalgebra 0.35's complex SVD
+  reconstructs rank-deficient matrices with errors of up to 20%.
+
 ## [1.5.1] — 2026-10-26
 
 ### Fixed

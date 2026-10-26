@@ -204,6 +204,38 @@ frame update for each gate is derived once.
   `sample_detectors` with the same seed, in bounded memory. A batch is
   1024 shots, or fewer when its frames and records would exceed 128 MiB.
 
+## Matrix-product states (`mps/`)
+
+Site q holds qubit q as a tensor `l × 2 × r`, stored row-major with index
+`(a·2 + s)·r + b`. The same buffer is then the `(2l) × r` matrix (for
+moving the centre right and for contracting with the next site) and the
+`l × (2r)` matrix (for moving it left), so no reshuffling is needed.
+
+- **Canonical form.** Sites left of the orthogonality centre are
+  left-canonical and sites right of it right-canonical, kept by
+  Householder QR when the centre moves. One-qubit gates act on a site in
+  place and keep the form.
+- **Gates.** A gate on k qubits moves the centre into the block, routes
+  the qubits next to each other by swaps, and contracts the k sites into
+  one tensor `θ` of shape `(l·2ᵏ) × r`. It applies the gate (its matrix
+  reordered from gate order to site order) and splits θ from the left;
+  the swaps are then undone. Keeping qubit q at site q keeps
+  nearest-neighbour circuits free of swaps.
+- **Splits.** A split of an `m × n` matrix M takes the eigendecomposition
+  of the smaller Gram matrix (MM† or M†M) and chooses the kept subspace
+  by the options. It orthonormalises the subspace's basis by Householder
+  QR into an isometry Q and keeps F = Q†M. The discarded weight is
+  1 − ‖F‖²/‖M‖², measured rather than estimated, so the error accounting
+  is exact even when the eigenvectors are not. nalgebra's complex SVD
+  was not used because it fails on rank-deficient matrices.
+- **Fast products.** Complex matrix products run as three real products
+  (Gauss's trick) on nalgebra's optimised real kernels; this is about
+  five times faster than nalgebra's generic complex product.
+- **Readout.** Expectation values contract from the first to the last
+  factor of the string, with the centre moved into that range. Sampling
+  moves the centre to site 0, so that every other site is right-canonical
+  and a prefix's probability is the norm² of its left vector.
+
 ## WebAssembly (`metatron_qso_wasm`)
 
 The core has no platform code beyond optional rayon, so it compiles for

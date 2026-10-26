@@ -13,6 +13,7 @@
 - [OpenQASM programs](programs.md)
 - [Stabilizer simulation and graph states](stabilizers.md)
 - [Error-correction experiments](qec.md)
+- [Matrix-product states](mps.md)
 - [Parameters and gradients](gradients.md)
 - [Variational algorithms](variational.md)
 - [Excited states and state geometry](excited.md)

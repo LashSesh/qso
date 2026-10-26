@@ -70,6 +70,7 @@ or by the benchmark report you can run yourself.
 | **Circuits** | Builder API with symbolic, differentiable parameters (`θ = a·p[i] + b`), inverse, binding, depth and gate counts. OpenQASM 2.0 and 3 export *and* import; multi-controlled gates are exported by exact, ancilla-free decomposition |
 | **Programs** | OpenQASM 2 and an OpenQASM 3 subset: gate definitions, `ctrl`/`negctrl`/`inv`/`pow` modifiers, mid-circuit measurement, reset and conditions. Exact outcome distributions by following every measurement branch, seeded sampling; checked against the OpenQASM project's example programs |
 | **Stabilizer simulation** | Aaronson–Gottesman tableaux for up to 16 384 qubits: Clifford gates (rotations by multiples of π/2 included), Pauli measurements, reset, expectation values, sampling. Graph states of any graph, local complementation, entanglement entropy from GF(2) cut-ranks. Clifford OpenQASM programs, mid-circuit measurement included, run on it automatically when they are too large for a state vector |
+| **Matrix-product states** | Circuits with little entanglement on up to 65 536 qubits: any gate of the gate set (controls included), routed by swaps; bond-dimension limit and cutoff with every truncation measured and a rigorous lower bound on the fidelity with the exact state; Pauli expectation values, exact sampling, amplitudes, measurement and reset, entanglement at every bond; OpenQASM programs |
 | **Error correction** | Detector circuits (Clifford gates, Pauli noise, measurement records, detectors, logical observables) in the style of Stim; Pauli-frame sampling, 64 shots per machine word; detector error models, equal to Stim's term by term; a weighted union-find decoder; repetition and rotated surface-code memory experiments with circuit-level noise; logical error rates; export to Stim's format |
 | **Observables** | Pauli strings and sums with a parser (`"0.5*Z0 Z1 - X2"`), matrix-free expectation values and `H\|ψ⟩`, exact ground states by Lanczos |
 | **Noise** | Density-matrix simulator (up to 14 qubits) on the same kernels. Depolarising (1 and 2 qubits), amplitude damping, phase damping, bit flip, phase flip, thermal relaxation (T₁/T₂), Pauli channels (correlated two-qubit noise), coherent rotations, custom Kraus channels, Pauli twirls. **Device models** (JSON): per-qubit T₁/T₂ and readout errors, per-gate durations, depolarising errors, over-rotations and channels, relaxation while qubits wait. **Quantum trajectories** for any register a state vector holds: one trajectory, compilation included, costs about three noiseless runs at 16–20 qubits, and 200 trajectories take 1.2–1.3 times as long as 200 noiseless runs |
@@ -123,6 +124,8 @@ or by the benchmark report you can run yourself.
 | GHZ state on 10 000 qubits (stabilizer simulator): ⟨Z₀Z₉₉₉₉⟩ / ⟨Z₄₃₂₁⟩ / ⟨X^⊗n⟩ | 1 / 0 / 1 | 1 / 0 / 1 |
 | Graph-state entanglement across the two halves of the hypercube Q₁₀ / of the cycle C₁₀₀₀ | 512 / 2 ebits | cut-rank over GF(2): 512 / 2 |
 | Random Clifford circuits (200, 1–8 qubits): stabilizer vs. state-vector simulator | fidelity 1 to 10⁻¹⁰ | — |
+| Trotterized XX chain, 100 qubits, 6 steps (matrix-product state): ⟨Z_j⟩ and ⟨Z_i Z_j⟩ | equal to the free-fermion values to 10⁻⁸ | exact free-fermion evolution of the same circuit |
+| QAOA on a ring of 100 nodes (matrix-product state), p = 1 / 2 / 3 | 0.75 / 0.8333 / 0.875 | (2p+1)/(2p+2), Mbeng et al. 2019 |
 | Rotated surface code, d rounds, circuit-level noise p = 0.001, union-find decoding: logical error rate at d = 3 / 5 / 7 | 8.4·10⁻⁴ / 1.4·10⁻⁴ / 2.1·10⁻⁵ (10⁶ shots; falls with d; rises with d at p = 0.01) | below threshold ⇔ falls with d |
 | Repetition code, one round of bit flips, union-find decoding, all 2ᵈ error patterns (d = 3 … 9) | fails exactly on the patterns with more than d/2 flips | majority vote |
 | Detector error models of memory experiments vs. Stim | identical terms, probabilities to 10⁻¹⁵ relative | Stim 1.16 |
@@ -334,6 +337,7 @@ search on Q8 for [17]: gamma 0.146868, best time 27.522674, success 0.754627 (ex
 | [`circuits`](metatron-qso-rs/examples/circuits.rs) | GHZ state, OpenQASM export, Grover's sine law, phase estimation |
 | [`noise_mitigation`](metatron-qso-rs/examples/noise_mitigation.rs) | A toy device: trajectories against density matrices, readout mitigation, ZNE, PEC and classical shadows on a GHZ state |
 | [`stabilizers`](metatron-qso-rs/examples/stabilizers.rs) | A GHZ state on 10 000 qubits, graph-state entanglement of Metatron's Cube, the Fruit of Life, C₁₀₀₀ and Q₁₀, local complementation |
+| [`mps`](metatron-qso-rs/examples/mps.rs) | An XX-chain quench on 200 qubits and QAOA on a ring of 200 nodes on matrix-product states, with the fidelity bound |
 | [`surface_code`](metatron-qso-rs/examples/surface_code.rs) | Logical error rates of rotated surface codes (d = 3, 5, 7) and repetition codes under circuit-level noise, below and above threshold |
 | [`molecules`](metatron-qso-rs/examples/molecules.rs) | LiH under four encodings against full CI, UCCSD, k-UpCCGSD and ADAPT-VQE; VQD excited states of H₂; Trotter errors against their bounds |
 | [`benchmark_report`](metatron-qso-rs/examples/benchmark_report.rs) | The performance and validation tables of [BENCHMARKS.md](docs/BENCHMARKS.md) |
@@ -363,7 +367,7 @@ machine-readable output; `qso <command> --help` lists all options.
 | `qaoa` | QAOA for MaxCut with exact optimum and approximation ratio | `--graph`, `--p`, `--restarts`, `--seed`, `--layerwise` |
 | `vqe` | VQE with an EfficientSU2 ansatz, compared with the exact ground energy | `--model h2\|tfim:N,J,H\|heisenberg:N,J,Δ`, `--hamiltonian "<Pauli sum>"`, `--qubits`, `--layers`, `--method`, `--restarts`, `--seed` |
 | `grover` | Grover search, simulated vs. theoretical success | `--qubits`, `--marked`, `--iterations` |
-| `qasm FILE` | Run an OpenQASM 2 or 3 program and sample its bits, or convert it; Clifford programs beyond 34 qubits on the stabilizer simulator | `--shots`, `--seed`, `--export qasm2\|qasm3`, `--stabilizer`, `--noise p1,p2`, `--device FILE`, `--trajectories N` |
+| `qasm FILE` | Run an OpenQASM 2 or 3 program and sample its bits, or convert it; Clifford programs beyond 34 qubits on the stabilizer simulator | `--shots`, `--seed`, `--export qasm2\|qasm3`, `--stabilizer`, `--mps`, `--max-bond N`, `--noise p1,p2`, `--device FILE`, `--trajectories N` |
 | `qec` | Repetition or surface-code memory experiment: logical error rate with union-find decoding | `--code surface\|repetition`, `--distance 3,5,7`, `--rounds`, `--p 0.001,0.01`, `--shots`, `--stim FILE` |
 | `estimate FILE` | ⟨H⟩ with standard error, optionally mitigated | `--observable`, `--shots`, `--device`, `--mitigate-readout`, `--zne 1,3,5`, `--pec N` |
 | `molecule FILE` | Qubit Hamiltonian, Hartree–Fock and full-CI energies of an FCIDUMP molecule, and a variational solution | `--mapping`, `--two-qubit-reduction`, `--method none\|uccsd\|upccgsd\|adapt`, `--roots` |
@@ -427,6 +431,7 @@ Know its boundaries:
 |---|---|---|
 | Pure-state register | 34 qubits | 2³⁴ amplitudes = 256 GiB; practical limit is your RAM (16 bytes per amplitude) |
 | Stabilizer register | 16 384 qubits, Clifford gates only | n²/2 bytes, about twice that while measuring. A gate costs n/32 word operations, a measurement O(n²) (about a second at the limit), sampling every qubit O(n³/64) once (about two minutes at the limit) |
+| Matrix-product state | 65 536 qubits, bond dimension up to 4096, 2²⁸ tensor entries | A gate between neighbours costs O(χ³): about 15 ms at χ = 64, 0.13 s at χ = 128, 0.9 s at χ = 256 on one core; distant gates add two swaps per site in between. Highly entangled circuits need χ = 2^(n/2) and belong on the state vector |
 | Detector circuit | 65 536 qubits, 2²⁴ operations, 64 observables | Pauli-frame sampling: one word operation per operation and 64 shots. Surface code d = 21 with 21 rounds (881 qubits, 4840 detectors): error model 0.5 s, 100 000 decoded shots 15 s on one core |
 | Density-matrix register | 14 qubits | 4¹⁴ entries = 4 GiB. Quantum trajectories reach the pure-state limit at the price of statistical error (and up to three state vectors in memory per running trajectory) |
 | Noise channels | one and two qubits | Kraus operators of channels on more qubits are not supported; noise after larger gates acts on consecutive pairs |
@@ -477,6 +482,7 @@ metatron-qso-rs/            Rust library `metatron_qso` and the `qso` CLI
   src/linalg/               Hermitian eigensolvers, Lanczos, Krylov, sparse matrices
   src/stabilizer/           stabilizer tableaux, graph states, Clifford programs
   src/qec/                  detector circuits, frame sampling, error models, decoding, codes
+  src/mps/                  matrix-product states, OpenQASM programs on them
   src/photonics/            permanents, interferometers, boson sampling
   src/backend.rs            execution backends and shot-based estimation
   src/bin/qso.rs            command-line tool

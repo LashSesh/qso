@@ -35,6 +35,10 @@ Pauli-frame sampler of the error-correction experiments is checked against
 the stabilizer simulator, and the decoder against exact majority-vote
 failure rates and against every single fault (and, at distance 5, every
 pair of faults) of the surface code ([Error correction](qec.md)).
+Matrix-product states are checked against the state vector on random
+circuits (within their fidelity bound), and on 100 qubits against the
+exact free-fermion evolution of a Trotterized XX chain and the QAOA ring
+optimum ([Matrix-product states](mps.md)).
 
 ## Cross-validation with other frameworks
 
