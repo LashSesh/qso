@@ -124,3 +124,18 @@ def test_ground_state_matches_dense_diagonalisation():
 def test_invalid_states_raise_value_error(build):
     with pytest.raises(ValueError):
         build()
+
+
+def test_vector_kernels_match_the_portable_ones() -> None:
+    assert q.simd_level() in ("avx", "neon", "portable")
+    c = q.Circuit(16)
+    for k in range(16):
+        c.u(k, 0.3 + k, 0.2, 0.1).rz(k, 0.4)
+    for k in range(15):
+        c.crx(k, k + 1, 0.7).rzz(k, (k + 5) % 16, 0.2)
+    fast = q.simulate(c).amplitudes
+    q.set_simd(False)
+    assert q.simd_level() == "portable"
+    slow = q.simulate(c).amplitudes
+    q.set_simd(True)
+    assert np.array_equal(fast, slow)

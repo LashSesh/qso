@@ -14,6 +14,7 @@ use metatron_qso::algorithms::gradients::{
 use metatron_qso::algorithms::qaoa::optimize_layerwise;
 use metatron_qso::noise;
 use metatron_qso::prelude::*;
+use num_complex::Complex64 as C64;
 
 fn median_seconds(repeats: usize, mut f: impl FnMut()) -> f64 {
     f(); // warm-up
@@ -51,7 +52,10 @@ fn main() -> Result<()> {
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
-    println!("Machine: {threads} hardware threads; build: release\n");
+    println!(
+        "Machine: {threads} hardware threads; build: release; kernels: {}\n",
+        metatron_qso::quantum::simd_level()
+    );
 
     println!("## Statevector throughput (layer = H + RZ on every qubit, CX chain)\n");
     println!("| qubits | gates/layer | time/layer | ns per gate·amplitude |");
@@ -99,6 +103,9 @@ fn main() -> Result<()> {
         println!("| {kind} | {} | {per:.3} |", fmt_time(t / 5.0));
     }
 
+    println!("\n## Kernels against memory bandwidth (24 qubits, all threads)\n");
+    bandwidth_table(threads, &mut record);
+
     println!("\n## Gradients (TFIM, 10 qubits, EfficientSU2 with 4 layers = 100 parameters)\n");
     let h = models::transverse_field_ising(10, 1.0, 0.7, false);
     let circuit = ansatz::efficient_su2(10, 4, Entanglement::Linear);
@@ -121,6 +128,21 @@ fn main() -> Result<()> {
         record(format!("gradient_tfim10/{}", name.replace(' ', "_")), t);
         println!("| {name} | {} |", fmt_time(t));
     }
+
+    // A register far beyond the cache: the backward pass runs block by
+    // block.
+    let h20 = models::transverse_field_ising(20, 1.0, 0.7, false);
+    let c20 = ansatz::efficient_su2(20, 4, Entanglement::Linear);
+    let theta20: Vec<f64> = (0..c20.num_parameters()).map(|k| 0.01 * k as f64).collect();
+    let t = median_seconds(3, || {
+        expectation_and_gradient(&c20, &h20, &theta20, None, GradientMethod::Adjoint).unwrap();
+    });
+    record("gradient_tfim20/adjoint".into(), t);
+    println!(
+        "| adjoint, 20 qubits ({} parameters) | {} |",
+        c20.num_parameters(),
+        fmt_time(t)
+    );
 
     println!("\n## Batched evaluation (same circuit and Hamiltonian, 256 parameter vectors)\n");
     println!("| quantity | one call per vector | one batch call | speed-up |");
@@ -384,4 +406,150 @@ fn main() -> Result<()> {
         eprintln!("wrote {path}");
     }
     Ok(())
+}
+
+/// One in-place read-modify-write pass over `data` (f64 scaled) on
+/// `threads` scoped threads, each walking its part as `streams` parallel
+/// sequences (prefetchers favour several streams). The fastest of a few
+/// stream counts is the least time a gate that reads and writes every
+/// amplitude can take.
+fn reference_pass(data: &mut [f64], threads: usize, streams: usize) {
+    let chunk = data.len().div_ceil(threads);
+    std::thread::scope(|scope| {
+        for part in data.chunks_mut(chunk) {
+            scope.spawn(move || {
+                let m = part.len() / streams;
+                for i in (0..m).step_by(8) {
+                    for j in 0..streams {
+                        let run = &mut part[j * m + i..(j * m + i + 8).min((j + 1) * m)];
+                        run.iter_mut().for_each(|x| *x *= 0.999_999);
+                    }
+                }
+            });
+        }
+    });
+}
+
+fn reference_time(data: &mut [f64], threads: usize) -> f64 {
+    [1, 2, 4]
+        .into_iter()
+        .map(|streams| median_seconds(5, || reference_pass(data, threads, streams)))
+        .fold(f64::INFINITY, f64::min)
+}
+
+/// Gates on 24 qubits against the reference pass: a gate that reads and
+/// writes every amplitude cannot beat 1.0 (CX and SWAP move only half).
+fn bandwidth_table(threads: usize, record: &mut impl FnMut(String, f64)) {
+    let n = 24;
+    let bytes = 2.0 * 16.0 * (1u64 << n) as f64;
+    let mut buffer = vec![1.0f64; 2 << n];
+    let t_one = reference_time(&mut buffer, 1);
+    let t_all = reference_time(&mut buffer, threads);
+    drop(buffer);
+    record("bandwidth/reference_pass/threads=1".into(), t_one);
+    record("bandwidth/reference_pass/threads=all".into(), t_all);
+    println!(
+        "Reference: the fastest in-place pass over the 256 MiB state (one, two or four \
+         streams per thread) takes {} on one thread ({:.1} GB/s read + write) and {} on \
+         all threads ({:.1} GB/s).\n",
+        fmt_time(t_one),
+        bytes / t_one / 1e9,
+        fmt_time(t_all),
+        bytes / t_all / 1e9
+    );
+    let (c, s) = (0.6f64.cos(), 0.6f64.sin());
+    let dense = vec![
+        C64::new(1.0, 0.0),
+        C64::new(0.0, 0.0),
+        C64::new(0.0, 0.0),
+        C64::new(0.0, 0.0),
+        C64::new(0.0, 0.0),
+        C64::new(c, 0.0),
+        C64::new(0.0, -s),
+        C64::new(0.0, 0.0),
+        C64::new(0.0, 0.0),
+        C64::new(0.0, -s),
+        C64::new(c, 0.0),
+        C64::new(0.0, 0.0),
+        C64::new(0.0, 0.0),
+        C64::new(0.0, 0.0),
+        C64::new(0.0, 0.0),
+        C64::from_polar(1.0, 0.4),
+    ];
+    type Build = Box<dyn Fn(&mut Circuit, usize, usize)>;
+    let gates: Vec<(&str, Build)> = vec![
+        (
+            "H",
+            Box::new(|c, a, _| {
+                c.h(a);
+            }),
+        ),
+        (
+            "RZ",
+            Box::new(|c, a, _| {
+                c.rz(a, 0.3);
+            }),
+        ),
+        (
+            "U (complex 2×2)",
+            Box::new(|c, a, _| {
+                c.u(a, 0.3, 0.2, 0.1);
+            }),
+        ),
+        (
+            "CX",
+            Box::new(|c, a, b| {
+                c.cx(a, b);
+            }),
+        ),
+        (
+            "CZ",
+            Box::new(|c, a, b| {
+                c.cz(a, b);
+            }),
+        ),
+        (
+            "CRX",
+            Box::new(|c, a, b| {
+                c.crx(a, b, 0.3);
+            }),
+        ),
+        (
+            "RZZ",
+            Box::new(|c, a, b| {
+                c.rzz(a, b, 0.3);
+            }),
+        ),
+        (
+            "SWAP",
+            Box::new(|c, a, b| {
+                c.swap(a, b);
+            }),
+        ),
+        (
+            "dense 4×4",
+            Box::new(move |c, a, b| {
+                c.unitary(dense.clone(), &[a, b], &[]).unwrap();
+            }),
+        ),
+    ];
+    let mut psi = StateVector::zero(n);
+    let mut layer = Circuit::new(n);
+    for q in 0..n {
+        layer.h(q);
+    }
+    psi.apply_circuit(&layer, &[]).unwrap();
+    println!("| gate | qubits 0, 1 | × reference | qubits 21, 20 | × reference |");
+    println!("|---|---:|---:|---:|---:|");
+    for (name, build) in &gates {
+        let mut row = format!("| {name} |");
+        for (a, b, tag) in [(0, 1, "low"), (21, 20, "high")] {
+            let mut c = Circuit::new(n);
+            build(&mut c, a, b);
+            let t = median_seconds(5, || psi.apply_circuit(&c, &[]).unwrap());
+            record(format!("bandwidth/{name}/{tag}"), t);
+            row += &format!(" {} | {:.2} |", fmt_time(t), t / t_all);
+        }
+        println!("{row}");
+    }
 }

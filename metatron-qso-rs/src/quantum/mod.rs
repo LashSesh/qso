@@ -21,6 +21,7 @@ pub(crate) mod plan;
 pub mod program;
 pub mod qasm;
 pub mod qubit_operator;
+pub(crate) mod simd;
 pub mod state;
 
 pub use circuit::{Circuit, Instruction, Param, Parameter};
@@ -30,4 +31,5 @@ pub use pauli::{Pauli, PauliString, PauliSum};
 pub use program::{Condition, Operation, Program, Register, record_bitstring};
 pub use qasm::{from_qasm2, to_qasm2};
 pub use qubit_operator::QubitOperator;
+pub use simd::{set_simd, simd_level};
 pub use state::{Counts, MAX_QUBITS, StateVector, bitstring};

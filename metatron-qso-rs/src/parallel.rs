@@ -126,6 +126,82 @@ where
     data.chunks_exact_mut(2 * stride).for_each(block);
 }
 
+/// Call `f(lo, hi)` on runs that together cover the pairs of
+/// [`for_each_pair`]: `lo` holds elements with bit `stride` clear and `hi`
+/// their partners, in pieces of at most `CHUNK` elements once runs are
+/// long.
+#[inline]
+pub(crate) fn for_each_pair_runs<T, F>(data: &mut [T], stride: usize, f: F)
+where
+    T: Send,
+    F: Fn(&mut [T], &mut [T]) + Sync + Send,
+{
+    let block = |chunk: &mut [T]| {
+        let (lo, hi) = chunk.split_at_mut(stride);
+        f(lo, hi);
+    };
+    #[cfg(feature = "parallel")]
+    if data.len() >= PAR_THRESHOLD {
+        if stride >= CHUNK {
+            data.par_chunks_mut(2 * stride).for_each(|chunk| {
+                let (lo, hi) = chunk.split_at_mut(stride);
+                lo.par_chunks_mut(CHUNK)
+                    .zip(hi.par_chunks_mut(CHUNK))
+                    .for_each(|(l, h)| f(l, h));
+            });
+        } else {
+            data.par_chunks_mut(CHUNK.max(2 * stride))
+                .for_each(|group| group.chunks_exact_mut(2 * stride).for_each(block));
+        }
+        return;
+    }
+    data.chunks_exact_mut(2 * stride).for_each(block);
+}
+
+/// Call `f(offset, lo, hi)` on the chunks of the lower half of `data`
+/// (at `offset`) together with the chunks of the upper half at
+/// `offset + data.len() / 2`, in parallel when worthwhile: two streams
+/// through memory, which the hardware serves faster than one.
+#[inline]
+pub(crate) fn for_each_chunk_pair<T, F>(data: &mut [T], f: F)
+where
+    T: Send,
+    F: Fn(usize, &mut [T], &mut [T]) + Sync + Send,
+{
+    let (lo, hi) = data.split_at_mut(data.len() / 2);
+    #[cfg(feature = "parallel")]
+    if lo.len() + hi.len() >= PAR_THRESHOLD {
+        lo.par_chunks_mut(CHUNK)
+            .zip(hi.par_chunks_mut(CHUNK))
+            .enumerate()
+            .for_each(|(c, (l, h))| f(c * CHUNK, l, h));
+        return;
+    }
+    for (c, (l, h)) in lo.chunks_mut(CHUNK).zip(hi.chunks_mut(CHUNK)).enumerate() {
+        f(c * CHUNK, l, h);
+    }
+}
+
+/// Call `f(offset, chunk)` on consecutive chunks of at most `CHUNK`
+/// elements, in parallel when worthwhile.
+#[inline]
+pub(crate) fn for_each_chunk<T, F>(data: &mut [T], f: F)
+where
+    T: Send,
+    F: Fn(usize, &mut [T]) + Sync + Send,
+{
+    #[cfg(feature = "parallel")]
+    if data.len() >= PAR_THRESHOLD {
+        data.par_chunks_mut(CHUNK)
+            .enumerate()
+            .for_each(|(c, chunk)| f(c * CHUNK, chunk));
+        return;
+    }
+    for (c, chunk) in data.chunks_mut(CHUNK).enumerate() {
+        f(c * CHUNK, chunk);
+    }
+}
+
 /// Mutate every element of `data` with knowledge of its index.
 #[inline]
 pub(crate) fn for_each_mut<T, F>(data: &mut [T], f: F)
