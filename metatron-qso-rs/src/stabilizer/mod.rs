@@ -317,48 +317,39 @@ impl StabilizerState {
     /// Hadamard.
     pub fn h(&mut self, q: usize) -> Result<&mut Self> {
         self.check(q)?;
-        self.column(q, |x, z, r| {
-            *r ^= *x & *z;
-            std::mem::swap(x, z);
-        });
+        <Self as CliffordTarget>::h(self, q);
         Ok(self)
     }
 
     /// Phase gate `S = diag(1, i)`.
     pub fn s(&mut self, q: usize) -> Result<&mut Self> {
         self.check(q)?;
-        self.column(q, |x, z, r| {
-            *r ^= *x & *z;
-            *z ^= *x;
-        });
+        <Self as CliffordTarget>::s(self, q);
         Ok(self)
     }
 
     /// `S† = diag(1, −i)`.
     pub fn sdg(&mut self, q: usize) -> Result<&mut Self> {
         self.check(q)?;
-        self.column(q, |x, z, r| {
-            *r ^= *x & !*z;
-            *z ^= *x;
-        });
+        <Self as CliffordTarget>::sdg(self, q);
         Ok(self)
     }
 
     pub fn x(&mut self, q: usize) -> Result<&mut Self> {
         self.check(q)?;
-        self.column(q, |_, z, r| *r ^= *z);
+        <Self as CliffordTarget>::x(self, q);
         Ok(self)
     }
 
     pub fn y(&mut self, q: usize) -> Result<&mut Self> {
         self.check(q)?;
-        self.column(q, |x, z, r| *r ^= *x ^ *z);
+        <Self as CliffordTarget>::y(self, q);
         Ok(self)
     }
 
     pub fn z(&mut self, q: usize) -> Result<&mut Self> {
         self.check(q)?;
-        self.column(q, |x, _, r| *r ^= *x);
+        <Self as CliffordTarget>::z(self, q);
         Ok(self)
     }
 
@@ -375,14 +366,7 @@ impl StabilizerState {
     /// CNOT with control `c` and target `t`.
     pub fn cx(&mut self, c: usize, t: usize) -> Result<&mut Self> {
         self.check_pair(c, t)?;
-        let (oc, ot) = (c * self.rw, t * self.rw);
-        for w in 0..self.rw {
-            let (xc, zc) = (self.x[oc + w], self.z[oc + w]);
-            let (xt, zt) = (self.x[ot + w], self.z[ot + w]);
-            self.r[w] ^= xc & zt & !(xt ^ zc);
-            self.x[ot + w] = xt ^ xc;
-            self.z[oc + w] = zc ^ zt;
-        }
+        <Self as CliffordTarget>::cx(self, c, t);
         Ok(self)
     }
 
@@ -398,111 +382,16 @@ impl StabilizerState {
 
     pub fn swap(&mut self, a: usize, b: usize) -> Result<&mut Self> {
         self.check_pair(a, b)?;
-        let (oa, ob) = (a * self.rw, b * self.rw);
-        for w in 0..self.rw {
-            self.x.swap(oa + w, ob + w);
-            self.z.swap(oa + w, ob + w);
-        }
+        <Self as CliffordTarget>::swap(self, a, b);
         Ok(self)
-    }
-
-    fn rz_quarters(&mut self, q: usize, k: u32) -> Result<()> {
-        match k {
-            1 => self.s(q)?,
-            2 => self.z(q)?,
-            3 => self.sdg(q)?,
-            _ => self,
-        };
-        Ok(())
-    }
-
-    fn rx_quarters(&mut self, q: usize, k: u32) -> Result<()> {
-        if k != 0 {
-            self.h(q)?;
-            self.rz_quarters(q, k)?;
-            self.h(q)?;
-        }
-        Ok(())
-    }
-
-    fn ry_quarters(&mut self, q: usize, k: u32) -> Result<()> {
-        // RY(θ) = S RX(θ) S†.
-        if k != 0 {
-            self.sdg(q)?;
-            self.rx_quarters(q, k)?;
-            self.s(q)?;
-        }
-        Ok(())
-    }
-
-    fn rzz_quarters(&mut self, a: usize, b: usize, k: u32) -> Result<()> {
-        if k != 0 {
-            self.cx(a, b)?;
-            self.rz_quarters(b, k)?;
-            self.cx(a, b)?;
-        }
-        Ok(())
     }
 
     /// Apply a Clifford instruction (parameters bound to `theta`); an error
     /// for gates outside the Clifford group (T, rotations by other angles,
     /// most multi-controlled gates, custom unitaries).
     pub fn apply_instruction(&mut self, inst: &Instruction, theta: &[f64]) -> Result<()> {
-        use GateKind::*;
         validate_instruction(inst, theta, self.n)?;
-        let a = inst.angles(theta);
-        let t = &inst.targets;
-        let name = inst.kind.name();
-        match (inst.kind, inst.controls.as_slice()) {
-            (H, []) => drop(self.h(t[0])?),
-            (X, []) => drop(self.x(t[0])?),
-            (Y, []) => drop(self.y(t[0])?),
-            (Z, []) => drop(self.z(t[0])?),
-            (S, []) => drop(self.s(t[0])?),
-            (Sdg, []) => drop(self.sdg(t[0])?),
-            (SX, []) => drop(self.sx(t[0])?),
-            (SXdg, []) => drop(self.sxdg(t[0])?),
-            (Swap, []) => drop(self.swap(t[0], t[1])?),
-            (X, [c]) => drop(self.cx(*c, t[0])?),
-            (Y, [c]) => drop(self.cy(*c, t[0])?),
-            (Z, [c]) => drop(self.cz(*c, t[0])?),
-            (RZ | P, []) => self.rz_quarters(t[0], quarter_turns(a[0], name)?)?,
-            (RX, []) => self.rx_quarters(t[0], quarter_turns(a[0], name)?)?,
-            (RY, []) => self.ry_quarters(t[0], quarter_turns(a[0], name)?)?,
-            (RZZ, []) => self.rzz_quarters(t[0], t[1], quarter_turns(a[0], name)?)?,
-            (RXX, []) => {
-                let k = quarter_turns(a[0], name)?;
-                self.h(t[0])?.h(t[1])?;
-                self.rzz_quarters(t[0], t[1], k)?;
-                self.h(t[0])?.h(t[1])?;
-            }
-            (RYY, []) => {
-                // RYY = (S⊗S) RXX (S†⊗S†).
-                let k = quarter_turns(a[0], name)?;
-                self.sdg(t[0])?.sdg(t[1])?.h(t[0])?.h(t[1])?;
-                self.rzz_quarters(t[0], t[1], k)?;
-                self.h(t[0])?.h(t[1])?.s(t[0])?.s(t[1])?;
-            }
-            (U, []) => {
-                // U(θ, φ, λ) = RZ(φ) RY(θ) RZ(λ) up to a global phase.
-                let (kt, kp, kl) = (
-                    quarter_turns(a[0], "U θ")?,
-                    quarter_turns(a[1], "U φ")?,
-                    quarter_turns(a[2], "U λ")?,
-                );
-                self.rz_quarters(t[0], kl)?;
-                self.ry_quarters(t[0], kt)?;
-                self.rz_quarters(t[0], kp)?;
-            }
-            // Controlled phases: CP(0) = I, CP(π) = CZ.
-            (P, [c]) => match quarter_turns(a[0], "controlled P")? {
-                0 => {}
-                2 => drop(self.cz(*c, t[0])?),
-                _ => return Err(not_clifford(inst)),
-            },
-            _ => return Err(not_clifford(inst)),
-        }
-        Ok(())
+        apply_clifford(self, inst, theta)
     }
 
     // -- Measurement -------------------------------------------------------
@@ -803,12 +692,196 @@ impl StabilizerState {
             ));
         }
         // √(−iX) = RX(π/2); √(iZ) = RZ(−π/2) = S† up to phase.
-        self.rx_quarters(v, 1)?;
+        rx_quarters(self, v, 1);
         for &(w, _) in graph.neighbors(v) {
             self.sdg(w)?;
         }
         Ok(())
     }
+}
+
+/// The Clifford primitives of a simulator: every supported gate is
+/// decomposed into them (up to global phases). Qubits are validated
+/// before; the primitives cannot fail.
+pub(crate) trait CliffordTarget {
+    fn h(&mut self, q: usize);
+    fn s(&mut self, q: usize);
+    fn sdg(&mut self, q: usize);
+    fn x(&mut self, q: usize);
+    fn y(&mut self, q: usize);
+    fn z(&mut self, q: usize);
+    fn cx(&mut self, c: usize, t: usize);
+    fn swap(&mut self, a: usize, b: usize);
+}
+
+impl CliffordTarget for StabilizerState {
+    fn h(&mut self, q: usize) {
+        self.column(q, |x, z, r| {
+            *r ^= *x & *z;
+            std::mem::swap(x, z);
+        });
+    }
+
+    fn s(&mut self, q: usize) {
+        self.column(q, |x, z, r| {
+            *r ^= *x & *z;
+            *z ^= *x;
+        });
+    }
+
+    fn sdg(&mut self, q: usize) {
+        self.column(q, |x, z, r| {
+            *r ^= *x & !*z;
+            *z ^= *x;
+        });
+    }
+
+    fn x(&mut self, q: usize) {
+        self.column(q, |_, z, r| *r ^= *z);
+    }
+
+    fn y(&mut self, q: usize) {
+        self.column(q, |x, z, r| *r ^= *x ^ *z);
+    }
+
+    fn z(&mut self, q: usize) {
+        self.column(q, |x, _, r| *r ^= *x);
+    }
+
+    fn cx(&mut self, c: usize, t: usize) {
+        let (oc, ot) = (c * self.rw, t * self.rw);
+        for w in 0..self.rw {
+            let (xc, zc) = (self.x[oc + w], self.z[oc + w]);
+            let (xt, zt) = (self.x[ot + w], self.z[ot + w]);
+            self.r[w] ^= xc & zt & !(xt ^ zc);
+            self.x[ot + w] = xt ^ xc;
+            self.z[oc + w] = zc ^ zt;
+        }
+    }
+
+    fn swap(&mut self, a: usize, b: usize) {
+        let (oa, ob) = (a * self.rw, b * self.rw);
+        for w in 0..self.rw {
+            self.x.swap(oa + w, ob + w);
+            self.z.swap(oa + w, ob + w);
+        }
+    }
+}
+
+fn rz_quarters<T: CliffordTarget>(t: &mut T, q: usize, k: u32) {
+    match k {
+        1 => t.s(q),
+        2 => t.z(q),
+        3 => t.sdg(q),
+        _ => {}
+    }
+}
+
+fn rx_quarters<T: CliffordTarget>(t: &mut T, q: usize, k: u32) {
+    if k != 0 {
+        t.h(q);
+        rz_quarters(t, q, k);
+        t.h(q);
+    }
+}
+
+fn ry_quarters<T: CliffordTarget>(t: &mut T, q: usize, k: u32) {
+    // RY(θ) = S RX(θ) S†.
+    if k != 0 {
+        t.sdg(q);
+        rx_quarters(t, q, k);
+        t.s(q);
+    }
+}
+
+fn rzz_quarters<T: CliffordTarget>(t: &mut T, a: usize, b: usize, k: u32) {
+    if k != 0 {
+        t.cx(a, b);
+        rz_quarters(t, b, k);
+        t.cx(a, b);
+    }
+}
+
+/// Apply a validated instruction through the primitives of `sim`.
+pub(crate) fn apply_clifford<T: CliffordTarget>(
+    sim: &mut T,
+    inst: &Instruction,
+    theta: &[f64],
+) -> Result<()> {
+    use GateKind::*;
+    let a = inst.angles(theta);
+    let t = &inst.targets;
+    let name = inst.kind.name();
+    match (inst.kind, inst.controls.as_slice()) {
+        (H, []) => sim.h(t[0]),
+        (X, []) => sim.x(t[0]),
+        (Y, []) => sim.y(t[0]),
+        (Z, []) => sim.z(t[0]),
+        (S, []) => sim.s(t[0]),
+        (Sdg, []) => sim.sdg(t[0]),
+        (SX, []) => rx_quarters(sim, t[0], 1),
+        (SXdg, []) => rx_quarters(sim, t[0], 3),
+        (Swap, []) => sim.swap(t[0], t[1]),
+        (X, [c]) => sim.cx(*c, t[0]),
+        (Y, [c]) => {
+            sim.sdg(t[0]);
+            sim.cx(*c, t[0]);
+            sim.s(t[0]);
+        }
+        (Z, [c]) => {
+            sim.h(t[0]);
+            sim.cx(*c, t[0]);
+            sim.h(t[0]);
+        }
+        (RZ | P, []) => rz_quarters(sim, t[0], quarter_turns(a[0], name)?),
+        (RX, []) => rx_quarters(sim, t[0], quarter_turns(a[0], name)?),
+        (RY, []) => ry_quarters(sim, t[0], quarter_turns(a[0], name)?),
+        (RZZ, []) => rzz_quarters(sim, t[0], t[1], quarter_turns(a[0], name)?),
+        (RXX, []) => {
+            let k = quarter_turns(a[0], name)?;
+            sim.h(t[0]);
+            sim.h(t[1]);
+            rzz_quarters(sim, t[0], t[1], k);
+            sim.h(t[0]);
+            sim.h(t[1]);
+        }
+        (RYY, []) => {
+            // RYY = (S⊗S) RXX (S†⊗S†).
+            let k = quarter_turns(a[0], name)?;
+            for &q in &t[..2] {
+                sim.sdg(q);
+                sim.h(q);
+            }
+            rzz_quarters(sim, t[0], t[1], k);
+            for &q in &t[..2] {
+                sim.h(q);
+                sim.s(q);
+            }
+        }
+        (U, []) => {
+            // U(θ, φ, λ) = RZ(φ) RY(θ) RZ(λ) up to a global phase.
+            let (kt, kp, kl) = (
+                quarter_turns(a[0], "U θ")?,
+                quarter_turns(a[1], "U φ")?,
+                quarter_turns(a[2], "U λ")?,
+            );
+            rz_quarters(sim, t[0], kl);
+            ry_quarters(sim, t[0], kt);
+            rz_quarters(sim, t[0], kp);
+        }
+        // Controlled phases: CP(0) = I, CP(π) = CZ.
+        (P, [c]) => match quarter_turns(a[0], "controlled P")? {
+            0 => {}
+            2 => {
+                sim.h(t[0]);
+                sim.cx(*c, t[0]);
+                sim.h(t[0]);
+            }
+            _ => return Err(not_clifford(inst)),
+        },
+        _ => return Err(not_clifford(inst)),
+    }
+    Ok(())
 }
 
 /// Check an instruction as the state-vector simulator does: arity, qubits
