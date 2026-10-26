@@ -1,12 +1,13 @@
 # QSO Roadmap (1.x)
 
-Status: October 2026. Milestones 1.1 to 1.8 delivered — 1.3 combined the
+Status: October 2026. Milestones 1.1 to 1.9 delivered — 1.3 combined the
 milestones planned as "quantum walks" and "simulation performance".
 Milestones 1.4 (noise at scale and error mitigation), 1.5 (algorithms and
 physics) and 1.6 (interoperability) shipped together as release 1.4.0.
 Milestones 1.7 (stabilizer simulation and graph states) and 1.8
 (error-correction experiments) ship together as release 1.5.0 (1.5.1
-fixes its npm publication). Next is 1.9, matrix-product states. Up to 1.3
+fixes its npm publication). Milestone 1.9 (matrix-product states) is
+delivered. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -384,7 +385,7 @@ random circuits, and found no wrong result there. It found:
 * generators that allocated gigabytes before reaching the operation
   limit.
 
-### 1.9 — Matrix-product states (M–L)
+### 1.9 — Matrix-product states (delivered)
 
 Use case: circuits with little entanglement on far more qubits than a
 state vector holds — Trotterized dynamics of spin chains, shallow QAOA on
@@ -392,18 +393,30 @@ rings and other sparse graphs, walk and Hamiltonian-simulation circuits —
 with a stated bound on the truncation error instead of a silent
 approximation.
 
-| Deliverable | Detail |
-|---|---|
-| MPS simulator | states of up to 65 536 qubits as matrix-product states with a bond-dimension limit and a truncation cutoff; any gate of the gate set, controls included, routed by swaps to adjacent sites |
-| Error accounting | discarded weight of every truncation and a rigorous lower bound on the fidelity with the exact state |
-| Readout | Pauli expectation values, exact sampling of all qubits, amplitudes, measurement and reset, entanglement entropy at every bond, conversion to a state vector for small registers |
-| Interfaces | circuits and OpenQASM programs on the MPS from Rust, Python and the CLI |
+| Deliverable | Delivered | Left for later |
+|---|---|---|
+| MPS simulator | states of up to 65 536 qubits in mixed canonical form, with a bond-dimension limit and a truncation cutoff; any gate of the gate set and any unitary on up to 8 qubits, controls included, routed by swaps to adjacent sites; consecutive gates on the same qubits fused | faster splits at large bond dimension (randomized range finders); folding rings so that the closing edge stays local; time-evolving block decimation for Hamiltonians directly |
+| Error accounting | the discarded weight of every split, measured exactly, and a rigorous lower bound on the fidelity with the exactly prepared state | — |
+| Readout | Pauli strings, `PauliSum`s and term lists; exact sampling of all qubits; amplitudes; measurement and reset; entanglement entropy at every bond; conversion to a state vector up to 24 qubits | — |
+| Interfaces | `metatron_qso::mps` in Rust, `MatrixProductState` and `Program.sample(method="mps")` in Python, `qso qasm --mps --max-bond` | the WASM package and the browser playground |
 
-Validation: random circuits against the state-vector simulator (exact when
-no truncation occurs; within the fidelity bound when it does);
-Trotterized XX chains of 100 and more qubits against the exact free-fermion
-evolution of the same circuit; QAOA on rings of 100 and more nodes against
-(2p + 1)/(2p + 2); GHZ states on thousands of qubits with bond dimension 2.
+Splits use the Hermitian eigendecomposition of a Gram matrix and a
+Householder QR instead of nalgebra's complex SVD, which reconstructs
+rank-deficient matrices with errors of several percent.
+
+Validation:
+
+* 120 random circuits on 1 to 12 qubits, with every gate kind and random
+  controlled unitaries, against the state-vector simulator: amplitudes,
+  expectation values and bond entropies agree, and with truncation the
+  true fidelity is never below the reported bound;
+* a Trotterized XX chain of 100 qubits against the exact free-fermion
+  evolution of the same circuit: ⟨Z_j⟩ and ⟨Z_i Z_j⟩ (Wick's theorem) to
+  10⁻⁸;
+* QAOA on a ring of 100 nodes with angles optimised on a ring of 10:
+  (2p + 1)/(2p + 2) for p = 1, 2, 3 to 10⁻⁶;
+* GHZ states on 2000 qubits with bond dimension 2;
+* sampling, measurement and reset follow the Born rule.
 
 ### Research track (later)
 
@@ -428,7 +441,7 @@ after the CPU core is close to memory bandwidth.
    experiments need the stabilizer simulator; graph states connect it to
    QSO's graphs. Both ship as one release.
 7. **1.9: matrix-product states** from the research track: they need no
-   new dependency (the SVD is nalgebra's), they reach the large chains and
+   new dependency (splits use nalgebra's Hermitian eigensolver), they reach the large chains and
    sparse graphs that QSO's walks and QAOA work on, and free fermions and
    the QAOA ring formula give exact references far beyond 34 qubits.
 
@@ -458,7 +471,7 @@ Taken (October 2026):
   it needs no dependency, it has exact references (the state-vector
   simulator, closed forms, enumeration), and graph states and
   error-correcting codes are graph-structured quantum computing.
-  Matrix-product states and a GPU backend wait.
+  Matrix-product states follow in 1.9; a GPU backend waits.
 * Decoding starts with union-find, not minimum-weight matching: it is
   short, has no dependency and runs in almost linear time. Its logical
   error rates are reported beside PyMatching's, so its accuracy cost is
