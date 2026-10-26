@@ -200,8 +200,9 @@ def correctness(quick: bool) -> dict:
 
 
 def qec_vs_stim(quick: bool) -> dict:
-    """Detector error models and detection-event rates of QSO's memory
-    experiments against Stim on the exported circuits; QSO's matching
+    """Detector error models and detection-event rates against Stim: of
+    QSO's memory experiments (on their export) and of Stim's generated
+    circuits (imported into QSO, against the originals); QSO's matching
     decoder against PyMatching shot by shot on the same error model and
     syndromes; and QSO's union-find logical error rate next to PyMatching's
     (minimum-weight matching)."""
@@ -228,9 +229,29 @@ def qec_vs_stim(quick: bool) -> dict:
         e = model.get(key, 0.0)
         model[key] = e * (1 - p) + p * (1 - e)
 
+    # Stim's own generated circuits, imported; Stim runs the originals.
+    originals = {}
+    generated = {
+        "stim repetition_code:memory d=5": ("repetition_code:memory", 5),
+        "stim rotated_memory_x d=5": ("surface_code:rotated_memory_x", 5),
+        "stim rotated_memory_z d=5": ("surface_code:rotated_memory_z", 5),
+    }
+    for name, (task, d) in generated.items():
+        sc = stim.Circuit.generated(
+            task,
+            distance=d,
+            rounds=d,
+            after_clifford_depolarization=0.003,
+            before_round_data_depolarization=0.002,
+            before_measure_flip_probability=0.004,
+            after_reset_flip_probability=0.003,
+        )
+        cases[name] = q.DetectorCircuit.from_stim(str(sc))
+        originals[name] = sc
+
     out = {}
     for name, c in cases.items():
-        sc = stim.Circuit(c.to_stim())
+        sc = originals.get(name) or stim.Circuit(c.to_stim())
         theirs: dict = {}
         for inst in sc.detector_error_model(decompose_errors=False).flattened():
             if inst.type != "error":

@@ -77,3 +77,10 @@ path = "fuzz_targets/qec.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "stim"
+path = "fuzz_targets/stim.rs"
+test = false
+doc = false
+bench = false

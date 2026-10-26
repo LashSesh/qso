@@ -80,6 +80,18 @@ def test_matching_decodes_at_least_as_well_as_union_find() -> None:
     assert repr(matching).startswith("MatchingDecoder(detectors=")
 
 
+def test_stim_circuits_import() -> None:
+    c = q.surface_code_memory(3, 3, 0.002)
+    back = q.DetectorCircuit.from_stim(c.to_stim())
+    assert back.to_stim() == c.to_stim()
+    assert back.n_detectors == c.n_detectors
+    text = "R 0 1\nREPEAT 2 {\n  X_ERROR(0.1) 0\n  CX 0 1\n  MR 1\n  DETECTOR rec[-1]\n}\nM 0\nOBSERVABLE_INCLUDE(0) rec[-1]"
+    r = q.DetectorCircuit.from_stim(text)
+    assert (r.n_qubits, r.n_measurements, r.n_detectors, r.n_observables) == (2, 3, 2, 1)
+    with pytest.raises(ValueError, match="MPP is not supported"):
+        q.DetectorCircuit.from_stim("MPP X0*X1")
+
+
 def test_surface_code_below_threshold() -> None:
     noise = q.CircuitNoise.uniform(0.001)
     rates = [q.logical_error_rate(q.surface_code_memory(d, d, noise), 50_000, seed=7) for d in (3, 5)]

@@ -368,6 +368,10 @@ enum Command {
         /// text format.
         #[arg(long)]
         stim: Option<std::path::PathBuf>,
+        /// Decode a circuit in Stim's text format instead of a generated
+        /// memory experiment (code, distance, rounds and p are ignored).
+        #[arg(long, conflicts_with = "stim")]
+        circuit: Option<std::path::PathBuf>,
     },
 }
 
@@ -1167,7 +1171,45 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             shots,
             seed,
             stim,
+            circuit: from_file,
         } => {
+            let kind = match decoder {
+                DecoderArg::UnionFind => qec::DecoderKind::UnionFind,
+                DecoderArg::Matching => qec::DecoderKind::Matching,
+            };
+            let decoder_name = match kind {
+                qec::DecoderKind::UnionFind => "union-find",
+                qec::DecoderKind::Matching => "matching",
+            };
+            if let Some(path) = from_file {
+                let text = std::fs::read_to_string(path).map_err(|e| {
+                    QsoError::invalid("circuit", format!("{}: {e}", path.display()))
+                })?;
+                let circuit = qec::DetectorCircuit::from_stim(&text)?;
+                let rate = qec::logical_error_rate_with(&circuit, *shots, *seed, kind)?;
+                let line = format!(
+                    "{}: {} qubits, {} detectors, {} observables; logical error rate {:.3e} ± {:.1e} ({} of {} shots, {decoder_name})",
+                    path.display(),
+                    circuit.n_qubits(),
+                    circuit.n_detectors(),
+                    circuit.n_observables(),
+                    rate.rate,
+                    rate.standard_error,
+                    rate.errors,
+                    rate.shots
+                );
+                return Ok((
+                    json!({
+                        "circuit": path.display().to_string(),
+                        "qubits": circuit.n_qubits(),
+                        "detectors": circuit.n_detectors(),
+                        "observables": circuit.n_observables(),
+                        "decoder": kind,
+                        "logical_error_rate": rate,
+                    }),
+                    line,
+                ));
+            }
             let mut rows = Vec::new();
             let mut lines = Vec::new();
             for &prob in p {
@@ -1183,10 +1225,6 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                             QsoError::invalid("stim", format!("{}: {e}", path.display()))
                         })?;
                     }
-                    let kind = match decoder {
-                        DecoderArg::UnionFind => qec::DecoderKind::UnionFind,
-                        DecoderArg::Matching => qec::DecoderKind::Matching,
-                    };
                     let rate = qec::logical_error_rate_with(&circuit, *shots, *seed, kind)?;
                     lines.push(format!(
                         "p = {prob}, d = {d}, {r} rounds: {} qubits, {} detectors; logical error rate {:.3e} ± {:.1e} ({} of {} shots, {})",
@@ -1196,10 +1234,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                         rate.standard_error,
                         rate.errors,
                         rate.shots,
-                        match kind {
-                            qec::DecoderKind::UnionFind => "union-find",
-                            qec::DecoderKind::Matching => "matching",
-                        }
+                        decoder_name
                     ));
                     rows.push(json!({
                         "p": prob,

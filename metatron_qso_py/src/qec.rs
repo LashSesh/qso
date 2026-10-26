@@ -204,6 +204,16 @@ impl PyDetectorCircuit {
         self.inner.to_stim().raise()
     }
 
+    /// A circuit in Stim's text format: Clifford gates, measurements and
+    /// resets in the X, Y and Z bases, X/Y/Z errors, one- and two-qubit
+    /// depolarizing noise, detectors, observables and REPEAT blocks.
+    #[staticmethod]
+    fn from_stim(text: &str) -> PyResult<Self> {
+        Ok(Self {
+            inner: DetectorCircuit::from_stim(text).raise()?,
+        })
+    }
+
     /// Sample `shots` shots: `(detectors, observables)`, boolean arrays of
     /// shape (shots, n_detectors) and (shots, n_observables) that say
     /// whether noise flipped each detector and observable.
