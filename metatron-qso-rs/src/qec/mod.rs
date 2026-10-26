@@ -31,7 +31,7 @@ pub use codes::{
 pub use decoder::{MatchingEdge, MatchingGraph, UnionFindDecoder};
 pub use dem::{DetectorErrorModel, ErrorMechanism, detector_error_model};
 pub use frame::{DetectorSamples, sample_detectors};
-pub use matching::MatchingDecoder;
+pub use matching::{MAX_MATCHING_PAIRS, MatchingDecoder};
 
 use crate::error::Result;
 use crate::rng::Rng;

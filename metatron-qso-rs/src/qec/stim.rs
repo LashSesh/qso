@@ -192,8 +192,12 @@ const SUPPORTED: [&str; 41] = [
 /// The rest of the measurements and resets.
 const SUPPORTED_MEASUREMENTS: [&str; 5] = ["MY", "MR", "MRZ", "MRX", "MRY"];
 
+/// Deepest nesting of REPEAT blocks.
+const MAX_REPEAT_DEPTH: usize = 64;
+
 /// Operations of the detector circuit an instruction becomes (an upper
-/// bound, for the size check before expansion).
+/// bound, for the size check before expansion); at least 1, so that the
+/// check also bounds the time of the expansion.
 fn cost(name: &str, targets: usize) -> u64 {
     let per = match name {
         "MY" | "MRY" => 6,
@@ -206,8 +210,9 @@ fn cost(name: &str, targets: usize) -> u64 {
 
 fn parse_items(
     lines: &mut std::iter::Peekable<impl Iterator<Item = (usize, String)>>,
-    nested: bool,
+    depth: usize,
 ) -> Result<Vec<Item>> {
+    let nested = depth > 0;
     let mut items = Vec::new();
     while let Some((line, text)) = lines.next() {
         let text = text.split('#').next().unwrap_or("").trim().to_string();
@@ -255,7 +260,16 @@ fn parse_items(
                 .trim()
                 .parse()
                 .map_err(|_| parse_error(line, "REPEAT needs a count"))?;
-            let body = parse_items(lines, true)?;
+            if count == 0 {
+                return Err(parse_error(line, "REPEAT needs a count of at least 1"));
+            }
+            if depth >= MAX_REPEAT_DEPTH {
+                return Err(parse_error(
+                    line,
+                    format!("REPEAT blocks nest deeper than {MAX_REPEAT_DEPTH}"),
+                ));
+            }
+            let body = parse_items(lines, depth + 1)?;
             items.push(Item::Repeat { count, body });
             continue;
         }
@@ -309,16 +323,15 @@ fn parse_items(
     Ok(items)
 }
 
-/// Operations after expansion, and the largest qubit.
+/// Steps of the expansion (operations, annotations and block
+/// iterations), and the largest qubit.
 fn measure_items(items: &[Item]) -> (u64, Option<usize>) {
     let mut ops = 0u64;
     let mut max = None;
     for item in items {
         match item {
             Item::Instruction { name, targets, .. } => {
-                if !IGNORED.contains(&name.as_str()) {
-                    ops = ops.saturating_add(cost(name, targets.len()));
-                }
+                ops = ops.saturating_add(cost(name, targets.len()));
                 for t in targets {
                     if let Target::Qubit(q) = t {
                         max = max.max(Some(*q));
@@ -327,7 +340,7 @@ fn measure_items(items: &[Item]) -> (u64, Option<usize>) {
             }
             Item::Repeat { count, body } => {
                 let (o, m) = measure_items(body);
-                ops = ops.saturating_add(o.saturating_mul(*count));
+                ops = ops.saturating_add((o + 1).saturating_mul(*count));
                 if *count > 0 {
                     max = max.max(m);
                 }
@@ -377,14 +390,11 @@ impl Builder {
     fn emit(&mut self, items: &[Item]) -> Result<()> {
         for item in items {
             match item {
-                // A block without operations (only TICKs) is skipped,
-                // whatever its count.
-                Item::Repeat { count, body } if measure_items(body).0 > 0 => {
+                Item::Repeat { count, body } => {
                     for _ in 0..*count {
                         self.emit(body)?;
                     }
                 }
-                Item::Repeat { .. } => {}
                 Item::Instruction {
                     name,
                     args,
@@ -435,14 +445,23 @@ impl Builder {
                 )),
             })
             .collect::<Result<_>>()?;
-        let p = match args {
-            [] => 0.0,
-            [p] => *p,
-            _ => {
+        // Noise takes its probability, measurements an optional flip
+        // probability, gates and resets nothing.
+        let is_noise = name.ends_with("_ERROR") || name.starts_with("DEPOLARIZE");
+        let p = match (args, is_noise, name.starts_with('M')) {
+            ([p], true, _) | ([p], false, true) => *p,
+            ([], false, _) => 0.0,
+            (_, true, _) => {
+                return Err(parse_error(line, format!("{name} takes one probability")));
+            }
+            (_, false, true) => {
                 return Err(parse_error(
                     line,
                     format!("{name} takes at most one argument"),
                 ));
+            }
+            (_, false, false) => {
+                return Err(parse_error(line, format!("{name} takes no arguments")));
             }
         };
         let one = |b: &mut Self, kind: GateKind, angle: Option<f64>| -> Result<()> {
@@ -560,12 +579,14 @@ impl DetectorCircuit {
             .enumerate()
             .map(|(i, l)| (i + 1, l.to_string()))
             .peekable();
-        let items = parse_items(&mut lines, false)?;
+        let items = parse_items(&mut lines, 0)?;
         let (ops, max) = measure_items(&items);
         if ops > MAX_QEC_OPERATIONS as u64 {
             return Err(QsoError::invalid(
                 "circuit",
-                format!("the circuit expands to more than {MAX_QEC_OPERATIONS} operations"),
+                format!(
+                    "the circuit expands to more than {MAX_QEC_OPERATIONS} operations and annotations"
+                ),
             ));
         }
         let n = max.map_or(1, |q| q + 1);

@@ -1,14 +1,15 @@
 # QSO Roadmap (1.x)
 
-Status: October 2026. Milestones 1.1 to 1.9 delivered — 1.3 combined the
+Status: October 2026. Milestones 1.1 to 1.10 delivered — 1.3 combined the
 milestones planned as "quantum walks" and "simulation performance".
 Milestones 1.4 (noise at scale and error mitigation), 1.5 (algorithms and
 physics) and 1.6 (interoperability) shipped together as release 1.4.0.
 Milestones 1.7 (stabilizer simulation and graph states) and 1.8
 (error-correction experiments) ship together as release 1.5.0 (1.5.1
 fixes its npm publication). Milestone 1.9 (matrix-product states) is
-delivered. The second stage, milestones 1.10 to 1.13, starts with exact
-decoding; finished milestones are released together, not one by one.
+delivered, and so is 1.10 (exact decoding and Stim circuits), the first
+of the second stage (1.10 to 1.13); finished milestones are released
+together, not one by one.
 Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
@@ -48,8 +49,8 @@ which withdraws the results of version 1.
 | Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | no noise learning (PEC needs the Pauli noise given), no leakage or non-Markovian noise, channels on at most two qubits, no virtual distillation or probabilistic error amplification |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0) | no time-dependent Hamiltonians, no open-system discrete-time walks, no pretty-good-transfer decision (only best fidelity in a window) |
 | Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5) | no integrals of its own (needs FCIDUMP files from a chemistry code), no unrestricted (UHF) integrals, no tight commutator bound for product formulas of order 4 and higher, no time-dependent Hamiltonians |
-| Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's text format for detector circuits and error models, written only (1.8); edge lists, GraphML and duck-typed NetworkX import for graphs | no Stim circuit import; no bridges to other frameworks, by decision (see section 2) |
-| Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8) | no exact matching decoder (union-find is up to 6% above PyMatching), no X-basis memory experiments |
+| Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
+| Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10) | no correlated decoding; matching is far slower than PyMatching's sparse blossom on large shots |
 | Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9) | no MPS in the browser build |
 | Documentation | user guide, executed tutorials and Python reference on GitHub Pages (1.2) | no Rust-specific tutorials; no hosted documentation per released version |
 | Engineering | CI on Linux (x86_64, arm64), macOS and Windows; Miri, fuzzing, API checks, weekly cross-validation and benchmark tracking; Trusted Publishing (1.2) | no coverage measurement; fuzzing only of the parsers and deserialisers |
@@ -445,23 +446,48 @@ The first stage made every area QSO covers correct and validated. The
 second closes the gaps that the first stage measured but left open,
 in the order of what they block.
 
-### 1.10 — Exact decoding and Stim circuits (M)
+### 1.10 — Exact decoding and Stim circuits (delivered)
 
 Use case: logical error rates that are those of minimum-weight matching,
 not an approximation of them, on circuits written by Stim or by QSO.
 
-| Deliverable | Detail |
-|---|---|
-| Matching decoder | exact minimum-weight perfect matching on the detection events of each shot: shortest paths in the matching graph, Edmonds' blossom algorithm on the events and their boundary copies; usable everywhere the union-find decoder is |
-| Stim circuits | an importer for Stim's circuit format (the gates QSO's detector circuits know, noise channels, `DETECTOR`, `OBSERVABLE_INCLUDE`, `REPEAT`, measurement records); errors name the unsupported instruction |
-| Codes | X-basis memory experiments for the rotated surface code |
+| Deliverable | Delivered | Left for later |
+|---|---|---|
+| Matching decoder | `MatchingDecoder`: Dijkstra distances (cached per detector up to 32 MiB, bounded searches beyond), the boundary through savings b_i + b_j − d_ij, Edmonds' blossom algorithm on integer weights; `Decoder` trait and `logical_error_rate_with`, Python and `qso qec --decoder matching` | correlated (hyperedge) decoding; a sparse-blossom implementation for very large shots (PyMatching is several hundred times faster at d = 17) |
+| Stim circuits | `DetectorCircuit::from_stim`: Clifford gates, measurements and resets in three bases, X/Y/Z and depolarizing noise, detectors, observables, REPEAT blocks; unsupported instructions named in the error | PAULI_CHANNEL, correlated and heralded errors, MPP, feedback |
+| Codes | X-basis memory of the rotated surface code (`MemoryBasis::X`) | lattice surgery, colour codes |
 
-Validation: matchings against enumeration of every perfect matching on
-random small graphs; every fault pattern of weight up to (d − 1)/2
-corrected; in the scheduled cross-validation, the decoder's predictions
-against PyMatching's shot by shot (equal up to ties) and imported Stim
-circuits' error models against Stim's; `to_stim` followed by the importer
-reproduces every circuit.
+Validation:
+
+* the blossom algorithm against dynamic programming on 4000 random
+  graphs with frequent ties;
+* corrections against enumeration of every error set on 300 random
+  error models, for every syndrome;
+* every single fault, every pair at d = 5 (both bases) and 20 000
+  random triples at d = 7 corrected;
+* predictions against PyMatching on the same error model and syndromes:
+  one of 800 000 differed in the cross-validation;
+* Stim-generated repetition and surface-code circuits reproduce Stim's
+  error models (unit tests with fixtures; the cross-validation at d = 5);
+  exported circuits read back to the same text; a fuzz target for the
+  importer.
+
+An independent review compared the decoder with its own exact reference
+(Dijkstra over node and observable parity, then dynamic programming over
+events) on 240 000 syndromes of 40 000 random models. It also compared it
+with PyMatching up to d = 17, and imported circuits with Stim on 400
+random circuits. It found no wrong result there. It found:
+
+* an error of probability 0, or one so small that (1 − p)/p overflows,
+  set every matching weight to 0; such errors are now left out or get
+  finite weights;
+* deeply nested REPEAT blocks overflowed the stack, and annotations
+  (TICK) inside large blocks were not counted toward the size limit;
+  nesting is now limited to 64 and every annotation counts;
+* the decoder's memory grew with the square of the number of events
+  without a limit; shots needing more than 2²² pairs are now an error;
+* noise without a probability was read as noiseless, and gate arguments
+  were ignored; both are errors now, as in Stim.
 
 ### 1.11 — The state-vector core at memory bandwidth (M)
 

@@ -45,8 +45,8 @@ pub struct MatchingGraph {
 }
 
 impl MatchingGraph {
-    /// The matching graph of a detector error model; every error must
-    /// flip at most two detectors (see the `decompose` option of
+    /// The matching graph of a detector error model (errors of probability
+    /// 0 are left out); every error must flip at most two detectors (see the `decompose` option of
     /// [`detector_error_model`](super::dem::detector_error_model)).
     pub fn from_dem(dem: &DetectorErrorModel) -> Result<Self> {
         let n = dem.n_detectors;
@@ -83,7 +83,13 @@ impl MatchingGraph {
                     format!("{p} is not a probability"),
                 ));
             }
-            let length = if p >= 0.5 { 0.0 } else { ((1.0 - p) / p).ln() };
+            if p == 0.0 {
+                // An error that never happens is no edge.
+                continue;
+            }
+            // ln(1 − p) − ln p stays finite for subnormal p, where
+            // (1 − p)/p overflows.
+            let length = if p >= 0.5 { 0.0 } else { (-p).ln_1p() - p.ln() };
             edges.push(MatchingEdge {
                 a,
                 b,

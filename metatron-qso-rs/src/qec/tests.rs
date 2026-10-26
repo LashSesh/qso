@@ -818,7 +818,7 @@ fn stim_import_reads_blocks_bases_and_rejects_the_rest() {
     );
     assert!(logical_error_rate_with(&c, 1000, 1, DecoderKind::Matching).is_ok());
     // MX and RX agree with H around Z; MY and RY with S† H.
-    let idle = DetectorCircuit::from_stim("REPEAT 1000000000000 {\nTICK\n}\nH 0").unwrap();
+    let idle = DetectorCircuit::from_stim("REPEAT 1000 {\nTICK\n}\nH 0").unwrap();
     assert_eq!(idle.operations().len(), 1);
     let x = DetectorCircuit::from_stim("RX 0\nZ_ERROR(0.1) 0\nMX 0\nDETECTOR rec[-1]").unwrap();
     let y = DetectorCircuit::from_stim("RY 0\nX_ERROR(0.1) 0\nMY 0\nDETECTOR rec[-1]").unwrap();
@@ -843,6 +843,14 @@ fn stim_import_reads_blocks_bases_and_rejects_the_rest() {
         ("DETECTOR rec[-1]", "before 0 measurements"),
         ("M(0.1, 0.2) 0", "at most one argument"),
         ("H 18446744073709551615", "beyond the largest register"),
+        // Annotations and nesting count toward the limits too.
+        ("REPEAT 1000000000000 {\nTICK\n}", "operations"),
+        (&"REPEAT 1 {\n".repeat(100), "nest deeper"),
+        ("REPEAT 0 {\nH 0\n}", "at least 1"),
+        // Arguments as strictly as Stim.
+        ("X_ERROR 0", "one probability"),
+        ("DEPOLARIZE1(0.1, 0.2) 0", "one probability"),
+        ("H(0.1) 0", "no arguments"),
     ] {
         let err = DetectorCircuit::from_stim(bad).unwrap_err().to_string();
         assert!(err.contains(what), "{bad:?}: {err}");
@@ -908,4 +916,61 @@ fn x_basis_memory_corrects_low_weight_faults_and_has_a_threshold() {
         r5.rate < 2.0 * z5.rate && z5.rate < 2.0 * r5.rate,
         "{r5:?} vs {z5:?}"
     );
+}
+
+#[test]
+fn matching_ignores_impossible_errors_and_bounds_its_pairs() {
+    // An error of probability 0 (or so small that (1 − p)/p overflows)
+    // must not flatten the other weights.
+    for tiny in [0.0, 1e-320, 5e-324] {
+        let e = |p: f64, detectors: Vec<usize>, observables| ErrorMechanism {
+            probability: p,
+            detectors,
+            observables,
+        };
+        let dem = DetectorErrorModel {
+            n_detectors: 4,
+            n_observables: 1,
+            errors: vec![
+                e(0.01, vec![0], 1),
+                e(0.01, vec![1], 0),
+                e(0.1, vec![0, 1], 0),
+                e(tiny, vec![2, 3], 0),
+            ],
+        };
+        let graph = MatchingGraph::from_dem(&dem).unwrap();
+        assert!(graph.edges().iter().all(|e| e.length.is_finite()));
+        let mut d = MatchingDecoder::new(graph.clone());
+        assert_eq!(d.decode(&[0, 1]).unwrap(), 0, "p = {tiny}");
+        assert_eq!(UnionFindDecoder::new(graph).decode(&[0, 1]).unwrap(), 0);
+        if tiny > 0.0 {
+            assert_eq!(d.decode(&[2, 3]).unwrap(), 0);
+        } else {
+            assert!(d.decode(&[2, 3]).is_err());
+        }
+    }
+    // A ring without boundary: every pair of events must be weighed, and
+    // beyond the limit decoding is an error, not unbounded memory.
+    let n = 3000;
+    let dem = DetectorErrorModel {
+        n_detectors: n,
+        n_observables: 1,
+        errors: (0..n)
+            .map(|i| ErrorMechanism {
+                probability: 0.01,
+                detectors: if i + 1 < n {
+                    vec![i, i + 1]
+                } else {
+                    vec![0, n - 1]
+                },
+                observables: u64::from(i == 0),
+            })
+            .collect(),
+    };
+    let mut d = MatchingDecoder::new(MatchingGraph::from_dem(&dem).unwrap());
+    let all: Vec<usize> = (0..n).collect();
+    let err = d.decode(&all).unwrap_err().to_string();
+    assert!(err.contains("pairs"), "{err}");
+    assert_eq!(d.decode(&[5, 9]).unwrap(), 0);
+    assert_eq!(d.decode(&[n - 2, 1]).unwrap(), 1);
 }

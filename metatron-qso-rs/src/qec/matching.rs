@@ -15,7 +15,13 @@
 //! Dijkstra stops at radius `b_i + max_j b_j`. Weights are ln((1 − p)/p),
 //! 0 for p ≥ 1/2, rounded to integers with the largest edge at 2²⁰, so
 //! the blossom algorithm computes exactly; "minimum" refers to these
-//! integer weights.
+//! integer weights. A shot may weigh at most [`MAX_MATCHING_PAIRS`] pairs
+//! of events.
+//!
+//! Where several corrections weigh the same, which one is returned can
+//! depend on the order in which pairs were found, and so on which
+//! distance rows were cached by earlier shots; every one is a
+//! minimum-weight correction, and a seeded run is reproducible.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -24,6 +30,12 @@ use super::decoder::MatchingGraph;
 use crate::error::{QsoError, Result};
 
 const NONE: usize = usize::MAX;
+/// Most pairs of detection events one shot may weigh (about 200 MiB with
+/// the blossom algorithm's arrays).
+pub const MAX_MATCHING_PAIRS: usize = 1 << 22;
+/// Largest stand-in cost of events without a boundary path; beyond it the
+/// integer arithmetic of the blossom algorithm could overflow.
+const MAX_STRANDED_COST: i64 = i64::MAX / 16;
 
 /// Distance and path observables from one detector to every detector.
 type Row = Box<[(i64, u64)]>;
@@ -264,9 +276,20 @@ impl MatchingDecoder {
                 radius
             });
             self.clear();
+            if pairs.len() > MAX_MATCHING_PAIRS {
+                break;
+            }
         }
         self.index = index;
         self.to_boundary = to_boundary;
+        if pairs.len() > MAX_MATCHING_PAIRS {
+            return Err(QsoError::invalid(
+                "fired",
+                format!(
+                    "{k} detection events need more than {MAX_MATCHING_PAIRS} pairs for exact matching"
+                ),
+            ));
+        }
         // Events without a boundary path pay `stranded_cost` there: more
         // than all their pairs together (each pair counts at most the
         // longest path from its first event), so they are matched
@@ -278,6 +301,12 @@ impl MatchingDecoder {
         let stranded_cost = (0..k)
             .filter(|&i| bound[i] == i64::MAX)
             .fold(1i64, |acc, i| acc.saturating_add(longest[i]));
+        if stranded_cost > MAX_STRANDED_COST {
+            return Err(QsoError::invalid(
+                "fired",
+                "the detection events are too far apart for exact integer matching",
+            ));
+        }
         let cost = |d: usize| {
             let b = self.to_boundary[d];
             if b == i64::MAX { stranded_cost } else { b }

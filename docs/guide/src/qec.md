@@ -162,7 +162,10 @@ J. Math. Phys. 43, 4452 (2002)). It takes three steps:
 
 Weights are rounded to integers, with the largest edge at 2²⁰, so the
 blossom algorithm computes exactly. Errors more likely than not have
-weight 0.
+weight 0, and errors of probability 0 are left out. Where several
+corrections weigh the same, which one is returned can depend on the
+distances earlier shots have cached. Each of them has minimum weight,
+and a seeded run is reproducible.
 
 ```python
 import metatron_qso as q
@@ -271,7 +274,8 @@ following instructions:
 
 TICK and coordinates are ignored. Inverted measurement targets (`!q`)
 read the same as plain ones, since detection events are relative to the
-noiseless circuit. Any other instruction is an error that names it and
+noiseless circuit. As in Stim, noise needs its probability, gates take
+no arguments, and a REPEAT block repeats at least once. Any other instruction is an error that names it and
 its line: classical feedback, MPP, correlated, heralded and Pauli-channel
 noise.
 
@@ -307,8 +311,8 @@ qso qec --circuit surface.stim --decoder matching --shots 100000
 | Results of one `sample` call | shots × (detectors + 64) ≤ 2³³ bits (1 GiB); in Python, shots × (detectors + observables) ≤ 2³⁰ |
 | Error components of a model | 2²²; their detector lists before merging, 2²⁷ entries (1 GiB); propagation, 2³⁴ word operations |
 | Code distance, rounds | 101, 10 000, and at most 2²⁴ operations (checked before building) |
-| Imported Stim circuits | 65 536 qubits, 2²⁴ operations after expanding REPEAT blocks (checked before expanding) |
-| Matching decoder | cached distances 2²¹ entries (32 MiB); bounded searches beyond |
+| Imported Stim circuits | 65 536 qubits; 2²⁴ operations and annotations after expanding REPEAT blocks (checked before expanding); blocks nested at most 64 deep |
+| Matching decoder | cached distances 2²¹ entries (32 MiB), bounded searches beyond; at most 2²² pairs of events per shot |
 
 - **Sampling.** Each operation costs one word operation per 64 shots.
 - **Error model.** The model takes one pass through the circuit per 4096
