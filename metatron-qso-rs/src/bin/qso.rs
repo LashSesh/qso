@@ -345,10 +345,12 @@ enum Command {
     },
     /// Memory experiment of a repetition or rotated surface code under
     /// circuit-level depolarizing noise: sampled with Pauli frames and
-    /// decoded by union-find.
+    /// decoded by union-find or minimum-weight matching.
     Qec {
         #[arg(long, value_enum, default_value_t = CodeArg::Surface)]
         code: CodeArg,
+        #[arg(long, value_enum, default_value_t = DecoderArg::UnionFind)]
+        decoder: DecoderArg,
         /// Code distances (odd for the surface code), e.g. 3,5,7.
         #[arg(long, value_delimiter = ',', default_value = "3,5")]
         distance: Vec<usize>,
@@ -367,6 +369,12 @@ enum Command {
         #[arg(long)]
         stim: Option<std::path::PathBuf>,
     },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum DecoderArg {
+    UnionFind,
+    Matching,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -1152,6 +1160,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
         }
         Command::Qec {
             code,
+            decoder,
             distance,
             rounds,
             p,
@@ -1174,15 +1183,23 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                             QsoError::invalid("stim", format!("{}: {e}", path.display()))
                         })?;
                     }
-                    let rate = qec::logical_error_rate(&circuit, *shots, *seed)?;
+                    let kind = match decoder {
+                        DecoderArg::UnionFind => qec::DecoderKind::UnionFind,
+                        DecoderArg::Matching => qec::DecoderKind::Matching,
+                    };
+                    let rate = qec::logical_error_rate_with(&circuit, *shots, *seed, kind)?;
                     lines.push(format!(
-                        "p = {prob}, d = {d}, {r} rounds: {} qubits, {} detectors; logical error rate {:.3e} ± {:.1e} ({} of {} shots)",
+                        "p = {prob}, d = {d}, {r} rounds: {} qubits, {} detectors; logical error rate {:.3e} ± {:.1e} ({} of {} shots, {})",
                         circuit.n_qubits(),
                         circuit.n_detectors(),
                         rate.rate,
                         rate.standard_error,
                         rate.errors,
-                        rate.shots
+                        rate.shots,
+                        match kind {
+                            qec::DecoderKind::UnionFind => "union-find",
+                            qec::DecoderKind::Matching => "matching",
+                        }
                     ));
                     rows.push(json!({
                         "p": prob,
@@ -1190,6 +1207,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                         "rounds": r,
                         "qubits": circuit.n_qubits(),
                         "detectors": circuit.n_detectors(),
+                        "decoder": kind,
                         "logical_error_rate": rate,
                     }));
                 }

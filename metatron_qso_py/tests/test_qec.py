@@ -60,6 +60,26 @@ def test_decoding_a_repetition_code_is_majority_vote() -> None:
     assert r.rate == pytest.approx(failures)
 
 
+def test_matching_decodes_at_least_as_well_as_union_find() -> None:
+    c = q.surface_code_memory(5, 5, 0.006)
+    dem = c.detector_error_model(decompose=True)
+    matching = q.MatchingDecoder(dem)
+    det, obs = c.sample(5000, seed=3)
+    predicted = matching.decode_batch(det)
+    assert [matching.decode(list(np.flatnonzero(row))) for row in det[:50]] == list(predicted[:50])
+    # Every single fault is corrected.
+    for _, detectors, flips in dem.errors:
+        assert matching.decode(detectors) == flips
+    uf = q.logical_error_rate(c, 5000, seed=3)
+    mw = q.logical_error_rate(c, 5000, seed=3, decoder="matching")
+    assert mw.errors == int(np.sum(predicted != obs[:, 0]))
+    assert mw.errors < uf.errors
+    assert uf == q.logical_error_rate(c, 5000, seed=3, decoder="union_find")
+    with pytest.raises(ValueError, match="unknown decoder"):
+        q.logical_error_rate(c, 10, decoder="blossom")  # type: ignore[arg-type]
+    assert repr(matching).startswith("MatchingDecoder(detectors=")
+
+
 def test_surface_code_below_threshold() -> None:
     noise = q.CircuitNoise.uniform(0.001)
     rates = [q.logical_error_rate(q.surface_code_memory(d, d, noise), 50_000, seed=7) for d in (3, 5)]

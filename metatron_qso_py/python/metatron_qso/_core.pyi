@@ -4,6 +4,7 @@ import os
 from typing import (
     Any,
     Callable,
+    Literal,
     Optional,
     Sequence,
     Tuple,
@@ -1537,6 +1538,14 @@ class UnionFindDecoder:
     def decode_batch(self, detectors: ArrayLike) -> NDArray[np.uint64]: ...
 
 @final
+class MatchingDecoder:
+    def __new__(cls, model: DetectorErrorModel) -> MatchingDecoder: ...
+    @property
+    def n_detectors(self) -> int: ...
+    def decode(self, fired: Sequence[int]) -> int: ...
+    def decode_batch(self, detectors: ArrayLike) -> NDArray[np.uint64]: ...
+
+@final
 class LogicalErrorRate:
     @property
     def shots(self) -> int: ...
@@ -1554,7 +1563,10 @@ def surface_code_memory(
     distance: int, rounds: int, noise: Union[CircuitNoise, float, None] = None
 ) -> DetectorCircuit: ...
 def logical_error_rate(
-    circuit: DetectorCircuit, shots: int, seed: int = 0
+    circuit: DetectorCircuit,
+    shots: int,
+    seed: int = 0,
+    decoder: Literal["union_find", "matching"] = "union_find",
 ) -> LogicalErrorRate: ...
 
 @final
