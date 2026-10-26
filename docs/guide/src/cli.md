@@ -21,6 +21,7 @@ machine-readable output; `qso <command> --help` lists all options.
 | `estimate FILE` | ⟨H⟩ of an OpenQASM circuit with standard error and 95 % interval, optionally mitigated | `--observable`, `--shots`, `--allocation`, `--device`, `--trajectories`, `--mitigate-readout`, `--zne 1,3,5`, `--extrapolation`, `--pec N` |
 | `molecule FILE` | Qubit Hamiltonian, Hartree–Fock and full-CI energies of an FCIDUMP molecule, and a variational solution | `--mapping jordan-wigner\|parity\|bravyi-kitaev`, `--two-qubit-reduction`, `--method none\|uccsd\|upccgsd\|adapt`, `--k`, `--roots` |
 | `trotter` | Trotter–Suzuki circuit for exp(−iHt) with its error bound | `--hamiltonian`, `--qubits`, `--time`, `--steps`, `--order`, `--output FILE` |
+| `qec` | Repetition or surface-code memory experiment under circuit-level noise: logical error rate with union-find decoding ([Error correction](qec.md)) | `--code surface\|repetition`, `--distance 3,5,7`, `--rounds`, `--p 0.001,0.01`, `--shots`, `--seed`, `--stim FILE` |
 
 Graphs are given as specifications (see [Graphs](graphs.md)), for example
 `metatron`, `fruit-of-life`, `petersen`, `hypercube:8`, `johnson:7,3` or

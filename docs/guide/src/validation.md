@@ -30,7 +30,11 @@ These checks live in the test suites, which run on every change on Linux
 The OpenQASM reader runs the example programs of the OpenQASM project and
 checks their known results ([OpenQASM programs](programs.md)). The
 stabilizer simulator is checked against the state-vector simulator on
-random Clifford circuits ([Stabilizer simulation](stabilizers.md)).
+random Clifford circuits ([Stabilizer simulation](stabilizers.md)). The
+Pauli-frame sampler of the error-correction experiments is checked against
+the stabilizer simulator, and the decoder against exact majority-vote
+failure rates and against every single fault (and, at distance 5, every
+pair of faults) of the surface code ([Error correction](qec.md)).
 
 ## Cross-validation with other frameworks
 
@@ -44,12 +48,13 @@ deviation above rounding level fails the run.
 | Energies and gradients of a 100-parameter ansatz (PennyLane adjoint, Qulacs backprop) | 1.8·10⁻¹⁵ |
 | Density matrices of noisy circuits (Qiskit Aer) | 3.5·10⁻¹⁵ |
 | Permanents (The Walrus) | 2.8·10⁻¹⁴ relative |
+| Detector error models of repetition and surface-code memory experiments (Stim) | 1.0·10⁻¹⁵ relative; detection-event rates agree to sampling precision |
 
 ## Robustness
 
 | Check | What it covers |
 |---|---|
-| Fuzzing | Each parser and deserialiser runs under cargo-fuzz for one minute on every pull request and ten minutes every week. The parsers are OpenQASM 2 and 3, Pauli sums and graph specifications; the JSON forms are those of circuits, states, graphs, Pauli sums and device models; fermion operators and FCIDUMP files are fuzzed as well. Beyond "no crash", the targets check that exported QASM re-imports to an equivalent circuit, that the OpenQASM 2 and 3 exports of a program reproduce its outcome distribution, and that accepted data are well-formed. Every input that ever failed is replayed on each run. |
+| Fuzzing | Each parser and deserialiser runs under cargo-fuzz for one minute on every pull request and ten minutes every week. The parsers are OpenQASM 2 and 3, Pauli sums and graph specifications; the JSON forms are those of circuits, states, graphs, Pauli sums and device models; fermion operators and FCIDUMP files are fuzzed as well, and so are detector circuits built from random bytes. Beyond "no crash", the targets check that exported QASM re-imports to an equivalent circuit, that the OpenQASM 2 and 3 exports of a program reproduce its outcome distribution, that accepted data are well-formed, and that the union-find decoder explains every syndrome that some set of matching-graph edges produces. Every input that ever failed is replayed on each run. |
 | Miri | The `unsafe` statevector kernels run under Miri on multi-threaded paths, which checks them for undefined behaviour and data races; so do the buffer exports of the WebAssembly module. |
 | Hostile input | Tests feed oversized, non-finite and inconsistent input to every public entry point and expect an error. |
 

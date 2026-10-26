@@ -164,6 +164,40 @@ across a bipartition is the GF(2) rank of the generators restricted to
 one side minus its size (Fattal et al. 2004); for graph states this is
 the cut-rank of the adjacency matrix.
 
+## Error-correction experiments (`qec/`)
+
+A `DetectorCircuit` is a list of operations: Clifford gates, Pauli noise,
+measurements (each appends one bit to the record), resets, detectors and
+observables (parities of record bits). Three components share one
+representation of Pauli frames, `Frames`: X and Z bits by qubit, `w`
+words per qubit, bit s of word k belonging to frame 64k + s. `Frames`
+implements the same `CliffordTarget` trait as the tableau, so both run
+every Clifford gate through one function, `apply_clifford`, and the
+frame update for each gate is derived once.
+
+- **Sampling.** Each shot's frame is its error relative to a noiseless
+  run. Detectors are deterministic, so detection events are parities of
+  measurement flips, and the reference run is never needed. The Z part
+  of every fresh or measured qubit is randomized, which turns the random
+  outcomes of the reference into random flips. Noise is applied by
+  geometric skipping, at a cost proportional to the number of errors.
+- **Error models.** Every noise operation contributes an X and a Z
+  component per qubit, and every noisy measurement a flip. The components
+  are propagated, without randomization, as up to 4096 frames per pass;
+  the detector and observable rows of the pass are read back as each
+  component's signature. Independent error terms (the exact decomposition
+  of depolarizing channels into Paulis) take the XOR of their components'
+  signatures, and terms with equal signatures merge.
+- **Decoding.** The matching graph has a node per detector plus one
+  boundary node. Union-find growth uses integer steps proportional to the
+  edge weights (the lightest edge takes two). The decoder keeps all its
+  arrays across shots and resets only what a shot touched, so a shot
+  costs time in proportion to its clusters, not to the graph. Peeling
+  roots a cluster at the boundary only when its parity needs it.
+- **Logical error rates.** `logical_error_rate` samples in blocks of
+  65 536 shots from one random stream, so it returns the same result as
+  one call of `sample_detectors` with the same seed, in bounded memory.
+
 ## WebAssembly (`metatron_qso_wasm`)
 
 The core has no platform code beyond optional rayon, so it compiles for

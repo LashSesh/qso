@@ -6,12 +6,58 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-Milestone 1.7 of the [roadmap](docs/ROADMAP.md): stabilizer simulation
-and graph states. Every result is checked against the state-vector
-simulator, a closed form or the exact outcome distribution (named
-below).
+Milestones 1.7 (stabilizer simulation and graph states) and 1.8
+(error-correction experiments) of the [roadmap](docs/ROADMAP.md). Every
+result is checked against an independent reference — the state-vector
+simulator, the tableau simulator, a closed form, exact enumeration or
+Stim (named below).
 
-### Added
+### Added — error-correction experiments (milestone 1.8)
+
+- **Detector circuits** (`qec::DetectorCircuit`): Clifford gates, X/Y/Z
+  errors, one- and two-qubit depolarizing noise, noisy measurements,
+  resets, detectors and up to 64 logical observables; `append_circuit`
+  for any Clifford `Circuit`; `to_stim` writes Stim's text format.
+- **Pauli-frame sampling** (`qec::sample_detectors`): 64 shots per word;
+  rejects detectors and observables that are not deterministic without
+  noise.
+  - Detection events and observable flips match shot-by-shot simulation
+    on the tableau, with explicitly sampled errors, on random noisy
+    Clifford circuits and on memory experiments.
+- **Detector error models** (`qec::detector_error_model`): the exact
+  decomposition of depolarizing channels into independent Pauli errors,
+  propagation of every error, merging of equal effects, and an optional
+  decomposition into graphlike parts.
+  - On four repetition and surface-code memory experiments, the models
+    equal Stim 1.16's term by term (probabilities to 10⁻¹⁵ relative), and
+    detection-event rates agree with Stim's sampler; this is part of the
+    scheduled cross-validation.
+- **Union-find decoder** (`qec::UnionFindDecoder`, `qec::MatchingGraph`):
+  weighted growth and peeling (Delfosse and Nickerson 2021).
+  - On the repetition code, it fails on exactly the error patterns with
+    more than d/2 flips (all 2ᵈ patterns, d = 3 … 9).
+  - Every single fault of the repetition code (d = 5) and of the surface
+    code (d = 3, 5) is corrected, and every pair of faults at d = 5.
+  - Logical error rates are 10–28% above PyMatching's
+    (minimum-weight matching) on the cross-validation circuits.
+- **Memory experiments** (`qec::repetition_code_memory`,
+  `qec::surface_code_memory`) with circuit-level noise (`CircuitNoise`),
+  and `qec::logical_error_rate`.
+  - Rotated surface code under circuit-level noise p = 0.001: logical
+    error rates of 1.3·10⁻³, 1.9·10⁻⁴ and 1.0·10⁻⁴ at d = 3, 5, 7. At
+    p = 0.01, they rise with d. Both directions are validation tests.
+- **CLI:** `qso qec`.
+- **Python:** `DetectorCircuit`, `CircuitNoise`, `DetectorErrorModel`,
+  `UnionFindDecoder` (with `decode_batch`), `LogicalErrorRate`,
+  `repetition_code_memory`, `surface_code_memory`, `logical_error_rate`.
+- **Tests:** fuzz target `qec`. It builds circuits from random bytes,
+  samples them, builds their models, and checks that the decoder
+  explains every syndrome of matching-graph edges.
+- **Docs:** example `surface_code`, guide chapter "Error-correction
+  experiments", and a Stim and PyMatching section in the cross-framework
+  comparison.
+
+### Added — stabilizer simulation (milestone 1.7)
 
 - **Stabilizer simulation** (`stabilizer::StabilizerState`).
   - Aaronson–Gottesman tableaux, bit-packed and stored by qubit, for up to

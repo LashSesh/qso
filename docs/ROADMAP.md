@@ -4,8 +4,8 @@ Status: October 2026. Milestones 1.1 to 1.6 delivered — 1.3 combined the
 milestones planned as "quantum walks" and "simulation performance".
 Milestones 1.4 (noise at scale and error mitigation), 1.5 (algorithms and
 physics) and 1.6 (interoperability) shipped together as release 1.4.0.
-Milestone 1.7 (stabilizer simulation and graph states) is delivered and
-unreleased; next is 1.8, error-correction experiments. Up to 1.3 milestone and release numbers coincided; from 1.4 on the
+Milestones 1.7 (stabilizer simulation and graph states) and 1.8
+(error-correction experiments) are delivered and unreleased. Up to 1.3 milestone and release numbers coincided; from 1.4 on the
 milestone numbers name units of work and releases follow Semantic
 Versioning on their own (the next release after 1.3.0 is 1.4.0, whatever
 it contains).
@@ -335,18 +335,36 @@ found no wrong result on these paths. It found:
 All were fixed with regression tests. Programs that end in measurements
 are now sampled from their record bits alone.
 
-### 1.8 — Error-correction experiments (M–L)
+### 1.8 — Error-correction experiments (delivered, unreleased)
 
-| Deliverable | Detail |
-|---|---|
-| Detector circuits | Clifford circuits with Pauli noise channels, measurement records, detectors and logical observables |
-| Pauli-frame sampler | 64 shots per machine word, for millions of shots of noisy Clifford circuits |
-| Codes | repetition code and rotated surface code memory experiments with circuit-level noise |
-| Decoding | detector error models from circuits, matching graphs, a union-find decoder |
+| Deliverable | Delivered | Left for later |
+|---|---|---|
+| Detector circuits | Clifford gates, X/Y/Z errors, one- and two-qubit depolarizing noise, noisy measurements, resets, detectors and up to 64 observables; any Clifford `Circuit` can be appended; export to Stim's text format | an importer for Stim circuits; leakage and erasure |
+| Pauli-frame sampler | 64 shots per machine word, noise by geometric skipping, a determinism check of every detector and observable | multi-threaded sampling |
+| Codes | repetition and rotated surface-code memory experiments with circuit-level noise (`CircuitNoise`) | X-basis memory, lattice surgery, colour codes |
+| Decoding | detector error models (exact depolarizing decomposition, merged effects, graphlike decomposition), matching graphs, a weighted union-find decoder, logical error rates in bounded memory | minimum-weight perfect matching; correlated decoding |
 
-Validation: frame sampling against the tableau simulator; logical error
-rates against exact enumeration for distance 3; error rates that fall with
-distance below threshold.
+Validation:
+
+* frame sampling agrees with shot-by-shot tableau simulation, with
+  explicitly sampled errors, on random noisy Clifford circuits and on
+  memory experiments;
+* the error model predicts every detector's rate;
+* on the repetition code, the decoder fails on exactly the error patterns
+  with more than d/2 flips (all 2ᵈ patterns, d = 3 … 9);
+* every single fault (surface code d = 3 and 5, repetition code d = 5)
+  and every pair of faults (surface code d = 5) is corrected;
+* below threshold (p = 0.001), surface-code logical error rates fall with
+  the distance, and above it (p = 0.01) they rise;
+* the scheduled cross-validation compares the error models with Stim's
+  term by term and the detection-event rates with Stim's sampler, and
+  reports PyMatching's logical error rates beside QSO's.
+
+Profiling during the milestone made error models of large circuits about
+13 times faster and decoding about 4 times faster. The error model now
+propagates up to 4096 errors per pass, walks the operations with a cursor
+instead of hash lookups, and reads signatures from set bits. The decoder
+keeps its allocations across shots.
 
 ### Research track (later)
 
@@ -371,7 +389,7 @@ memory bandwidth.
    to 1.6 ship as one release, 1.4.0, to keep releases (and CI runs) few.
 6. **1.7 and 1.8: stabilizers before error correction.** Error-correction
    experiments need the stabilizer simulator; graph states connect it to
-   QSO's graphs.
+   QSO's graphs. Both ship as one release.
 
 ## 6. Measures of success
 
@@ -400,6 +418,11 @@ Taken (October 2026):
   simulator, closed forms, enumeration), and graph states and
   error-correcting codes are graph-structured quantum computing.
   Matrix-product states and a GPU backend wait.
+* Decoding starts with union-find, not minimum-weight matching: it is
+  short, has no dependency and runs in almost linear time. Its logical
+  error rates are reported beside PyMatching's, so its accuracy cost is
+  visible. Error models and circuits interoperate with Stim through its
+  text format, not through a binding.
 * The browser playground stays, because it costs little to maintain: it
   is plain HTML and JavaScript without dependencies or a build step, it
   uses only the npm package's JSON interface, which the package's tests

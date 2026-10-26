@@ -142,7 +142,7 @@ jobs:
       - name: Fuzz the parsers and deserialisers (10 minutes each)
         working-directory: metatron-qso-rs
         run: |
-          for t in qasm openqasm pauli graph_spec graph_io json device chemistry; do
+          for t in qasm openqasm pauli graph_spec graph_io json device chemistry qec; do
             mkdir -p "fuzz/corpus/$t"
             # The prebuilt cargo-fuzz is a static musl binary and would
             # default to the musl target, which the sanitizer cannot use.

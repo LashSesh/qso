@@ -84,8 +84,58 @@ fn tableau_samples(c: &DetectorCircuit, shots: usize, seed: u64) -> (Vec<Vec<boo
         .unzip()
 }
 
+/// A random Clifford circuit U on `n` qubits, every kind of noise on
+/// random qubits, then U† and noisy measurements of every qubit: each
+/// result is 0 without noise, so each is a detector.
+fn random_noisy_circuit(n: usize, seed: u64) -> DetectorCircuit {
+    let mut rng = Rng::seed_from_u64(seed);
+    let mut u = crate::quantum::Circuit::new(n);
+    for _ in 0..30 {
+        let a = rng.below(n as u64) as usize;
+        let b = (a + 1 + rng.below(n as u64 - 1) as usize) % n;
+        match rng.below(6) {
+            0 => u.h(a),
+            1 => u.s(a),
+            2 => u.sx(a),
+            3 => u.cx(a, b),
+            4 => u.cz(a, b),
+            _ => u.cy(a, b),
+        };
+    }
+    let mut c = DetectorCircuit::new(n).unwrap();
+    c.append_circuit(&u, &[]).unwrap();
+    for k in 0..8 {
+        let a = rng.below(n as u64) as usize;
+        let b = (a + 1 + rng.below(n as u64 - 1) as usize) % n;
+        let noise = match k % 5 {
+            0 => Noise::XError(0.05),
+            1 => Noise::YError(0.04),
+            2 => Noise::ZError(0.06),
+            3 => Noise::Depolarize1(0.08),
+            _ => Noise::Depolarize2(0.1),
+        };
+        let qs = if k % 5 == 4 { vec![a, b] } else { vec![a] };
+        c.noise(noise, &qs).unwrap();
+        // More gates between the noise.
+        let mut v = crate::quantum::Circuit::new(n);
+        v.h(b).cx(a, b);
+        c.append_circuit(&v, &[]).unwrap();
+        c.append_circuit(&v.inverse(), &[]).unwrap();
+    }
+    c.append_circuit(&u.inverse(), &[]).unwrap();
+    let m: Vec<usize> = (0..n).map(|q| c.measure(q, 0.02).unwrap()).collect();
+    for &r in &m {
+        c.detector(&[r]).unwrap();
+    }
+    c.observable(0, &[m[0], m[n - 1]]).unwrap();
+    c.observable(1, &[m[1]]).unwrap();
+    c
+}
+
 fn circuits() -> Vec<(&'static str, DetectorCircuit)> {
     vec![
+        ("random 4 qubits", random_noisy_circuit(4, 1)),
+        ("random 6 qubits", random_noisy_circuit(6, 2)),
         (
             "repetition d=3",
             repetition_code_memory(3, 2, &CircuitNoise::uniform(0.03)).unwrap(),

@@ -681,3 +681,48 @@ fn surface_codes_suppress_logical_errors_below_threshold() {
         .collect();
     assert!(rep[0] > 3.0 * rep[1] && rep[1] > 3.0 * rep[2], "{rep:?}");
 }
+
+#[test]
+fn union_find_decodes_the_repetition_code_by_majority_vote() {
+    use metatron_qso::qec::{
+        CircuitNoise, MatchingGraph, UnionFindDecoder, detector_error_model, repetition_code_memory,
+    };
+    // One round with bit flips on the data only: every error pattern of
+    // d bits is enumerated, and the decoder fails exactly when more than
+    // half of the bits flipped.
+    for d in [3usize, 5, 7, 9] {
+        let c = repetition_code_memory(d, 1, &CircuitNoise::data_only(0.3)).unwrap();
+        let dem = detector_error_model(&c, true).unwrap();
+        assert_eq!(dem.errors.len(), d);
+        let mut decoder = UnionFindDecoder::new(MatchingGraph::from_dem(&dem).unwrap());
+        let mut failures_by_weight = vec![0usize; d + 1];
+        for pattern in 0u32..(1 << d) {
+            let mut fired = std::collections::BTreeSet::new();
+            let mut flips = 0;
+            for (k, e) in dem.errors.iter().enumerate() {
+                if (pattern >> k) & 1 == 1 {
+                    for &det in &e.detectors {
+                        if !fired.remove(&det) {
+                            fired.insert(det);
+                        }
+                    }
+                    flips ^= e.observables;
+                }
+            }
+            let fired: Vec<usize> = fired.into_iter().collect();
+            let predicted = if fired.is_empty() {
+                0
+            } else {
+                decoder.decode(&fired).unwrap()
+            };
+            if predicted != flips {
+                failures_by_weight[pattern.count_ones() as usize] += 1;
+            }
+        }
+        // Weight k fails for all C(d, k) patterns if k > d/2, never otherwise.
+        for (k, &f) in failures_by_weight.iter().enumerate() {
+            let binom = (0..k).fold(1usize, |b, i| b * (d - i) / (i + 1));
+            assert_eq!(f, if 2 * k > d { binom } else { 0 }, "d = {d}, weight {k}");
+        }
+    }
+}
