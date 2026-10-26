@@ -127,7 +127,7 @@ or by the benchmark report you can run yourself.
 | Repetition code, one round of bit flips, union-find decoding, all 2ᵈ error patterns (d = 3 … 9) | fails exactly on the patterns with more than d/2 flips | majority vote |
 | Detector error models of memory experiments vs. Stim | identical terms, probabilities to 10⁻¹⁵ relative | Stim 1.16 |
 
-The test-suite (365 Rust tests and 243 Python tests, run in CI on Linux
+The test-suite (376 Rust tests and 249 Python tests, run in CI on Linux
 (x86_64 and arm64), macOS and Windows) also checks:
 
 - every gate against an independent dense-matrix reference, and the QFT
@@ -146,7 +146,11 @@ The test-suite (365 Rust tests and 243 Python tests, run in CI on Linux
 - noise: device models against hand-built channel sequences, Pauli twirls
   against the exact average over all 16 frames, PEC against the exact sum
   over all corrections (to 10⁻¹²), and 95 % confidence intervals that cover
-  the exact value in 91–99 % of repeated estimates.
+  the exact value in 91–99 % of repeated estimates;
+- error correction: Pauli-frame sampling against shot-by-shot tableau
+  simulation on random noisy Clifford circuits, error models against
+  sampled detector rates, and every single fault (and, at distance 5,
+  every pair of faults) of the surface code corrected.
 
 ## Metatron's Cube, precisely
 
