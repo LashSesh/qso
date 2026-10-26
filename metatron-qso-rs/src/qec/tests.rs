@@ -527,3 +527,168 @@ fn weighted_growth_corrects_random_low_weight_errors() {
         assert_eq!(predicted, flips, "{f:?}");
     }
 }
+
+#[test]
+fn matching_finds_the_lightest_correction() {
+    // Random small error models: for every set of fired detectors, the
+    // correction weighs as little as the lightest set of errors with that
+    // syndrome (enumerated), and predicts the observables of one of them.
+    let mut rng = Rng::seed_from_u64(7);
+    for trial in 0..300 {
+        let nd = 1 + trial % 7;
+        let ne = 1 + rng.below(11) as usize;
+        let with_boundary = trial % 4 != 0;
+        let errors: Vec<ErrorMechanism> = (0..ne)
+            .map(|_| {
+                let a = rng.below(nd as u64) as usize;
+                let mut b = rng.below(nd as u64 + u64::from(with_boundary)) as usize;
+                if b == a {
+                    b = if with_boundary { nd } else { (a + 1) % nd };
+                }
+                let mut detectors = vec![a];
+                if b < nd && b != a {
+                    detectors.push(b);
+                }
+                detectors.sort_unstable();
+                ErrorMechanism {
+                    probability: 0.001 + 0.45 * rng.uniform(),
+                    detectors,
+                    observables: rng.below(4),
+                }
+            })
+            .collect();
+        let dem = DetectorErrorModel {
+            n_detectors: nd,
+            n_observables: 2,
+            errors,
+        };
+        let mut decoder = MatchingDecoder::new(MatchingGraph::from_dem(&dem).unwrap());
+        let edges = decoder.graph().edges().to_vec();
+        // Lightest weight and its observables, per syndrome.
+        let mut best: Vec<Option<(i64, Vec<u64>)>> = vec![None; 1 << nd];
+        for subset in 0usize..1 << edges.len() {
+            let (mut syndrome, mut weight, mut obs) = (0usize, 0i64, 0u64);
+            for (k, e) in edges.iter().enumerate() {
+                if subset & (1 << k) != 0 {
+                    syndrome ^= 1 << e.a;
+                    if e.b < nd {
+                        syndrome ^= 1 << e.b;
+                    }
+                    weight += decoder.weight[k];
+                    obs ^= e.observables;
+                }
+            }
+            match &mut best[syndrome] {
+                Some((w, o)) if *w == weight => o.push(obs),
+                Some((w, _)) if *w < weight => {}
+                slot => *slot = Some((weight, vec![obs])),
+            }
+        }
+        for (syndrome, b) in best.iter().enumerate() {
+            let fired: Vec<usize> = (0..nd).filter(|&d| syndrome & (1 << d) != 0).collect();
+            match (b, decoder.decode_weighted(&fired)) {
+                (None, r) => assert!(r.is_err(), "trial {trial}: {fired:?} has no correction"),
+                (Some((w, obs)), r) => {
+                    let (prediction, weight) = r.unwrap();
+                    assert_eq!(weight, *w, "trial {trial}: {fired:?} in {edges:?}");
+                    assert!(obs.contains(&prediction), "trial {trial}: {fired:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn matching_corrects_every_fault_up_to_half_the_distance() {
+    for (name, c) in [
+        (
+            "repetition d=5",
+            repetition_code_memory(5, 4, &CircuitNoise::uniform(0.001)).unwrap(),
+        ),
+        (
+            "surface d=3",
+            surface_code_memory(3, 3, &CircuitNoise::uniform(0.001)).unwrap(),
+        ),
+        (
+            "surface d=5",
+            surface_code_memory(5, 3, &CircuitNoise::uniform(0.001)).unwrap(),
+        ),
+    ] {
+        let dem = detector_error_model(&c, true).unwrap();
+        let mut decoder = MatchingDecoder::new(MatchingGraph::from_dem(&dem).unwrap());
+        for e in &dem.errors {
+            assert_eq!(
+                decoder.decode(&e.detectors).unwrap(),
+                e.observables,
+                "{name}: {e:?}"
+            );
+        }
+    }
+    // Every pair of faults at distance 5.
+    let c = surface_code_memory(5, 2, &CircuitNoise::uniform(0.001)).unwrap();
+    let dem = detector_error_model(&c, true).unwrap();
+    let mut decoder = MatchingDecoder::new(MatchingGraph::from_dem(&dem).unwrap());
+    let errs = &dem.errors;
+    for i in 0..errs.len() {
+        for j in i + 1..errs.len() {
+            let mut fired = errs[i].detectors.clone();
+            fired.extend(&errs[j].detectors);
+            assert_eq!(
+                decoder.decode(&fired).unwrap(),
+                errs[i].observables ^ errs[j].observables,
+                "{:?} + {:?}",
+                errs[i],
+                errs[j]
+            );
+        }
+    }
+    // Random sets of three faults at distance 7.
+    let c = surface_code_memory(7, 7, &CircuitNoise::uniform(0.001)).unwrap();
+    let dem = detector_error_model(&c, true).unwrap();
+    let graph = MatchingGraph::from_dem(&dem).unwrap();
+    let edges = graph.edges().to_vec();
+    let mut decoder = MatchingDecoder::new(graph);
+    let mut rng = Rng::seed_from_u64(5);
+    for _ in 0..20_000 {
+        let mut fired = Vec::new();
+        let mut flips = 0;
+        for _ in 0..3 {
+            let e = &edges[rng.below(edges.len() as u64) as usize];
+            fired.push(e.a);
+            if e.b < dem.n_detectors {
+                fired.push(e.b);
+            }
+            flips ^= e.observables;
+        }
+        assert_eq!(decoder.decode(&fired).unwrap(), flips, "{fired:?}");
+    }
+}
+
+#[test]
+fn matching_fails_less_often_than_union_find() {
+    let c = surface_code_memory(5, 5, &CircuitNoise::uniform(0.006)).unwrap();
+    let uf = logical_error_rate_with(&c, 20_000, 3, DecoderKind::UnionFind).unwrap();
+    let mwpm = logical_error_rate_with(&c, 20_000, 3, DecoderKind::Matching).unwrap();
+    assert_eq!(uf, logical_error_rate(&c, 20_000, 3).unwrap());
+    assert!(
+        mwpm.errors > 0 && mwpm.errors < uf.errors,
+        "{mwpm:?} vs {uf:?}"
+    );
+}
+
+#[test]
+fn matching_without_the_distance_cache_agrees() {
+    // Beyond the cache, bounded searches find the same pairs.
+    let c = surface_code_memory(5, 5, &CircuitNoise::uniform(0.01)).unwrap();
+    let dem = detector_error_model(&c, true).unwrap();
+    let graph = MatchingGraph::from_dem(&dem).unwrap();
+    let mut cached = MatchingDecoder::new(graph.clone());
+    let mut searching = MatchingDecoder::new(graph);
+    searching.cache_capacity = 0;
+    let samples = sample_detectors(&c, 2000, 9).unwrap();
+    for fired in samples.fired_by_shot() {
+        let (p, w) = cached.decode_weighted(&fired).unwrap();
+        let (q, v) = searching.decode_weighted(&fired).unwrap();
+        assert_eq!((p, w), (q, v), "{fired:?}");
+    }
+}

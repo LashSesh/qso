@@ -31,7 +31,7 @@ pub struct MatchingEdge {
     pub observables: u64,
     /// Length of the edge in growth: its weight ln((1 − p)/p), or 0 for
     /// p ≥ 1/2.
-    length: f64,
+    pub(crate) length: f64,
 }
 
 /// Detectors as nodes (plus a boundary node), errors as edges.
@@ -39,7 +39,7 @@ pub struct MatchingEdge {
 pub struct MatchingGraph {
     n_detectors: usize,
     edges: Vec<MatchingEdge>,
-    adjacency: Vec<Vec<usize>>,
+    pub(crate) adjacency: Vec<Vec<usize>>,
     /// Errors that flip observables but no detector: undetectable.
     undetectable: Vec<(f64, u64)>,
 }
