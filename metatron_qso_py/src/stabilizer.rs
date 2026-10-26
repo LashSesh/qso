@@ -188,8 +188,9 @@ impl PyStabilizerState {
         }
     }
 
-    /// Measure every qubit `shots` times (at most 10⁷), leaving the state
-    /// unchanged: `{bitstring: count}` with qubit n−1 first.
+    /// Measure every qubit `shots` times (shots × qubits at most 2²⁶),
+    /// leaving the state unchanged: `{bitstring: count}` with qubit n−1
+    /// first.
     #[pyo3(signature = (shots, seed = 0))]
     fn sample<'py>(
         &self,
@@ -201,7 +202,9 @@ impl PyStabilizerState {
             return Err(invalid("shots must be at most 10⁷"));
         }
         let s = &self.inner;
-        let counts = py.detach(|| s.sample_counts(shots, &mut Rng::seed_from_u64(seed)));
+        let counts = py
+            .detach(|| s.sample_counts(shots, &mut Rng::seed_from_u64(seed)))
+            .raise()?;
         let d = PyDict::new(py);
         for (k, v) in counts {
             d.set_item(k, v)?;

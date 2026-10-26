@@ -4,8 +4,8 @@ Status: October 2026. Milestones 1.1 to 1.6 delivered — 1.3 combined the
 milestones planned as "quantum walks" and "simulation performance".
 Milestones 1.4 (noise at scale and error mitigation), 1.5 (algorithms and
 physics) and 1.6 (interoperability) shipped together as release 1.4.0.
-Next: 1.7, stabilizer simulation and graph states, then 1.8,
-error-correction experiments, both from the research track. Up to 1.3 milestone and release numbers coincided; from 1.4 on the
+Milestone 1.7 (stabilizer simulation and graph states) is delivered and
+unreleased; next is 1.8, error-correction experiments. Up to 1.3 milestone and release numbers coincided; from 1.4 on the
 milestone numbers name units of work and releases follow Semantic
 Versioning on their own (the next release after 1.3.0 is 1.4.0, whatever
 it contains).
@@ -302,20 +302,38 @@ register names that made exports unreadable, and records above 32 bits
 truncated in WebAssembly. All were fixed with regression tests before the
 release.
 
-### 1.7 — Stabilizer simulation and graph states (M, next)
+### 1.7 — Stabilizer simulation and graph states (delivered, unreleased)
 
-| Deliverable | Detail |
-|---|---|
-| Tableau simulator | Aaronson–Gottesman tableaux, bit-packed: Clifford gates (including rotations by multiples of π/2), Z and Pauli measurements, reset, Pauli expectation values, seeded sampling; thousands of qubits |
-| Clifford programs | OpenQASM programs and circuits made of Clifford gates run on the tableau simulator, mid-circuit measurement and feed-forward included; `qso qasm` and the WebAssembly module choose it when a program is Clifford and too large for a state vector |
-| Graph states | the graph state of any QSO graph, its stabilizer generators, local complementation as a local Clifford operation, entanglement entropy of any bipartition from the cut-rank over GF(2) |
+| Deliverable | Delivered | Not done, and why |
+|---|---|---|
+| Tableau simulator | Aaronson–Gottesman tableaux for up to 16 384 qubits, stored by qubit (a gate is O(n/32) words); Clifford gates including rotations by multiples of π/2; Pauli measurements, reset, expectation values, sampling from the affine outcome space | measurements in column form without transposition (they cost O(n²), a second at the limit); noisy Clifford circuits at scale come with the frame sampler of 1.8 |
+| Clifford programs | OpenQASM programs of Clifford gates, mid-circuit measurement and feed-forward included; programs that end in measurements are sampled at a cost per shot independent of n; `qso qasm`, Python (`method="auto"`) and the WebAssembly module choose the tableau for Clifford programs too large for a state vector | — |
+| Graph states | graph states of any unweighted graph, local complementation as a local Clifford, entanglement entropy from GF(2) ranks | a test of local-Clifford equivalence (Bouchet's algorithm) |
 
-Validation: random Clifford circuits on up to 12 qubits agree with the
-state-vector simulator (states up to phase, Pauli expectation values,
-outcome distributions); GHZ and graph states of thousands of qubits have
-their known stabilizers and correlations; graph-state entanglement equals
-the state-vector entropy on small graphs; local complementation equals the
-local Clifford operation of Hein, Eisert and Briegel (2004).
+Validation:
+
+* 200 random Clifford circuits on 1–8 qubits match the state-vector
+  simulator (states, Pauli expectation values, collapse, supports);
+* a GHZ state on 10 000 qubits has its known correlations;
+* graph-state entanglement equals the state-vector entropy and the
+  cut-rank (Q₁₀: 512, C₁₀₀₀: 2);
+* local complementation equals the local Clifford of Hein, Eisert and
+  Briegel (2004);
+* the graph state of Metatron's Cube is a GHZ state up to local Cliffords.
+
+An independent review compared the tableau with the state vector in 4000
+further random trials on registers of 1 to 257 qubits (word and block
+boundaries included), 600 random programs and 300 random graphs, and
+found no wrong result on these paths. It found:
+
+* a panic for parametrized circuits without parameters;
+* angles above about 10⁸ rad accepted as Clifford, because the
+  tolerance was relative;
+* unbounded time in program sampling and in sampling all qubits;
+* cost figures in the docs that ignored the transposition of the tableau.
+
+All were fixed with regression tests. Programs that end in measurements
+are now sampled from their record bits alone.
 
 ### 1.8 — Error-correction experiments (M–L)
 

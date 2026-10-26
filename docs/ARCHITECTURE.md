@@ -145,8 +145,11 @@ operations on two or four contiguous columns, O(n/32) words in all.
 
 Measurements need whole rows. `measure_pauli` transposes the tableau to
 rows in 64 × 64 bit blocks, runs the Aaronson–Gottesman update (row
-products with their phases summed word by word), and transposes back:
-O(n²/64) word operations.
+products with their phases summed word by word), and transposes back.
+The transpositions dominate: O(n²) per measurement, about a second at
+16 384 qubits. Programs that end in measurements avoid them per shot: the
+record is a linear function of the outcomes, so QSO samples the image of
+the outcome space, at most 64 basis vectors.
 
 Sampling every qubit uses the structure of stabilizer states. Gaussian
 elimination of the stabilizers on their X parts leaves signed Z strings,

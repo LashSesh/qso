@@ -210,7 +210,7 @@ fn ghz_state_on_two_thousand_qubits() {
     let all_x: Vec<(usize, Pauli)> = (0..n).map(|q| (q, Pauli::X)).collect();
     assert_eq!(s.expectation(&all_x).unwrap(), 1.0);
     let mut rng = Rng::seed_from_u64(4);
-    let counts = s.sample_counts(200, &mut rng);
+    let counts = s.sample_counts(200, &mut rng).unwrap();
     assert_eq!(counts.len(), 2);
     assert!(counts.contains_key(&"0".repeat(n)) && counts.contains_key(&"1".repeat(n)));
     // Measuring one qubit fixes all others.
@@ -337,7 +337,13 @@ fn clifford_programs() {
     assert!(matches!(run_program(&ghz, &mut rng).unwrap(), 0b00 | 0b11));
     // A program without qubits writes no bits.
     let empty = Program::from_qasm("bit[2] c;").unwrap();
-    assert_eq!(sample_program(&empty, 3, 0).unwrap().into_iter().collect::<Vec<_>>(), vec![(0, 3)]);
+    assert_eq!(
+        sample_program(&empty, 3, 0)
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>(),
+        vec![(0, 3)]
+    );
     // Non-Clifford programs are rejected.
     let t = Program::from_qasm("qubit q; bit c; t q; c = measure q;").unwrap();
     assert!(!is_clifford_program(&t));
@@ -413,4 +419,63 @@ fn transposition_round_trips() {
         t.set_rows(&s.rows());
         assert_eq!(s, t);
     }
+}
+
+/// Regressions of the review of the stabilizer simulator.
+#[test]
+fn review_regressions() {
+    // A parametrized gate without parameters is an error, not a panic.
+    let mut c = Circuit::new(1);
+    let p = c.new_parameter();
+    c.rx(0, p);
+    assert!(!is_clifford_circuit(&c, &[]));
+    assert!(StabilizerState::from_circuit(&c, &[]).is_err());
+    assert!(is_clifford_circuit(&c, &[FRAC_PI_2]));
+    assert!(!is_clifford_circuit(&c, &[f64::NAN]));
+    // Huge angles are Clifford only when they are multiples of π/2.
+    for theta in [1e9, 7.9e8, 1.6e6 + 1e-3] {
+        let mut c = Circuit::new(1);
+        c.rx(0, theta);
+        assert!(!is_clifford_circuit(&c, &[]), "{theta}");
+    }
+    let mut c = Circuit::new(1);
+    c.rx(0, 1e6 * FRAC_PI_2);
+    assert!(is_clifford_circuit(&c, &[]));
+    // Malformed instructions are rejected before the tableau changes.
+    let mut s = StabilizerState::zero(2).unwrap();
+    let before = s.clone();
+    let bad = Instruction {
+        kind: GateKind::RYY,
+        targets: vec![0, 0],
+        controls: vec![],
+        params: vec![FRAC_PI_2.into()],
+        matrix: None,
+    };
+    assert!(s.apply_instruction(&bad, &[]).is_err());
+    let empty = Instruction {
+        targets: vec![],
+        ..bad.clone()
+    };
+    assert!(s.apply_instruction(&empty, &[]).is_err());
+    assert_eq!(s, before);
+    // Pauli factors are a letter and digits.
+    assert!(s.expectation_str("Z+1").is_err());
+    // Measuring two of 2000 qubits costs per shot what two qubits cost.
+    let mut src = String::from("qubit[2000] q; bit[2] c; h q;");
+    src.push_str(" c[0] = measure q[0]; c[1] = measure q[1999];");
+    let p = Program::from_qasm(&src).unwrap();
+    let counts = sample_program(&p, 100_000, 3).unwrap();
+    assert_eq!(counts.len(), 4);
+    for &n in counts.values() {
+        assert!((n as f64 - 25_000.0).abs() < 5.0 * (100_000.0f64 * 0.25 * 0.75).sqrt());
+    }
+    // Shot-by-shot simulation and full samples are bounded.
+    let big =
+        Program::from_qasm("qubit[16384] q; bit c; h q[0]; c = measure q[0]; reset q[0];").unwrap();
+    assert!(sample_program(&big, 1000, 0).is_err());
+    let wide = StabilizerState::zero(16384).unwrap();
+    assert!(
+        wide.sample_counts(5000, &mut Rng::seed_from_u64(0))
+            .is_err()
+    );
 }

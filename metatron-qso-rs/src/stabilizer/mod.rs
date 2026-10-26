@@ -3,9 +3,11 @@
 //! A [`StabilizerState`] stores an n-qubit stabilizer state as the
 //! tableau of Aaronson and Gottesman (Phys. Rev. A 70, 052328 (2004)):
 //! n destabilizer and n stabilizer generators, each a Pauli string with a
-//! sign, bit-packed into 64-bit words. Clifford gates update the tableau in
-//! O(n) time, measurements in O(n²/64), so circuits on thousands of qubits
-//! run in milliseconds to seconds.
+//! sign, bit-packed into 64-bit words and stored by qubit. A Clifford gate
+//! costs O(n/32) word operations; a measurement or an expectation value
+//! O(n²) (the tableau is transposed to rows and back); sampling every qubit
+//! O(n³/64) once, then O(n²/64) per shot. At 16 384 qubits a measurement
+//! takes about a second and the sampler about two minutes.
 //!
 //! Clifford gates are H, S, S†, X, Y, Z, √X, √X†, SWAP, CX, CY and CZ, and
 //! the rotations RX, RY, RZ, P, RXX, RYY, RZZ and U whose angles are
@@ -36,6 +38,9 @@ use crate::rng::Rng;
 /// bytes (128 MiB at the limit), measurements as n² and sampling all
 /// qubits as n³.
 pub const MAX_STABILIZER_QUBITS: usize = 1 << 14;
+
+/// Most bits [`StabilizerState::sample_counts`] returns (shots × qubits).
+pub const MAX_SAMPLED_BITS: usize = 1 << 26;
 
 /// Largest register [`StabilizerState::to_statevector`] converts.
 pub const MAX_STATEVECTOR_QUBITS: usize = 20;
@@ -143,9 +148,12 @@ fn transpose64(a: &mut [u64; 64]) {
 }
 
 fn quarter_turns(theta: f64, what: &str) -> Result<u32> {
-    let k = theta / FRAC_PI_2;
-    let r = k.round();
-    if !theta.is_finite() || (k - r).abs() > 1e-9 * k.abs().max(1.0) {
+    let r = (theta / FRAC_PI_2).round();
+    // An absolute tolerance on the angle, plus the rounding of θ itself:
+    // huge angles are Clifford only when they are multiples of π/2 to
+    // within a few units in the last place.
+    let tolerance = 1e-9 + 8.0 * f64::EPSILON * theta.abs();
+    if !theta.is_finite() || (theta - r * FRAC_PI_2).abs() > tolerance {
         return Err(QsoError::invalid(
             "gate",
             format!("{what}({theta}) is not a Clifford gate (angles must be multiples of π/2)"),
@@ -441,11 +449,9 @@ impl StabilizerState {
     /// most multi-controlled gates, custom unitaries).
     pub fn apply_instruction(&mut self, inst: &Instruction, theta: &[f64]) -> Result<()> {
         use GateKind::*;
+        validate_instruction(inst, theta, self.n)?;
         let a = inst.angles(theta);
         let t = &inst.targets;
-        for &q in inst.qubits().collect::<Vec<_>>().iter() {
-            self.check(q)?;
-        }
         let name = inst.kind.name();
         match (inst.kind, inst.controls.as_slice()) {
             (H, []) => drop(self.h(t[0])?),
@@ -673,14 +679,21 @@ impl StabilizerState {
     }
 
     /// Measure every qubit `shots` times (on copies of the state):
-    /// `{bitstring: count}` with qubit n−1 first.
-    pub fn sample_counts(&self, shots: usize, rng: &mut Rng) -> BTreeMap<String, usize> {
+    /// `{bitstring: count}` with qubit n−1 first. Shots × qubits must be at
+    /// most [`MAX_SAMPLED_BITS`].
+    pub fn sample_counts(&self, shots: usize, rng: &mut Rng) -> Result<BTreeMap<String, usize>> {
+        if shots.saturating_mul(self.n) > MAX_SAMPLED_BITS {
+            return Err(QsoError::invalid(
+                "shots",
+                format!("shots × qubits must be at most {MAX_SAMPLED_BITS}"),
+            ));
+        }
         let sampler = self.sampler();
         let mut counts = BTreeMap::new();
         for _ in 0..shots {
             *counts.entry(sampler.sample_string(rng)).or_default() += 1;
         }
-        counts
+        Ok(counts)
     }
 
     /// The state vector (up to a global phase) for at most
@@ -796,6 +809,26 @@ impl StabilizerState {
         }
         Ok(())
     }
+}
+
+/// Check an instruction as the state-vector simulator does: arity, qubits
+/// in range and distinct, and parameters bound to finite values.
+pub(crate) fn validate_instruction(inst: &Instruction, theta: &[f64], n: usize) -> Result<()> {
+    inst.validate(n)?;
+    for p in &inst.params {
+        if let crate::quantum::Param::Symbol(s) = p
+            && s.index >= theta.len()
+        {
+            return Err(QsoError::ParameterCount {
+                expected: s.index + 1,
+                actual: theta.len(),
+            });
+        }
+    }
+    if theta.iter().any(|t| !t.is_finite()) {
+        return Err(QsoError::invalid("theta", "parameters must be finite"));
+    }
+    Ok(())
 }
 
 /// The local complement `G * v`: the neighbourhood of `v` is
@@ -936,8 +969,11 @@ pub fn parse_pauli(text: &str) -> Result<(f64, Vec<(usize, Pauli)>)> {
             Some('Z') => Pauli::Z,
             _ => return Err(QsoError::Parse(format!("bad Pauli factor '{tok}'"))),
         };
-        let q: usize = chars
-            .as_str()
+        let digits = chars.as_str();
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(QsoError::Parse(format!("bad Pauli factor '{tok}'")));
+        }
+        let q: usize = digits
             .parse()
             .map_err(|_| QsoError::Parse(format!("bad Pauli factor '{tok}'")))?;
         ops.push((q, p));

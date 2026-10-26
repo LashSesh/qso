@@ -12,6 +12,13 @@ use crate::rng::Rng;
 /// `theta`).
 pub fn is_clifford_instruction(inst: &Instruction, theta: &[f64]) -> bool {
     use GateKind::*;
+    let bound = inst.params.iter().all(|p| match p {
+        crate::quantum::Param::Symbol(s) => s.index < theta.len(),
+        _ => true,
+    });
+    if !bound || theta.iter().any(|t| !t.is_finite()) {
+        return false;
+    }
     let a = inst.angles(theta);
     let quarter = |x: f64| quarter_turns(x, "").ok();
     match (inst.kind, inst.controls.len()) {
@@ -110,10 +117,16 @@ pub fn run_program(program: &Program, rng: &mut Rng) -> Result<u64> {
     Ok(record)
 }
 
+/// Most work (shots × operations × qubits²) of shot-by-shot simulation:
+/// minutes at most.
+pub const MAX_TABLEAU_WORK: u128 = 1 << 36;
+
 /// `shots` seeded samples of a Clifford program's classical record. A
 /// program of gates followed by measurements runs once and is then
-/// sampled from the outcome distribution; any other program is simulated
-/// shot by shot (shots × operations at most 2³⁰).
+/// sampled from the distribution of its (at most 64) record bits, at a
+/// cost per shot independent of the number of qubits; any other program
+/// is simulated shot by shot (shots × operations × qubits² at most
+/// [`MAX_TABLEAU_WORK`]).
 pub fn sample_program(program: &Program, shots: usize, seed: u64) -> Result<BTreeMap<u64, usize>> {
     if !is_clifford_program(program) {
         return Err(QsoError::invalid(
@@ -133,35 +146,62 @@ pub fn sample_program(program: &Program, shots: usize, seed: u64) -> Result<BTre
         .all(|o| matches!(o, Operation::Measure { .. }));
     if terminal {
         // A program without qubits (only bits) runs on a one-qubit dummy.
-    let mut s = StabilizerState::zero(program.n_qubits().max(1))?;
+        let mut s = StabilizerState::zero(program.n_qubits().max(1))?;
         for op in &ops[..first_measure] {
             if let Operation::Gate(inst) = op {
                 s.apply_instruction(inst, &[])?;
             }
         }
-        let sampler = s.sampler();
-        let pairs: Vec<(usize, usize)> = ops[first_measure..]
-            .iter()
-            .filter_map(|o| match o {
-                Operation::Measure { qubit, bit } => Some((*qubit, *bit)),
-                _ => None,
-            })
-            .collect();
-        for _ in 0..shots {
-            let v = sampler.sample_words(&mut rng);
-            let mut record = 0u64;
-            for &(q, b) in &pairs {
-                let bit = (v[q / 64] >> (q % 64)) & 1;
-                record = (record & !(1 << b)) | (bit << b);
+        // The record is a linear function of the outcomes (the last
+        // measurement into a bit wins), so it is uniform over the image of
+        // the outcome space: at most 64 basis vectors, whatever n is.
+        let mut last = BTreeMap::new();
+        for op in &ops[first_measure..] {
+            if let Operation::Measure { qubit, bit } = op {
+                last.insert(*bit, *qubit);
             }
-            *counts.entry(record).or_default() += 1;
+        }
+        let record = |v: &[u64]| {
+            last.iter()
+                .map(|(&b, &q)| ((v[q / 64] >> (q % 64)) & 1) << b)
+                .fold(0u64, |acc, x| acc | x)
+        };
+        let sampler = s.sampler();
+        let offset = record(&sampler.offset);
+        let mut basis: Vec<u64> = Vec::new();
+        for v in &sampler.basis {
+            // Reduce against the basis so far; keep what is independent.
+            let mut r = record(v);
+            for &b in &basis {
+                r = r.min(r ^ b);
+            }
+            if r != 0 {
+                basis.push(r);
+                basis.sort_unstable_by(|a, b| b.cmp(a));
+            }
+        }
+        for _ in 0..shots {
+            let bits = rng.next_u64();
+            let mut r = offset;
+            for (k, &b) in basis.iter().enumerate() {
+                if (bits >> k) & 1 == 1 {
+                    r ^= b;
+                }
+            }
+            *counts.entry(r).or_default() += 1;
         }
         return Ok(counts);
     }
-    if shots.saturating_mul(program.len().max(1)) > MAX_SHOT_WORK {
+    // Shot by shot: a measurement costs O(n²), so the work bound counts
+    // shots × operations × n².
+    let n = program.n_qubits().max(1) as u128;
+    let work = (shots as u128) * (program.len().max(1) as u128) * n * n;
+    if shots.saturating_mul(program.len().max(1)) > MAX_SHOT_WORK || work > MAX_TABLEAU_WORK {
         return Err(QsoError::invalid(
             "shots",
-            format!("shots × operations exceed {MAX_SHOT_WORK}"),
+            format!(
+                "shots × operations × qubits² exceeds {MAX_TABLEAU_WORK} (or shots × operations {MAX_SHOT_WORK})"
+            ),
         ));
     }
     for _ in 0..shots {

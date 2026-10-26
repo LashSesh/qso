@@ -290,6 +290,7 @@ fn clifford_qasm(program: &Program, shots: usize, seed: u64) -> Outcome {
         StabilizerState::from_circuit(&circuit, &[])
             .map_err(|e| e.to_string())?
             .sample_counts(shots, &mut Rng::seed_from_u64(seed))
+            .map_err(|e| e.to_string())?
     } else {
         sample_program(program, shots, seed)
             .map_err(|e| e.to_string())?

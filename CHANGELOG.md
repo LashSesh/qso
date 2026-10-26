@@ -44,7 +44,8 @@ below).
 - **Python:** `StabilizerState`, `local_complementation`, `is_clifford`,
   `Program.is_clifford` and `Program.sample(method=…)`.
 - **Tests:** the `openqasm` fuzz target also runs Clifford programs on
-  the stabilizer simulator against the exact distribution.
+  the stabilizer simulator; every record must have non-zero exact
+  probability.
 - **Docs:** example `stabilizers` and the guide chapter "Stabilizer
   simulation and graph states".
 

@@ -15,8 +15,9 @@ The Clifford gates are:
 - RX, RY, RZ, P, RXX, RYY, RZZ and U, when every angle is a multiple of
   π/2.
 
-Any other gate is an error. A stabilizer state is defined only up to a
-global phase.
+Any other gate is an error, and so is an angle that is not a multiple of
+π/2 to within 10⁻⁹ (plus the rounding of large angles). A stabilizer
+state is defined only up to a global phase.
 
 ```python
 import metatron_qso as q
@@ -135,17 +136,20 @@ fn main() -> Result<()> {
   et al.
 - A GHZ state on 10 000 qubits has its known correlations. The cut-ranks
   of the hypercube Q₁₀ (512) and the cycle C₁₀₀₀ (2) are reproduced.
-- Clifford programs agree with the exact outcome distributions: in the
-  tests, and in a fuzz target that runs random programs on both
-  simulators.
+- Clifford programs agree with the exact outcome distributions in the
+  tests (counts within a few standard deviations). A fuzz target runs
+  random Clifford programs on the stabilizer simulator and checks that
+  every record it produces has non-zero exact probability.
 
 ## Limits
 
 | Limit | Value |
 |---|---|
 | Register | 16384 qubits |
-| Memory | about n²/2 bytes (128 MiB at the limit) |
+| Memory | about n²/2 bytes (128 MiB at the limit), twice that while measuring |
 | Gate | O(n/32) word operations |
-| Measurement | O(n²/64) |
-| Sampling every qubit | O(n³/64) once, then O(n²/64) per shot |
+| Measurement, expectation value, `same_state` | O(n²): the tableau is transposed to rows (about a second per measurement at the limit) |
+| Sampling every qubit | O(n³/64) once (about two minutes at the limit), then O(n²/64) per shot; shots × qubits at most 2²⁶ |
+| Programs of gates followed by measurements | simulated once, then O(1) per shot for their at most 64 bits |
+| Other programs | simulated shot by shot; shots × operations × qubits² at most 2³⁶ |
 | Conversion to a state vector | 20 qubits |

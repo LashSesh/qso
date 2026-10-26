@@ -883,7 +883,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 let labelled: std::collections::BTreeMap<String, usize> = if tableau {
                     if program.n_bits() == 0 {
                         let state = StabilizerState::from_circuit(&program.to_circuit()?, &[])?;
-                        state.sample_counts(*shots, &mut Rng::seed_from_u64(*seed))
+                        state.sample_counts(*shots, &mut Rng::seed_from_u64(*seed))?
                     } else {
                         sample_program(&program, *shots, *seed)?
                             .iter()

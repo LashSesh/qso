@@ -416,7 +416,7 @@ Know its boundaries:
 | Limit | Value | Reason |
 |---|---|---|
 | Pure-state register | 34 qubits | 2³⁴ amplitudes = 256 GiB; practical limit is your RAM (16 bytes per amplitude) |
-| Stabilizer register | 16 384 qubits, Clifford gates only | n²/2 bytes; measurements cost n²/64 word operations, sampling every qubit n³/64 once |
+| Stabilizer register | 16 384 qubits, Clifford gates only | n²/2 bytes, about twice that while measuring. A gate costs n/32 word operations, a measurement O(n²) (about a second at the limit), sampling every qubit O(n³/64) once (about two minutes at the limit) |
 | Density-matrix register | 14 qubits | 4¹⁴ entries = 4 GiB. Quantum trajectories reach the pure-state limit at the price of statistical error (and up to three state vectors in memory per running trajectory) |
 | Noise channels | one and two qubits | Kraus operators of channels on more qubits are not supported; noise after larger gates acts on consecutive pairs |
 | Probabilistic error cancellation | Pauli noise; overhead grows as Γ = Π γ | Twirling turns other noise into Pauli noise on average; the standard error grows with Γ, exponentially in the number of noisy gates |

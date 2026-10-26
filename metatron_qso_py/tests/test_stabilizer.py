@@ -79,3 +79,16 @@ def test_invalid_input() -> None:
         s.sample(10**8)
     with pytest.raises(ValueError):
         q.StabilizerState(21).to_statevector()
+
+
+def test_review_regressions() -> None:
+    c = q.Circuit(1)
+    p = c.new_parameter()
+    c.rx(0, p)
+    assert not q.is_clifford(c)
+    with pytest.raises(ValueError):
+        q.StabilizerState.from_circuit(c)
+    assert q.is_clifford(c, [np.pi / 2])
+    assert not q.is_clifford(q.Circuit(1).rx(0, 1e9))
+    with pytest.raises(ValueError, match="shots"):
+        q.StabilizerState(16384).sample(5000)
