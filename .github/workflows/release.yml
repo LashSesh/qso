@@ -262,7 +262,8 @@ jobs:
           if npm view "metatron-qso@$version" version >/dev/null 2>&1; then
             echo "metatron-qso $version is already on npm"
           else
-            npm publish npm/metatron-qso-"$version".tgz --access public --provenance
+            # "./": without it npm reads "npm/…" as a GitHub repository.
+            npm publish ./npm/metatron-qso-"$version".tgz --access public --provenance
           fi
 
   github-release:
