@@ -689,16 +689,28 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             let best = t.best_transfer(*t_max, 4000)?;
             // Exact PGST decision where the graph family allows it; perfect
             // transfer implies it on every graph.
-            let pretty_good =
-                PrettyGoodTransfer::from_graph(&g, (*generator).into(), *gamma, *from, to)
-                    .ok()
-                    .map(|p| p.pretty_good())
-                    .or(t.perfect_transfer_time().map(|_| true));
-            let pgst_line = match pretty_good {
-                Some(true) => "\npretty good state transfer: yes".to_string(),
-                Some(false) => "\npretty good state transfer: no (exact)".to_string(),
-                None => "\npretty good state transfer: undecided (exact only for paths and cycles)"
-                    .to_string(),
+            let exact = PrettyGoodTransfer::from_graph(&g, (*generator).into(), *gamma, *from, to);
+            // Paths and cycles are recognised before any arithmetic, so an
+            // error on one means the decision itself failed.
+            let family = g.is_connected()
+                && g.is_unweighted()
+                && g.degrees().iter().all(|&d| d <= 2)
+                && g.num_edges() + 1 >= g.num_nodes();
+            let pretty_good = exact
+                .as_ref()
+                .ok()
+                .map(|p| p.pretty_good())
+                .or(t.perfect_transfer_time().map(|_| true));
+            let pgst_line = match (pretty_good, &exact) {
+                (Some(true), _) => "\npretty good state transfer: yes".to_string(),
+                (Some(false), _) => "\npretty good state transfer: no (exact)".to_string(),
+                (None, Err(e)) if family => {
+                    format!("\npretty good state transfer: undecided ({e})")
+                }
+                (None, _) => {
+                    "\npretty good state transfer: undecided (exact only for paths and cycles)"
+                        .to_string()
+                }
             };
             let text = match t.perfect_transfer_time() {
                 Some(tau) => format!(

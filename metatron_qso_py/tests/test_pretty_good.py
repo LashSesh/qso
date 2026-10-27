@@ -36,3 +36,27 @@ def test_decisions_times_and_witnesses():
         q.PrettyGoodTransfer.cayley([6], [[1]], [0], [3])
     with pytest.raises(ValueError):
         q.PrettyGoodTransfer.path(4, 0, 3, "hamming")
+
+
+def test_fidelity_is_exact_for_any_pair() -> None:
+    import numpy as np
+
+    # Cycle C8, nodes 0 and 3 (not strongly cospectral): the walk's
+    # transfer probability from the matrix exponential.
+    n = 8
+    a = np.zeros((n, n))
+    for i in range(n):
+        a[i, (i + 1) % n] = a[(i + 1) % n, i] = 1
+    w, vecs = np.linalg.eigh(a)
+    t = q.PrettyGoodTransfer.cycle(n, 0, 3)
+    assert not t.strongly_cospectral and t.rank == 0
+    for time in (0.5, 2.0):
+        u = vecs @ np.diag(np.exp(1j * w * time)) @ vecs.T
+        assert t.fidelity(time) == pytest.approx(abs(u[3, 0]) ** 2, abs=1e-12)
+    # The support and the representation.
+    p4 = q.PrettyGoodTransfer.path(4, 0, 3)
+    assert len(p4.support) == 4 and {s for _, s in p4.support} == {1, -1}
+    assert "perfect_time=None" in repr(p4)
+    assert "perfect_time=1.57" in repr(q.PrettyGoodTransfer.cycle(4, 0, 2))
+    with pytest.raises(ValueError):
+        q.PrettyGoodTransfer.cayley([6], [[1], [5], [1], [5]], [0], [3])

@@ -105,8 +105,11 @@ Each eigenvalue becomes an integer vector in the power basis of `Q(ζ_N)`
 the integer kernel of these vectors, found by integer column reduction,
 and the parity condition is checked on a basis of it. When there is no
 PGST, `obstruction` returns a relation with odd parity. The decision is
-exact; `best_transfer` searches a window for a high fidelity, but PGST
-times can lie far beyond any window.
+exact. When there is PGST and the differences `θ_r − θ_0` span a space of
+rank 1, there is also perfect state transfer, at the time π/g read off the
+integer data. `fidelity(t)` is the exact transfer probability for any pair,
+from the closed-form eigenvectors. `best_transfer` searches a window for a
+high fidelity, but PGST times can lie far beyond any window.
 
 ```python
 import metatron_qso as q
@@ -126,14 +129,22 @@ of two (Godsil, Kirkland, Severini and Smith 2012; n ≤ 300), the ends of the
 Laplacian path (the Heisenberg chain) exactly when n is a power of two
 (Banchi et al. 2017; n ≤ 200), and antipodal vertices of the cycle `C_n`
 exactly when n is a power of two (Pal 2017; n ≤ 512). They also check
-strong cospectrality, PST times and fidelities against `StateTransfer` on
-hypercubes, circulants and paths, every obstruction, and a time with
-fidelity above 0.999 on `P_4` against the propagated walk.
+strong cospectrality, PST times and fidelities (for every pair of nodes)
+against `StateTransfer` on hypercubes, circulants, paths, tori, `Z_3 × Z_5`
+and the Hamming graph H(2, 3), every obstruction, and a time with fidelity
+above 0.999 on `P_4` against the propagated walk.
 
-The integer arithmetic is exact or fails: on overflow the answer is an
-error, never a guess. Paths up to 800 nodes and cycles up to 4096 are
-decided in under a second (Q₁₆ in 50 ms); the path on 1000 nodes
-overflows. `qso transfer` prints the exact decision for paths and cycles.
+The integer arithmetic is exact or fails: on overflow of 128-bit integers
+the answer is an error, never a guess. The cost grows with the number of
+distinct eigenvalues m and the field degree d, roughly as m²(m + d), and
+the search holds m(m + d) integers, at most 2²⁴: larger groups are refused
+before the search starts. In an independent review on one core, cycles
+with 2^k nodes were fast (C₄₀₉₆ in 0.6 s, Q₁₆ in 65 ms), but other cycle
+sizes above about 2000 nodes took 10 to 60 s and some overflowed, the path
+on 1000 nodes overflowed while those on 1200 and 2000 were decided, and
+Laplacian paths of prime length near 800 took about 7 s. `qso transfer`
+prints the exact decision for paths and cycles, and says why when it is
+undecided.
 
 ## In Rust
 

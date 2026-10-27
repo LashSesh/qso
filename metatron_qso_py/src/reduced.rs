@@ -635,13 +635,23 @@ impl PyPrettyGoodTransfer {
     }
 
     /// An integer relation among the eigenvalue differences with odd
-    /// parity, which rules out PGST, or `None`.
+    /// parity, which rules out PGST, or `None` (also when its coefficients
+    /// exceed 64 bits). Coefficient i belongs to `support[i + 1]`.
     #[getter]
     fn obstruction(&self) -> Option<Vec<i64>> {
         self.inner.obstruction().map(<[i64]>::to_vec)
     }
 
-    /// `|⟨v| exp(−iHt) |u⟩|²`.
+    /// The eigenvalues of the Hamiltonian in the support of `u`, with the
+    /// sign σ of `v` on each (0 where the nodes are not strongly
+    /// cospectral).
+    #[getter]
+    fn support(&self) -> Vec<(f64, i8)> {
+        self.inner.support()
+    }
+
+    /// `|⟨v| exp(−iHt) |u⟩|²`, from the closed-form eigenvectors (any
+    /// pair of nodes).
     fn fidelity(&self, t: f64) -> PyResult<f64> {
         check_time("t", t)?;
         Ok(self.inner.fidelity(t))
@@ -663,7 +673,7 @@ impl PyPrettyGoodTransfer {
     fn __repr__(&self) -> String {
         let d = self.inner.decision();
         format!(
-            "PrettyGoodTransfer(strongly_cospectral={}, pretty_good={}, perfect_time={:?})",
+            "PrettyGoodTransfer(strongly_cospectral={}, pretty_good={}, perfect_time={})",
             if d.strongly_cospectral {
                 "True"
             } else {
@@ -671,6 +681,7 @@ impl PyPrettyGoodTransfer {
             },
             if d.pretty_good { "True" } else { "False" },
             d.perfect_time
+                .map_or_else(|| "None".to_string(), |t| t.to_string())
         )
     }
 }

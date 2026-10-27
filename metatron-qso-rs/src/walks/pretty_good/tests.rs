@@ -1,4 +1,5 @@
 use super::*;
+use crate::error::QsoError;
 use crate::graph::generators;
 use crate::walks::{ContinuousWalk, StateTransfer};
 
@@ -158,8 +159,87 @@ fn exact_decisions_agree_with_the_numerical_pst_analysis() {
     }
     for n in 2..=12usize {
         for v in 1..n {
-            let exact = PrettyGoodTransfer::path(n, Generator::Adjacency, 1.0, 0, v).unwrap();
-            cases.push((exact, generators::path(n), Generator::Adjacency, 1.0, 0, v));
+            for generator in [Generator::Adjacency, Generator::Laplacian] {
+                let exact = PrettyGoodTransfer::path(n, generator, 1.0, 0, v).unwrap();
+                cases.push((exact, generators::path(n), generator, 1.0, 0, v));
+            }
+        }
+    }
+    // Products of cyclic groups: tori, Z_3 × Z_5, and the Hamming graph
+    // H(2, 3) (two coordinates mod 3, one changed per edge).
+    for (moduli, set) in [
+        (
+            vec![4usize, 6],
+            vec![vec![1i64, 0], vec![-1, 0], vec![0, 1], vec![0, -1]],
+        ),
+        (
+            vec![3, 5],
+            vec![
+                vec![1, 0],
+                vec![-1, 0],
+                vec![0, 1],
+                vec![0, -1],
+                vec![1, 1],
+                vec![-1, -1],
+            ],
+        ),
+        (
+            vec![3, 3],
+            vec![vec![1, 0], vec![2, 0], vec![0, 1], vec![0, 2]],
+        ),
+        (
+            vec![2, 4, 2],
+            vec![
+                vec![1, 0, 0],
+                vec![0, 1, 0],
+                vec![0, 3, 0],
+                vec![0, 0, 1],
+                vec![1, 2, 1],
+            ],
+        ),
+    ] {
+        let size: usize = moduli.iter().product();
+        let coords = |mut x: usize| -> Vec<usize> {
+            moduli
+                .iter()
+                .map(|&m| {
+                    let c = x % m;
+                    x /= m;
+                    c
+                })
+                .collect()
+        };
+        let index = |c: &[i64]| -> usize {
+            c.iter()
+                .zip(&moduli)
+                .rev()
+                .fold(0, |acc, (&x, &m)| acc * m + x.rem_euclid(m as i64) as usize)
+        };
+        let mut edges = Vec::new();
+        for a in 0..size {
+            let ca = coords(a);
+            for s in &set {
+                let sum: Vec<i64> = ca.iter().zip(s).map(|(&x, &y)| x as i64 + y).collect();
+                let b = index(&sum);
+                if a < b {
+                    edges.push((a, b));
+                }
+            }
+        }
+        let g = Graph::from_edges(size, &edges).unwrap();
+        for v in 1..size {
+            for generator in [Generator::Adjacency, Generator::Laplacian] {
+                let exact = PrettyGoodTransfer::cayley(
+                    &moduli,
+                    &set,
+                    generator,
+                    0.9,
+                    &coords(0),
+                    &coords(v),
+                )
+                .unwrap();
+                cases.push((exact, g.clone(), generator, 0.9, 0, v));
+            }
         }
     }
     let mut pst = 0;
@@ -182,14 +262,14 @@ fn exact_decisions_agree_with_the_numerical_pst_analysis() {
         if exact.perfect_time().is_some() {
             assert!(exact.pretty_good(), "{label}");
         }
-        // The fidelity is the walk's.
-        if exact.strongly_cospectral() {
-            for t in [0.3, 1.7, 4.1] {
-                assert!(
-                    (exact.fidelity(t) - numeric.fidelity(t)).abs() < 1e-10,
-                    "{label} t = {t}"
-                );
-            }
+        // The fidelity is the walk's, for every pair.
+        for t in [0.3, 1.7, 4.1] {
+            assert!(
+                (exact.fidelity(t) - numeric.fidelity(t)).abs() < 1e-10,
+                "{label} t = {t}: {} vs {}",
+                exact.fidelity(t),
+                numeric.fidelity(t)
+            );
         }
     }
     assert!(pst >= 8, "{pst}");
@@ -250,8 +330,98 @@ fn graphs_are_recognised_and_inputs_checked() {
         )
         .is_err()
     );
-    // Not strongly cospectral: no fidelity window search.
+    // Not strongly cospectral: no PGST, rank 0, the true fidelity (the
+    // walk's) and its window search.
     let t = PrettyGoodTransfer::path(5, Generator::Adjacency, 1.0, 0, 1).unwrap();
-    assert!(!t.strongly_cospectral() && !t.pretty_good());
-    assert!(t.best_transfer(10.0, 100).is_err());
+    assert!(!t.strongly_cospectral() && !t.pretty_good() && t.rank() == 0);
+    let walk = ContinuousWalk::new(&generators::path(5), Generator::Adjacency, 1.0).unwrap();
+    assert!((t.fidelity(1.0) - walk.probabilities(0, 1.0).unwrap()[1]).abs() < 1e-12);
+    let best = t.best_transfer(10.0, 1000).unwrap();
+    assert!((best.fidelity - walk.probabilities(0, best.time).unwrap()[1]).abs() < 1e-12);
+    // Repeated or missing connection elements, hopping rates out of range,
+    // sizes beyond the field, and errors that name the argument.
+    let bad = |r: Result<PrettyGoodTransfer>, name: &str| match r {
+        Err(QsoError::InvalidArgument { name: n, .. }) => assert_eq!(n, name),
+        other => panic!("{other:?}"),
+    };
+    bad(
+        PrettyGoodTransfer::cayley(
+            &[6],
+            &[vec![1], vec![5], vec![7], vec![-1]],
+            Generator::Adjacency,
+            1.0,
+            &[0],
+            &[3],
+        ),
+        "connection",
+    );
+    bad(
+        PrettyGoodTransfer::cayley(&[6], &[], Generator::Adjacency, 1.0, &[0], &[3]),
+        "connection",
+    );
+    bad(
+        PrettyGoodTransfer::cayley(
+            &[6],
+            &[vec![1], vec![5]],
+            Generator::Adjacency,
+            1.0,
+            &[0],
+            &[9],
+        ),
+        "v",
+    );
+    bad(
+        PrettyGoodTransfer::path(4, Generator::Adjacency, 1e-200, 0, 3),
+        "gamma",
+    );
+    bad(
+        PrettyGoodTransfer::path(4, Generator::Adjacency, 1e200, 0, 3),
+        "gamma",
+    );
+    bad(
+        PrettyGoodTransfer::path(1_000_000, Generator::Adjacency, 1.0, 0, 3),
+        "n",
+    );
+    bad(
+        PrettyGoodTransfer::cycle(10_000, Generator::Adjacency, 1.0, 0, 3),
+        "n",
+    );
+    bad(
+        PrettyGoodTransfer::cayley(
+            &[9973, 2],
+            &[vec![1, 0], vec![-1, 0]],
+            Generator::Adjacency,
+            1.0,
+            &[0, 0],
+            &[1, 0],
+        ),
+        "moduli",
+    );
+    // A group whose relation search would not fit in memory is refused
+    // before it starts (17 000 distinct eigenvalues).
+    bad(
+        PrettyGoodTransfer::cayley(
+            &[1024, 64],
+            &[vec![1, 0], vec![-1, 0], vec![0, 1], vec![0, -1]],
+            Generator::Adjacency,
+            1.0,
+            &[0, 0],
+            &[512, 0],
+        ),
+        "graph",
+    );
+    // Odd cycles use Q(ζ_n) itself: C_5001 fits.
+    let odd = PrettyGoodTransfer::cycle(5001, Generator::Adjacency, 1.0, 0, 1).unwrap();
+    assert!(!odd.strongly_cospectral());
+}
+
+#[test]
+fn perfect_transfer_times_are_exact_at_extreme_rates() {
+    // C_4 antipodal: PST at π/(2γ), from the integer data alone.
+    for gamma in [1e-90, 1e-3, 1.0, 1e90] {
+        let t = PrettyGoodTransfer::cycle(4, Generator::Adjacency, gamma, 0, 2).unwrap();
+        let expected = std::f64::consts::FRAC_PI_2 / gamma;
+        let got = t.perfect_time().unwrap();
+        assert!((got - expected).abs() <= 1e-12 * expected, "{gamma}: {got}");
+    }
 }

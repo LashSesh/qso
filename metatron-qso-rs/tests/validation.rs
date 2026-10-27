@@ -1237,9 +1237,12 @@ fn pretty_good_state_transfer_follows_number_theory() {
         assert_eq!(t.pretty_good(), n.is_power_of_two(), "P{n}");
     }
     // Antipodes of C_n: PGST iff n is a power of two (Pal 2017).
+    // The cycle is regular, so the Laplacian gives the same answer.
     for n in (4..=512usize).step_by(2) {
-        let t = PrettyGoodTransfer::cycle(n, Generator::Adjacency, 1.0, 0, n / 2).unwrap();
-        assert_eq!(t.pretty_good(), n.is_power_of_two(), "C{n}");
+        for generator in [Generator::Adjacency, Generator::Laplacian] {
+            let t = PrettyGoodTransfer::cycle(n, generator, 1.0, 0, n / 2).unwrap();
+            assert_eq!(t.pretty_good(), n.is_power_of_two(), "C{n} {generator:?}");
+        }
     }
 }
 

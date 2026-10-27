@@ -19,7 +19,7 @@
 //! [`PrettyGoodTransfer`] computes them for graphs whose eigenvalues lie
 //! in a cyclotomic field `Q(ζ_N)` and are known in closed form: paths
 //! (adjacency and Laplacian), cycles, and Cayley graphs of finite abelian
-//! groups (circulants, hypercubes, Hamming-type products). Every
+//! groups (circulants, hypercubes, tori, Hamming graphs). Every
 //! eigenvalue is an integer vector in the power basis `1, ζ, …, ζ^{φ(N)−1}`
 //! (powers of `ζ` reduced modulo the cyclotomic polynomial `Φ_N`); the
 //! relations form the integer kernel of those vectors, found by integer
@@ -56,6 +56,13 @@ use crate::graph::Graph;
 pub const MAX_CYCLOTOMIC_ORDER: usize = 1 << 13;
 /// Largest group (number of nodes) of [`PrettyGoodTransfer::cayley`].
 pub const MAX_CAYLEY_NODES: usize = 1 << 16;
+/// Largest number of integers the relation search holds: with `m`
+/// distinct eigenvalues in the support and field degree `d`, it keeps
+/// `m (m + d)` entries of 16 bytes (here at most 256 MiB).
+pub const MAX_RELATION_ENTRIES: usize = 1 << 24;
+/// Range of the hopping rate γ: outside it the transfer times under- or
+/// overflow.
+pub const GAMMA_RANGE: (f64, f64) = (1e-100, 1e100);
 
 /// Integers in the power basis of `Q(ζ_N)`.
 struct Cyclotomic {
@@ -318,6 +325,8 @@ struct Level {
     energy: f64,
     /// `‖E_θ e_u‖²`.
     weight: f64,
+    /// `⟨e_v|E_θ|e_u⟩` (real for these graphs).
+    cross: f64,
     /// `σ_θ` (0: not strongly cospectral on this eigenspace).
     sign: i8,
 }
@@ -328,7 +337,9 @@ struct Level {
 pub struct PrettyGoodTransfer {
     levels: Vec<Level>,
     cospectral: bool,
-    /// A relation violating the parity condition, if any.
+    /// Whether a relation violates the parity condition.
+    obstructed: bool,
+    /// That relation, when its coefficients fit in `i64`.
     obstruction: Option<Vec<i64>>,
     /// Rank of the eigenvalue differences over `Q`.
     rank: usize,
@@ -342,15 +353,19 @@ pub struct TransferDecision {
     pub pretty_good: bool,
     /// Earliest time of perfect state transfer, if there is one.
     pub perfect_time: Option<f64>,
-    /// Dimension over `Q` of the span of the eigenvalue differences.
+    /// Dimension over `Q` of the span of the eigenvalue differences (0
+    /// when the nodes are not strongly cospectral).
     pub rank: usize,
 }
 
 fn check_gamma(gamma: f64) -> Result<()> {
-    if !(gamma.is_finite() && gamma > 0.0) {
+    if !(GAMMA_RANGE.0..=GAMMA_RANGE.1).contains(&gamma) {
         return Err(QsoError::invalid(
             "gamma",
-            "hopping rate must be positive and finite",
+            format!(
+                "the hopping rate must lie between {:e} and {:e}",
+                GAMMA_RANGE.0, GAMMA_RANGE.1
+            ),
         ));
     }
     Ok(())
@@ -388,6 +403,15 @@ impl PrettyGoodTransfer {
         if n < 2 {
             return Err(QsoError::invalid("n", "a path needs at least 2 nodes"));
         }
+        if n >= MAX_CYCLOTOMIC_ORDER / 2 {
+            return Err(QsoError::invalid(
+                "n",
+                format!(
+                    "at most {} nodes (the eigenvalues lie in a cyclotomic field of order 2(n + 1) ≤ {MAX_CYCLOTOMIC_ORDER})",
+                    MAX_CYCLOTOMIC_ORDER / 2 - 1
+                ),
+            ));
+        }
         for node in [u, v] {
             if node >= n {
                 return Err(QsoError::NodeOutOfRange { node, n_nodes: n });
@@ -408,6 +432,7 @@ impl PrettyGoodTransfer {
                 for j in 1..=n_ {
                     let (p, q) = (j * (a + 1), j * (b + 1));
                     let su = (std::f64::consts::PI * p as f64 / m as f64).sin();
+                    let sv = (std::f64::consts::PI * q as f64 / m as f64).sin();
                     let zero_u = p.rem_euclid(m) == 0;
                     let zero_v = q.rem_euclid(m) == 0;
                     if zero_u {
@@ -416,6 +441,7 @@ impl PrettyGoodTransfer {
                                 exact: Vec::new(),
                                 energy: 0.0,
                                 weight: 0.0,
+                                cross: 0.0,
                                 sign: 0,
                             });
                         }
@@ -426,6 +452,7 @@ impl PrettyGoodTransfer {
                         exact: field.element(&terms)?,
                         energy: -gamma * field.value(&terms),
                         weight: 2.0 / m as f64 * su * su,
+                        cross: 2.0 / m as f64 * su * sv,
                         sign: sine_ratio(p, q, m).unwrap_or(0),
                     });
                 }
@@ -438,6 +465,7 @@ impl PrettyGoodTransfer {
                 for j in 0..n_ {
                     let (p, q) = (j * (2 * a + 1), j * (2 * b + 1));
                     let cu = (std::f64::consts::PI * p as f64 / m as f64).cos();
+                    let cv = (std::f64::consts::PI * q as f64 / m as f64).cos();
                     let zero = |x: i64| (2 * x).rem_euclid(2 * m) == m;
                     if zero(p) {
                         if !zero(q) {
@@ -445,6 +473,7 @@ impl PrettyGoodTransfer {
                                 exact: Vec::new(),
                                 energy: 0.0,
                                 weight: 0.0,
+                                cross: 0.0,
                                 sign: 0,
                             });
                         }
@@ -460,6 +489,7 @@ impl PrettyGoodTransfer {
                         exact: field.element(&terms)?,
                         energy: gamma * field.value(&terms),
                         weight: norm * cu * cu,
+                        cross: norm * cu * cv,
                         sign: cosine_ratio(p, q, m).unwrap_or(0),
                     });
                 }
@@ -472,6 +502,12 @@ impl PrettyGoodTransfer {
     pub fn cycle(n: usize, generator: Generator, gamma: f64, u: usize, v: usize) -> Result<Self> {
         if n < 3 {
             return Err(QsoError::invalid("n", "a cycle needs at least 3 nodes"));
+        }
+        if n > MAX_CYCLOTOMIC_ORDER {
+            return Err(QsoError::invalid(
+                "n",
+                format!("at most {MAX_CYCLOTOMIC_ORDER} nodes"),
+            ));
         }
         Self::cayley(
             &[n],
@@ -513,10 +549,10 @@ impl PrettyGoodTransfer {
                     format!("at most {MAX_CAYLEY_NODES} group elements"),
                 )
             })?;
-        for x in [u, v] {
+        for (name, x) in [("u", u), ("v", v)] {
             if x.len() != k || x.iter().zip(moduli).any(|(&a, &m)| a >= m) {
                 return Err(QsoError::invalid(
-                    "u",
+                    name,
                     "elements need one coordinate below each modulus",
                 ));
             }
@@ -543,8 +579,17 @@ impl PrettyGoodTransfer {
                 "the identity would be a loop",
             ));
         }
+        if set.is_empty() {
+            return Err(QsoError::invalid("connection", "the set is empty"));
+        }
         let mut sorted = set.clone();
         sorted.sort();
+        if sorted.windows(2).any(|w| w[0] == w[1]) {
+            return Err(QsoError::invalid(
+                "connection",
+                "an element is listed twice (after reduction modulo the moduli)",
+            ));
+        }
         let mut negated: Vec<Vec<i64>> = set
             .iter()
             .map(|s| reduce(&s.iter().map(|x| -x).collect::<Vec<_>>()))
@@ -556,8 +601,17 @@ impl PrettyGoodTransfer {
                 "the set must be symmetric (s and −s)",
             ));
         }
+        // Q(ζ_N) for the exponent N of the group (for odd N it equals
+        // Q(ζ_2N), and characters never take the value −1).
         let order = moduli.iter().fold(1usize, |l, &m| l / gcd(l, m) * m);
-        let order = if order % 2 == 1 { 2 * order } else { order };
+        if order > MAX_CYCLOTOMIC_ORDER {
+            return Err(QsoError::invalid(
+                "moduli",
+                format!(
+                    "the exponent of the group (the lcm of the moduli, {order}) must be at most {MAX_CYCLOTOMIC_ORDER}"
+                ),
+            ));
+        }
         let field = Cyclotomic::new(order)?;
         let scale: Vec<i64> = moduli.iter().map(|&m| (order / m) as i64).collect();
         let degree = set.len() as i64;
@@ -568,7 +622,7 @@ impl PrettyGoodTransfer {
             .map(|((&b, &a), &m)| (b as i64 - a as i64).rem_euclid(m as i64))
             .collect();
         // Characters χ_c(g) = ζ^{Σ c_i g_i N/m_i}; eigenvalue Σ_s χ_c(s).
-        let mut groups: HashMap<Vec<i64>, (f64, usize, i8)> = HashMap::new();
+        let mut groups: HashMap<Vec<i64>, (f64, usize, i8, f64)> = HashMap::new();
         let mut order_seen: Vec<Vec<i64>> = Vec::new();
         let mut c = vec![0usize; k];
         for _ in 0..size {
@@ -598,16 +652,20 @@ impl PrettyGoodTransfer {
             } else {
                 0
             };
+            // ⟨e_v|E|e_u⟩ sums χ_c(v − u)/|G| over the eigenspace; the
+            // imaginary parts cancel (c and −c share the eigenvalue).
+            let cross = (2.0 * std::f64::consts::PI * e as f64 / order as f64).cos();
             match groups.get_mut(&exact) {
                 Some(entry) => {
                     entry.1 += 1;
+                    entry.3 += cross;
                     if entry.2 != sign {
                         entry.2 = 0;
                     }
                 }
                 None => {
                     order_seen.push(exact.clone());
-                    groups.insert(exact, (energy, 1, sign));
+                    groups.insert(exact, (energy, 1, sign, cross));
                 }
             }
             // Next character (mixed radix).
@@ -622,11 +680,12 @@ impl PrettyGoodTransfer {
         let levels = order_seen
             .into_iter()
             .map(|exact| {
-                let (energy, count, sign) = groups[&exact];
+                let (energy, count, sign, cross) = groups[&exact];
                 Level {
                     exact,
                     energy,
                     weight: count as f64 / size as f64,
+                    cross: cross / size as f64,
                     sign,
                 }
             })
@@ -700,12 +759,24 @@ impl PrettyGoodTransfer {
         let mut out = Self {
             levels,
             cospectral,
+            obstructed: false,
             obstruction: None,
             rank: 0,
             perfect_time: None,
         };
         if !cospectral {
             return Ok(out);
+        }
+        let (m, d) = (out.levels.len() - 1, out.levels[0].exact.len());
+        if m.saturating_mul(m + d) > MAX_RELATION_ENTRIES {
+            return Err(QsoError::invalid(
+                "graph",
+                format!(
+                    "{} distinct eigenvalues in a field of degree {d}: the relation search would hold {} integers, more than {MAX_RELATION_ENTRIES}",
+                    m + 1,
+                    m.saturating_mul(m + d)
+                ),
+            ));
         }
         let base = out.levels[0].exact.clone();
         let columns: Vec<Vec<i64>> = out.levels[1..]
@@ -715,7 +786,7 @@ impl PrettyGoodTransfer {
         let (kernel, rank) = integer_kernel(&columns).ok_or_else(|| {
             QsoError::invalid(
                 "graph",
-                "integer overflow while computing the eigenvalue relations; undecided",
+                "the integer relations among the eigenvalues overflow 128-bit integers; the pair is not decided",
             )
         })?;
         out.rank = rank;
@@ -726,15 +797,15 @@ impl PrettyGoodTransfer {
         for relation in &kernel {
             let parity: i128 = relation.iter().zip(&delta).map(|(l, d)| l * d).sum();
             if parity.rem_euclid(2) == 1 {
+                out.obstructed = true;
                 out.obstruction = relation
                     .iter()
                     .map(|&x| i64::try_from(x).ok())
-                    .collect::<Option<Vec<i64>>>()
-                    .or_else(|| Some(relation.iter().map(|x| x.rem_euclid(2) as i64).collect()));
+                    .collect::<Option<Vec<i64>>>();
                 break;
             }
         }
-        if out.obstruction.is_none() && rank <= 1 && out.levels.len() >= 2 {
+        if !out.obstructed && rank <= 1 && out.levels.len() >= 2 {
             // All differences are rational multiples of θ_1 − θ_0: PST at
             // π/g with g their greatest common divisor (as a real number).
             let i = columns[0].iter().position(|&x| x != 0).expect("rank 1");
@@ -742,13 +813,11 @@ impl PrettyGoodTransfer {
             let den = columns[0][i];
             // Differences D_r = (columns[r][i] / den)·D_1; g = D_1·gcd(num)/den.
             let g_num = columns.iter().fold(0i64, |g, c| gcd_i64(g, c[i]));
+            // Without an obstruction, each D_r/g is an integer of the
+            // parity of δ_r: PST at π/g, exactly, and no earlier (some
+            // integer combination of the D_r is g).
             let g = (d1 / den as f64 * g_num as f64).abs();
-            if g > 0.0 {
-                let t = std::f64::consts::PI / g;
-                if out.fidelity(t) > 1.0 - 1e-9 {
-                    out.perfect_time = Some(t);
-                }
-            }
+            out.perfect_time = Some(std::f64::consts::PI / g);
         }
         Ok(out)
     }
@@ -760,7 +829,7 @@ impl PrettyGoodTransfer {
 
     /// Whether there is pretty good state transfer (exact).
     pub fn pretty_good(&self) -> bool {
-        self.cospectral && self.obstruction.is_none()
+        self.cospectral && !self.obstructed
     }
 
     /// Earliest time of perfect state transfer, if there is one.
@@ -768,13 +837,18 @@ impl PrettyGoodTransfer {
         self.perfect_time
     }
 
-    /// Dimension over `Q` of the span of the differences `θ_r − θ_0`.
+    /// Dimension over `Q` of the span of the differences `θ_r − θ_0` (0
+    /// when the nodes are not strongly cospectral).
     pub fn rank(&self) -> usize {
         self.rank
     }
 
     /// An integer relation `Σ_{r ≥ 1} ℓ_r (θ_r − θ_0) = 0` with odd
-    /// `Σ ℓ_r δ_r`, which rules out PGST (strongly cospectral nodes only).
+    /// `Σ ℓ_r δ_r`, which rules out PGST (strongly cospectral nodes only;
+    /// coefficient `i` belongs to entry `i + 1` of
+    /// [`PrettyGoodTransfer::support`], whose entry 0 is `θ_0`).
+    /// `None` also when the relation found has coefficients beyond `i64`;
+    /// [`PrettyGoodTransfer::pretty_good`] is decided either way.
     pub fn obstruction(&self) -> Option<&[i64]> {
         self.obstruction.as_deref()
     }
@@ -799,13 +873,13 @@ impl PrettyGoodTransfer {
         }
     }
 
-    /// Transfer fidelity `|⟨v|e^{−iHt}|u⟩|²` (strongly cospectral nodes;
-    /// otherwise the bound from the cospectral eigenspaces).
+    /// Transfer fidelity `|⟨v|e^{−iHt}|u⟩|² = |Σ_θ ⟨v|E_θ|u⟩ e^{−iθt}|²`,
+    /// from the closed-form eigenvectors (any pair of nodes).
     pub fn fidelity(&self, t: f64) -> f64 {
         let a: C64 = self
             .levels
             .iter()
-            .map(|l| C64::from_polar(l.weight * l.sign as f64, -l.energy * t))
+            .map(|l| C64::from_polar(l.cross, -l.energy * t))
             .sum();
         a.norm_sqr()
     }
@@ -813,12 +887,6 @@ impl PrettyGoodTransfer {
     /// Highest fidelity over `t ∈ [0, t_max]` (grid scan with `resolution`
     /// points, then golden-section refinement).
     pub fn best_transfer(&self, t_max: f64, resolution: usize) -> Result<TransferResult> {
-        if !self.cospectral {
-            return Err(QsoError::invalid(
-                "nodes",
-                "not strongly cospectral: the fidelity is not given by the eigenvalue support",
-            ));
-        }
         if !(t_max.is_finite() && t_max > 0.0) {
             return Err(QsoError::invalid("t_max", "must be finite and positive"));
         }
