@@ -209,6 +209,73 @@ fn losses_match_an_interferometer_with_environment_modes() {
 }
 
 #[test]
+fn partially_distinguishable_photons_sharing_a_lossy_mode() {
+    // A lost photon leaves its partner in a mixture of internal states
+    // with coherences: compare with the Fock-space simulation of the
+    // interferometer with environment modes, marginalised over them.
+    let mut rng = Rng::seed_from_u64(21);
+    let u = haar_unitary(3, &mut rng).unwrap();
+    let losses = [0.6, 0.75, 0.5];
+    let big = with_environment(&u, &losses, true);
+    for input in [vec![2, 1, 0], vec![2, 0, 2], vec![0, 3, 0]] {
+        let modes: Vec<usize> = input
+            .iter()
+            .enumerate()
+            .flat_map(|(j, &s)| std::iter::repeat_n(j, s))
+            .collect();
+        let states: Vec<Vec<C64>> = modes.iter().map(|_| random_state(2, &mut rng)).collect();
+        let sampler = BosonSampler::new(u.clone(), &input).unwrap();
+        let lossy = ImperfectBosonSampler::new(sampler)
+            .with_internal_states(&states)
+            .unwrap()
+            .with_transmission(&losses)
+            .unwrap();
+        let mut want: HashMap<Vec<usize>, f64> = HashMap::new();
+        for (t, p) in brute_force(&big, &modes, &states) {
+            *want.entry(t[..3].to_vec()).or_insert(0.0) += p;
+        }
+        for (t, p) in &want {
+            let got = lossy.probability(t).unwrap();
+            assert!((got - p).abs() < 1e-13, "{input:?} {t:?}: {got} vs {p}");
+        }
+    }
+    // The review's example: two photons with overlap ½ in a mode with
+    // transmission ½, one more photon, a 50:50 beam splitter.
+    let sampler =
+        BosonSampler::new(beam_splitter(std::f64::consts::FRAC_PI_4, 0.0), &[2, 1]).unwrap();
+    let s = ImperfectBosonSampler::new(sampler)
+        .with_indistinguishability(0.5)
+        .unwrap()
+        .with_transmission(&[0.5, 1.0])
+        .unwrap();
+    let modes = [0, 0, 1];
+    let gram_states = cholesky_states(s.gram());
+    let mut want: HashMap<Vec<usize>, f64> = HashMap::new();
+    let big = with_environment(
+        &beam_splitter(std::f64::consts::FRAC_PI_4, 0.0),
+        &[0.5, 1.0],
+        true,
+    );
+    for (t, p) in brute_force(&big, &modes, &gram_states) {
+        *want.entry(t[..2].to_vec()).or_insert(0.0) += p;
+    }
+    for (t, p) in &want {
+        assert!((s.probability(t).unwrap() - p).abs() < 1e-13, "{t:?}");
+    }
+    // Dropping photons one by one gave 0.125 and 0.1875.
+    assert!((s.probability(&[1, 1]).unwrap() - 0.107741).abs() < 1e-6);
+    assert!((s.probability(&[2, 0]).unwrap() - 0.196129).abs() < 1e-6);
+}
+
+/// States whose Gram matrix is `gram` (columns of its Cholesky factor).
+fn cholesky_states(gram: &CMatrix) -> Vec<Vec<C64>> {
+    let l = gram.clone().cholesky().unwrap().unpack();
+    (0..gram.nrows())
+        .map(|j| (0..gram.ncols()).map(|k| l[(j, k)].conj()).collect())
+        .collect()
+}
+
+#[test]
 fn partial_distinguishability_with_loss_and_sampling() {
     let mut rng = Rng::seed_from_u64(2);
     let u = haar_unitary(3, &mut rng).unwrap();

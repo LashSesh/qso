@@ -25,9 +25,10 @@ Milestone 1.14 (Gaussian boson sampling and imperfect photons) of the
   - Covariance matrices and means with ħ = 2, as in The Walrus.
   - Squeezing, displacement, rotation, interferometers and loss, also
     into a thermal environment.
-  - Photon-number probabilities (loop hafnians, or Kan's formula when it
-    is cheaper and stable), threshold-click probabilities (torontonians),
-    and exact samples drawn mode by mode.
+  - Photon-number probabilities (loop hafnians, over N rows instead of
+    2N for pure states; Kan's formula for mixed states with many photons
+    in few modes when it is cheaper), threshold-click probabilities
+    (torontonians), and exact samples drawn mode by mode.
   - Tests: squeezed, coherent, thermal and two-mode squeezed states
     against their closed forms, loss as binomial thinning, sums to one,
     sampling frequencies.
@@ -35,12 +36,15 @@ Milestone 1.14 (Gaussian boson sampling and imperfect photons) of the
   `ImperfectBosonSampler`).
   - Partial distinguishability from the Gram matrix of the internal
     states (Tichy; Shchesnovich).
-  - Losses at the inputs and detector efficiencies.
-  - Tests: a simulation with the internal states as extra modes; losses
-    through an interferometer with environment modes; the
-    Hong–Ou–Mandel visibility.
-- **Cross-validation** against The Walrus 0.22: probabilities agree to
-  2·10⁻¹⁶, hafnians to 3·10⁻¹² relative up to 20 × 20.
+  - Losses at the inputs (through environment modes, exact also when
+    partially distinguishable photons share a lossy mode) and detector
+    efficiencies.
+  - Tests: a simulation with the internal states as extra modes of an
+    interferometer with environment modes; the Hong–Ou–Mandel
+    visibility.
+- **Cross-validation** against The Walrus 0.22: probabilities differ by
+  about 10⁻¹⁵ (absolute, 4 modes) and by 2·10⁻¹¹ relative at 20 photons;
+  hafnians by 7·10⁻¹² relative up to 20 × 20.
 
 ## [1.6.0] — 2026-10-27
 

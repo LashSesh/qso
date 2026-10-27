@@ -18,8 +18,11 @@
 //! distinguishable photons are limited to [`MAX_PARTIAL_PHOTONS`].
 //!
 //! Loss before the interferometer (transmission `η_j` of input mode `j`)
-//! removes every photon independently; finite detector efficiencies
-//! `ε_i` thin the counts of output mode `i` binomially. Both are exact.
+//! is a beam splitter to an environment mode per input mode, summed over
+//! the photons that end there; this keeps the internal states of the
+//! surviving photons exact when photons of one mode overlap partially.
+//! Finite detector efficiencies `ε_i` thin the counts of output mode `i`
+//! binomially. Both are exact.
 
 use super::boson::{BosonSampler, Distribution, MAX_PATTERNS, occupation_patterns};
 use super::permanent::glynn;
@@ -251,6 +254,12 @@ impl ImperfectBosonSampler {
     }
 
     /// Probability of `output` after the input losses, before detection.
+    ///
+    /// Loss is a beam splitter that couples every lossy input mode `j` to
+    /// its own environment mode (amplitude `√(1 − η_j)`); the photons that
+    /// end there are summed over. Photons in one input mode share their
+    /// environment mode, so a lost photon leaves its partner in the exact
+    /// mixture of internal states (dropping photons one by one would not).
     fn probability_before_detection(&self, output: &[usize]) -> Result<f64> {
         let photons = self.photon_modes();
         let n = photons.len();
@@ -258,68 +267,80 @@ impl ImperfectBosonSampler {
         if k > n {
             return Ok(0.0);
         }
-        let eta: Vec<f64> = photons.iter().map(|&j| self.transmission[j]).collect();
-        if eta.iter().all(|&e| e == 1.0) {
-            if k != n {
-                return Ok(0.0);
-            }
-            return self.ideal(&(0..n).collect::<Vec<_>>(), output);
-        }
-        // Sum over the subsets of k surviving photons.
+        let input = self.sampler.input();
+        let lossy: Vec<usize> = (0..input.len())
+            .filter(|&j| input[j] > 0 && self.transmission[j] < 1.0)
+            .collect();
         let mut total = 0.0;
-        for mask in 0u64..(1u64 << n) {
-            if mask.count_ones() as usize != k {
-                continue;
-            }
-            let weight: f64 = (0..n)
-                .map(|j| {
-                    if (mask >> j) & 1 == 1 {
-                        eta[j]
-                    } else {
-                        1.0 - eta[j]
-                    }
-                })
-                .product();
-            if weight == 0.0 {
-                continue;
-            }
-            let kept: Vec<usize> = (0..n).filter(|&j| (mask >> j) & 1 == 1).collect();
-            total += weight * self.ideal(&kept, output)?;
-        }
+        let mut lost = vec![0usize; lossy.len()];
+        self.environment_patterns(output, &lossy, &mut lost, 0, n - k, &mut total)?;
         Ok(total)
     }
 
-    /// Lossless probability that the photons `kept` leave through `output`.
-    fn ideal(&self, kept: &[usize], output: &[usize]) -> Result<f64> {
-        let n = kept.len();
-        if output.iter().sum::<usize>() != n {
-            return Ok(0.0);
+    /// Add the lossless probability of `output` with `lost[i]` photons in
+    /// the environment mode of input mode `lossy[i]`, over every split of
+    /// `remaining` lost photons from position `i` on.
+    fn environment_patterns(
+        &self,
+        output: &[usize],
+        lossy: &[usize],
+        lost: &mut Vec<usize>,
+        i: usize,
+        remaining: usize,
+        total: &mut f64,
+    ) -> Result<()> {
+        if i == lossy.len() {
+            if remaining == 0 {
+                *total += self.ideal(output, lossy, lost)?;
+            }
+            return Ok(());
         }
+        let most = self.sampler.input()[lossy[i]].min(remaining);
+        for take in 0..=most {
+            lost[i] = take;
+            self.environment_patterns(output, lossy, lost, i + 1, remaining - take, total)?;
+        }
+        lost[i] = 0;
+        Ok(())
+    }
+
+    /// Probability that all photons leave through `output` and, for every
+    /// `lossy[i]`, `lost[i]` of them through its environment mode.
+    fn ideal(&self, output: &[usize], lossy: &[usize], lost: &[usize]) -> Result<f64> {
+        let photons = self.photon_modes();
+        let n = photons.len();
         if n == 0 {
             return Ok(1.0);
         }
-        let photons = self.photon_modes();
         let u = self.sampler.unitary();
-        let rows: Vec<usize> = output
-            .iter()
-            .enumerate()
-            .flat_map(|(i, &t)| std::iter::repeat_n(i, t))
-            .collect();
-        let cols: Vec<usize> = kept.iter().map(|&j| photons[j]).collect();
-        let mt: Vec<C64> = rows
-            .iter()
-            .flat_map(|&r| cols.iter().map(move |&c| u[(r, c)]))
-            .collect();
-        let s = |a: usize, b: usize| self.gram[(kept[a], kept[b])];
+        let eta = &self.transmission;
+        // Rows: output modes, then environment modes; columns: photons.
+        let mut mt: Vec<C64> = Vec::with_capacity(n * n);
+        for (r, &t) in output.iter().enumerate() {
+            for _ in 0..t {
+                mt.extend(photons.iter().map(|&c| u[(r, c)] * eta[c].sqrt()));
+            }
+        }
+        for (&j, &l) in lossy.iter().zip(lost) {
+            for _ in 0..l {
+                mt.extend(
+                    photons
+                        .iter()
+                        .map(|&c| C64::new(if c == j { (1.0 - eta[j]).sqrt() } else { 0.0 }, 0.0)),
+                );
+            }
+        }
+        debug_assert_eq!(mt.len(), n * n);
+        let s = |a: usize, b: usize| self.gram[(a, b)];
         let all_one = (0..n).all(|a| (0..n).all(|b| (s(a, b) - C64::new(1.0, 0.0)).norm() < 1e-14));
         let identity = (0..n).all(|a| (0..n).all(|b| a == b || s(a, b).norm() < 1e-14));
-        let out_fact: f64 = output.iter().map(|&t| factorial(t)).product();
+        let out_fact: f64 = output.iter().chain(lost).map(|&t| factorial(t)).product();
         // Norm of the input state: Π over input modes of perm(S_block).
         let mut norm = 1.0;
         let mut a = 0;
         while a < n {
             let mut b = a;
-            while b < n && cols[b] == cols[a] {
+            while b < n && photons[b] == photons[a] {
                 b += 1;
             }
             let block: Vec<C64> = (a..b)

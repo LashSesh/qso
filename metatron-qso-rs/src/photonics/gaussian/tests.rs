@@ -223,3 +223,99 @@ fn invalid_states_and_inputs_are_rejected() {
     big.squeeze(0, 2.0, 0.0).unwrap();
     assert!(big.sample(100, 2, &mut Rng::seed_from_u64(0)).is_err());
 }
+
+#[test]
+fn strongly_squeezed_and_large_states_keep_their_accuracy() {
+    // Opposite squeezing r = 5 on a beam splitter: two-mode squeezed
+    // vacuum, p(n, n) = tanh^{2n} r / cosh² r. A = X(I − Q⁻¹)* is not
+    // exactly symmetric here.
+    let r: f64 = 5.0;
+    let h = std::f64::consts::FRAC_1_SQRT_2;
+    let bs = CMatrix::from_row_slice(
+        2,
+        2,
+        &[
+            C64::new(h, 0.0),
+            C64::new(h, 0.0),
+            C64::new(h, 0.0),
+            C64::new(-h, 0.0),
+        ],
+    );
+    let mut s = GaussianState::vacuum(2).unwrap();
+    s.squeeze(0, r, 0.0).unwrap();
+    s.squeeze(1, -r, 0.0).unwrap();
+    s.interferometer(&bs, &[0, 1]).unwrap();
+    for k in 0..4 {
+        let want = r.tanh().powi(2 * k) / r.cosh().powi(2);
+        let got = s.probability(&[k as usize, k as usize]).unwrap();
+        assert!((got - want).abs() < 1e-9 * want, "{k}: {got} vs {want}");
+    }
+    // Equal squeezing and random interferometers no longer fail the
+    // symmetry check.
+    let mut rng = Rng::seed_from_u64(8);
+    for _ in 0..20 {
+        let mut s = GaussianState::vacuum(4).unwrap();
+        for i in 0..4 {
+            s.squeeze(i, 5.0, 0.3 * i as f64).unwrap();
+        }
+        s.interferometer(&haar_unitary(4, &mut rng).unwrap(), &[0, 1, 2, 3])
+            .unwrap();
+        assert!(s.probability(&[1, 1, 0, 2]).unwrap() >= 0.0);
+    }
+    // Squeezed vacuum r = 3 at 20 photons (pure: the n × n loop hafnian;
+    // 4·10⁻¹² relative, Kan's formula on the 2n × 2n matrix gave 2·10⁻⁹).
+    let r: f64 = 3.0;
+    let mut sq = GaussianState::vacuum(1).unwrap();
+    sq.squeeze(0, r, 0.0).unwrap();
+    let want =
+        r.tanh().powi(20) * factorial(20) / (4f64.powi(10) * factorial(10).powi(2) * r.cosh());
+    let got = sq.probability(&[20]).unwrap();
+    assert!((got - want).abs() < 1e-11 * want, "{got} vs {want}");
+    // 300 modes squeezed at r = 2: det Q ≈ e^{794} overflows, the
+    // probability of the vacuum is Π 1/cosh r ≈ 10^{−173}.
+    let mut big = GaussianState::vacuum(300).unwrap();
+    for i in 0..300 {
+        big.squeeze(i, 2.0, 0.0).unwrap();
+    }
+    let want = (-300.0 * 2f64.cosh().ln()).exp();
+    let got = big.probability(&[0; 300]).unwrap();
+    assert!((got - want).abs() < 1e-9 * want, "{got} vs {want}");
+    assert!((big.click_probability(&[false; 300]).unwrap() - want).abs() < 1e-9 * want);
+}
+
+#[test]
+fn covariance_matrices_are_symmetrised_and_checked_independently_of_their_scale() {
+    // Asymmetric within the tolerance: accepted and symmetrised.
+    let mut s = GaussianState::vacuum(2).unwrap();
+    s.squeeze(0, 1.0, 0.0).unwrap();
+    s.squeeze(1, 0.5, 0.0).unwrap();
+    s.interferometer(
+        &haar_unitary(2, &mut Rng::seed_from_u64(1)).unwrap(),
+        &[0, 1],
+    )
+    .unwrap();
+    let mut cov = s.cov().clone();
+    cov[(0, 1)] += 0.9e-12;
+    let t = GaussianState::from_parts(cov, vec![0.0; 4]).unwrap();
+    assert!((t.probability(&[1, 1]).unwrap() - s.probability(&[1, 1]).unwrap()).abs() < 1e-11);
+    // A squeezed state slightly below the uncertainty limit (det V =
+    // 0.999) is rejected, while squeezed states round-trip (up to r = 8,
+    // where the rounded matrix has det V = 0.9988).
+    for r in [4.0, 8.0] {
+        let mut sq = GaussianState::vacuum(1).unwrap();
+        sq.squeeze(0, r, 0.7).unwrap();
+        assert!(GaussianState::from_parts(sq.cov().clone(), vec![0.0; 2]).is_ok());
+    }
+    let mut diag = GaussianState::vacuum(1).unwrap();
+    diag.squeeze(0, 4.0, 0.0).unwrap();
+    let mut bad = diag.cov().clone();
+    bad[(1, 1)] *= 0.999;
+    assert!(GaussianState::from_parts(bad, vec![0.0; 2]).is_err());
+    // Repeated modes do not make a reduced state.
+    assert!(s.reduced(&[0, 0]).is_err());
+    // Round-off residues in the means count as zero for clicks.
+    let mut z = GaussianState::from_parts(s.cov().clone(), vec![1e-17, 0.0, 0.0, -1e-17]).unwrap();
+    assert!(z.click_probability(&[true, false]).is_ok());
+    z.displace(0, C64::new(0.1, 0.0)).unwrap();
+    assert!(z.click_probability(&[true, false]).is_err());
+}

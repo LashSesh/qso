@@ -116,7 +116,7 @@ or by the benchmark report you can run yourself.
 | Hong–Ou–Mandel with partially distinguishable photons, coincidence probability | (1 − \|⟨ψ₁\|ψ₂⟩\|²)/2 | Hong, Ou & Mandel 1987 |
 | Perfect matchings by hafnians: hypercubes Q₃ / Q₄ / Q₅, dodecahedron, icosahedron | 9 / 272 / 589 185, 36, 125 | OEIS A005271; known counts |
 | Squeezed vacuum (r = 0.8), photon-number distribution to 18 photons | closed form to 10⁻¹⁰ (relative) | tanh^{2k} r (2k)! / (4^k k!² cosh r) |
-| Gaussian boson sampling: photon-number and click probabilities, 4 modes with displacement and loss | agree to 2·10⁻¹⁶ | The Walrus 0.22 |
+| Gaussian boson sampling: photon-number and click probabilities, 4 modes with displacement and loss; 20 photons from 10 squeezed modes | about 10⁻¹⁵ absolute; 2·10⁻¹¹ relative at 20 photons | The Walrus 0.22 |
 | State vectors of random circuits, largest difference to Qiskit Aer, Qulacs, Cirq, PennyLane | ≤ 3 × 10⁻¹⁵ | — |
 | Quantum trajectories vs density matrices, χ² test of 20 000 samples on 3, 6 and 10 qubits | passes at the 0.1 % level | — |
 | GHZ₅ on the toy device, ⟨Σ Z_i Z_{i+1}⟩: raw / readout-mitigated + ZNE (1, 3, 5) | 3.38 / 4.00 ± 0.01 | 4 |

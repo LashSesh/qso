@@ -116,21 +116,38 @@ impl GaussianState {
                 "the covariance matrix is not symmetric",
             ));
         }
-        // V + iΩ, Ω = [[0, I], [−I, 0]].
+        let cov = (&cov + cov.transpose()) * 0.5;
+        // V + iΩ ≥ 0 (Ω = [[0, I], [−I, 0]]) ⟺ V > 0 and every symplectic
+        // eigenvalue ν ≥ 1; with V = L Lᵀ, ±iν are the eigenvalues of
+        // Lᵀ Ω L. Rounding V to doubles moves ν by up to ε·κ(V) (a state
+        // squeezed by r = 8 has κ = e^{32} and ν uncertain by 10⁻²), so
+        // that is the tolerance.
+        let (values, _) = crate::linalg::eigh_real(&cov);
+        let chol = cov
+            .clone()
+            .cholesky()
+            .filter(|_| values[0] > 0.0)
+            .ok_or_else(|| {
+                QsoError::invalid("cov", "the covariance matrix must be positive definite")
+            })?;
+        let l = chol.l();
         let h = CMatrix::from_fn(dim, dim, |r, c| {
-            let omega = match (r < n, c < n) {
-                (true, false) if c - n == r => 1.0,
-                (false, true) if r - n == c => -1.0,
-                _ => 0.0,
-            };
-            C64::new(cov[(r, c)], omega)
+            // i (Lᵀ Ω L)_rc = i Σ_k (L_{k,r} L_{k+n,c} − L_{k+n,r} L_{k,c}).
+            let v: f64 = (0..n)
+                .map(|k| l[(k, r)] * l[(k + n, c)] - l[(k + n, r)] * l[(k, c)])
+                .sum();
+            C64::new(0.0, v)
         });
-        let min = crate::linalg::eigh(&h).0[0];
-        if min < -1e-9 * scale {
+        let nu = crate::linalg::eigh(&h)
+            .0
+            .iter()
+            .fold(f64::INFINITY, |m, v| m.min(v.abs()));
+        let kappa = values[dim - 1] / values[0];
+        if nu < 1.0 - 1e-10 - f64::EPSILON * kappa {
             return Err(QsoError::invalid(
                 "cov",
                 format!(
-                    "the covariance matrix violates the uncertainty principle (V + iΩ has eigenvalue {min:.3e})"
+                    "the covariance matrix violates the uncertainty principle (symplectic eigenvalue {nu:.6} < 1)"
                 ),
             ));
         }
@@ -306,8 +323,11 @@ impl GaussianState {
         if modes.is_empty() {
             return Err(QsoError::invalid("modes", "at least one mode"));
         }
-        for &m in modes {
+        for (k, &m) in modes.iter().enumerate() {
             self.check_mode(m)?;
+            if modes[..k].contains(&m) {
+                return Err(QsoError::invalid("modes", format!("mode {m} is repeated")));
+            }
         }
         let idx: Vec<usize> = modes
             .iter()
@@ -319,6 +339,17 @@ impl GaussianState {
             cov: RMatrix::from_fn(idx.len(), idx.len(), |r, c| self.cov[(idx[r], idx[c])]),
             means: idx.iter().map(|&i| self.means[i]).collect(),
         })
+    }
+
+    /// `ln det Q = ln det((V + I)/2) = Σ ln((1 + λ_i)/2)` over the
+    /// eigenvalues of `V`. A determinant of `Q` itself cancels digits when
+    /// the modes are strongly squeezed (10⁻⁹ at r = 5).
+    fn log_det_q(&self) -> f64 {
+        crate::linalg::eigh_real(&self.cov)
+            .0
+            .iter()
+            .map(|l| ((1.0 + l) / 2.0).ln())
+            .sum()
     }
 
     /// `Q = σ + I/2`, `β = (⟨a⟩, ⟨a⟩*)`.
@@ -376,11 +407,9 @@ impl GaussianState {
             ));
         }
         let (q, beta) = self.q_and_beta();
-        let qinv = q.clone().try_inverse().ok_or_else(|| {
-            QsoError::invalid("state", "Q is singular (not a valid Gaussian state)")
-        })?;
+        let qinv = invert_q(&q)?;
         let x = |r: usize| if r < n { r + n } else { r - n };
-        // A = X (I − Q⁻¹)*.
+        // A = X (I − Q⁻¹)*, symmetric up to rounding (made exact here).
         let a = CMatrix::from_fn(2 * n, 2 * n, |r, c| {
             let id = if x(r) == c {
                 C64::new(1.0, 0.0)
@@ -389,32 +418,21 @@ impl GaussianState {
             };
             (id - qinv[(x(r), c)]).conj()
         });
+        let a = (&a + a.transpose()) * C64::new(0.5, 0.0);
         let gamma: Vec<C64> = (0..2 * n)
             .map(|r| beta[r].conj() - (0..2 * n).map(|c| a[(r, c)] * beta[c]).sum::<C64>())
             .collect();
-        // Kan's formula over the repeated rows costs Π (n_i + 1)² terms of
-        // O(m²); the general loop hafnian 2^N terms of O(N³). Kan's is also
-        // the stable one when many photons share a mode.
-        let rpt: Vec<usize> = pattern.iter().chain(pattern).copied().collect();
-        let kan_terms: f64 = pattern
-            .iter()
-            .map(|&k| ((k + 1) * (k + 1)) as f64)
-            .product();
-        let occupied = pattern.iter().filter(|&&k| k > 0).count() as f64;
-        let kan_cost = kan_terms * (2.0 * occupied).powi(2);
-        let general_cost = 2f64.powi(total as i32) * (2.0 * total as f64).powi(3);
-        let lhaf = if kan_cost <= general_cost {
-            super::hafnian::loop_hafnian_repeated(&a, &gamma, &rpt)?
+        // A pure state has A = B ⊕ B* and γ = (g, g*): the loop hafnian
+        // factorises into |lhaf(B, g)|², half the rows (more accurate and
+        // exponentially faster).
+        let scale = a.iter().map(|z| z.norm()).fold(1.0, f64::max);
+        let pure = (0..n).all(|r| (0..n).all(|c| a[(r, c + n)].norm() <= 1e-13 * scale));
+        let lhaf = if pure {
+            let b = a.view((0, 0), (n, n)).into_owned();
+            repeated_loop_hafnian(&b, &gamma[..n], pattern)?.norm_sqr()
         } else {
-            let rows: Vec<usize> = (0..2 * n)
-                .flat_map(|k| std::iter::repeat_n(k, rpt[k]))
-                .collect();
-            let m = rows.len();
-            let mut sub = CMatrix::from_fn(m, m, |r, c| a[(rows[r], rows[c])]);
-            for r in 0..m {
-                sub[(r, r)] = gamma[rows[r]];
-            }
-            loop_hafnian(&sub)?
+            let rpt: Vec<usize> = pattern.iter().chain(pattern).copied().collect();
+            repeated_loop_hafnian(&a, &gamma, &rpt)?.re
         };
         let quad: C64 = (0..2 * n)
             .map(|r| {
@@ -424,9 +442,11 @@ impl GaussianState {
                         .sum::<C64>()
             })
             .sum();
-        let det = q.determinant();
+        // exp(−½ β† Q⁻¹ β) / √det Q, through log det Q (det Q overflows
+        // for hundreds of squeezed modes).
+        let factor = (quad * -0.5).exp().re * (-0.5 * self.log_det_q()).exp();
         let factorials: f64 = pattern.iter().map(|&k| factorial(k)).product();
-        let p = (lhaf * (quad * -0.5).exp() / det.sqrt()).re / factorials;
+        let p = lhaf * factor / factorials;
         Ok(p.max(0.0))
     }
 
@@ -440,7 +460,8 @@ impl GaussianState {
                 actual: clicks.len(),
             });
         }
-        if self.means.iter().any(|&v| v != 0.0) {
+        let scale = self.cov.amax().max(1.0).sqrt();
+        if self.means.iter().any(|&v| v.abs() > 1e-12 * scale) {
             return Err(QsoError::invalid(
                 "state",
                 "click probabilities are implemented for states with zero means",
@@ -454,9 +475,7 @@ impl GaussianState {
             ));
         }
         let (q, _) = self.q_and_beta();
-        let qinv = q.clone().try_inverse().ok_or_else(|| {
-            QsoError::invalid("state", "Q is singular (not a valid Gaussian state)")
-        })?;
+        let qinv = invert_q(&q)?;
         let idx: Vec<usize> = on
             .iter()
             .copied()
@@ -470,7 +489,8 @@ impl GaussianState {
             };
             id - qinv[(idx[r], idx[c])]
         });
-        let p = (torontonian(&o)? / q.determinant().sqrt()).re;
+        let o = (&o + o.adjoint()) * C64::new(0.5, 0.0);
+        let p = torontonian(&o)?.re * (-0.5 * self.log_det_q()).exp();
         Ok(p.max(0.0))
     }
 
@@ -549,6 +569,45 @@ impl GaussianState {
                 Ok(clicks)
             })
             .collect()
+    }
+}
+
+/// `Q⁻¹` by Cholesky (`Q` is Hermitian positive definite); nalgebra's
+/// closed-form inverse of small matrices loses digits when the modes are
+/// strongly squeezed (10⁻⁹ at r = 5).
+fn invert_q(q: &CMatrix) -> Result<CMatrix> {
+    q.clone().cholesky().map(|c| c.inverse()).ok_or_else(|| {
+        QsoError::invalid(
+            "state",
+            "Q is not positive definite (not a valid Gaussian state)",
+        )
+    })
+}
+
+/// Loop hafnian of `a` with rows and columns repeated `rpt` times and the
+/// diagonal replaced by `diag` (repeated likewise). Up to 20 rows, or
+/// when it is cheaper, the general loop hafnian of the repeated matrix
+/// (`2^{N/2}` terms of `O(N⁴)`); otherwise Kan's formula (`Π (rpt_i + 1)`
+/// terms), which is fast for many photons in few modes but loses digits
+/// to cancellation as the photon number grows.
+fn repeated_loop_hafnian(a: &CMatrix, diag: &[C64], rpt: &[usize]) -> Result<C64> {
+    let total: usize = rpt.iter().sum();
+    let kan_terms: f64 = rpt.iter().map(|&k| (k + 1) as f64).product();
+    let occupied = rpt.iter().filter(|&&k| k > 0).count() as f64;
+    let kan_cost = kan_terms * occupied * occupied;
+    let general_cost = 2f64.powf(total as f64 / 2.0) * (total as f64).powi(4);
+    if total <= 20 || general_cost <= kan_cost {
+        let rows: Vec<usize> = (0..rpt.len())
+            .flat_map(|k| std::iter::repeat_n(k, rpt[k]))
+            .collect();
+        let m = rows.len();
+        let mut sub = CMatrix::from_fn(m, m, |r, c| a[(rows[r], rows[c])]);
+        for r in 0..m {
+            sub[(r, r)] = diag[rows[r]];
+        }
+        loop_hafnian(&sub)
+    } else {
+        super::hafnian::loop_hafnian_repeated(a, diag, rpt)
     }
 }
 

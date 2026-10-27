@@ -224,3 +224,32 @@ fn repeated_hafnians_match_the_expanded_matrix() {
     assert!(loop_hafnian_repeated(&a, &[ONE], &[1, 1]).is_err());
     assert!(hafnian_repeated(&a, &[usize::MAX / 2, 3]).is_err());
 }
+
+#[test]
+fn repeated_hafnians_neither_overflow_nor_hide_their_limits() {
+    let fact = |n: usize| (1..=n).map(|i| i as f64).product::<f64>();
+    // haf of J_{2k} with off-diagonal blocks c: c^k k!; c = 10⁶, k = 20
+    // overflowed the powers of Kan's formula.
+    let c = 1e6;
+    let a = CMatrix::from_row_slice(2, 2, &[ZERO, C64::new(c, 0.0), C64::new(c, 0.0), ZERO]);
+    let want = c.powi(20) * fact(20);
+    let got = hafnian_repeated(&a, &[20, 20]).unwrap();
+    assert!((got.re - want).abs() < 1e-10 * want, "{got} vs {want}");
+    // [[1]] repeated 40 times: 39!! (the measured error is about 10⁻¹¹).
+    let one = CMatrix::from_element(1, 1, C64::new(1.0, 0.0));
+    let want: f64 = (1..40).step_by(2).map(|i| i as f64).product();
+    let got = hafnian_repeated(&one, &[40]).unwrap();
+    assert!((got.re - want).abs() < 1e-9 * want, "{got} vs {want}");
+    // At most MAX_HAFNIAN_DIM rows.
+    assert!(hafnian_repeated(&one, &[42]).is_err());
+    // A wrong diagonal length is reported as such.
+    match loop_hafnian_repeated(&one, &[ONE, ONE], &[2]) {
+        Err(QsoError::DimensionMismatch { expected, actual }) => {
+            assert_eq!((expected, actual), (1, 2))
+        }
+        other => panic!("{other:?}"),
+    }
+    // Symmetry is checked relative to the entries.
+    let tiny = CMatrix::from_row_slice(2, 2, &[ZERO, C64::new(1e-13, 0.0), ZERO, ZERO]);
+    assert!(hafnian(&tiny).is_err());
+}

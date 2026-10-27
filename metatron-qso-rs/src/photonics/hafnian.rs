@@ -26,7 +26,7 @@ use crate::linalg::CMatrix;
 use crate::parallel;
 
 /// Largest dimension accepted by [`hafnian`], [`loop_hafnian`] and
-/// [`torontonian`] (2²⁰ terms of `O(40³)` operations).
+/// [`torontonian`] (2²⁰ terms of `O(40⁴)` operations for a hafnian).
 pub const MAX_HAFNIAN_DIM: usize = 40;
 
 const ZERO: C64 = C64::new(0.0, 0.0);
@@ -53,7 +53,7 @@ fn check(name: &'static str, a: &CMatrix, symmetric: bool) -> Result<usize> {
         let scale = a.iter().map(|z| z.norm()).fold(0.0, f64::max);
         for i in 0..r {
             for j in 0..i {
-                if (a[(i, j)] - a[(j, i)]).norm() > 1e-12 * scale.max(1.0) {
+                if (a[(i, j)] - a[(j, i)]).norm() > 1e-12 * scale {
                     return Err(QsoError::invalid(
                         name,
                         format!("the matrix is not symmetric (entries ({i}, {j}) and ({j}, {i}))"),
@@ -200,8 +200,11 @@ pub const MAX_REPEATED_TERMS: u64 = 1 << 32;
 /// haf = Σ_{0 ≤ ν ≤ rpt} (−1)^{Σν} Π C(rpt_i, ν_i) (½ hᵀAh)^{N/2} / (N/2)!,   h = rpt/2 − ν
 /// ```
 ///
-/// `Π (rpt_i + 1)` terms instead of `2^{N/2}`, and stable where many rows
-/// repeat (many photons in few modes).
+/// `Π (rpt_i + 1)` terms instead of `2^{N/2}`: fast where many rows repeat
+/// (many photons in few modes). The alternating sum cancels, so digits are
+/// lost as `N` grows: for `[[1]]` repeated 40 times (39!!) the relative
+/// error is about 10⁻¹¹, for `[[0, 1], [1, 0]]` repeated 20 + 20 times
+/// (20!) about 10⁻¹¹ as well. At most [`MAX_HAFNIAN_DIM`] rows.
 pub fn hafnian_repeated(a: &CMatrix, rpt: &[usize]) -> Result<C64> {
     repeated(a, None, rpt)
 }
@@ -214,16 +217,27 @@ pub fn loop_hafnian_repeated(a: &CMatrix, diag: &[C64], rpt: &[usize]) -> Result
 
 fn repeated(a: &CMatrix, diag: Option<&[C64]>, rpt: &[usize]) -> Result<C64> {
     let m = a.nrows();
-    if a.ncols() != m || rpt.len() != m || diag.is_some_and(|d| d.len() != m) {
-        return Err(QsoError::DimensionMismatch {
-            expected: m,
-            actual: rpt.len(),
-        });
+    if a.ncols() != m {
+        return Err(QsoError::invalid(
+            "matrix",
+            format!("a square matrix is needed, got {m} × {}", a.ncols()),
+        ));
+    }
+    for len in [Some(rpt.len()), diag.map(<[C64]>::len)]
+        .into_iter()
+        .flatten()
+    {
+        if len != m {
+            return Err(QsoError::DimensionMismatch {
+                expected: m,
+                actual: len,
+            });
+        }
     }
     if a.iter().chain(diag.unwrap_or(&[])).any(|z| !z.is_finite()) {
         return Err(QsoError::invalid("matrix", "entries must be finite"));
     }
-    let scale = a.iter().map(|z| z.norm()).fold(0.0, f64::max).max(1.0);
+    let scale = a.iter().map(|z| z.norm()).fold(0.0, f64::max);
     for i in 0..m {
         for j in 0..i {
             if (a[(i, j)] - a[(j, i)]).norm() > 1e-12 * scale {
@@ -235,10 +249,10 @@ fn repeated(a: &CMatrix, diag: Option<&[C64]>, rpt: &[usize]) -> Result<C64> {
     let keep: Vec<usize> = (0..m).filter(|&i| rpt[i] > 0).collect();
     let r: Vec<usize> = keep.iter().map(|&i| rpt[i]).collect();
     let total: usize = r.iter().sum();
-    if total > 2 * MAX_HAFNIAN_DIM {
+    if total > MAX_HAFNIAN_DIM {
         return Err(QsoError::invalid(
             "rpt",
-            format!("at most {} rows in total", 2 * MAX_HAFNIAN_DIM),
+            format!("at most {MAX_HAFNIAN_DIM} rows in total"),
         ));
     }
     let terms = r
@@ -255,12 +269,27 @@ fn repeated(a: &CMatrix, diag: Option<&[C64]>, rpt: &[usize]) -> Result<C64> {
         return Ok(ZERO);
     }
     let k = keep.len();
-    let sub = CMatrix::from_fn(k, k, |i, j| a[(keep[i], keep[j])]);
-    let mu: Option<Vec<C64>> = diag.map(|d| keep.iter().map(|&i| d[i]).collect());
+    // lhaf(tA, √t μ) = t^{N/2} lhaf(A, μ): scale the entries to at most 1
+    // so the powers below cannot overflow.
+    let biggest = keep
+        .iter()
+        .flat_map(|&i| keep.iter().map(move |&j| a[(i, j)].norm()))
+        .chain(
+            diag.into_iter()
+                .flat_map(|d| keep.iter().map(|&i| d[i].norm_sqr())),
+        )
+        .fold(0.0, f64::max);
+    if biggest == 0.0 {
+        return Ok(if total == 0 { ONE } else { ZERO });
+    }
+    let t = 1.0 / biggest;
+    let sub = CMatrix::from_fn(k, k, |i, j| a[(keep[i], keep[j])] * t);
+    let mu: Option<Vec<C64>> = diag.map(|d| keep.iter().map(|&i| d[i] * t.sqrt()).collect());
+    let unscale = biggest.powf(total as f64 / 2.0);
     let half = total / 2;
     let fact = |n: usize| (1..=n).map(|i| i as f64).product::<f64>();
     let binom = |n: usize, j: usize| fact(n) / (fact(j) * fact(n - j));
-    Ok(parallel::sum_ranges(terms, |start, end| {
+    let sum = parallel::sum_ranges(terms, |start, end| {
         let mut acc = ZERO;
         let mut h = vec![0.0; k];
         for t in start..end {
@@ -301,7 +330,8 @@ fn repeated(a: &CMatrix, diag: Option<&[C64]>, rpt: &[usize]) -> Result<C64> {
             }
         }
         acc
-    }))
+    });
+    Ok(sum * unscale)
 }
 
 /// Torontonian of a `2N × 2N` matrix `O` in the ordering `(a₁…a_N,

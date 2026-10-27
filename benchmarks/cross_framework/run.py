@@ -362,6 +362,27 @@ def gaussian_vs_thewalrus(rng) -> dict:
     )
     o = np.eye(2 * n) - np.linalg.inv(tq.Qmat(cov))
     tor_err = abs(q.torontonian(o) - thewalrus.tor(o)) / abs(thewalrus.tor(o))
+    # Relative accuracy at higher photon numbers: 20 photons from 10
+    # squeezed modes (pure), 12 photons from 6 lossy modes (mixed).
+    rel_err = 0.0
+    for modes, lossy, patterns in [
+        (10, False, [[2] * 10, [4, 0, 4, 0, 2, 2, 0, 4, 2, 2]]),
+        (6, True, [[2] * 6, [4, 0, 4, 0, 2, 2], [6, 0, 0, 6, 0, 0]]),
+    ]:
+        big = q.GaussianState(modes)
+        for i in range(modes):
+            big.squeeze(i, 0.9)
+        big.interferometer(q.haar_unitary(modes, seed=modes))
+        if lossy:
+            for i in range(modes):
+                big.loss(i, 0.9)
+        cov_big, zeros = np.array(big.cov), np.zeros(2 * modes)
+        for pat in patterns:
+            if lossy:
+                theirs = tq.density_matrix_element(zeros, cov_big, pat, pat).real
+            else:
+                theirs = abs(tq.pure_state_amplitude(zeros, cov_big, pat)) ** 2
+            rel_err = max(rel_err, abs(big.probability(pat) - theirs) / theirs)
     return {
         "hafnian_max_relative_difference": haf_err,
         "repeated_hafnian_max_relative_difference": rep_err,
@@ -369,6 +390,7 @@ def gaussian_vs_thewalrus(rng) -> dict:
         "covariance_max_difference": cov_err,
         "gbs_probability_max_difference": prob_err,
         "click_probability_max_difference": click_err,
+        "gbs_probability_max_relative_difference": rel_err,
     }
 
 
@@ -376,8 +398,9 @@ TOLERANCES = {
     "state": 1e-12,
     "gradient": 1e-12,
     "permanent": 1e-10,
-    # QSO sums 2^{n/2} terms with alternating signs: 3·10⁻¹² relative at
-    # 18 × 18 against a 40-digit reference (The Walrus: 2·10⁻¹⁴).
+    # QSO sums 2^{n/2} terms with alternating signs: up to 7·10⁻¹² relative
+    # at 20 × 20 (The Walrus: 10⁻¹⁵ against exact integer hafnians); the
+    # same for 20-photon probabilities.
     "hafnian": 1e-10,
     "gaussian_probability": 1e-12,
     "density_matrix": 1e-12,
@@ -402,7 +425,12 @@ def check(c: dict) -> list[str]:
     if not c["permanent_max_relative_difference_vs_thewalrus"] <= TOLERANCES["permanent"]:
         failures.append(f"permanents differ from The Walrus by {c['permanent_max_relative_difference_vs_thewalrus']:.3g}")
     g = c["gaussian_vs_thewalrus"]
-    for key in ("hafnian_max_relative_difference", "repeated_hafnian_max_relative_difference", "torontonian_relative_difference"):
+    for key in (
+        "hafnian_max_relative_difference",
+        "repeated_hafnian_max_relative_difference",
+        "torontonian_relative_difference",
+        "gbs_probability_max_relative_difference",
+    ):
         if not g[key] <= TOLERANCES["hafnian"]:
             failures.append(f"{key} against The Walrus is {g[key]:.3g}")
     for key in ("covariance_max_difference", "gbs_probability_max_difference", "click_probability_max_difference"):
