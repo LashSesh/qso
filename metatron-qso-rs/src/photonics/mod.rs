@@ -16,6 +16,7 @@
 mod boson;
 pub mod gaussian;
 pub mod hafnian;
+mod imperfect;
 pub mod permanent;
 
 pub use boson::{
@@ -27,6 +28,7 @@ pub use hafnian::{
     MAX_HAFNIAN_DIM, MAX_REPEATED_TERMS, hafnian, hafnian_repeated, loop_hafnian,
     loop_hafnian_repeated, torontonian,
 };
+pub use imperfect::{ImperfectBosonSampler, MAX_PARTIAL_PHOTONS};
 pub use permanent::{MAX_PERMANENT_DIM, permanent, permanent_real};
 
 use crate::error::{QsoError, Result};
