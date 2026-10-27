@@ -14,11 +14,18 @@
 //! (Aaronson & Arkhipov 2011). See [`BosonSampler`].
 
 mod boson;
+pub mod gaussian;
+pub mod hafnian;
 pub mod permanent;
 
 pub use boson::{
     BosonSampler, Distribution, MAX_OUTPUT_ENTRIES, MAX_PATTERNS, count_patterns,
     occupation_patterns,
+};
+pub use gaussian::{GaussianState, MAX_CLICKS, MAX_GAUSSIAN_MODES, MAX_GAUSSIAN_PHOTONS};
+pub use hafnian::{
+    MAX_HAFNIAN_DIM, MAX_REPEATED_TERMS, hafnian, hafnian_repeated, loop_hafnian,
+    loop_hafnian_repeated, torontonian,
 };
 pub use permanent::{MAX_PERMANENT_DIM, permanent, permanent_real};
 
