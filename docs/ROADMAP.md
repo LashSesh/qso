@@ -12,7 +12,8 @@ state-vector core at memory bandwidth), 1.12 (noise learning) and 1.13
 (walks beyond static Hamiltonians) — ship together as release 1.6.0;
 finished milestones are released together, not one by one. The third
 stage (1.14 to 1.17) is delivered and not yet released; the fourth
-stage (1.18 to 1.21) is delivered too; neither stage is released yet. Up to 1.3
+stage (1.18 to 1.21) is delivered too; neither stage is released yet. The
+fifth stage (1.22 to 1.25) is planned. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -958,6 +959,100 @@ above.
 A GPU backend through `wgpu`: it starts only with a clear use case and
 after the CPU core is close to memory bandwidth.
 
+## 4e. Fifth stage (1.22 to 1.25)
+
+Planned October 2026, after the fourth stage, from the gaps that remain in
+the table of section 1 and from what the fourth stage's reviews measured.
+The rules stay: no new dependency of the crate, an independent reference
+for every deliverable, reference tools (Stim, PySCF, Qulacs, Qiskit Aer)
+in the cross-validation only.
+
+### 1.22 — Error-correction circuits that keep their distance (M–L)
+
+Use case: experiments with colour and bivariate bicycle codes. The generic
+syndrome schedule of 1.19 measures X and then Z checks in greedy layers;
+hook errors lower its circuit distance (the distance-3 colour code fails
+linearly in p), and nothing in QSO reports the distance a circuit actually
+has.
+
+| Deliverable | Detail |
+|---|---|
+| Circuit distance | the fewest error mechanisms of a detector error model that flip an observable and fire no detector: exact for graph-like models (shortest paths through the matching graph), and for hypergraph models an exact search up to a weight limit with a BP+OSD upper bound beyond it |
+| Schedules | CNOT orders for the triangular colour code that keep circuit distance d, and the syndrome cycle of Bravyi et al. (2024) for bivariate bicycle codes, as options of `css_code_memory`; the current greedy layering stays the default for arbitrary codes |
+| Correlated decoding | two-pass matching for depolarising noise: after a first matching, the edges correlated with the chosen ones through Y-type errors are reweighted and the shot is decoded again (Fowler, arXiv:1310.0863) |
+
+Validation: circuit distances of surface, colour and repetition circuits
+against Stim's `shortest_graphlike_error` and
+`search_for_undetectable_logical_errors` on the same circuits; the rotated
+surface code keeps distance d with the hook-safe order and loses it with a
+bad one; the colour-code schedules reach distance d; the bicycle-code
+cycle reaches the circuit distance and logical error rates reported in the
+paper (within sampling error); correlated matching against exhaustive
+maximum-likelihood decoding on small codes and against plain matching on
+surface codes (logical error rates measured side by side).
+
+### 1.23 — Larger basis sets and open shells (M–L)
+
+Use case: chemistry beyond the smallest basis sets and the first two rows.
+STO-3G and 6-31G without polarisation functions give qualitatively wrong
+geometries and reaction energies; most benchmark sets use cc-pVDZ or
+6-31G*.
+
+| Deliverable | Detail |
+|---|---|
+| Integrals | the McMurchie–Davidson recursion for any angular momentum (d and f functions), Cartesian and spherical shells, with the same Boys-function and screening code |
+| Basis sets | 6-31G* and cc-pVDZ for H to Ar; STO-3G and 6-31G extended to Ar; basis data in the repository, as today |
+| Open shells | restricted open-shell Hartree–Fock (ROHF) and the active-space Hamiltonian of its orbitals, beside RHF and UHF |
+
+Validation: one- and two-electron integrals against PySCF to 10⁻¹² and
+SCF energies to 10⁻⁹ (RHF, UHF, ROHF) on molecules with d functions
+(H₂O and NH₃ in cc-pVDZ and 6-31G*, HCl and H₂S in cc-pVDZ, the triplet
+O₂ in ROHF); CASCI energies in small active spaces against PySCF; the
+existing STO-3G and 6-31G references unchanged.
+
+### 1.24 — Short simulations at full speed (S–M)
+
+Use case: VQE, QAOA and sampling loops that run many short simulations,
+each after a pause (an optimiser step, Python code). After a warm-up QSO
+is ahead at 16 qubits in the latest cross-validation (one layer in 1.3 ms,
+Qulacs 1.5 ms), but rayon's workers sleep as soon as they are idle, so on
+virtual machines the first simulation after a pause pays for waking them
+(section 1, thread wake-up); that cost is not measured yet.
+
+| Deliverable | Detail |
+|---|---|
+| Worker pool | a pool for the state-vector kernels on the standard library's threads that spins briefly before parking, with the parallel thresholds measured again; rayon stays for the rest of the crate |
+| Cold timings | the first simulation after an idle period timed in `benchmark_report` and in the cross-validation, beside the warmed-up timings |
+
+Validation: cross-framework timings at 10 to 18 qubits, cold and warm,
+against Qulacs and Qiskit Aer on the same machine; no slowdown at 20 to 26
+qubits; results bit for bit unchanged (differential tests); the pool under
+Miri for data races.
+
+### 1.25 — Documentation and reach (S–M)
+
+Use case: users of released versions, Rust users, and the browser.
+
+| Deliverable | Detail |
+|---|---|
+| Versioned documentation | the guide and the Python reference of every release on the site, with a version selector, built from the release tags |
+| Rust tutorials | the examples as tutorial pages of the guide, compiled and run in CI |
+| MPS in the browser | matrix-product states in the WebAssembly build, its JSON interface and the playground |
+| Coverage | the CLI and the Rust code run by the Python tests in the coverage report |
+
+Validation: the documentation build produces every released version; the
+tutorials compile and run on every change; the browser build's MPS gives
+the native results on the npm package's tests; the coverage report lists
+the CLI's lines.
+
+### Not in this stage
+
+Tight commutator bounds for product formulas of order four and higher,
+leakage and non-Markovian noise, channels on more than two qubits, and
+pretty good state transfer on graphs outside the cyclotomic families
+remain gaps; they have fewer users than the four above or no exact
+reference yet.
+
 ## 5. Order and reasoning
 
 1. **1.2 first:** small, made every later release safer, and documentation
@@ -1000,6 +1095,13 @@ after the CPU core is close to memory bandwidth.
     the codes current experiments use. Single precision (1.20) serves the
     gate-model core; coverage and differential testing (1.21) close the
     stage because they test everything before it.
+13. **Fifth stage: error correction first.** Distance-preserving circuits
+    and correlated decoding (1.22) finish what 1.19 opened, and its review
+    measured the cost of the generic schedule; Stim gives exact distance
+    references. Larger basis sets and open shells (1.23) close the oldest
+    chemistry gap with PySCF as reference. Short simulations (1.24) address
+    the last speed gap of the table, the cold start after a pause, and
+    documentation and reach (1.25) end the stage, as tests ended the last.
 
 ## 6. Measures of success
 
@@ -1045,6 +1147,11 @@ Taken (October 2026):
   single precision (1.20), coverage and differential testing (1.21). The
   `ldpc` package joins The Walrus, PySCF, Stim and PyMatching as a
   reference of the cross-validation only.
+* Fifth stage (October 2026): error-correction circuits that keep their
+  distance, with circuit-distance search and correlated decoding (1.22),
+  larger basis sets and open shells (1.23), short simulations at full
+  speed (1.24), documentation and reach (1.25). The GPU research track
+  still waits for a use case.
 * The browser playground stays, because it costs little to maintain: it
   is plain HTML and JavaScript without dependencies or a build step, it
   uses only the npm package's JSON interface, which the package's tests
