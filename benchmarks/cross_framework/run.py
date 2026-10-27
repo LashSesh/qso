@@ -188,6 +188,7 @@ def correctness(quick: bool) -> dict:
         "tfim10_energy": value,
         "gradients_vs_qso": gradients,
         "permanent_max_relative_difference_vs_thewalrus": perm_err,
+        "gaussian_vs_thewalrus": gaussian_vs_thewalrus(rng),
         "noisy_circuits": {
             "circuits": len(noisy_circuits),
             "qubits": 5,
@@ -309,10 +310,76 @@ def qec_vs_stim(quick: bool) -> dict:
 
 
 # Largest accepted deviations for --check (all are rounding-level).
+def gaussian_vs_thewalrus(rng) -> dict:
+    """Hafnians, torontonians and Gaussian boson sampling against The Walrus."""
+    import metatron_qso as q
+    import thewalrus
+    import thewalrus.quantum as tq
+    from thewalrus.symplectic import expand, interferometer, loss, squeezing
+    from thewalrus import threshold_detection_prob
+
+    haf_err = 0.0
+    for size in range(2, 21, 2):
+        a = rng.normal(size=(size, size)) + 1j * rng.normal(size=(size, size))
+        a = a + a.T
+        for loop in (False, True):
+            ours, theirs = q.hafnian(a, loop=loop), thewalrus.hafnian(a, loop=loop)
+            haf_err = max(haf_err, abs(ours - theirs) / abs(theirs))
+    b = rng.normal(size=(3, 3)) + 1j * rng.normal(size=(3, 3))
+    b = b + b.T
+    mu = rng.normal(size=3) + 1j * rng.normal(size=3)
+    rep_err = max(
+        abs(q.hafnian_repeated(b, [4, 2, 2]) - thewalrus.hafnian_repeated(b, [4, 2, 2]))
+        / abs(thewalrus.hafnian_repeated(b, [4, 2, 2])),
+        abs(q.hafnian_repeated(b, [3, 2, 2], mu) - thewalrus.hafnian_repeated(b, [3, 2, 2], mu=mu, loop=True))
+        / abs(thewalrus.hafnian_repeated(b, [3, 2, 2], mu=mu, loop=True)),
+    )
+    # Four squeezed modes through a Haar-random interferometer, displaced,
+    # one mode lossy.
+    n = 4
+    params = [(0.5, 0.1), (0.3, 1.0), (0.6, 0.4), (0.2, 2.0)]
+    s = np.eye(2 * n)
+    for i, (r, phi) in enumerate(params):
+        s = expand(squeezing(r, phi), i, n) @ s
+    u = q.haar_unitary(n, seed=7)
+    s = interferometer(u) @ s
+    cov, means = s @ s.T, np.zeros(2 * n)
+    means[1], means[n + 2] = 0.4, -0.3
+    means, cov = loss(means, cov, 0.7, 3)
+    state = q.GaussianState(n)
+    for i, (r, phi) in enumerate(params):
+        state.squeeze(i, r, phi)
+    state.interferometer(u)
+    state = q.GaussianState.from_parts(state.cov, np.array([0, 0.4, 0, 0, 0, 0, -0.3, 0]))
+    state.loss(3, 0.7)
+    cov_err = float(np.max(np.abs(state.cov - cov)))
+    table = tq.probabilities(means, cov, cutoff=5)
+    prob_err = max(abs(state.probability(list(idx)) - table[idx]) for idx in np.ndindex(*table.shape))
+    zero = q.GaussianState.from_parts(state.cov, np.zeros(2 * n))
+    click_err = max(
+        abs(zero.click_probability([bool(c) for c in pat]) - threshold_detection_prob(np.zeros(2 * n), state.cov, np.array(pat)).real)
+        for pat in np.ndindex(*(2,) * n)
+    )
+    o = np.eye(2 * n) - np.linalg.inv(tq.Qmat(cov))
+    tor_err = abs(q.torontonian(o) - thewalrus.tor(o)) / abs(thewalrus.tor(o))
+    return {
+        "hafnian_max_relative_difference": haf_err,
+        "repeated_hafnian_max_relative_difference": rep_err,
+        "torontonian_relative_difference": tor_err,
+        "covariance_max_difference": cov_err,
+        "gbs_probability_max_difference": prob_err,
+        "click_probability_max_difference": click_err,
+    }
+
+
 TOLERANCES = {
     "state": 1e-12,
     "gradient": 1e-12,
     "permanent": 1e-10,
+    # QSO sums 2^{n/2} terms with alternating signs: 3·10⁻¹² relative at
+    # 18 × 18 against a 40-digit reference (The Walrus: 2·10⁻¹⁴).
+    "hafnian": 1e-10,
+    "gaussian_probability": 1e-12,
     "density_matrix": 1e-12,
     "error_model": 1e-12,
     # Detection-event rates are sampled: |z| over up to 72 detectors.
@@ -334,6 +401,13 @@ def check(c: dict) -> list[str]:
             failures.append(f"energies or gradients differ from {name}: {g}")
     if not c["permanent_max_relative_difference_vs_thewalrus"] <= TOLERANCES["permanent"]:
         failures.append(f"permanents differ from The Walrus by {c['permanent_max_relative_difference_vs_thewalrus']:.3g}")
+    g = c["gaussian_vs_thewalrus"]
+    for key in ("hafnian_max_relative_difference", "repeated_hafnian_max_relative_difference", "torontonian_relative_difference"):
+        if not g[key] <= TOLERANCES["hafnian"]:
+            failures.append(f"{key} against The Walrus is {g[key]:.3g}")
+    for key in ("covariance_max_difference", "gbs_probability_max_difference", "click_probability_max_difference"):
+        if not g[key] <= TOLERANCES["gaussian_probability"]:
+            failures.append(f"{key} against The Walrus is {g[key]:.3g}")
     d = c["noisy_circuits"]["max_density_matrix_difference_vs_qiskit_aer"]
     if not d <= TOLERANCES["density_matrix"]:
         failures.append(f"noisy density matrices differ from Qiskit Aer by {d:.3g}")

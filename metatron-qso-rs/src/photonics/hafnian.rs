@@ -14,11 +14,11 @@
 //! ```
 //!
 //! with `C = X·B_Z` (and, for the loop hafnian, `C = X·(B_Z − diag B_Z)`,
-//! `y = diag B_Z`, `x = X·y`). The power traces come from the
-//! characteristic polynomial of `C`, by Householder reduction to Hessenberg
-//! form and La Budde's recurrence, so each of the `2ⁿ` terms costs
-//! `O(n³)`. As for permanents, the terms are summed in fixed chunks, in
-//! order, so results do not depend on the number of threads.
+//! `y = diag B_Z`, `x = X·y`). The power traces come from powers of `C`
+//! by multiplication, so each of the `2ⁿ` terms costs `O(n⁴)`; traces from
+//! the characteristic polynomial would cost `O(n³)` but lose two orders of
+//! magnitude in accuracy. As for permanents, the terms are summed in fixed
+//! chunks, in order, so results do not depend on the number of threads.
 
 use crate::C64;
 use crate::error::{QsoError, Result};
@@ -160,59 +160,33 @@ fn exp_coefficient(e: &[C64], n: usize) -> C64 {
     g[n]
 }
 
-/// `Tr(C^k)` for `k = 0..=kmax`, from the characteristic polynomial.
+/// `Tr(C^k)` for `k = 0..=kmax`: the powers `C^j` up to `j = ⌈kmax/2⌉` by
+/// multiplication, and `Tr(C^k) = Σ_{ab} (C^i)_{ab} (C^{k−i})_{ba}`. Traces
+/// from the characteristic polynomial (Newton's identities) or from
+/// eigenvalues cost a factor `kmax/2` less but lose two orders of
+/// magnitude in accuracy on random 18 × 18 matrices.
 fn power_traces(c: &CMatrix, kmax: usize) -> Vec<C64> {
     let m = c.nrows();
-    let a = charpoly(c);
-    // det(I − λC) = Σ_j a_j λ^j with a_0 = 1; Newton's identities.
-    let coef = |j: usize| if j <= m { a[j] } else { ZERO };
-    let mut t = vec![ZERO; kmax + 1];
-    t[0] = C64::new(m as f64, 0.0);
-    for k in 1..=kmax {
-        let mut s = coef(k) * (-(k as f64));
-        for j in 1..k {
-            s -= coef(j) * t[k - j];
-        }
-        t[k] = s;
+    let half = kmax.div_ceil(2);
+    let mut powers: Vec<CMatrix> = Vec::with_capacity(half + 1);
+    powers.push(CMatrix::identity(m, m));
+    for j in 1..=half {
+        let next = &powers[j - 1] * c;
+        powers.push(next);
     }
-    t
-}
-
-/// Coefficients `a_j` of `det(I − λC) = Σ_j a_j λ^j` (`a_0 = 1`): La
-/// Budde's recurrence on the Hessenberg form of `C`.
-fn charpoly(c: &CMatrix) -> Vec<C64> {
-    let m = c.nrows();
-    if m == 0 {
-        return vec![ONE];
-    }
-    let h = c.clone().hessenberg().h();
-    // p[k][j]: coefficient of x^{k−j} in det(xI − H_k), H_k the leading k × k block.
-    let mut p: Vec<Vec<C64>> = vec![vec![ONE]];
-    for k in 1..=m {
-        let hk = h[(k - 1, k - 1)];
-        let mut next = vec![ZERO; k + 1];
-        // (x − h_kk)·p_{k−1}
-        for (j, &v) in p[k - 1].iter().enumerate() {
-            next[j] += v;
-            next[j + 1] -= hk * v;
-        }
-        // − Σ_{i<k} h_{i,k} (Π_{j=i+1}^{k} h_{j,j−1}) p_{i−1}
-        let mut prod = ONE;
-        for i in (1..k).rev() {
-            prod *= h[(i, i - 1)];
-            let w = h[(i - 1, k - 1)] * prod;
-            if w == ZERO {
-                continue;
+    (0..=kmax)
+        .map(|k| {
+            let i = k / 2;
+            let (p, q) = (&powers[i], &powers[k - i]);
+            let mut t = ZERO;
+            for a in 0..m {
+                for b in 0..m {
+                    t += p[(a, b)] * q[(b, a)];
+                }
             }
-            // p_{i−1} has degree i−1; it shifts to the coefficient of
-            // x^{(i−1)−j}, i.e. index j + (k − i + 1) in `next`.
-            for (j, &v) in p[i - 1].iter().enumerate() {
-                next[j + k - i + 1] -= w * v;
-            }
-        }
-        p.push(next);
-    }
-    p.pop().expect("m ≥ 1")
+            t
+        })
+        .collect()
 }
 
 /// Most terms `Π (r_i + 1)` of [`hafnian_repeated`] and
