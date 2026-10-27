@@ -85,7 +85,7 @@ or by the benchmark report you can run yourself.
 | **Optimisers** | L-BFGS with strong-Wolfe line search, Adam, gradient descent with momentum, Nelder–Mead, SPSA |
 | **Graphs** | Weighted graphs; complete, cycle, path, star, bipartite, hypercube, grid/torus, Petersen, Heawood, Johnson, Kneser, Hamming, rook's, Paley, Shrikhande, circulant, Cayley (Z₂ⁿ) and random graphs; the five Platonic solids; the Metatron's Cube / Fruit-of-Life family; Cartesian products; **exact automorphism groups, canonical labelling and isomorphism**; edge-list and GraphML files, NetworkX import |
 | **Quantum walks** | Continuous-time walks on any graph — exact on up to 2048 nodes, Krylov propagation and cyclic subspaces beyond — with limiting and time-averaged distributions and mixing times. **Symmetry reduction** by equitable partitions (hypercubes, Hamming and Johnson graphs of any size). Childs–Goldstone spatial search with optimised hopping rate, **perfect state transfer**, Lindblad dephasing, classical baselines. **Driven walks** with time-dependent Hamiltonians (fourth-order commutator-free Magnus integrator with step-size control), such as adiabatic search. **Discrete-time walks**: coined walks (Grover, Fourier, Hadamard coins; Shenvi–Kempe–Whaley search), the Hadamard walk on the line, Szegedy walks with quantum hitting times; coined walks with coin and position dephasing on density matrices. **Walk circuits**: exact for circulant and Cayley graphs, product formulas for any graph |
-| **Boson sampling** | Permanents (Glynn's formula, `O(n·2ⁿ)`), Haar-random interferometers, exact output probabilities for indistinguishable and distinguishable photons, exact sampling (Clifford & Clifford) |
+| **Boson sampling** | Permanents (Glynn's formula, `O(n·2ⁿ)`), Haar-random interferometers, exact output probabilities for indistinguishable and distinguishable photons, exact sampling (Clifford & Clifford); partially distinguishable photons and losses; **Gaussian boson sampling**: Gaussian states (squeezing, displacement, interferometers, loss), photon-number and threshold-click probabilities by hafnians, loop hafnians and torontonians, exact sampling |
 | **Backends** | Statevector, noisy density-matrix and device backends (density matrices or trajectories), shot-based estimation with qubit-wise-commuting measurement groups |
 | **Interfaces** | Rust library `metatron_qso`, Python package `metatron_qso` (NumPy I/O, type stubs), `qso` command-line tool with JSON output, npm package `metatron-qso` (WebAssembly, no dependencies) and a browser playground |
 | **Reproducibility** | One explicit, portable seeded RNG (xoshiro256++) for all randomness; parallel sums give bit-identical results for any thread count |
@@ -113,6 +113,10 @@ or by the benchmark report you can run yourself.
 | Automorphism group orders: Metatron's Cube / Fruit of Life / dodecahedron | 6 227 020 800 / 12 / 120 | 13! / D₆ / I_h |
 | Hong–Ou–Mandel: two photons on a 50:50 beam splitter, coincidence probability | 0 (distinguishable: 0.5) | 0, Hong, Ou & Mandel 1987 |
 | Full bunching of n photons, boson / distinguishable probability | n! for n = 1 … 6 | n! |
+| Hong–Ou–Mandel with partially distinguishable photons, coincidence probability | (1 − \|⟨ψ₁\|ψ₂⟩\|²)/2 | Hong, Ou & Mandel 1987 |
+| Perfect matchings by hafnians: hypercubes Q₃ / Q₄ / Q₅, dodecahedron, icosahedron | 9 / 272 / 589 185, 36, 125 | OEIS A005271; known counts |
+| Squeezed vacuum (r = 0.8), photon-number distribution to 18 photons | closed form to 10⁻¹⁰ (relative) | tanh^{2k} r (2k)! / (4^k k!² cosh r) |
+| Gaussian boson sampling: photon-number and click probabilities, 4 modes with displacement and loss | agree to 2·10⁻¹⁶ | The Walrus 0.22 |
 | State vectors of random circuits, largest difference to Qiskit Aer, Qulacs, Cirq, PennyLane | ≤ 3 × 10⁻¹⁵ | — |
 | Quantum trajectories vs density matrices, χ² test of 20 000 samples on 3, 6 and 10 qubits | passes at the 0.1 % level | — |
 | GHZ₅ on the toy device, ⟨Σ Z_i Z_{i+1}⟩: raw / readout-mitigated + ZNE (1, 3, 5) | 3.38 / 4.00 ± 0.01 | 4 |
@@ -491,7 +495,7 @@ metatron-qso-rs/            Rust library `metatron_qso` and the `qso` CLI
   src/stabilizer/           stabilizer tableaux, graph states, Clifford programs
   src/qec/                  detector circuits, frame sampling, error models, decoding, codes
   src/mps/                  matrix-product states, OpenQASM programs on them
-  src/photonics/            permanents, interferometers, boson sampling
+  src/photonics/            permanents, hafnians, boson sampling, Gaussian states
   src/backend.rs            execution backends and shot-based estimation
   src/bin/qso.rs            command-line tool
   tests/                    validation, robustness and property tests

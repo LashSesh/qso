@@ -4,6 +4,44 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+Milestone 1.14 (Gaussian boson sampling and imperfect photons) of the
+[roadmap](docs/ROADMAP.md), the first of its third stage.
+
+### Added
+
+- **Hafnians** (`photonics::hafnian`, Python `hafnian`,
+  `hafnian_repeated`, `torontonian`).
+  - Hafnians and loop hafnians by the formula of Björklund, Gupt and
+    Quesada (2019), Kan's formula for matrices with repeated rows, and
+    torontonians.
+  - Tests: brute force, (2n − 1)!! and the telephone numbers for the
+    all-ones matrix, perm(B) for bipartite graphs, and the perfect
+    matchings of the hypercubes Q₃ to Q₅ (9, 272, 589 185), the
+    dodecahedron, icosahedron, Petersen and Heawood graphs.
+- **Gaussian states** (`photonics::GaussianState`, Python
+  `GaussianState`).
+  - Covariance matrices and means with ħ = 2, as in The Walrus.
+  - Squeezing, displacement, rotation, interferometers and loss, also
+    into a thermal environment.
+  - Photon-number probabilities (loop hafnians, or Kan's formula when it
+    is cheaper and stable), threshold-click probabilities (torontonians),
+    and exact samples drawn mode by mode.
+  - Tests: squeezed, coherent, thermal and two-mode squeezed states
+    against their closed forms, loss as binomial thinning, sums to one,
+    sampling frequencies.
+- **Imperfect photons** (`photonics::ImperfectBosonSampler`, Python
+  `ImperfectBosonSampler`).
+  - Partial distinguishability from the Gram matrix of the internal
+    states (Tichy; Shchesnovich).
+  - Losses at the inputs and detector efficiencies.
+  - Tests: a simulation with the internal states as extra modes; losses
+    through an interferometer with environment modes; the
+    Hong–Ou–Mandel visibility.
+- **Cross-validation** against The Walrus 0.22: probabilities agree to
+  2·10⁻¹⁶, hafnians to 3·10⁻¹² relative up to 20 × 20.
+
 ## [1.6.0] — 2026-10-27
 
 Milestones 1.9 (matrix-product states), 1.10 (exact decoding and Stim

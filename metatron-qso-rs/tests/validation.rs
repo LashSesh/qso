@@ -1034,3 +1034,81 @@ fn fully_dephased_coined_walk_on_metatrons_cube_is_classical() {
         assert!(quantum.iter().zip(&p).all(|(a, b)| (a - b).abs() < 1e-13));
     }
 }
+
+#[test]
+fn hafnians_count_perfect_matchings() {
+    use metatron_qso::graph::generators;
+    use metatron_qso::photonics::hafnian;
+    // Hypercubes Q₃, Q₄, Q₅ (OEIS A005271), the dodecahedron, icosahedron,
+    // Petersen and Heawood graphs.
+    let cases = [
+        (generators::hypercube(3), 9.0),
+        (generators::hypercube(4), 272.0),
+        (generators::hypercube(5), 589_185.0),
+        (
+            generators::platonic(generators::PlatonicSolid::Dodecahedron),
+            36.0,
+        ),
+        (
+            generators::platonic(generators::PlatonicSolid::Icosahedron),
+            125.0,
+        ),
+        (generators::petersen(), 6.0),
+        (generators::heawood(), 24.0),
+    ];
+    for (g, count) in cases {
+        let a = g.adjacency_matrix().map(|v| metatron_qso::C64::new(v, 0.0));
+        let h = hafnian(&a).unwrap();
+        assert!(
+            (h.re - count).abs() < 1e-7 * count && h.im.abs() < 1e-7 * count,
+            "{h} vs {count}"
+        );
+    }
+}
+
+#[test]
+fn gaussian_states_follow_their_photon_statistics() {
+    use metatron_qso::photonics::{GaussianState, beam_splitter};
+    // Squeezed vacuum r = 0.8: p(2k) = tanh^{2k} r (2k)! / (4^k k!² cosh r),
+    // to 18 photons in one mode (relative error below 10⁻¹⁰).
+    let r: f64 = 0.8;
+    let mut s = GaussianState::vacuum(1).unwrap();
+    s.squeeze(0, r, 0.3).unwrap();
+    let fact = |n: usize| (1..=n).map(|i| i as f64).product::<f64>();
+    for k in 0..=9 {
+        let want = r.tanh().powi(2 * k as i32) * fact(2 * k)
+            / (4f64.powi(k as i32) * fact(k).powi(2) * r.cosh());
+        let got = s.probability(&[2 * k]).unwrap();
+        assert!((got - want).abs() < 1e-10 * want, "{k}: {got} vs {want}");
+    }
+    // Two-mode squeezed vacuum from two single-mode squeezers and a 50:50
+    // beam splitter: p(n, n) = tanh^{2n} r / cosh² r.
+    let mut two = GaussianState::vacuum(2).unwrap();
+    two.squeeze(0, r, 0.0).unwrap().squeeze(1, -r, 0.0).unwrap();
+    let bs = beam_splitter(std::f64::consts::FRAC_PI_4, 0.0);
+    two.interferometer(&bs, &[0, 1]).unwrap();
+    for n in 0..6 {
+        let want = r.tanh().powi(2 * n as i32) / r.cosh().powi(2);
+        assert!((two.probability(&[n, n]).unwrap() - want).abs() < 1e-12);
+    }
+    // Threshold detectors on a thermal state with n̄ = 2: no click 1/3.
+    let t = GaussianState::thermal(&[2.0]).unwrap();
+    assert!((t.click_probability(&[false]).unwrap() - 1.0 / 3.0).abs() < 1e-14);
+}
+
+#[test]
+fn hong_ou_mandel_dip_follows_the_photon_overlap() {
+    use metatron_qso::photonics::{BosonSampler, ImperfectBosonSampler, beam_splitter};
+    // P(1, 1) = (1 − |⟨ψ₁|ψ₂⟩|²)/2 on a 50:50 beam splitter, also with
+    // detector efficiency 0.9 (times 0.81).
+    let sampler =
+        BosonSampler::new(beam_splitter(std::f64::consts::FRAC_PI_4, 0.0), &[1, 1]).unwrap();
+    for x in [0.0, 0.3, 0.7, 1.0] {
+        let s = ImperfectBosonSampler::new(sampler.clone())
+            .with_indistinguishability(x)
+            .unwrap();
+        assert!((s.probability(&[1, 1]).unwrap() - (1.0 - x) / 2.0).abs() < 1e-14);
+        let lossy = s.with_efficiency(&[0.9, 0.9]).unwrap();
+        assert!((lossy.probability(&[1, 1]).unwrap() - 0.81 * (1.0 - x) / 2.0).abs() < 1e-14);
+    }
+}
