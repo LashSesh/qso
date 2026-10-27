@@ -263,6 +263,13 @@ enum Command {
         /// automatically for Clifford programs too large for a state vector).
         #[arg(long, conflicts_with_all = ["noise", "device"])]
         stabilizer: bool,
+        /// Run on a matrix-product state (any program; exact up to the
+        /// reported fidelity bound).
+        #[arg(long, conflicts_with_all = ["noise", "device", "stabilizer"])]
+        mps: bool,
+        /// Largest bond dimension of the matrix-product state.
+        #[arg(long, default_value_t = 256, requires = "mps")]
+        max_bond: usize,
     },
     /// Estimate ⟨H⟩ of an OpenQASM circuit from shots, with standard
     /// errors and optional error mitigation.
@@ -338,10 +345,15 @@ enum Command {
     },
     /// Memory experiment of a repetition or rotated surface code under
     /// circuit-level depolarizing noise: sampled with Pauli frames and
-    /// decoded by union-find.
+    /// decoded by union-find or minimum-weight matching.
     Qec {
         #[arg(long, value_enum, default_value_t = CodeArg::Surface)]
         code: CodeArg,
+        #[arg(long, value_enum, default_value_t = DecoderArg::UnionFind)]
+        decoder: DecoderArg,
+        /// Basis of the surface-code memory: z protects |0⟩_L, x |+⟩_L.
+        #[arg(long, value_enum, default_value_t = BasisArg::Z)]
+        basis: BasisArg,
         /// Code distances (odd for the surface code), e.g. 3,5,7.
         #[arg(long, value_delimiter = ',', default_value = "3,5")]
         distance: Vec<usize>,
@@ -359,7 +371,23 @@ enum Command {
         /// text format.
         #[arg(long)]
         stim: Option<std::path::PathBuf>,
+        /// Decode a circuit in Stim's text format instead of a generated
+        /// memory experiment (code, distance, rounds and p are ignored).
+        #[arg(long, conflicts_with = "stim")]
+        circuit: Option<std::path::PathBuf>,
     },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum BasisArg {
+    Z,
+    X,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum DecoderArg {
+    UnionFind,
+    Matching,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -895,6 +923,8 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             device,
             trajectories,
             stabilizer,
+            mps,
+            max_bond,
         } => {
             let src = read_text(file)?;
             let program = Program::from_qasm(&src)?;
@@ -909,9 +939,34 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 // Exact simulation of the program; one without classical
                 // bits is measured on every qubit.
                 let tableau = *stabilizer
-                    || (program.n_qubits() > metatron_qso::quantum::MAX_QUBITS
+                    || (!*mps
+                        && program.n_qubits() > metatron_qso::quantum::MAX_QUBITS
                         && is_clifford_program(&program));
-                let labelled: std::collections::BTreeMap<String, usize> = if tableau {
+                let mut bound = None;
+                let labelled: std::collections::BTreeMap<String, usize> = if *mps {
+                    let options = metatron_qso::mps::MpsOptions {
+                        max_bond: *max_bond,
+                        ..Default::default()
+                    };
+                    if program.n_bits() == 0 {
+                        let mut state = metatron_qso::mps::Mps::from_circuit(
+                            &program.to_circuit()?,
+                            &[],
+                            options,
+                        )?;
+                        bound = state.fidelity_lower_bound();
+                        state.sample_counts(*shots, &mut Rng::seed_from_u64(*seed))?
+                    } else {
+                        let (counts, b) = metatron_qso::mps::program::sample_program(
+                            &program, *shots, *seed, options,
+                        )?;
+                        bound = b;
+                        counts
+                            .iter()
+                            .map(|(&r, &c)| (record_bitstring(r, program.n_bits()), c))
+                            .collect()
+                    }
+                } else if tableau {
                     if program.n_bits() == 0 {
                         let state = StabilizerState::from_circuit(&program.to_circuit()?, &[])?;
                         state.sample_counts(*shots, &mut Rng::seed_from_u64(*seed))?
@@ -933,14 +988,21 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                         .map(|(&r, &c)| (record_bitstring(r, width), c))
                         .collect()
                 };
-                let backend = if tableau { "stabilizer" } else { "program" };
+                let backend = if *mps {
+                    "mps"
+                } else if tableau {
+                    "stabilizer"
+                } else {
+                    "program"
+                };
                 let mut sorted: Vec<_> = labelled.iter().collect();
                 sorted.sort_by(|a, b| b.1.cmp(a.1));
                 let text = format!(
-                    "{} qubits, {} bits, {} operations, backend {backend}\n{}",
+                    "{} qubits, {} bits, {} operations, backend {backend}{}\n{}",
                     program.n_qubits(),
                     program.n_bits(),
                     program.len(),
+                    bound.map_or(String::new(), |b| format!(", fidelity ≥ {b:.12}")),
                     sorted
                         .iter()
                         .take(16)
@@ -950,7 +1012,8 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 );
                 return Ok((
                     json!({"qubits": program.n_qubits(), "bits": program.n_bits(),
-                           "operations": program.len(), "backend": backend, "counts": labelled}),
+                           "operations": program.len(), "backend": backend, "counts": labelled,
+                           "fidelity_lower_bound": bound}),
                     text,
                 ));
             }
@@ -1110,13 +1173,53 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
         }
         Command::Qec {
             code,
+            decoder,
+            basis,
             distance,
             rounds,
             p,
             shots,
             seed,
             stim,
+            circuit: from_file,
         } => {
+            let kind = match decoder {
+                DecoderArg::UnionFind => qec::DecoderKind::UnionFind,
+                DecoderArg::Matching => qec::DecoderKind::Matching,
+            };
+            let decoder_name = match kind {
+                qec::DecoderKind::UnionFind => "union-find",
+                qec::DecoderKind::Matching => "matching",
+            };
+            if let Some(path) = from_file {
+                let text = std::fs::read_to_string(path).map_err(|e| {
+                    QsoError::invalid("circuit", format!("{}: {e}", path.display()))
+                })?;
+                let circuit = qec::DetectorCircuit::from_stim(&text)?;
+                let rate = qec::logical_error_rate_with(&circuit, *shots, *seed, kind)?;
+                let line = format!(
+                    "{}: {} qubits, {} detectors, {} observables; logical error rate {:.3e} ± {:.1e} ({} of {} shots, {decoder_name})",
+                    path.display(),
+                    circuit.n_qubits(),
+                    circuit.n_detectors(),
+                    circuit.n_observables(),
+                    rate.rate,
+                    rate.standard_error,
+                    rate.errors,
+                    rate.shots
+                );
+                return Ok((
+                    json!({
+                        "circuit": path.display().to_string(),
+                        "qubits": circuit.n_qubits(),
+                        "detectors": circuit.n_detectors(),
+                        "observables": circuit.n_observables(),
+                        "decoder": kind,
+                        "logical_error_rate": rate,
+                    }),
+                    line,
+                ));
+            }
             let mut rows = Vec::new();
             let mut lines = Vec::new();
             for &prob in p {
@@ -1124,7 +1227,15 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                     let noise = qec::CircuitNoise::uniform(prob);
                     let r = rounds.unwrap_or(d);
                     let circuit = match code {
-                        CodeArg::Surface => qec::surface_code_memory(d, r, &noise)?,
+                        CodeArg::Surface => qec::surface_code_memory_with(
+                            d,
+                            r,
+                            &noise,
+                            match basis {
+                                BasisArg::Z => qec::MemoryBasis::Z,
+                                BasisArg::X => qec::MemoryBasis::X,
+                            },
+                        )?,
                         CodeArg::Repetition => qec::repetition_code_memory(d, r, &noise)?,
                     };
                     if let Some(path) = stim.as_ref().filter(|_| rows.is_empty()) {
@@ -1132,15 +1243,16 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                             QsoError::invalid("stim", format!("{}: {e}", path.display()))
                         })?;
                     }
-                    let rate = qec::logical_error_rate(&circuit, *shots, *seed)?;
+                    let rate = qec::logical_error_rate_with(&circuit, *shots, *seed, kind)?;
                     lines.push(format!(
-                        "p = {prob}, d = {d}, {r} rounds: {} qubits, {} detectors; logical error rate {:.3e} ± {:.1e} ({} of {} shots)",
+                        "p = {prob}, d = {d}, {r} rounds: {} qubits, {} detectors; logical error rate {:.3e} ± {:.1e} ({} of {} shots, {})",
                         circuit.n_qubits(),
                         circuit.n_detectors(),
                         rate.rate,
                         rate.standard_error,
                         rate.errors,
-                        rate.shots
+                        rate.shots,
+                        decoder_name
                     ));
                     rows.push(json!({
                         "p": prob,
@@ -1148,6 +1260,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                         "rounds": r,
                         "qubits": circuit.n_qubits(),
                         "detectors": circuit.n_detectors(),
+                        "decoder": kind,
                         "logical_error_rate": rate,
                     }));
                 }

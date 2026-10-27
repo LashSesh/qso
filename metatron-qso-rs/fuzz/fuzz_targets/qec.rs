@@ -1,13 +1,14 @@
 //! Detector circuits from bytes: building, sampling, error models and
 //! export never panic, an error model exists exactly when sampling
-//! accepts the circuit, and the union-find decoder explains every syndrome
-//! that some set of matching-graph edges produces.
+//! accepts the circuit, the Stim export reads back to the same text, and
+//! the union-find and matching decoders explain every syndrome that some
+//! set of matching-graph edges produces.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
 use metatron_qso::qec::{
-    DetectorCircuit, MatchingGraph, Noise, UnionFindDecoder, detector_error_model,
-    sample_detectors,
+    DetectorCircuit, MatchingDecoder, MatchingGraph, Noise, UnionFindDecoder,
+    detector_error_model, sample_detectors,
 };
 
 fuzz_target!(|data: &[u8]| {
@@ -39,7 +40,9 @@ fuzz_target!(|data: &[u8]| {
             _ => Ok(()),
         };
     }
-    let _ = c.to_stim().expect("every circuit exports");
+    let text = c.to_stim().expect("every circuit exports");
+    let back = DetectorCircuit::from_stim(&text).expect("exported circuits import");
+    assert_eq!(back.to_stim().unwrap(), text);
     // Small circuits stay within every limit: a model exists exactly when
     // the detectors and observables are deterministic, as for sampling.
     let sampled = sample_detectors(&c, 100, 1).is_ok();
@@ -52,6 +55,7 @@ fuzz_target!(|data: &[u8]| {
     };
     let nd = graph.n_detectors();
     let edges = graph.edges().to_vec();
+    let mut matching = MatchingDecoder::new(graph.clone());
     let mut decoder = UnionFindDecoder::new(graph);
     // Syndromes of edge sets chosen by the remaining bytes.
     for pick in chunks.remainder().iter().chain(rest.iter().take(16)) {
@@ -70,5 +74,8 @@ fuzz_target!(|data: &[u8]| {
         decoder
             .decode(&fired)
             .unwrap_or_else(|e| panic!("syndrome {fired:?} of graph edges not explained: {e}"));
+        matching
+            .decode(&fired)
+            .unwrap_or_else(|e| panic!("syndrome {fired:?} of graph edges not matched: {e}"));
     }
 });

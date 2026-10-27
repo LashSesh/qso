@@ -10,7 +10,8 @@ of Stim (Gidney, Quantum 5, 497 (2021)):
   *detectors* and *logical observables*;
 - the Pauli-frame sampler simulates many shots of it, 64 per machine word;
 - the detector error model lists each independent error and its effect;
-- the union-find decoder predicts the observable flips of each shot;
+- a union-find or an exact minimum-weight matching decoder predicts the
+  observable flips of each shot;
 - `logical_error_rate` combines all four.
 
 ## Detector circuits
@@ -139,10 +140,69 @@ them fixed. `logical_error_rate` samples in blocks of at most 65 536
 shots and 1 GiB of results, so its memory does not grow with the number
 of shots.
 
+## Exact decoding: minimum-weight matching
+
+`MatchingDecoder` finds, for each shot, the lightest set of errors that
+explains the detection events: a minimum-weight perfect matching of the
+events in pairs or to the boundary (Dennis, Kitaev, Landahl and Preskill,
+J. Math. Phys. 43, 4452 (2002)). It takes three steps:
+
+1. **Distances.** Dijkstra's algorithm gives the distance between events
+   and the observables flipped along the path. The distances from a
+   detector are cached when it first fires, up to 2²¹ entries (32 MiB).
+   Beyond that, each search stops as soon as no farther event can be
+   worth pairing.
+2. **Savings.** Pairing events i and j instead of sending both to the
+   boundary saves b_i + b_j − d_ij, where b is the distance to the
+   boundary. Only positive savings become edges, so the boundary needs no
+   copies of the events.
+3. **Blossoms.** Edmonds' blossom algorithm (after van Rantwijk's
+   implementation, the one NetworkX uses) finds the matching with the
+   largest total saving: the lightest correction.
+
+Weights are rounded to integers, with the largest edge at 2²⁰, so the
+blossom algorithm computes exactly. Errors more likely than not have
+weight 0, and errors of probability 0 are left out. Where several
+corrections weigh the same, which one is returned can depend on the
+distances earlier shots have cached. Each of them has minimum weight,
+and a seeded run is reproducible.
+
+```python
+import metatron_qso as q
+
+c = q.surface_code_memory(5, 5, 0.006)
+detectors, observables = c.sample(20_000, seed=3)
+dem = c.detector_error_model(decompose=True)
+predicted = q.MatchingDecoder(dem).decode_batch(detectors)
+mwpm = q.logical_error_rate(c, 20_000, seed=3, decoder="matching")
+uf = q.logical_error_rate(c, 20_000, seed=3)        # the same shots
+assert mwpm.errors == int((predicted != observables[:, 0]).sum())
+assert mwpm.errors < uf.errors
+```
+
+The results are checked against independent references:
+
+- **Blossom algorithm.** On 4000 random graphs of up to 14 vertices, with
+  weights in narrow ranges so that ties and nested blossoms are common,
+  it matches dynamic programming over subsets.
+- **Correction weight.** On 300 random error models, for every syndrome,
+  the correction weighs as little as the lightest set of errors with that
+  syndrome found by enumeration. The prediction is the observable flip
+  of one such set.
+- **Faults.** It corrects every single fault, every pair of faults at
+  distance 5 and 20 000 random triples at distance 7.
+- **PyMatching.** In the scheduled cross-validation, on the same error
+  model and the same syndromes, its predictions agree with PyMatching's.
+  In a run with 100 000 shots for each of eight circuits, a single shot
+  differed, on the X-basis surface code. Two exact decoders may differ
+  where corrections weigh the same, or through their rounding of the
+  weights.
+
 ## Memory experiments
 
-Two families of memory experiments are built in. Both protect |0⟩ and
-take a `CircuitNoise` or a single probability for every kind of noise.
+Two families of memory experiments are built in. They protect |0⟩ (the
+surface code also |+⟩) and take a `CircuitNoise` or a single probability
+for every kind of noise.
 
 | Noise | Where |
 |---|---|
@@ -163,16 +223,21 @@ the order that keeps hook errors perpendicular to the logical operators:
 NW, NE, SW, SE for X ancillas, NW, SW, NE, SE for Z ancillas. The
 detectors are the Z-type stabilizers, so the model is a matching graph
 for bit flips, and observable 0 is the logical Z, Z on the first row of
-data qubits.
+data qubits. `surface_code_memory(d, rounds, noise, basis="x")` (in Rust
+`surface_code_memory_with(…, MemoryBasis::X)`) protects |+⟩ instead. The
+data qubits are prepared and measured in the X basis, through H gates
+with one-qubit gate noise. The X-type stabilizers are the detectors, and
+the logical X, X on the first column, is the observable.
 
 Under uniform circuit-level noise p (d rounds, seed 7, 10⁶ shots at
-p = 0.001 and 10⁵ otherwise; `cargo run --release --example surface_code`):
+p = 0.001 and 10⁵ otherwise; `cargo run --release --example surface_code`),
+with union-find / matching on the same shots:
 
 | p | d = 3 | d = 5 | d = 7 |
 |---|---|---|---|
-| 0.001 | 8.4·10⁻⁴ | 1.4·10⁻⁴ | 2.1·10⁻⁵ |
-| 0.003 | 7.0·10⁻³ | 3.8·10⁻³ | 1.6·10⁻³ |
-| 0.01 | 0.062 | 0.086 | 0.109 |
+| 0.001 | 8.4·10⁻⁴ / 8.3·10⁻⁴ | 1.4·10⁻⁴ / 1.3·10⁻⁴ | 2.1·10⁻⁵ / 1.7·10⁻⁵ |
+| 0.003 | 7.0·10⁻³ / 6.8·10⁻³ | 3.8·10⁻³ / 3.6·10⁻³ | 1.6·10⁻³ / 1.4·10⁻³ |
+| 0.01 | 0.062 / 0.060 | 0.086 / 0.081 | 0.109 / 0.100 |
 
 Below the threshold, larger codes fail less often. Above it, they fail
 more often. Here the threshold lies between 0.3% and 1%. The test
@@ -192,10 +257,27 @@ fn main() -> metatron_qso::Result<()> {
 }
 ```
 
-## Stim export and the command line
+## Stim circuits and the command line
 
 `to_stim()` writes a circuit in Stim's text format, with relative
-measurement records (`rec[-k]`) and exact probabilities:
+measurement records (`rec[-k]`) and exact probabilities.
+`DetectorCircuit.from_stim(text)` reads one. It understands the
+following instructions:
+
+- the Clifford gates H, S, S_DAG, X, Y, Z, SQRT_X(_DAG), SQRT_Y(_DAG), CX,
+  CY, CZ, XCZ, YCZ and SWAP;
+- measurements and resets in the X, Y and Z bases (M, MX, MY, R, RX, RY,
+  MR, MRX, MRY), with an optional flip probability;
+- the noise channels X_ERROR, Y_ERROR, Z_ERROR, DEPOLARIZE1 and
+  DEPOLARIZE2;
+- DETECTOR, OBSERVABLE_INCLUDE and REPEAT blocks.
+
+TICK and coordinates are ignored. Inverted measurement targets (`!q`)
+read the same as plain ones, since detection events are relative to the
+noiseless circuit. As in Stim, noise needs its probability, gates take
+no arguments, and a REPEAT block repeats at least once. Any other instruction is an error that names it and
+its line: classical feedback, MPP, correlated, heralded and Pauli-channel
+noise.
 
 ```python
 import metatron_qso as q
@@ -203,13 +285,20 @@ import metatron_qso as q
 text = q.repetition_code_memory(3, 2, 0.01).to_stim()
 assert text.startswith("R 0\n")
 assert "DETECTOR rec[-1] rec[-3]" in text
+assert q.DetectorCircuit.from_stim(text).to_stim() == text
 ```
+
+Circuits that Stim generates read back with Stim's error model. Unit
+tests cover the repetition code and the rotated surface code in both
+bases, and the scheduled cross-validation covers them at d = 5.
 
 `qso qec` runs memory experiments from the shell:
 
 ```text
 qso qec --distance 3,5,7 --p 0.001,0.01 --shots 100000
+qso qec --basis x --decoder matching --distance 5 --p 0.003
 qso qec --code repetition --distance 9 --p 0.05 --stim rep9.stim
+qso qec --circuit surface.stim --decoder matching --shots 100000
 ```
 
 ## Limits and costs
@@ -222,12 +311,18 @@ qso qec --code repetition --distance 9 --p 0.05 --stim rep9.stim
 | Results of one `sample` call | shots × (detectors + 64) ≤ 2³³ bits (1 GiB); in Python, shots × (detectors + observables) ≤ 2³⁰ |
 | Error components of a model | 2²²; their detector lists before merging, 2²⁷ entries (1 GiB); propagation, 2³⁴ word operations |
 | Code distance, rounds | 101, 10 000, and at most 2²⁴ operations (checked before building) |
+| Imported Stim circuits | 65 536 qubits; 2²⁴ operations and annotations after expanding REPEAT blocks (checked before expanding); blocks nested at most 64 deep |
+| Matching decoder | cached distances 2²¹ entries (32 MiB), bounded searches beyond; at most 2²² pairs of events per shot |
 
 - **Sampling.** Each operation costs one word operation per 64 shots.
 - **Error model.** The model takes one pass through the circuit per 4096
   error components, or more when the circuit has more than 4096
   measurements (each pass holds its records).
+- **Matching.** A shot with k detection events costs k distance lookups
+  (or bounded searches) and O(k³) for the blossom algorithm. At low noise
+  matching is about as fast as union-find. At p = 0.01 and d = 7 it takes
+  twice as long (7.4 s against 3.7 s for 10⁵ shots).
 - **Example timing.** On one core, a distance-21 surface code with 21
   rounds (881 qubits, 4840 detectors) needs about 0.5 s for its error
-  model and 15 s for 100 000 decoded shots at p = 0.001. The error model
+  model and 15 s for 100 000 shots decoded by union-find at p = 0.001. The error model
   of d = 41 with 41 rounds (35 280 detectors) takes 30 s.

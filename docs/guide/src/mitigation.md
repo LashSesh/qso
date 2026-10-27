@@ -139,6 +139,68 @@ avg = q.twirled_average(
 print(avg.value, avg.std_error)
 ```
 
+## Learned noise
+
+PEC above takes the noise from the device model. On hardware the noise
+has to be measured first. `learn_layer` does this for a layer of
+two-qubit Clifford gates (`cx`, `cy`, `cz`, `swap` on disjoint qubits),
+following van den Berg et al. (Nat. Phys. 19, 1116 (2023)). Twirled, the
+layer's noise is a Pauli channel, and the sparse Pauli–Lindblad model
+writes it with one rate λ_k per generator P_k: every one-qubit Pauli and
+every two-qubit Pauli on neighbouring qubits. A Pauli b then has fidelity
+f_b = exp(−2 Σ λ_k), summed over the generators that anticommute with b.
+
+The experiment prepares product eigenstates in a set of product bases
+in which every pair of coupled qubits sees all nine pairs of letters
+(nine bases when the coupling graph has at most four colours, 27 up to
+13 colours). It repeats the twirled layer an even number of times d,
+and measures. Readout is
+twirled too, so readout errors only scale the signal. The decay of ⟨b⟩
+with d gives the product f_b·f_{UbU} free of state preparation and
+measurement errors. Non-negative least squares turns the products into
+rates. Standard errors come from a bootstrap over the twirled circuits.
+
+One limitation comes from the method itself: where the layer maps b to
+another Pauli, only the product f_b·f_{UbU} is learnable, and the two
+are taken equal. Noise that commutes with the layer (depolarising
+noise, a phase error on the control of a cx) is recovered. Noise that
+the layer moves, such as a ZZ error after a cx, is split evenly between
+b and UbU. The result lists the Paulis this affects (`symmetrised`).
+
+`pec_layered` cancels the learned noise in a circuit of blocks separated
+by the layer, `B₀ L B₁ L … B_m`. `pea_layered` amplifies it by inserting
+Paulis with positive probabilities, without the sign problem and
+overhead of PEC, and extrapolates the values to zero noise. The inserted
+Paulis are one-qubit gates. On hardware they are merged into the
+neighbouring gates. In the simulator they are noiseless when the device
+has no one-qubit gate noise.
+
+```python
+import metatron_qso as q
+
+device = (q.DeviceModel("learnable", idle_noise=False)
+          .with_rule(gate="cx", depolarizing=0.012,
+                     channels=[q.Channel.rotation("ZI", 0.12)])
+          .with_default_qubit(readout=(0.02, 0.04)))
+layer = q.Circuit(2).cx(0, 1)
+learned = q.learn_layer(layer, device, seed=1)
+model = learned["model"]
+for g, rate, se in zip(model.generators, model.rates, learned["std_errors"]):
+    print(f"{g:8} {rate:.5f} ± {se:.5f}")
+
+blocks = [q.Circuit(2).ry(0, 0.7).ry(1, -0.4), q.Circuit(2).ry(0, -1.1).rz(1, 2.0),
+          q.Circuit(2).ry(1, 0.3)]
+obs = q.PauliSum("Z0 Z1 + 0.5*X0")
+pec = q.pec_layered(blocks, layer, model, device, obs, samples=4000, seed=2)
+pea = q.pea_layered(blocks, layer, model, device, obs, [1.0, 2.0, 3.0], 4000, seed=3)
+print(pec["estimate"].value, pea["estimate"].value)
+```
+
+In the validation suite, a four-qubit device with two-qubit depolarising
+noise, a coherent phase error and readout errors is learned. All 39 rates
+lie within three standard errors of their exact values, and PEC with the
+learned model gives 0.534 ± 0.005 for a value of 0.533 (raw 0.492).
+
 ## Classical shadows
 
 A `ClassicalShadow` records snapshots of a state, each measured in random

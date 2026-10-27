@@ -1,11 +1,16 @@
 # QSO Roadmap (1.x)
 
-Status: October 2026. Milestones 1.1 to 1.8 delivered — 1.3 combined the
+Status: October 2026. Milestones 1.1 to 1.13 delivered — 1.3 combined the
 milestones planned as "quantum walks" and "simulation performance".
 Milestones 1.4 (noise at scale and error mitigation), 1.5 (algorithms and
 physics) and 1.6 (interoperability) shipped together as release 1.4.0.
 Milestones 1.7 (stabilizer simulation and graph states) and 1.8
-(error-correction experiments) ship together as release 1.5.0. Up to 1.3
+(error-correction experiments) shipped together as release 1.5.0 (1.5.1
+fixed its npm publication). Milestone 1.9 (matrix-product states) and the
+second stage — 1.10 (exact decoding and Stim circuits), 1.11 (the
+state-vector core at memory bandwidth), 1.12 (noise learning) and 1.13
+(walks beyond static Hamiltonians) — ship together as release 1.6.0;
+finished milestones are released together, not one by one. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -39,12 +44,14 @@ which withdraws the results of version 1.
 
 | Area | Now | Gap |
 |---|---|---|
-| Statevector speed | specialised kernels (1.1); gate fusion and cache blocking (1.3.0): 16-qubit layers 4.7× and 18–24-qubit layers 1.6–2.6× faster than in 1.2; batched evaluation | no explicit SIMD, no single precision; the adjoint backward pass is not blocked; worker threads sleep when idle, so short isolated simulations on virtual machines run cold — see [measurements](#measured-performance-against-established-simulators) |
+| Statevector speed | specialised kernels (1.1); gate fusion and cache blocking (1.3.0): 16-qubit layers 4.7× and 18–24-qubit layers 1.6–2.6× faster than in 1.2; batched evaluation; AVX and NEON kernels close to memory bandwidth and a blocked adjoint pass (1.11) | no single precision; worker threads sleep when idle, so short isolated simulations on virtual machines run cold — see [measurements](#measured-performance-against-established-simulators) |
 | Boson sampling | exact probabilities and exact sampling (1.1) | no partial distinguishability, photon loss or Gaussian boson sampling |
-| Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | no noise learning (PEC needs the Pauli noise given), no leakage or non-Markovian noise, channels on at most two qubits, no virtual distillation or probabilistic error amplification |
-| Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0) | no time-dependent Hamiltonians, no open-system discrete-time walks, no pretty-good-transfer decision (only best fidelity in a window) |
+| Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | noise learning for layers of two-qubit Clifford gates only, on density matrices (1.12); no leakage or non-Markovian noise, channels on at most two qubits, no virtual distillation |
+| Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0) | time-dependent Hamiltonians and decoherent coined walks without symmetry reduction (1.13); no pretty-good-transfer decision (only best fidelity in a window) |
 | Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5) | no integrals of its own (needs FCIDUMP files from a chemistry code), no unrestricted (UHF) integrals, no tight commutator bound for product formulas of order 4 and higher, no time-dependent Hamiltonians |
-| Interoperability | OpenQASM 2 without `gate` definitions; multi-controlled gates exported by exact decomposition (1.3.0); edge lists, GraphML and duck-typed NetworkX import for graphs | no OpenQASM 3, no browser build; no bridges to other frameworks, by decision (see section 2) |
+| Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
+| Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10) | no correlated decoding; matching is far slower than PyMatching's sparse blossom on large shots |
+| Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9) | no MPS in the browser build |
 | Documentation | user guide, executed tutorials and Python reference on GitHub Pages (1.2) | no Rust-specific tutorials; no hosted documentation per released version |
 | Engineering | CI on Linux (x86_64, arm64), macOS and Windows; Miri, fuzzing, API checks, weekly cross-validation and benchmark tracking; Trusted Publishing (1.2) | no coverage measurement; fuzzing only of the parsers and deserialisers |
 
@@ -383,12 +390,229 @@ random circuits, and found no wrong result there. It found:
 * generators that allocated gigabytes before reaching the operation
   limit.
 
+### 1.9 — Matrix-product states (delivered, release 1.6.0)
+
+Use case: circuits with little entanglement on far more qubits than a
+state vector holds — Trotterized dynamics of spin chains, shallow QAOA on
+rings and other sparse graphs, walk and Hamiltonian-simulation circuits —
+with a stated bound on the truncation error instead of a silent
+approximation.
+
+| Deliverable | Delivered | Left for later |
+|---|---|---|
+| MPS simulator | states of up to 65 536 qubits in mixed canonical form, with a bond-dimension limit and a truncation cutoff; any gate of the gate set and any unitary on up to 8 qubits, controls included, routed by swaps to adjacent sites; consecutive gates on the same qubits fused | faster splits at large bond dimension (randomized range finders); folding rings so that the closing edge stays local; time-evolving block decimation for Hamiltonians directly |
+| Error accounting | the discarded weight of every split, measured exactly, and a rigorous lower bound on the fidelity with the exactly prepared state | — |
+| Readout | Pauli strings, `PauliSum`s and term lists; exact sampling of all qubits; amplitudes; measurement and reset; entanglement entropy at every bond; conversion to a state vector up to 24 qubits | — |
+| Interfaces | `metatron_qso::mps` in Rust, `MatrixProductState` and `Program.sample(method="mps")` in Python, `qso qasm --mps --max-bond` | the WASM package and the browser playground |
+
+Splits use the Hermitian eigendecomposition of a Gram matrix and a
+Householder QR instead of nalgebra's complex SVD, which reconstructs
+rank-deficient matrices with errors of several percent.
+
+Validation:
+
+* 120 random circuits on 1 to 12 qubits, with every gate kind and random
+  controlled unitaries, against the state-vector simulator: amplitudes,
+  expectation values and bond entropies agree, and with truncation the
+  true fidelity is never below the reported bound;
+* a Trotterized XX chain of 100 qubits against the exact free-fermion
+  evolution of the same circuit: ⟨Z_j⟩ and ⟨Z_i Z_j⟩ (Wick's theorem) to
+  10⁻⁸;
+* QAOA on a ring of 100 nodes with angles optimised on a ring of 10:
+  (2p + 1)/(2p + 2) for p = 1, 2, 3 to 10⁻⁶;
+* GHZ states on 2000 qubits with bond dimension 2;
+* sampling, measurement and reset follow the Born rule.
+
+An independent review checked 600 random circuits with every gate kind
+against the state vector and 4200 truncated runs against their bounds,
+and found no wrong amplitude and no violated bound there. It found:
+
+* programs that measured after a truncation in some shots and not in
+  others reported the bound of the others;
+* the discarded weight, computed as 1 − ‖F‖²/‖M‖², charged every exact
+  split about 10⁻⁸ in distance, so long exact circuits reported bounds
+  below 1 (0.99998 for a star of CNOTs on 2000 qubits); it is now
+  computed from the residual, and the distance without cancellation;
+* angles that overflowed after scaling (θ · 10³⁰⁰) produced a NaN state
+  with a bound of 1;
+* sampling memory grew with shots × qubits beyond any limit, and the
+  work limit of programs ignored the bodies of `if` statements;
+* a gate's tensor was checked against the memory limit only after it was
+  built, and a failing split left the state half written.
+
+## 4b. Second stage (1.10 to 1.13)
+
+The first stage made every area QSO covers correct and validated. The
+second closes the gaps that the first stage measured but left open,
+in the order of what they block.
+
+### 1.10 — Exact decoding and Stim circuits (delivered, release 1.6.0)
+
+Use case: logical error rates that are those of minimum-weight matching,
+not an approximation of them, on circuits written by Stim or by QSO.
+
+| Deliverable | Delivered | Left for later |
+|---|---|---|
+| Matching decoder | `MatchingDecoder`: Dijkstra distances (cached per detector up to 32 MiB, bounded searches beyond), the boundary through savings b_i + b_j − d_ij, Edmonds' blossom algorithm on integer weights; `Decoder` trait and `logical_error_rate_with`, Python and `qso qec --decoder matching` | correlated (hyperedge) decoding; a sparse-blossom implementation for very large shots (PyMatching is several hundred times faster at d = 17) |
+| Stim circuits | `DetectorCircuit::from_stim`: Clifford gates, measurements and resets in three bases, X/Y/Z and depolarizing noise, detectors, observables, REPEAT blocks; unsupported instructions named in the error | PAULI_CHANNEL, correlated and heralded errors, MPP, feedback |
+| Codes | X-basis memory of the rotated surface code (`MemoryBasis::X`) | lattice surgery, colour codes |
+
+Validation:
+
+* the blossom algorithm against dynamic programming on 4000 random
+  graphs with frequent ties;
+* corrections against enumeration of every error set on 300 random
+  error models, for every syndrome;
+* every single fault, every pair at d = 5 (both bases) and 20 000
+  random triples at d = 7 corrected;
+* predictions against PyMatching on the same error model and syndromes:
+  one of 800 000 differed in the cross-validation;
+* Stim-generated repetition and surface-code circuits reproduce Stim's
+  error models (unit tests with fixtures; the cross-validation at d = 5);
+  exported circuits read back to the same text; a fuzz target for the
+  importer.
+
+An independent review compared the decoder with its own exact reference
+(Dijkstra over node and observable parity, then dynamic programming over
+events) on 240 000 syndromes of 40 000 random models. It also compared it
+with PyMatching up to d = 17, and imported circuits with Stim on 400
+random circuits. It found no wrong result there. It found:
+
+* an error of probability 0, or one so small that (1 − p)/p overflows,
+  set every matching weight to 0; such errors are now left out or get
+  finite weights;
+* deeply nested REPEAT blocks overflowed the stack, and annotations
+  (TICK) inside large blocks were not counted toward the size limit;
+  nesting is now limited to 64 and every annotation counts;
+* the decoder's memory grew with the square of the number of events
+  without a limit; shots needing more than 2²² pairs are now an error;
+* noise without a probability was read as noiseless, and gate arguments
+  were ignored; both are errors now, as in Stim.
+
+### 1.11 — The state-vector core at memory bandwidth (delivered, release 1.6.0)
+
+Use case: the precondition the roadmap sets for a GPU backend, measured
+instead of assumed.
+
+| Deliverable | Delivered | Left for later |
+|---|---|---|
+| Bandwidth reference | `benchmark_report` times every gate on 24 qubits against the fastest in-place pass over the state (one, two or four memory streams per thread) and names the kernels' instruction set | per-kernel numbers on other machines |
+| Kernels | the kernels work on contiguous runs through primitives in AVX (x86-64, detected at run time) and NEON (aarch64), without FMA so that every version rounds as the portable one; diagonal gates read two memory streams; `set_simd` and `simd_level` in Rust and Python | AVX-512; vector paths for two-qubit gates on qubits 0 and 1, which keep element loops |
+| Gradients | the adjoint backward pass blocked like the forward pass, with per-block terms summed in block order | blocked parameter-shift and finite differences |
+
+Measured on the 4-core test machine (BENCHMARKS.md):
+
+* on high qubits, H, RZ, RZZ, the complex U and a dense 4×4 matrix take
+  0.97–1.32 times the reference pass; on qubits 0 and 1, 1.2–1.8 times
+  (the dense 4×4 matrix 2.9 times);
+* circuits of H, RZ and CX layers run 1.2–1.5 times faster than with the
+  1.10 code at 20–24 qubits, layers with RY, RZ, CX and RZZ 1.5–1.9
+  times;
+* an adjoint gradient is 2–3 times faster at 16–20 qubits.
+
+The cores are therefore close to memory bandwidth on whole-register
+gates. Inside cache blocks, the arithmetic now runs in vector registers.
+
+Validation:
+
+* the vector and portable kernels agree bit for bit on every kernel, on
+  small registers and on 17 qubits (native, and for NEON under Miri's
+  aarch64 interpretation; CI also runs the tests on arm64);
+* phase gates leave the amplitudes they do not touch unchanged, signs of
+  zero included;
+* the blocked backward pass equals the plain one to 10⁻¹² on circuits with
+  gates inside and across blocks and controls above them, and Miri checks
+  its unsafe code.
+
+An independent review compared the vector paths with the portable ones
+on random circuits of 1 to 20 qubits over the whole gate set (no bit
+differed), compared states with a dense reference simulator and with the
+1.10 code (bit-identical on 72 random circuits), checked gradients
+against finite differences at 15–17 qubits and determinism for 1 to 7
+threads. It found no memory-safety bug or wrong result. It found that
+phase gates on low qubits multiplied the other half by 1, flipping the
+sign of some zeros (fixed), and descriptions that overstated what the
+equality test covered (corrected, and the test extended).
+
+### 1.12 — Noise learning (delivered, release 1.6.0)
+
+Use case: error mitigation whose noise model comes from data, as on a
+device, not from the simulator's own model.
+
+| Deliverable | Delivered | Left for later |
+|---|---|---|
+| Pauli-channel learning | `learn_layer` fits the sparse Pauli–Lindblad model of a twirled layer of `cx`, `cy`, `cz` and `swap` gates (van den Berg et al., Nat. Phys. 19, 1116 (2023)): one rate per one-qubit Pauli and per two-qubit Pauli on coupled qubits, from the decay of product eigenstates over even depths, measured in the bases of an orthogonal array over a colouring of the coupling graph, with readout twirling, non-negative least squares and standard errors from a bootstrap over the twirled circuits | layers that are not self-inverse; learning beyond the density-matrix limit of 10 qubits; resolving the degeneracy of Paulis the layer exchanges (only their product is learnable; the fit splits it evenly) |
+| Mitigation | `pec_layered` cancels and `pea_layered` amplifies the learned noise in circuits of blocks separated by the layer, the latter with zero-noise extrapolation | inserted Paulis merged into neighbouring gates (they are separate, noiseless when the device has no one-qubit gate noise) |
+
+Validation:
+
+* on a four-qubit device with two-qubit depolarising noise, a coherent
+  phase error on the control qubits and readout errors, all 39 learned
+  rates lie within three standard errors of the exact ones, and PEC with
+  the learned model gives 0.534 ± 0.005 for an exact 0.533 (raw 0.492);
+* unit tests recover known sparse models (also with exactly measured
+  idle qubits), check that PEC with the learned model is unbiased and
+  that amplification extrapolates towards the exact value, check the
+  Pauli conjugation rules against state vectors and NNLS against brute
+  force and rescaled rows.
+
+An independent review confirmed the conjugation rules, the twirls, the
+bases, the decay fit, the bootstrap indexing and the PEC and PEA
+probabilities. It found that the NNLS thresholds were absolute, so that
+exactly measured fidelities (idle qubits without readout errors, whose
+rows have huge weights) could set almost every rate to zero; that
+bootstrap replicas with non-positive means inflated standard errors;
+that one twirl was accepted and gave zero standard errors; and that the
+mitigation functions did not re-check deserialised models. All are
+fixed with tests: relative thresholds with protection against cycling, a
+relative weight floor, robust spreads, at least two twirls, model
+validation. The greedy colouring was replaced by DSatur and the bases by
+orthogonal arrays from GF(3)ᵏ (9 bases up to 4 colours, 27 up to 13).
+
+### 1.13 — Walks beyond static Hamiltonians (delivered, release 1.6.0)
+
+Use case: adiabatic and driven walks, and decoherent discrete-time walks.
+
+| Deliverable | Delivered | Left for later |
+|---|---|---|
+| Time-dependent walks | `DrivenWalk`: H(t) = Σ_j c_j(t)·H_j with Laplacian, adjacency, projector, potential and uniform-projector terms, by the fourth-order commutator-free Magnus integrator with two Krylov exponentials per step, step-size control by step doubling and a step cap for pulsed drives | higher-order Magnus schemes; symmetry-reduced driven walks (the quotient walks of 1.3 with a time-dependent rate); detecting discontinuities of the drive (they must be split by the caller) |
+| Open discrete-time walks | `DecoherentCoinedWalk`: coined walks on density matrices of up to 2048 arcs, with partial measurements of the coin register and of the node after every step | trajectories for larger graphs; dephasing of the line walk |
+
+Validation:
+
+* the local adiabatic search of Roland and Cerf on K₆₄, K₂₅₆ and K₁₀₂₄
+  (ε = 0.1) reaches the marked node with probability 0.99942, 0.99987
+  and 0.99996 at the closed-form running time, a linear schedule over the
+  same time 0.765, 0.525 and 0.315; all six values agree with SciPy's
+  DOP853 on the two-dimensional subspace to 10⁻⁶;
+* halving a fixed step divides the error by 18.5, 16.6 and 16.1 (order
+  four); static walks equal `ContinuousWalk`; step-size control meets
+  tolerances from 10⁻⁴ to 10⁻¹⁰, finishes down to 10⁻¹⁶ and resolves a
+  pulse with `max_step`;
+* with the coin measured every step, the Fourier-coin walk equals the
+  simple random walk (Petersen graph, cube, cycle, Metatron's Cube, to
+  10⁻¹²) and the Grover walk the Markov chain on arcs; steps equal a
+  dense UρU† and keep states positive for every dephasing strength.
+
+An independent review confirmed the Magnus coefficients, nodes and factor
+order (error ratios 16.1–16.4 against a DOP853 reference with strongly
+non-commuting terms), the error estimate and controller exponent, the
+term handling and the Roland–Cerf numbers, which it reproduced
+independently. It found two errors in the decoherent walk: a step
+returned the transpose of UρU†, wrong for complex coins such as the
+Fourier coin of degree three or more, and coin dephasing as first
+defined was not a channel when it was stronger than position dephasing
+(negative probabilities). Both are fixed, with tests that fail on the
+old code. It also found that the step control stalled once it reached
+its minimum step (tolerances below 10⁻¹² or stiff drives ran until
+`max_steps`) and that steps longer than a pulse or across a jump of the
+drive passed unnoticed; the controller was reworked, `max_step` added
+and the behaviour documented.
+
 ### Research track (later)
 
-Matrix-product-state simulation for low-entanglement circuits and a GPU
-backend through `wgpu`. Each is a project of its own; they start only with
-a clear use case, and a GPU backend only after the CPU core is close to
-memory bandwidth.
+A GPU backend through `wgpu`: it starts only with a clear use case and
+after the CPU core is close to memory bandwidth.
 
 ## 5. Order and reasoning
 
@@ -407,6 +631,18 @@ memory bandwidth.
 6. **1.7 and 1.8: stabilizers before error correction.** Error-correction
    experiments need the stabilizer simulator; graph states connect it to
    QSO's graphs. Both ship as one release.
+7. **1.9: matrix-product states** from the research track: they need no
+   new dependency (splits use nalgebra's Hermitian eigensolver), they
+   reach the large chains and sparse graphs that QSO's walks and QAOA
+   work on, and free fermions and the QAOA ring formula give exact
+   references far beyond 34 qubits.
+8. **1.10: exact decoding first in the second stage.** The accuracy cost
+   of union-find is measured and visible; matching removes it, and
+   PyMatching gives a shot-by-shot reference. Importing Stim circuits
+   lets the cross-validation use Stim's own generated circuits.
+9. **1.11: performance** next, because a GPU backend waits for it.
+10. **1.12 and 1.13: noise learning and driven walks**, each closing a gap
+    of the first stage's table.
 
 ## 6. Measures of success
 
@@ -434,12 +670,15 @@ Taken (October 2026):
   it needs no dependency, it has exact references (the state-vector
   simulator, closed forms, enumeration), and graph states and
   error-correcting codes are graph-structured quantum computing.
-  Matrix-product states and a GPU backend wait.
+  Matrix-product states follow in 1.9; a GPU backend waits.
 * Decoding starts with union-find, not minimum-weight matching: it is
   short, has no dependency and runs in almost linear time. Its logical
   error rates are reported beside PyMatching's, so its accuracy cost is
   visible. Error models and circuits interoperate with Stim through its
   text format, not through a binding.
+* Second stage (October 2026): exact decoding (1.10), the state-vector
+  core at memory bandwidth (1.11), noise learning (1.12), driven and open
+  walks (1.13). Finished milestones are released together.
 * The browser playground stays, because it costs little to maintain: it
   is plain HTML and JavaScript without dependencies or a build step, it
   uses only the npm package's JSON interface, which the package's tests

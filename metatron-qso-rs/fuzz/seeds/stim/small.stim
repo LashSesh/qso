@@ -1,0 +1,10 @@
+R 0 1
+REPEAT 2 {
+  H 0
+  CX 0 1
+  DEPOLARIZE2(0.01) 0 1
+  MR(0.02) 1
+  DETECTOR rec[-1]
+}
+MX 0
+OBSERVABLE_INCLUDE(0) rec[-1]

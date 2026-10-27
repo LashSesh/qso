@@ -31,7 +31,7 @@ pub struct MatchingEdge {
     pub observables: u64,
     /// Length of the edge in growth: its weight ln((1 − p)/p), or 0 for
     /// p ≥ 1/2.
-    length: f64,
+    pub(crate) length: f64,
 }
 
 /// Detectors as nodes (plus a boundary node), errors as edges.
@@ -39,14 +39,14 @@ pub struct MatchingEdge {
 pub struct MatchingGraph {
     n_detectors: usize,
     edges: Vec<MatchingEdge>,
-    adjacency: Vec<Vec<usize>>,
+    pub(crate) adjacency: Vec<Vec<usize>>,
     /// Errors that flip observables but no detector: undetectable.
     undetectable: Vec<(f64, u64)>,
 }
 
 impl MatchingGraph {
-    /// The matching graph of a detector error model; every error must
-    /// flip at most two detectors (see the `decompose` option of
+    /// The matching graph of a detector error model (errors of probability
+    /// 0 are left out); every error must flip at most two detectors (see the `decompose` option of
     /// [`detector_error_model`](super::dem::detector_error_model)).
     pub fn from_dem(dem: &DetectorErrorModel) -> Result<Self> {
         let n = dem.n_detectors;
@@ -83,7 +83,13 @@ impl MatchingGraph {
                     format!("{p} is not a probability"),
                 ));
             }
-            let length = if p >= 0.5 { 0.0 } else { ((1.0 - p) / p).ln() };
+            if p == 0.0 {
+                // An error that never happens is no edge.
+                continue;
+            }
+            // ln(1 − p) − ln p stays finite for subnormal p, where
+            // (1 − p)/p overflows.
+            let length = if p >= 0.5 { 0.0 } else { (-p).ln_1p() - p.ln() };
             edges.push(MatchingEdge {
                 a,
                 b,

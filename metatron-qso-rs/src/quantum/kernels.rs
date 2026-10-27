@@ -14,7 +14,22 @@ use num_complex::Complex64 as C64;
 
 use super::circuit::Instruction;
 use super::gates::{GateKind, dmatrix_1q, dmatrix_2q, matrix_1q, matrix_2q};
-use crate::parallel::{CHUNK, SyncPtr, for_each_index, for_each_item, for_each_mut, for_each_pair};
+use super::simd::{
+    mat2_runs, mat2_runs_real, mat2_strided, mat2_strided_real, mat4_runs, scale_run,
+    scale_upper_strided, scale2_strided,
+};
+use crate::parallel::{
+    CHUNK, SyncPtr, for_each_chunk, for_each_chunk_pair, for_each_index, for_each_item,
+    for_each_mut, for_each_pair, for_each_pair_runs,
+};
+
+/// Runs shorter than this are handled element by element: the per-run
+/// overhead would outweigh the vector arithmetic.
+const MIN_RUN: usize = 4;
+
+/// Pieces of the two runs of a diagonal gate alternate in this many
+/// amplitudes, so that memory is read in two streams.
+const INTERLEAVE: usize = 512;
 
 /// Insert a zero bit at position `pos` of `k`.
 #[inline(always)]
@@ -60,6 +75,28 @@ fn sorted_positions(qubits: &[usize], controls: usize, len: usize) -> Vec<usize>
     pos
 }
 
+/// Call `f(start, len)` on the runs of the subspace where the bits at the
+/// (validated, sorted) `positions` equal those of `fixed`: they have length
+/// `2^positions[0]` and are split into pieces of at most `CHUNK`. Distinct
+/// calls address disjoint ranges.
+fn for_each_run<F>(n_amps: usize, positions: &[usize], fixed: usize, f: F)
+where
+    F: Fn(usize, usize) + Sync + Send,
+{
+    let low = positions[0];
+    let run = 1usize << low;
+    let piece = run.min(CHUNK);
+    let pieces_per_run = run / piece;
+    let runs = n_amps >> (positions.len() + low);
+    for_each_item(runs * pieces_per_run, n_amps, CHUNK / piece, move |w| {
+        let (r, k) = (w / pieces_per_run, w % pieces_per_run);
+        f(
+            (insert_zeros(r << low, positions) | fixed) + k * piece,
+            piece,
+        );
+    });
+}
+
 /// Apply a 2×2 matrix to `target`, restricted to basis states whose bits in
 /// `controls` (a bit mask) are all 1.
 pub(crate) fn apply_1q(amps: &mut [C64], target: usize, controls: usize, m: &[C64; 4]) {
@@ -71,48 +108,74 @@ pub(crate) fn apply_1q(amps: &mut [C64], target: usize, controls: usize, m: &[C6
             1usize << target < amps.len(),
             "target {target} outside the register"
         );
-        // Contiguous, vectorisable fast paths for uncontrolled gates:
-        // diagonal matrices (RZ) scale each half without branching, real
-        // matrices (H, RY) need two real products per amplitude instead of
-        // two complex ones.
+        // Contiguous runs for uncontrolled gates (target 0: adjacent
+        // pairs): diagonal matrices (RZ) scale each half, real matrices
+        // (H, RY) need two real products per amplitude instead of two
+        // complex ones. Below CHUNK, every chunk holds whole blocks and is handled in
+        // one call; above, runs of both halves are handled in step.
+        let stride = 1usize << target;
+        let small = stride < CHUNK;
         if m[1] == C64::new(0.0, 0.0) && m[2] == C64::new(0.0, 0.0) {
             let (d0, d1) = (m[0], m[3]);
-            for_each_pair(amps, 1 << target, move |a, b| {
-                *a *= d0;
-                *b *= d1;
-            });
+            if small {
+                for_each_chunk(amps, move |_, c| scale2_strided(c, stride, d0, d1));
+            } else {
+                for_each_pair_runs(amps, stride, move |a, b| {
+                    for (x, y) in a.chunks_mut(INTERLEAVE).zip(b.chunks_mut(INTERLEAVE)) {
+                        scale_run(x, d0);
+                        scale_run(y, d1);
+                    }
+                });
+            }
             return;
         }
         if m.iter().all(|z| z.im == 0.0) {
-            let [a00, a01, a10, a11] = m.map(|z| z.re);
-            for_each_pair(amps, 1 << target, move |a, b| {
-                let (x, y) = (*a, *b);
-                *a = x * a00 + y * a01;
-                *b = x * a10 + y * a11;
-            });
+            let r = m.map(|z| z.re);
+            if small {
+                for_each_chunk(amps, move |_, c| mat2_strided_real(c, stride, &r));
+            } else {
+                for_each_pair_runs(amps, stride, move |a, b| mat2_runs_real(a, b, &r));
+            }
             return;
         }
-        for_each_pair(amps, 1 << target, move |a, b| {
-            let (x, y) = (*a, *b);
-            *a = m[0] * x + m[1] * y;
-            *b = m[2] * x + m[3] * y;
-        });
+        if small {
+            for_each_chunk(amps, move |_, c| mat2_strided(c, stride, &m));
+        } else {
+            for_each_pair_runs(amps, stride, move |a, b| mat2_runs(a, b, &m));
+        }
         return;
     }
     let positions = sorted_positions(&[target], controls, amps.len());
-    let count = amps.len() >> positions.len();
     let bit = 1usize << target;
+    let len = amps.len();
     let ptr = SyncPtr::new(amps);
-    for_each_index(count, move |k| {
-        let i0 = insert_zeros(k, &positions) | controls;
-        let i1 = i0 | bit;
-        // SAFETY: distinct `k` map to disjoint index pairs (i0, i1).
+    if 1usize << positions[0] < MIN_RUN {
+        let count = len >> positions.len();
+        for_each_index(count, move |k| {
+            let i0 = insert_zeros(k, &positions) | controls;
+            let i1 = i0 | bit;
+            // SAFETY: distinct `k` map to disjoint index pairs (i0, i1).
+            unsafe {
+                let p = ptr.get();
+                let a = *p.add(i0);
+                let b = *p.add(i1);
+                *p.add(i0) = m[0] * a + m[1] * b;
+                *p.add(i1) = m[2] * a + m[3] * b;
+            }
+        });
+        return;
+    }
+    for_each_run(len, &positions, controls, move |start, n| {
+        // SAFETY: the run [start, start + n) has the target bit clear (its
+        // bits at and above the lowest position are fixed), its partner
+        // run lies `bit ≥ n` further on, both are inside the register
+        // (positions were validated), and distinct calls address disjoint
+        // runs.
         unsafe {
             let p = ptr.get();
-            let a = *p.add(i0);
-            let b = *p.add(i1);
-            *p.add(i0) = m[0] * a + m[1] * b;
-            *p.add(i1) = m[2] * a + m[3] * b;
+            let lo = std::slice::from_raw_parts_mut(p.add(start), n);
+            let hi = std::slice::from_raw_parts_mut(p.add(start + bit), n);
+            mat2_runs(lo, hi, &m);
         }
     });
 }
@@ -128,28 +191,43 @@ pub(crate) fn apply_2q(
     debug_assert!(amps.len().is_power_of_two());
     debug_assert_ne!(first, second);
     let positions = sorted_positions(&[first, second], controls, amps.len());
-    let count = amps.len() >> positions.len();
     let bf = 1usize << first;
     let bs = 1usize << second;
+    let len = amps.len();
     let ptr = SyncPtr::new(amps);
     let m = *m;
-    for_each_index(count, move |k| {
-        let base = insert_zeros(k, &positions) | controls;
+    if 1usize << positions[0] < MIN_RUN {
+        let count = len >> positions.len();
+        for_each_index(count, move |k| {
+            let base = insert_zeros(k, &positions) | controls;
+            // Local order |x_first x_second⟩ → local index 2·x_first + x_second.
+            let idx = [base, base | bs, base | bf, base | bf | bs];
+            // SAFETY: distinct `k` map to disjoint index quadruples.
+            unsafe {
+                let p = ptr.get();
+                let v = [
+                    *p.add(idx[0]),
+                    *p.add(idx[1]),
+                    *p.add(idx[2]),
+                    *p.add(idx[3]),
+                ];
+                for r in 0..4 {
+                    let row = &m[4 * r..4 * r + 4];
+                    *p.add(idx[r]) = row[0] * v[0] + row[1] * v[1] + row[2] * v[2] + row[3] * v[3];
+                }
+            }
+        });
+        return;
+    }
+    for_each_run(len, &positions, controls, move |start, n| {
         // Local order |x_first x_second⟩ → local index 2·x_first + x_second.
-        let idx = [base, base | bs, base | bf, base | bf | bs];
-        // SAFETY: distinct `k` map to disjoint index quadruples.
+        // SAFETY: the four runs differ in bits at or above the lowest
+        // position, so they are disjoint (each of length n ≤ 2^lowest), in
+        // the register, and disjoint from those of other calls.
         unsafe {
             let p = ptr.get();
-            let v = [
-                *p.add(idx[0]),
-                *p.add(idx[1]),
-                *p.add(idx[2]),
-                *p.add(idx[3]),
-            ];
-            for r in 0..4 {
-                let row = &m[4 * r..4 * r + 4];
-                *p.add(idx[r]) = row[0] * v[0] + row[1] * v[1] + row[2] * v[2] + row[3] * v[3];
-            }
+            let run = |off: usize| std::slice::from_raw_parts_mut(p.add(start + off), n);
+            mat4_runs([run(0), run(bs), run(bf), run(bf | bs)], &m);
         }
     });
 }
@@ -287,17 +365,66 @@ pub(crate) fn apply_phase_on_mask(amps: &mut [C64], mask: usize, phase: C64) {
     if mask.is_power_of_two() {
         // Uncontrolled phase gate: scale the upper half of every block.
         assert!(mask < amps.len(), "qubit outside the register");
-        for_each_pair(amps, mask, move |_, b| *b *= phase);
+        if mask < CHUNK {
+            for_each_chunk(amps, move |_, c| scale_upper_strided(c, mask, phase));
+        } else {
+            for_each_pair_runs(amps, mask, move |_, b| scale_run(b, phase));
+        }
         return;
     }
     let positions = sorted_positions(&[], mask, amps.len());
-    let count = amps.len() >> positions.len();
+    let len = amps.len();
     let ptr = SyncPtr::new(amps);
-    for_each_index(count, move |k| {
-        let i = insert_zeros(k, &positions) | mask;
-        // SAFETY: distinct `k` map to distinct indices.
+    if 1usize << positions[0] < MIN_RUN {
+        let count = len >> positions.len();
+        for_each_index(count, move |k| {
+            let i = insert_zeros(k, &positions) | mask;
+            // SAFETY: distinct `k` map to distinct indices.
+            unsafe {
+                *ptr.get().add(i) *= phase;
+            }
+        });
+        return;
+    }
+    for_each_run(len, &positions, mask, move |start, n| {
+        // SAFETY: distinct calls address disjoint runs inside the register.
         unsafe {
-            *ptr.get().add(i) *= phase;
+            scale_run(
+                std::slice::from_raw_parts_mut(ptr.get().add(start), n),
+                phase,
+            );
+        }
+    });
+}
+
+/// Multiply each run of `2^low` amplitudes by `phase(start)` (`None`:
+/// leave it), for a diagonal whose phase depends only on bits at or above
+/// `low`.
+fn apply_diagonal_runs<F>(amps: &mut [C64], low: usize, phase: F)
+where
+    F: Fn(usize) -> Option<C64> + Sync + Send,
+{
+    let run = 1usize << low;
+    if run < MIN_RUN || amps.len() < 2 * CHUNK {
+        for_each_mut(amps, |i, a| {
+            if let Some(z) = phase(i) {
+                *a *= z;
+            }
+        });
+        return;
+    }
+    // The lower and upper halves in step: two streams through memory.
+    let half = amps.len() / 2;
+    let piece = run.min(INTERLEAVE);
+    for_each_chunk_pair(amps, move |offset, lo, hi| {
+        for (j, (a, b)) in lo.chunks_mut(piece).zip(hi.chunks_mut(piece)).enumerate() {
+            let i = offset + j * piece;
+            if let Some(z) = phase(i) {
+                scale_run(a, z);
+            }
+            if let Some(z) = phase(half + i) {
+                scale_run(b, z);
+            }
         }
     });
 }
@@ -359,13 +486,14 @@ pub(crate) fn apply_instruction_masked(
             let same = cj(C64::from_polar(1.0, -half));
             let diff = cj(C64::from_polar(1.0, half));
             let mask = (1usize << t[0]) | (1usize << t[1]);
-            apply_diagonal(amps, move |i| {
+            let low = (mask | controls).trailing_zeros() as usize;
+            apply_diagonal_runs(amps, low, move |i| {
                 if i & controls != controls {
-                    C64::new(1.0, 0.0)
+                    None
                 } else if (i & mask).count_ones().is_multiple_of(2) {
-                    same
+                    Some(same)
                 } else {
-                    diff
+                    Some(diff)
                 }
             });
         }
@@ -402,7 +530,19 @@ pub(crate) fn apply_instruction_derivative(
     angles: &[f64],
     which: usize,
 ) {
-    let controls = inst.control_mask();
+    apply_instruction_derivative_masked(amps, inst, angles, which, inst.control_mask());
+}
+
+/// [`apply_instruction_derivative`] with the control mask given explicitly
+/// (the instruction's own controls ignored), for a block of a larger
+/// register whose high control bits are set.
+pub(crate) fn apply_instruction_derivative_masked(
+    amps: &mut [C64],
+    inst: &Instruction,
+    angles: &[f64],
+    which: usize,
+    controls: usize,
+) {
     match inst.kind.num_targets() {
         Some(1) => apply_1q(
             amps,
@@ -431,6 +571,122 @@ pub(crate) fn apply_instruction_derivative(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Apply the same gates with the vector and the portable primitives:
+    /// the results must agree bit for bit (on processors without AVX both
+    /// runs take the portable path).
+    #[test]
+    fn vector_and_portable_kernels_agree_bit_for_bit() {
+        let mut rng = crate::Rng::seed_from_u64(11);
+        let mut c = || C64::new(rng.normal(), rng.normal());
+        let m2: [C64; 4] = std::array::from_fn(|_| c());
+        let m4: [C64; 16] = std::array::from_fn(|_| c());
+        let real = m2.map(|z| C64::new(z.re, 0.0));
+        let diag = [m2[0], C64::new(0.0, 0.0), C64::new(0.0, 0.0), m2[3]];
+        let phase = m2[1];
+        let rzz = Instruction {
+            kind: GateKind::RZZ,
+            targets: vec![0, 1],
+            controls: vec![],
+            params: vec![],
+            matrix: None,
+        };
+        let cases = |amps: &mut [C64], n: usize| {
+            for t in 0..n {
+                apply_1q(amps, t, 0, &m2);
+                apply_1q(amps, t, 0, &real);
+                apply_1q(amps, t, 0, &diag);
+                apply_phase_on_mask(amps, 1 << t, phase);
+                for u in (0..n).filter(|&u| u != t) {
+                    apply_1q(amps, t, 1 << u, &m2);
+                    apply_2q(amps, t, u, 0, &m4);
+                    apply_phase_on_mask(amps, (1 << t) | (1 << u), phase);
+                    // Miri perturbs cos and sin (the RZZ phases) on every
+                    // call, so the two runs would differ there.
+                    if !cfg!(miri) {
+                        let inst = Instruction {
+                            targets: vec![t, u],
+                            ..rzz.clone()
+                        };
+                        apply_instruction(amps, &inst, &[0.7], false, 0);
+                    }
+                    if let Some(w) = (0..n).find(|&w| w != t && w != u) {
+                        apply_2q(amps, t, u, 1 << w, &m4);
+                    }
+                }
+            }
+        };
+        // Large registers: the parallel paths, runs longer than CHUNK
+        // (strides from 2¹²), and the two-stream diagonal.
+        let large = |amps: &mut [C64], n: usize| {
+            for t in [0, 1, 5, 12, 13, 16] {
+                apply_1q(amps, t, 0, &m2);
+                apply_1q(amps, t, 0, &real);
+                apply_1q(amps, t, 0, &diag);
+                apply_phase_on_mask(amps, 1 << t, phase);
+                apply_1q(amps, t, 1 << ((t + 3) % n), &m2);
+                apply_2q(amps, t, (t + 1) % n, 0, &m4);
+                let inst = Instruction {
+                    targets: vec![t, (t + 5) % n],
+                    ..rzz.clone()
+                };
+                if !cfg!(miri) {
+                    apply_instruction(amps, &inst, &[0.7], false, 0);
+                }
+            }
+        };
+        // Under Miri (portable only) small registers exercise the same
+        // run code; 17 qubits reach the parallel paths natively.
+        let sizes: &[(usize, u64)] = if cfg!(miri) {
+            &[(1, 1), (2, 2), (4, 3)]
+        } else {
+            &[(1, 1), (2, 2), (3, 3), (5, 4), (9, 5), (17, 6)]
+        };
+        for &(n, seed) in sizes {
+            let start = random_state(n, seed);
+            let mut fast = start.clone();
+            let mut slow = start;
+            crate::quantum::set_simd(true);
+            if n < 17 {
+                cases(&mut fast, n);
+            } else {
+                large(&mut fast, n);
+            }
+            crate::quantum::set_simd(false);
+            if n < 17 {
+                cases(&mut slow, n);
+            } else {
+                large(&mut slow, n);
+            }
+            crate::quantum::set_simd(true);
+            for (a, b) in fast.iter().zip(&slow) {
+                assert_eq!(
+                    (a.re.to_bits(), a.im.to_bits()),
+                    (b.re.to_bits(), b.im.to_bits()),
+                    "n = {n}"
+                );
+            }
+        }
+    }
+
+    /// A phase gate leaves the amplitudes it does not touch exactly as they
+    /// were, signs of zero included, on low and high qubits alike.
+    #[test]
+    fn phase_gates_leave_the_other_half_untouched() {
+        let phase = C64::new(0.6, 0.8);
+        for n in [1usize, 14] {
+            for t in [0, n - 1] {
+                let mut amps = vec![C64::new(-0.0, -0.6); 1 << n];
+                apply_phase_on_mask(&mut amps, 1 << t, phase);
+                for (i, a) in amps.iter().enumerate() {
+                    if i & (1 << t) == 0 {
+                        assert!(a.re == 0.0 && a.re.is_sign_negative(), "n {n}, t {t}");
+                        assert_eq!(a.im, -0.6);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn insert_zero_places_bits() {

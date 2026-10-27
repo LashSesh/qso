@@ -18,7 +18,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{QsoError, Result};
 use crate::linalg::inner;
+use crate::parallel::{SyncPtr, map_tasks};
+use crate::quantum::Instruction;
 use crate::quantum::kernels;
+use crate::quantum::plan::BLOCK_QUBITS;
 use crate::quantum::{Circuit, GateKind, MAX_QUBITS, Param, PauliSum, StateVector};
 
 /// How gradients are computed.
@@ -187,8 +190,22 @@ fn adjoint(
 pub(crate) fn adjoint_with<F>(
     circuit: &Circuit,
     theta: &[f64],
+    phi: Vec<C64>,
+    apply: F,
+) -> (f64, Vec<f64>)
+where
+    F: Fn(&[C64], &mut [C64]),
+{
+    adjoint_with_block(circuit, theta, phi, apply, BLOCK_QUBITS)
+}
+
+/// [`adjoint_with`] with blocks of `2^c` amplitudes.
+fn adjoint_with_block<F>(
+    circuit: &Circuit,
+    theta: &[f64],
     mut phi: Vec<C64>,
     apply: F,
+    c: usize,
 ) -> (f64, Vec<f64>)
 where
     F: Fn(&[C64], &mut [C64]),
@@ -197,8 +214,26 @@ where
     apply(&phi, &mut lambda);
     let value = inner(&phi, &lambda).re;
     let mut grad = vec![0.0; theta.len()];
-    let mut mu = vec![C64::new(0.0, 0.0); phi.len()];
-    for inst in circuit.instructions().iter().rev() {
+    let mut mu = Vec::new();
+    // Gates whose targets lie in a cache block are differentiated block by
+    // block (when the register is larger than a block); the others one at
+    // a time over the whole register.
+    let blocked = phi.len() > 1 << c;
+    let local = |inst: &Instruction| blocked && inst.targets.iter().all(|&t| t < c);
+    let insts = circuit.instructions();
+    let mut k = insts.len();
+    while k > 0 {
+        if local(&insts[k - 1]) {
+            let mut j = k - 1;
+            while j > 0 && local(&insts[j - 1]) {
+                j -= 1;
+            }
+            backward_blocked(&insts[j..k], theta, &mut phi, &mut lambda, c, &mut grad);
+            k = j;
+            continue;
+        }
+        k -= 1;
+        let inst = &insts[k];
         let angles = inst.angles(theta);
         let inverse = inst.inverse();
         let inv_angles = inverse.angles(theta);
@@ -207,7 +242,8 @@ where
         if inst.is_parametrised() {
             for (slot, param) in inst.params.iter().enumerate() {
                 if let Param::Symbol(p) = param {
-                    mu.copy_from_slice(&phi);
+                    mu.clear();
+                    mu.extend_from_slice(&phi);
                     kernels::apply_instruction_derivative(&mut mu, inst, &angles, slot);
                     grad[p.index] += 2.0 * p.scale * inner(&lambda, &mu).re;
                 }
@@ -217,6 +253,101 @@ where
         kernels::apply_instruction(&mut lambda, &inverse, &inv_angles, false, 0);
     }
     (value, grad)
+}
+
+/// The backward pass over `run` (gates whose targets lie below qubit `c`)
+/// block by block: each block of `φ` and `λ` stays in cache while every
+/// gate of the run is undone and differentiated on it. The gradient terms
+/// are summed over blocks in block order, so the result does not depend
+/// on the number of threads.
+fn backward_blocked(
+    run: &[Instruction],
+    theta: &[f64],
+    phi: &mut [C64],
+    lambda: &mut [C64],
+    c: usize,
+    grad: &mut [f64],
+) {
+    struct Step<'a> {
+        inst: &'a Instruction,
+        angles: Vec<f64>,
+        inverse: Instruction,
+        inv_angles: Vec<f64>,
+        /// (parameter slot, parameter index, scale) of each derivative.
+        slots: Vec<(usize, usize, f64)>,
+        low: usize,
+        high: usize,
+    }
+    let block = 1usize << c;
+    let steps: Vec<Step<'_>> = run
+        .iter()
+        .rev()
+        .map(|inst| {
+            let inverse = inst.inverse();
+            let controls = inst.control_mask();
+            Step {
+                inst,
+                angles: inst.angles(theta),
+                inv_angles: inverse.angles(theta),
+                inverse,
+                slots: inst
+                    .params
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(slot, p)| match p {
+                        Param::Symbol(s) => Some((slot, s.index, s.scale)),
+                        Param::Value(_) => None,
+                    })
+                    .collect(),
+                low: controls & (block - 1),
+                high: controls & !(block - 1),
+            }
+        })
+        .collect();
+    let (pp, lp) = (SyncPtr::new(phi), SyncPtr::new(lambda));
+    let partials: Vec<Vec<f64>> = map_tasks(phi.len() / block, |k| {
+        let base = k * block;
+        // SAFETY: distinct `k` address disjoint blocks of both registers.
+        let (p, l) = unsafe {
+            (
+                std::slice::from_raw_parts_mut(pp.get().add(base), block),
+                std::slice::from_raw_parts_mut(lp.get().add(base), block),
+            )
+        };
+        let mut mu = Vec::new();
+        let mut out = Vec::new();
+        for s in &steps {
+            let on = base & s.high == s.high;
+            if on {
+                kernels::apply_instruction_masked(p, &s.inverse, &s.inv_angles, false, 0, s.low);
+            }
+            for &(slot, _, _) in &s.slots {
+                if on {
+                    mu.clear();
+                    mu.extend_from_slice(p);
+                    kernels::apply_instruction_derivative_masked(
+                        &mut mu, s.inst, &s.angles, slot, s.low,
+                    );
+                    out.push(inner(l, &mu).re);
+                } else {
+                    // The derivative vanishes where the controls are off.
+                    out.push(0.0);
+                }
+            }
+            if on {
+                kernels::apply_instruction_masked(l, &s.inverse, &s.inv_angles, false, 0, s.low);
+            }
+        }
+        out
+    });
+    let mut t = 0;
+    for s in &steps {
+        for &(_, index, scale) in &s.slots {
+            let total: f64 = partials.iter().map(|v| v[t]).sum();
+            grad[index] += 2.0 * scale * total;
+            t += 1;
+        }
+    }
 }
 
 fn parameter_shift(
@@ -283,6 +414,48 @@ fn parameter_shift(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_blocked_backward_pass_matches_the_plain_one() {
+        use super::*;
+        // Blocks of 2³ on 7 qubits: gates inside and across blocks,
+        // controls inside and above, gates with several parameters.
+        let n = 7;
+        let mut c = Circuit::new(n);
+        let p = c.new_parameters(46);
+        let mut k = 0;
+        let mut next = || {
+            k += 1;
+            p[k - 1]
+        };
+        for layer in 0..2 {
+            for q in 0..n {
+                c.ry(q, next()).rz(q, next());
+            }
+            c.u(1, next(), next(), next());
+            c.crx(6, 1, next()).crx(0, 2, next()).cry(5, 4, next());
+            for q in 0..n - 1 {
+                c.cx(q, q + 1);
+            }
+            c.rzz(0, 1, next()).rzz(2, 3, next()).rx(5, next());
+            if layer == 0 {
+                c.h(6).cz(6, 0);
+            }
+        }
+        let theta: Vec<f64> = (0..46).map(|j| 0.1 + 0.37 * j as f64).collect();
+        let h: PauliSum = "Z0 Z1 + 0.5 X2 Y6 - 0.3 Y3 Z4 + 0.2 X5".parse().unwrap();
+        let mut psi = StateVector::zero(n);
+        psi.apply_circuit(&c, &theta).unwrap();
+        let phi = psi.into_amplitudes();
+        let apply = |x: &[C64], y: &mut [C64]| h.apply_amplitudes(x, y);
+        let (v0, g0) = adjoint_with_block(&c, &theta, phi.clone(), apply, 20);
+        let (v1, g1) = adjoint_with_block(&c, &theta, phi, apply, 3);
+        assert_eq!(v0, v1);
+        for (a, b) in g0.iter().zip(&g1) {
+            assert!((a - b).abs() < 1e-12, "{a} vs {b}");
+        }
+        assert!(g0.iter().filter(|x| x.abs() > 1e-6).count() > 20);
+    }
+
     #[test]
     fn batches_match_single_evaluations() {
         use crate::algorithms::ansatz::{Entanglement, efficient_su2};

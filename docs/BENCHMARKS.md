@@ -12,7 +12,9 @@ with `cargo bench -p metatron-qso-rs`. Numbers depend on the machine; run
 the report on yours before comparing.
 
 **Machine for the numbers below:** cloud VM, 4 vCPU Intel Xeon @ 2.10 GHz
-(AVX-512), 15 GB RAM, Linux 6.18, rustc 1.97.0, QSO 1.3.0, release profile
+(AVX-512), 15 GB RAM, Linux 6.18, rustc 1.97.0, QSO 1.6.0 as of
+milestone 1.11 (AVX kernels; 1.12 and 1.13 add modules these benchmarks do
+not use), release profile
 (`opt-level = 3`, thin LTO, `codegen-units = 1`), default features (rayon
 parallelism). A comparison with Qiskit Aer, Qulacs, Cirq, PennyLane
 Lightning and The Walrus on the same machine is
@@ -27,54 +29,71 @@ tables show one complete run.
 
 | qubits | gates/layer | time/layer | ns per gate·amplitude |
 |---:|---:|---:|---:|
-| 10 | 29 | 14.4 µs | 0.485 |
-| 14 | 41 | 319.8 µs | 0.476 |
-| 16 | 47 | 546.4 µs | 0.177 |
-| 18 | 53 | 2.20 ms | 0.159 |
-| 20 | 59 | 8.72 ms | 0.141 |
-| 22 | 65 | 34.36 ms | 0.126 |
-| 24 | 71 | 210.71 ms | 0.177 |
+| 10 | 29 | 9.8 µs | 0.331 |
+| 14 | 41 | 227.9 µs | 0.339 |
+| 16 | 47 | 1.07 ms | 0.349 |
+| 18 | 53 | 2.59 ms | 0.186 |
+| 20 | 59 | 6.97 ms | 0.113 |
+| 22 | 65 | 45.45 ms | 0.167 |
+| 24 | 71 | 205.84 ms | 0.173 |
 
 ## Cost per gate type (22 qubits, 5 passes over all qubits)
 
 | gate | time per pass | ns per gate·amplitude |
 |---|---:|---:|
-| H | 8.17 ms | 0.089 |
-| RY | 8.44 ms | 0.092 |
-| RZ | 12.07 ms | 0.131 |
-| CX | 7.83 ms | 0.085 |
+| H | 10.07 ms | 0.109 |
+| RY | 8.95 ms | 0.097 |
+| RZ | 7.36 ms | 0.080 |
+| CX | 14.69 ms | 0.159 |
+
+## Kernels against memory bandwidth (24 qubits, all threads)
+
+Reference: the fastest in-place pass over the 256 MiB state (one, two or four streams per thread) takes 29.37 ms on one thread (18.3 GB/s read + write) and 8.68 ms on all threads (61.8 GB/s).
+
+| gate | qubits 0, 1 | × reference | qubits 21, 20 | × reference |
+|---|---:|---:|---:|---:|
+| H | 10.48 ms | 1.21 | 8.46 ms | 0.97 |
+| RZ | 10.51 ms | 1.21 | 10.72 ms | 1.23 |
+| U (complex 2×2) | 12.03 ms | 1.39 | 11.46 ms | 1.32 |
+| CX | 14.01 ms | 1.61 | 4.18 ms | 0.48 |
+| CZ | 12.38 ms | 1.43 | 2.41 ms | 0.28 |
+| CRX | 14.49 ms | 1.67 | 4.51 ms | 0.52 |
+| RZZ | 15.74 ms | 1.81 | 10.40 ms | 1.20 |
+| SWAP | 11.88 ms | 1.37 | 5.24 ms | 0.60 |
+| dense 4×4 | 25.01 ms | 2.88 | 8.53 ms | 0.98 |
 
 ## Gradients (TFIM, 10 qubits, EfficientSU2 with 4 layers = 100 parameters)
 
 | method | time per full gradient |
 |---|---:|
-| adjoint | 465.9 µs |
-| parameter shift | 24.53 ms |
-| finite differences | 22.44 ms |
+| adjoint | 525.1 µs |
+| parameter shift | 24.68 ms |
+| finite differences | 21.00 ms |
+| adjoint, 20 qubits (200 parameters) | 696.53 ms |
 
 ## Batched evaluation (same circuit and Hamiltonian, 256 parameter vectors)
 
 | quantity | one call per vector | one batch call | speed-up |
 |---|---:|---:|---:|
-| expectation values | 26.76 ms | 8.24 ms | 3.2× |
-| values + adjoint gradients | 128.26 ms | 34.27 ms | 3.7× |
+| expectation values | 29.06 ms | 7.68 ms | 3.8× |
+| values + adjoint gradients | 132.35 ms | 43.91 ms | 3.0× |
 
 ## QAOA value + gradient (p = 3, random 3-regular graphs)
 
 | nodes | time |
 |---:|---:|
-| 10 | 231.5 µs |
-| 14 | 4.61 ms |
-| 18 | 35.34 ms |
-| 20 | 128.54 ms |
+| 10 | 120.8 µs |
+| 14 | 2.62 ms |
+| 18 | 27.66 ms |
+| 20 | 106.45 ms |
 
 ## Quantum walks
 
 | case | time |
 |---|---:|
-| Metatron's Cube, P(t) (dense spectral) | 0.4 µs |
-| 100×100 torus (10 000 nodes), P(t = 5) (Krylov) | 78.39 ms |
-| automorphism group of Metatron's Cube (13!) | 2.73 ms |
+| Metatron's Cube, P(t) (dense spectral) | 0.5 µs |
+| 100×100 torus (10 000 nodes), P(t = 5) (Krylov) | 86.65 ms |
+| automorphism group of Metatron's Cube (13!) | 3.03 ms |
 
 ## Validated results (reproduced by this run)
 
@@ -219,10 +238,27 @@ not affected. The technical note (Section 3.8) has the comparison for QSO
 * **Cost per gate type**: uncontrolled real matrices (H, RY) and the
   diagonal RZ have dedicated vectorisable paths; singly controlled X swaps
   contiguous runs of amplitudes (see [ARCHITECTURE.md](ARCHITECTURE.md)).
+* **Kernels against memory bandwidth** (1.11): the reference is the
+  fastest in-place pass over the 24-qubit state with one, two or four
+  memory streams per thread. A gate that reads and writes every amplitude
+  cannot beat 1.0. CX, CZ, CRX and SWAP touch only part of the state and
+  can. On high qubits, H, the dense 4×4 matrix, RZ, RZZ and the complex
+  U run at 0.97–1.32 of the reference. On qubits 0 and 1 the kernels
+  take 1.2–1.8 times the reference. The dense 4×4 matrix on qubits 0 and
+  1 takes 2.9 times, because the two lowest qubits leave no contiguous
+  runs and its element loop is limited by arithmetic.
+* **AVX against the portable kernels** (1.11, same machine, medians of
+  repeated runs): the layer of H, RZ and CX takes 9.8 against 12.9 ms at
+  20 qubits, and a layer of RY, RZ, CX and RZZ 15.7 against 20.4 ms. The
+  1.10 code took 14.6 and 30.3 ms for the same layers. At 24 qubits the
+  layers take 222 and 280 ms, against 264 and 414 ms with the 1.10 code.
 * **Adjoint differentiation** costs about three circuit evaluations for all
   100 parameters, while parameter shift and finite differences need two
   evaluations per parameter. The ratio grows linearly with the parameter
-  count.
+  count. Since 1.11 the backward pass runs block by block on
+  registers larger than a cache block. On 20 qubits with 200 parameters a
+  gradient takes 0.7–0.8 s, against 1.76 s with the 1.10 code (2.9× at
+  16 qubits).
 * **Batched evaluation** runs one parameter vector per thread for
   registers below 16 qubits, where a single evaluation cannot use all
   threads. Run-to-run variation of the speed-up was 2.7–4.4×.

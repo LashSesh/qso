@@ -23,6 +23,7 @@ use num_complex::Complex64 as C64;
 use super::circuit::{Circuit, Instruction};
 use super::gates::{GateKind, matrix_1q};
 use super::kernels::{apply_1q, apply_instruction, apply_instruction_masked, apply_phase_on_mask};
+use super::simd::scale_run;
 
 /// log₂ of the block size in amplitudes (2¹⁴ amplitudes = 256 KiB).
 #[cfg(not(miri))]
@@ -240,7 +241,7 @@ fn local<'a>(op: &Op<'a>, c: usize) -> Option<Local<'a>> {
 }
 
 fn scale(block: &mut [C64], s: C64) {
-    block.iter_mut().for_each(|a| *a *= s);
+    scale_run(block, s);
 }
 
 /// Apply a local operation to the block starting at global index `base`.
@@ -305,10 +306,24 @@ fn apply_local(block: &mut [C64], base: usize, local: &Local<'_>) {
                 scale(block, if odd_high { *diff } else { *same });
                 return;
             }
-            for (i, a) in block.iter_mut().enumerate() {
-                if i & low_controls == low_controls {
-                    let odd = ((i & low_mask).count_ones() % 2 == 1) != odd_high;
-                    *a *= if odd { *diff } else { *same };
+            // The phase is constant on runs below the lowest bit involved.
+            let run = 1usize << (low_mask | low_controls).trailing_zeros();
+            let phase = |i: usize| {
+                let odd = ((i & low_mask).count_ones() % 2 == 1) != odd_high;
+                if odd { *diff } else { *same }
+            };
+            if run < 4 {
+                for (i, a) in block.iter_mut().enumerate() {
+                    if i & low_controls == low_controls {
+                        *a *= phase(i);
+                    }
+                }
+            } else {
+                for (j, part) in block.chunks_mut(run).enumerate() {
+                    let i = j * run;
+                    if i & low_controls == low_controls {
+                        scale_run(part, phase(i));
+                    }
                 }
             }
         }
@@ -346,21 +361,36 @@ pub(crate) fn run_with_block(amps: &mut [C64], circuit: &Circuit, theta: &[f64],
         return;
     }
     let ops = fuse(circuit, theta, c);
+    // Runs of local operations, as ranges of `ops`; a run of one gains
+    // nothing from blocking, and the whole-register kernel streams memory
+    // better. Its result is the same up to the sign of zero amplitudes (a
+    // controlled phase may go through the general 2×2 kernel there).
     let mut run: Vec<Local<'_>> = Vec::new();
-    for op in &ops {
+    let mut first = 0;
+    let flush = |amps: &mut [C64], run: &mut Vec<Local<'_>>, op: &Op<'_>| {
+        match run.len() {
+            0 => {}
+            1 => op.apply_full(amps),
+            _ => apply_run(amps, c, run),
+        }
+        run.clear();
+    };
+    for (k, op) in ops.iter().enumerate() {
         match local(op, c) {
-            Some(l) => run.push(l),
-            None => {
-                if !run.is_empty() {
-                    apply_run(amps, c, &run);
-                    run.clear();
+            Some(l) => {
+                if run.is_empty() {
+                    first = k;
                 }
+                run.push(l);
+            }
+            None => {
+                flush(amps, &mut run, &ops[first]);
                 op.apply_full(amps);
             }
         }
     }
     if !run.is_empty() {
-        apply_run(amps, c, &run);
+        flush(amps, &mut run, &ops[first]);
     }
 }
 

@@ -17,7 +17,9 @@ mod circuit;
 mod discrete;
 mod estimation;
 mod graph;
+mod learning;
 mod mitigation;
+mod mps;
 mod noise;
 mod optimization;
 mod photonics;
@@ -161,6 +163,21 @@ fn py_bitstring(index: usize, n_qubits: usize) -> PyResult<String> {
     Ok(bitstring(index, n_qubits))
 }
 
+/// The instruction set of the amplitude kernels: "avx", "neon" or
+/// "portable".
+#[pyfunction]
+fn simd_level() -> &'static str {
+    metatron_qso::quantum::simd_level()
+}
+
+/// Use the vector kernels where the processor has them (the default) or
+/// the portable ones; results are bit for bit the same. Returns whether
+/// vector kernels are in use.
+#[pyfunction]
+fn set_simd(enabled: bool) -> bool {
+    metatron_qso::quantum::set_simd(enabled)
+}
+
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
@@ -170,6 +187,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
         metatron_qso::noise::MAX_DENSITY_QUBITS,
     )?;
     m.add_function(wrap_pyfunction!(py_bitstring, m)?)?;
+    m.add_function(wrap_pyfunction!(simd_level, m)?)?;
+    m.add_function(wrap_pyfunction!(set_simd, m)?)?;
     graph::register(m)?;
     circuit::register(m)?;
     state::register(m)?;
@@ -180,11 +199,13 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     noise::register(m)?;
     estimation::register(m)?;
     mitigation::register(m)?;
+    learning::register(m)?;
     photonics::register(m)?;
     chemistry::register(m)?;
     simulation::register(m)?;
     optimization::register(m)?;
     stabilizer::register(m)?;
     qec::register(m)?;
+    mps::register(m)?;
     Ok(())
 }

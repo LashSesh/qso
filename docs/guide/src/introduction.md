@@ -26,7 +26,8 @@ reports them in full.
 | [Circuits and states](circuits.md) | Gates, simulation, sampling, observables, OpenQASM |
 | [OpenQASM programs](programs.md) | OpenQASM 2 and 3, mid-circuit measurement, reset, feed-forward |
 | [Stabilizer simulation and graph states](stabilizers.md) | Clifford circuits on thousands of qubits, graph states, local complementation, entanglement from cut-ranks |
-| [Error-correction experiments](qec.md) | Noisy Clifford circuits with detectors, Pauli-frame sampling, detector error models, union-find decoding, repetition and surface-code memory experiments |
+| [Matrix-product states](mps.md) | Circuits with little entanglement on up to 65 536 qubits, with a rigorous bound on the truncation error |
+| [Error-correction experiments](qec.md) | Noisy Clifford circuits with detectors, Pauli-frame sampling, detector error models, union-find and exact matching decoding, repetition and surface-code memory experiments, Stim circuits in and out |
 | [Parameters and gradients](gradients.md) | Symbolic parameters, adjoint and parameter-shift gradients |
 | [Variational algorithms](variational.md) | VQE, QAOA, variational and graph classifiers |
 | [Excited states and state geometry](excited.md) | VQD, SSVQE, quantum Fisher information, natural gradient, imaginary-time evolution |

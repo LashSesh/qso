@@ -1,8 +1,9 @@
 //! Detector circuits, Pauli-frame sampling, detector error models, the
-//! union-find decoder and memory experiments.
+//! union-find and matching decoders and memory experiments.
 
 use metatron_qso::qec::{
-    self, CircuitNoise, DetectorCircuit, DetectorErrorModel, MatchingGraph, Noise, UnionFindDecoder,
+    self, CircuitNoise, Decoder, DecoderKind, DetectorCircuit, DetectorErrorModel, MatchingDecoder,
+    MatchingGraph, MemoryBasis, Noise, UnionFindDecoder,
 };
 use numpy::ndarray::Array2;
 use numpy::{AllowTypeChange, IntoPyArray, PyArray1, PyArray2, PyArrayLike2};
@@ -201,6 +202,16 @@ impl PyDetectorCircuit {
     /// The circuit in Stim's text format.
     fn to_stim(&self) -> PyResult<String> {
         self.inner.to_stim().raise()
+    }
+
+    /// A circuit in Stim's text format: Clifford gates, measurements and
+    /// resets in the X, Y and Z bases, X/Y/Z errors, one- and two-qubit
+    /// depolarizing noise, detectors, observables and REPEAT blocks.
+    #[staticmethod]
+    fn from_stim(text: &str) -> PyResult<Self> {
+        Ok(Self {
+            inner: DetectorCircuit::from_stim(text).raise()?,
+        })
     }
 
     /// Sample `shots` shots: `(detectors, observables)`, boolean arrays of
@@ -427,34 +438,8 @@ impl PyUnionFindDecoder {
         py: Python<'py>,
         detectors: PyArrayLike2<'py, bool, AllowTypeChange>,
     ) -> PyResult<Bound<'py, PyArray1<u64>>> {
-        let a = detectors.as_array();
         let n = self.inner.graph().n_detectors();
-        if a.ncols() != n {
-            return Err(invalid(format!(
-                "expected {n} columns (one per detector), got {}",
-                a.ncols()
-            )));
-        }
-        let rows: Vec<Vec<usize>> = a
-            .rows()
-            .into_iter()
-            .map(|r| (0..n).filter(|&d| r[d]).collect())
-            .collect();
-        let decoder = &mut self.inner;
-        let out = py
-            .detach(|| {
-                rows.iter()
-                    .map(|f| {
-                        if f.is_empty() {
-                            Ok(0)
-                        } else {
-                            decoder.decode(f)
-                        }
-                    })
-                    .collect::<metatron_qso::Result<Vec<u64>>>()
-            })
-            .raise()?;
-        Ok(out.into_pyarray(py))
+        decode_batch(py, &mut self.inner, n, detectors)
     }
 
     fn __repr__(&self) -> String {
@@ -467,7 +452,92 @@ impl PyUnionFindDecoder {
     }
 }
 
-/// Logical failures of the union-find decoder on sampled shots.
+/// Decode each row of a (shots, n) boolean array of detection events.
+fn decode_batch<'py>(
+    py: Python<'py>,
+    decoder: &mut (impl Decoder + Send),
+    n: usize,
+    detectors: PyArrayLike2<'py, bool, AllowTypeChange>,
+) -> PyResult<Bound<'py, PyArray1<u64>>> {
+    let a = detectors.as_array();
+    if a.ncols() != n {
+        return Err(invalid(format!(
+            "expected {n} columns (one per detector), got {}",
+            a.ncols()
+        )));
+    }
+    let rows: Vec<Vec<usize>> = a
+        .rows()
+        .into_iter()
+        .map(|r| (0..n).filter(|&d| r[d]).collect())
+        .collect();
+    let out = py
+        .detach(|| {
+            rows.iter()
+                .map(|f| {
+                    if f.is_empty() {
+                        Ok(0)
+                    } else {
+                        decoder.decode(f)
+                    }
+                })
+                .collect::<metatron_qso::Result<Vec<u64>>>()
+        })
+        .raise()?;
+    Ok(out.into_pyarray(py))
+}
+
+/// The exact minimum-weight perfect matching decoder of a detector error
+/// model whose errors flip at most two detectors each. Distances from
+/// each detector are cached when it first fires (up to 32 MiB).
+#[pyclass(name = "MatchingDecoder", module = "metatron_qso")]
+pub struct PyMatchingDecoder {
+    inner: MatchingDecoder,
+}
+
+#[pymethods]
+impl PyMatchingDecoder {
+    #[new]
+    fn new(py: Python<'_>, model: &PyDetectorErrorModel) -> PyResult<Self> {
+        let graph = MatchingGraph::from_dem(&model.inner).raise()?;
+        Ok(Self {
+            inner: py.detach(|| MatchingDecoder::new(graph)),
+        })
+    }
+
+    #[getter]
+    fn n_detectors(&self) -> usize {
+        self.inner.graph().n_detectors()
+    }
+
+    /// Predicted observable flips (a bit mask) for the detectors that
+    /// fired.
+    fn decode(&mut self, fired: Vec<usize>) -> PyResult<u64> {
+        self.inner.decode(&fired).raise()
+    }
+
+    /// Decode each row of a (shots, n_detectors) boolean array; returns
+    /// the predicted observable masks.
+    fn decode_batch<'py>(
+        &mut self,
+        py: Python<'py>,
+        detectors: PyArrayLike2<'py, bool, AllowTypeChange>,
+    ) -> PyResult<Bound<'py, PyArray1<u64>>> {
+        let n = self.inner.graph().n_detectors();
+        decode_batch(py, &mut self.inner, n, detectors)
+    }
+
+    fn __repr__(&self) -> String {
+        let g = self.inner.graph();
+        format!(
+            "MatchingDecoder(detectors={}, edges={})",
+            g.n_detectors(),
+            g.edges().len()
+        )
+    }
+}
+
+/// Logical failures of a decoder on sampled shots.
 #[pyclass(name = "LogicalErrorRate", module = "metatron_qso", frozen, eq)]
 #[derive(Clone, PartialEq)]
 pub struct PyLogicalErrorRate {
@@ -511,34 +581,55 @@ fn repetition_code_memory(
 }
 
 /// A rotated surface-code memory experiment of odd `distance` protecting
-/// `|0⟩_L`, with Z-type detectors and the logical Z as observable 0.
+/// `|0⟩_L` (`basis="z"`: Z-type detectors, the logical Z as observable 0)
+/// or `|+⟩_L` (`basis="x"`: X-type detectors, the logical X).
 #[pyfunction]
-#[pyo3(signature = (distance, rounds, noise = None))]
+#[pyo3(signature = (distance, rounds, noise = None, basis = "z"))]
 fn surface_code_memory(
     distance: usize,
     rounds: usize,
     noise: Option<NoiseArg>,
+    basis: &str,
 ) -> PyResult<PyDetectorCircuit> {
+    let basis = match basis {
+        "z" | "Z" => MemoryBasis::Z,
+        "x" | "X" => MemoryBasis::X,
+        other => {
+            return Err(invalid(format!(
+                "unknown basis {other:?}; use \"z\" or \"x\""
+            )));
+        }
+    };
     let noise = noise.map(NoiseArg::model).unwrap_or_default();
     Ok(PyDetectorCircuit {
-        inner: qec::surface_code_memory(distance, rounds, &noise).raise()?,
+        inner: qec::surface_code_memory_with(distance, rounds, &noise, basis).raise()?,
     })
 }
 
-/// Sample `shots` shots of `circuit`, decode them with the union-find
-/// decoder of its decomposed detector error model and count the logical
-/// failures.
+/// Sample `shots` shots of `circuit`, decode them with the decoder of its
+/// decomposed detector error model (`"union_find"` or `"matching"`) and
+/// count the logical failures. Every decoder sees the same shots.
 #[pyfunction]
-#[pyo3(signature = (circuit, shots, seed = 0))]
+#[pyo3(signature = (circuit, shots, seed = 0, decoder = "union_find"))]
 fn logical_error_rate(
     py: Python<'_>,
     circuit: &PyDetectorCircuit,
     shots: usize,
     seed: u64,
+    decoder: &str,
 ) -> PyResult<PyLogicalErrorRate> {
+    let kind = match decoder {
+        "union_find" => DecoderKind::UnionFind,
+        "matching" => DecoderKind::Matching,
+        other => {
+            return Err(invalid(format!(
+                "unknown decoder {other:?}; use \"union_find\" or \"matching\""
+            )));
+        }
+    };
     let c = &circuit.inner;
     let r = py
-        .detach(|| qec::logical_error_rate(c, shots, seed))
+        .detach(|| qec::logical_error_rate_with(c, shots, seed, kind))
         .raise()?;
     Ok(PyLogicalErrorRate {
         shots: r.shots,
@@ -553,6 +644,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCircuitNoise>()?;
     m.add_class::<PyDetectorErrorModel>()?;
     m.add_class::<PyUnionFindDecoder>()?;
+    m.add_class::<PyMatchingDecoder>()?;
     m.add_class::<PyLogicalErrorRate>()?;
     m.add_function(wrap_pyfunction!(repetition_code_memory, m)?)?;
     m.add_function(wrap_pyfunction!(surface_code_memory, m)?)?;

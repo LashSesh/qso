@@ -19,6 +19,7 @@
 //! ```
 
 pub mod device;
+pub mod learning;
 pub mod trajectories;
 
 pub use device::{ChannelSpec, DeviceModel, GateRule, QubitProperties};

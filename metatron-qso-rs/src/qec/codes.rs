@@ -187,6 +187,16 @@ fn build_repetition(
     Ok(b.c)
 }
 
+/// The logical state a memory experiment protects.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MemoryBasis {
+    /// `|0⟩_L`: Z-type detectors, the logical Z as observable.
+    #[default]
+    Z,
+    /// `|+⟩_L`: X-type detectors, the logical X as observable.
+    X,
+}
+
 /// A rotated surface-code memory experiment protecting `|0⟩_L`: `d × d`
 /// data qubits (row-major, `0..d²`) and `d² − 1` ancillas, `rounds`
 /// rounds of syndrome extraction with the hook-safe CNOT order, then every
@@ -202,12 +212,32 @@ pub fn surface_code_memory(
     rounds: usize,
     noise: &CircuitNoise,
 ) -> Result<DetectorCircuit> {
-    check(distance, rounds, true)?;
-    check_size(rounds, |r| build_surface(distance, r, noise))?;
-    build_surface(distance, rounds, noise)
+    surface_code_memory_with(distance, rounds, noise, MemoryBasis::Z)
 }
 
-fn build_surface(distance: usize, rounds: usize, noise: &CircuitNoise) -> Result<DetectorCircuit> {
+/// [`surface_code_memory`] in either basis. In the X basis the data
+/// qubits are prepared in `|+⟩` (reset, then H) and measured in the X
+/// basis (H, then M), both with the noise of a one-qubit gate; the X-type
+/// stabilizers are the detectors, and observable 0 is the logical X, the
+/// product of X on the first column.
+pub fn surface_code_memory_with(
+    distance: usize,
+    rounds: usize,
+    noise: &CircuitNoise,
+    basis: MemoryBasis,
+) -> Result<DetectorCircuit> {
+    check(distance, rounds, true)?;
+    check_size(rounds, |r| build_surface(distance, r, noise, basis))?;
+    build_surface(distance, rounds, noise, basis)
+}
+
+fn build_surface(
+    distance: usize,
+    rounds: usize,
+    noise: &CircuitNoise,
+    basis: MemoryBasis,
+) -> Result<DetectorCircuit> {
+    let x_basis = basis == MemoryBasis::X;
     let d = distance as i64;
     let data = |r: i64, c: i64| (r * d + c) as usize;
     // Plaquette (i, j) covers data (i, j), (i, j+1), (i+1, j), (i+1, j+1)
@@ -246,6 +276,9 @@ fn build_surface(distance: usize, rounds: usize, noise: &CircuitNoise) -> Result
         .collect();
     let all_anc: Vec<usize> = (0..plaquettes.len()).map(ancilla).collect();
     b.reset(&all)?;
+    if x_basis {
+        b.h(&data_qubits)?;
+    }
     let mut previous: Option<Vec<usize>> = None;
     for _ in 0..rounds {
         b.c.noise(Noise::Depolarize1(noise.before_round), &data_qubits)?;
@@ -271,7 +304,7 @@ fn build_surface(distance: usize, rounds: usize, noise: &CircuitNoise) -> Result
         b.h(&x_anc)?;
         let m = b.measure(&all_anc)?;
         for (k, &(_, _, is_x)) in plaquettes.iter().enumerate() {
-            if is_x {
+            if is_x != x_basis {
                 continue;
             }
             match &previous {
@@ -283,9 +316,12 @@ fn build_surface(distance: usize, rounds: usize, noise: &CircuitNoise) -> Result
         previous = Some(m);
     }
     let last = previous.expect("at least one round");
+    if x_basis {
+        b.h(&data_qubits)?;
+    }
     let m = b.measure(&data_qubits)?;
     for (k, &(i, j, is_x)) in plaquettes.iter().enumerate() {
-        if is_x {
+        if is_x != x_basis {
             continue;
         }
         let mut recs = vec![last[k]];
@@ -297,7 +333,11 @@ fn build_surface(distance: usize, rounds: usize, noise: &CircuitNoise) -> Result
         }
         b.c.detector(&recs)?;
     }
-    let first_row: Vec<usize> = (0..d).map(|c| m[data(0, c)]).collect();
-    b.c.observable(0, &first_row)?;
+    let logical: Vec<usize> = if x_basis {
+        (0..d).map(|r| m[data(r, 0)]).collect()
+    } else {
+        (0..d).map(|c| m[data(0, c)]).collect()
+    };
+    b.c.observable(0, &logical)?;
     Ok(b.c)
 }

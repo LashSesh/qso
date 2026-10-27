@@ -42,12 +42,35 @@ The kernels enumerate those groups by *inserting zero bits*: for
 then OR in the control mask. Distinct `k` give disjoint groups, so the loop
 parallelises without locks (`SyncPtr` documents this safety contract).
 
+Since 1.11 the arithmetic runs on *runs*: amplitudes whose bits at the
+gate's positions are fixed form contiguous runs of `2^p` amplitudes, `p`
+the lowest position. The kernels hand pairs of runs (a 2×2 matrix),
+single runs (a phase) or four runs (a 4×4 matrix) to the primitives of
+`quantum/simd.rs`. Those have a portable version and vector versions:
+AVX on x86-64, detected once at run time, with two amplitudes per
+register, and NEON on aarch64 with one. A complex product is
+`(a·c − b·d, a·d + b·c)` with separate multiplications and additions (AVX
+`mul` and `addsub`; NEON adds the negated term), in the same order as
+the scalar code, so every version gives the same bits. `set_simd(false)`
+forces the portable path, and a test compares the two on the one- and
+two-qubit kernels, phases and RZZ, on small registers and on 17 qubits.
+Uncontrolled one-qubit gates on low qubits are handled a chunk at a time
+(adjacent pairs for qubit 0). Controlled gates, multi-qubit phases and
+two-qubit gates whose lowest qubit (target or control) is 0 or 1 have runs
+shorter than four amplitudes and keep the element loops, where a call per
+run would cost more than it saves.
+
 Specialised paths:
 
-* uncontrolled single-qubit gates iterate over contiguous half-blocks
-  (`parallel::for_each_pair`), which the compiler vectorises; diagonal
-  matrices (`RZ`) scale each half without branching, and real matrices
-  (`H`, `RY`) use real instead of complex products, about twice as fast;
+* uncontrolled single-qubit gates process a whole chunk per call when
+  their stride is small and pairs of runs otherwise; diagonal matrices
+  (`RZ`) scale each half without branching, and real matrices (`H`,
+  `RY`) use real instead of complex products;
+* `RZZ` reads the lower and upper halves of the register in step, and
+  `RZ` on a high qubit the two halves of each block (pieces of 512
+  amplitudes): the memory system serves two streams faster than one,
+  about 64 against 44 GB/s on the test machine; `Z, S, T, P` scale only
+  the half they act on;
 * `X`, `SWAP` and their controlled forms are permutations (no arithmetic);
   a singly controlled `X` swaps contiguous runs of `2^min(c, t)`
   amplitudes, split into fixed pieces so that gates on high qubits
@@ -198,11 +221,63 @@ frame update for each gate is derived once.
   arrays across shots and resets only what a shot touched, so a shot
   costs time in proportion to its clusters, not to the graph. Peeling
   roots a cluster at the boundary only when its parity needs it.
+- **Matching.** The matching decoder pairs events by savings
+  s_ij = b_i + b_j − d_ij against the boundary (b: distance to the
+  boundary, precomputed by one Dijkstra from the boundary node). A
+  maximum-weight matching on the positive savings is a minimum-weight
+  correction, and pairs with d_ij ≥ b_i + b_j are never needed, which
+  bounds each search. Events without a path to the boundary pay a
+  stand-in cost larger than all their pairs together, so they are matched
+  whenever possible. Distance rows are cached per detector up to 2²¹
+  entries. The blossom algorithm is van Rantwijk's O(n³) primal-dual
+  method on integer weights (largest edge 2²⁰), so its dual updates are
+  exact.
+- **Stim import.** The text is parsed into a tree of instructions and
+  REPEAT blocks. The expanded operation count and the largest qubit are
+  computed before anything is built, so a short text cannot expand
+  beyond the limits. Other bases are rotated to Z around measurements
+  and resets.
 - **Logical error rates.** `logical_error_rate` samples in blocks of
   whole batches (at most 65 536 shots and 1 GiB of results) from one
   random stream, so it returns the same result as one call of
   `sample_detectors` with the same seed, in bounded memory. A batch is
   1024 shots, or fewer when its frames and records would exceed 128 MiB.
+
+## Matrix-product states (`mps/`)
+
+Site q holds qubit q as a tensor `l × 2 × r`, stored row-major with index
+`(a·2 + s)·r + b`. The same buffer is then the `(2l) × r` matrix (for
+moving the centre right and for contracting with the next site) and the
+`l × (2r)` matrix (for moving it left), so no reshuffling is needed.
+
+- **Canonical form.** Sites left of the orthogonality centre are
+  left-canonical and sites right of it right-canonical, kept by
+  Householder QR when the centre moves. One-qubit gates act on a site in
+  place and keep the form.
+- **Gates.** A gate on k qubits moves the centre into the block, routes
+  the qubits next to each other by swaps, and contracts the k sites into
+  one tensor `θ` of shape `(l·2ᵏ) × r`. It applies the gate (its matrix
+  reordered from gate order to site order) and splits θ from the left;
+  the swaps are then undone. Keeping qubit q at site q keeps
+  nearest-neighbour circuits free of swaps.
+- **Splits.** A split of an `m × n` matrix M takes the eigendecomposition
+  of the smaller Gram matrix (MM† or M†M) and chooses the kept subspace
+  by the options. It orthonormalises the subspace's basis by Householder
+  QR into an isometry Q and keeps F = Q†M. The discarded weight is
+  ‖M − QF‖²/‖M‖², measured rather than estimated, so the error accounting
+  is exact even when the eigenvectors are not; computing it from the
+  residual instead of as 1 − ‖F‖²/‖M‖² avoids a cancellation that would
+  charge every exact split 10⁻¹⁶. A split computes all new tensors before
+  it writes any, so a split beyond the memory limit leaves the state as
+  it was. nalgebra's complex SVD was not used because it fails on
+  rank-deficient matrices.
+- **Fast products.** Complex matrix products run as three real products
+  (Gauss's trick) on nalgebra's optimised real kernels; this is about
+  five times faster than nalgebra's generic complex product.
+- **Readout.** Expectation values contract from the first to the last
+  factor of the string, with the centre moved into that range. Sampling
+  moves the centre to site 0, so that every other site is right-canonical
+  and a prefix's probability is the norm² of its left vector.
 
 ## WebAssembly (`metatron_qso_wasm`)
 
@@ -328,7 +403,13 @@ VQD reuses the adjoint method with the observable `H + Σ β_j |ψ_j⟩⟨ψ_j|`
 Adjoint differentiation (Jones & Gacon 2020) keeps three vectors: the state
 `φ`, the co-state `λ = H|ψ⟩`, and a scratch copy. Walking the circuit
 backwards, each gate is undone on `φ` and `λ`, and every parameter of the
-gate contributes `2·Re⟨λ|∂U φ⟩·scale`. The cost is about three circuit
+gate contributes `2·Re⟨λ|∂U φ⟩·scale`. On registers larger than a cache
+block, runs of gates whose targets lie inside a block are undone and
+differentiated block by block, like the forward plans: the block of `φ`
+and `λ` stays in cache through the whole run, and the contributions of
+each gate are summed over the blocks in block order, so the result does
+not depend on the number of threads. At 16–20 qubits this makes a
+gradient 2–3 times faster. The cost is about three circuit
 simulations regardless of the parameter count (0.53 ms vs 28 ms for
 parameter shift with 100 parameters, see BENCHMARKS.md). Parameter-shift rules are provided for
 hardware-faithful gradients and as an independent check: two terms for
