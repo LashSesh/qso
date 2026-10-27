@@ -1,6 +1,7 @@
 //! Continuous-time quantum walks, spatial search, dephasing and classical
 //! baselines.
 
+use metatron_qso::walks::driven::{DrivenWalk, MagnusOptions, Term};
 use metatron_qso::walks::{
     ContinuousWalk, DephasingWalk, Generator, SpatialSearch, classical_hitting_times,
     classical_walk_probabilities,
@@ -408,10 +409,132 @@ fn classical_hitting_times_py<'py>(
     ))
 }
 
+/// One term of a driven walk: `("laplacian", graph)`, `("adjacency",
+/// graph)` (minus the adjacency matrix), `("projector", nodes)`,
+/// `("potential", values)` or `("uniform", None)` (the projector onto the
+/// uniform superposition).
+fn term(n: usize, spec: &Bound<'_, PyAny>) -> PyResult<Term> {
+    let (kind, arg): (String, Bound<'_, PyAny>) = spec
+        .extract()
+        .map_err(|_| invalid("each term is a pair (kind, argument)"))?;
+    match kind.to_ascii_lowercase().as_str() {
+        "laplacian" | "adjacency" => {
+            let g = arg
+                .cast::<PyGraph>()
+                .map_err(|_| invalid(format!("a {kind} term takes a Graph")))?;
+            Ok(Term::graph(&g.borrow().inner, generator(&kind)?))
+        }
+        "projector" => {
+            let nodes: Vec<usize> = arg.extract()?;
+            Term::projector(n, &nodes).raise()
+        }
+        "potential" => {
+            let values: Vec<f64> = arg.extract()?;
+            Term::potential(&values).raise()
+        }
+        "uniform" => Ok(Term::Uniform),
+        _ => Err(invalid(format!(
+            "unknown term '{kind}' (expected laplacian, adjacency, projector, potential or uniform)"
+        ))),
+    }
+}
+
+/// A continuous-time walk with a time-dependent Hamiltonian
+/// `H(t) = Σ_j c_j(t)·H_j` on `n_nodes` nodes; see `term` kinds in
+/// `terms`. `evolve` integrates it with the fourth-order commutator-free
+/// Magnus integrator and step-size control.
+#[pyclass(name = "DrivenWalk", module = "metatron_qso", frozen)]
+pub struct PyDrivenWalk {
+    inner: DrivenWalk,
+}
+
+#[pymethods]
+impl PyDrivenWalk {
+    #[new]
+    fn new(n_nodes: usize, terms: Vec<Bound<'_, PyAny>>) -> PyResult<Self> {
+        let terms = terms
+            .iter()
+            .map(|t| term(n_nodes, t))
+            .collect::<PyResult<Vec<_>>>()?;
+        DrivenWalk::new(n_nodes, terms)
+            .raise()
+            .map(|inner| Self { inner })
+    }
+
+    #[getter]
+    fn num_nodes(&self) -> usize {
+        self.inner.num_nodes()
+    }
+
+    #[getter]
+    fn num_terms(&self) -> usize {
+        self.inner.num_terms()
+    }
+
+    /// Evolve `psi0` from `t0` to `t1`; `coefficients(t)` returns the
+    /// coefficients of the terms at time `t`. `tol` bounds the error of the
+    /// final state; `fixed_step` switches step-size control off. Returns a
+    /// dict with `state`, `steps`, `rejected` and `error_estimate`.
+    #[pyo3(signature = (
+        psi0, t0, t1, coefficients, tol = 1e-8, initial_step = None, fixed_step = None,
+        max_steps = 1_000_000
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn evolve<'py>(
+        &self,
+        py: Python<'py>,
+        psi0: ComplexArg<'_>,
+        t0: f64,
+        t1: f64,
+        coefficients: &Bound<'py, PyAny>,
+        tol: f64,
+        initial_step: Option<f64>,
+        fixed_step: Option<f64>,
+        max_steps: usize,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let options = MagnusOptions {
+            tol,
+            initial_step,
+            fixed_step,
+            max_steps,
+        };
+        let mut error: Option<PyErr> = None;
+        let result = self.inner.evolve(
+            &complex_vec(&psi0),
+            t0,
+            t1,
+            |t| {
+                coefficients
+                    .call1((t,))
+                    .and_then(|v| v.extract::<Vec<f64>>())
+                    .map_err(|e| {
+                        error = Some(e);
+                        metatron_qso::QsoError::invalid(
+                            "coefficients",
+                            "the callable raised an exception",
+                        )
+                    })
+            },
+            &options,
+        );
+        if let Some(e) = error {
+            return Err(e);
+        }
+        let r = result.raise()?;
+        Ok(pydict!(py, {
+            "state" => complex_array(py, r.state),
+            "steps" => r.steps,
+            "rejected" => r.rejected,
+            "error_estimate" => r.error_estimate,
+        }))
+    }
+}
+
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyContinuousWalk>()?;
     m.add_class::<PySpatialSearch>()?;
     m.add_class::<PyDephasingWalk>()?;
+    m.add_class::<PyDrivenWalk>()?;
     m.add_function(wrap_pyfunction!(classical_walk_probabilities_py, m)?)?;
     m.add_function(wrap_pyfunction!(classical_hitting_times_py, m)?)?;
     Ok(())

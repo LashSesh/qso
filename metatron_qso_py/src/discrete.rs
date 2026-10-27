@@ -2,8 +2,10 @@
 
 use metatron_qso::C64;
 use metatron_qso::linalg::CMatrix;
-use metatron_qso::walks::{Coin, CoinedWalk, LineWalk, SzegedyWalk, circuits};
-use numpy::PyArray1;
+use metatron_qso::walks::{
+    Coin, CoinedWalk, DecoherentCoinedWalk, LineWalk, SzegedyWalk, circuits,
+};
+use numpy::{PyArray1, PyArray2};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
@@ -12,8 +14,8 @@ use crate::circuit::PyCircuit;
 use crate::graph::PyGraph;
 use crate::walks::{check_time, generator};
 use crate::{
-    ComplexArg, ComplexMatrixArg, Raise, RealArg, complex_array, complex_vec, invalid, pydict,
-    real_array, real_vec, square_complex,
+    ComplexArg, ComplexMatrixArg, Raise, RealArg, cmatrix, complex_array, complex_vec, invalid,
+    pydict, real_array, real_vec, square_complex,
 };
 
 /// A coin given by name or as a unitary matrix.
@@ -167,6 +169,119 @@ impl PyCoinedWalk {
             "success_probability" => r.success_probability,
             "history" => real_array(py, r.history),
         }))
+    }
+}
+
+fn density(rho: &ComplexMatrixArg<'_>) -> PyResult<CMatrix> {
+    let (dim, data) = square_complex("rho", rho)?;
+    Ok(CMatrix::from_row_slice(dim, dim, &data))
+}
+
+/// A coined walk with decoherence, on density matrices: every step applies
+/// the walk's unitary step and then dephasing in the arc basis. Coin
+/// dephasing (probability `coin_dephasing` per step) destroys coherences
+/// between arcs at the same node, position dephasing between arcs at
+/// different nodes. At most 2048 arcs.
+#[pyclass(name = "DecoherentCoinedWalk", module = "metatron_qso", frozen)]
+pub struct PyDecoherentCoinedWalk {
+    inner: DecoherentCoinedWalk,
+}
+
+#[pymethods]
+impl PyDecoherentCoinedWalk {
+    #[new]
+    #[pyo3(signature = (walk, coin_dephasing = 0.0, position_dephasing = 0.0))]
+    fn new(walk: &PyCoinedWalk, coin_dephasing: f64, position_dephasing: f64) -> PyResult<Self> {
+        DecoherentCoinedWalk::new(walk.inner.clone(), coin_dephasing, position_dephasing)
+            .raise()
+            .map(|inner| Self { inner })
+    }
+
+    #[getter]
+    fn num_nodes(&self) -> usize {
+        self.inner.walk().num_nodes()
+    }
+
+    #[getter]
+    fn num_arcs(&self) -> usize {
+        self.inner.walk().num_arcs()
+    }
+
+    #[getter]
+    fn coin_dephasing(&self) -> f64 {
+        self.inner.coin_dephasing()
+    }
+
+    #[getter]
+    fn position_dephasing(&self) -> f64 {
+        self.inner.position_dephasing()
+    }
+
+    /// `|ψ⟩⟨ψ|` for an arc state `psi`.
+    fn pure<'py>(
+        &self,
+        py: Python<'py>,
+        psi: ComplexArg<'_>,
+    ) -> PyResult<Bound<'py, PyArray2<C64>>> {
+        Ok(cmatrix(py, &self.inner.pure(&complex_vec(&psi)).raise()?))
+    }
+
+    /// The walker at `node` with the maximally mixed coin.
+    fn localized_mixed<'py>(
+        &self,
+        py: Python<'py>,
+        node: usize,
+    ) -> PyResult<Bound<'py, PyArray2<C64>>> {
+        Ok(cmatrix(py, &self.inner.localized_mixed(node).raise()?))
+    }
+
+    /// One step.
+    fn step<'py>(
+        &self,
+        py: Python<'py>,
+        rho: ComplexMatrixArg<'_>,
+    ) -> PyResult<Bound<'py, PyArray2<C64>>> {
+        let rho = density(&rho)?;
+        let w = &self.inner;
+        Ok(cmatrix(py, &py.detach(|| w.step(&rho)).raise()?))
+    }
+
+    /// `steps` steps from `rho0`.
+    fn evolve<'py>(
+        &self,
+        py: Python<'py>,
+        rho0: ComplexMatrixArg<'_>,
+        steps: usize,
+    ) -> PyResult<Bound<'py, PyArray2<C64>>> {
+        let rho = density(&rho0)?;
+        let w = &self.inner;
+        Ok(cmatrix(py, &py.detach(|| w.evolve(&rho, steps)).raise()?))
+    }
+
+    /// Probability of each node.
+    fn node_probabilities<'py>(
+        &self,
+        py: Python<'py>,
+        rho: ComplexMatrixArg<'_>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        Ok(real_array(
+            py,
+            self.inner.node_probabilities(&density(&rho)?).raise()?,
+        ))
+    }
+
+    /// Node probabilities after `steps` steps from `start` (uniform coin).
+    fn probabilities<'py>(
+        &self,
+        py: Python<'py>,
+        start: usize,
+        steps: usize,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let w = &self.inner;
+        Ok(real_array(
+            py,
+            py.detach(|| w.probabilities(start, steps)).raise()?,
+        ))
     }
 }
 
@@ -347,6 +462,7 @@ fn diagonal_unitary_circuit(phases: RealArg<'_>) -> PyResult<PyCircuit> {
 
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCoinedWalk>()?;
+    m.add_class::<PyDecoherentCoinedWalk>()?;
     m.add_class::<PyLineWalk>()?;
     m.add_class::<PySzegedyWalk>()?;
     m.add_function(wrap_pyfunction!(circulant_walk_circuit, m)?)?;
