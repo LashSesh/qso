@@ -11,7 +11,9 @@ of Stim (Gidney, Quantum 5, 497 (2021)):
 - the Pauli-frame sampler simulates many shots of it, 64 per machine word;
 - the detector error model lists each independent error and its effect;
 - a union-find or an exact minimum-weight matching decoder predicts the
-  observable flips of each shot;
+  observable flips of each shot, or, where errors flip more than two
+  detectors (colour codes, quantum LDPC codes), belief propagation with
+  ordered-statistics decoding (BP+OSD);
 - `logical_error_rate` combines all four.
 
 ## Detector circuits
@@ -319,6 +321,120 @@ fn main() -> metatron_qso::Result<()> {
 }
 ```
 
+## Beyond matching: BP+OSD, colour and bicycle codes
+
+In a colour code or a quantum LDPC code, one error flips three or more
+detectors. Such a model is not a matching graph. `BpOsdDecoder` decodes
+it on its Tanner graph, with detectors as checks and errors as bits,
+following Roffe et al., "Decoding across the quantum LDPC code landscape"
+(2020), and the `ldpc` package:
+
+- **Belief propagation.** Log-likelihood messages run on the flooding
+  schedule. The min-sum rule is scaled by a factor (default 0.625; 0
+  gives 1 − 2⁻ᵗ in iteration t). The product-sum rule is also
+  available. BP stops as soon as its hard decision flips exactly the
+  fired detectors.
+- **Ordered statistics.** If BP does not converge, OSD sorts the errors
+  by their posterior, most likely first. The first independent columns
+  form an information set, and OSD-0 solves for it on a reduced GF(2)
+  basis built column by column.
+- **Combination sweep.** The default, OSD-CS of order 7, also tries every
+  single error outside the information set and every pair among the
+  first `osd_order` of them. It keeps the candidate with the largest
+  prior likelihood, Σ ln((1 − p)/p) (`ldpc` sums ln(1/p)). The
+  exhaustive variant tries every subset of the first `osd_order`, at
+  most 20.
+
+`max_iterations=0` skips BP.
+
+Two families of codes are built in, and `CssCode(n, x_checks, z_checks)`
+takes any others. The logical operators are computed and paired, so that
+X logical i and Z logical j overlap oddly exactly when i = j.
+
+- **Colour codes.** `CssCode.color_code(d)` is the triangular colour code
+  on the 6.6.6 lattice. It has odd distance d, (3d² + 1)/4 qubits and
+  one logical qubit. The same faces of weight 4 and 6 serve as X and Z
+  checks.
+- **Bivariate bicycle codes.** `CssCode.bivariate_bicycle(l, m, a, b)`
+  builds the code of Bravyi et al., Nature 627, 778 (2024), with
+  H_X = [A | B] and H_Z = [Bᵀ | Aᵀ]. A and B are sums of monomials
+  x^i y^j in the cyclic shifts x = S_l ⊗ I_m and y = I_l ⊗ S_m.
+  `CssCode.bivariate_bicycle_code(n)` returns one of the codes from the
+  paper's table, with its distance: [[72, 12, 6]], [[90, 8, 10]],
+  [[108, 8, 10]], [[144, 12, 12]] ("gross") or [[288, 12, 18]].
+
+`css_code_memory(code, rounds, noise, basis="z")` measures every X check
+and then every Z check in each round, with one ancilla each. The CNOTs of
+each type are packed into layers that touch every qubit at most once.
+The detectors and observables are those of the memory basis. This
+schedule is not tuned against hook errors, so the circuit distance can
+be below the code distance.
+
+```python
+import metatron_qso as q
+
+code, distance = q.CssCode.bivariate_bicycle_code(72)
+assert (code.n, code.k, distance) == (72, 12, 6)
+circuit = q.css_code_memory(code, 6, 0.001)
+rate = q.logical_error_rate(circuit, 200, seed=1, decoder="bposd")
+assert rate.rate < 0.05
+```
+
+The checks:
+
+- **Minimum weight.** Without BP and with every non-pivot column in the
+  exhaustive search, OSD returns the most likely correction. This holds
+  on every syndrome of 150 random error models with hyperedges, compared
+  with enumeration. Every variant's correction flips exactly the fired
+  detectors, and the sweeps are never heavier than OSD-0.
+- **Low-weight errors.** With every BP variant, the decoder corrects
+  every single and every pair of bit flips on the colour codes of
+  distance 5 and 7 and on the [[72, 12, 6]] code.
+- **The Steane-code exception.** On the distance-3 colour code (the
+  Steane code), an error on the qubit shared by all three checks fires
+  every detector. Scaled min-sum and product-sum BP then converge in
+  their first iteration to four errors on the other qubits, which is a
+  logical error. `ldpc` behaves the same with the same options. Plain
+  min-sum (`scaling=1.0`) leaves this case to OSD, which corrects it.
+- **ldpc.** The cross-validation compares the two decoders shot by shot
+  with the same options:
+  - On colour codes (d = 7, 9) and the [[72, 12, 6]] and
+    [[144, 12, 12]] codes under bit flips with p = 0.05, scaled,
+    adaptive and product-sum BP agree on every correction and every
+    convergence. The one exception is product-sum on [[144, 12, 12]],
+    which differs in 0.3% of shots, where tanh saturates.
+  - On circuit-level models from Stim, which equal QSO's to 10⁻¹⁵, the
+    predictions agree except in 0.1% of shots, where the different OSD
+    scores pick different candidates.
+- **Speed.** Measured from Python with one call per shot, on bit flips
+  with p = 0.05:
+
+  | Code | QSO (µs/shot) | ldpc (µs/shot) |
+  |---|---:|---:|
+  | Colour, d = 7 | 21 | 22 |
+  | Colour, d = 9 | 36 | 44 |
+  | [[72, 12, 6]] | 26 | 32 |
+  | [[144, 12, 12]] | 69 | 84 |
+
+Under uniform circuit-level noise with d rounds (20 000 shots,
+`qso qec --code color --decoder bposd --distance 3,5,7 --p 0.001,0.002
+--shots 20000`):
+
+| p | d = 3 | d = 5 | d = 7 |
+|---|---|---|---|
+| 0.001 | 1.5·10⁻² | 1.0·10⁻³ | 3.5·10⁻⁴ |
+| 0.002 | 3.2·10⁻² | 4.7·10⁻³ | 2.2·10⁻³ |
+
+At d = 3 the rate grows linearly with p, because single faults already
+fail: the Steane-code case above, and hook errors of the untuned
+schedule. From d = 5 on, it grows faster.
+
+`bposd_decodes_colour_and_bicycle_codes` in `tests/validation.rs` checks
+the ordering of the colour codes and the [[72, 12, 6]] rate, which is
+about 1.5·10⁻³ at p = 0.001 with 6 rounds. A shot of the [[144, 12, 12]]
+code with 12 rounds (936 detectors) takes about 8 ms at p = 0.001 and
+17 ms at p = 0.003.
+
 ## Stim circuits and the command line
 
 `to_stim()` writes a circuit in Stim's text format, with relative
@@ -361,7 +477,11 @@ qso qec --distance 3,5,7 --p 0.001,0.01 --shots 100000
 qso qec --basis x --decoder matching --distance 5 --p 0.003
 qso qec --code repetition --distance 9 --p 0.05 --stim rep9.stim
 qso qec --circuit surface.stim --decoder matching --shots 100000
+qso qec --code color --distance 5,7 --decoder bposd --p 0.002
+qso qec --code bb --distance 72,144 --decoder bposd --p 0.001 --shots 2000
 ```
+
+For `--code bb`, `--distance` names the code by its qubits.
 
 ## Limits and costs
 
@@ -376,6 +496,8 @@ qso qec --circuit surface.stim --decoder matching --shots 100000
 | Imported Stim circuits | 65 536 qubits; 2²⁴ operations and annotations after expanding REPEAT blocks (checked before expanding); blocks nested at most 64 deep |
 | Matching decoder (`MatchingDecoder`) | cached distances 2²¹ entries (32 MiB), bounded searches beyond; at most 2²² pairs of events per shot |
 | Sparse matching decoder | no limit on detection events; time grows faster than linearly where blossoms nest deeply (51 ms for 2001 events in one chain) |
+| BP+OSD decoder | 16 384 detectors; OSD keeps a dense basis of up to (detectors)² bits |
+| Bivariate bicycle codes | l · m ≤ 4096 |
 
 - **Sampling.** Each operation costs one word operation per 64 shots.
 - **Error model.** The model takes one pass through the circuit per 4096

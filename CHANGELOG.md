@@ -9,9 +9,28 @@ All notable changes to this project are documented here. The format follows
 Milestones 1.14 (Gaussian boson sampling and imperfect photons), 1.15
 (molecular integrals), 1.16 (fast matching) and 1.17 (mitigation by
 purification) of the [roadmap](docs/ROADMAP.md), its third stage, and
-milestone 1.18 (pretty good state transfer) of the fourth.
+milestones 1.18 (pretty good state transfer) and 1.19 (decoding beyond
+matching) of the fourth.
 
 ### Added
+
+- **BP+OSD decoding, colour and bivariate bicycle codes** (`qec::bposd`,
+  `qec::css`; Python `BpOsdDecoder`, `CssCode`, `css_code_memory`; `qso qec
+  --code color|bb --decoder bposd`).
+  - Belief propagation on the Tanner graph of a detector error model
+    (min-sum with a fixed or adaptive factor, or product-sum; flooding
+    schedule), then ordered-statistics decoding (OSD-0, combination sweep,
+    exhaustive) on a reduced GF(2) basis; `DecoderKind::BpOsd` decodes the
+    undecomposed model.
+  - `CssCode` from X and Z checks with paired logical operators;
+    triangular 6.6.6 colour codes, bivariate bicycle codes and the table
+    of Bravyi et al. (2024); memory experiments in either basis.
+  - `DetectorErrorModel` can be built from a list of errors in Python;
+    `MatchingGraph::to_dem`.
+  - Tests: exhaustive OSD against enumeration; every weight ≤ 2 error on
+    colour codes d = 5, 7 and the [[72, 12, 6]] code; code parameters; in
+    the cross-validation, shot-by-shot agreement with `ldpc` and Stim's
+    error models of the CSS circuits.
 
 - **Pretty good state transfer, decided exactly** (`walks::pretty_good`,
   Python `PrettyGoodTransfer`, in `qso transfer`).
