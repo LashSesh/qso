@@ -11,7 +11,7 @@ second stage — 1.10 (exact decoding and Stim circuits), 1.11 (the
 state-vector core at memory bandwidth), 1.12 (noise learning) and 1.13
 (walks beyond static Hamiltonians) — ship together as release 1.6.0;
 finished milestones are released together, not one by one. In the third
-stage (1.14 to 1.17), 1.14 and 1.15 are delivered and the others are planned. Up to 1.3
+stage (1.14 to 1.17), 1.14, 1.15 and 1.17 are delivered and 1.16 is in review. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -716,7 +716,7 @@ Validation: identical correction weights to the current exact decoder and
 to PyMatching on every shot; speed measured against PyMatching on the same
 machine.
 
-### 1.17 — Mitigation by purification (S–M)
+### 1.17 — Mitigation by purification (S–M, delivered)
 
 Use case: error mitigation without a noise model.
 
@@ -727,6 +727,26 @@ Use case: error mitigation without a noise model.
 Validation: exact purified values against the dominant eigenvector of ρ;
 the circuit estimator against the exact one; error suppression measured
 on noisy circuits.
+
+Delivered: `mitigation::distillation` (`distilled_expectation`,
+`dominant_expectation`, `DistillationCircuits`) with Python bindings. The
+circuits diagonalise, per qubit, the k-qubit unitary of the cyclic shift
+times the Pauli factor with two-level rotations, so they export to
+OpenQASM. They reproduce `Tr(ρᵏO)/Tr(ρᵏ)` to 10⁻¹¹ for one to three
+copies. On a depolarised GHZ-like state the error falls from 0.19 to
+3.6·10⁻³ and 6.9·10⁻⁵; when the dominant eigenvector moves, it stops at
+that eigenvector's floor (9·10⁻⁴ in the second example).
+
+An independent review confirmed the factorisation over qubits, the
+estimator, the bit and copy conventions (also with qiskit and Aer noisy
+density matrices, to 10⁻¹⁵) and the coverage of the standard errors. It
+found that the measurement circuits could not leave the library (custom
+multi-qubit gates); they are now built from exportable controlled
+rotations. Malformed probabilities and counts were accepted, the dense
+functions were slow at their limit, and the documentation presented a
+state without a noise floor as typical; all fixed, with an example and a
+test that show the floor and one that shows a coherent error passing
+through.
 
 ### Research track (later)
 
