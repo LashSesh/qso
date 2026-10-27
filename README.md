@@ -150,8 +150,9 @@ or by the benchmark report you can run yourself.
 | Repetition code, one round of bit flips, union-find decoding, all 2ᵈ error patterns (d = 3 … 9) | fails exactly on the patterns with more than d/2 flips | majority vote |
 | Detector error models of memory experiments vs. Stim | identical terms, probabilities to 10⁻¹⁵ relative | Stim 1.16 |
 
-The test-suite (379 Rust tests and 249 Python tests, run in CI on Linux
-(x86_64 and arm64), macOS and Windows) also checks:
+The test-suite (525 Rust tests and 286 Python tests, run in CI on Linux
+(x86_64 and arm64), macOS and Windows; 90.5 % of the crate's lines and
+79.4 % of its branches covered) also checks:
 
 - every gate against an independent dense-matrix reference, and the QFT
   against the DFT matrix;

@@ -11,8 +11,8 @@ second stage — 1.10 (exact decoding and Stim circuits), 1.11 (the
 state-vector core at memory bandwidth), 1.12 (noise learning) and 1.13
 (walks beyond static Hamiltonians) — ship together as release 1.6.0;
 finished milestones are released together, not one by one. The third
-stage (1.14 to 1.17) is delivered and not yet released; of the fourth
-stage (1.18 to 1.21), 1.18 to 1.20 are delivered and 1.21 is in progress. Up to 1.3
+stage (1.14 to 1.17) is delivered and not yet released; the fourth
+stage (1.18 to 1.21) is delivered too; neither stage is released yet. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -55,7 +55,7 @@ which withdraws the results of version 1.
 | Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19) | no correlated decoding; syndrome circuits of CSS codes are not tuned against hook errors |
 | Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9) | no MPS in the browser build |
 | Documentation | user guide, executed tutorials and Python reference on GitHub Pages (1.2) | no Rust-specific tutorials; no hosted documentation per released version |
-| Engineering | CI on Linux (x86_64, arm64), macOS and Windows; Miri, fuzzing, API checks, weekly cross-validation and benchmark tracking; Trusted Publishing (1.2) | no coverage measurement; fuzzing only of the parsers and deserialisers; the five simulators (state vector, density matrix, trajectories, MPS, tableau) are compared on fixed cases, not on random circuits |
+| Engineering | CI on Linux (x86_64, arm64), macOS and Windows; Miri, fuzzing, API checks, weekly cross-validation and benchmark tracking; Trusted Publishing (1.2); line and branch coverage, and differential tests of all simulators on random circuits (1.21) | coverage of the Python bindings and the CLI |
 
 ### Measured performance against established simulators
 
@@ -926,7 +926,7 @@ precision, "two more qubits"), a Python test that could not fail, a
 kernel test that compared with `==` rather than bit patterns, and NaN
 from the readouts of an all-zero state; all fixed.
 
-### 1.21 — Coverage and differential testing (S–M)
+### 1.21 — Coverage and differential testing (S–M, delivered)
 
 Use case: trust in the parts no reference covers directly.
 
@@ -938,6 +938,12 @@ Use case: trust in the parts no reference covers directly.
 
 Validation: the coverage number per release; the differential targets run
 in CI on every change and longer on the scheduled job.
+
+| Deliverable | Delivered | Not done, and why |
+|---|---|---|
+| Coverage | a CI job (`cargo-llvm-cov`, nightly for branches) with totals and the least-covered files in the job summary; the HTML report published with the documentation under `coverage/`; at this milestone 90.5 % of lines, 92.8 % of functions, 90.6 % of regions and 79.4 % of branches | coverage of the Python bindings and the CLI: their tests run a separate build of the extension and the binary, so the CLI's source (`src/bin/qso.rs`, 872 lines) counts in the totals as uncovered |
+| Differential testing | `differential::compare`: one circuit on the single-precision state vector, the noiseless density matrix and trajectory, an MPS of unlimited bond dimension, the tableau (all Pauli expectation values for Clifford circuits) and the OpenQASM 2 and 3 round trips, against the double-precision state vector; property tests on random circuits of every gate kind (controls, dense unitaries, 1 to 6 qubits) and a `differential` fuzz target, both on every change and longer every week | mid-circuit programs across simulators: their outcomes are distributions, compared already by the OpenQASM fuzz target and the program tests |
+| Fixes | none were needed: over 12 000 property-test circuits and 16 000 fuzzed ones agreed to rounding | — |
 
 ### Not in this stage
 

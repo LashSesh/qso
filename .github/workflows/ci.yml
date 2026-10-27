@@ -187,9 +187,34 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # Under Miri the parallel thresholds are lowered (src/parallel.rs), so
       # the multi-threaded kernel paths run on 7-qubit registers.
-      - run: "cargo miri test -p metatron-qso-rs --lib -- quantum::kernels:: quantum::plan:: parallel:: algorithms::gradients::tests::the_blocked"
+      - run: "cargo miri test -p metatron-qso-rs --lib -- quantum::kernels:: quantum::plan:: quantum::single::tests::vector_primitives parallel:: algorithms::gradients::tests::the_blocked"
       # The WebAssembly module's exports pass buffers as raw pointers.
       - run: cargo miri test -p metatron_qso_wasm --lib -- buffers_round_trip
+
+  coverage:
+    name: coverage (lines and branches)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          # Branch coverage needs nightly's -Z coverage-options.
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Unit, validation, property and differential tests with coverage
+        run: |
+          cargo llvm-cov --release -p metatron-qso-rs --all-features --branch --json --summary-only --output-path coverage.json
+          cargo llvm-cov report --release -p metatron-qso-rs --branch --summary-only | tee coverage.txt
+          python3 scripts/coverage_summary.py coverage.json >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: |
+            coverage.json
+            coverage.txt
 
   fuzz:
     name: fuzz (60 s per target)
@@ -205,10 +230,10 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz
-      - name: Fuzz the parsers and deserialisers
+      - name: Fuzz the parsers, the deserialisers and the simulators against each other
         working-directory: metatron-qso-rs
         run: |
-          for t in qasm openqasm pauli graph_spec graph_io json device chemistry qec stim; do
+          for t in qasm openqasm pauli graph_spec graph_io json device chemistry qec stim differential; do
             mkdir -p "fuzz/corpus/$t"
             # The prebuilt cargo-fuzz is a static musl binary and would
             # default to the musl target, which the sanitizer cannot use.

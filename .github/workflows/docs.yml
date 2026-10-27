@@ -2,8 +2,9 @@ name: Docs
 
 # Builds the documentation site: the user guide (mdBook, docs/guide), the
 # tutorials (docs/tutorials, executed during the build), the Python API
-# reference (pdoc) and the playground (docs/playground), which runs QSO
-# compiled to WebAssembly. Every code block of the guide is run as part of the
+# reference (pdoc), the playground (docs/playground), which runs QSO
+# compiled to WebAssembly, and the line and branch coverage report of the
+# crate's tests (/coverage/). Every code block of the guide is run as part of the
 # build. Pull requests build the site; pushes to main also deploy it to
 # GitHub Pages (Settings → Pages → Source: GitHub Actions).
 
@@ -47,6 +48,19 @@ jobs:
           python -m pip install dist/*.whl
       - name: Build the site
         run: python docs/build_site.py --out site
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      # The coverage report of this commit, published with the
+      # documentation at /coverage/.
+      - name: Coverage report
+        run: |
+          cargo +nightly llvm-cov --release -p metatron-qso-rs --all-features --branch --html --output-dir site/coverage
+          cargo +nightly llvm-cov report --release -p metatron-qso-rs --branch --json --summary-only --output-path site/coverage/summary.json
+          python3 scripts/coverage_summary.py site/coverage/summary.json
       - uses: actions/upload-pages-artifact@v5
         with:
           path: site

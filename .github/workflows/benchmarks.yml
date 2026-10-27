@@ -13,7 +13,9 @@ name: Benchmarks
 #                     the last four runs, stored on the `benchmark-data`
 #                     branch; a slowdown of more than 25 % fails the job;
 #   fuzz            – ten minutes per fuzz target, with the corpus kept
-#                     between runs.
+#                     between runs;
+#   differential    – 5000 random circuits per property test on every
+#                     simulator that takes them (tests/differential.rs).
 #
 # The JSON results are uploaded as artefacts.
 
@@ -121,6 +123,17 @@ jobs:
           echo "::error::benchmark regression, see the job summary"
           exit 1
 
+  differential:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Long differential run
+        env:
+          QSO_DIFFERENTIAL_CASES: "5000"
+        run: cargo test --release -p metatron-qso-rs --all-features --test differential
+
   fuzz:
     runs-on: ubuntu-latest
     env:
@@ -142,7 +155,7 @@ jobs:
       - name: Fuzz the parsers and deserialisers (10 minutes each)
         working-directory: metatron-qso-rs
         run: |
-          for t in qasm openqasm pauli graph_spec graph_io json device chemistry qec stim; do
+          for t in qasm openqasm pauli graph_spec graph_io json device chemistry qec stim differential; do
             mkdir -p "fuzz/corpus/$t"
             # The prebuilt cargo-fuzz is a static musl binary and would
             # default to the musl target, which the sanitizer cannot use.

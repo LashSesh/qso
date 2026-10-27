@@ -10,9 +10,20 @@ Milestones 1.14 (Gaussian boson sampling and imperfect photons), 1.15
 (molecular integrals), 1.16 (fast matching) and 1.17 (mitigation by
 purification) of the [roadmap](docs/ROADMAP.md), its third stage, and
 milestones 1.18 (pretty good state transfer), 1.19 (decoding beyond
-matching) and 1.20 (single precision) of the fourth.
+matching), 1.20 (single precision) and 1.21 (coverage and differential
+testing) of the fourth, which completes it.
 
 ### Added
+
+- **Differential testing and coverage** (`differential::compare`).
+  - One circuit on every simulator that takes it — single-precision state
+    vector, density matrix, trajectory, unbounded MPS, stabilizer tableau,
+    OpenQASM 2 and 3 round trips — with each deviation from the
+    double-precision state vector.
+  - Property tests on random circuits (48 per test on every change, 5000
+    in the weekly job) and a `differential` fuzz target.
+  - Line and branch coverage measured in CI and published with the
+    documentation (90.5 % of lines, 79.4 % of branches).
 
 - **Single-precision state vectors** (`quantum::StateVector32`, Python
   `StateVector32` and `simulate(..., precision="single")`, `qso qasm

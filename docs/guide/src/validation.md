@@ -63,8 +63,20 @@ deviation above rounding level fails the run.
 | Check | What it covers |
 |---|---|
 | Fuzzing | Each parser and deserialiser runs under cargo-fuzz for one minute on every pull request and ten minutes every week. The parsers are OpenQASM 2 and 3, Pauli sums, graph specifications and Stim circuits; the JSON forms are those of circuits, states, graphs, Pauli sums and device models; fermion operators and FCIDUMP files are fuzzed as well, and so are detector circuits built from random bytes. Beyond "no crash", the targets check that exported QASM re-imports to an equivalent circuit that prepares the same state on a matrix-product state, that the OpenQASM 2 and 3 exports of a program reproduce its outcome distribution, that accepted data are well-formed, that the union-find and matching decoders explain every syndrome that some set of matching-graph edges produces, and that Stim circuits (imported, or exported and read back) reproduce their text. Every input that ever failed is replayed on each run. |
+| Differential testing | `differential::compare` (Rust) runs one circuit on every simulator that takes it and reports each deviation from the double-precision state vector. It covers the single-precision state vector, the noiseless density matrix, a noiseless trajectory, a matrix-product state of unlimited bond dimension, the stabilizer tableau (every Pauli expectation value, for Clifford circuits) and the OpenQASM 2 and 3 round trips. Property tests feed it random circuits of every gate kind, with controls and dense unitaries, on 1 to 6 qubits: 48 per test on every change and 5000 every week. A fuzz target decodes circuits from random bytes, for one minute on every pull request and ten minutes every week. So far no simulator has disagreed beyond rounding (10⁻⁹, single precision 10⁻¹⁰ per gate) on over 12 000 property-test circuits and 16 000 fuzzed ones. |
 | Miri | The `unsafe` statevector kernels run under Miri on multi-threaded paths, which checks them for undefined behaviour and data races; so do the buffer exports of the WebAssembly module. |
 | Hostile input | Tests feed oversized, non-finite and inconsistent input to every public entry point and expect an error. |
+
+## Coverage
+
+CI measures line and branch coverage of the crate's tests (unit,
+validation, property, differential and robustness tests) with
+`cargo-llvm-cov`. The job summary lists the totals and the files with the
+most uncovered lines. The documentation site publishes the report of each
+build under [`coverage/`](coverage/html/index.html). At milestone 1.21 the
+crate's tests covered 90.5 % of lines, 92.8 % of functions and 79.4 % of
+branches. The command line's source counts as uncovered: its smoke tests
+run a separately built binary.
 
 ## API stability
 

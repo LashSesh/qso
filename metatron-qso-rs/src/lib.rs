@@ -50,6 +50,7 @@
 pub mod algorithms;
 pub mod backend;
 pub mod chemistry;
+pub mod differential;
 pub mod error;
 pub mod estimation;
 pub mod graph;
