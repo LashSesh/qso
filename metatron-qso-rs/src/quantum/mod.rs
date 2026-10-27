@@ -1,6 +1,8 @@
 //! Gate-based quantum simulation: states, gates, circuits and observables.
 //!
-//! * [`StateVector`] — n-qubit pure states with multi-threaded gate kernels.
+//! * [`StateVector`] — n-qubit pure states with multi-threaded gate kernels;
+//!   [`StateVector32`] in single precision, one qubit more in the same
+//!   memory.
 //! * [`Circuit`] — gate lists with symbolic, differentiable parameters.
 //! * [`PauliSum`] — Hermitian observables, matrix-free expectation values and
 //!   exact diagonalisation via Lanczos; [`QubitOperator`] for complex
@@ -21,7 +23,9 @@ pub(crate) mod plan;
 pub mod program;
 pub mod qasm;
 pub mod qubit_operator;
+pub(crate) mod scalar;
 pub(crate) mod simd;
+pub mod single;
 pub mod state;
 
 pub use circuit::{Circuit, Instruction, Param, Parameter};
@@ -32,4 +36,5 @@ pub use program::{Condition, Operation, Program, Register, record_bitstring};
 pub use qasm::{from_qasm2, to_qasm2};
 pub use qubit_operator::QubitOperator;
 pub use simd::{set_simd, simd_level};
+pub use single::{MAX_QUBITS_SINGLE, StateVector32};
 pub use state::{Counts, MAX_QUBITS, StateVector, bitstring};

@@ -145,6 +145,18 @@ impl StateVector {
         Ok(s)
     }
 
+    /// State from amplitudes as given (not normalised; length a power of
+    /// two).
+    pub(crate) fn from_amplitudes_unnormalized(amps: Vec<C64>) -> Result<Self> {
+        let dim = amps.len();
+        if dim == 0 || !dim.is_power_of_two() {
+            return Err(QsoError::NotPowerOfTwo(dim));
+        }
+        let n_qubits = dim.trailing_zeros() as usize;
+        check_size(n_qubits)?;
+        Ok(Self { n_qubits, amps })
+    }
+
     /// Haar-random pure state.
     pub fn random(n_qubits: usize, rng: &mut Rng) -> Self {
         check_size(n_qubits).expect("register too large");

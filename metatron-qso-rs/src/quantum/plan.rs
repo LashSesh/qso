@@ -23,7 +23,7 @@ use num_complex::Complex64 as C64;
 use super::circuit::{Circuit, Instruction};
 use super::gates::{GateKind, matrix_1q};
 use super::kernels::{apply_1q, apply_instruction, apply_instruction_masked, apply_phase_on_mask};
-use super::simd::scale_run;
+use super::scalar::Amplitude;
 
 /// log₂ of the block size in amplitudes (2¹⁴ amplitudes = 256 KiB).
 #[cfg(not(miri))]
@@ -66,19 +66,21 @@ enum Op<'a> {
 
 impl Op<'_> {
     /// Apply with the given control mask (the op's own controls ignored).
-    fn apply(&self, amps: &mut [C64], controls: usize) {
+    fn apply<A: Amplitude>(&self, amps: &mut [A], controls: usize) {
         match self {
             Op::Gate(inst, angles) => {
                 apply_instruction_masked(amps, inst, angles.get(), false, 0, controls)
             }
-            Op::Fused { qubit, matrix } => apply_1q(amps, *qubit, controls, matrix),
+            Op::Fused { qubit, matrix } => {
+                apply_1q(amps, *qubit, controls, &matrix.map(A::from_c64))
+            }
         }
     }
 
-    fn apply_full(&self, amps: &mut [C64]) {
+    fn apply_full<A: Amplitude>(&self, amps: &mut [A]) {
         match self {
             Op::Gate(inst, angles) => apply_instruction(amps, inst, angles.get(), false, 0),
-            Op::Fused { qubit, matrix } => apply_1q(amps, *qubit, 0, matrix),
+            Op::Fused { qubit, matrix } => apply_1q(amps, *qubit, 0, &matrix.map(A::from_c64)),
         }
     }
 }
@@ -240,12 +242,12 @@ fn local<'a>(op: &Op<'a>, c: usize) -> Option<Local<'a>> {
     }
 }
 
-fn scale(block: &mut [C64], s: C64) {
-    scale_run(block, s);
+fn scale<A: Amplitude>(block: &mut [A], s: C64) {
+    A::scale_run(block, A::from_c64(s));
 }
 
 /// Apply a local operation to the block starting at global index `base`.
-fn apply_local(block: &mut [C64], base: usize, local: &Local<'_>) {
+fn apply_local<A: Amplitude>(block: &mut [A], base: usize, local: &Local<'_>) {
     let low = block.len() - 1;
     match local {
         Local::Targets {
@@ -264,7 +266,7 @@ fn apply_local(block: &mut [C64], base: usize, local: &Local<'_>) {
             }
             match mask & low {
                 0 => scale(block, *phase),
-                m => apply_phase_on_mask(block, m, *phase),
+                m => apply_phase_on_mask(block, m, A::from_c64(*phase)),
             }
         }
         Local::Bit {
@@ -282,12 +284,12 @@ fn apply_local(block: &mut [C64], base: usize, local: &Local<'_>) {
                 let p = if base & bit != 0 { *p1 } else { *p0 };
                 match low_controls {
                     0 => scale(block, p),
-                    m => apply_phase_on_mask(block, m, p),
+                    m => apply_phase_on_mask(block, m, A::from_c64(p)),
                 }
             } else {
-                let zero = C64::new(0.0, 0.0);
                 let q = bit.trailing_zeros() as usize;
-                apply_1q(block, q, low_controls, &[*p0, zero, zero, *p1]);
+                let (p0, p1) = (A::from_c64(*p0), A::from_c64(*p1));
+                apply_1q(block, q, low_controls, &[p0, A::ZERO, A::ZERO, p1]);
             }
         }
         Local::Parity {
@@ -308,9 +310,10 @@ fn apply_local(block: &mut [C64], base: usize, local: &Local<'_>) {
             }
             // The phase is constant on runs below the lowest bit involved.
             let run = 1usize << (low_mask | low_controls).trailing_zeros();
+            let (same, diff) = (A::from_c64(*same), A::from_c64(*diff));
             let phase = |i: usize| {
                 let odd = ((i & low_mask).count_ones() % 2 == 1) != odd_high;
-                if odd { *diff } else { *same }
+                if odd { diff } else { same }
             };
             if run < 4 {
                 for (i, a) in block.iter_mut().enumerate() {
@@ -322,7 +325,7 @@ fn apply_local(block: &mut [C64], base: usize, local: &Local<'_>) {
                 for (j, part) in block.chunks_mut(run).enumerate() {
                     let i = j * run;
                     if i & low_controls == low_controls {
-                        scale_run(part, phase(i));
+                        A::scale_run(part, phase(i));
                     }
                 }
             }
@@ -331,9 +334,9 @@ fn apply_local(block: &mut [C64], base: usize, local: &Local<'_>) {
 }
 
 /// Apply a run of local operations block by block, blocks in parallel.
-fn apply_run(amps: &mut [C64], c: usize, run: &[Local<'_>]) {
+fn apply_run<A: Amplitude>(amps: &mut [A], c: usize, run: &[Local<'_>]) {
     let block = 1usize << c;
-    let apply = |(k, chunk): (usize, &mut [C64])| {
+    let apply = |(k, chunk): (usize, &mut [A])| {
         for local in run {
             apply_local(chunk, k * block, local);
         }
@@ -351,7 +354,12 @@ fn apply_run(amps: &mut [C64], c: usize, run: &[Local<'_>]) {
 /// fusing gates and blocking for cache with blocks of `2^c` amplitudes.
 /// Registers of at most `2^c` amplitudes are simulated gate by gate: they
 /// fit in cache already.
-pub(crate) fn run_with_block(amps: &mut [C64], circuit: &Circuit, theta: &[f64], c: usize) {
+pub(crate) fn run_with_block<A: Amplitude>(
+    amps: &mut [A],
+    circuit: &Circuit,
+    theta: &[f64],
+    c: usize,
+) {
     let n = amps.len().trailing_zeros() as usize;
     if n <= c {
         for inst in circuit.instructions() {
@@ -367,7 +375,7 @@ pub(crate) fn run_with_block(amps: &mut [C64], circuit: &Circuit, theta: &[f64],
     // controlled phase may go through the general 2×2 kernel there).
     let mut run: Vec<Local<'_>> = Vec::new();
     let mut first = 0;
-    let flush = |amps: &mut [C64], run: &mut Vec<Local<'_>>, op: &Op<'_>| {
+    let flush = |amps: &mut [A], run: &mut Vec<Local<'_>>, op: &Op<'_>| {
         match run.len() {
             0 => {}
             1 => op.apply_full(amps),
@@ -415,7 +423,7 @@ where
 }
 
 /// Apply `circuit` with parameters `theta` (already validated) to `amps`.
-pub(crate) fn run(amps: &mut [C64], circuit: &Circuit, theta: &[f64]) {
+pub(crate) fn run<A: Amplitude>(amps: &mut [A], circuit: &Circuit, theta: &[f64]) {
     run_with_block(amps, circuit, theta, BLOCK_QUBITS);
 }
 

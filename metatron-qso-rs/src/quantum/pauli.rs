@@ -323,16 +323,18 @@ impl PauliSum {
         Ok(self.expectation_amplitudes(state.amplitudes()))
     }
 
-    pub(crate) fn expectation_amplitudes(&self, amps: &[C64]) -> f64 {
+    /// ⟨ψ|H|ψ⟩ for amplitudes of either precision, accumulated in double
+    /// precision.
+    pub(crate) fn expectation_amplitudes<A: super::scalar::Amplitude>(&self, amps: &[A]) -> f64 {
         let n = amps.len();
         let mut total = 0.0;
         for &(c, s) in &self.terms {
             let value = if s.is_identity() {
-                sum_f64(n, |b| amps[b].norm_sqr())
+                sum_f64(n, |b| amps[b].norm_sqr_f64())
             } else if s.is_diagonal() {
                 let z = s.z;
                 sum_f64(n, |b| {
-                    let p = amps[b].norm_sqr();
+                    let p = amps[b].norm_sqr_f64();
                     if ((b as u64) & z).count_ones().is_multiple_of(2) {
                         p
                     } else {
@@ -342,7 +344,7 @@ impl PauliSum {
             } else {
                 sum_c64(n, |b| {
                     let (phase, image) = s.act(b);
-                    amps[image].conj() * phase * amps[b]
+                    amps[image].to_c64().conj() * phase * amps[b].to_c64()
                 })
                 .re
             };
