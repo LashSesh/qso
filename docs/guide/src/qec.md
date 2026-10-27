@@ -198,6 +198,59 @@ The results are checked against independent references:
   where corrections weigh the same, or through their rounding of the
   weights.
 
+## Fast matching: regions on the detector graph
+
+`SparseMatchingDecoder` computes the same minimum-weight matching without
+the distances between events. It runs the primal-dual blossom algorithm
+on the detector graph itself, as sparse blossom does (Higgott and Gidney,
+Quantum 9, 1600 (2025)):
+
+- Every detection event owns a region of the graph. Its radius is the
+  event's dual variable. Regions grow, freeze or shrink at unit speed in
+  a common time.
+- When two regions touch, the path between their events is tight. A
+  growing region that touches a matched pair adds both to its
+  alternating tree. Two trees that touch augment and become matched
+  pairs. Two regions of one tree close an odd cycle, which becomes a
+  blossom region. A growing region that reaches the boundary matches to
+  it.
+- A shrinking blossom at radius zero shatters into its children. A
+  shrinking single event at radius zero closes a blossom with its tree
+  neighbours.
+
+A shot touches only the nodes the regions cover, so its cost grows with
+the number of detection events and their area, not with the square of
+their number. Weights are those of `MatchingDecoder`, doubled so that two
+growing regions meet at integer times. `logical_error_rate(...,
+decoder="matching")` and `qso qec --decoder matching` use this decoder;
+`decode_with_weight` returns the correction's weight Σ ln((1 − p)/p).
+
+The checks:
+
+- **The exact decoder.** On every syndrome of 400 random error models,
+  on 4000 sampled shots of surface codes (d = 3 to 9) and a repetition
+  code, on 2400 dense random syndromes of random graphs and on the even
+  syndromes of odd cycles, the correction weighs exactly as much as
+  `MatchingDecoder`'s. Together these shots form 11 000 blossoms and
+  shatter 1600.
+- **PyMatching.** In the cross-validation, on the same error model and
+  syndromes, the weights agree to 10⁻⁵ relative (both decoders round
+  ln((1 − p)/p) to integers), and the predictions differ only where
+  corrections weigh the same.
+- **Speed.** Measured against PyMatching 2.4 on one core of the same
+  machine, on surface-code memory experiments with d rounds:
+
+| d | p | detectors | QSO (µs/shot) | PyMatching (µs/shot) |
+|---|---|---:|---:|---:|
+| 11 | 0.003 | 720 | 20 | 12 |
+| 17 | 0.001 | 2 592 | 23 | 19 |
+| 17 | 0.005 | 2 592 | 253 | 109 |
+| 25 | 0.001 | 8 112 | 85 | 100 |
+| 25 | 0.005 | 8 112 | 925 | 569 |
+
+`MatchingDecoder`, on the complete graph of events, takes 94 000 µs per
+shot at d = 25 and p = 0.001.
+
 ## Memory experiments
 
 Two families of memory experiments are built in. They protect |0⟩ (the
@@ -312,16 +365,17 @@ qso qec --circuit surface.stim --decoder matching --shots 100000
 | Error components of a model | 2²²; their detector lists before merging, 2²⁷ entries (1 GiB); propagation, 2³⁴ word operations |
 | Code distance, rounds | 101, 10 000, and at most 2²⁴ operations (checked before building) |
 | Imported Stim circuits | 65 536 qubits; 2²⁴ operations and annotations after expanding REPEAT blocks (checked before expanding); blocks nested at most 64 deep |
-| Matching decoder | cached distances 2²¹ entries (32 MiB), bounded searches beyond; at most 2²² pairs of events per shot |
+| Matching decoder (`MatchingDecoder`) | cached distances 2²¹ entries (32 MiB), bounded searches beyond; at most 2²² pairs of events per shot |
+| Sparse matching decoder | no limit on detection events |
 
 - **Sampling.** Each operation costs one word operation per 64 shots.
 - **Error model.** The model takes one pass through the circuit per 4096
   error components, or more when the circuit has more than 4096
   measurements (each pass holds its records).
-- **Matching.** A shot with k detection events costs k distance lookups
-  (or bounded searches) and O(k³) for the blossom algorithm. At low noise
-  matching is about as fast as union-find. At p = 0.01 and d = 7 it takes
-  twice as long (7.4 s against 3.7 s for 10⁵ shots).
+- **Matching.** With `MatchingDecoder`, a shot with k detection events
+  costs k distance lookups (or bounded searches) and O(k³) for the
+  blossom algorithm. `SparseMatchingDecoder` costs time in proportion to
+  the events and the area their regions cover (see the table above).
 - **Example timing.** On one core, a distance-21 surface code with 21
   rounds (881 qubits, 4840 detectors) needs about 0.5 s for its error
   model and 15 s for 100 000 shots decoded by union-find at p = 0.001. The error model

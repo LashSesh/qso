@@ -70,14 +70,22 @@ def test_matching_decodes_at_least_as_well_as_union_find() -> None:
     # Every single fault is corrected.
     for _, detectors, flips in dem.errors:
         assert matching.decode(detectors) == flips
+    # The sparse decoder (used by decoder="matching") finds corrections of
+    # the same weight.
+    sparse = q.SparseMatchingDecoder(dem)
+    for row in det[:500]:
+        fired = list(np.flatnonzero(row))
+        assert sparse.decode_with_weight(fired)[1] == matching.decode_with_weight(fired)[1]
+    sparse_predicted = sparse.decode_batch(det)
     uf = q.logical_error_rate(c, 5000, seed=3)
     mw = q.logical_error_rate(c, 5000, seed=3, decoder="matching")
-    assert mw.errors == int(np.sum(predicted != obs[:, 0]))
+    assert mw.errors == int(np.sum(sparse_predicted != obs[:, 0]))
     assert mw.errors < uf.errors
     assert uf == q.logical_error_rate(c, 5000, seed=3, decoder="union_find")
     with pytest.raises(ValueError, match="unknown decoder"):
         q.logical_error_rate(c, 10, decoder="blossom")  # type: ignore[arg-type]
     assert repr(matching).startswith("MatchingDecoder(detectors=")
+    assert repr(sparse).startswith("SparseMatchingDecoder(detectors=")
 
 
 def test_x_basis_memory() -> None:

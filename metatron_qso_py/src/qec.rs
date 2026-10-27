@@ -3,7 +3,7 @@
 
 use metatron_qso::qec::{
     self, CircuitNoise, Decoder, DecoderKind, DetectorCircuit, DetectorErrorModel, MatchingDecoder,
-    MatchingGraph, MemoryBasis, Noise, UnionFindDecoder,
+    MatchingGraph, MemoryBasis, Noise, SparseMatchingDecoder, UnionFindDecoder,
 };
 use numpy::ndarray::Array2;
 use numpy::{AllowTypeChange, IntoPyArray, PyArray1, PyArray2, PyArrayLike2};
@@ -516,6 +516,12 @@ impl PyMatchingDecoder {
         self.inner.decode(&fired).raise()
     }
 
+    /// Predicted observable flips and the weight of the correction,
+    /// the sum of ln((1 − p)/p) over its errors.
+    fn decode_with_weight(&mut self, fired: Vec<usize>) -> PyResult<(u64, f64)> {
+        self.inner.decode_with_weight(&fired).raise()
+    }
+
     /// Decode each row of a (shots, n_detectors) boolean array; returns
     /// the predicted observable masks.
     fn decode_batch<'py>(
@@ -531,6 +537,62 @@ impl PyMatchingDecoder {
         let g = self.inner.graph();
         format!(
             "MatchingDecoder(detectors={}, edges={})",
+            g.n_detectors(),
+            g.edges().len()
+        )
+    }
+}
+
+/// Minimum-weight perfect matching by growing regions on the detector
+/// graph (sparse blossom): the same weights as `MatchingDecoder`, faster
+/// for large codes.
+#[pyclass(name = "SparseMatchingDecoder", module = "metatron_qso")]
+pub struct PySparseMatchingDecoder {
+    inner: SparseMatchingDecoder,
+}
+
+#[pymethods]
+impl PySparseMatchingDecoder {
+    #[new]
+    fn new(py: Python<'_>, model: &PyDetectorErrorModel) -> PyResult<Self> {
+        let graph = MatchingGraph::from_dem(&model.inner).raise()?;
+        Ok(Self {
+            inner: py.detach(|| SparseMatchingDecoder::new(graph)),
+        })
+    }
+
+    #[getter]
+    fn n_detectors(&self) -> usize {
+        self.inner.graph().n_detectors()
+    }
+
+    /// Predicted observable flips (a bit mask) for the detectors that
+    /// fired.
+    fn decode(&mut self, fired: Vec<usize>) -> PyResult<u64> {
+        self.inner.decode(&fired).raise()
+    }
+
+    /// Predicted observable flips and the weight of the correction,
+    /// the sum of ln((1 − p)/p) over its errors.
+    fn decode_with_weight(&mut self, fired: Vec<usize>) -> PyResult<(u64, f64)> {
+        self.inner.decode_with_weight(&fired).raise()
+    }
+
+    /// Decode each row of a (shots, n_detectors) boolean array; returns
+    /// the predicted observable masks.
+    fn decode_batch<'py>(
+        &mut self,
+        py: Python<'py>,
+        detectors: PyArrayLike2<'py, bool, AllowTypeChange>,
+    ) -> PyResult<Bound<'py, PyArray1<u64>>> {
+        let n = self.inner.graph().n_detectors();
+        decode_batch(py, &mut self.inner, n, detectors)
+    }
+
+    fn __repr__(&self) -> String {
+        let g = self.inner.graph();
+        format!(
+            "SparseMatchingDecoder(detectors={}, edges={})",
             g.n_detectors(),
             g.edges().len()
         )
@@ -645,6 +707,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDetectorErrorModel>()?;
     m.add_class::<PyUnionFindDecoder>()?;
     m.add_class::<PyMatchingDecoder>()?;
+    m.add_class::<PySparseMatchingDecoder>()?;
     m.add_class::<PyLogicalErrorRate>()?;
     m.add_function(wrap_pyfunction!(repetition_code_memory, m)?)?;
     m.add_function(wrap_pyfunction!(surface_code_memory, m)?)?;

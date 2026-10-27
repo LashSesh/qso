@@ -295,6 +295,14 @@ def qec_vs_stim(quick: bool) -> dict:
         for k in range(bits.shape[1]):
             reference_flips |= bits[:, k].astype(np.uint64) << np.uint64(k)
         qso_flips = q.MatchingDecoder(dem).decode_batch(det)
+        sparse_flips = q.SparseMatchingDecoder(dem).decode_batch(det)
+        # Correction weights shot by shot (first 2000 shots).
+        sparse = q.SparseMatchingDecoder(dem)
+        weight_diff = 0.0
+        for row in det[:2000]:
+            _, ours_w = sparse.decode_with_weight(list(np.flatnonzero(row)))
+            _, theirs_w = reference.decode(row, return_weight=True)
+            weight_diff = max(weight_diff, abs(ours_w - theirs_w) / max(1.0, theirs_w))
         out[name] = {
             "detectors": c.n_detectors,
             "error_mechanisms": len(ours),
@@ -306,6 +314,46 @@ def qec_vs_stim(quick: bool) -> dict:
             "logical_error_rate_matching": q.logical_error_rate(c, shots, seed=4, decoder="matching").rate,
             "logical_error_rate_pymatching": mwpm,
             "matching_disagreement_with_pymatching": float(np.mean(qso_flips != reference_flips)),
+            "sparse_matching_disagreement_with_pymatching": float(np.mean(sparse_flips != reference_flips)),
+            "sparse_matching_max_relative_weight_difference": weight_diff,
+        }
+    out["decoding_speed"] = decoding_speed(quick)
+    return out
+
+
+def decoding_speed(quick: bool) -> dict:
+    """Microseconds per shot of QSO's sparse matching decoder and of
+    PyMatching on the same error model and syndromes (one thread each)."""
+    import pymatching
+
+    import metatron_qso as q
+
+    shots = 2000 if quick else 20_000
+    out = {}
+    for d, p in [(11, 0.003), (17, 0.001), (17, 0.005), (25, 0.001), (25, 0.005)]:
+        c = q.surface_code_memory(d, d, p)
+        dem = c.detector_error_model(decompose=True)
+        reference = pymatching.Matching()
+        for pr, dets, obs in dem.errors:
+            faults = {k for k in range(64) if obs >> k & 1}
+            weight = math.log((1 - pr) / pr) if pr < 0.5 else 0.0
+            if len(dets) == 1:
+                reference.add_boundary_edge(dets[0], fault_ids=faults, weight=weight, error_probability=pr, merge_strategy="smallest-weight")
+            elif len(dets) == 2:
+                reference.add_edge(dets[0], dets[1], fault_ids=faults, weight=weight, error_probability=pr, merge_strategy="smallest-weight")
+        det, _ = c.sample(shots, seed=7)
+        decoder = q.SparseMatchingDecoder(dem)
+        start = time.perf_counter()
+        decoder.decode_batch(det)
+        ours = time.perf_counter() - start
+        start = time.perf_counter()
+        reference.decode_batch(det)
+        theirs = time.perf_counter() - start
+        out[f"surface d={d}, {d} rounds, p={p}"] = {
+            "detectors": c.n_detectors,
+            "shots": shots,
+            "qso_us_per_shot": 1e6 * ours / shots,
+            "pymatching_us_per_shot": 1e6 * theirs / shots,
         }
     return out
 
@@ -455,6 +503,9 @@ TOLERANCES = {
     # Two exact matching decoders differ only on ties and on rounded
     # weights.
     "matching_disagreement": 1e-3,
+    # Both decoders round ln((1 − p)/p) to integers (QSO: the largest edge
+    # at 2²⁰).
+    "matching_weight": 1e-5,
     # PySCF's integrals carry errors up to 3·10⁻¹¹ (a 40-digit evaluation
     # agrees with QSO), and its CODATA 2010 bohr moves the geometries by
     # 3·10⁻¹¹ relative.
@@ -490,6 +541,12 @@ def check(c: dict) -> list[str]:
     if not d <= TOLERANCES["density_matrix"]:
         failures.append(f"noisy density matrices differ from Qiskit Aer by {d:.3g}")
     for name, r in c["qec_vs_stim"].items():
+        if name == "decoding_speed":
+            continue
+        if not r["sparse_matching_max_relative_weight_difference"] <= TOLERANCES["matching_weight"]:
+            failures.append(f"sparse matching weights on {name} differ from PyMatching's: {r}")
+        if not r["sparse_matching_disagreement_with_pymatching"] <= TOLERANCES["matching_disagreement"]:
+            failures.append(f"sparse matching predictions on {name} differ from PyMatching's: {r}")
         if r["error_mechanisms_only_one_side"] or not r["max_relative_probability_difference"] <= TOLERANCES["error_model"]:
             failures.append(f"detector error model of {name} differs from Stim's: {r}")
         if not r["max_detector_rate_z_score"] <= TOLERANCES["detector_rate_z"]:

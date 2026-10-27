@@ -6,11 +6,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-Milestones 1.14 (Gaussian boson sampling and imperfect photons) and 1.15
-(molecular integrals) of the [roadmap](docs/ROADMAP.md), the first of its
-third stage.
+Milestones 1.14 (Gaussian boson sampling and imperfect photons), 1.15
+(molecular integrals) and 1.16 (fast matching) of the
+[roadmap](docs/ROADMAP.md), the first of its third stage.
 
 ### Added
+
+- **Sparse matching** (`qec::SparseMatchingDecoder`, Python
+  `SparseMatchingDecoder`): minimum-weight perfect matching by growing
+  regions on the detector graph (the idea of sparse blossom), with
+  `decode_with_weight` on both matching decoders.
+  - The same correction weights as `MatchingDecoder` on every tested
+    shot (every syndrome of random models, sampled memory experiments,
+    dense random syndromes with nested and shattering blossoms).
+  - At d = 25, p = 0.001: 85 µs per shot instead of 94 ms; 0.8 to 2.3
+    times PyMatching's time on surface codes from d = 11 to 25.
 
 - **Molecules from their geometry** (`chemistry::integrals`,
   `chemistry::scf`; Python `Molecule`, `AoIntegrals`, `hartree_fock`;
@@ -64,6 +74,10 @@ third stage.
 
 ### Changed
 
+- The matching decoder of `logical_error_rate(..., decoder="matching")`
+  and `qso qec --decoder matching` is now `SparseMatchingDecoder`
+  (the same weights; where corrections weigh the same, it may pick
+  another one).
 - `MolecularIntegrals.fci_energies` builds the determinant matrix by the
   Slater–Condon rules instead of through the qubit Hamiltonian, and uses
   Lanczos for a single root above 1024 determinants (full CI of LiH in

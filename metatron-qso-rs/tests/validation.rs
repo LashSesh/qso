@@ -1149,3 +1149,25 @@ fn hartree_fock_from_geometry_matches_pyscf() {
         1e-8
     ));
 }
+
+#[test]
+fn sparse_matching_has_the_weights_of_exact_matching() {
+    use metatron_qso::qec::{
+        CircuitNoise, MatchingDecoder, MatchingGraph, SparseMatchingDecoder, detector_error_model,
+        sample_detectors, surface_code_memory,
+    };
+    // Surface code d = 7, 7 rounds, at and above threshold noise: every
+    // shot's correction weighs as much as the exact decoder's.
+    for p in [0.003, 0.01] {
+        let c = surface_code_memory(7, 7, &CircuitNoise::uniform(p)).unwrap();
+        let dem = detector_error_model(&c, true).unwrap();
+        let graph = MatchingGraph::from_dem(&dem).unwrap();
+        let mut exact = MatchingDecoder::new(graph.clone());
+        let mut sparse = SparseMatchingDecoder::new(graph);
+        for fired in sample_detectors(&c, 1000, 1).unwrap().fired_by_shot() {
+            let (_, a) = exact.decode_with_weight(&fired).unwrap();
+            let (_, b) = sparse.decode_with_weight(&fired).unwrap();
+            assert_eq!(a, b, "{fired:?}");
+        }
+    }
+}

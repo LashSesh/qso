@@ -5,9 +5,10 @@
 //! * [`sample_detectors`]: Pauli-frame sampling, 64 shots per machine word;
 //! * [`detector_error_model`]: the independent errors of a circuit and the
 //!   detectors and observables each flips;
-//! * [`MatchingGraph`], [`UnionFindDecoder`] and [`MatchingDecoder`]:
-//!   decoding by weighted union-find with peeling, or by exact
-//!   minimum-weight perfect matching;
+//! * [`MatchingGraph`], [`UnionFindDecoder`], [`SparseMatchingDecoder`]
+//!   and [`MatchingDecoder`]: decoding by weighted union-find with
+//!   peeling, or by exact minimum-weight perfect matching, grown on the
+//!   detector graph or computed on the complete graph of detection events;
 //! * [`repetition_code_memory`] and [`surface_code_memory`]
 //!   ([`surface_code_memory_with`] for the X basis): memory experiments
 //!   with circuit-level noise;
@@ -21,6 +22,7 @@ pub mod decoder;
 pub mod dem;
 pub mod frame;
 pub mod matching;
+pub mod sparse;
 mod stim;
 
 pub use circuit::{DetectorCircuit, MAX_OBSERVABLES, Noise, QecOp};
@@ -32,6 +34,7 @@ pub use decoder::{MatchingEdge, MatchingGraph, UnionFindDecoder};
 pub use dem::{DetectorErrorModel, ErrorMechanism, detector_error_model};
 pub use frame::{DetectorSamples, sample_detectors};
 pub use matching::{MAX_MATCHING_PAIRS, MatchingDecoder};
+pub use sparse::SparseMatchingDecoder;
 
 use crate::error::Result;
 use crate::rng::Rng;
@@ -55,6 +58,12 @@ impl Decoder for MatchingDecoder {
     }
 }
 
+impl Decoder for SparseMatchingDecoder {
+    fn decode(&mut self, fired: &[usize]) -> Result<u64> {
+        SparseMatchingDecoder::decode(self, fired)
+    }
+}
+
 /// The decoders [`logical_error_rate_with`] can use.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -62,7 +71,9 @@ pub enum DecoderKind {
     /// Weighted union-find ([`UnionFindDecoder`]): almost linear time.
     #[default]
     UnionFind,
-    /// Minimum-weight perfect matching ([`MatchingDecoder`]).
+    /// Minimum-weight perfect matching by region growth
+    /// ([`SparseMatchingDecoder`]; the same weights as
+    /// [`MatchingDecoder`]).
     Matching,
 }
 
@@ -71,7 +82,7 @@ impl DecoderKind {
     pub fn build(self, graph: MatchingGraph) -> Box<dyn Decoder + Send> {
         match self {
             DecoderKind::UnionFind => Box::new(UnionFindDecoder::new(graph)),
-            DecoderKind::Matching => Box::new(MatchingDecoder::new(graph)),
+            DecoderKind::Matching => Box::new(SparseMatchingDecoder::new(graph)),
         }
     }
 }
