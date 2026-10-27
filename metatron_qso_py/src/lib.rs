@@ -17,6 +17,7 @@ mod circuit;
 mod discrete;
 mod estimation;
 mod graph;
+mod learning;
 mod mitigation;
 mod mps;
 mod noise;
@@ -198,6 +199,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     noise::register(m)?;
     estimation::register(m)?;
     mitigation::register(m)?;
+    learning::register(m)?;
     photonics::register(m)?;
     chemistry::register(m)?;
     simulation::register(m)?;

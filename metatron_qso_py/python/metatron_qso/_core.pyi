@@ -1032,6 +1032,65 @@ def twirled_average(
     seed: int = 0,
 ) -> Estimate: ...
 
+
+# ---------------------------------------------------------------------------
+# Noise learning
+
+@final
+class SparsePauliLindblad:
+    def __new__(
+        cls, n_qubits: int, generators: Sequence[str], rates: Sequence[float]
+    ) -> SparsePauliLindblad: ...
+    @property
+    def n_qubits(self) -> int: ...
+    @property
+    def generators(self) -> list[str]: ...
+    @property
+    def rates(self) -> list[float]: ...
+    def fidelity(self, pauli: str) -> float: ...
+    def overhead(self) -> float: ...
+    def scaled(self, factor: float) -> SparsePauliLindblad: ...
+    def error_probabilities(self) -> dict[str, float]: ...
+
+@type_check_only
+class LearnedNoise(TypedDict):
+    model: SparsePauliLindblad
+    std_errors: list[float]
+    products: list[Tuple[str, float, float]]
+    symmetrised: list[str]
+
+def learn_layer(
+    layer: Circuit,
+    device: DeviceModel,
+    depths: Optional[Sequence[int]] = None,
+    twirls: int = 16,
+    shots: int = 256,
+    edges: Optional[Sequence[Tuple[int, int]]] = None,
+    seed: int = 0,
+) -> LearnedNoise: ...
+def pec_layered(
+    blocks: Sequence[Circuit],
+    layer: Circuit,
+    model: SparsePauliLindblad,
+    device: DeviceModel,
+    observable: PauliSum,
+    samples: int,
+    seed: int = 0,
+) -> PecResult: ...
+def pea_layered(
+    blocks: Sequence[Circuit],
+    layer: Circuit,
+    model: SparsePauliLindblad,
+    device: DeviceModel,
+    observable: PauliSum,
+    scales: Sequence[float],
+    samples: int,
+    method: str = "richardson",
+    degree: Optional[int] = None,
+    asymptote: float = 0.0,
+    seed: int = 0,
+) -> ZneResult: ...
+
 # ---------------------------------------------------------------------------
 # Classifier
 

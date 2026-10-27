@@ -200,7 +200,11 @@ fn folding(name: &str, seed: u64) -> PyResult<Folding> {
     }
 }
 
-fn extrapolation(method: &str, degree: Option<usize>, asymptote: f64) -> PyResult<Extrapolation> {
+pub(crate) fn extrapolation(
+    method: &str,
+    degree: Option<usize>,
+    asymptote: f64,
+) -> PyResult<Extrapolation> {
     if degree.is_some() && method != "polynomial" {
         return Err(invalid("`degree` applies to polynomial extrapolation only"));
     }
