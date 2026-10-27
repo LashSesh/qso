@@ -345,7 +345,9 @@ following Roffe et al., "Decoding across the quantum LDPC code landscape"
   exhaustive variant tries every subset of the first `osd_order`, at
   most 20.
 
-`max_iterations=0` skips BP.
+`max_iterations=0` skips BP (in `ldpc` it means as many iterations as
+errors). OSD of order 0 is OSD-0 for every method, as in `ldpc`. Errors
+that flip no detector are left out, as in the matching decoders.
 
 Two families of codes are built in, and `CssCode(n, x_checks, z_checks)`
 takes any others. The logical operators are computed and paired, so that
@@ -394,8 +396,9 @@ The checks:
   Steane code), an error on the qubit shared by all three checks fires
   every detector. Scaled min-sum and product-sum BP then converge in
   their first iteration to four errors on the other qubits, which is a
-  logical error. `ldpc` behaves the same with the same options. Plain
-  min-sum (`scaling=1.0`) leaves this case to OSD, which corrects it.
+  logical error. `ldpc` returns the same four errors with the same
+  options (checked in the cross-validation). Plain min-sum
+  (`scaling=1.0`) leaves this case to OSD, which corrects it.
 - **ldpc.** The cross-validation compares the two decoders shot by shot
   with the same options:
   - On colour codes (d = 7, 9) and the [[72, 12, 6]] and
@@ -403,18 +406,21 @@ The checks:
     adaptive and product-sum BP agree on every correction and every
     convergence. The one exception is product-sum on [[144, 12, 12]],
     which differs in 0.3% of shots, where tanh saturates.
+  - Exhaustive OSD of order 4 after one BP iteration, on 100 random
+    models with equal priors, gives the same correction on every shot.
   - On circuit-level models from Stim, which equal QSO's to 10⁻¹⁵, the
     predictions agree except in 0.1% of shots, where the different OSD
     scores pick different candidates.
-- **Speed.** Measured from Python with one call per shot, on bit flips
-  with p = 0.05:
+- **Speed.** The same section of the cross-validation times both decoders
+  from Python, one call per shot, on bit flips with p = 0.05 (scaled
+  min-sum, OSD-CS of order 7):
 
   | Code | QSO (µs/shot) | ldpc (µs/shot) |
   |---|---:|---:|
-  | Colour, d = 7 | 21 | 22 |
-  | Colour, d = 9 | 36 | 44 |
-  | [[72, 12, 6]] | 26 | 32 |
-  | [[144, 12, 12]] | 69 | 84 |
+  | Colour, d = 7 | 16 | 19 |
+  | Colour, d = 9 | 38 | 42 |
+  | [[72, 12, 6]] | 21 | 32 |
+  | [[144, 12, 12]] | 66 | 85 |
 
 Under uniform circuit-level noise with d rounds (20 000 shots,
 `qso qec --code color --decoder bposd --distance 3,5,7 --p 0.001,0.002
@@ -430,10 +436,9 @@ fail: the Steane-code case above, and hook errors of the untuned
 schedule. From d = 5 on, it grows faster.
 
 `bposd_decodes_colour_and_bicycle_codes` in `tests/validation.rs` checks
-the ordering of the colour codes and the [[72, 12, 6]] rate, which is
-about 1.5·10⁻³ at p = 0.001 with 6 rounds. A shot of the [[144, 12, 12]]
-code with 12 rounds (936 detectors) takes about 8 ms at p = 0.001 and
-17 ms at p = 0.003.
+the ordering of the colour codes (d = 3, 5, 7 at p = 0.002) and that the
+[[72, 12, 6]] code fails in under 1% of shots at p = 0.001 with 6 rounds
+(about 1.5·10⁻³).
 
 ## Stim circuits and the command line
 
@@ -496,8 +501,9 @@ For `--code bb`, `--distance` names the code by its qubits.
 | Imported Stim circuits | 65 536 qubits; 2²⁴ operations and annotations after expanding REPEAT blocks (checked before expanding); blocks nested at most 64 deep |
 | Matching decoder (`MatchingDecoder`) | cached distances 2²¹ entries (32 MiB), bounded searches beyond; at most 2²² pairs of events per shot |
 | Sparse matching decoder | no limit on detection events; time grows faster than linearly where blossoms nest deeply (51 ms for 2001 events in one chain) |
-| BP+OSD decoder | 16 384 detectors; OSD keeps a dense basis of up to (detectors)² bits |
-| Bivariate bicycle codes | l · m ≤ 4096 |
+| BP+OSD decoder | 16 384 detectors; OSD keeps a dense basis and its combinations, about 2 · (detectors)² bits (64 MiB at the limit), and takes time in proportion to errors × rank × detectors / 64 per shot that BP does not settle |
+| CSS codes | 8192 qubits (the logical operators cost about n³/64 word operations); bivariate bicycle codes l · m ≤ 4096 |
+| Detector error models built directly | 2²⁴ detectors, 64 observables |
 
 - **Sampling.** Each operation costs one word operation per 64 shots.
 - **Error model.** The model takes one pass through the circuit per 4096

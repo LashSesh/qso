@@ -410,17 +410,67 @@ def bposd_vs_ldpc(quick: bool) -> dict:
             ours = q.BpOsdDecoder(dem, **ours_kw)
             theirs = LdpcBpOsd(h, error_rate=p, max_iter=50, osd_method="osd_cs", osd_order=7, **theirs_kw)
             same = converged_same = 0
+            t_ours = t_theirs = 0.0
             for s in syndromes:
-                o = ours.decode_detailed(list(np.flatnonzero(s)))
+                fired = list(np.flatnonzero(s))
+                start = time.perf_counter()
+                o = ours.decode_detailed(fired)
+                t_ours += time.perf_counter() - start
+                start = time.perf_counter()
+                d = theirs.decode(s)
+                t_theirs += time.perf_counter() - start
                 x = np.zeros(code.n, dtype=np.uint8)
                 x[o.errors] = 1
-                same += bool(np.array_equal(x, theirs.decode(s)))
+                same += bool(np.array_equal(x, d))
                 converged_same += o.converged == bool(theirs.converge)
             out["capacity"][f"{name}, {label}"] = {
                 "shots": shots,
                 "correction_disagreement": 1 - same / shots,
                 "convergence_disagreement": 1 - converged_same / shots,
+                # One call per shot from Python, both decoders.
+                "qso_us_per_shot": 1e6 * t_ours / shots,
+                "ldpc_us_per_shot": 1e6 * t_theirs / shots,
             }
+    # The Steane code (colour code d = 3): an error on the qubit of all
+    # three checks fires every detector; both decoders converge in BP to
+    # four errors (a logical error) with scaled min-sum.
+    steane = q.CssCode.color_code(3)
+    h = np.zeros((3, 7), dtype=np.uint8)
+    for i, c in enumerate(steane.z_checks):
+        h[i, c] = 1
+    shared = int(np.flatnonzero(h.all(axis=0))[0])
+    dem = q.DetectorErrorModel(3, [(0.01, list(np.flatnonzero(h[:, j])), 0) for j in range(7)])
+    o = q.BpOsdDecoder(dem).decode_detailed([0, 1, 2])
+    theirs = LdpcBpOsd(h, error_rate=0.01, max_iter=50, bp_method="minimum_sum", ms_scaling_factor=0.625,
+                       osd_method="osd_cs", osd_order=7)
+    d = theirs.decode(np.ones(3, dtype=np.uint8))
+    out["steane_shared_qubit"] = {
+        "qso": o.errors,
+        "ldpc": [int(j) for j in np.flatnonzero(d)],
+        "qso_converged": o.converged,
+        "ldpc_converged": bool(theirs.converge),
+        "shared_qubit": shared,
+    }
+    # Exhaustive OSD after one BP iteration on random models with equal
+    # priors: the same subsets in the same order.
+    same = total = 0
+    for _ in range(20 if quick else 100):
+        m_, n_ = 8, 30
+        h = (rng.random((m_, n_)) < 0.25).astype(np.uint8)
+        h[rng.integers(m_), :] |= h.sum(axis=0) == 0
+        dem = q.DetectorErrorModel(m_, [(0.05, list(np.flatnonzero(h[:, j])), 0) for j in range(n_)])
+        ours = q.BpOsdDecoder(dem, max_iterations=1, osd="exhaustive", osd_order=4)
+        theirs = LdpcBpOsd(h, error_rate=0.05, max_iter=1, bp_method="minimum_sum", ms_scaling_factor=0.625,
+                           osd_method="osd_e", osd_order=4)
+        for _ in range(20):
+            s = h @ (rng.random(n_) < 0.15).astype(np.uint8) % 2
+            if not s.any():
+                continue
+            x = np.zeros(n_, dtype=np.uint8)
+            x[ours.decode_detailed(list(np.flatnonzero(s))).errors] = 1
+            same += bool(np.array_equal(x, theirs.decode(s)))
+            total += 1
+    out["exhaustive_random_models"] = {"shots": total, "correction_disagreement": 1 - same / total}
     circuit_cases = {
         "colour d=5, 5 rounds, p=0.003": (q.CssCode.color_code(5), 5, 0.003),
         "[[72, 12, 6]], 6 rounds, p=0.002": (q.CssCode.bivariate_bicycle_code(72)[0], 6, 0.002),
@@ -684,6 +734,12 @@ def check(c: dict) -> list[str]:
             failures.append(f"detection-event rates of {name} differ from Stim's: {r}")
         if not r["matching_disagreement_with_pymatching"] <= TOLERANCES["matching_disagreement"]:
             failures.append(f"matching predictions on {name} differ from PyMatching's: {r}")
+    st = c["bposd_vs_ldpc"]["steane_shared_qubit"]
+    if st["qso"] != st["ldpc"] or st["qso_converged"] != st["ldpc_converged"]:
+        failures.append(f"BP+OSD on the Steane code's shared qubit differs from ldpc's: {st}")
+    ex = c["bposd_vs_ldpc"]["exhaustive_random_models"]
+    if not ex["correction_disagreement"] <= TOLERANCES["bposd_min_sum_disagreement"]:
+        failures.append(f"exhaustive OSD differs from ldpc's: {ex}")
     for name, r in c["bposd_vs_ldpc"]["capacity"].items():
         key = "bposd_product_sum_disagreement" if "product-sum" in name else "bposd_min_sum_disagreement"
         if not max(r["correction_disagreement"], r["convergence_disagreement"]) <= TOLERANCES[key]:

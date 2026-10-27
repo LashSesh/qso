@@ -418,7 +418,13 @@ impl BpOsdDecoder {
         let mut best_x = x0.clone();
         let mut best = weight_of(&x0);
         let order_limit = self.options.osd_order.min(rest.len());
-        match self.options.osd {
+        // Order 0 is OSD-0 for every method, as in `ldpc`.
+        let method = if self.options.osd_order == 0 {
+            OsdMethod::Zero
+        } else {
+            self.options.osd
+        };
+        match method {
             OsdMethod::Zero => {}
             OsdMethod::CombinationSweep => {
                 // Single flips of every column outside the set, by the
@@ -461,13 +467,13 @@ impl BpOsdDecoder {
                     .iter()
                     .map(|&t| self.representation(t))
                     .collect();
-                // Gray code: one flip per step.
-                let mut x = x0.clone();
-                let mut flips = 0u64;
-                for step in 1u64..1 << order_limit {
-                    let bit = step.trailing_zeros() as usize;
-                    flips ^= 1 << bit;
-                    gf2::xor_into(&mut x, &reps[bit]);
+                // Subsets in binary order (the first of equally likely
+                // candidates is kept, as in `ldpc`).
+                for flips in 1u64..1 << order_limit {
+                    let mut x = x0.clone();
+                    for k in (0..order_limit).filter(|&k| flips >> k & 1 == 1) {
+                        gf2::xor_into(&mut x, &reps[k]);
+                    }
                     let w = weight_of(&x)
                         + (0..order_limit)
                             .filter(|&k| flips >> k & 1 == 1)
@@ -479,7 +485,7 @@ impl BpOsdDecoder {
                             .filter(|&k| flips >> k & 1 == 1)
                             .map(|k| rest[k])
                             .collect();
-                        best_x = x.clone();
+                        best_x = x;
                     }
                 }
             }

@@ -33,15 +33,17 @@ pub mod matching;
 pub mod sparse;
 mod stim;
 
-pub use bposd::{BpMethod, BpOsdDecoder, BpOsdOptions, BpOsdOutcome, OsdMethod};
+pub use bposd::{
+    BpMethod, BpOsdDecoder, BpOsdOptions, BpOsdOutcome, MAX_BPOSD_DETECTORS, OsdMethod,
+};
 pub use circuit::{DetectorCircuit, MAX_OBSERVABLES, Noise, QecOp};
 pub use codes::{
     CircuitNoise, MemoryBasis, repetition_code_memory, surface_code_memory,
     surface_code_memory_with,
 };
-pub use css::{CssCode, css_code_memory};
+pub use css::{CssCode, MAX_CSS_QUBITS, css_code_memory};
 pub use decoder::{MatchingEdge, MatchingGraph, UnionFindDecoder};
-pub use dem::{DetectorErrorModel, ErrorMechanism, detector_error_model};
+pub use dem::{DetectorErrorModel, ErrorMechanism, MAX_MODEL_DETECTORS, detector_error_model};
 pub use frame::{DetectorSamples, sample_detectors};
 pub use matching::{MAX_MATCHING_PAIRS, MatchingDecoder};
 pub use sparse::SparseMatchingDecoder;
@@ -85,25 +87,23 @@ pub enum DecoderKind {
     /// ([`SparseMatchingDecoder`]; the same weights as
     /// [`MatchingDecoder`]).
     Matching,
-    /// BP+OSD ([`BpOsdDecoder`] with its default options) on the model
-    /// without decomposition.
+    /// BP+OSD ([`BpOsdDecoder`] with its default options); for a circuit
+    /// ([`DecoderKind::build_for`]) on the model without decomposition.
     BpOsd,
 }
 
 impl DecoderKind {
-    /// The decoder of a matching graph.
-    pub fn build(self, graph: MatchingGraph) -> Box<dyn Decoder + Send> {
-        match self {
+    /// The decoder of a matching graph (BP+OSD on the graph's errors; it
+    /// takes at most [`MAX_BPOSD_DETECTORS`](bposd::MAX_BPOSD_DETECTORS)
+    /// detectors).
+    pub fn build(self, graph: MatchingGraph) -> Result<Box<dyn Decoder + Send>> {
+        Ok(match self {
             DecoderKind::UnionFind => Box::new(UnionFindDecoder::new(graph)),
             DecoderKind::Matching => Box::new(SparseMatchingDecoder::new(graph)),
             DecoderKind::BpOsd => {
-                let dem = graph.to_dem();
-                Box::new(
-                    BpOsdDecoder::new(&dem, BpOsdOptions::default())
-                        .expect("a matching graph is a valid model"),
-                )
+                Box::new(BpOsdDecoder::new(&graph.to_dem(), BpOsdOptions::default())?)
             }
-        }
+        })
     }
 
     /// The decoder of a circuit's detector error model: decomposed into a
@@ -116,7 +116,7 @@ impl DecoderKind {
             )?),
             _ => self.build(MatchingGraph::from_dem(&detector_error_model(
                 circuit, true,
-            )?)?),
+            )?)?)?,
         })
     }
 }

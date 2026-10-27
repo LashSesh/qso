@@ -359,3 +359,51 @@ fn bposd_is_close_to_matching_on_surface_codes() {
     }
     assert!(same * 10 >= total * 9, "{same} of {total}");
 }
+
+#[test]
+fn sizes_are_checked_before_building() {
+    use crate::qec::DecoderKind;
+    // More detectors than BP+OSD takes: an error, not a panic.
+    let dem = DetectorErrorModel {
+        n_detectors: MAX_BPOSD_DETECTORS + 1,
+        n_observables: 1,
+        errors: vec![ErrorMechanism {
+            probability: 0.1,
+            detectors: vec![0, 1],
+            observables: 1,
+        }],
+    };
+    let graph = MatchingGraph::from_dem(&dem).unwrap();
+    assert!(DecoderKind::BpOsd.build(graph.clone()).is_err());
+    assert!(DecoderKind::Matching.build(graph).is_ok());
+    let huge = DetectorErrorModel {
+        n_detectors: usize::MAX,
+        ..dem
+    };
+    assert!(MatchingGraph::from_dem(&huge).is_err());
+    // A sweep of order 0 is OSD-0 (as in ldpc).
+    let mut rng = Rng::seed_from_u64(4);
+    let dem = random_dem(&mut rng, 20, 60);
+    let base = BpOsdOptions {
+        max_iterations: 0,
+        osd_order: 0,
+        ..Default::default()
+    };
+    let mut sweep = BpOsdDecoder::new(&dem, base).unwrap();
+    let mut zero = BpOsdDecoder::new(
+        &dem,
+        BpOsdOptions {
+            osd: OsdMethod::Zero,
+            ..base
+        },
+    )
+    .unwrap();
+    for _ in 0..50 {
+        let set: Vec<usize> = (0..60).filter(|_| rng.below(5) == 0).collect();
+        let fired = syndrome_of(&dem, &set);
+        assert_eq!(
+            sweep.decode_detailed(&fired).unwrap(),
+            zero.decode_detailed(&fired).unwrap()
+        );
+    }
+}

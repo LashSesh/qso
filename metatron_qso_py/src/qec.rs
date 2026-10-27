@@ -384,6 +384,18 @@ impl PyDetectorErrorModel {
         errors: Vec<(f64, Vec<usize>, u64)>,
         n_observables: Option<usize>,
     ) -> PyResult<Self> {
+        if n_detectors > qec::MAX_MODEL_DETECTORS {
+            return Err(invalid(format!(
+                "at most {} detectors",
+                qec::MAX_MODEL_DETECTORS
+            )));
+        }
+        if n_observables.is_some_and(|o| o > qec::MAX_OBSERVABLES) {
+            return Err(invalid(format!(
+                "at most {} observables",
+                qec::MAX_OBSERVABLES
+            )));
+        }
         let mut out = Vec::with_capacity(errors.len());
         for (k, (probability, mut detectors, observables)) in errors.into_iter().enumerate() {
             if !(0.0..=1.0).contains(&probability) {

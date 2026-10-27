@@ -208,3 +208,14 @@ fn cnot_layers_touch_each_qubit_once() {
     // Greedy colouring needs at most 2Δ − 1 layers (Δ = 6 here).
     assert!(l.len() <= 11, "{}", l.len());
 }
+
+#[test]
+fn bicycle_exponents_reduce_and_sizes_are_bounded() {
+    // x^(2⁶⁴ − 1) = x³ on Z_6: the [[72, 12]] code.
+    let b = [(0, 3), (1, 0), (2, 0)];
+    let huge = CssCode::bivariate_bicycle(6, 6, &[(usize::MAX, 0), (0, 1), (0, 2 + 6 * 1000)], &b)
+        .unwrap();
+    let plain = CssCode::bivariate_bicycle(6, 6, &[(3, 0), (0, 1), (0, 2)], &b).unwrap();
+    assert_eq!(huge, plain);
+    assert!(CssCode::new(MAX_CSS_QUBITS + 1, vec![], vec![]).is_err());
+}

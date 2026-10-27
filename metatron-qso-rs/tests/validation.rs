@@ -1262,7 +1262,8 @@ fn bposd_decodes_colour_and_bicycle_codes() {
         assert_eq!((c.n(), c.k()), (n, k));
     }
     // Circuit-level noise p = 0.002, d rounds: the colour codes of distance
-    // 5 and 7 fail far less often than distance 3 (3.2·10⁻², 4.7·10⁻³ and
+    // 5 and 7 fail far less often than distance 3, and 7 less often than 5
+    // (3.2·10⁻², 4.7·10⁻³ and
     // 2.2·10⁻³ at 20 000 shots), and the [[72, 12, 6]] code at p = 0.001
     // protects its 12 qubits with a failure rate of about 1.5·10⁻³.
     let rate = |code: &CssCode, rounds: usize, p: f64, shots: usize| {
@@ -1278,7 +1279,7 @@ fn bposd_decodes_colour_and_bicycle_codes() {
     eprintln!("colour codes d = 3, 5, 7: {colour:?}");
     assert!(colour[0] > 0.02, "{colour:?}");
     assert!(
-        colour[1] < colour[0] / 3.0 && colour[2] < colour[0] / 3.0,
+        colour[1] < colour[0] / 3.0 && colour[2] < colour[1],
         "{colour:?}"
     );
     let bb = rate(

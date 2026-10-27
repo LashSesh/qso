@@ -11,8 +11,8 @@ second stage — 1.10 (exact decoding and Stim circuits), 1.11 (the
 state-vector core at memory bandwidth), 1.12 (noise learning) and 1.13
 (walks beyond static Hamiltonians) — ship together as release 1.6.0;
 finished milestones are released together, not one by one. The third
-stage (1.14 to 1.17) is delivered and not yet released; the fourth stage
-(1.18 to 1.21) is planned. Up to 1.3
+stage (1.14 to 1.17) is delivered and not yet released; of the fourth
+stage (1.18 to 1.21), 1.18 and 1.19 are delivered and 1.20 is in progress. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -49,10 +49,10 @@ which withdraws the results of version 1.
 | Statevector speed | specialised kernels (1.1); gate fusion and cache blocking (1.3.0): 16-qubit layers 4.7× and 18–24-qubit layers 1.6–2.6× faster than in 1.2; batched evaluation; AVX and NEON kernels close to memory bandwidth and a blocked adjoint pass (1.11) | no single precision; worker threads sleep when idle, so short isolated simulations on virtual machines run cold — see [measurements](#measured-performance-against-established-simulators) |
 | Boson sampling | exact probabilities and exact sampling (1.1); partial distinguishability, loss and Gaussian boson sampling with hafnians and torontonians (1.14) | mixed Gaussian states with many photons spread over many modes are impractical (10¹² operations at 20 photons in 10 modes) |
 | Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | noise learning for layers of two-qubit Clifford gates only, on density matrices (1.12); no leakage or non-Markovian noise, channels on at most two qubits; virtual distillation (1.17) mitigates only its measured copies' preparation |
-| Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13) | time-dependent Hamiltonians and decoherent coined walks without symmetry reduction; no pretty-good-transfer decision (only the best fidelity in a time window) |
+| Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18) | time-dependent Hamiltonians and decoherent coined walks without symmetry reduction; pretty good transfer on other graphs |
 | Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5) | Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); no d functions (no larger bases, nothing beyond neon), no restricted open-shell Hamiltonians, no tight commutator bound for product formulas of order 4 and higher |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
-| Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16) | only errors that flip at most two detectors can be decoded: no colour codes, no quantum LDPC codes, no correlated decoding |
+| Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19) | no correlated decoding; syndrome circuits of CSS codes are not tuned against hook errors |
 | Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9) | no MPS in the browser build |
 | Documentation | user guide, executed tutorials and Python reference on GitHub Pages (1.2) | no Rust-specific tutorials; no hosted documentation per released version |
 | Engineering | CI on Linux (x86_64, arm64), macOS and Windows; Miri, fuzzing, API checks, weekly cross-validation and benchmark tracking; Trusted Publishing (1.2) | no coverage measurement; fuzzing only of the parsers and deserialisers; the five simulators (state vector, density matrix, trajectories, MPS, tableau) are compared on fixed cases, not on random circuits |
@@ -776,7 +776,7 @@ table of section 1. As before, each milestone closes a gap without a new
 dependency of the crate and has an independent reference; reference tools
 (here the Python package `ldpc`) enter only the cross-validation.
 
-### 1.18 — Pretty good state transfer, decided exactly (M)
+### 1.18 — Pretty good state transfer, decided exactly (M, delivered)
 
 Use case: quantum walks as transport. Perfect state transfer is rare;
 pretty good state transfer — fidelity arbitrarily close to 1 at suitable
@@ -790,6 +790,10 @@ not by searching a time window.
 | Exact eigenvalues | for graphs whose eigenvalues lie in cyclotomic fields (circulants and Cayley graphs of abelian groups, paths and their symmetric quotients): eigenvalues as rational vectors in a basis of `Q(ζ_N)`, integer relations by Hermite normal form; other graphs answer "undecided" |
 | Times | for a decided pair, a time with fidelity above a requested `1 − ε` (simultaneous Diophantine approximation), checked by evolving the walk |
 
+(The criterion in the table, stated precisely: every relation
+`Σ_{r≥1} ℓ_r (θ_r − θ_0) = 0` has `Σ ℓ_r δ_r` even, with `δ_r` marking the
+eigenspaces where the sign differs from that of `θ_0`.)
+
 Validation: paths `P_n` have PGST between their ends exactly when `n + 1`
 is a prime, twice a prime or a power of two (Godsil, Kirkland, Severini
 and Smith 2012), checked for every `n` up to a few hundred; cycles `C_n`
@@ -797,7 +801,35 @@ have PGST between antipodal vertices exactly when `n` is a power of two
 (Pal 2017); perfect state transfer (already decided since 1.3) implies
 PGST; every returned time reaches its fidelity in the simulated walk.
 
-### 1.19 — Decoding beyond matching (M–L)
+| Deliverable | Delivered | Not done, and why |
+|---|---|---|
+| Strong cospectrality | from the closed-form eigenvectors of each family, exactly (sine and cosine signs by residues) | — |
+| The decision | `walks::PrettyGoodTransfer` (Python `PrettyGoodTransfer`, `qso transfer`): Kronecker's criterion with the relations as the integer kernel of the eigenvalues' power-basis coordinates in `Q(ζ_N)`; obstructions as witnesses; PST and its time from the same integer data | a parity-only search (rational kernel and 2-adic saturation) that would avoid 128-bit overflow on large non-power-of-two cycles: the column reduction errs there instead of answering, and refuses relation searches above 2²⁴ integers |
+| Exact eigenvalues | paths (adjacency and Laplacian), cycles, Cayley graphs of finite abelian groups | symmetric quotients of paths; other graphs give an error rather than "undecided" (the CLI says "undecided") |
+| Times | `best_transfer`, a window search, with `fidelity(t)` exact for any pair | the Diophantine construction of a time for a requested `1 − ε`: PGST times grow quickly with the fidelity, and the window search with a propagated-walk check covers the cases a user can simulate |
+
+Delivered as planned otherwise: the three theorems hold for every size
+tested (paths n ≤ 300, Laplacian paths n ≤ 200, cycles n ≤ 512, both
+generators), PST times and fidelities agree with `StateTransfer` on
+hypercubes, circulants, paths, tori, `Z_3 × Z_5` and H(2, 3), and a P₄ time
+reaches fidelity 0.999 in the walk.
+
+An independent review checked the decisions against its own exact oracle
+(big-integer elimination with 2-adic saturation) on 21 320 path pairs and
+18 554 Cayley pairs, against van Bommel's characterisation of all mirror
+pairs of paths and against Bernasconi–Godsil–Severini on cube-like graphs,
+and found no wrong decision. It found that `fidelity` was wrong for pairs
+that are not strongly cospectral (it summed only the cospectral
+eigenspaces), that a large Cayley group exhausted memory and aborted the
+process, that PST times were confirmed in floating point (and lost at
+extreme hopping rates), that duplicate connection elements and empty sets
+were accepted, that some errors named the wrong argument, and that the
+guide's timings were untested and partly wrong. All fixed: the fidelity
+comes from the closed-form `⟨v|E_θ|u⟩` and is tested for every pair, the
+relation search is bounded before it allocates, PST is decided from the
+integer data, and the guide states the measured costs.
+
+### 1.19 — Decoding beyond matching (M–L, delivered)
 
 Use case: codes whose errors flip more than two detectors — colour codes
 and quantum LDPC codes such as the bivariate bicycle codes.
@@ -814,6 +846,40 @@ predictions against the `ldpc` package on the same error models and
 syndromes in the cross-validation; colour-code circuits against Stim's
 generated colour-code circuits (error models term by term); the code
 parameters `n` and `k` of the bivariate bicycle codes by GF(2) rank.
+
+| Deliverable | Delivered | Not done, and why |
+|---|---|---|
+| BP+OSD | `qec::BpOsdDecoder` (Python `BpOsdDecoder`): min-sum (fixed or adaptive factor) and product-sum BP, OSD-0, combination sweep and exhaustive OSD on a reduced GF(2) basis | serial and layered schedules: flooding is what `ldpc` defaults to and what the comparison needs |
+| Codes | `qec::CssCode` from any checks, triangular 6.6.6 colour codes, bivariate bicycle codes and the table of Bravyi et al.; `css_code_memory` in both bases | the depth-8 syndrome circuit of Bravyi et al. and hook-aware colour-code schedules: the generic schedule measures X then Z checks in greedy layers, so its circuit distance can be lower |
+| Interfaces | `DecoderKind::BpOsd`, `qso qec --code color\|bb --decoder bposd`, Python `css_code_memory`, `logical_error_rate(..., decoder="bposd")`, `DetectorErrorModel` from a list | — |
+
+Validation as planned, with one change: Stim's generated colour-code
+circuit (`color_code:memory_xyz`) uses C_XYZ gates outside the importer's
+gate set, so QSO's own CSS circuits are compared with Stim's error models
+term by term instead (to 10⁻¹⁵). Exhaustive OSD equals enumeration on
+every syndrome of 150 random models with hyperedges; every weight ≤ 2
+error is corrected on the colour codes d = 5, 7 and the [[72, 12, 6]]
+code; against `ldpc` 2.4, min-sum BP with OSD-CS and exhaustive OSD gives
+the same correction on every shot with equal priors (product-sum: 0.3% on
+[[144, 12, 12]]), and circuit-level predictions differ in at most 0.1% of
+shots, where the OSD scores differ (Σ ln((1 − p)/p) against Σ ln(1/p)).
+One finding is recorded rather than fixed, because `ldpc` shares it: on
+the Steane code, scaled min-sum BP converges on four errors for the error
+on the qubit of all three checks.
+
+An independent review confirmed the BP messages line by line against
+`ldpc`, the OSD solution and candidate mapping, the GF(2) basis, the code
+constructions and the memory circuits, and fuzzed 300 models with
+enumeration. It found that a directly built error model with an enormous
+detector count panicked or aborted the matching decoders, that
+`DecoderKind::BpOsd.build` could panic, that bicycle-code exponents beyond
+2⁶³ wrapped into a wrong code, that `CssCode` had no size limit (hours at
+65 536 qubits), that exhaustive OSD and order-0 sweeps broke ties
+differently from `ldpc`, and that the README overstated the agreement and
+the guide quoted untimed speeds. All fixed: models, decoders and codes are
+bounded with errors, exponents are reduced, tie order and order 0 follow
+`ldpc`, and the cross-validation now times both decoders and checks the
+Steane case and exhaustive OSD.
 
 ### 1.20 — Single precision (M)
 

@@ -141,3 +141,15 @@ def test_invalid_input_raises() -> None:
         q.css_code_memory(q.CssCode.color_code(3), 0)
     with pytest.raises(ValueError):
         q.logical_error_rate(q.css_code_memory(q.CssCode.color_code(3), 1), 10, decoder="bp")
+
+
+def test_constructed_models_are_bounded() -> None:
+    with pytest.raises(ValueError):
+        q.DetectorErrorModel(2**62, [(0.1, [0], 1)])
+    with pytest.raises(ValueError):
+        q.DetectorErrorModel(2, [(0.1, [0], 1)], n_observables=10**9)
+    big = q.DetectorErrorModel(20_000, [(0.1, [0, 1], 1)])
+    with pytest.raises(ValueError):
+        q.BpOsdDecoder(big)
+    huge = q.CssCode.bivariate_bicycle(6, 6, [(2**64 - 1, 0), (0, 1), (0, 2)], [(0, 3), (1, 0), (2, 0)])
+    assert huge.k == 12

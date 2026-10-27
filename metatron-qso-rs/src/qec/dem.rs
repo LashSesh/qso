@@ -32,6 +32,9 @@ pub struct ErrorMechanism {
     pub observables: u64,
 }
 
+/// Most detectors of a model: a circuit has at most one per operation.
+pub const MAX_MODEL_DETECTORS: usize = super::circuit::MAX_QEC_OPERATIONS;
+
 /// Independent error mechanisms of a circuit.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DetectorErrorModel {

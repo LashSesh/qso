@@ -1,13 +1,16 @@
 //! CSS codes given by their checks: triangular colour codes, bivariate
 //! bicycle codes, and memory experiments for any of them.
 
-use super::circuit::{DetectorCircuit, MAX_OBSERVABLES, MAX_QEC_QUBITS, Noise};
+use super::circuit::{DetectorCircuit, MAX_OBSERVABLES, Noise};
 use super::codes::{CircuitNoise, MAX_DISTANCE, MemoryBasis, Noisy, check_rounds, check_size};
 use super::gf2::{self, Basis};
 use crate::error::{QsoError, Result};
 
 /// Largest `l · m` of a bivariate bicycle code (it has `2 l m` qubits).
 pub const MAX_BICYCLE_SIZE: usize = 1 << 12;
+/// Most qubits of a [`CssCode`]: finding the logical operators costs
+/// about n³/64 word operations (seconds at this size).
+pub const MAX_CSS_QUBITS: usize = 1 << 13;
 
 /// A CSS code: X-type and Z-type checks on `n` qubits, every X check
 /// overlapping every Z check evenly, and a basis of logical operators,
@@ -26,10 +29,10 @@ impl CssCode {
     /// The code of the given checks (supports of X-type and Z-type
     /// stabilizer generators; they may be dependent).
     pub fn new(n: usize, x_checks: Vec<Vec<usize>>, z_checks: Vec<Vec<usize>>) -> Result<Self> {
-        if n == 0 || n > MAX_QEC_QUBITS {
+        if n == 0 || n > MAX_CSS_QUBITS {
             return Err(QsoError::invalid(
                 "n",
-                format!("between 1 and {MAX_QEC_QUBITS} qubits"),
+                format!("between 1 and {MAX_CSS_QUBITS} qubits"),
             ));
         }
         let normal = |checks: Vec<Vec<usize>>, name: &'static str| -> Result<Vec<Vec<usize>>> {
@@ -188,7 +191,9 @@ impl CssCode {
         let row = |terms: &[(usize, usize)], i: i64, j: i64, sign: i64, offset: usize| {
             let mut v = Vec::new();
             for &(p, q) in terms {
-                let c = offset + idx(i + sign * p as i64, j + sign * q as i64);
+                // Exponents modulo the orders of x and y (x^l = y^m = 1).
+                let (p, q) = ((p % l) as i64, (q % m) as i64);
+                let c = offset + idx(i + sign * p, j + sign * q);
                 // Equal monomials cancel.
                 if let Some(pos) = v.iter().position(|&x| x == c) {
                     v.swap_remove(pos);
