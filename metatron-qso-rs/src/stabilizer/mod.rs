@@ -147,13 +147,28 @@ fn transpose64(a: &mut [u64; 64]) {
     }
 }
 
+/// Largest rounding of θ (8 ulp) for which a rotation can still be
+/// recognised as Clifford; larger angles (|θ| ≳ 5.6·10⁸) are refused,
+/// since the multiple of π/2 they are near is no longer determined (from
+/// |θ| ≈ 4·10¹⁴ on, every angle passed before this limit).
+const MAX_ANGLE_ROUNDING: f64 = 1e-6;
+
+/// How far a rotation angle may lie from a multiple of π/2 and still be
+/// applied as a Clifford gate: 10⁻⁹ plus the rounding of θ.
+pub fn clifford_tolerance(theta: f64) -> f64 {
+    1e-9 + (8.0 * f64::EPSILON * theta.abs()).min(MAX_ANGLE_ROUNDING)
+}
+
 fn quarter_turns(theta: f64, what: &str) -> Result<u32> {
     let r = (theta / FRAC_PI_2).round();
     // An absolute tolerance on the angle, plus the rounding of θ itself:
     // huge angles are Clifford only when they are multiples of π/2 to
     // within a few units in the last place.
-    let tolerance = 1e-9 + 8.0 * f64::EPSILON * theta.abs();
-    if !theta.is_finite() || (theta - r * FRAC_PI_2).abs() > tolerance {
+    let tolerance = clifford_tolerance(theta);
+    if !theta.is_finite()
+        || 8.0 * f64::EPSILON * theta.abs() > MAX_ANGLE_ROUNDING
+        || (theta - r * FRAC_PI_2).abs() > tolerance
+    {
         return Err(QsoError::invalid(
             "gate",
             format!("{what}({theta}) is not a Clifford gate (angles must be multiples of π/2)"),

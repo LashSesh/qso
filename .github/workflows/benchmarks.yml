@@ -14,7 +14,7 @@ name: Benchmarks
 #                     branch; a slowdown of more than 25 % fails the job;
 #   fuzz            – ten minutes per fuzz target, with the corpus kept
 #                     between runs;
-#   differential    – 5000 random circuits per property test on every
+#   differential    – 20 000 random circuits per property test on every
 #                     simulator that takes them (tests/differential.rs).
 #
 # The JSON results are uploaded as artefacts.
@@ -131,7 +131,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Long differential run
         env:
-          QSO_DIFFERENTIAL_CASES: "5000"
+          QSO_DIFFERENTIAL_CASES: "20000"
         run: cargo test --release -p metatron-qso-rs --all-features --test differential
 
   fuzz:

@@ -100,4 +100,6 @@ fuzz_target!(|data: &[u8]| {
     }
     let report = compare(&c, &[]).expect("every decoded circuit runs");
     assert!(report.failures().is_empty(), "{:?}\n{report:?}", report.failures());
+    // Every gate decoded here has an OpenQASM 2 and 3 form.
+    assert!(report.qasm2.is_some() && report.qasm3.is_some(), "{report:?}");
 });

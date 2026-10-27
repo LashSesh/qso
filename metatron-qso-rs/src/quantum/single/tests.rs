@@ -105,8 +105,17 @@ fn single_precision_states_convert_sample_and_measure() {
     assert!((d.amplitudes()[1].arg() + 0.5).abs() < 1e-7);
 }
 
+/// Bit patterns, with every NaN mapped to one pattern (its sign and
+/// payload are not specified, and Miri chooses them at random).
 fn bits(v: &[C32]) -> Vec<(u32, u32)> {
-    v.iter().map(|z| (z.re.to_bits(), z.im.to_bits())).collect()
+    let b = |x: f32| {
+        if x.is_nan() {
+            f32::NAN.to_bits()
+        } else {
+            x.to_bits()
+        }
+    };
+    v.iter().map(|z| (b(z.re), b(z.im))).collect()
 }
 
 #[test]

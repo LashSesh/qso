@@ -386,11 +386,19 @@ impl Mps {
     /// number and the discarded weight fraction.
     fn keep(&self, sv: &[f64]) -> (usize, f64) {
         let total: f64 = sv.iter().map(|s| s * s).sum();
-        if total == 0.0 {
+        if total == 0.0 || !total.is_finite() {
             return (1, 0.0);
         }
         let mut keep = sv.len().min(self.options.max_bond);
         let mut dropped: f64 = sv[keep..].iter().map(|s| s * s).sum();
+        // Singular values whose weight is below the rounding of the Gram
+        // matrix (ε · total) are noise of the eigendecomposition, whatever
+        // the cutoff: kept, the next Gram matrix squares them to 10⁻¹⁰⁰
+        // and below, and its eigendecomposition fails.
+        while keep > 1 && sv[keep - 1] * sv[keep - 1] <= f64::EPSILON * total {
+            dropped += sv[keep - 1] * sv[keep - 1];
+            keep -= 1;
+        }
         while keep > 1 {
             let w = sv[keep - 1] * sv[keep - 1];
             if dropped + w > self.options.cutoff * total {

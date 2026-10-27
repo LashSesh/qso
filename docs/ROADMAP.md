@@ -943,8 +943,22 @@ in CI on every change and longer on the scheduled job.
 | Deliverable | Delivered | Not done, and why |
 |---|---|---|
 | Coverage | a CI job (`cargo-llvm-cov`, nightly for branches) with totals and the least-covered files in the job summary; the HTML report published with the documentation under `coverage/`; at this milestone 90.5 % of lines, 92.8 % of functions, 90.6 % of regions and 79.4 % of branches | coverage of the Python bindings and the CLI: their tests run a separate build of the extension and the binary, so the CLI's source (`src/bin/qso.rs`, 872 lines) counts in the totals as uncovered |
-| Differential testing | `differential::compare`: one circuit on the single-precision state vector, the noiseless density matrix and trajectory, an MPS of unlimited bond dimension, the tableau (all Pauli expectation values for Clifford circuits) and the OpenQASM 2 and 3 round trips, against the double-precision state vector; property tests on random circuits of every gate kind (controls, dense unitaries, 1 to 6 qubits) and a `differential` fuzz target, both on every change and longer every week | mid-circuit programs across simulators: their outcomes are distributions, compared already by the OpenQASM fuzz target and the program tests |
-| Fixes | none were needed: over 12 000 property-test circuits and 16 000 fuzzed ones agreed to rounding | — |
+| Differential testing | `differential::compare`: one circuit on the single-precision state vector, the noiseless density matrix and trajectory, an MPS of unlimited bond dimension, the tableau (all Pauli expectation values for Clifford circuits) and the OpenQASM 2 and 3 round trips, against the double-precision state vector; property tests on random circuits of every gate kind (up to three controls, dense unitaries on up to three qubits, symbolic and special angles, 1 to 10 qubits) and a `differential` fuzz target, both on every change and longer every week | mid-circuit programs across simulators: their outcomes are distributions, compared already by the OpenQASM fuzz target and the program tests |
+| Fixes | three, each with a regression test: an MPS without cutoff kept singular values of 10⁻⁴⁰, whose squares broke the next eigendecomposition (NaN states; the fuzz target could crash on it); the tableau accepted any rotation by an angle above 4·10¹⁴ as Clifford; the single-precision kernel test compared NaN bit patterns, which Miri randomises | — |
+
+An independent review found the three faults above with its own
+adversarial circuits, and showed that the first version of the checks was
+too weak: `1 − F` is quadratic in the error, so a tolerance of 10⁻⁹ let
+angle errors of 5·10⁻⁵ through (a mutation that rounded every exported
+angle to six digits passed), norm errors were clamped away, export
+failures were taken for "no form", the tableau check was nearly vacuous
+beyond five qubits, and the generators missed gate kinds, multiple
+controls, three-qubit unitaries, parameters and larger registers. All
+fixed: amplitudes are compared after aligning the phase (an angle off by
+10⁻⁸ shows), norms are checked, only the exporters' explicit refusals
+count as "no form", the tableau's generators are checked, and the
+generators cover what was missing. 40 000 property-test circuits and
+21 000 fuzzed ones then agreed.
 
 ### Not in this stage
 

@@ -20,8 +20,15 @@ testing) of the fourth, which completes it.
     vector, density matrix, trajectory, unbounded MPS, stabilizer tableau,
     OpenQASM 2 and 3 round trips — with each deviation from the
     double-precision state vector.
-  - Property tests on random circuits (48 per test on every change, 5000
-    in the weekly job) and a `differential` fuzz target.
+  - Amplitudes compared after aligning the global phase (linear in the
+    error), norms and traces separately; property tests on random
+    circuits of every gate kind, controls, dense unitaries, parameters,
+    1 to 10 qubits (256 per test on every change, 20 000 in the weekly
+    job) and a `differential` fuzz target.
+  - Fixed on the way: an MPS without cutoff turned to NaN (singular
+    values below the rounding of the Gram matrix are now always
+    dropped); the tableau refuses rotations by angles above about 5.6·10⁸ rad,
+    where any angle passed as Clifford from 4·10¹⁴ on.
   - Line and branch coverage measured in CI and published with the
     documentation (90.5 % of lines, 79.4 % of branches).
 

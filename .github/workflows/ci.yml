@@ -194,6 +194,9 @@ jobs:
   coverage:
     name: coverage (lines and branches)
     runs-on: ubuntu-latest
+    env:
+      # Nightly may warn where stable does not.
+      RUSTFLAGS: ""
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
