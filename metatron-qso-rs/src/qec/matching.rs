@@ -192,7 +192,8 @@ impl MatchingDecoder {
     }
 
     /// The prediction and the weight of the correction, `Σ ln((1 − p)/p)`
-    /// over its errors (up to the rounding of the weights to integers).
+    /// over its errors (errors with `p ≥ ½` count 0; up to the rounding of
+    /// the weights to integers).
     pub fn decode_with_weight(&mut self, fired: &[usize]) -> Result<(u64, f64)> {
         let (prediction, weight) = self.decode_weighted(fired)?;
         Ok((prediction, weight as f64 / self.scale))

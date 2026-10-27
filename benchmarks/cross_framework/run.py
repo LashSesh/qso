@@ -296,10 +296,13 @@ def qec_vs_stim(quick: bool) -> dict:
             reference_flips |= bits[:, k].astype(np.uint64) << np.uint64(k)
         qso_flips = q.MatchingDecoder(dem).decode_batch(det)
         sparse_flips = q.SparseMatchingDecoder(dem).decode_batch(det)
-        # Correction weights shot by shot (first 2000 shots).
+        # Correction weights shot by shot: the first 2000 shots and every
+        # shot whose prediction differs from PyMatching's.
         sparse = q.SparseMatchingDecoder(dem)
         weight_diff = 0.0
-        for row in det[:2000]:
+        differing = np.flatnonzero(sparse_flips != reference_flips)
+        for s in sorted(set(range(min(2000, shots))) | set(differing.tolist())):
+            row = det[s]
             _, ours_w = sparse.decode_with_weight(list(np.flatnonzero(row)))
             _, theirs_w = reference.decode(row, return_weight=True)
             weight_diff = max(weight_diff, abs(ours_w - theirs_w) / max(1.0, theirs_w))
@@ -323,7 +326,8 @@ def qec_vs_stim(quick: bool) -> dict:
 
 def decoding_speed(quick: bool) -> dict:
     """Microseconds per shot of QSO's sparse matching decoder and of
-    PyMatching on the same error model and syndromes (one thread each)."""
+    PyMatching on the same error model and syndromes (one thread each;
+    after a warm-up, medians of interleaved repetitions)."""
     import pymatching
 
     import metatron_qso as q
@@ -343,12 +347,18 @@ def decoding_speed(quick: bool) -> dict:
                 reference.add_edge(dets[0], dets[1], fault_ids=faults, weight=weight, error_probability=pr, merge_strategy="smallest-weight")
         det, _ = c.sample(shots, seed=7)
         decoder = q.SparseMatchingDecoder(dem)
-        start = time.perf_counter()
-        decoder.decode_batch(det)
-        ours = time.perf_counter() - start
-        start = time.perf_counter()
-        reference.decode_batch(det)
-        theirs = time.perf_counter() - start
+        # Warm-up, then interleaved repetitions; medians.
+        decoder.decode_batch(det[:200])
+        reference.decode_batch(det[:200])
+        ours_times, theirs_times = [], []
+        for _ in range(3 if quick else 5):
+            start = time.perf_counter()
+            decoder.decode_batch(det)
+            ours_times.append(time.perf_counter() - start)
+            start = time.perf_counter()
+            reference.decode_batch(det)
+            theirs_times.append(time.perf_counter() - start)
+        ours, theirs = statistics.median(ours_times), statistics.median(theirs_times)
         out[f"surface d={d}, {d} rounds, p={p}"] = {
             "detectors": c.n_detectors,
             "shots": shots,

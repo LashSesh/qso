@@ -34,8 +34,10 @@ purification) of the [roadmap](docs/ROADMAP.md): its third stage.
   - The same correction weights as `MatchingDecoder` on every tested
     shot (every syndrome of random models, sampled memory experiments,
     dense random syndromes with nested and shattering blossoms).
-  - At d = 25, p = 0.001: 85 µs per shot instead of 94 ms; 0.8 to 2.3
-    times PyMatching's time on surface codes from d = 11 to 25.
+  - At d = 25, p = 0.001: 95 µs per shot instead of 94 ms; 1.1 to 1.9
+    times PyMatching's time on surface codes from d = 11 to 25 (up to 2.3
+    at p = 0.01 to 0.05); a chain of 2001 events that all fire (deeply
+    nested blossoms) 51 ms, PyMatching 1.3 s.
 
 - **Molecules from their geometry** (`chemistry::integrals`,
   `chemistry::scf`; Python `Molecule`, `AoIntegrals`, `hartree_fock`;

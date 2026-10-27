@@ -160,6 +160,8 @@ fn sparse_matching_agrees_on_dense_random_syndromes() {
     }
     // Every operation of the algorithm ran.
     eprintln!("blossoms, shattered, zero-radius, grown: {counts:?}");
+    // (The guide quotes these counts: about 11 000 blossoms, 1600 shattered.)
+    assert!(counts[0] > 11_000 && counts[1] > 1_600, "{counts:?}");
     assert!(counts.iter().all(|&c| c > 50), "{counts:?}");
 }
 
@@ -186,4 +188,38 @@ fn sparse_matching_rejects_impossible_syndromes() {
     assert_eq!(d.decode(&[0, 0, 0, 1]).unwrap(), 1);
     // The decoder is reusable after an error.
     assert_eq!(d.decode(&[1, 0]).unwrap(), 1);
+}
+
+#[test]
+fn long_chains_nest_blossoms_deeply() {
+    // A path of detectors that all fire, with a tail to the boundary: every
+    // shrinking region that reaches zero closes a blossom around the last
+    // one, so blossoms nest about n/2 deep (the case where walking up the
+    // nesting from every node was cubic).
+    for n in [21usize, 101, 401] {
+        let tail = 10;
+        let mut errors: Vec<ErrorMechanism> = (0..n + tail - 1)
+            .map(|i| ErrorMechanism {
+                probability: 0.1,
+                detectors: vec![i, i + 1],
+                observables: u64::from(i == 0),
+            })
+            .collect();
+        errors.push(ErrorMechanism {
+            probability: 0.1,
+            detectors: vec![n + tail - 1],
+            observables: 2,
+        });
+        let dem = DetectorErrorModel {
+            n_detectors: n + tail,
+            n_observables: 2,
+            errors,
+        };
+        let all: Vec<usize> = (0..n).collect();
+        let every_fifth: Vec<usize> = (0..n).step_by(5).collect();
+        let counts = agree_on_samples(&dem, vec![all, every_fifth], &format!("chain {n}"));
+        if n == 401 {
+            assert!(counts[0] > 100, "{counts:?}");
+        }
+    }
 }

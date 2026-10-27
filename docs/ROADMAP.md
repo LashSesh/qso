@@ -11,7 +11,7 @@ second stage — 1.10 (exact decoding and Stim circuits), 1.11 (the
 state-vector core at memory bandwidth), 1.12 (noise learning) and 1.13
 (walks beyond static Hamiltonians) — ship together as release 1.6.0;
 finished milestones are released together, not one by one. In the third
-stage (1.14 to 1.17), 1.14, 1.15 and 1.17 are delivered and 1.16 is in review. Up to 1.3
+stage (1.14 to 1.17) is delivered as well. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -704,7 +704,7 @@ messages, slow integrals, copies of the integral tensor in Python) are
 fixed; near-linearly-dependent bases (atoms within 0.01 Å) still leave
 rounding noise above the default gradient tolerance, as documented.
 
-### 1.16 — Fast matching (M)
+### 1.16 — Fast matching (M, delivered)
 
 Use case: decoding large surface-code experiments shot by shot.
 
@@ -715,6 +715,26 @@ Use case: decoding large surface-code experiments shot by shot.
 Validation: identical correction weights to the current exact decoder and
 to PyMatching on every shot; speed measured against PyMatching on the same
 machine.
+
+Delivered: `qec::SparseMatchingDecoder` (Python `SparseMatchingDecoder`),
+Edmonds' primal-dual algorithm run on the detector graph: regions grow,
+freeze and shrink, trees grow and augment, blossoms form and shatter, and
+`decoder="matching"` uses it. Its correction weights equal the exact
+decoder's on every tested shot and PyMatching's to the rounding of the
+weights (the cross-validation checks the first 2000 shots of every circuit
+and every shot whose prediction differs). On surface codes from d = 11 to
+25 it takes 1.1 to 1.9 times PyMatching's time (the exact decoder: up to
+1000 times).
+
+An independent review found no wrong correction in about 2.4 million
+comparisons with brute force, the exact decoder and PyMatching (random
+graphs with and without boundary, zero-weight and parallel edges,
+lattices, surface codes), no violated invariant with debug assertions, and
+no overflow. It found a cubic worst case: deeply nested blossoms made
+every node walk up the nesting (a chain of 2001 events took 3 s); the
+top-level region is now cached per node (51 ms). It also corrected the
+cost and speed claims, which came from single unwarmed runs, and a guide
+example that compared the two decoders' tie-breaking.
 
 ### 1.17 — Mitigation by purification (S–M, delivered)
 

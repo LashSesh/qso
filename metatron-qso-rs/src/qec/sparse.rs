@@ -12,9 +12,12 @@
 //! Edmonds' algorithm change (a tree grows, two trees augment, an odd
 //! cycle becomes a blossom region, a shrinking blossom shatters). When a
 //! growing region reaches the boundary its tree augments to it. Only the
-//! nodes near detection events are ever touched, so a shot costs time in
-//! proportion to its detection events and the area their regions cover,
-//! not to the square of their number.
+//! nodes near detection events are ever touched. At low noise, where
+//! events lie apart and few blossoms nest, a shot costs time close to
+//! proportional to its events and the area their regions cover; deeply
+//! nested blossoms (a long chain of events that all fire) make every
+//! region change reschedule its whole area, which grows quadratically
+//! with the events (as in PyMatching).
 //!
 //! The dual variables are the radii; they stay feasible for the linear
 //! program of minimum-weight T-joins, whose optimum is the minimum-weight
@@ -111,6 +114,9 @@ struct Node {
     wrapped: i64,
     /// Invalidates scheduled node events.
     version: u32,
+    /// The top-level region that owns the node (kept up to date when
+    /// blossoms form and shatter).
+    top: u32,
 }
 
 const EMPTY: Node = Node {
@@ -120,6 +126,7 @@ const EMPTY: Node = Node {
     obs: 0,
     wrapped: 0,
     version: 0,
+    top: NONE,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -194,7 +201,8 @@ impl SparseMatchingDecoder {
     }
 
     /// The prediction and the weight of the correction, `Σ ln((1 − p)/p)`
-    /// over its errors (up to the rounding of the weights to integers).
+    /// over its errors (errors with `p ≥ ½` count 0; up to the rounding of
+    /// the weights to integers).
     pub fn decode_with_weight(&mut self, fired: &[usize]) -> Result<(u64, f64)> {
         let (prediction, weight) = self.decode_weighted(fired)?;
         Ok((prediction, weight as f64 / self.scale))
@@ -225,6 +233,8 @@ impl SparseMatchingDecoder {
             }
             k = end;
         }
+        // Clean state even if an earlier shot was interrupted.
+        self.reset();
         let result = self.solve(&events);
         self.reset();
         result
@@ -270,6 +280,7 @@ impl SparseMatchingDecoder {
                 obs: 0,
                 wrapped: 0,
                 version: 0,
+                top: r,
             };
             self.touched.push(d);
             self.trees += 1;
@@ -378,7 +389,8 @@ impl SparseMatchingDecoder {
         if node.region == NONE {
             return;
         }
-        let top = self.top(node.region);
+        let top = node.top;
+        debug_assert_eq!(top, self.top(node.region));
         let rate = self.regions[top as usize].rate;
         let lr = self.local_radius(v, top);
         let boundary = self.graph.n_detectors();
@@ -394,7 +406,7 @@ impl SparseMatchingDecoder {
                 }
                 continue;
             }
-            let other = self.top(self.nodes[w].region);
+            let other = self.nodes[w].top;
             if other == top {
                 continue;
             }
@@ -418,7 +430,8 @@ impl SparseMatchingDecoder {
         if node.region == NONE {
             return;
         }
-        let top = self.top(node.region);
+        let top = node.top;
+        debug_assert_eq!(top, self.top(node.region));
         let rate = self.regions[top as usize].rate;
         let lr = self.local_radius(v, top);
         let boundary = self.graph.n_detectors();
@@ -454,6 +467,7 @@ impl SparseMatchingDecoder {
                         obs: node.obs ^ edge.observables,
                         wrapped: node.wrapped,
                         version: target.version,
+                        top,
                     };
                     self.touched.push(w as u32);
                     self.regions[top as usize].shell.push(w as u32);
@@ -461,7 +475,7 @@ impl SparseMatchingDecoder {
                 }
                 continue;
             }
-            let other = self.top(target.region);
+            let other = target.top;
             if other == top {
                 continue;
             }
@@ -737,6 +751,7 @@ impl SparseMatchingDecoder {
             self.coverage(x, &mut nodes);
             for &v in &nodes {
                 self.nodes[v as usize].wrapped += radius;
+                self.nodes[v as usize].top = b;
             }
             let g = &mut self.regions[x as usize];
             g.radius0 = radius;
@@ -827,6 +842,7 @@ impl SparseMatchingDecoder {
             self.coverage(c, &mut nodes);
             for &v in &nodes {
                 self.nodes[v as usize].wrapped -= radius;
+                self.nodes[v as usize].top = c;
             }
             let x = &mut self.regions[c as usize];
             x.parent = NONE;

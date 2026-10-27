@@ -173,7 +173,7 @@ import metatron_qso as q
 c = q.surface_code_memory(5, 5, 0.006)
 detectors, observables = c.sample(20_000, seed=3)
 dem = c.detector_error_model(decompose=True)
-predicted = q.MatchingDecoder(dem).decode_batch(detectors)
+predicted = q.SparseMatchingDecoder(dem).decode_batch(detectors)
 mwpm = q.logical_error_rate(c, 20_000, seed=3, decoder="matching")
 uf = q.logical_error_rate(c, 20_000, seed=3)        # the same shots
 assert mwpm.errors == int((predicted != observables[:, 0]).sum())
@@ -218,9 +218,12 @@ Quantum 9, 1600 (2025)):
   shrinking single event at radius zero closes a blossom with its tree
   neighbours.
 
-A shot touches only the nodes the regions cover, so its cost grows with
-the number of detection events and their area, not with the square of
-their number. Weights are those of `MatchingDecoder`, doubled so that two
+A shot touches only the nodes the regions cover. At low noise, where
+events lie apart, its cost is close to proportional to the events and
+their area; it grows faster where blossoms nest deeply, because a region
+that changes its growth reschedules its whole area. A chain of 2001
+detectors that all fire (blossoms nested 1000 deep) takes 51 ms, PyMatching
+1.3 s. Weights are those of `MatchingDecoder`, doubled so that two
 growing regions meet at integer times. `logical_error_rate(...,
 decoder="matching")` and `qso qec --decoder matching` use this decoder;
 `decode_with_weight` returns the correction's weight Σ ln((1 − p)/p).
@@ -235,19 +238,25 @@ The checks:
   shatter 1600.
 - **PyMatching.** In the cross-validation, on the same error model and
   syndromes, the weights agree to 10⁻⁵ relative (both decoders round
-  ln((1 − p)/p) to integers), and the predictions differ only where
+  ln((1 − p)/p) to integers) on the first 2000 shots of every circuit and
+  on every shot whose prediction differs: predictions differ only where
   corrections weigh the same.
 - **Speed.** Measured against PyMatching 2.4 on one core of the same
-  machine, on surface-code memory experiments with d rounds:
+  machine, on surface-code memory experiments with d rounds (after a
+  warm-up, medians of five interleaved runs of 20 000 shots, as the
+  cross-validation measures them):
 
 | d | p | detectors | QSO (µs/shot) | PyMatching (µs/shot) |
 |---|---|---:|---:|---:|
-| 11 | 0.003 | 720 | 20 | 12 |
-| 17 | 0.001 | 2 592 | 23 | 19 |
-| 17 | 0.005 | 2 592 | 253 | 109 |
-| 25 | 0.001 | 8 112 | 85 | 100 |
-| 25 | 0.005 | 8 112 | 925 | 569 |
+| 11 | 0.003 | 720 | 23 | 12 |
+| 17 | 0.001 | 2 592 | 22 | 14 |
+| 17 | 0.005 | 2 592 | 220 | 121 |
+| 25 | 0.001 | 8 112 | 95 | 88 |
+| 25 | 0.005 | 8 112 | 865 | 520 |
 
+PyMatching's own timing varies between runs (at d = 25, p = 0.001 by up
+to a factor 2), so the ratios, 1.1 to 1.9 here and up to 2.3 at
+p = 0.01 to 0.05, are approximate.
 `MatchingDecoder`, on the complete graph of events, takes 94 000 µs per
 shot at d = 25 and p = 0.001.
 
@@ -366,7 +375,7 @@ qso qec --circuit surface.stim --decoder matching --shots 100000
 | Code distance, rounds | 101, 10 000, and at most 2²⁴ operations (checked before building) |
 | Imported Stim circuits | 65 536 qubits; 2²⁴ operations and annotations after expanding REPEAT blocks (checked before expanding); blocks nested at most 64 deep |
 | Matching decoder (`MatchingDecoder`) | cached distances 2²¹ entries (32 MiB), bounded searches beyond; at most 2²² pairs of events per shot |
-| Sparse matching decoder | no limit on detection events |
+| Sparse matching decoder | no limit on detection events; time grows faster than linearly where blossoms nest deeply (51 ms for 2001 events in one chain) |
 
 - **Sampling.** Each operation costs one word operation per 64 shots.
 - **Error model.** The model takes one pass through the circuit per 4096
