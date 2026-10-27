@@ -1,15 +1,15 @@
 # QSO Roadmap (1.x)
 
-Status: October 2026. Milestones 1.1 to 1.11 delivered — 1.3 combined the
+Status: October 2026. Milestones 1.1 to 1.12 delivered — 1.3 combined the
 milestones planned as "quantum walks" and "simulation performance".
 Milestones 1.4 (noise at scale and error mitigation), 1.5 (algorithms and
 physics) and 1.6 (interoperability) shipped together as release 1.4.0.
 Milestones 1.7 (stabilizer simulation and graph states) and 1.8
 (error-correction experiments) ship together as release 1.5.0 (1.5.1
 fixes its npm publication). Milestone 1.9 (matrix-product states) is
-delivered, and so are 1.10 (exact decoding and Stim circuits) and 1.11
-(the state-vector core at memory bandwidth) of the second stage (1.10 to
-1.13); finished milestones are released together, not one by one.
+delivered, and so are 1.10 (exact decoding and Stim circuits), 1.11
+(the state-vector core at memory bandwidth) and 1.12 (noise learning) of
+the second stage (1.10 to 1.13); finished milestones are released together, not one by one.
 Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
@@ -46,7 +46,7 @@ which withdraws the results of version 1.
 |---|---|---|
 | Statevector speed | specialised kernels (1.1); gate fusion and cache blocking (1.3.0): 16-qubit layers 4.7× and 18–24-qubit layers 1.6–2.6× faster than in 1.2; batched evaluation; AVX and NEON kernels close to memory bandwidth and a blocked adjoint pass (1.11) | no single precision; worker threads sleep when idle, so short isolated simulations on virtual machines run cold — see [measurements](#measured-performance-against-established-simulators) |
 | Boson sampling | exact probabilities and exact sampling (1.1) | no partial distinguishability, photon loss or Gaussian boson sampling |
-| Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | no noise learning (PEC needs the Pauli noise given), no leakage or non-Markovian noise, channels on at most two qubits, no virtual distillation or probabilistic error amplification |
+| Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | noise learning for layers of two-qubit Clifford gates only, on density matrices (1.12); no leakage or non-Markovian noise, channels on at most two qubits, no virtual distillation |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0) | no time-dependent Hamiltonians, no open-system discrete-time walks, no pretty-good-transfer decision (only best fidelity in a window) |
 | Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5) | no integrals of its own (needs FCIDUMP files from a chemistry code), no unrestricted (UHF) integrals, no tight commutator bound for product formulas of order 4 and higher, no time-dependent Hamiltonians |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
@@ -534,19 +534,40 @@ phase gates on low qubits multiplied the other half by 1, flipping the
 sign of some zeros (fixed), and descriptions that overstated what the
 equality test covered (corrected, and the test extended).
 
-### 1.12 — Noise learning (M)
+### 1.12 — Noise learning (delivered)
 
 Use case: error mitigation whose noise model comes from data, as on a
 device, not from the simulator's own model.
 
-| Deliverable | Detail |
-|---|---|
-| Pauli-channel learning | the sparse Pauli–Lindblad model of a twirled layer (van den Berg et al., Nat. Phys. 19, 1116 (2023)) fitted from fidelities of repeated layers, with standard errors |
-| Mitigation | PEC and probabilistic error amplification with the learned model |
+| Deliverable | Delivered | Left for later |
+|---|---|---|
+| Pauli-channel learning | `learn_layer` fits the sparse Pauli–Lindblad model of a twirled layer of `cx`, `cy`, `cz` and `swap` gates (van den Berg et al., Nat. Phys. 19, 1116 (2023)): one rate per one-qubit Pauli and per two-qubit Pauli on coupled qubits, from the decay of product eigenstates over even depths, measured in the bases of an orthogonal array over a colouring of the coupling graph, with readout twirling, non-negative least squares and standard errors from a bootstrap over the twirled circuits | layers that are not self-inverse; learning beyond the density-matrix limit of 10 qubits; resolving the degeneracy of Paulis the layer exchanges (only their product is learnable; the fit splits it evenly) |
+| Mitigation | `pec_layered` cancels and `pea_layered` amplifies the learned noise in circuits of blocks separated by the layer, the latter with zero-noise extrapolation | inserted Paulis merged into neighbouring gates (they are separate, noiseless when the device has no one-qubit gate noise) |
 
-Validation: learned rates recover the rates of a known device model
-within their standard errors; PEC with the learned model is unbiased on
-circuits whose exact value is known.
+Validation:
+
+* on a four-qubit device with two-qubit depolarising noise, a coherent
+  phase error on the control qubits and readout errors, all 39 learned
+  rates lie within three standard errors of the exact ones, and PEC with
+  the learned model gives 0.534 ± 0.005 for an exact 0.533 (raw 0.492);
+* unit tests recover known sparse models (also with exactly measured
+  idle qubits), check that PEC with the learned model is unbiased and
+  that amplification extrapolates towards the exact value, check the
+  Pauli conjugation rules against state vectors and NNLS against brute
+  force and rescaled rows.
+
+An independent review confirmed the conjugation rules, the twirls, the
+bases, the decay fit, the bootstrap indexing and the PEC and PEA
+probabilities. It found that the NNLS thresholds were absolute, so that
+exactly measured fidelities (idle qubits without readout errors, whose
+rows have huge weights) could set almost every rate to zero; that
+bootstrap replicas with non-positive means inflated standard errors;
+that one twirl was accepted and gave zero standard errors; and that the
+mitigation functions did not re-check deserialised models. All are
+fixed with tests: relative thresholds with protection against cycling, a
+relative weight floor, robust spreads, at least two twirls, model
+validation. The greedy colouring was replaced by DSatur and the bases by
+orthogonal arrays from GF(3)ᵏ (9 bases up to 4 colours, 27 up to 13).
 
 ### 1.13 — Walks beyond static Hamiltonians (S–M)
 
