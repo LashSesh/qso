@@ -10,7 +10,8 @@ fixed its npm publication). Milestone 1.9 (matrix-product states) and the
 second stage — 1.10 (exact decoding and Stim circuits), 1.11 (the
 state-vector core at memory bandwidth), 1.12 (noise learning) and 1.13
 (walks beyond static Hamiltonians) — ship together as release 1.6.0;
-finished milestones are released together, not one by one. Up to 1.3
+finished milestones are released together, not one by one. The third
+stage (1.14 to 1.17) is planned. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -609,6 +610,70 @@ its minimum step (tolerances below 10⁻¹² or stiff drives ran until
 drive passed unnoticed; the controller was reworked, `max_step` added
 and the behaviour documented.
 
+## 4c. Third stage (1.14 to 1.17)
+
+Planned October 2026, after release 1.6.0, from the gaps in the table of
+section 1. Each milestone closes a gap without a new dependency and has an
+independent reference.
+
+### 1.14 — Gaussian boson sampling and imperfect photons (M)
+
+Use case: the photonic experiments that followed Aaronson–Arkhipov
+boson sampling, and photons as they are in the laboratory.
+
+| Deliverable | Detail |
+|---|---|
+| Hafnians | hafnian and loop hafnian (Björklund, Gupt and Quesada 2019, O(n³2^{n/2})), exact for real and complex matrices |
+| Gaussian states | covariance matrices and displacements of squeezed, coherent and thermal states; interferometers, squeezers, displacements and photon loss |
+| Gaussian boson sampling | photon-number probabilities (hafnians of the kernel), threshold-detector probabilities (torontonians), exact sampling for small systems |
+| Imperfect photons | partial distinguishability of Fock-state boson sampling (Gram matrix of the internal states) and photon loss |
+
+Validation: hafnians of matrices with closed forms ((2n−1)!! for the all-ones matrix,
+perfect matchings of graphs counted by brute force); a single-mode squeezed
+state against its closed-form photon statistics; probabilities summing to
+one; partial distinguishability interpolating between the permanent and the
+classical limit, with the Hong–Ou–Mandel visibility |⟨ψ₁|ψ₂⟩|²; hafnians,
+torontonians and GBS probabilities against The Walrus in the
+cross-validation.
+
+### 1.15 — Molecular integrals (M)
+
+Use case: molecules from their geometry, without an external
+quantum-chemistry code.
+
+| Deliverable | Detail |
+|---|---|
+| Integrals | overlap, kinetic, nuclear-attraction and electron-repulsion integrals over contracted Cartesian Gaussians (Obara–Saika or McMurchie–Davidson), STO-3G and 6-31G for the first two rows |
+| Self-consistent field | restricted and unrestricted Hartree–Fock with DIIS; FCIDUMP output and the existing qubit Hamiltonians |
+
+Validation: integrals, Hartree–Fock and full-CI energies of H₂, LiH, BeH₂
+and H₂O against PySCF (10⁻⁸ Ha), the existing FCIDUMP files reproduced
+from geometries.
+
+### 1.16 — Fast matching (M)
+
+Use case: decoding large surface-code experiments shot by shot.
+
+| Deliverable | Detail |
+|---|---|
+| Sparse matching | a matching decoder that grows regions on the detector graph instead of building complete graphs of defects (the idea of sparse blossom, Higgott and Gidney 2023) |
+
+Validation: identical correction weights to the current exact decoder and
+to PyMatching on every shot; speed measured against PyMatching on the same
+machine.
+
+### 1.17 — Mitigation by purification (S–M)
+
+Use case: error mitigation without a noise model.
+
+| Deliverable | Detail |
+|---|---|
+| Virtual distillation | ⟨O⟩ from Tr(ρᵏO)/Tr(ρᵏ) for k = 2, 3, exactly on density matrices and with the circuits of Huggins et al. (2021) on copies of the register |
+
+Validation: exact purified values against the dominant eigenvector of ρ;
+the circuit estimator against the exact one; error suppression measured
+on noisy circuits.
+
 ### Research track (later)
 
 A GPU backend through `wgpu`: it starts only with a clear use case and
@@ -643,6 +708,13 @@ after the CPU core is close to memory bandwidth.
 9. **1.11: performance** next, because a GPU backend waits for it.
 10. **1.12 and 1.13: noise learning and driven walks**, each closing a gap
     of the first stage's table.
+11. **Third stage: photons first.** Boson sampling is where QSO started
+    (1.1), and The Walrus already serves as a reference in the
+    cross-validation, so Gaussian boson sampling (1.14) extends a
+    validated core. Molecular integrals (1.15) remove the last external
+    input of the chemistry stack; PySCF is the reference. Fast matching
+    (1.16) closes a measured speed gap, and purification (1.17) adds a
+    mitigation that needs no noise model.
 
 ## 6. Measures of success
 
@@ -679,6 +751,10 @@ Taken (October 2026):
 * Second stage (October 2026): exact decoding (1.10), the state-vector
   core at memory bandwidth (1.11), noise learning (1.12), driven and open
   walks (1.13). Finished milestones are released together.
+* Third stage (October 2026): Gaussian boson sampling and imperfect
+  photons (1.14), molecular integrals (1.15), fast matching (1.16),
+  purification (1.17). The GPU research track still waits for a use case,
+  and would need a dependency (`wgpu`).
 * The browser playground stays, because it costs little to maintain: it
   is plain HTML and JavaScript without dependencies or a build step, it
   uses only the npm package's JSON interface, which the package's tests
