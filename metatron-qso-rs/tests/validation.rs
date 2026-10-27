@@ -912,3 +912,125 @@ fn learned_noise_recovers_a_known_device_and_cancels_it() {
     assert!(close(exact, 0.533, 5e-4) && close(noisy, 0.492, 5e-4));
     assert!(close(r.overhead, 1.20, 5e-3));
 }
+
+#[test]
+fn local_adiabatic_search_follows_roland_and_cerf() {
+    use metatron_qso::C64;
+    use metatron_qso::walks::driven::{DrivenWalk, MagnusOptions, Term};
+    // H(s) = (1 − s)(I − |u⟩⟨u|) + s(I − |m⟩⟨m|) on N nodes (|u⟩ uniform),
+    // with ds/dt = ε·g(s)²: T = N/(ε√(N−1))·arctan√(N−1) → (π/2ε)√N.
+    let eps = 0.1;
+    // Success probabilities (local / linear schedule with the same T) agree
+    // with an independent integration of the two-dimensional subspace
+    // (SciPy) for N = 64 and 256.
+    for (n, local_p, linear_p) in [
+        (64, 0.999418, 0.764631),
+        (256, 0.999868, 0.524902),
+        (1024, 0.999956, 0.315042),
+    ] {
+        let marked = n / 3;
+        let walk = DrivenWalk::new(
+            n,
+            vec![Term::Uniform, Term::projector(n, &[marked]).unwrap()],
+        )
+        .unwrap();
+        let rn = (n as f64 - 1.0).sqrt();
+        let total = n as f64 / (eps * rn) * rn.atan();
+        let local = |t: f64| 0.5 * (1.0 + (2.0 * eps * rn * t / n as f64 - rn.atan()).tan() / rn);
+        let psi0 = vec![C64::new(1.0 / (n as f64).sqrt(), 0.0); n];
+        let opts = MagnusOptions::default();
+        let run = |s: &dyn Fn(f64) -> f64| {
+            walk.evolve(&psi0, 0.0, total, |t| Ok(vec![-(1.0 - s(t)), -s(t)]), &opts)
+                .unwrap()
+                .state[marked]
+                .norm_sqr()
+        };
+        let p = run(&local);
+        let q = run(&|t: f64| t / total);
+        assert!(
+            close(p, local_p, 1e-6) && close(q, linear_p, 1e-6),
+            "{n}: {p} {q}"
+        );
+        assert!(p > 1.0 - eps * eps);
+        // T/√N = 14.57, 15.11, 15.40 → π/(2ε) = 15.71.
+        let ratio = total / (n as f64).sqrt();
+        assert!(ratio < PI / (2.0 * eps) && ratio > 0.92 * PI / (2.0 * eps));
+    }
+}
+
+#[test]
+fn magnus_integrator_converges_with_fourth_order() {
+    use metatron_qso::C64;
+    use metatron_qso::walks::Generator;
+    use metatron_qso::walks::driven::{DrivenWalk, MagnusOptions, Term};
+    // A walk on the Fruit of Life with a time-dependent hopping rate and a
+    // rotating potential.
+    let g = metatron_qso::graph::metatron::fruit_of_life();
+    let n = g.num_nodes();
+    let potential: Vec<f64> = (0..n).map(|j| (j as f64).cos()).collect();
+    let walk = DrivenWalk::new(
+        n,
+        vec![
+            Term::graph(&g, Generator::Laplacian),
+            Term::potential(&potential).unwrap(),
+        ],
+    )
+    .unwrap();
+    let mut psi0 = vec![C64::new(0.0, 0.0); n];
+    psi0[0] = C64::new(1.0, 0.0);
+    let run = |h: f64| {
+        let opts = MagnusOptions {
+            fixed_step: Some(h),
+            tol: 1e-12,
+            ..MagnusOptions::default()
+        };
+        walk.evolve(
+            &psi0,
+            0.0,
+            2.0,
+            |t| Ok(vec![1.0 + 0.5 * (3.0 * t).sin(), 2.0 * t.cos()]),
+            &opts,
+        )
+        .unwrap()
+        .state
+    };
+    let reference = run(1.0 / 1024.0);
+    let errors: Vec<f64> = [0.2, 0.1, 0.05, 0.025]
+        .iter()
+        .map(|&h| {
+            run(h)
+                .iter()
+                .zip(&reference)
+                .map(|(a, b)| (a - b).norm_sqr())
+                .sum::<f64>()
+                .sqrt()
+        })
+        .collect();
+    // Halving the step divides the error by 18.5, 16.6 and 16.1 (2⁴ = 16).
+    let ratios: Vec<f64> = errors.windows(2).map(|w| w[0] / w[1]).collect();
+    for (r, want) in ratios.iter().zip([18.5, 16.6, 16.1]) {
+        assert!(close(*r, want, 0.05), "{ratios:?}");
+    }
+}
+
+#[test]
+fn fully_dephased_coined_walk_on_metatrons_cube_is_classical() {
+    use metatron_qso::walks::decoherent::DecoherentCoinedWalk;
+    use metatron_qso::walks::{Coin, CoinedWalk};
+    // K13 with the Fourier coin, coin measured after every step: the node
+    // distribution is that of the simple random walk, P^t with P = A/12.
+    let g = metatron_qso::graph::metatron::metatron_cube();
+    let walk = CoinedWalk::new(&g, Coin::Fourier).unwrap();
+    let open = DecoherentCoinedWalk::new(walk, 1.0, 0.0).unwrap();
+    let mut rho = open.localized_mixed(0).unwrap();
+    let mut p = vec![0.0; 13];
+    p[0] = 1.0;
+    for _ in 0..10 {
+        rho = open.step(&rho).unwrap();
+        p = (0..13)
+            .map(|v| (0..13).filter(|&u| u != v).map(|u| p[u] / 12.0).sum())
+            .collect();
+        let quantum = open.node_probabilities(&rho).unwrap();
+        assert!(quantum.iter().zip(&p).all(|(a, b)| (a - b).abs() < 1e-13));
+    }
+}
