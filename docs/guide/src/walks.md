@@ -94,6 +94,9 @@ exponentials per step (Blanes and Moan 2006). The exponentials use Krylov
 propagation, so sparse walks on large graphs stay cheap. The step size
 is controlled by step doubling: a step is accepted when one step of h
 and two of h/2 agree to the tolerance, and the two half steps are kept.
+The coefficients are sampled only inside each step: split the
+evolution at jumps of the drive, and give short pulses a `max_step`.
+The Python callable runs with the interpreter lock held.
 `fixed_step` switches the control off. In the tests, halving a fixed
 step divides the error by 16.1–18.5, the factor 2⁴ of a fourth-order
 method.
@@ -128,8 +131,8 @@ print(abs(local["state"][marked]) ** 2, abs(linear["state"][marked]) ** 2)
 The validation suite checks N = 64, 256 and 1024. The local schedule
 reaches the marked node with probability 0.99942, 0.99987 and 0.99996,
 and a linear schedule over the same time with 0.765, 0.525 and 0.315.
-For N = 64 and 256 both values agree to 10⁻⁶ with an independent
-integration of the two-dimensional subspace.
+All six values agree to 10⁻⁶ with an independent integration of the
+two-dimensional subspace (SciPy).
 
 ## In Rust
 

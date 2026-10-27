@@ -31,6 +31,10 @@ def test_local_adiabatic_search():
     psi0 = np.full(n, 1 / math.sqrt(n), complex)
     r = walk.evolve(psi0, 0.0, total, lambda t: [-(1 - s(t)), -s(t)])
     assert abs(r["state"][marked]) ** 2 > 1 - eps**2
+    single = q.DrivenWalk(n, [("uniform", None), ("projector", marked)])
+    capped = single.evolve(psi0, 0.0, total, lambda t: [-(1 - s(t)), -s(t)], max_step=1.0)
+    assert np.abs(capped["state"] - r["state"]).max() < 1e-6
+    assert capped["forced"] == 0
 
 
 def test_driven_walk_errors():

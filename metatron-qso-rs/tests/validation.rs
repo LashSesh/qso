@@ -922,7 +922,7 @@ fn local_adiabatic_search_follows_roland_and_cerf() {
     let eps = 0.1;
     // Success probabilities (local / linear schedule with the same T) agree
     // with an independent integration of the two-dimensional subspace
-    // (SciPy) for N = 64 and 256.
+    // (SciPy's DOP853 at rtol 1e-12) to 10⁻⁶.
     for (n, local_p, linear_p) in [
         (64, 0.999418, 0.764631),
         (256, 0.999868, 0.524902),

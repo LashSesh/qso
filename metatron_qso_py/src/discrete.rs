@@ -178,10 +178,10 @@ fn density(rho: &ComplexMatrixArg<'_>) -> PyResult<CMatrix> {
 }
 
 /// A coined walk with decoherence, on density matrices: every step applies
-/// the walk's unitary step and then dephasing in the arc basis. Coin
-/// dephasing (probability `coin_dephasing` per step) destroys coherences
-/// between arcs at the same node, position dephasing between arcs at
-/// different nodes. At most 2048 arcs.
+/// the walk's unitary step and then dephasing in the arc basis. With
+/// probability `coin_dephasing` per step the coin register (the index of
+/// the arc at its node) is measured, with `position_dephasing` the node.
+/// At most 2048 arcs.
 #[pyclass(name = "DecoherentCoinedWalk", module = "metatron_qso", frozen)]
 pub struct PyDecoherentCoinedWalk {
     inner: DecoherentCoinedWalk,

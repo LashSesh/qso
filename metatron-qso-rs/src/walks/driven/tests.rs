@@ -183,3 +183,124 @@ fn invalid_inputs_are_rejected() {
         .unwrap();
     assert_eq!(r.state, psi);
 }
+
+#[test]
+fn tight_tolerances_and_stiff_walks_still_finish() {
+    let (walk, mut c) = driven_cycle();
+    let psi0 = localized(8, 1);
+    let reference = walk
+        .evolve(
+            &psi0,
+            0.0,
+            2.0,
+            &mut c,
+            &MagnusOptions {
+                fixed_step: Some(1.0 / 2048.0),
+                tol: 1e-14,
+                ..MagnusOptions::default()
+            },
+        )
+        .unwrap()
+        .state;
+    for tol in [1e-12, 1e-14, 1e-16] {
+        let opts = MagnusOptions {
+            tol,
+            ..MagnusOptions::default()
+        };
+        let r = walk.evolve(&psi0, 0.0, 2.0, &mut c, &opts).unwrap();
+        assert!(distance(&r.state, &reference) < 1e-11, "tol {tol}");
+        assert!(r.steps < 20_000, "tol {tol}: {} steps", r.steps);
+    }
+    // A cycle of 200 nodes with ‖H‖ ≈ 30.
+    let g = generators::cycle(200);
+    let stiff = DrivenWalk::new(200, vec![Term::graph(&g, Generator::Laplacian)]).unwrap();
+    let opts = MagnusOptions {
+        tol: 1e-12,
+        ..MagnusOptions::default()
+    };
+    let r = stiff
+        .evolve(
+            &localized(200, 0),
+            0.0,
+            1.0,
+            |t| Ok(vec![7.5 * (1.0 + t)]),
+            &opts,
+        )
+        .unwrap();
+    assert!((norm(&r.state) - 1.0).abs() < 1e-10);
+    // A coefficient with an infinite derivative at t = 0.7.
+    let r = walk
+        .evolve(
+            &psi0,
+            0.0,
+            1.4,
+            |t| Ok(vec![1.0, (t - 0.7).abs().sqrt(), 0.0]),
+            &MagnusOptions::default(),
+        )
+        .unwrap();
+    assert!(r.forced < 100);
+}
+
+#[test]
+fn max_step_resolves_pulses_and_jumps_are_split() {
+    let (walk, _) = driven_cycle();
+    let psi0 = localized(8, 0);
+    // A Gaussian pulse of width 0.01 at t = 0.83 on the potential.
+    let pulse = |t: f64| Ok(vec![1.0, 30.0 * (-((t - 0.83) / 0.01).powi(2)).exp(), 0.0]);
+    let fine = MagnusOptions {
+        fixed_step: Some(1e-4),
+        tol: 1e-12,
+        ..MagnusOptions::default()
+    };
+    let reference = walk.evolve(&psi0, 0.0, 2.0, pulse, &fine).unwrap().state;
+    let opts = MagnusOptions {
+        max_step: Some(0.005),
+        ..MagnusOptions::default()
+    };
+    let r = walk.evolve(&psi0, 0.0, 2.0, pulse, &opts).unwrap();
+    assert!(distance(&r.state, &reference) < 1e-7);
+    // A jump at t = 0.5, integrated in two pieces.
+    let jump = |t: f64| Ok(vec![1.0, if t < 0.5 { 0.0 } else { 2.0 }, 0.0]);
+    let before = |_: f64| Ok(vec![1.0, 0.0, 0.0]);
+    let after = |_: f64| Ok(vec![1.0, 2.0, 0.0]);
+    let defaults = MagnusOptions::default();
+    let mid = walk
+        .evolve(&psi0, 0.0, 0.5, before, &defaults)
+        .unwrap()
+        .state;
+    let split = walk.evolve(&mid, 0.5, 2.0, after, &defaults).unwrap().state;
+    let reference = walk
+        .evolve(
+            &psi0,
+            0.0,
+            2.0,
+            jump,
+            &MagnusOptions {
+                fixed_step: Some(1.0 / 1024.0),
+                ..fine.clone()
+            },
+        )
+        .unwrap()
+        .state;
+    // 0.5 is a multiple of the fixed step, so the reference is exact too.
+    assert!(distance(&split, &reference) < 1e-8);
+    assert!(
+        walk.evolve(
+            &psi0,
+            0.0,
+            1.0,
+            before,
+            &MagnusOptions {
+                max_step: Some(0.0),
+                ..defaults.clone()
+            }
+        )
+        .is_err()
+    );
+    // Steps that do not advance time in floating point are an error.
+    let far = MagnusOptions {
+        fixed_step: Some(1e-5),
+        ..MagnusOptions::default()
+    };
+    assert!(walk.evolve(&psi0, 1e12, 1e12 + 1e-3, before, &far).is_err());
+}

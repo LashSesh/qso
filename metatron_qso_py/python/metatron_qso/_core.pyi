@@ -556,6 +556,7 @@ class DrivenEvolution(TypedDict):
     steps: int
     rejected: int
     error_estimate: float
+    forced: int
 
 @final
 class DrivenWalk:
@@ -573,6 +574,7 @@ class DrivenWalk:
         tol: float = 1e-8,
         initial_step: Optional[float] = None,
         fixed_step: Optional[float] = None,
+        max_step: Optional[float] = None,
         max_steps: int = 1_000_000,
     ) -> DrivenEvolution: ...
 

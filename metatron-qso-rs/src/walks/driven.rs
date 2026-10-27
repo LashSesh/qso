@@ -18,7 +18,10 @@
 //! each exponential applied by Krylov propagation. Step sizes are chosen by
 //! step doubling: a step is accepted when the difference between one step
 //! of `h` and two of `h/2`, divided by 15, is below the tolerance per unit
-//! time, and the result of the two half steps is kept.
+//! time, and the result of the two half steps is kept. The coefficients
+//! are sampled inside each step only, so a discontinuous drive should be
+//! split into separate evolutions at its jumps, and a short pulse needs
+//! [`MagnusOptions::max_step`].
 //!
 //! ```
 //! use metatron_qso::graph::generators;
@@ -46,6 +49,10 @@ use crate::linalg::{CsrMatrix, KrylovOptions, expm_multiply, norm};
 use crate::parallel::for_each_mut;
 
 use super::Generator;
+
+/// Steps accepted at the smallest step size before [`DrivenWalk::evolve`]
+/// gives up.
+const MAX_FORCED_STEPS: usize = 10_000;
 
 /// Largest walk (nodes).
 pub const MAX_DRIVEN_NODES: usize = 1 << 24;
@@ -106,6 +113,11 @@ pub struct MagnusOptions {
     /// Fixed step instead of step-size control (the last step is shortened
     /// to end on time).
     pub fixed_step: Option<f64>,
+    /// Longest step under step-size control. The error estimate samples
+    /// the coefficients inside each step only: a jump or a pulse shorter
+    /// than a step can go unnoticed, so set this below the shortest
+    /// feature of the drive, or split the evolution at discontinuities.
+    pub max_step: Option<f64>,
     /// Most steps, accepted and rejected.
     pub max_steps: usize,
 }
@@ -116,6 +128,7 @@ impl Default for MagnusOptions {
             tol: 1e-8,
             initial_step: None,
             fixed_step: None,
+            max_step: None,
             max_steps: 1_000_000,
         }
     }
@@ -132,6 +145,9 @@ pub struct DrivenEvolution {
     /// Sum of the error estimates of the accepted steps (0 with a fixed
     /// step).
     pub error_estimate: f64,
+    /// Steps accepted at the smallest step size (`10⁻¹²` of the interval)
+    /// although their error estimate exceeded the tolerance.
+    pub forced: usize,
 }
 
 /// A walk with Hamiltonian `H(t) = Σ_j c_j(t)·H_j`.
@@ -341,15 +357,31 @@ impl DrivenWalk {
             steps: 0,
             rejected: 0,
             error_estimate: 0.0,
+            forced: 0,
         };
         if span == 0.0 {
             out.state = psi;
             return Ok(out);
         }
         let scale = norm(psi0).max(f64::MIN_POSITIVE);
-        // Krylov errors well below the integrator's.
-        let krylov_tol = (1e-3 * options.tol).max(1e-15);
+        // Krylov errors well below the integrator's: each exponential gets
+        // a hundredth of the step's share of the tolerance (the error of a
+        // Krylov propagation is absolute, so shares add up over steps).
+        let krylov_tol = |h: f64| (1e-2 * options.tol * h / span).max(1e-15);
         let mut t = t0;
+        // Next time point, landing exactly on t1 at the end.
+        let advance = |t: f64, h: f64| -> Result<f64> {
+            if t1 - (t + h) <= 1e-14 * span {
+                Ok(t1)
+            } else if t + h > t {
+                Ok(t + h)
+            } else {
+                Err(QsoError::invalid(
+                    "step",
+                    format!("a step of {h} does not advance t = {t} in floating point"),
+                ))
+            }
+        };
         if let Some(h) = options.fixed_step {
             if !(h.is_finite() && h > 0.0) {
                 return Err(QsoError::invalid("fixed_step", "the step must be positive"));
@@ -359,16 +391,17 @@ impl DrivenWalk {
                     return Err(too_many(out.steps, t1 - t));
                 }
                 let h = h.min(t1 - t);
-                psi = self.step(&psi, t, h, &mut coefficients, krylov_tol)?;
-                t = if t1 - (t + h) <= 1e-14 * span {
-                    t1
-                } else {
-                    t + h
-                };
+                let next = advance(t, h)?;
+                psi = self.step(&psi, t, h, &mut coefficients, krylov_tol(h))?;
+                t = next;
                 out.steps += 1;
             }
             out.state = psi;
             return Ok(out);
+        }
+        let max_step = options.max_step.unwrap_or(span);
+        if !(max_step.is_finite() && max_step > 0.0) {
+            return Err(QsoError::invalid("max_step", "the step must be positive"));
         }
         let mut h = options.initial_step.unwrap_or(span / 100.0);
         if !(h.is_finite() && h > 0.0) {
@@ -377,14 +410,17 @@ impl DrivenWalk {
                 "the step must be positive",
             ));
         }
+        let h_min = 1e-12 * span;
         while t < t1 {
             if out.steps + out.rejected >= options.max_steps {
                 return Err(too_many(out.steps + out.rejected, t1 - t));
             }
-            h = h.min(t1 - t);
-            let full = self.step(&psi, t, h, &mut coefficients, krylov_tol)?;
-            let half = self.step(&psi, t, h / 2.0, &mut coefficients, krylov_tol)?;
-            let half = self.step(&half, t + h / 2.0, h / 2.0, &mut coefficients, krylov_tol)?;
+            h = h.min(t1 - t).min(max_step).max(h_min.min(t1 - t));
+            let next = advance(t, h)?;
+            let tol = krylov_tol(h);
+            let full = self.step(&psi, t, h, &mut coefficients, tol)?;
+            let half = self.step(&psi, t, h / 2.0, &mut coefficients, tol)?;
+            let half = self.step(&half, t + h / 2.0, h / 2.0, &mut coefficients, tol)?;
             let diff: f64 = full
                 .iter()
                 .zip(&half)
@@ -392,26 +428,36 @@ impl DrivenWalk {
                 .sum::<f64>()
                 .sqrt();
             let err = diff / 15.0 / scale;
-            let allowed = options.tol * h / span;
-            if err <= allowed || h <= 1e-12 * span {
+            // Below about 100 ulp the estimate is round-off.
+            let allowed = (options.tol * h / span).max(100.0 * f64::EPSILON);
+            let forced = err > allowed && h <= h_min;
+            if err <= allowed || forced {
                 psi = half;
-                t = if t1 - (t + h) <= 1e-14 * span {
-                    t1
-                } else {
-                    t + h
-                };
+                t = next;
                 out.steps += 1;
+                out.forced += usize::from(forced);
+                if out.forced > MAX_FORCED_STEPS {
+                    return Err(QsoError::NoConvergence {
+                        method: "Magnus integrator (step size at its minimum)",
+                        iterations: out.steps + out.rejected,
+                        residual: t1 - t,
+                    });
+                }
                 out.error_estimate += err * scale;
             } else {
                 out.rejected += 1;
             }
-            // Local error ∝ h⁵ against an allowance ∝ h.
+            // Local error ∝ h⁵ against an allowance ∝ h; growth at most
+            // doubles the step, so a drive changing on a new time scale is
+            // sampled before it is stepped over.
             let factor = if err == 0.0 {
-                4.0
+                2.0
             } else {
-                (0.9 * (allowed / err).powf(0.25)).clamp(0.2, 4.0)
+                (0.9 * (allowed / err).powf(0.25)).clamp(0.2, 2.0)
             };
-            h *= factor;
+            // After a forced step, keep the step (it is already the
+            // smallest) instead of shrinking it further.
+            h = if forced { h_min } else { h * factor };
         }
         out.state = psi;
         Ok(out)

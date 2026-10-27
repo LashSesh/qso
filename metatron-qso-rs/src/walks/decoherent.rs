@@ -4,13 +4,18 @@
 //! flip-flop shift), `ρ ↦ UρU†`, and then dephasing in the arc basis
 //! `|u → v⟩` (position `u`, coin `v`):
 //!
-//! * coin dephasing with probability `p_c` destroys the coherence between
-//!   different arcs at the same node, `ρ_ab ↦ (1 − p_c)·ρ_ab`;
-//! * position dephasing with probability `p_x` destroys the coherence
-//!   between arcs at different nodes, `ρ_ab ↦ (1 − p_x)·ρ_ab`.
+//! * position dephasing: with probability `p_x` the position is measured
+//!   and the outcome forgotten, `ρ_ab ↦ (1 − p_x)·ρ_ab` for arcs at
+//!   different nodes;
+//! * coin dephasing: with probability `p_c` the coin register is measured,
+//!   the index of the arc among those leaving its node (in order of
+//!   increasing neighbour), `ρ_ab ↦ (1 − p_c)·ρ_ab` for arcs with
+//!   different indices.
 //!
-//! Each is the channel "measure with probability p": with probability `p`
-//! the coin (or the position) is measured and the outcome forgotten.
+//! Both act at once: `ρ_ab ↦ f_x·f_c·ρ_ab`. Each is a mixture of the
+//! identity and a projective measurement, so the step is a channel for all
+//! `p_c, p_x ∈ [0, 1]`. Different arcs at the same node always have
+//! different indices.
 //!
 //! With full coin dephasing the node probabilities follow a classical
 //! Markov chain on the arcs: from an arc arriving at a node, the walker
@@ -45,6 +50,8 @@ pub struct DecoherentCoinedWalk {
     walk: CoinedWalk,
     /// Node of every arc.
     tails: Vec<usize>,
+    /// Index of every arc among the arcs leaving its node (the coin state).
+    labels: Vec<usize>,
     coin_dephasing: f64,
     position_dephasing: f64,
 }
@@ -69,10 +76,14 @@ impl DecoherentCoinedWalk {
                 requested: walk.num_arcs(),
             });
         }
-        let tails = walk.arcs().into_iter().map(|(u, _)| u).collect();
+        let tails: Vec<usize> = walk.arcs().into_iter().map(|(u, _)| u).collect();
+        let labels = (0..tails.len())
+            .map(|a| a - tails.iter().position(|&u| u == tails[a]).expect("own node"))
+            .collect();
         Ok(Self {
             walk,
             tails,
+            labels,
             coin_dephasing: coin,
             position_dephasing: position,
         })
@@ -151,22 +162,22 @@ impl DecoherentCoinedWalk {
         for r in 0..m {
             let row: Vec<C64> = w.row(r).iter().map(|z| z.conj()).collect();
             let v = self.walk.step(&row)?;
+            // v = column r of U·W†, so (UρU†)[r, c] = conj(v[c]).
             for (c, z) in v.into_iter().enumerate() {
-                out[(c, r)] = z.conj();
+                out[(r, c)] = z.conj();
             }
         }
         let (keep_coin, keep_position) = (1.0 - self.coin_dephasing, 1.0 - self.position_dephasing);
         if keep_coin != 1.0 || keep_position != 1.0 {
             for c in 0..m {
                 for r in 0..m {
-                    if r == c {
-                        continue;
+                    let mut f = 1.0;
+                    if self.tails[r] != self.tails[c] {
+                        f *= keep_position;
                     }
-                    let f = if self.tails[r] == self.tails[c] {
-                        keep_coin
-                    } else {
-                        keep_position
-                    };
+                    if self.labels[r] != self.labels[c] {
+                        f *= keep_coin;
+                    }
                     out[(r, c)] *= f;
                 }
             }
@@ -315,6 +326,66 @@ mod tests {
         assert!((&rho - rho.adjoint()).norm() < 1e-12);
         let eig = crate::linalg::eigh(&rho).0;
         assert!(eig.iter().all(|&l| l > -1e-12));
+    }
+
+    fn dense_step(walk: &CoinedWalk) -> CMatrix {
+        let m = walk.num_arcs();
+        let mut u = CMatrix::zeros(m, m);
+        for c in 0..m {
+            let mut e = vec![C64::new(0.0, 0.0); m];
+            e[c] = C64::new(1.0, 0.0);
+            u.column_mut(c).copy_from_slice(&walk.step(&e).unwrap());
+        }
+        u
+    }
+
+    fn random_density(m: usize, seed: u64) -> CMatrix {
+        let mut rng = crate::Rng::seed_from_u64(seed);
+        let a = CMatrix::from_fn(m, m, |_, _| C64::new(rng.normal(), rng.normal()));
+        let rho = &a * a.adjoint();
+        let t = rho.trace();
+        rho / t
+    }
+
+    #[test]
+    fn a_step_is_the_unitary_step_with_complex_coins() {
+        // The Fourier coin of degree ≥ 3 is complex: a transposed step would
+        // show here.
+        for g in [generators::complete(4), generators::petersen()] {
+            let walk = CoinedWalk::new(&g, Coin::Fourier).unwrap();
+            let u = dense_step(&walk);
+            let open = DecoherentCoinedWalk::new(walk.clone(), 0.0, 0.0).unwrap();
+            let rho = random_density(walk.num_arcs(), 3);
+            let want = &u * &rho * u.adjoint();
+            assert!((open.step(&rho).unwrap() - want).norm() < 1e-12);
+            let a = open.probabilities(0, 5).unwrap();
+            let b = walk.probabilities(0, 5).unwrap();
+            assert!(a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-12));
+        }
+    }
+
+    #[test]
+    fn every_dephasing_strength_keeps_states_positive() {
+        let cases = [
+            (generators::cycle(10), Coin::Hadamard, 0.1, 0.0),
+            (generators::complete(5), Coin::Grover, 1.0, 0.0),
+            (generators::complete(13), Coin::Fourier, 1.0, 0.0),
+            (generators::petersen(), Coin::Grover, 0.5, 0.0),
+            (generators::petersen(), Coin::Fourier, 0.3, 0.9),
+        ];
+        for (g, coin, pc, px) in cases {
+            let walk = CoinedWalk::new(&g, coin).unwrap();
+            let open = DecoherentCoinedWalk::new(walk.clone(), pc, px).unwrap();
+            let mut rho = random_density(walk.num_arcs(), 7);
+            for _ in 0..6 {
+                rho = open.step(&rho).unwrap();
+                let eig = crate::linalg::eigh(&rho).0;
+                assert!(eig.iter().all(|&l| l > -1e-12), "{pc} {px}: {}", eig[0]);
+                assert!((rho.trace().re - 1.0).abs() < 1e-12);
+            }
+            let pure = open.probabilities(0, 8).unwrap();
+            assert!(pure.iter().all(|&p| p > -1e-12));
+        }
     }
 
     #[test]

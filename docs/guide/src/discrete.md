@@ -39,11 +39,12 @@ print(math.sqrt((p * x**2).sum()) / steps)          # 0.5412
 
 `DecoherentCoinedWalk` runs a coined walk on density matrices, so it can
 lose coherence. Every step applies the walk's unitary step and then
-dephasing in the arc basis. Coin dephasing with probability p_c per step
-scales the coherences between different arcs at the same node by
-1 − p_c: the coin is measured with probability p_c. Position dephasing
-does the same for arcs at different nodes. With p_c = p_x = 0 it is the
-coherent walk.
+dephasing in the arc basis. Coin dephasing measures the coin register,
+the index of the arc among those leaving its node, with probability p_c
+per step: coherences between arcs with different indices shrink by
+1 − p_c. Position dephasing measures the node with probability p_x.
+Both are mixtures of the identity and a measurement, so states stay
+valid density matrices. With p_c = p_x = 0 it is the coherent walk.
 
 When the coin is measured after every step, the node probabilities
 follow a classical Markov chain on the arcs. From an arc arriving at a

@@ -106,7 +106,7 @@ or by the benchmark report you can run yourself.
 | Perfect state transfer between the ends of P₂, P₃ / P₄ … P₁₂ | π/2, π/√2 / none | Christandl et al. 2004 |
 | Hadamard walk on the line, σ(t)/t at t = 1000 | 0.54120 | √(1 − 1/√2) = 0.54120, Konno 2002 |
 | Szegedy quantum hitting time on cycles Cₙ, n = 16 … 128 | n/4 | √ of the classical n²/6 up to a constant, Szegedy 2004 |
-| Local adiabatic search on K_N (ε = 0.1), success at T = N/(ε√(N−1))·arctan√(N−1) for N = 64 / 256 / 1024; linear schedule, same T | 0.99942 / 0.99987 / 0.99996; 0.765 / 0.525 / 0.315 | ≥ 1 − ε², Roland & Cerf 2002; SciPy integration (N = 64, 256) to 10⁻⁶ |
+| Local adiabatic search on K_N (ε = 0.1), success at T = N/(ε√(N−1))·arctan√(N−1) for N = 64 / 256 / 1024; linear schedule, same T | 0.99942 / 0.99987 / 0.99996; 0.765 / 0.525 / 0.315 | ≥ 1 − ε², Roland & Cerf 2002; SciPy integration to 10⁻⁶ |
 | Fourth-order Magnus integrator, error ratio when the step halves | 18.5 / 16.6 / 16.1 | 2⁴ = 16 |
 | Coined walk on Metatron's Cube with the coin measured every step (Fourier coin) | equals the simple random walk to 10⁻¹³ | classical random walk |
 | Shrikhande vs 4 × 4 rook's graph (same spectrum) | not isomorphic, \|Aut\| 192 vs 1152 | — |

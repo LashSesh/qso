@@ -425,8 +425,8 @@ fn term(n: usize, spec: &Bound<'_, PyAny>) -> PyResult<Term> {
             Ok(Term::graph(&g.borrow().inner, generator(&kind)?))
         }
         "projector" => {
-            let nodes: Vec<usize> = arg.extract()?;
-            Term::projector(n, &nodes).raise()
+            let nodes: Indices = arg.extract()?;
+            Term::projector(n, &nodes.into_vec()).raise()
         }
         "potential" => {
             let values: Vec<f64> = arg.extract()?;
@@ -473,11 +473,15 @@ impl PyDrivenWalk {
 
     /// Evolve `psi0` from `t0` to `t1`; `coefficients(t)` returns the
     /// coefficients of the terms at time `t`. `tol` bounds the error of the
-    /// final state; `fixed_step` switches step-size control off. Returns a
-    /// dict with `state`, `steps`, `rejected` and `error_estimate`.
+    /// final state; `fixed_step` switches step-size control off; `max_step`
+    /// caps the step (the coefficients are sampled inside steps only:
+    /// split evolutions at jumps, and resolve pulses with `max_step`).
+    /// Holds the GIL, since it calls `coefficients`. Returns a dict with
+    /// `state`, `steps`, `rejected`, `error_estimate` and `forced` (steps
+    /// accepted at the minimum step size above the tolerance).
     #[pyo3(signature = (
         psi0, t0, t1, coefficients, tol = 1e-8, initial_step = None, fixed_step = None,
-        max_steps = 1_000_000
+        max_step = None, max_steps = 1_000_000
     ))]
     #[allow(clippy::too_many_arguments)]
     fn evolve<'py>(
@@ -490,12 +494,14 @@ impl PyDrivenWalk {
         tol: f64,
         initial_step: Option<f64>,
         fixed_step: Option<f64>,
+        max_step: Option<f64>,
         max_steps: usize,
     ) -> PyResult<Bound<'py, PyDict>> {
         let options = MagnusOptions {
             tol,
             initial_step,
             fixed_step,
+            max_step,
             max_steps,
         };
         let mut error: Option<PyErr> = None;
@@ -526,6 +532,7 @@ impl PyDrivenWalk {
             "steps" => r.steps,
             "rejected" => r.rejected,
             "error_estimate" => r.error_estimate,
+            "forced" => r.forced,
         }))
     }
 }
