@@ -1,15 +1,15 @@
 # QSO Roadmap (1.x)
 
-Status: October 2026. Milestones 1.1 to 1.12 delivered — 1.3 combined the
+Status: October 2026. Milestones 1.1 to 1.13 delivered — 1.3 combined the
 milestones planned as "quantum walks" and "simulation performance".
 Milestones 1.4 (noise at scale and error mitigation), 1.5 (algorithms and
 physics) and 1.6 (interoperability) shipped together as release 1.4.0.
 Milestones 1.7 (stabilizer simulation and graph states) and 1.8
 (error-correction experiments) ship together as release 1.5.0 (1.5.1
 fixes its npm publication). Milestone 1.9 (matrix-product states) is
-delivered, and so are 1.10 (exact decoding and Stim circuits), 1.11
-(the state-vector core at memory bandwidth) and 1.12 (noise learning) of
-the second stage (1.10 to 1.13); finished milestones are released together, not one by one.
+delivered, and so is the second stage: 1.10 (exact decoding and Stim
+circuits), 1.11 (the state-vector core at memory bandwidth), 1.12 (noise
+learning) and 1.13 (walks beyond static Hamiltonians); finished milestones are released together, not one by one.
 Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
@@ -47,7 +47,7 @@ which withdraws the results of version 1.
 | Statevector speed | specialised kernels (1.1); gate fusion and cache blocking (1.3.0): 16-qubit layers 4.7× and 18–24-qubit layers 1.6–2.6× faster than in 1.2; batched evaluation; AVX and NEON kernels close to memory bandwidth and a blocked adjoint pass (1.11) | no single precision; worker threads sleep when idle, so short isolated simulations on virtual machines run cold — see [measurements](#measured-performance-against-established-simulators) |
 | Boson sampling | exact probabilities and exact sampling (1.1) | no partial distinguishability, photon loss or Gaussian boson sampling |
 | Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | noise learning for layers of two-qubit Clifford gates only, on density matrices (1.12); no leakage or non-Markovian noise, channels on at most two qubits, no virtual distillation |
-| Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0) | no time-dependent Hamiltonians, no open-system discrete-time walks, no pretty-good-transfer decision (only best fidelity in a window) |
+| Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0) | time-dependent Hamiltonians and decoherent coined walks without symmetry reduction (1.13); no pretty-good-transfer decision (only best fidelity in a window) |
 | Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5) | no integrals of its own (needs FCIDUMP files from a chemistry code), no unrestricted (UHF) integrals, no tight commutator bound for product formulas of order 4 and higher, no time-dependent Hamiltonians |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
 | Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10) | no correlated decoding; matching is far slower than PyMatching's sparse blossom on large shots |
@@ -569,19 +569,45 @@ relative weight floor, robust spreads, at least two twirls, model
 validation. The greedy colouring was replaced by DSatur and the bases by
 orthogonal arrays from GF(3)ᵏ (9 bases up to 4 colours, 27 up to 13).
 
-### 1.13 — Walks beyond static Hamiltonians (S–M)
+### 1.13 — Walks beyond static Hamiltonians (delivered)
 
 Use case: adiabatic and driven walks, and decoherent discrete-time walks.
 
-| Deliverable | Detail |
-|---|---|
-| Time-dependent walks | continuous-time walks with a time-dependent Hamiltonian by fourth-order commutator-free Magnus integrators with step-size control |
-| Open discrete-time walks | coined walks with coin and position dephasing on density matrices |
+| Deliverable | Delivered | Left for later |
+|---|---|---|
+| Time-dependent walks | `DrivenWalk`: H(t) = Σ_j c_j(t)·H_j with Laplacian, adjacency, projector, potential and uniform-projector terms, by the fourth-order commutator-free Magnus integrator with two Krylov exponentials per step, step-size control by step doubling and a step cap for pulsed drives | higher-order Magnus schemes; symmetry-reduced driven walks (the quotient walks of 1.3 with a time-dependent rate); detecting discontinuities of the drive (they must be split by the caller) |
+| Open discrete-time walks | `DecoherentCoinedWalk`: coined walks on density matrices of up to 2048 arcs, with partial measurements of the coin register and of the node after every step | trajectories for larger graphs; dephasing of the line walk |
 
-Validation: the local adiabatic search on the complete graph against its
-closed-form running time (Roland and Cerf 2002); the Magnus integrators'
-order of convergence; decoherent coined walks against the classical walk
-in the fully dephased limit.
+Validation:
+
+* the local adiabatic search of Roland and Cerf on K₆₄, K₂₅₆ and K₁₀₂₄
+  (ε = 0.1) reaches the marked node with probability 0.99942, 0.99987
+  and 0.99996 at the closed-form running time, a linear schedule over the
+  same time 0.765, 0.525 and 0.315; all six values agree with SciPy's
+  DOP853 on the two-dimensional subspace to 10⁻⁶;
+* halving a fixed step divides the error by 18.5, 16.6 and 16.1 (order
+  four); static walks equal `ContinuousWalk`; step-size control meets
+  tolerances from 10⁻⁴ to 10⁻¹⁰, finishes down to 10⁻¹⁶ and resolves a
+  pulse with `max_step`;
+* with the coin measured every step, the Fourier-coin walk equals the
+  simple random walk (Petersen graph, cube, cycle, Metatron's Cube, to
+  10⁻¹²) and the Grover walk the Markov chain on arcs; steps equal a
+  dense UρU† and keep states positive for every dephasing strength.
+
+An independent review confirmed the Magnus coefficients, nodes and factor
+order (error ratios 16.1–16.4 against a DOP853 reference with strongly
+non-commuting terms), the error estimate and controller exponent, the
+term handling and the Roland–Cerf numbers, which it reproduced
+independently. It found two errors in the decoherent walk: a step
+returned the transpose of UρU†, wrong for complex coins such as the
+Fourier coin of degree three or more, and coin dephasing as first
+defined was not a channel when it was stronger than position dephasing
+(negative probabilities). Both are fixed, with tests that fail on the
+old code. It also found that the step control stalled once it reached
+its minimum step (tolerances below 10⁻¹² or stiff drives ran until
+`max_steps`) and that steps longer than a pulse or across a jump of the
+drive passed unnoticed; the controller was reworked, `max_step` added
+and the behaviour documented.
 
 ### Research track (later)
 
