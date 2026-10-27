@@ -4,16 +4,18 @@
 use metatron_qso::C64;
 use metatron_qso::chemistry::adapt::{AdaptOptions, adapt_vqe_molecule};
 use metatron_qso::chemistry::{
-    FermionOperator, Mapping, MolecularIntegrals, QubitEncoding, k_upccgsd, uccsd,
+    AoIntegrals, Basis, FermionOperator, Mapping, MolecularIntegrals, Molecule, QubitEncoding,
+    ScfOptions, ScfResult, k_upccgsd, rhf, uccsd, uhf,
 };
 use metatron_qso::quantum::QubitOperator;
-use numpy::IntoPyArray;
+use numpy::ndarray::{Array2, Array4};
+use numpy::{IntoPyArray, PyArray1, PyArray2, PyArray4};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use crate::circuit::PyCircuit;
 use crate::state::{PyPauliSum, wrap_sum};
-use crate::{Raise, invalid, pydict};
+use crate::{Raise, invalid, pydict, real_array, rmatrix};
 
 fn encoding(mapping: &str, two_qubit_reduction: bool) -> PyResult<QubitEncoding> {
     let mapping = Mapping::from_name(mapping).raise()?;
@@ -425,8 +427,313 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyQubitOperator>()?;
     m.add_class::<PyFermionOperator>()?;
     m.add_class::<PyMolecularIntegrals>()?;
+    m.add_class::<PyMolecule>()?;
+    m.add_class::<PyAoIntegrals>()?;
+    m.add_class::<PyHartreeFock>()?;
+    m.add_function(wrap_pyfunction!(hartree_fock, m)?)?;
     m.add_function(wrap_pyfunction!(py_uccsd, m)?)?;
     m.add_function(wrap_pyfunction!(py_k_upccgsd, m)?)?;
     m.add_function(wrap_pyfunction!(adapt_vqe, m)?)?;
     Ok(())
+}
+
+/// A molecule: nuclei, total charge and spin multiplicity `2S + 1`.
+#[pyclass(name = "Molecule", module = "metatron_qso", frozen)]
+#[derive(Clone)]
+pub struct PyMolecule {
+    inner: Molecule,
+}
+
+#[pymethods]
+impl PyMolecule {
+    /// From `"H 0 0 0; H 0 0 0.735"` (element and position in ångström
+    /// per atom, separated by `;` or new lines), H to Ne.
+    #[new]
+    #[pyo3(signature = (atoms, charge = 0, multiplicity = 1))]
+    fn new(atoms: &str, charge: i32, multiplicity: u32) -> PyResult<Self> {
+        Molecule::from_atoms(atoms, charge, multiplicity)
+            .raise()
+            .map(|inner| Self { inner })
+    }
+
+    /// Atomic numbers.
+    #[getter]
+    fn charges(&self) -> Vec<u32> {
+        self.inner.charges.clone()
+    }
+
+    /// Positions in bohr, one row per atom.
+    #[getter]
+    fn positions<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f64>> {
+        let p = &self.inner.positions;
+        Array2::from_shape_fn((p.len(), 3), |(i, k)| p[i][k]).into_pyarray(py)
+    }
+
+    #[getter]
+    fn charge(&self) -> i32 {
+        self.inner.charge
+    }
+
+    #[getter]
+    fn multiplicity(&self) -> u32 {
+        self.inner.multiplicity
+    }
+
+    #[getter]
+    fn n_electrons(&self) -> usize {
+        self.inner.n_electrons()
+    }
+
+    /// `(n_alpha, n_beta)`.
+    #[getter]
+    fn n_alpha_beta(&self) -> (usize, usize) {
+        self.inner.n_alpha_beta()
+    }
+
+    /// Nuclear repulsion energy (hartree).
+    fn nuclear_repulsion(&self) -> f64 {
+        self.inner.nuclear_repulsion()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Molecule(atoms={}, charge={}, multiplicity={})",
+            self.inner.charges.len(),
+            self.inner.charge,
+            self.inner.multiplicity
+        )
+    }
+}
+
+/// Overlap, kinetic, nuclear-attraction and electron-repulsion integrals
+/// over the basis functions of a molecule.
+#[pyclass(name = "AoIntegrals", module = "metatron_qso", frozen)]
+#[derive(Clone)]
+pub struct PyAoIntegrals {
+    inner: AoIntegrals,
+}
+
+fn matrix<'py>(
+    py: Python<'py>,
+    n: usize,
+    f: impl Fn(usize, usize) -> f64,
+) -> Bound<'py, PyArray2<f64>> {
+    Array2::from_shape_fn((n, n), |(i, j)| f(i, j)).into_pyarray(py)
+}
+
+#[pymethods]
+impl PyAoIntegrals {
+    /// The integrals of `molecule` in `basis` (`"sto-3g"` or `"6-31g"`).
+    #[new]
+    #[pyo3(signature = (molecule, basis = "sto-3g"))]
+    fn new(py: Python<'_>, molecule: &PyMolecule, basis: &str) -> PyResult<Self> {
+        let basis = Basis::from_name(basis).raise()?;
+        let mol = &molecule.inner;
+        py.detach(|| AoIntegrals::compute(mol, basis))
+            .raise()
+            .map(|inner| Self { inner })
+    }
+
+    #[getter]
+    fn n_functions(&self) -> usize {
+        self.inner.n_functions()
+    }
+
+    #[getter]
+    fn overlap<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f64>> {
+        matrix(py, self.inner.n_functions(), |i, j| {
+            self.inner.overlap(i, j)
+        })
+    }
+
+    #[getter]
+    fn kinetic<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f64>> {
+        matrix(py, self.inner.n_functions(), |i, j| {
+            self.inner.kinetic(i, j)
+        })
+    }
+
+    #[getter]
+    fn nuclear<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f64>> {
+        matrix(py, self.inner.n_functions(), |i, j| {
+            self.inner.nuclear(i, j)
+        })
+    }
+
+    /// Core Hamiltonian `T + V`.
+    #[getter]
+    fn core<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f64>> {
+        matrix(py, self.inner.n_functions(), |i, j| self.inner.core(i, j))
+    }
+
+    /// `(ij|kl)` in chemists' notation, shape `(n, n, n, n)`.
+    #[getter]
+    fn eri<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray4<f64>>> {
+        let n = self.inner.n_functions();
+        Array4::from_shape_vec((n, n, n, n), self.inner.eri_tensor().to_vec())
+            .map(|a| a.into_pyarray(py))
+            .map_err(|e| invalid(e.to_string()))
+    }
+
+    /// Atom of every basis function.
+    #[getter]
+    fn atoms(&self) -> Vec<usize> {
+        self.inner.atoms().to_vec()
+    }
+
+    /// Angular momentum of every basis function.
+    #[getter]
+    fn angular_momenta(&self) -> Vec<u32> {
+        self.inner.angular_momenta().to_vec()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("AoIntegrals(n_functions={})", self.inner.n_functions())
+    }
+}
+
+/// A converged Hartree–Fock solution (see `hartree_fock`).
+#[pyclass(name = "HartreeFock", module = "metatron_qso", frozen)]
+pub struct PyHartreeFock {
+    inner: ScfResult,
+    integrals: AoIntegrals,
+}
+
+#[pymethods]
+impl PyHartreeFock {
+    /// Total energy including the nuclear repulsion (hartree).
+    #[getter]
+    fn energy(&self) -> f64 {
+        self.inner.energy
+    }
+
+    #[getter]
+    fn nuclear_repulsion(&self) -> f64 {
+        self.inner.nuclear_repulsion
+    }
+
+    /// Orbital energies: one array for RHF, `[alpha, beta]` for UHF.
+    #[getter]
+    fn orbital_energies<'py>(&self, py: Python<'py>) -> Vec<Bound<'py, PyArray1<f64>>> {
+        self.inner
+            .orbital_energies
+            .iter()
+            .map(|e| real_array(py, e.clone()))
+            .collect()
+    }
+
+    /// Orbital coefficients (columns): one matrix for RHF, `[alpha, beta]`
+    /// for UHF.
+    #[getter]
+    fn coefficients<'py>(&self, py: Python<'py>) -> Vec<Bound<'py, PyArray2<f64>>> {
+        self.inner
+            .coefficients
+            .iter()
+            .map(|c| rmatrix(py, c))
+            .collect()
+    }
+
+    #[getter]
+    fn n_alpha(&self) -> usize {
+        self.inner.n_alpha
+    }
+
+    #[getter]
+    fn n_beta(&self) -> usize {
+        self.inner.n_beta
+    }
+
+    #[getter]
+    fn iterations(&self) -> usize {
+        self.inner.iterations
+    }
+
+    #[getter]
+    fn restricted(&self) -> bool {
+        self.inner.is_restricted()
+    }
+
+    /// `⟨S²⟩` of the determinant.
+    fn s_squared(&self) -> f64 {
+        self.inner.s_squared()
+    }
+
+    /// The integrals the calculation used.
+    #[getter]
+    fn integrals(&self) -> PyAoIntegrals {
+        PyAoIntegrals {
+            inner: self.integrals.clone(),
+        }
+    }
+
+    /// The Hamiltonian in the restricted orbitals, the lowest `frozen`
+    /// doubly occupied and folded into the core energy, keeping `active`
+    /// orbitals (all others when `None`).
+    #[pyo3(signature = (frozen = 0, active = None))]
+    fn molecular_integrals(
+        &self,
+        py: Python<'_>,
+        frozen: usize,
+        active: Option<usize>,
+    ) -> PyResult<PyMolecularIntegrals> {
+        py.detach(|| {
+            self.inner
+                .molecular_integrals(&self.integrals, frozen, active)
+        })
+        .raise()
+        .map(|inner| PyMolecularIntegrals { inner })
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "HartreeFock(energy={:.10}, restricted={}, iterations={})",
+            self.inner.energy,
+            self.inner.is_restricted(),
+            self.inner.iterations
+        )
+    }
+}
+
+/// Restricted (default) or unrestricted Hartree–Fock of `molecule` in
+/// `basis`, with DIIS.
+#[pyfunction]
+#[pyo3(signature = (
+    molecule,
+    basis = "sto-3g",
+    unrestricted = false,
+    max_iterations = 200,
+    energy_tolerance = 1e-10,
+    gradient_tolerance = 1e-8,
+    diis_space = 8,
+))]
+#[allow(clippy::too_many_arguments)]
+fn hartree_fock(
+    py: Python<'_>,
+    molecule: &PyMolecule,
+    basis: &str,
+    unrestricted: bool,
+    max_iterations: usize,
+    energy_tolerance: f64,
+    gradient_tolerance: f64,
+    diis_space: usize,
+) -> PyResult<PyHartreeFock> {
+    let basis = Basis::from_name(basis).raise()?;
+    let options = ScfOptions {
+        max_iterations,
+        energy_tolerance,
+        gradient_tolerance,
+        diis_space,
+        ..ScfOptions::default()
+    };
+    let mol = &molecule.inner;
+    py.detach(|| {
+        let integrals = AoIntegrals::compute(mol, basis)?;
+        let inner = if unrestricted {
+            uhf(mol, &integrals, &options)?
+        } else {
+            rhf(mol, &integrals, &options)?
+        };
+        Ok(PyHartreeFock { inner, integrals })
+    })
+    .raise()
 }

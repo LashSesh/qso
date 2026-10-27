@@ -4,7 +4,8 @@ QSO's chemistry chain starts from the molecular integrals. From them it
 builds the Hamiltonian, maps it to qubits and prepares the Hartree–Fock
 state. Full configuration interaction (CI) gives the exact reference
 energy, and UCCSD, k-UpCCGSD and ADAPT-VQE give variational estimates.
-QSO computes no integrals itself. It reads them from FCIDUMP files, which
+The integrals come either from a molecule's geometry, through QSO's own
+Gaussian integrals and Hartree–Fock, or from FCIDUMP files, which
 quantum-chemistry codes such as PySCF, Psi4 or Molpro write.
 
 ## Fermionic operators
@@ -72,9 +73,10 @@ assert abs(h.ground_state_energy() - mol.fci_energies()[0]) < 1e-10
 ```
 
 `fci_energies(k)` diagonalises the Hamiltonian among all determinants
-with the given numbers of spin-up and spin-down electrons. Up to 4096
-determinants it returns the lowest `k` levels. Above that it returns the
-ground state only, computed by Lanczos.
+with the given numbers of spin-up and spin-down electrons; its matrix
+follows from the Slater–Condon rules. Up to 4096 determinants it returns
+the lowest `k` levels. Above that, and for a single level above 1024
+determinants, it returns the ground state only, computed by Lanczos.
 
 The tests check the whole chain against PySCF for H₂, LiH and BeH₂ in
 STO-3G:
@@ -83,6 +85,52 @@ STO-3G:
 - The determinant-space spectra agree under Jordan–Wigner, parity,
   Bravyi–Kitaev and the reduced parity encoding.
 - Their lowest roots equal PySCF's full-CI energies to 10⁻⁸ Ha.
+
+## Molecules from their geometry
+
+`Molecule` takes the atoms in ångström, the total charge and the spin
+multiplicity. `AoIntegrals` evaluates the overlap, kinetic,
+nuclear-attraction and electron-repulsion integrals over contracted
+Cartesian Gaussians by the McMurchie–Davidson scheme, in the STO-3G or
+6-31G basis (hydrogen to neon, at most 64 basis functions; functions in
+PySCF's order). `hartree_fock` solves the restricted (closed-shell) or
+unrestricted Hartree–Fock equations with DIIS. The iterations start from
+the orbitals of the core Hamiltonian, filled with the average occupation of
+both spins, as PySCF does: filling each spin separately trapped OH in an
+excited state. A calculation that does not converge raises an error.
+
+`molecular_integrals(frozen, active)` transforms the integrals to the
+restricted orbitals. The lowest `frozen` orbitals stay doubly occupied and
+move into the core energy; `active` orbitals are kept. The result is a
+`MolecularIntegrals`, so everything above applies, and `to_fcidump()`
+writes it:
+
+```python
+import metatron_qso as q
+
+water = q.Molecule("O 0 0 0.1173; H 0 0.7572 -0.4692; H 0 -0.7572 -0.4692")
+hf = q.hartree_fock(water, "6-31g")
+mo = hf.molecular_integrals(frozen=1, active=8)        # 16 qubits
+print(hf.energy, mo.fci_energies()[0])                 # −75.98397, −76.02473
+oh = q.hartree_fock(q.Molecule("O 0 0 0; H 0 0 0.97", multiplicity=2),
+                    "6-31g", unrestricted=True)
+print(oh.energy, oh.s_squared())                       # −75.36317, 0.75377
+```
+
+The tests compare with PySCF 2.14:
+
+- The integrals of H₂, LiH, H₂O and NH₃ agree to the last digits PySCF
+  gives. The largest difference, 2.5·10⁻¹¹ in one integral of NH₃, is
+  PySCF's: a 40-digit evaluation agrees with QSO to 10⁻¹⁶.
+- Restricted energies of H₂, LiH, BeH₂ and H₂O in both bases, and
+  unrestricted energies and ⟨S²⟩ of OH, triplet CH₂, H₂O⁺ and Li, agree to
+  10⁻⁹ Ha.
+- Full CI and frozen-core active spaces (CASCI) agree to 10⁻⁸ Ha, and the
+  FCIDUMP files of H₂, LiH and BeH₂ are reproduced from their geometries.
+
+PySCF converts ångström with the CODATA 2010 bohr, QSO with CODATA 2018;
+the geometries differ by 3·10⁻¹¹ relative, the energies by about
+10⁻¹⁰ Ha.
 
 ## UCCSD, k-UpCCGSD and ADAPT-VQE
 
@@ -172,4 +220,15 @@ $ qso molecule examples/molecules/lih_sto3g.fcidump --mapping parity --two-qubit
 Hartree–Fock   -7.8620238601
 full CI        -7.8824019323  -7.7664184751
 UCCSD          -7.8823912923  (92 parameters, error vs full CI 1.06e-5)
+```
+
+`qso scf` runs Hartree–Fock from a geometry and, with `--fci`, full CI in
+an active space; `--fcidump` writes the active-space Hamiltonian for
+`qso molecule`:
+
+```text
+$ qso scf --atoms "O 0 0 0.1173; H 0 0.7572 -0.4692; H 0 -0.7572 -0.4692" --basis 6-31g --frozen 1 --active 8 --fci
+13 basis functions, 5 + 5 electrons
+RHF   -75.9839744727  (13 iterations, <S²> = 0.000000)
+full CI (8 orbitals, 4 + 4 electrons)   -76.0247256325  (correlation -0.0407511598)
 ```

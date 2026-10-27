@@ -14,7 +14,9 @@ use metatron_qso::algorithms::{grover, models, vqe::Vqe};
 use metatron_qso::backend::{Backend, DensityMatrixBackend, DeviceBackend, StatevectorBackend};
 use metatron_qso::chemistry::adapt::{AdaptOptions, adapt_vqe_molecule};
 use metatron_qso::chemistry::ansatz as chem_ansatz;
-use metatron_qso::chemistry::{Mapping, MolecularIntegrals, QubitEncoding};
+use metatron_qso::chemistry::{
+    AoIntegrals, Basis, Mapping, MolecularIntegrals, Molecule, QubitEncoding, ScfOptions, rhf, uhf,
+};
 use metatron_qso::estimation::{Estimate, EstimatorOptions, ShotAllocation, estimate};
 use metatron_qso::graph::{Graph, generators, io};
 use metatron_qso::mitigation::ReadoutCalibration;
@@ -305,6 +307,35 @@ enum Command {
         pec: Option<usize>,
         #[arg(long, default_value_t = 0)]
         seed: u64,
+    },
+    /// Hartree–Fock of a molecule from its geometry (STO-3G or 6-31G,
+    /// H to Ne), optionally full CI in an active space and an FCIDUMP file.
+    Scf {
+        /// Atoms in ångström, e.g. "H 0 0 0; H 0 0 0.735".
+        #[arg(long)]
+        atoms: String,
+        #[arg(long, default_value = "sto-3g")]
+        basis: String,
+        #[arg(long, default_value_t = 0, allow_hyphen_values = true)]
+        charge: i32,
+        /// Spin multiplicity 2S + 1.
+        #[arg(long, default_value_t = 1)]
+        multiplicity: u32,
+        /// Unrestricted Hartree–Fock (open shells).
+        #[arg(long)]
+        unrestricted: bool,
+        /// Doubly occupied orbitals folded into the core energy.
+        #[arg(long, default_value_t = 0)]
+        frozen: usize,
+        /// Orbitals kept after the frozen ones (default: all).
+        #[arg(long)]
+        active: Option<usize>,
+        /// Full CI in the frozen-core active space.
+        #[arg(long)]
+        fci: bool,
+        /// Write the active-space Hamiltonian as an FCIDUMP file.
+        #[arg(long)]
+        fcidump: Option<std::path::PathBuf>,
     },
     /// Molecular Hamiltonian from an FCIDUMP file: qubit Hamiltonian,
     /// Hartree–Fock and full-CI energies, and a variational solution.
@@ -1058,6 +1089,75 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             Ok((
                 json!({"qubits": n, "gates": circuit.len(), "depth": circuit.depth(), "backend": backend_name, "counts": labelled}),
                 text,
+            ))
+        }
+        Command::Scf {
+            atoms,
+            basis,
+            charge,
+            multiplicity,
+            unrestricted,
+            frozen,
+            active,
+            fci,
+            fcidump,
+        } => {
+            let mol = Molecule::from_atoms(atoms, *charge, *multiplicity)?;
+            let ints = AoIntegrals::compute(&mol, Basis::from_name(basis)?)?;
+            let options = ScfOptions::default();
+            let hf = if *unrestricted {
+                uhf(&mol, &ints, &options)?
+            } else {
+                rhf(&mol, &ints, &options)?
+            };
+            let (na, nb) = mol.n_alpha_beta();
+            let mut lines = vec![
+                format!(
+                    "{} basis functions, {na} + {nb} electrons",
+                    ints.n_functions()
+                ),
+                format!(
+                    "{}   {:.10}  ({} iterations, <S²> = {:.6})",
+                    if *unrestricted { "UHF" } else { "RHF" },
+                    hf.energy,
+                    hf.iterations,
+                    hf.s_squared()
+                ),
+            ];
+            let mut fci_energy = Value::Null;
+            if *fci || fcidump.is_some() {
+                let mo = hf.molecular_integrals(&ints, *frozen, *active)?;
+                if *fci {
+                    let e = mo.fci_energies(1)?[0];
+                    lines.push(format!(
+                        "full CI ({} orbitals, {} + {} electrons)   {e:.10}  (correlation {:.10})",
+                        mo.n_orbitals(),
+                        mo.n_alpha(),
+                        mo.n_beta(),
+                        e - hf.energy
+                    ));
+                    fci_energy = json!(e);
+                }
+                if let Some(path) = fcidump {
+                    std::fs::write(path, mo.to_fcidump()).map_err(|e| {
+                        QsoError::invalid("fcidump", format!("{}: {e}", path.display()))
+                    })?;
+                    lines.push(format!("wrote {}", path.display()));
+                }
+            }
+            Ok((
+                json!({
+                    "basis_functions": ints.n_functions(),
+                    "electrons": [na, nb],
+                    "restricted": !unrestricted,
+                    "energy": hf.energy,
+                    "nuclear_repulsion": hf.nuclear_repulsion,
+                    "iterations": hf.iterations,
+                    "s_squared": hf.s_squared(),
+                    "orbital_energies": hf.orbital_energies,
+                    "fci": fci_energy,
+                }),
+                lines.join("\n"),
             ))
         }
         Command::Molecule {

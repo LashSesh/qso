@@ -111,6 +111,9 @@ impl ScfResult {
     /// larger than `S(S+1)`).
     pub fn s_squared(&self) -> f64 {
         let sz = (self.n_alpha as f64 - self.n_beta as f64) / 2.0;
+        if self.is_restricted() {
+            return sz * (sz + 1.0);
+        }
         let mut value = sz * (sz + 1.0) + self.n_beta as f64;
         let (ca, cb) = (&self.coefficients[0], self.coefficients.last().unwrap());
         let ca = ca.columns(0, self.n_alpha);

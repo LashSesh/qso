@@ -26,6 +26,7 @@ R_P(theta) = exp(-i theta P / 2). Invalid input raises ``ValueError``.
 
 from ._core import (
     AmplitudeProblem,
+    AoIntegrals,
     BosonSampler,
     Channel,
     Circuit,
@@ -45,6 +46,7 @@ from ._core import (
     GaussianState,
     Graph,
     GraphClassifier,
+    HartreeFock,
     ImperfectBosonSampler,
     LineWalk,
     LogicalErrorRate,
@@ -56,6 +58,7 @@ from ._core import (
     MatrixProductState,
     MaxCutQaoa,
     MolecularIntegrals,
+    Molecule,
     NoiseModel,
     Parameter,
     PauliSum,
@@ -101,6 +104,7 @@ from ._core import (
     haar_unitary,
     hafnian,
     hafnian_repeated,
+    hartree_fock,
     hardware_efficient,
     heisenberg_xxz,
     imaginary_time_evolution,
@@ -149,6 +153,7 @@ from ._core import (
 
 __all__ = [
     "AmplitudeProblem",
+    "AoIntegrals",
     "BosonSampler",
     "Channel",
     "Circuit",
@@ -168,6 +173,7 @@ __all__ = [
     "GaussianState",
     "Graph",
     "GraphClassifier",
+    "HartreeFock",
     "ImperfectBosonSampler",
     "LineWalk",
     "LogicalErrorRate",
@@ -179,6 +185,7 @@ __all__ = [
     "MatrixProductState",
     "MaxCutQaoa",
     "MolecularIntegrals",
+    "Molecule",
     "NoiseModel",
     "Parameter",
     "PauliSum",
@@ -224,6 +231,7 @@ __all__ = [
     "haar_unitary",
     "hafnian",
     "hafnian_repeated",
+    "hartree_fock",
     "hardware_efficient",
     "heisenberg_xxz",
     "imaginary_time_evolution",

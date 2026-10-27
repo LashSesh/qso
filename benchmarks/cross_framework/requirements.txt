@@ -11,3 +11,4 @@ thewalrus==0.22.0
 numpy==2.5.4
 stim==1.16.0
 pymatching==2.4.0
+pyscf==2.14.0

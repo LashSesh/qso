@@ -6,11 +6,26 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-Milestone 1.14 (Gaussian boson sampling and imperfect photons) of the
-[roadmap](docs/ROADMAP.md), the first of its third stage.
+Milestones 1.14 (Gaussian boson sampling and imperfect photons) and 1.15
+(molecular integrals) of the [roadmap](docs/ROADMAP.md), the first of its
+third stage.
 
 ### Added
 
+- **Molecules from their geometry** (`chemistry::integrals`,
+  `chemistry::scf`; Python `Molecule`, `AoIntegrals`, `hartree_fock`;
+  CLI `qso scf`).
+  - Overlap, kinetic, nuclear-attraction and electron-repulsion integrals
+    over contracted Cartesian Gaussians (McMurchie–Davidson), STO-3G and
+    6-31G for hydrogen to neon.
+  - Restricted and unrestricted Hartree–Fock with DIIS, ⟨S²⟩, and the
+    transformation to molecular orbitals with a frozen core and an active
+    space, giving `MolecularIntegrals` (qubit Hamiltonians, full CI,
+    FCIDUMP output).
+  - Tests against PySCF 2.14: integrals of H₂, LiH, H₂O and NH₃;
+    restricted energies of H₂, LiH, BeH₂ and H₂O and unrestricted
+    energies of OH, CH₂, H₂O⁺ and Li to 10⁻⁹ Ha; full CI and CASCI to
+    10⁻⁸ Ha; the bundled FCIDUMP files reproduced from geometries.
 - **Hafnians** (`photonics::hafnian`, Python `hafnian`,
   `hafnian_repeated`, `torontonian`).
   - Hafnians and loop hafnians by the formula of Björklund, Gupt and
@@ -42,9 +57,17 @@ Milestone 1.14 (Gaussian boson sampling and imperfect photons) of the
   - Tests: a simulation with the internal states as extra modes of an
     interferometer with environment modes; the Hong–Ou–Mandel
     visibility.
-- **Cross-validation** against The Walrus 0.22: probabilities differ by
+- **Cross-validation** against PySCF 2.14 (integrals to 2·10⁻¹⁰,
+  energies to 10⁻¹⁰ Ha) and against The Walrus 0.22: probabilities differ by
   about 10⁻¹⁵ (absolute, 4 modes) and by 2·10⁻¹¹ relative at 20 photons;
   hafnians by 7·10⁻¹² relative up to 20 × 20.
+
+### Changed
+
+- `MolecularIntegrals.fci_energies` builds the determinant matrix by the
+  Slater–Condon rules instead of through the qubit Hamiltonian, and uses
+  Lanczos for a single root above 1024 determinants (full CI of LiH in
+  6-31G: from 69 s to under a second).
 
 ## [1.6.0] — 2026-10-27
 

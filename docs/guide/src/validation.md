@@ -16,7 +16,7 @@ Every algorithm is checked against an independent reference:
 | Exact sums | PEC summed over all corrections, Pauli twirls over all 16 frames, the variance 3ᵏ of classical shadows |
 | Statistics | coverage of confidence intervals over repeated runs; unbiased adaptive shot allocation over 2000 seeds; the 1/N error scaling of amplitude estimation over 200 seeds; learned noise rates of a known device within their bootstrap standard errors |
 | Rigorous bounds | product-formula errors below their bounds; qDRIFT channels below Campbell's bound; canonical amplitude estimation within its error bound with probability ≥ 8/π² |
-| Other codes | Qiskit Aer, Qulacs, Cirq, PennyLane Lightning and The Walrus (permanents, hafnians, Gaussian boson sampling); PySCF's Hartree–Fock and full-CI energies for H₂, LiH and BeH₂ |
+| Other codes | Qiskit Aer, Qulacs, Cirq, PennyLane Lightning and The Walrus (permanents, hafnians, Gaussian boson sampling); PySCF's integrals and its Hartree–Fock, full-CI and CASCI energies for H₂, LiH, BeH₂, H₂O, NH₃, OH and CH₂ |
 
 These checks live in the test suites, which run on every change on Linux
 (x86_64 and arm64), macOS and Windows:

@@ -34,7 +34,7 @@ import frameworks as fw  # noqa: E402
 
 PACKAGES = [
     "metatron-qso", "qiskit", "qiskit-aer", "qulacs", "cirq-core", "pennylane",
-    "pennylane-lightning", "thewalrus", "numpy", "projectq", "stim", "pymatching",
+    "pennylane-lightning", "thewalrus", "numpy", "projectq", "stim", "pymatching", "pyscf",
 ]
 
 # ----------------------------------------------------------------------------
@@ -197,6 +197,7 @@ def correctness(quick: bool) -> dict:
             "max_density_matrix_difference_vs_qiskit_aer": density_diff,
         },
         "qec_vs_stim": qec_vs_stim(quick),
+        "chemistry_vs_pyscf": chemistry_vs_pyscf(),
     }
 
 
@@ -394,6 +395,50 @@ def gaussian_vs_thewalrus(rng) -> dict:
     }
 
 
+def chemistry_vs_pyscf() -> dict:
+    """Gaussian integrals and Hartree–Fock against PySCF."""
+    import metatron_qso as q
+    from pyscf import gto, mcscf, scf
+
+    water = "O 0 0 0.1173; H 0 0.7572 -0.4692; H 0 -0.7572 -0.4692"
+    ammonia = "N 0.1 -0.05 0.12; H 0.9377 -0.3816 0.0; H -0.4689 -0.1 0.8121; H -0.4689 0.7 -0.8121"
+    integral_err = 0.0
+    for atoms in (water, ammonia):
+        for basis in ("sto-3g", "6-31g"):
+            mol = gto.M(atom=atoms, basis=basis, unit="angstrom", cart=True, verbose=0)
+            ours = q.AoIntegrals(q.Molecule(atoms), basis)
+            for name, theirs in (
+                ("overlap", mol.intor("int1e_ovlp")),
+                ("kinetic", mol.intor("int1e_kin")),
+                ("nuclear", mol.intor("int1e_nuc")),
+                ("eri", mol.intor("int2e")),
+            ):
+                integral_err = max(integral_err, float(np.max(np.abs(getattr(ours, name) - theirs))))
+    energy_err = 0.0
+    for atoms, charge, mult, basis in (
+        (water, 0, 1, "6-31g"),
+        ("Be 0 0 0; H 0 0 1.326; H 0 0 -1.326", 0, 1, "6-31g"),
+        ("O 0 0 0; H 0 0 0.97", 0, 2, "6-31g"),
+        ("C 0 0 0.1; H 0 0.99 -0.5; H 0 -0.99 -0.5", 0, 3, "6-31g"),
+    ):
+        mol = gto.M(atom=atoms, basis=basis, unit="angstrom", cart=True, charge=charge, spin=mult - 1, verbose=0)
+        mf = scf.RHF(mol) if mult == 1 else scf.UHF(mol)
+        mf.conv_tol = 1e-12
+        theirs = mf.kernel()
+        ours = q.hartree_fock(q.Molecule(atoms, charge, mult), basis, unrestricted=mult > 1)
+        energy_err = max(energy_err, abs(ours.energy - theirs))
+        if mult == 1:
+            cas = mcscf.CASCI(mf, 6, mol.nelectron - 2)
+            cas.fcisolver.conv_tol = 1e-12
+            theirs_cas = cas.kernel()[0]
+            ours_cas = ours.molecular_integrals(frozen=1, active=6).fci_energies()[0]
+            energy_err = max(energy_err, abs(ours_cas - theirs_cas))
+    return {
+        "integral_max_difference": integral_err,
+        "energy_max_difference": energy_err,
+    }
+
+
 TOLERANCES = {
     "state": 1e-12,
     "gradient": 1e-12,
@@ -410,6 +455,11 @@ TOLERANCES = {
     # Two exact matching decoders differ only on ties and on rounded
     # weights.
     "matching_disagreement": 1e-3,
+    # PySCF's integrals carry errors up to 3·10⁻¹¹ (a 40-digit evaluation
+    # agrees with QSO), and its CODATA 2010 bohr moves the geometries by
+    # 3·10⁻¹¹ relative.
+    "integral": 1e-9,
+    "scf_energy": 1e-8,
 }
 
 
@@ -446,6 +496,11 @@ def check(c: dict) -> list[str]:
             failures.append(f"detection-event rates of {name} differ from Stim's: {r}")
         if not r["matching_disagreement_with_pymatching"] <= TOLERANCES["matching_disagreement"]:
             failures.append(f"matching predictions on {name} differ from PyMatching's: {r}")
+    chem = c["chemistry_vs_pyscf"]
+    if not chem["integral_max_difference"] <= TOLERANCES["integral"]:
+        failures.append(f"integrals differ from PySCF by {chem['integral_max_difference']:.3g}")
+    if not chem["energy_max_difference"] <= TOLERANCES["scf_energy"]:
+        failures.append(f"Hartree–Fock or CASCI energies differ from PySCF by {chem['energy_max_difference']:.3g}")
     return failures
 
 

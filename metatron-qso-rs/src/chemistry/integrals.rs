@@ -23,7 +23,9 @@ use super::basis_data::{SIX_31G, STO_3G, ShellData};
 use crate::error::{QsoError, Result};
 use crate::parallel;
 
-/// Bohr per ångström (CODATA 2018, as in PySCF).
+/// Bohr per ångström (CODATA 2018). PySCF 2.14 uses the CODATA 2010 bohr,
+/// 0.52917721092 Å, which moves geometries given in ångström by 3·10⁻¹¹
+/// relative (energies by about 10⁻¹⁰ Ha).
 pub const BOHR_PER_ANGSTROM: f64 = 1.0 / 0.529_177_210_903;
 
 /// Most basis functions: the electron-repulsion tensor has `n⁴` entries.
@@ -708,7 +710,8 @@ impl AoIntegrals {
         &self.angular
     }
 
-    pub(crate) fn eri_tensor(&self) -> &[f64] {
+    /// All `(ij|kl)`, at `((i·n + j)·n + k)·n + l`.
+    pub fn eri_tensor(&self) -> &[f64] {
         &self.eri
     }
 }
