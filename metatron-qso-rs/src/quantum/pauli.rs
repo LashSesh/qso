@@ -90,6 +90,12 @@ impl PauliString {
         Ok(s)
     }
 
+    /// The string with X parts `x` and Z parts `z` (bit `q`: qubit `q`;
+    /// both bits set: Y).
+    pub(crate) fn from_masks(x: u64, z: u64) -> Self {
+        Self { x, z }
+    }
+
     /// Single-qubit Pauli `p` on qubit `q`.
     ///
     /// # Panics
