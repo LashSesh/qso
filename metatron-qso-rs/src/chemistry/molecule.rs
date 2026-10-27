@@ -488,9 +488,92 @@ impl MolecularIntegrals {
     /// space of determinants with `n_α` and `n_β` electrons. Spaces up to
     /// [`DENSE_FCI_LIMIT`] determinants are diagonalised densely; larger
     /// ones, up to [`MAX_DETERMINANTS`], give the ground state by Lanczos
-    /// (`n_roots` must then be 1).
+    /// (`n_roots` must then be 1), as does a single root above 1024
+    /// determinants. The matrix follows from the Slater–Condon rules.
     pub fn fci_energies(&self, n_roots: usize) -> Result<Vec<f64>> {
-        self.fci_energies_with(QubitEncoding::default(), n_roots)
+        let basis = self.determinants()?;
+        let index: HashMap<u64, usize> = basis.iter().enumerate().map(|(i, &b)| (b, i)).collect();
+        let columns = basis
+            .iter()
+            .map(|&d| self.slater_condon(d, &index))
+            .collect();
+        lowest_eigenvalues(columns, n_roots)
+    }
+
+    /// Spin-orbital integral `⟨pq|rs⟩ = (pr|qs) δ_{σp σr} δ_{σq σs}`
+    /// (spin orbitals in block order).
+    fn physicist(&self, p: usize, q: usize, r: usize, s: usize) -> f64 {
+        let m = self.n_orbitals;
+        if (p < m) != (r < m) || (q < m) != (s < m) {
+            return 0.0;
+        }
+        self.two_body[idx4(m, p % m, r % m, q % m, s % m)]
+    }
+
+    /// `⟨pq||rs⟩ = ⟨pq|rs⟩ − ⟨pq|sr⟩`.
+    fn antisymmetrised(&self, p: usize, q: usize, r: usize, s: usize) -> f64 {
+        self.physicist(p, q, r, s) - self.physicist(p, q, s, r)
+    }
+
+    fn spin_one_body(&self, p: usize, q: usize) -> f64 {
+        let m = self.n_orbitals;
+        if (p < m) != (q < m) {
+            return 0.0;
+        }
+        self.one_body[idx2(m, p % m, q % m)]
+    }
+
+    /// Column `H|d⟩` in the determinant basis by the Slater–Condon rules.
+    fn slater_condon(&self, d: u64, index: &HashMap<u64, usize>) -> Vec<(usize, f64)> {
+        let n = self.n_spin_orbitals();
+        let occ: Vec<usize> = (0..n).filter(|&p| d >> p & 1 == 1).collect();
+        let virt: Vec<usize> = (0..n).filter(|&p| d >> p & 1 == 0).collect();
+        let mut col = Vec::new();
+        // Diagonal.
+        let mut diag = self.core_energy;
+        for (k, &i) in occ.iter().enumerate() {
+            diag += self.spin_one_body(i, i);
+            for &j in &occ[..k] {
+                diag += self.antisymmetrised(i, j, i, j);
+            }
+        }
+        col.push((index[&d], diag));
+        // Singles i → a.
+        for &i in &occ {
+            for &a in &virt {
+                if (i < self.n_orbitals) != (a < self.n_orbitals) {
+                    continue;
+                }
+                let mut v = self.spin_one_body(a, i);
+                for &j in &occ {
+                    if j != i {
+                        v += self.antisymmetrised(a, j, i, j);
+                    }
+                }
+                if v != 0.0 {
+                    let (phase, e) = create(annihilate((1.0, d), i), a);
+                    col.push((index[&e], phase * v));
+                }
+            }
+        }
+        // Doubles i < j → a < b: ⟨ab||ij⟩ times the sign of a†_a a†_b a_j a_i.
+        for (x, &i) in occ.iter().enumerate() {
+            for &j in &occ[x + 1..] {
+                for (y, &a) in virt.iter().enumerate() {
+                    for &b in &virt[y + 1..] {
+                        let v = self.antisymmetrised(a, b, i, j);
+                        if v == 0.0 {
+                            continue;
+                        }
+                        let state = annihilate(annihilate((1.0, d), i), j);
+                        let (phase, e) = create(create(state, b), a);
+                        col.push((index[&e], phase * v));
+                    }
+                }
+            }
+        }
+        col.sort_by_key(|e| e.0);
+        col
     }
 
     /// [`MolecularIntegrals::fci_energies`] computed from the qubit
@@ -528,6 +611,26 @@ fn combinations(n: usize, k: usize) -> Vec<u64> {
         v = (((r ^ v) >> 2) / c) | r;
     }
     out
+}
+
+/// `a_p` on `phase·|d⟩` (`p` occupied).
+fn annihilate((phase, d): (f64, u64), p: usize) -> (f64, u64) {
+    let sign = if (d & ((1u64 << p) - 1)).count_ones() % 2 == 1 {
+        -phase
+    } else {
+        phase
+    };
+    (sign, d & !(1u64 << p))
+}
+
+/// `a†_p` on `phase·|d⟩` (`p` empty).
+fn create((phase, d): (f64, u64), p: usize) -> (f64, u64) {
+    let sign = if (d & ((1u64 << p) - 1)).count_ones() % 2 == 1 {
+        -phase
+    } else {
+        phase
+    };
+    (sign, d | (1u64 << p))
 }
 
 /// `P|b⟩ = phase |b'⟩`.
@@ -592,7 +695,22 @@ pub(crate) fn sector_energies(h: &PauliSum, basis: &[u64], n_roots: usize) -> Re
         col.sort_by_key(|e| e.0);
         columns.push(col);
     }
-    if dim <= DENSE_FCI_LIMIT {
+    lowest_eigenvalues(columns, n_roots)
+}
+
+/// The lowest `n_roots` eigenvalues of the real symmetric matrix with
+/// sparse `columns`.
+fn lowest_eigenvalues(columns: Vec<Vec<(usize, f64)>>, n_roots: usize) -> Result<Vec<f64>> {
+    let dim = columns.len();
+    if n_roots == 0 || n_roots > dim {
+        return Err(QsoError::invalid(
+            "n_roots",
+            format!("need 1 to {dim} roots, got {n_roots}"),
+        ));
+    }
+    // A dense eigensolver costs O(dim³): above 1024 determinants a single
+    // root comes from Lanczos.
+    if dim <= DENSE_FCI_LIMIT && (n_roots > 1 || dim <= 1024) {
         let mut m = RMatrix::zeros(dim, dim);
         for (c, col) in columns.iter().enumerate() {
             for &(r, v) in col {
