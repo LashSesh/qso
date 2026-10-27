@@ -57,6 +57,10 @@ fn check(distance: usize, rounds: usize, odd: bool) -> Result<()> {
             ),
         ));
     }
+    check_rounds(rounds)
+}
+
+pub(super) fn check_rounds(rounds: usize) -> Result<()> {
     if rounds == 0 || rounds > MAX_ROUNDS {
         return Err(QsoError::invalid(
             "rounds",
@@ -69,7 +73,10 @@ fn check(distance: usize, rounds: usize, odd: bool) -> Result<()> {
 /// Fail before building if `rounds` rounds would exceed
 /// [`MAX_QEC_OPERATIONS`]: every round adds the same operations, so one
 /// and two rounds give the count.
-fn check_size(rounds: usize, build: impl Fn(usize) -> Result<DetectorCircuit>) -> Result<()> {
+pub(super) fn check_size(
+    rounds: usize,
+    build: impl Fn(usize) -> Result<DetectorCircuit>,
+) -> Result<()> {
     if rounds <= 2 {
         return Ok(());
     }
@@ -89,13 +96,13 @@ fn check_size(rounds: usize, build: impl Fn(usize) -> Result<DetectorCircuit>) -
 }
 
 /// A builder that adds the noise of [`CircuitNoise`] around operations.
-struct Noisy<'a> {
-    c: DetectorCircuit,
-    noise: &'a CircuitNoise,
+pub(super) struct Noisy<'a> {
+    pub(super) c: DetectorCircuit,
+    pub(super) noise: &'a CircuitNoise,
 }
 
 impl Noisy<'_> {
-    fn reset(&mut self, qs: &[usize]) -> Result<()> {
+    pub(super) fn reset(&mut self, qs: &[usize]) -> Result<()> {
         for &q in qs {
             self.c.reset(q)?;
         }
@@ -103,7 +110,7 @@ impl Noisy<'_> {
         Ok(())
     }
 
-    fn h(&mut self, qs: &[usize]) -> Result<()> {
+    pub(super) fn h(&mut self, qs: &[usize]) -> Result<()> {
         for &q in qs {
             self.c.h(q)?;
         }
@@ -113,7 +120,7 @@ impl Noisy<'_> {
     }
 
     /// CNOTs on disjoint pairs (control, target).
-    fn cx(&mut self, pairs: &[(usize, usize)]) -> Result<()> {
+    pub(super) fn cx(&mut self, pairs: &[(usize, usize)]) -> Result<()> {
         let mut flat = Vec::with_capacity(2 * pairs.len());
         for &(a, b) in pairs {
             self.c.cx(a, b)?;
@@ -124,7 +131,7 @@ impl Noisy<'_> {
         Ok(())
     }
 
-    fn measure(&mut self, qs: &[usize]) -> Result<Vec<usize>> {
+    pub(super) fn measure(&mut self, qs: &[usize]) -> Result<Vec<usize>> {
         qs.iter()
             .map(|&q| self.c.measure(q, self.noise.measurement))
             .collect()

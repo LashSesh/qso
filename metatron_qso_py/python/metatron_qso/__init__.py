@@ -15,9 +15,9 @@ quantum Fisher information, natural gradient and imaginary-time evolution;
 QUBO/Ising problems with QAOA mixers; amplitude estimation; stabilizer
 simulation and graph states; and quantum error correction (detector
 circuits, Pauli-frame sampling, detector error models, union-find and
-minimum-weight matching decoding, repetition and surface-code memory
-experiments); and matrix-product states for circuits with little
-entanglement on many qubits.
+minimum-weight matching and BP+OSD decoding, repetition, surface,
+colour and bivariate bicycle code memory experiments); and matrix-product
+states for circuits with little entanglement on many qubits.
 
 Conventions: qubit 0 is the least significant bit of a basis index; bit
 strings print qubit n-1 first; time evolution is exp(-iHt); rotations are
@@ -28,12 +28,15 @@ from ._core import (
     AmplitudeProblem,
     AoIntegrals,
     BosonSampler,
+    BpOsdDecoder,
+    BpOsdOutcome,
     Channel,
     Circuit,
     CircuitNoise,
     ClassicalShadow,
     CoinedWalk,
     ContinuousWalk,
+    CssCode,
     DecoherentCoinedWalk,
     DensityMatrix,
     DephasingWalk,
@@ -91,6 +94,7 @@ from ._core import (
     circulant_walk_circuit,
     classical_hitting_times,
     classical_walk_probabilities,
+    css_code_memory,
     diagonal_unitary_circuit,
     distilled_expectation,
     dominant_expectation,
@@ -109,8 +113,8 @@ from ._core import (
     haar_unitary,
     hafnian,
     hafnian_repeated,
-    hartree_fock,
     hardware_efficient,
+    hartree_fock,
     heisenberg_xxz,
     imaginary_time_evolution,
     inverse_qft,
@@ -160,12 +164,15 @@ __all__ = [
     "AmplitudeProblem",
     "AoIntegrals",
     "BosonSampler",
+    "BpOsdDecoder",
+    "BpOsdOutcome",
     "Channel",
     "Circuit",
     "CircuitNoise",
     "ClassicalShadow",
     "CoinedWalk",
     "ContinuousWalk",
+    "CssCode",
     "DecoherentCoinedWalk",
     "DensityMatrix",
     "DephasingWalk",
@@ -223,6 +230,7 @@ __all__ = [
     "circulant_walk_circuit",
     "classical_hitting_times",
     "classical_walk_probabilities",
+    "css_code_memory",
     "diagonal_unitary_circuit",
     "distilled_expectation",
     "dominant_expectation",
@@ -241,8 +249,8 @@ __all__ = [
     "haar_unitary",
     "hafnian",
     "hafnian_repeated",
-    "hartree_fock",
     "hardware_efficient",
+    "hartree_fock",
     "heisenberg_xxz",
     "imaginary_time_evolution",
     "inverse_qft",

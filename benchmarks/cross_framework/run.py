@@ -35,6 +35,7 @@ import frameworks as fw  # noqa: E402
 PACKAGES = [
     "metatron-qso", "qiskit", "qiskit-aer", "qulacs", "cirq-core", "pennylane",
     "pennylane-lightning", "thewalrus", "numpy", "projectq", "stim", "pymatching", "pyscf",
+    "ldpc",
 ]
 
 # ----------------------------------------------------------------------------
@@ -197,6 +198,7 @@ def correctness(quick: bool) -> dict:
             "max_density_matrix_difference_vs_qiskit_aer": density_diff,
         },
         "qec_vs_stim": qec_vs_stim(quick),
+        "bposd_vs_ldpc": bposd_vs_ldpc(quick),
         "chemistry_vs_pyscf": chemistry_vs_pyscf(),
     }
 
@@ -369,6 +371,110 @@ def decoding_speed(quick: bool) -> dict:
 
 
 # Largest accepted deviations for --check (all are rounding-level).
+def bposd_vs_ldpc(quick: bool) -> dict:
+    """QSO's BP+OSD decoder against the `ldpc` package (Roffe), shot by
+    shot with the same options: on colour and bivariate bicycle codes
+    with independent bit flips (every prior equal), and on circuit-level
+    memory experiments of QSO's CSS circuits through Stim's detector error
+    model (columns in Stim's order; the priors differ, and `ldpc` scores
+    OSD candidates by Σ ln(1/p) where QSO uses Σ ln((1 − p)/p)). Also the
+    logical error rate of QSO's own pipeline next to `ldpc`'s."""
+    import stim
+    from ldpc import BpOsdDecoder as LdpcBpOsd
+
+    import metatron_qso as q
+
+    rng = np.random.default_rng(20261027)
+    shots = 1000 if quick else 5000
+    variants = {
+        "min-sum 0.625": ({}, {"bp_method": "minimum_sum", "ms_scaling_factor": 0.625}),
+        "min-sum adaptive": ({"scaling": 0.0}, {"bp_method": "minimum_sum", "ms_scaling_factor": 0.0}),
+        "product-sum": ({"method": "product_sum"}, {"bp_method": "product_sum"}),
+    }
+    out: dict = {"capacity": {}, "circuit": {}}
+    codes = {
+        "colour d=7": q.CssCode.color_code(7),
+        "colour d=9": q.CssCode.color_code(9),
+        "[[72, 12, 6]]": q.CssCode.bivariate_bicycle_code(72)[0],
+        "[[144, 12, 12]]": q.CssCode.bivariate_bicycle_code(144)[0],
+    }
+    p = 0.05
+    for name, code in codes.items():
+        h = np.zeros((len(code.z_checks), code.n), dtype=np.uint8)
+        for i, c in enumerate(code.z_checks):
+            h[i, c] = 1
+        dem = q.DetectorErrorModel(h.shape[0], [(p, list(np.flatnonzero(h[:, j])), 0) for j in range(code.n)])
+        errors = (rng.random((shots, code.n)) < p).astype(np.uint8)
+        syndromes = errors @ h.T % 2
+        for label, (ours_kw, theirs_kw) in variants.items():
+            ours = q.BpOsdDecoder(dem, **ours_kw)
+            theirs = LdpcBpOsd(h, error_rate=p, max_iter=50, osd_method="osd_cs", osd_order=7, **theirs_kw)
+            same = converged_same = 0
+            for s in syndromes:
+                o = ours.decode_detailed(list(np.flatnonzero(s)))
+                x = np.zeros(code.n, dtype=np.uint8)
+                x[o.errors] = 1
+                same += bool(np.array_equal(x, theirs.decode(s)))
+                converged_same += o.converged == bool(theirs.converge)
+            out["capacity"][f"{name}, {label}"] = {
+                "shots": shots,
+                "correction_disagreement": 1 - same / shots,
+                "convergence_disagreement": 1 - converged_same / shots,
+            }
+    circuit_cases = {
+        "colour d=5, 5 rounds, p=0.003": (q.CssCode.color_code(5), 5, 0.003),
+        "[[72, 12, 6]], 6 rounds, p=0.002": (q.CssCode.bivariate_bicycle_code(72)[0], 6, 0.002),
+    }
+    cshots = 1000 if quick else 4000
+    for name, (code, rounds, pc) in circuit_cases.items():
+        c = q.css_code_memory(code, rounds, pc)
+        sc = stim.Circuit(c.to_stim())
+        cols = []
+        for inst in sc.detector_error_model(decompose_errors=False).flattened():
+            if inst.type != "error":
+                continue
+            t = inst.targets_copy()
+            dets = sorted(x.val for x in t if x.is_relative_detector_id())
+            if dets:
+                obs = sum(1 << x.val for x in t if x.is_logical_observable_id())
+                cols.append((inst.args_copy()[0], dets, obs))
+        # QSO's own model of the circuit against Stim's.
+        ours_model = {(tuple(d), o): pp for pp, d, o in c.detector_error_model().errors if d}
+        theirs_model = {(tuple(d), o): pp for pp, d, o in cols}
+        keys = set(ours_model) | set(theirs_model)
+        model_diff = max(
+            abs(ours_model.get(k, 0.0) - theirs_model.get(k, 0.0)) / max(ours_model.get(k, 0.0), theirs_model.get(k, 0.0))
+            for k in keys
+        )
+        nd = sc.num_detectors
+        h = np.zeros((nd, len(cols)), dtype=np.uint8)
+        for j, (_, dets, _) in enumerate(cols):
+            h[dets, j] = 1
+        col_obs = np.array([o for _, _, o in cols], dtype=np.uint64)
+        theirs = LdpcBpOsd(
+            h, channel_probs=[pp for pp, _, _ in cols], max_iter=50, bp_method="minimum_sum",
+            ms_scaling_factor=0.625, osd_method="osd_cs", osd_order=7,
+        )
+        ours = q.BpOsdDecoder(q.DetectorErrorModel(nd, cols))
+        det, flips = sc.compile_detector_sampler(seed=5).sample(cshots, separate_observables=True)
+        actual = (flips.astype(np.uint64) << np.arange(flips.shape[1], dtype=np.uint64)).sum(axis=1)
+        a = ours.decode_batch(det)
+        b = np.array(
+            [np.bitwise_xor.reduce(col_obs[theirs.decode(r.astype(np.uint8)).astype(bool)], initial=np.uint64(0)) for r in det],
+            dtype=np.uint64,
+        )
+        out["circuit"][name] = {
+            "shots": cshots,
+            "error_mechanisms": len(cols),
+            "max_relative_probability_difference_vs_stim": model_diff,
+            "prediction_disagreement": float(np.mean(a != b)),
+            "logical_error_rate_qso_on_stim_model": float(np.mean(a != actual)),
+            "logical_error_rate_ldpc": float(np.mean(b != actual)),
+            "logical_error_rate_qso_pipeline": q.logical_error_rate(c, cshots, seed=6, decoder="bposd").rate,
+        }
+    return out
+
+
 def gaussian_vs_thewalrus(rng) -> dict:
     """Hafnians, torontonians and Gaussian boson sampling against The Walrus."""
     import metatron_qso as q
@@ -526,6 +632,12 @@ TOLERANCES = {
     # Both decoders round ln((1 − p)/p) to integers (QSO: the largest edge
     # at 2²⁰).
     "matching_weight": 1e-5,
+    # BP+OSD against ldpc: with equal priors the same arithmetic (min-sum
+    # exactly; product-sum differs where tanh saturates); on circuit
+    # models the OSD scores differ (Σ ln(1/p) against Σ ln((1 − p)/p)).
+    "bposd_min_sum_disagreement": 1e-3,
+    "bposd_product_sum_disagreement": 1e-2,
+    "bposd_circuit_disagreement": 1e-2,
     # Same geometries in bohr: integrals to rounding, energies to the
     # convergence of both SCF codes.
     "integral": 1e-12,
@@ -572,6 +684,15 @@ def check(c: dict) -> list[str]:
             failures.append(f"detection-event rates of {name} differ from Stim's: {r}")
         if not r["matching_disagreement_with_pymatching"] <= TOLERANCES["matching_disagreement"]:
             failures.append(f"matching predictions on {name} differ from PyMatching's: {r}")
+    for name, r in c["bposd_vs_ldpc"]["capacity"].items():
+        key = "bposd_product_sum_disagreement" if "product-sum" in name else "bposd_min_sum_disagreement"
+        if not max(r["correction_disagreement"], r["convergence_disagreement"]) <= TOLERANCES[key]:
+            failures.append(f"BP+OSD corrections on {name} differ from ldpc's: {r}")
+    for name, r in c["bposd_vs_ldpc"]["circuit"].items():
+        if not r["max_relative_probability_difference_vs_stim"] <= TOLERANCES["error_model"]:
+            failures.append(f"detector error model of {name} differs from Stim's: {r}")
+        if not r["prediction_disagreement"] <= TOLERANCES["bposd_circuit_disagreement"]:
+            failures.append(f"BP+OSD predictions on {name} differ from ldpc's: {r}")
     chem = c["chemistry_vs_pyscf"]
     if not chem["integral_max_difference"] <= TOLERANCES["integral"]:
         failures.append(f"integrals differ from PySCF by {chem['integral_max_difference']:.3g}")

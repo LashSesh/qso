@@ -1,9 +1,11 @@
 //! Detector circuits, Pauli-frame sampling, detector error models, the
-//! union-find and matching decoders and memory experiments.
+//! union-find, matching and BP+OSD decoders, CSS codes and memory
+//! experiments.
 
 use metatron_qso::qec::{
-    self, CircuitNoise, Decoder, DecoderKind, DetectorCircuit, DetectorErrorModel, MatchingDecoder,
-    MatchingGraph, MemoryBasis, Noise, SparseMatchingDecoder, UnionFindDecoder,
+    self, BpMethod, BpOsdDecoder, BpOsdOptions, BpOsdOutcome, CircuitNoise, CssCode, Decoder,
+    DecoderKind, DetectorCircuit, DetectorErrorModel, ErrorMechanism, MatchingDecoder,
+    MatchingGraph, MemoryBasis, Noise, OsdMethod, SparseMatchingDecoder, UnionFindDecoder,
 };
 use numpy::ndarray::Array2;
 use numpy::{AllowTypeChange, IntoPyArray, PyArray1, PyArray2, PyArrayLike2};
@@ -364,6 +366,8 @@ impl PyCircuitNoise {
 
 /// Independent error mechanisms of a circuit: `errors` lists
 /// `(probability, detectors, observables)` with `observables` a bit mask.
+/// Built by `DetectorCircuit.detector_error_model`, or directly from such
+/// a list (for instance the columns of a parity-check matrix).
 #[pyclass(name = "DetectorErrorModel", module = "metatron_qso", frozen)]
 pub struct PyDetectorErrorModel {
     inner: DetectorErrorModel,
@@ -371,6 +375,58 @@ pub struct PyDetectorErrorModel {
 
 #[pymethods]
 impl PyDetectorErrorModel {
+    /// `n_observables` defaults to one more than the highest observable
+    /// bit used.
+    #[new]
+    #[pyo3(signature = (n_detectors, errors, n_observables = None))]
+    fn new(
+        n_detectors: usize,
+        errors: Vec<(f64, Vec<usize>, u64)>,
+        n_observables: Option<usize>,
+    ) -> PyResult<Self> {
+        let mut out = Vec::with_capacity(errors.len());
+        for (k, (probability, mut detectors, observables)) in errors.into_iter().enumerate() {
+            if !(0.0..=1.0).contains(&probability) {
+                return Err(invalid(format!(
+                    "error {k}: {probability} is not a probability"
+                )));
+            }
+            detectors.sort_unstable();
+            if detectors.windows(2).any(|w| w[0] == w[1]) {
+                return Err(invalid(format!("error {k} lists a detector twice")));
+            }
+            if let Some(&d) = detectors.last().filter(|&&d| d >= n_detectors) {
+                return Err(invalid(format!(
+                    "error {k} flips detector {d} of {n_detectors}"
+                )));
+            }
+            out.push(ErrorMechanism {
+                probability,
+                detectors,
+                observables,
+            });
+        }
+        let used = out
+            .iter()
+            .map(|e| 64 - e.observables.leading_zeros() as usize)
+            .max()
+            .unwrap_or(0);
+        let n_observables = n_observables.unwrap_or(used);
+        if n_observables < used {
+            return Err(invalid(format!(
+                "observable {} is used but n_observables is {n_observables}",
+                used - 1
+            )));
+        }
+        Ok(Self {
+            inner: DetectorErrorModel {
+                n_detectors,
+                n_observables,
+                errors: out,
+            },
+        })
+    }
+
     #[getter]
     fn n_detectors(&self) -> usize {
         self.inner.n_detectors
@@ -599,6 +655,270 @@ impl PySparseMatchingDecoder {
     }
 }
 
+/// What one BP+OSD decoding found: the predicted observable mask, the
+/// correction (indices into the model's errors), whether belief
+/// propagation alone converged, its iterations, and the correction's
+/// weight Σ ln((1 − p)/p).
+#[pyclass(name = "BpOsdOutcome", module = "metatron_qso", frozen)]
+pub struct PyBpOsdOutcome {
+    #[pyo3(get)]
+    observables: u64,
+    #[pyo3(get)]
+    errors: Vec<usize>,
+    #[pyo3(get)]
+    converged: bool,
+    #[pyo3(get)]
+    iterations: usize,
+    #[pyo3(get)]
+    weight: f64,
+}
+
+impl From<BpOsdOutcome> for PyBpOsdOutcome {
+    fn from(o: BpOsdOutcome) -> Self {
+        PyBpOsdOutcome {
+            observables: o.observables,
+            errors: o.errors,
+            converged: o.converged,
+            iterations: o.iterations,
+            weight: o.weight,
+        }
+    }
+}
+
+#[pymethods]
+impl PyBpOsdOutcome {
+    fn __repr__(&self) -> String {
+        format!(
+            "BpOsdOutcome(observables={}, errors={:?}, converged={}, iterations={}, weight={})",
+            self.observables,
+            self.errors,
+            if self.converged { "True" } else { "False" },
+            self.iterations,
+            self.weight
+        )
+    }
+}
+
+/// Belief propagation with ordered-statistics post-processing on a
+/// detector error model whose errors may flip any number of detectors.
+///
+/// `method` is `"min_sum"` (messages scaled by `scaling`; 0 means
+/// 1 − 2^−t in iteration t) or `"product_sum"`; `max_iterations=0`
+/// skips belief propagation. `osd` is `"osd0"`, `"cs"` (combination
+/// sweep: every single error outside the information set and the pairs
+/// among the first `osd_order`) or `"exhaustive"` (every subset of the
+/// first `osd_order`, at most 20).
+#[pyclass(name = "BpOsdDecoder", module = "metatron_qso")]
+pub struct PyBpOsdDecoder {
+    inner: BpOsdDecoder,
+}
+
+#[pymethods]
+impl PyBpOsdDecoder {
+    #[new]
+    #[pyo3(signature = (model, max_iterations = 50, method = "min_sum", scaling = 0.625, osd = "cs", osd_order = 7))]
+    fn new(
+        py: Python<'_>,
+        model: &PyDetectorErrorModel,
+        max_iterations: usize,
+        method: &str,
+        scaling: f64,
+        osd: &str,
+        osd_order: usize,
+    ) -> PyResult<Self> {
+        let method = match method {
+            "min_sum" => BpMethod::MinSum,
+            "product_sum" => BpMethod::ProductSum,
+            other => {
+                return Err(invalid(format!(
+                    "unknown method {other:?}; use \"min_sum\" or \"product_sum\""
+                )));
+            }
+        };
+        let osd = match osd {
+            "osd0" => OsdMethod::Zero,
+            "cs" => OsdMethod::CombinationSweep,
+            "exhaustive" => OsdMethod::Exhaustive,
+            other => {
+                return Err(invalid(format!(
+                    "unknown osd {other:?}; use \"osd0\", \"cs\" or \"exhaustive\""
+                )));
+            }
+        };
+        let options = BpOsdOptions {
+            max_iterations,
+            method,
+            scaling,
+            osd,
+            osd_order,
+        };
+        let dem = &model.inner;
+        Ok(Self {
+            inner: py.detach(|| BpOsdDecoder::new(dem, options)).raise()?,
+        })
+    }
+
+    #[getter]
+    fn n_detectors(&self) -> usize {
+        self.inner.n_detectors()
+    }
+
+    /// Predicted observable flips (a bit mask) for the detectors that
+    /// fired.
+    fn decode(&mut self, py: Python<'_>, fired: Vec<usize>) -> PyResult<u64> {
+        let d = &mut self.inner;
+        py.detach(|| d.decode(&fired)).raise()
+    }
+
+    /// The correction and how it was found (a `BpOsdOutcome`).
+    fn decode_detailed(&mut self, py: Python<'_>, fired: Vec<usize>) -> PyResult<PyBpOsdOutcome> {
+        let d = &mut self.inner;
+        Ok(py.detach(|| d.decode_detailed(&fired)).raise()?.into())
+    }
+
+    /// Decode each row of a (shots, n_detectors) boolean array; returns
+    /// the predicted observable masks.
+    fn decode_batch<'py>(
+        &mut self,
+        py: Python<'py>,
+        detectors: PyArrayLike2<'py, bool, AllowTypeChange>,
+    ) -> PyResult<Bound<'py, PyArray1<u64>>> {
+        let n = self.inner.n_detectors();
+        decode_batch(py, &mut self.inner, n, detectors)
+    }
+
+    fn __repr__(&self) -> String {
+        let o = self.inner.options();
+        format!(
+            "BpOsdDecoder(detectors={}, max_iterations={}, method={:?}, osd={:?}, osd_order={})",
+            self.inner.n_detectors(),
+            o.max_iterations,
+            o.method,
+            o.osd,
+            o.osd_order
+        )
+    }
+}
+
+/// A CSS code: X-type and Z-type checks (lists of qubits) on `n` qubits,
+/// with a basis of logical operators paired so that X logical i and Z
+/// logical j overlap oddly exactly when i = j.
+#[pyclass(name = "CssCode", module = "metatron_qso", frozen)]
+pub struct PyCssCode {
+    inner: CssCode,
+}
+
+#[pymethods]
+impl PyCssCode {
+    #[new]
+    fn new(n: usize, x_checks: Vec<Vec<usize>>, z_checks: Vec<Vec<usize>>) -> PyResult<Self> {
+        Ok(Self {
+            inner: CssCode::new(n, x_checks, z_checks).raise()?,
+        })
+    }
+
+    /// The triangular 6.6.6 colour code of odd `distance`: (3d² + 1)/4
+    /// qubits, one logical qubit, the same faces as X and Z checks.
+    #[staticmethod]
+    fn color_code(distance: usize) -> PyResult<Self> {
+        Ok(Self {
+            inner: CssCode::color_code(distance).raise()?,
+        })
+    }
+
+    /// The bivariate bicycle code with `x = S_l ⊗ I_m`, `y = I_l ⊗ S_m`,
+    /// `A = Σ x^a y^b` over the pairs `a`, `B` over `b`:
+    /// `H_X = [A | B]`, `H_Z = [Bᵀ | Aᵀ]`.
+    #[staticmethod]
+    fn bivariate_bicycle(
+        l: usize,
+        m: usize,
+        a: Vec<(usize, usize)>,
+        b: Vec<(usize, usize)>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            inner: CssCode::bivariate_bicycle(l, m, &a, &b).raise()?,
+        })
+    }
+
+    /// One of the bivariate bicycle codes of Bravyi et al. (2024) by its
+    /// qubits (72, 90, 108, 144 or 288); returns the code and its distance
+    /// from the paper.
+    #[staticmethod]
+    fn bivariate_bicycle_code(n: usize) -> PyResult<(Self, usize)> {
+        let (inner, d) = CssCode::bivariate_bicycle_code(n).raise()?;
+        Ok((Self { inner }, d))
+    }
+
+    #[getter]
+    fn n(&self) -> usize {
+        self.inner.n()
+    }
+
+    #[getter]
+    fn k(&self) -> usize {
+        self.inner.k()
+    }
+
+    #[getter]
+    fn x_checks(&self) -> Vec<Vec<usize>> {
+        self.inner.x_checks().to_vec()
+    }
+
+    #[getter]
+    fn z_checks(&self) -> Vec<Vec<usize>> {
+        self.inner.z_checks().to_vec()
+    }
+
+    #[getter]
+    fn x_logicals(&self) -> Vec<Vec<usize>> {
+        self.inner.x_logicals().to_vec()
+    }
+
+    #[getter]
+    fn z_logicals(&self) -> Vec<Vec<usize>> {
+        self.inner.z_logicals().to_vec()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "CssCode(n={}, k={}, x_checks={}, z_checks={})",
+            self.inner.n(),
+            self.inner.k(),
+            self.inner.x_checks().len(),
+            self.inner.z_checks().len()
+        )
+    }
+}
+
+fn parse_basis(basis: &str) -> PyResult<MemoryBasis> {
+    match basis {
+        "z" | "Z" => Ok(MemoryBasis::Z),
+        "x" | "X" => Ok(MemoryBasis::X),
+        other => Err(invalid(format!(
+            "unknown basis {other:?}; use \"z\" or \"x\""
+        ))),
+    }
+}
+
+/// A memory experiment for a CSS code: every round measures all X checks,
+/// then all Z checks, with ancillas; detectors are the checks of `basis`
+/// compared between rounds, observable i is logical i of that basis.
+#[pyfunction]
+#[pyo3(signature = (code, rounds, noise = None, basis = "z"))]
+fn css_code_memory(
+    code: &PyCssCode,
+    rounds: usize,
+    noise: Option<NoiseArg>,
+    basis: &str,
+) -> PyResult<PyDetectorCircuit> {
+    let basis = parse_basis(basis)?;
+    let noise = noise.map(NoiseArg::model).unwrap_or_default();
+    Ok(PyDetectorCircuit {
+        inner: qec::css_code_memory(&code.inner, rounds, &noise, basis).raise()?,
+    })
+}
+
 /// Logical failures of a decoder on sampled shots.
 #[pyclass(name = "LogicalErrorRate", module = "metatron_qso", frozen, eq)]
 #[derive(Clone, PartialEq)]
@@ -653,15 +973,7 @@ fn surface_code_memory(
     noise: Option<NoiseArg>,
     basis: &str,
 ) -> PyResult<PyDetectorCircuit> {
-    let basis = match basis {
-        "z" | "Z" => MemoryBasis::Z,
-        "x" | "X" => MemoryBasis::X,
-        other => {
-            return Err(invalid(format!(
-                "unknown basis {other:?}; use \"z\" or \"x\""
-            )));
-        }
-    };
+    let basis = parse_basis(basis)?;
     let noise = noise.map(NoiseArg::model).unwrap_or_default();
     Ok(PyDetectorCircuit {
         inner: qec::surface_code_memory_with(distance, rounds, &noise, basis).raise()?,
@@ -669,8 +981,9 @@ fn surface_code_memory(
 }
 
 /// Sample `shots` shots of `circuit`, decode them with the decoder of its
-/// decomposed detector error model (`"union_find"` or `"matching"`) and
-/// count the logical failures. Every decoder sees the same shots.
+/// decomposed detector error model (`"union_find"` or `"matching"`) or of
+/// its whole model (`"bposd"`, default options) and count the logical
+/// failures. Every decoder sees the same shots.
 #[pyfunction]
 #[pyo3(signature = (circuit, shots, seed = 0, decoder = "union_find"))]
 fn logical_error_rate(
@@ -683,9 +996,10 @@ fn logical_error_rate(
     let kind = match decoder {
         "union_find" => DecoderKind::UnionFind,
         "matching" => DecoderKind::Matching,
+        "bposd" => DecoderKind::BpOsd,
         other => {
             return Err(invalid(format!(
-                "unknown decoder {other:?}; use \"union_find\" or \"matching\""
+                "unknown decoder {other:?}; use \"union_find\", \"matching\" or \"bposd\""
             )));
         }
     };
@@ -708,9 +1022,13 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyUnionFindDecoder>()?;
     m.add_class::<PyMatchingDecoder>()?;
     m.add_class::<PySparseMatchingDecoder>()?;
+    m.add_class::<PyBpOsdDecoder>()?;
+    m.add_class::<PyBpOsdOutcome>()?;
+    m.add_class::<PyCssCode>()?;
     m.add_class::<PyLogicalErrorRate>()?;
     m.add_function(wrap_pyfunction!(repetition_code_memory, m)?)?;
     m.add_function(wrap_pyfunction!(surface_code_memory, m)?)?;
+    m.add_function(wrap_pyfunction!(css_code_memory, m)?)?;
     m.add_function(wrap_pyfunction!(logical_error_rate, m)?)?;
     Ok(())
 }

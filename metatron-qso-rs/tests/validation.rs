@@ -1242,3 +1242,48 @@ fn pretty_good_state_transfer_follows_number_theory() {
         assert_eq!(t.pretty_good(), n.is_power_of_two(), "C{n}");
     }
 }
+
+#[test]
+fn bposd_decodes_colour_and_bicycle_codes() {
+    use metatron_qso::qec::{
+        CircuitNoise, CssCode, DecoderKind, MemoryBasis, css_code_memory, logical_error_rate_with,
+    };
+    // The codes of the literature: triangular colour codes [[(3d² + 1)/4,
+    // 1, d]] and the bivariate bicycle codes of Bravyi et al. (2024).
+    for (d, n) in [(3, 7), (5, 19), (7, 37), (9, 61)] {
+        let c = CssCode::color_code(d).unwrap();
+        assert_eq!((c.n(), c.k()), (n, 1));
+    }
+    for (n, k) in [(72, 12), (90, 8), (108, 8), (144, 12), (288, 12)] {
+        let (c, _) = CssCode::bivariate_bicycle_code(n).unwrap();
+        assert_eq!((c.n(), c.k()), (n, k));
+    }
+    // Circuit-level noise p = 0.002, d rounds: the colour codes of distance
+    // 5 and 7 fail far less often than distance 3 (3.2·10⁻², 4.7·10⁻³ and
+    // 2.2·10⁻³ at 20 000 shots), and the [[72, 12, 6]] code at p = 0.001
+    // protects its 12 qubits with a failure rate of about 1.5·10⁻³.
+    let rate = |code: &CssCode, rounds: usize, p: f64, shots: usize| {
+        let c = css_code_memory(code, rounds, &CircuitNoise::uniform(p), MemoryBasis::Z).unwrap();
+        logical_error_rate_with(&c, shots, 3, DecoderKind::BpOsd)
+            .unwrap()
+            .rate
+    };
+    let colour: Vec<f64> = [3, 5, 7]
+        .iter()
+        .map(|&d| rate(&CssCode::color_code(d).unwrap(), d, 0.002, 4000))
+        .collect();
+    eprintln!("colour codes d = 3, 5, 7: {colour:?}");
+    assert!(colour[0] > 0.02, "{colour:?}");
+    assert!(
+        colour[1] < colour[0] / 3.0 && colour[2] < colour[0] / 3.0,
+        "{colour:?}"
+    );
+    let bb = rate(
+        &CssCode::bivariate_bicycle_code(72).unwrap().0,
+        6,
+        0.001,
+        1000,
+    );
+    eprintln!("[[72, 12, 6]]: {bb}");
+    assert!(bb < 0.01, "{bb}");
+}

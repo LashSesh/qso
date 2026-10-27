@@ -17,7 +17,7 @@
 //! minimum-weight decoder, and with unequal weights it can fail on some
 //! errors of weight below d/2.
 
-use super::dem::DetectorErrorModel;
+use super::dem::{DetectorErrorModel, ErrorMechanism};
 use crate::error::{QsoError, Result};
 
 /// An edge of a matching graph.
@@ -121,6 +121,44 @@ impl MatchingGraph {
 
     /// Errors that flip observables without firing a detector, with their
     /// probabilities: no decoder can correct them.
+    /// The detector error model with one error per edge (and per
+    /// undetectable error).
+    pub fn to_dem(&self) -> DetectorErrorModel {
+        let n = self.n_detectors;
+        let mut errors: Vec<ErrorMechanism> = self
+            .edges
+            .iter()
+            .map(|e| ErrorMechanism {
+                probability: e.probability,
+                detectors: if e.b == n {
+                    vec![e.a]
+                } else {
+                    vec![e.a.min(e.b), e.a.max(e.b)]
+                },
+                observables: e.observables,
+            })
+            .collect();
+        errors.extend(
+            self.undetectable
+                .iter()
+                .map(|&(probability, observables)| ErrorMechanism {
+                    probability,
+                    detectors: Vec::new(),
+                    observables,
+                }),
+        );
+        let n_observables = errors
+            .iter()
+            .map(|e| 64 - e.observables.leading_zeros() as usize)
+            .max()
+            .unwrap_or(0);
+        DetectorErrorModel {
+            n_detectors: n,
+            n_observables,
+            errors,
+        }
+    }
+
     pub fn undetectable(&self) -> &[(f64, u64)] {
         &self.undetectable
     }

@@ -1812,6 +1812,12 @@ class CircuitNoise:
 
 @final
 class DetectorErrorModel:
+    def __new__(
+        cls,
+        n_detectors: int,
+        errors: Sequence[tuple[float, Sequence[int], int]],
+        n_observables: Optional[int] = None,
+    ) -> DetectorErrorModel: ...
     @property
     def n_detectors(self) -> int: ...
     @property
@@ -1847,6 +1853,62 @@ class SparseMatchingDecoder:
     def decode_batch(self, detectors: ArrayLike) -> NDArray[np.uint64]: ...
 
 @final
+class BpOsdOutcome:
+    @property
+    def observables(self) -> int: ...
+    @property
+    def errors(self) -> list[int]: ...
+    @property
+    def converged(self) -> bool: ...
+    @property
+    def iterations(self) -> int: ...
+    @property
+    def weight(self) -> float: ...
+
+@final
+class BpOsdDecoder:
+    def __new__(
+        cls,
+        model: DetectorErrorModel,
+        max_iterations: int = 50,
+        method: Literal["min_sum", "product_sum"] = "min_sum",
+        scaling: float = 0.625,
+        osd: Literal["osd0", "cs", "exhaustive"] = "cs",
+        osd_order: int = 7,
+    ) -> BpOsdDecoder: ...
+    @property
+    def n_detectors(self) -> int: ...
+    def decode(self, fired: Sequence[int]) -> int: ...
+    def decode_detailed(self, fired: Sequence[int]) -> BpOsdOutcome: ...
+    def decode_batch(self, detectors: ArrayLike) -> NDArray[np.uint64]: ...
+
+@final
+class CssCode:
+    def __new__(
+        cls, n: int, x_checks: Sequence[Sequence[int]], z_checks: Sequence[Sequence[int]]
+    ) -> CssCode: ...
+    @staticmethod
+    def color_code(distance: int) -> CssCode: ...
+    @staticmethod
+    def bivariate_bicycle(
+        l: int, m: int, a: Sequence[tuple[int, int]], b: Sequence[tuple[int, int]]
+    ) -> CssCode: ...
+    @staticmethod
+    def bivariate_bicycle_code(n: int) -> tuple[CssCode, int]: ...
+    @property
+    def n(self) -> int: ...
+    @property
+    def k(self) -> int: ...
+    @property
+    def x_checks(self) -> list[list[int]]: ...
+    @property
+    def z_checks(self) -> list[list[int]]: ...
+    @property
+    def x_logicals(self) -> list[list[int]]: ...
+    @property
+    def z_logicals(self) -> list[list[int]]: ...
+
+@final
 class LogicalErrorRate:
     @property
     def shots(self) -> int: ...
@@ -1866,11 +1928,17 @@ def surface_code_memory(
     noise: Union[CircuitNoise, float, None] = None,
     basis: Literal["z", "x", "Z", "X"] = "z",
 ) -> DetectorCircuit: ...
+def css_code_memory(
+    code: CssCode,
+    rounds: int,
+    noise: Union[CircuitNoise, float, None] = None,
+    basis: Literal["z", "x", "Z", "X"] = "z",
+) -> DetectorCircuit: ...
 def logical_error_rate(
     circuit: DetectorCircuit,
     shots: int,
     seed: int = 0,
-    decoder: Literal["union_find", "matching"] = "union_find",
+    decoder: Literal["union_find", "matching", "bposd"] = "union_find",
 ) -> LogicalErrorRate: ...
 
 @final

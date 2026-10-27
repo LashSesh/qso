@@ -380,18 +380,23 @@ enum Command {
         #[arg(long)]
         output: Option<std::path::PathBuf>,
     },
-    /// Memory experiment of a repetition or rotated surface code under
-    /// circuit-level depolarizing noise: sampled with Pauli frames and
-    /// decoded by union-find or minimum-weight matching.
+    /// Memory experiment of a repetition, rotated surface, triangular
+    /// colour or bivariate bicycle code under circuit-level depolarizing
+    /// noise: sampled with Pauli frames and decoded by union-find,
+    /// minimum-weight matching or BP+OSD (colour and bicycle codes need
+    /// BP+OSD).
     Qec {
         #[arg(long, value_enum, default_value_t = CodeArg::Surface)]
         code: CodeArg,
         #[arg(long, value_enum, default_value_t = DecoderArg::UnionFind)]
         decoder: DecoderArg,
-        /// Basis of the surface-code memory: z protects |0⟩_L, x |+⟩_L.
+        /// Basis of the memory (not for the repetition code): z protects
+        /// |0⟩_L, x |+⟩_L.
         #[arg(long, value_enum, default_value_t = BasisArg::Z)]
         basis: BasisArg,
-        /// Code distances (odd for the surface code), e.g. 3,5,7.
+        /// Code distances (odd for the surface and colour codes), e.g.
+        /// 3,5,7; for bivariate bicycle codes their qubit counts (72, 90,
+        /// 108, 144, 288).
         #[arg(long, value_delimiter = ',', default_value = "3,5")]
         distance: Vec<usize>,
         /// Rounds of syndrome extraction (default: the distance).
@@ -425,12 +430,15 @@ enum BasisArg {
 enum DecoderArg {
     UnionFind,
     Matching,
+    Bposd,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
 enum CodeArg {
     Surface,
     Repetition,
+    Color,
+    Bb,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -1324,10 +1332,16 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             let kind = match decoder {
                 DecoderArg::UnionFind => qec::DecoderKind::UnionFind,
                 DecoderArg::Matching => qec::DecoderKind::Matching,
+                DecoderArg::Bposd => qec::DecoderKind::BpOsd,
             };
             let decoder_name = match kind {
                 qec::DecoderKind::UnionFind => "union-find",
                 qec::DecoderKind::Matching => "matching",
+                qec::DecoderKind::BpOsd => "BP+OSD",
+            };
+            let memory_basis = match basis {
+                BasisArg::Z => qec::MemoryBasis::Z,
+                BasisArg::X => qec::MemoryBasis::X,
             };
             if let Some(path) = from_file {
                 let text = std::fs::read_to_string(path).map_err(|e| {
@@ -1363,18 +1377,36 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             for &prob in p {
                 for &d in distance {
                     let noise = qec::CircuitNoise::uniform(prob);
-                    let r = rounds.unwrap_or(d);
+                    // The bicycle codes are named by their qubits.
+                    let (bicycle, code_distance) = match code {
+                        CodeArg::Bb => {
+                            let (c, cd) = qec::CssCode::bivariate_bicycle_code(d)?;
+                            (Some(c), cd)
+                        }
+                        _ => (None, d),
+                    };
+                    let r = rounds.unwrap_or(code_distance);
                     let circuit = match code {
-                        CodeArg::Surface => qec::surface_code_memory_with(
-                            d,
+                        CodeArg::Surface => {
+                            qec::surface_code_memory_with(d, r, &noise, memory_basis)?
+                        }
+                        CodeArg::Repetition => qec::repetition_code_memory(d, r, &noise)?,
+                        CodeArg::Color => qec::css_code_memory(
+                            &qec::CssCode::color_code(d)?,
                             r,
                             &noise,
-                            match basis {
-                                BasisArg::Z => qec::MemoryBasis::Z,
-                                BasisArg::X => qec::MemoryBasis::X,
-                            },
+                            memory_basis,
                         )?,
-                        CodeArg::Repetition => qec::repetition_code_memory(d, r, &noise)?,
+                        CodeArg::Bb => qec::css_code_memory(
+                            bicycle.as_ref().expect("built above"),
+                            r,
+                            &noise,
+                            memory_basis,
+                        )?,
+                    };
+                    let label = match &bicycle {
+                        Some(c) => format!("[[{}, {}, {code_distance}]]", c.n(), c.k()),
+                        None => format!("d = {d}"),
                     };
                     if let Some(path) = stim.as_ref().filter(|_| rows.is_empty()) {
                         std::fs::write(path, circuit.to_stim()?).map_err(|e| {
@@ -1383,7 +1415,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                     }
                     let rate = qec::logical_error_rate_with(&circuit, *shots, *seed, kind)?;
                     lines.push(format!(
-                        "p = {prob}, d = {d}, {r} rounds: {} qubits, {} detectors; logical error rate {:.3e} ± {:.1e} ({} of {} shots, {})",
+                        "p = {prob}, {label}, {r} rounds: {} qubits, {} detectors; logical error rate {:.3e} ± {:.1e} ({} of {} shots, {})",
                         circuit.n_qubits(),
                         circuit.n_detectors(),
                         rate.rate,
@@ -1394,7 +1426,8 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                     ));
                     rows.push(json!({
                         "p": prob,
-                        "distance": d,
+                        "distance": code_distance,
+                        "code_qubits": bicycle.as_ref().map(|c| c.n()),
                         "rounds": r,
                         "qubits": circuit.n_qubits(),
                         "detectors": circuit.n_detectors(),
