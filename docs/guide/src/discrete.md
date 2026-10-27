@@ -35,6 +35,37 @@ x = np.arange(-steps, steps + 1)
 print(math.sqrt((p * x**2).sum()) / steps)          # 0.5412
 ```
 
+## Decoherent coined walks
+
+`DecoherentCoinedWalk` runs a coined walk on density matrices, so it can
+lose coherence. Every step applies the walk's unitary step and then
+dephasing in the arc basis. Coin dephasing with probability p_c per step
+scales the coherences between different arcs at the same node by
+1 − p_c: the coin is measured with probability p_c. Position dephasing
+does the same for arcs at different nodes. With p_c = p_x = 0 it is the
+coherent walk.
+
+When the coin is measured after every step, the node probabilities
+follow a classical Markov chain on the arcs. From an arc arriving at a
+node, the walker leaves along arc j with probability |C_jk|². For the
+Fourier coin all these are 1/d, so the walk becomes the simple random
+walk. The tests check this exactly on the Petersen graph, the cube, a
+cycle and Metatron's Cube (K₁₃), and check the arc chain of the Grover
+coin, which steps back with probability (1 − 2/d)².
+
+```python
+import numpy as np
+import metatron_qso as q
+
+walk = q.CoinedWalk(q.Graph.metatron_cube(), "fourier")
+for p in [0.0, 0.2, 1.0]:
+    open_walk = q.DecoherentCoinedWalk(walk, coin_dephasing=p)
+    rho = open_walk.evolve(open_walk.localized_mixed(0), 5)
+    print(p, np.round(open_walk.node_probabilities(rho)[:3], 4))
+```
+
+Density matrices of arcs grow as (2|E|)²; at most 2048 arcs are allowed.
+
 ## Szegedy walks
 
 `SzegedyWalk` quantises the random walk P_uv = w_uv/d_u with the marked

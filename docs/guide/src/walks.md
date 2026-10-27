@@ -81,6 +81,56 @@ for rate in [0.0, 1.0, 10.0]:
 print(np.round(q.classical_walk_probabilities(g, 0, 3.0)[:3], 4))
 ```
 
+## Time-dependent Hamiltonians
+
+`DrivenWalk` evolves a walker under H(t) = Σ_j c_j(t)·H_j. A term is a
+pair: `("laplacian", graph)`, `("adjacency", graph)` (minus the
+adjacency matrix), `("projector", nodes)`, `("potential", values)` or
+`("uniform", None)`, the projector onto the uniform superposition (dense,
+but applied in O(N)). The coefficients come from any function of time.
+
+`evolve` uses the fourth-order commutator-free Magnus integrator with two
+exponentials per step (Blanes and Moan 2006). The exponentials use Krylov
+propagation, so sparse walks on large graphs stay cheap. The step size
+is controlled by step doubling: a step is accepted when one step of h
+and two of h/2 agree to the tolerance, and the two half steps are kept.
+`fixed_step` switches the control off. In the tests, halving a fixed
+step divides the error by 16.1–18.5, the factor 2⁴ of a fourth-order
+method.
+
+The local adiabatic search of Roland and Cerf (2002) is an example. On
+N nodes, H(s) = (1 − s)(I − |u⟩⟨u|) + s(I − |m⟩⟨m|) moves the
+uniform state |u⟩ to the marked node m. The schedule ds/dt = ε·g(s)²
+slows down where the gap g(s) is small and takes
+T = N/(ε√(N − 1))·arctan√(N − 1) ≈ (π/2ε)·√N, the quadratic speed-up.
+The identity only adds a global phase and is left out:
+
+```python
+import math
+import numpy as np
+import metatron_qso as q
+
+n, marked, eps = 256, 3, 0.1
+walk = q.DrivenWalk(n, [("uniform", None), ("projector", [marked])])
+rn = math.sqrt(n - 1)
+total = n / (eps * rn) * math.atan(rn)
+
+def s(t: float) -> float:   # the inverse of t(s)
+    return 0.5 * (1 + math.tan(2 * eps * rn * t / n - math.atan(rn)) / rn)
+
+psi0 = np.full(n, 1 / math.sqrt(n), complex)
+local = walk.evolve(psi0, 0.0, total, lambda t: [-(1 - s(t)), -s(t)])
+linear = walk.evolve(psi0, 0.0, total, lambda t: [-(1 - t / total), -t / total])
+print(abs(local["state"][marked]) ** 2, abs(linear["state"][marked]) ** 2)
+# 0.999868 0.524902
+```
+
+The validation suite checks N = 64, 256 and 1024. The local schedule
+reaches the marked node with probability 0.99942, 0.99987 and 0.99996,
+and a linear schedule over the same time with 0.765, 0.525 and 0.315.
+For N = 64 and 256 both values agree to 10⁻⁶ with an independent
+integration of the two-dimensional subspace.
+
 ## In Rust
 
 ```rust

@@ -214,7 +214,7 @@ API reference.
 | Models | `h2_sto3g`, `transverse_field_ising`, `heisenberg_xxz`, `maxcut_cost` |
 | Variational | `real_amplitudes`, `efficient_su2`, `hardware_efficient`, `qaoa_maxcut_circuit`, `expectation_and_gradient`, `expectation_batch`, `expectation_and_gradient_batch`, `run_vqe`, `MaxCutQaoa`, `optimize_qaoa_layerwise`, `VariationalClassifier`, `GraphClassifier` |
 | Textbook | `grover_search`, `estimate_phase` |
-| Walks | `ContinuousWalk`, `SpatialSearch` (`optimize` tunes rate and time jointly), `DephasingWalk`, `classical_walk_probabilities`, `classical_hitting_times`; `Quotient`, `QuotientWalk`, `QuotientSearch`, `StateTransfer`; `CoinedWalk`, `LineWalk`, `SzegedyWalk`; `circulant_walk_circuit`, `cayley_walk_circuit`, `trotter_walk_circuit`, `diagonal_unitary_circuit` |
+| Walks | `ContinuousWalk`, `SpatialSearch` (`optimize` tunes rate and time jointly), `DephasingWalk`, `DrivenWalk`, `classical_walk_probabilities`, `classical_hitting_times`; `Quotient`, `QuotientWalk`, `QuotientSearch`, `StateTransfer`; `CoinedWalk`, `DecoherentCoinedWalk`, `LineWalk`, `SzegedyWalk`; `circulant_walk_circuit`, `cayley_walk_circuit`, `trotter_walk_circuit`, `diagonal_unitary_circuit` |
 | Noise | `Channel`, `NoiseModel`, `DeviceModel`, `DensityMatrix`, `TrajectorySimulator`, `estimate_expectation` |
 | Estimation | `Estimate`, `estimate` (uniform, weighted, adaptive shot allocation), `ClassicalShadow` |
 | Mitigation | `ReadoutCalibration`, `nearest_probability_distribution`, `fold`, `extrapolate`, `zne`, `pec_expectation`, `twirl`, `twirled_average`; noise learning: `SparsePauliLindblad`, `learn_layer`, `pec_layered`, `pea_layered` |

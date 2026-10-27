@@ -7,8 +7,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 Milestones 1.9 (matrix-product states), 1.10 (exact decoding and Stim
-circuits), 1.11 (the state-vector core at memory bandwidth) and 1.12
-(noise learning) of the [roadmap](docs/ROADMAP.md). Results are checked against
+circuits), 1.11 (the state-vector core at memory bandwidth), 1.12
+(noise learning) and 1.13 (walks beyond static Hamiltonians) of the
+[roadmap](docs/ROADMAP.md). Results are checked against
 the state-vector simulator, exact free-fermion evolution, the QAOA ring
 optimum, enumeration, Stim and PyMatching (named below).
 
@@ -104,6 +105,21 @@ optimum, enumeration, Stim and PyMatching (named below).
     phase error and readout errors, all 39 learned rates lie within three
     standard errors of the exact ones, and PEC with the learned model is
     unbiased (0.534 ± 0.005 for 0.533, raw 0.492).
+- **Driven walks** (`walks::driven::DrivenWalk`, Python `DrivenWalk`).
+  - Walks under H(t) = Σ_j c_j(t)·H_j with Laplacian, adjacency,
+    projector, potential and uniform-projector terms.
+  - Fourth-order commutator-free Magnus integrator with two Krylov
+    exponentials per step, and step-size control by step doubling.
+  - Validation: static walks equal `ContinuousWalk`; halving the step
+    divides the error by 16.1–18.5; the local adiabatic search of Roland
+    and Cerf reaches the marked node of K₆₄, K₂₅₆ and K₁₀₂₄ with
+    probability ≥ 1 − ε², matching an independent SciPy integration to
+    10⁻⁶.
+- **Decoherent coined walks** (`walks::decoherent::DecoherentCoinedWalk`,
+  Python `DecoherentCoinedWalk`): coin and position dephasing on density
+  matrices of up to 2048 arcs. With the coin measured every step, the
+  Fourier-coin walk is the simple random walk (checked exactly, also on
+  Metatron's Cube) and the Grover walk a Markov chain on arcs.
 - **Benchmark report:** every gate on 24 qubits against the fastest
   in-place pass over the state, the kernels' instruction set, and the
   adjoint gradient on 20 qubits.

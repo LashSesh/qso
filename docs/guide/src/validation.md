@@ -9,7 +9,7 @@ Every algorithm is checked against an independent reference:
 
 | Kind of reference | Examples |
 |---|---|
-| Closed forms | Grover's sin²((2k+1)θ); QAOA on rings, (2p+1)/(2p+2); the one-layer QAOA formula of Wang et al.; walk limits such as 145/169; T₁/T₂ decay; n! bunching |
+| Closed forms | Grover's sin²((2k+1)θ); QAOA on rings, (2p+1)/(2p+2); the one-layer QAOA formula of Wang et al.; walk limits such as 145/169; T₁/T₂ decay; n! bunching; the running time of local adiabatic search; the classical random walk as the limit of fully dephased coined walks |
 | Published values | 0.6925 and 0.7559 for QAOA on large-girth cubic graphs; the full-CI energy of H₂/STO-3G; automorphism group orders |
 | Dense matrices | every gate, the QFT against the DFT matrix, Lanczos and Krylov against full diagonalisation |
 | A second method | adjoint, parameter-shift and finite-difference gradients; statevector against density matrix; quantum trajectories against density matrices (χ² tests); the quantum Fisher information against finite differences of the fidelity; four fermion encodings against each other |
