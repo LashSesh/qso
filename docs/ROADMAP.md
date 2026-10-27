@@ -10,8 +10,9 @@ fixed its npm publication). Milestone 1.9 (matrix-product states) and the
 second stage — 1.10 (exact decoding and Stim circuits), 1.11 (the
 state-vector core at memory bandwidth), 1.12 (noise learning) and 1.13
 (walks beyond static Hamiltonians) — ship together as release 1.6.0;
-finished milestones are released together, not one by one. In the third
-stage (1.14 to 1.17) is delivered as well. Up to 1.3
+finished milestones are released together, not one by one. The third
+stage (1.14 to 1.17) is delivered and not yet released; the fourth stage
+(1.18 to 1.21) is planned. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -46,15 +47,15 @@ which withdraws the results of version 1.
 | Area | Now | Gap |
 |---|---|---|
 | Statevector speed | specialised kernels (1.1); gate fusion and cache blocking (1.3.0): 16-qubit layers 4.7× and 18–24-qubit layers 1.6–2.6× faster than in 1.2; batched evaluation; AVX and NEON kernels close to memory bandwidth and a blocked adjoint pass (1.11) | no single precision; worker threads sleep when idle, so short isolated simulations on virtual machines run cold — see [measurements](#measured-performance-against-established-simulators) |
-| Boson sampling | exact probabilities and exact sampling (1.1) | no partial distinguishability, photon loss or Gaussian boson sampling |
-| Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | noise learning for layers of two-qubit Clifford gates only, on density matrices (1.12); no leakage or non-Markovian noise, channels on at most two qubits, no virtual distillation |
-| Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0) | time-dependent Hamiltonians and decoherent coined walks without symmetry reduction (1.13); no pretty-good-transfer decision (only best fidelity in a window) |
-| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5) | no integrals of its own (needs FCIDUMP files from a chemistry code), no unrestricted (UHF) integrals, no tight commutator bound for product formulas of order 4 and higher, no time-dependent Hamiltonians |
+| Boson sampling | exact probabilities and exact sampling (1.1); partial distinguishability, loss and Gaussian boson sampling with hafnians and torontonians (1.14) | mixed Gaussian states with many photons spread over many modes are impractical (10¹² operations at 20 photons in 10 modes) |
+| Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | noise learning for layers of two-qubit Clifford gates only, on density matrices (1.12); no leakage or non-Markovian noise, channels on at most two qubits; virtual distillation (1.17) mitigates only its measured copies' preparation |
+| Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13) | time-dependent Hamiltonians and decoherent coined walks without symmetry reduction; no pretty-good-transfer decision (only the best fidelity in a time window) |
+| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5) | Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); no d functions (no larger bases, nothing beyond neon), no restricted open-shell Hamiltonians, no tight commutator bound for product formulas of order 4 and higher |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
-| Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10) | no correlated decoding; matching is far slower than PyMatching's sparse blossom on large shots |
+| Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16) | only errors that flip at most two detectors can be decoded: no colour codes, no quantum LDPC codes, no correlated decoding |
 | Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9) | no MPS in the browser build |
 | Documentation | user guide, executed tutorials and Python reference on GitHub Pages (1.2) | no Rust-specific tutorials; no hosted documentation per released version |
-| Engineering | CI on Linux (x86_64, arm64), macOS and Windows; Miri, fuzzing, API checks, weekly cross-validation and benchmark tracking; Trusted Publishing (1.2) | no coverage measurement; fuzzing only of the parsers and deserialisers |
+| Engineering | CI on Linux (x86_64, arm64), macOS and Windows; Miri, fuzzing, API checks, weekly cross-validation and benchmark tracking; Trusted Publishing (1.2) | no coverage measurement; fuzzing only of the parsers and deserialisers; the five simulators (state vector, density matrix, trajectories, MPS, tableau) are compared on fixed cases, not on random circuits |
 
 ### Measured performance against established simulators
 
@@ -768,6 +769,88 @@ state without a noise floor as typical; all fixed, with an example and a
 test that show the floor and one that shows a coherent error passing
 through.
 
+## 4d. Fourth stage (1.18 to 1.21)
+
+Planned October 2026, after the third stage, from the updated gaps in the
+table of section 1. As before, each milestone closes a gap without a new
+dependency of the crate and has an independent reference; reference tools
+(here the Python package `ldpc`) enter only the cross-validation.
+
+### 1.18 — Pretty good state transfer, decided exactly (M)
+
+Use case: quantum walks as transport. Perfect state transfer is rare;
+pretty good state transfer — fidelity arbitrarily close to 1 at suitable
+times — is common on paths and cycles and is decided by number theory,
+not by searching a time window.
+
+| Deliverable | Detail |
+|---|---|
+| Strong cospectrality | exact test from the eigenprojections, with the eigenvalue support of the pair |
+| The decision | by Kronecker's theorem: PGST between strongly cospectral `u` and `v` holds exactly when every integer relation `Σ ℓ_r θ_r = 0` among the support eigenvalues has `Σ ℓ_r σ_r` even (`σ_r` the sign of `v` in eigenspace `r`; Banchi, Coutinho, Godsil and Severini 2017) |
+| Exact eigenvalues | for graphs whose eigenvalues lie in cyclotomic fields (circulants and Cayley graphs of abelian groups, paths and their symmetric quotients): eigenvalues as rational vectors in a basis of `Q(ζ_N)`, integer relations by Hermite normal form; other graphs answer "undecided" |
+| Times | for a decided pair, a time with fidelity above a requested `1 − ε` (simultaneous Diophantine approximation), checked by evolving the walk |
+
+Validation: paths `P_n` have PGST between their ends exactly when `n + 1`
+is a prime, twice a prime or a power of two (Godsil, Kirkland, Severini
+and Smith 2012), checked for every `n` up to a few hundred; cycles `C_n`
+have PGST between antipodal vertices exactly when `n` is a power of two
+(Pal 2017); perfect state transfer (already decided since 1.3) implies
+PGST; every returned time reaches its fidelity in the simulated walk.
+
+### 1.19 — Decoding beyond matching (M–L)
+
+Use case: codes whose errors flip more than two detectors — colour codes
+and quantum LDPC codes such as the bivariate bicycle codes.
+
+| Deliverable | Detail |
+|---|---|
+| BP+OSD | belief propagation (min-sum and product-sum) on the detector error model's check matrix, with ordered-statistics post-processing (OSD-0 and combination sweep; Roffe et al. 2020), GF(2) elimination without dependencies |
+| Codes | colour-code memory experiments (triangular 4.8.8 or 6.6.6) and bivariate bicycle codes, including the [[144, 12, 12]] code (Bravyi et al. 2024), as detector circuits |
+| Interfaces | Rust, Python and `qso qec --decoder bposd`; error models without the `decompose` restriction |
+
+Validation: on small codes the decoder against exhaustive minimum-weight
+decoding (agreement measured and stated); logical error rates and
+predictions against the `ldpc` package on the same error models and
+syndromes in the cross-validation; colour-code circuits against Stim's
+generated colour-code circuits (error models term by term); the code
+parameters `n` and `k` of the bivariate bicycle codes by GF(2) rank.
+
+### 1.20 — Single precision (M)
+
+Use case: two more qubits in the same memory and faster gates where
+10⁻⁶ accuracy suffices (sampling, QAOA landscapes, large walks).
+
+| Deliverable | Detail |
+|---|---|
+| `f32` state vectors | the gate kernels, fusion, measurement and sampling in single precision (AVX and NEON paths as for `f64`), opt-in per simulation |
+| Limits | the qubit limit raised by one for single precision; the documentation states the accuracy |
+
+Validation: random circuits against the double-precision simulator
+(fidelity loss measured and bounded in the documentation); speed and
+memory against the `f64` path and against Qulacs and Qiskit Aer in single
+precision on the same machine.
+
+### 1.21 — Coverage and differential testing (S–M)
+
+Use case: trust in the parts no reference covers directly.
+
+| Deliverable | Detail |
+|---|---|
+| Coverage | line and branch coverage of the crate measured in CI and published with the documentation |
+| Differential testing | random circuits run on all simulators that accept them — state vector, density matrix (no noise), trajectories, MPS (unbounded bond), tableau (Clifford circuits) — and through OpenQASM 2 and 3 round trips, in property tests and as fuzz targets |
+| Fixes | every disagreement found, fixed with a regression test |
+
+Validation: the coverage number per release; the differential targets run
+in CI on every change and longer on the scheduled job.
+
+### Not in this stage
+
+Larger basis sets with d functions and restricted open-shell Hamiltonians
+(chemistry), tight commutator bounds for product formulas of order four
+and higher, MPS in the browser build, and documentation per released
+version remain gaps; they are smaller or have fewer users than the four
+above.
+
 ### Research track (later)
 
 A GPU backend through `wgpu`: it starts only with a clear use case and
@@ -809,6 +892,12 @@ after the CPU core is close to memory bandwidth.
     input of the chemistry stack; PySCF is the reference. Fast matching
     (1.16) closes a measured speed gap, and purification (1.17) adds a
     mitigation that needs no noise model.
+12. **Fourth stage: walks first again.** Pretty good state transfer (1.18)
+    is the walk question QSO still answers only numerically, and number
+    theory gives exact references. Decoding beyond matching (1.19) opens
+    the codes current experiments use. Single precision (1.20) serves the
+    gate-model core; coverage and differential testing (1.21) close the
+    stage because they test everything before it.
 
 ## 6. Measures of success
 
@@ -849,6 +938,11 @@ Taken (October 2026):
   photons (1.14), molecular integrals (1.15), fast matching (1.16),
   purification (1.17). The GPU research track still waits for a use case,
   and would need a dependency (`wgpu`).
+* Fourth stage (October 2026): exact pretty-good-state-transfer decisions
+  (1.18), BP+OSD decoding with colour and bivariate bicycle codes (1.19),
+  single precision (1.20), coverage and differential testing (1.21). The
+  `ldpc` package joins The Walrus, PySCF, Stim and PyMatching as a
+  reference of the cross-validation only.
 * The browser playground stays, because it costs little to maintain: it
   is plain HTML and JavaScript without dependencies or a build step, it
   uses only the npm package's JSON interface, which the package's tests
