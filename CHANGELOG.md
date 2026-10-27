@@ -91,9 +91,12 @@ optimum, enumeration, Stim and PyMatching (named below).
   - `learn_layer` fits the sparse Pauli–Lindblad model of a twirled layer
     of `cx`, `cy`, `cz` and `swap` gates on disjoint qubits (van den Berg
     et al. 2023): one rate per one-qubit Pauli and per two-qubit Pauli on
-    neighbouring qubits, from decays over even depths in nine product
-    bases, with readout twirling and non-negative least squares.
-  - Standard errors from a bootstrap over the twirled circuits.
+    neighbouring qubits, from decays over even depths in product bases
+    (an orthogonal array over a colouring of the coupling graph: 9 bases
+    up to 4 colours, 27 up to 13), with readout twirling and non-negative
+    least squares.
+  - Standard errors from a bootstrap over the twirled circuits (robust
+    spread; those of the unconstrained fit, where λ ≥ 0 is active).
   - `pec_layered` cancels the learned noise in circuits of blocks
     separated by the layer; `pea_layered` amplifies it by inserting Paulis
     and extrapolates to zero noise.

@@ -390,3 +390,181 @@ fn invalid_inputs_are_rejected() {
         .is_err()
     );
 }
+
+#[test]
+fn nnls_does_not_depend_on_the_scale_of_rows() {
+    let mut rng = Rng::seed_from_u64(21);
+    let a: Vec<Vec<f64>> = (0..8)
+        .map(|_| (0..6).map(|_| rng.uniform_range(-1.0, 1.0)).collect())
+        .collect();
+    let b: Vec<f64> = (0..8).map(|_| rng.uniform_range(-1.0, 1.0)).collect();
+    let x = nnls(&a, &b);
+    assert!(x.iter().filter(|v| **v > 0.0).count() >= 2, "{x:?}");
+    for scale in [1e-9, 1e-3, 1e6, 1e12] {
+        let sa: Vec<Vec<f64>> = a
+            .iter()
+            .map(|r| r.iter().map(|v| v * scale).collect())
+            .collect();
+        let sb: Vec<f64> = b.iter().map(|v| v * scale).collect();
+        let y = nnls(&sa, &sb);
+        assert!(
+            x.iter().zip(&y).all(|(p, q)| (p - q).abs() < 1e-9),
+            "{scale}: {y:?}"
+        );
+    }
+    // Rows of very different weight (an exactly measured equation).
+    let mut weighted = a.clone();
+    weighted[0].iter_mut().for_each(|v| *v *= 1e9);
+    let mut wb = b.clone();
+    wb[0] *= 1e9;
+    let y = nnls(&weighted, &wb);
+    assert!(y.iter().all(|v| *v >= 0.0));
+    let r0: f64 = weighted[0].iter().zip(&y).map(|(p, q)| p * q).sum::<f64>() - wb[0];
+    // The heavy equation is met as well as the constraints allow.
+    let x0: f64 = weighted[0].iter().zip(&x).map(|(p, q)| p * q).sum::<f64>() - wb[0];
+    assert!(r0.abs() <= x0.abs() + 1e-6);
+}
+
+#[test]
+fn exactly_measured_generators_do_not_break_the_fit() {
+    // No readout errors and idle qubits: the idle generators are measured
+    // without any noise, so their weights are far above the others.
+    let truth = symmetric_model(2);
+    let device = device_with(&truth);
+    for (n, seed) in [(3, 1), (4, 2), (5, 1)] {
+        let learned = learn_layer(
+            &cx_layer(n),
+            &device,
+            &LearningOptions {
+                seed,
+                ..LearningOptions::default()
+            },
+        )
+        .unwrap();
+        for ((g, rate), se) in learned
+            .model
+            .generators
+            .iter()
+            .zip(&learned.model.rates)
+            .zip(&learned.std_errors)
+        {
+            let expected = truth
+                .generators
+                .iter()
+                .position(|h| h == g)
+                .map_or(0.0, |k| truth.rates[k]);
+            assert!(
+                (rate - expected).abs() < 4.0 * se + 1e-6,
+                "n {n}, seed {seed}, {g}: {rate} ± {se}, expected {expected}"
+            );
+        }
+    }
+}
+
+#[test]
+fn deep_noisy_points_do_not_inflate_the_standard_errors() {
+    // Depth 36 with few twirls and shots: some bootstrap replicas have
+    // non-positive means there.
+    let device = device_with(&symmetric_model(2))
+        .with_default_qubit(QubitProperties::new().with_readout(0.02, 0.04));
+    for seed in [9, 14, 17] {
+        let learned = learn_layer(
+            &cx_layer(2),
+            &device,
+            &LearningOptions {
+                depths: vec![2, 8, 36],
+                twirls: 8,
+                shots: 128,
+                seed,
+                ..LearningOptions::default()
+            },
+        )
+        .unwrap();
+        for (b, product, se) in &learned.products {
+            assert!(*se < 0.1, "seed {seed}, {b}: {product} ± {se}");
+        }
+    }
+}
+
+#[test]
+fn bases_cover_every_coupled_pair() {
+    let complete = |n: usize| -> Vec<(usize, usize)> {
+        (0..n)
+            .flat_map(|a| (a + 1..n).map(move |b| (a, b)))
+            .collect()
+    };
+    // Crown graph on 10 qubits (bipartite; greedy colouring in qubit
+    // order needs 5 colours), K4, K5 and a single qubit.
+    let crown: Vec<(usize, usize)> = (0..5)
+        .flat_map(|i| {
+            (0..5)
+                .filter(move |&j| j != i)
+                .map(move |j| (2 * i, 2 * j + 1))
+        })
+        .collect();
+    for (n, edges, count) in [
+        (10, crown, 9),
+        (4, complete(4), 9),
+        (5, complete(5), 27),
+        (13, complete(13), 27),
+        (1, vec![], 3),
+    ] {
+        let b = bases(n, &edges).unwrap();
+        assert_eq!(b.len(), count, "{n} qubits");
+        for &(p, q) in &edges {
+            let mut seen: Vec<(Pauli, Pauli)> = b.iter().map(|row| (row[p], row[q])).collect();
+            seen.sort_by_key(|&(x, y)| (x as u8, y as u8));
+            seen.dedup();
+            assert_eq!(seen.len(), 9, "{p}–{q}");
+        }
+        for g in generators(n, &edges) {
+            assert!(b.iter().any(|row| measurable(&g, row)), "{g}");
+        }
+    }
+    assert!(bases(14, &complete(14)).is_err());
+}
+
+#[test]
+fn invalid_models_are_rejected_by_the_mitigation() {
+    let layer = cx_layer(2);
+    let device = DeviceModel::new("ideal");
+    let obs = observable();
+    let blocks = random_blocks(2, 2, 3);
+    let mut short = symmetric_model(1);
+    short.rates.truncate(3);
+    assert!(pec_layered(&blocks, &layer, &short, &device, &obs, 10, 0).is_err());
+    let mut negative = symmetric_model(1);
+    negative.rates[0] = -5.0;
+    assert!(pec_layered(&blocks, &layer, &negative, &device, &obs, 10, 0).is_err());
+    assert!(
+        pea_layered(
+            &blocks,
+            &layer,
+            &negative,
+            &device,
+            &obs,
+            &[1.0, 2.0],
+            10,
+            Extrapolation::Linear,
+            0
+        )
+        .is_err()
+    );
+    let huge = symmetric_model(1).scaled(1e6).unwrap();
+    assert!(pec_layered(&blocks, &layer, &huge, &device, &obs, 10, 0).is_err());
+    let options = |twirls, shots, depths: Vec<usize>| LearningOptions {
+        twirls,
+        shots,
+        depths,
+        ..LearningOptions::default()
+    };
+    for o in [
+        options(1, 256, vec![2, 4]),
+        options(16, 0, vec![2, 4]),
+        options(16, MAX_LEARNING_SHOTS + 1, vec![2, 4]),
+        options(16, 256, vec![4, 4]),
+        options(usize::MAX, 256, vec![2, 4]),
+    ] {
+        assert!(learn_layer(&layer, &device, &o).is_err(), "{o:?}");
+    }
+}

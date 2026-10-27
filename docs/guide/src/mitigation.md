@@ -150,8 +150,11 @@ writes it with one rate λ_k per generator P_k: every one-qubit Pauli and
 every two-qubit Pauli on neighbouring qubits. A Pauli b then has fidelity
 f_b = exp(−2 Σ λ_k), summed over the generators that anticommute with b.
 
-The experiment prepares product eigenstates in nine bases, repeats the
-twirled layer an even number of times d, and measures. Readout is
+The experiment prepares product eigenstates in a set of product bases
+in which every pair of coupled qubits sees all nine pairs of letters
+(nine bases when the coupling graph has at most four colours, 27 up to
+13 colours). It repeats the twirled layer an even number of times d,
+and measures. Readout is
 twirled too, so readout errors only scale the signal. The decay of ⟨b⟩
 with d gives the product f_b·f_{UbU} free of state preparation and
 measurement errors. Non-negative least squares turns the products into
@@ -196,9 +199,7 @@ print(pec["estimate"].value, pea["estimate"].value)
 In the validation suite, a four-qubit device with two-qubit depolarising
 noise, a coherent phase error and readout errors is learned. All 39 rates
 lie within three standard errors of their exact values, and PEC with the
-learned model gives 0.534 ± 0.005 for a value of 0.533 (raw 0.492). Over
-30 seeds, the deviations divided by the standard errors have standard
-deviations between 0.9 and 1.2.
+learned model gives 0.534 ± 0.005 for a value of 0.533 (raw 0.492).
 
 ## Classical shadows
 

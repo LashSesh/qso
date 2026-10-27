@@ -46,6 +46,10 @@ use crate::rng::Rng;
 pub const MAX_LEARNING_QUBITS: usize = 10;
 /// Most circuits one call simulates.
 pub const MAX_LEARNING_CIRCUITS: usize = 1 << 20;
+/// Most shots per circuit.
+pub const MAX_LEARNING_SHOTS: usize = 1 << 24;
+/// Most applications of the layer in one call (circuits times depth).
+pub const MAX_LEARNING_LAYERS: usize = 1 << 28;
 /// Bootstrap replicas for the standard errors of the rates.
 const BOOTSTRAP: usize = 200;
 
@@ -64,20 +68,33 @@ impl SparsePauliLindblad {
     /// non-identity and inside the register, and the rates finite and
     /// non-negative.
     pub fn new(n_qubits: usize, generators: Vec<PauliString>, rates: Vec<f64>) -> Result<Self> {
+        let model = Self {
+            n_qubits,
+            generators,
+            rates,
+        };
+        model.validate()?;
+        Ok(model)
+    }
+
+    /// Check the conditions of [`SparsePauliLindblad::new`] (the fields are
+    /// public and the model can be deserialised).
+    pub fn validate(&self) -> Result<()> {
+        let n_qubits = self.n_qubits;
         if n_qubits == 0 || n_qubits > 64 {
             return Err(QsoError::invalid(
                 "n_qubits",
                 "a model acts on 1 to 64 qubits",
             ));
         }
-        if generators.len() != rates.len() {
+        if self.generators.len() != self.rates.len() {
             return Err(QsoError::DimensionMismatch {
-                expected: generators.len(),
-                actual: rates.len(),
+                expected: self.generators.len(),
+                actual: self.rates.len(),
             });
         }
         let mut seen = std::collections::HashSet::new();
-        for g in &generators {
+        for g in &self.generators {
             if g.is_identity() || g.min_qubits() > n_qubits || !seen.insert(*g) {
                 return Err(QsoError::invalid(
                     "generators",
@@ -85,17 +102,13 @@ impl SparsePauliLindblad {
                 ));
             }
         }
-        if rates.iter().any(|r| !(r.is_finite() && *r >= 0.0)) {
+        if self.rates.iter().any(|r| !(r.is_finite() && *r >= 0.0)) {
             return Err(QsoError::invalid(
                 "rates",
                 "rates must be finite and non-negative",
             ));
         }
-        Ok(Self {
-            n_qubits,
-            generators,
-            rates,
-        })
+        Ok(())
     }
 
     /// The Pauli fidelity `f_b = exp(−2 Σ_{P_k anticommutes with b} λ_k)`.
@@ -332,48 +345,84 @@ fn generators(n: usize, edges: &[(usize, usize)]) -> Vec<PauliString> {
 }
 
 /// Measurement bases (a letter per qubit) in which every generator is
-/// measurable: an orthogonal array over a colouring of the coupling graph,
-/// so that every pair of coupled qubits sees all nine letter pairs.
+/// measurable: an orthogonal array of strength two over a colouring of the
+/// coupling graph, so that every pair of coupled qubits sees all nine
+/// letter pairs. The rows are the vectors `r` of GF(3)ᵏ and colour `c`
+/// gets letter `r·p_c` for distinct projective points `p_c`: 3 bases for
+/// one colour, 9 for up to 4 colours and 27 for up to 13.
 fn bases(n: usize, edges: &[(usize, usize)]) -> Result<Vec<Vec<Pauli>>> {
+    let colour = colouring(n, edges);
+    let colours = colour.iter().max().map_or(1, |c| c + 1);
+    let (k, points): (u32, &[[usize; 3]]) = match colours {
+        1 => (1, &[[1, 0, 0]]),
+        2..=4 => (2, &[[1, 0, 0], [0, 1, 0], [1, 1, 0], [1, 2, 0]]),
+        5..=13 => (
+            3,
+            &[
+                [1, 0, 0],
+                [0, 1, 0],
+                [0, 0, 1],
+                [1, 1, 0],
+                [1, 2, 0],
+                [1, 0, 1],
+                [1, 0, 2],
+                [0, 1, 1],
+                [0, 1, 2],
+                [1, 1, 1],
+                [1, 1, 2],
+                [1, 2, 1],
+                [1, 2, 2],
+            ],
+        ),
+        _ => {
+            return Err(QsoError::invalid(
+                "edges",
+                "the coupling graph needs more than 13 colours",
+            ));
+        }
+    };
+    let letters = [Pauli::X, Pauli::Y, Pauli::Z];
+    Ok((0..3usize.pow(k))
+        .map(|r| {
+            let v = [r % 3, (r / 3) % 3, r / 9];
+            (0..n)
+                .map(|q| {
+                    let p = points[colour[q]];
+                    letters[(v[0] * p[0] + v[1] * p[1] + v[2] * p[2]) % 3]
+                })
+                .collect()
+        })
+        .collect())
+}
+
+/// A proper colouring of the coupling graph (DSatur: the next node is the
+/// one with the most distinct colours among its neighbours).
+fn colouring(n: usize, edges: &[(usize, usize)]) -> Vec<usize> {
+    let mut neighbours = vec![Vec::new(); n];
+    for &(a, b) in edges {
+        neighbours[a].push(b);
+        neighbours[b].push(a);
+    }
     let mut colour = vec![usize::MAX; n];
-    for q in 0..n {
-        let taken: Vec<usize> = edges
-            .iter()
-            .filter_map(|&(a, b)| match (a == q, b == q) {
-                (true, _) => Some(colour[b]),
-                (_, true) => Some(colour[a]),
-                _ => None,
-            })
-            .collect();
+    for _ in 0..n {
+        let used = |q: usize| {
+            let mut c: Vec<usize> = neighbours[q]
+                .iter()
+                .map(|&v| colour[v])
+                .filter(|&c| c != usize::MAX)
+                .collect();
+            c.sort_unstable();
+            c.dedup();
+            c
+        };
+        let q = (0..n)
+            .filter(|&q| colour[q] == usize::MAX)
+            .max_by_key(|&q| (used(q).len(), neighbours[q].len(), usize::MAX - q))
+            .expect("an uncoloured node");
+        let taken = used(q);
         colour[q] = (0..).find(|c| !taken.contains(c)).expect("a free colour");
     }
-    let colours = colour.iter().max().map_or(1, |c| c + 1);
-    if colours > 5 {
-        return Err(QsoError::invalid(
-            "edges",
-            "the coupling graph needs more than five colours",
-        ));
-    }
-    let letters = [Pauli::X, Pauli::Y, Pauli::Z];
-    // Up to three colours: the nine rows (a, b, a + b mod 3); more: every
-    // assignment of letters to colours.
-    let rows: Vec<Vec<usize>> = if colours <= 3 {
-        (0..9)
-            .map(|r| vec![r / 3, r % 3, (r / 3 + r % 3) % 3])
-            .collect()
-    } else {
-        (0..3usize.pow(colours as u32))
-            .map(|r| {
-                (0..colours)
-                    .map(|c| (r / 3usize.pow(c as u32)) % 3)
-                    .collect()
-            })
-            .collect()
-    };
-    Ok(rows
-        .iter()
-        .map(|row| (0..n).map(|q| letters[row[colour[q]]]).collect())
-        .collect())
+    colour
 }
 
 /// Whether Pauli `b` is diagonal in the product basis `basis`.
@@ -382,6 +431,20 @@ fn measurable(b: &PauliString, basis: &[Pauli]) -> bool {
         let p = b.get(q);
         p == Pauli::I || p == basis[q]
     })
+}
+
+/// Median (sorts `v`).
+fn median(v: &mut [f64]) -> f64 {
+    v.sort_by(f64::total_cmp);
+    let m = v.len();
+    if m == 0 {
+        return f64::NAN;
+    }
+    if m % 2 == 1 {
+        v[m / 2]
+    } else {
+        (v[m / 2 - 1] + v[m / 2]) / 2.0
+    }
 }
 
 /// Non-negative least squares `argmin_{x ≥ 0} ‖A x − b‖` (Lawson and
@@ -393,7 +456,9 @@ pub(crate) fn nnls(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
     let rhs = nalgebra::DVector::from_column_slice(b);
     let mut x = vec![0.0; k];
     let mut passive = vec![false; k];
-    let tol = 1e-12 * (1.0 + rhs.norm()) * (1.0 + mat.norm());
+    // Thresholds relative to the scale of the gradient Aᵀb and of the
+    // solution, so that rescaling rows leaves the result unchanged.
+    let tol = 1e-12 * (mat.transpose() * &rhs).amax();
     let gradient = |x: &[f64]| {
         let r = &rhs - &mat * nalgebra::DVector::from_column_slice(x);
         mat.transpose() * r
@@ -406,38 +471,52 @@ pub(crate) fn nnls(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
             return s;
         }
         let sub = nalgebra::DMatrix::from_fn(m, cols.len(), |i, c| mat[(i, cols[c])]);
-        let sol = sub
-            .svd(true, true)
-            .solve(&rhs, 1e-14)
-            .expect("both factors computed");
+        let svd = sub.svd(true, true);
+        let eps = 1e-13 * svd.singular_values.max();
+        let sol = svd.solve(&rhs, eps).expect("both factors computed");
         for (c, &j) in cols.iter().enumerate() {
             s[j] = sol[c];
         }
         s
     };
+    // Variables that came out non-positive right after entering; skipped
+    // until the solution changes (prevents cycling on round-off).
+    let mut skip = vec![false; k];
     for _ in 0..3 * k + 10 {
         let w = gradient(&x);
         let Some(j) = (0..k)
-            .filter(|&j| !passive[j] && w[j] > tol)
+            .filter(|&j| !passive[j] && !skip[j] && w[j] > tol)
             .max_by(|&p, &q| w[p].total_cmp(&w[q]))
         else {
             break;
         };
         passive[j] = true;
+        let mut first = true;
         loop {
             let s = solve(&passive);
             let bad: Vec<usize> = (0..k).filter(|&i| passive[i] && s[i] <= 0.0).collect();
             if bad.is_empty() {
                 x = s;
+                skip.iter_mut().for_each(|f| *f = false);
                 break;
             }
-            let alpha = bad
-                .iter()
-                .map(|&i| x[i] / (x[i] - s[i]))
-                .fold(f64::INFINITY, f64::min);
+            if first && s[j] <= 0.0 {
+                passive[j] = false;
+                skip[j] = true;
+                break;
+            }
+            first = false;
+            let (blocking, alpha) = bad.iter().map(|&i| (i, x[i] / (x[i] - s[i]))).fold(
+                (bad[0], f64::INFINITY),
+                |m, c| if c.1 < m.1 { c } else { m },
+            );
+            let scale = (0..k)
+                .filter(|&i| passive[i])
+                .map(|i| x[i].abs().max(s[i].abs()))
+                .fold(0.0, f64::max);
             for i in 0..k {
                 x[i] += alpha * (s[i] - x[i]);
-                if passive[i] && x[i] <= tol {
+                if passive[i] && (i == blocking || x[i] <= 1e-12 * scale) {
                     passive[i] = false;
                     x[i] = 0.0;
                 }
@@ -460,7 +539,11 @@ pub fn learn_layer(
     let gates = layer_gates(layer)?;
     let n = layer.n_qubits();
     device.validate()?;
-    if options.depths.len() < 2
+    let mut distinct = options.depths.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    if distinct.len() < 2
+        || distinct.len() != options.depths.len()
         || options
             .depths
             .iter()
@@ -468,13 +551,19 @@ pub fn learn_layer(
     {
         return Err(QsoError::invalid(
             "depths",
-            "at least two depths, each even and in 2..=4096",
+            "at least two distinct depths, each even and in 2..=4096",
         ));
     }
-    if options.twirls == 0 || options.shots == 0 {
+    if options.twirls < 2 {
         return Err(QsoError::invalid(
             "twirls",
-            "twirls and shots must be positive",
+            "at least two twirls (the standard errors come from their spread)",
+        ));
+    }
+    if options.shots == 0 || options.shots > MAX_LEARNING_SHOTS {
+        return Err(QsoError::invalid(
+            "shots",
+            format!("shots must lie in 1..={MAX_LEARNING_SHOTS}"),
         ));
     }
     let edges: Vec<(usize, usize)> = match &options.edges {
@@ -503,11 +592,15 @@ pub fn learn_layer(
     };
     let gens = generators(n, &edges);
     let bases = bases(n, &edges)?;
-    let work = bases.len() * options.depths.len() * options.twirls;
-    if work > MAX_LEARNING_CIRCUITS {
+    let work = (bases.len() * options.depths.len()).saturating_mul(options.twirls);
+    let layers = (bases.len() * distinct.iter().sum::<usize>()).saturating_mul(options.twirls);
+    if work > MAX_LEARNING_CIRCUITS || layers > MAX_LEARNING_LAYERS {
         return Err(QsoError::invalid(
             "twirls",
-            format!("the experiment needs more than {MAX_LEARNING_CIRCUITS} circuits"),
+            format!(
+                "the experiment needs more than {MAX_LEARNING_CIRCUITS} circuits or \
+                 {MAX_LEARNING_LAYERS} layers"
+            ),
         ));
     }
     let readout = device.readout_errors(n);
@@ -620,7 +713,7 @@ pub fn learn_layer(
                 };
                 let se = (var / m as f64)
                     .sqrt()
-                    .max(0.5 / (m * options.shots) as f64);
+                    .max(0.5 / (m as f64 * options.shots as f64));
                 mean > 3.0 * se
             })
             .map(|di| (di, options.depths[di] as f64 / 2.0))
@@ -667,15 +760,26 @@ pub fn learn_layer(
             halved_logs(&sum, &count)
         })
         .collect();
+    // Robust spread (1.4826 × median absolute deviation, the standard
+    // deviation for normal data): a replica whose mean at some depth falls
+    // to zero or below has an absurd logarithm, and must not dominate.
     let spread = |values: &[Vec<f64>], k: usize| {
-        Estimate::from_samples(&values.iter().map(|r| r[k]).collect::<Vec<_>>()).std_error
-            * (values.len() as f64).sqrt()
+        let mut v: Vec<f64> = values.iter().map(|r| r[k]).collect();
+        let centre = median(&mut v);
+        let mut dev: Vec<f64> = v.iter().map(|x| (x - centre).abs()).collect();
+        1.4826 * median(&mut dev)
     };
-    // Floor: an exactly reproducible fidelity (no noise at all) still gets
-    // a finite weight.
-    let sigma: Vec<f64> = (0..gens.len())
-        .map(|k| spread(&replicas, k).max(1e-9))
-        .collect();
+    // Floor: an exactly reproducible fidelity (no noise at all, as on an
+    // idle qubit without readout errors) gets a weight at most 100 times
+    // the typical one, which keeps the fit well conditioned.
+    let mut sigma: Vec<f64> = (0..gens.len()).map(|k| spread(&replicas, k)).collect();
+    let mut positive: Vec<f64> = sigma.iter().copied().filter(|s| *s > 0.0).collect();
+    let floor = if positive.is_empty() {
+        1.0
+    } else {
+        1e-2 * median(&mut positive)
+    };
+    sigma.iter_mut().for_each(|s| *s = s.max(floor));
     let products = gens
         .iter()
         .zip(&y)
@@ -743,6 +847,7 @@ fn check_layered(
     samples: usize,
 ) -> Result<Vec<Gate>> {
     let gates = layer_gates(layer)?;
+    model.validate()?;
     let n = layer.n_qubits();
     if blocks.is_empty() || blocks.iter().any(|b| b.n_qubits() != n) || model.n_qubits != n {
         return Err(QsoError::invalid(
@@ -818,6 +923,12 @@ pub fn pec_layered(
     device.validate()?;
     let layers = blocks.len() - 1;
     let gamma = model.overhead().powi(layers as i32);
+    if !gamma.is_finite() {
+        return Err(QsoError::invalid(
+            "model",
+            "the sampling overhead exp(2·Σλ·layers) overflows",
+        ));
+    }
     let flips: Vec<f64> = model
         .rates
         .iter()
