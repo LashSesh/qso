@@ -30,11 +30,12 @@ def test_single_precision_follows_double_precision() -> None:
     assert single.expectation(h) == pytest.approx(exact.expectation(h), abs=1e-6)
     assert single.probabilities().sum() == pytest.approx(1.0, abs=1e-12)
     np.testing.assert_allclose(single.probabilities(), exact.probabilities(), atol=1e-6)
-    # Built gate by gate, rounded from a double state, and back.
+    # Applied to a fresh state, rounded from a double state, and back
+    # (the fidelity of the unnormalised copy, divided by its norm).
     step = q.StateVector32.zero(12).apply(c)
     assert 1 - step.fidelity(exact) < 1e-11
     assert 1 - q.StateVector32.from_state(exact).fidelity(exact) < 1e-12
-    assert 1 - exact.fidelity(single.to_state()) < 1e-10
+    assert 1 - exact.fidelity(single.to_state()) / single.norm() ** 2 < 1e-10
 
 
 def test_single_precision_samples_and_rejects_bad_input() -> None:

@@ -22,7 +22,7 @@ matching) and 1.20 (single precision) of the fourth.
     amplitudes per register (bit for bit the portable arithmetic).
   - Half the memory, one more qubit (`MAX_QUBITS_SINGLE`); gate matrices
     in double precision, rounded once; sums in double precision.
-  - Tests: 1 − F below 10⁻¹¹ after 2800 gates on 18 qubits, expectation
+  - Tests: 1 − F below 10⁻¹¹ after 2140 gates on 18 qubits, expectation
     values to 10⁻⁶; in the cross-validation, against double precision
     beside Qiskit Aer's single precision, and timed against both.
 

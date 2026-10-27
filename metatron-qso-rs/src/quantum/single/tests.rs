@@ -94,9 +94,19 @@ fn single_precision_states_convert_sample_and_measure() {
     assert!(m.apply_circuit(&big, &[]).is_err());
     assert!(m.inner_with(&StateVector::zero(2)).is_err());
     assert!(m.apply_diagonal_evolution(&[0.0; 3], 1.0).is_err());
+    // The zero vector reads zeros, as a StateVector does.
+    let mut z = StateVector32::zero(2).unwrap();
+    z.amplitudes_mut()[0] = C32::new(0.0, 0.0);
+    assert!(z.probabilities().iter().all(|&p| p == 0.0));
+    assert_eq!(z.probability_one(0).unwrap(), 0.0);
+    assert_eq!(z.fidelity_with(&StateVector::zero(2)).unwrap(), 0.0);
     let mut d = StateVector32::basis(1, 1).unwrap();
     d.apply_diagonal_evolution(&[0.0, 1.0], 0.5).unwrap();
     assert!((d.amplitudes()[1].arg() + 0.5).abs() < 1e-7);
+}
+
+fn bits(v: &[C32]) -> Vec<(u32, u32)> {
+    v.iter().map(|z| (z.re.to_bits(), z.im.to_bits())).collect()
 }
 
 #[test]
@@ -104,7 +114,19 @@ fn vector_primitives_round_like_the_portable_ones() {
     use crate::quantum::scalar::portable;
     use crate::quantum::simd::single;
     let mut rng = Rng::seed_from_u64(31);
-    let c = |rng: &mut Rng| C32::new(rng.normal() as f32, rng.normal() as f32);
+    // Random values with signed zeros, subnormals and large magnitudes
+    // mixed in; results are compared as bit patterns.
+    let special = [0.0f32, -0.0, 1e-40, -3e38, 1.0];
+    let c = |rng: &mut Rng| {
+        let part = |rng: &mut Rng| {
+            if rng.below(6) == 0 {
+                special[rng.below(5) as usize]
+            } else {
+                rng.normal() as f32
+            }
+        };
+        C32::new(part(rng), part(rng))
+    };
     for len in [0usize, 1, 3, 4, 7, 16, 33] {
         let a: Vec<C32> = (0..len).map(|_| c(&mut rng)).collect();
         let b: Vec<C32> = (0..len).map(|_| c(&mut rng)).collect();
@@ -114,22 +136,22 @@ fn vector_primitives_round_like_the_portable_ones() {
         let (mut a1, mut b1, mut a2, mut b2) = (a.clone(), b.clone(), a.clone(), b.clone());
         single::mat2_runs(&mut a1, &mut b1, &m);
         portable::mat2_runs(&mut a2, &mut b2, &m);
-        assert_eq!((a1, b1), (a2, b2));
+        assert_eq!((bits(&a1), bits(&b1)), (bits(&a2), bits(&b2)));
         let (mut a1, mut b1, mut a2, mut b2) = (a.clone(), b.clone(), a.clone(), b.clone());
         single::mat2_runs_real(&mut a1, &mut b1, &r);
         portable::mat2_runs_real(&mut a2, &mut b2, &r);
-        assert_eq!((a1, b1), (a2, b2));
+        assert_eq!((bits(&a1), bits(&b1)), (bits(&a2), bits(&b2)));
         let (mut a1, mut a2) = (a.clone(), a.clone());
         single::scale_run(&mut a1, m[0]);
         portable::scale_run(&mut a2, m[0]);
-        assert_eq!(a1, a2);
+        assert_eq!(bits(&a1), bits(&a2));
         let mut runs1 = [a.clone(), b.clone(), a.clone(), b.clone()];
         let mut runs2 = runs1.clone();
         let [p, q, s, t] = &mut runs1;
         single::mat4_runs([p, q, s, t], &m4);
         let [p, q, s, t] = &mut runs2;
         portable::mat4_runs([p, q, s, t], &m4);
-        assert_eq!(runs1, runs2);
+        assert_eq!(runs1.map(|r| bits(&r)), runs2.map(|r| bits(&r)));
     }
     for stride in [1usize, 2, 4, 8] {
         for blocks in [1usize, 2, 3, 5] {
@@ -140,7 +162,7 @@ fn vector_primitives_round_like_the_portable_ones() {
                 let (mut p, mut q) = (x.clone(), x.clone());
                 f(&mut p);
                 g(&mut q);
-                assert_eq!(p, q, "stride {stride}, {blocks} blocks");
+                assert_eq!(bits(&p), bits(&q), "stride {stride}, {blocks} blocks");
             };
             check(&|v| single::mat2_strided(v, stride, &m), &|v| {
                 portable::mat2_strided(v, stride, &m)

@@ -62,10 +62,10 @@ instead of two.
 Gate matrices are formed in double precision and rounded once per gate.
 Norms, probabilities, overlaps and expectation values are summed in
 double precision, and probabilities and expectation values are divided by
-the squared norm. Rounding moves mostly that norm, by about 10⁻⁶ over a
+the squared norm. Rounding moves mostly that norm, by up to 10⁻⁵ over a
 few thousand gates. The direction of the state stays within
 1 − F ≈ 10⁻¹² of the double-precision state, and expectation values agree
-to 10⁻⁶ or better. The validation checks these bounds on 2800 gates with 18
+to 10⁻⁶ or better. The validation checks these bounds on 2140 gates with 18
 qubits, and the cross-validation checks QSO's and Qiskit Aer's single
 precision against double precision.
 
@@ -104,8 +104,9 @@ medians of 3 interleaved rounds:
 
 On large registers, where memory bandwidth limits every gate, single
 precision takes about half the time. Qiskit Aer's single precision was no
-faster than its double precision on this machine. Qulacs, PennyLane
-Lightning and Cirq's default simulator offer double precision only. On
+faster than its double precision on this machine. Qulacs offers double
+precision only; Cirq and PennyLane Lightning have single precision too but
+are timed here in double precision. On
 aarch64 the single-precision primitives use NEON, as the double-precision
 ones do.
 

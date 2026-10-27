@@ -174,8 +174,8 @@ impl PyStateVector {
 /// half the memory of `StateVector`, so one more qubit fits. Gate
 /// matrices are formed in double precision and rounded once; sums are
 /// taken in double precision, and probabilities and expectation values
-/// are divided by the squared norm, which rounding moves by about 10⁻⁶
-/// over a thousand gates.
+/// are divided by the squared norm, which rounding moves by up to 10⁻⁵
+/// over a few thousand gates.
 #[pyclass(name = "StateVector32", module = "metatron_qso")]
 #[derive(Clone)]
 pub struct PyStateVector32 {

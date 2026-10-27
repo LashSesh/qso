@@ -789,8 +789,8 @@ def check(c: dict) -> list[str]:
 def configurations(quick: bool) -> list[tuple]:
     """(kind, n, libraries, reps per round, warm-up)."""
     # Single precision: QSO's StateVector32 and Aer's single-precision
-    # state vector (Qulacs, PennyLane Lightning and Cirq's default build
-    # are double precision only).
+    # state vector (Qulacs is double precision only; PennyLane Lightning
+    # and Cirq run in double precision here).
     state_libs = ["qso", "qulacs", "aer", "pennylane", "qso-single", "aer-single"]
     sizes = [16, 20] if quick else [16, 20, 22, 24]
     out = []

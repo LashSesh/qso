@@ -35,6 +35,11 @@ fn check_size(n_qubits: usize) -> Result<()> {
     Ok(())
 }
 
+/// `x / norm`, and 0 for the zero vector (as [`StateVector`] reports).
+fn ratio(x: f64, norm: f64) -> f64 {
+    if norm > 0.0 { x / norm } else { 0.0 }
+}
+
 /// A pure state of `n` qubits stored as 2ⁿ single-precision amplitudes,
 /// with the index convention of [`StateVector`].
 #[derive(Clone, Debug, PartialEq)]
@@ -152,7 +157,7 @@ impl StateVector32 {
     /// norm under rounding does not count.
     pub fn fidelity_with(&self, other: &StateVector) -> Result<f64> {
         let overlap = self.inner_with(other)?.norm_sqr();
-        Ok(overlap / (self.norm().powi(2) * other.norm().powi(2)))
+        Ok(ratio(overlap, self.norm().powi(2) * other.norm().powi(2)))
     }
 
     fn same_register(&self, n: usize) -> Result<()> {
@@ -228,7 +233,9 @@ impl StateVector32 {
     /// by the squared norm.
     pub fn probabilities(&self) -> Vec<f64> {
         let total = self.norm().powi(2);
-        map_collect(self.amps.len(), |i| self.amps[i].norm_sqr_f64() / total)
+        map_collect(self.amps.len(), |i| {
+            ratio(self.amps[i].norm_sqr_f64(), total)
+        })
     }
 
     /// Probability that qubit `q` reads 1 (divided by the squared norm).
@@ -241,7 +248,7 @@ impl StateVector32 {
                 0.0
             }
         });
-        Ok(one / self.norm().powi(2))
+        Ok(ratio(one, self.norm().powi(2)))
     }
 
     /// `⟨ψ|H|ψ⟩ / ⟨ψ|ψ⟩`, accumulated in double precision.
@@ -252,7 +259,10 @@ impl StateVector32 {
                 actual: h.min_qubits(),
             });
         }
-        Ok(h.expectation_amplitudes(&self.amps) / self.norm().powi(2))
+        Ok(ratio(
+            h.expectation_amplitudes(&self.amps),
+            self.norm().powi(2),
+        ))
     }
 
     /// Sample `shots` computational-basis measurements of all qubits (the

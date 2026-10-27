@@ -4,7 +4,8 @@
 //! The kernels are generic over [`Amplitude`]. Double precision
 //! (`Complex64`) uses the vector primitives of [`super::simd`]; single
 //! precision (`Complex32`) uses AVX versions with four amplitudes per
-//! register on x86-64 and the portable loops below elsewhere.
+//! register on x86-64, NEON versions with two on aarch64, and the portable
+//! loops below elsewhere.
 //! Gate matrices are formed in double precision and rounded once per
 //! gate.
 

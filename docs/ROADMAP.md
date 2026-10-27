@@ -883,7 +883,7 @@ Steane case and exhaustive OSD.
 
 ### 1.20 — Single precision (M, delivered)
 
-Use case: two more qubits in the same memory and faster gates where
+Use case: one more qubit in the same memory and faster gates where
 10⁻⁶ accuracy suffices (sampling, QAOA landscapes, large walks).
 
 | Deliverable | Detail |
@@ -901,17 +901,30 @@ precision on the same machine.
 | `f32` state vectors | `quantum::StateVector32` (Python `StateVector32`, `simulate(..., precision="single")`, `qso qasm --single`): the kernels and the fused, blocked plan are generic over the amplitude type; AVX (four amplitudes per register) and NEON (two) primitives, bit for bit the portable arithmetic; sampling, measurement, probabilities, expectation values, conversion to and from double precision | single-precision density matrices, trajectories and mid-circuit programs: they keep double precision, and their registers are small or their cost is elsewhere |
 | Limits | `MAX_QUBITS_SINGLE` = `MAX_QUBITS` + 1 | — |
 
-Validation as planned: after 2800 gates on 18 qubits the direction stays
+Validation as planned: after 2140 gates on 18 qubits the direction stays
 within 1 − F < 10⁻¹¹ of the double-precision state (the norm drifts by
-about 10⁻⁶; probabilities and expectation values are divided by it), and
+8·10⁻⁶; probabilities and expectation values are divided by it), and
 expectation values agree to 10⁻⁶. In the cross-validation QSO's and
 Qiskit Aer's single precision both reach 1 − F ≈ 4·10⁻¹⁴ on 60-gate
 circuits. Speed on 4 cores: 1.6 to 2.1 times faster than QSO's double
 precision from 20 qubits on (24 qubits, one layer: 150 against 277 ms),
 and 7 to 13 times faster than Qiskit Aer, whose single precision was not
 faster than its double precision here. Qulacs offers no single precision on
-the CPU. The double-precision path was timed before and after the change
-and is unchanged within the noise of the machine.
+the CPU; Cirq and PennyLane Lightning, which do, are timed in double
+precision only. Memory halves by construction (8 bytes per amplitude
+instead of 16).
+
+An independent review found no soundness or rounding error in the AVX and
+NEON code (shuffles, blend masks, tails, operation order; bit for bit
+against the portable loops with signed zeros, subnormals and infinities)
+and confirmed that the double-precision path is bit for bit unchanged:
+state vectors, noisy density matrices, adjoint gradients and state
+derivatives of 78 circuits on 1 to 17 qubits, before and after. It found
+wrong numbers in the documentation (the gate count of the validation
+circuit, the size of the norm drift, which frameworks offer single
+precision, "two more qubits"), a Python test that could not fail, a
+kernel test that compared with `==` rather than bit patterns, and NaN
+from the readouts of an all-zero state; all fixed.
 
 ### 1.21 — Coverage and differential testing (S–M)
 
