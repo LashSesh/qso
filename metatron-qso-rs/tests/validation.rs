@@ -816,3 +816,91 @@ fn matrix_product_states_follow_free_fermions_and_qaoa_rings() {
         assert!(s.fidelity_lower_bound().unwrap() > 1.0 - 1e-9);
     }
 }
+
+#[test]
+fn learned_noise_recovers_a_known_device_and_cancels_it() {
+    use metatron_qso::noise::learning::{LearningOptions, learn_layer, pec_layered};
+    use metatron_qso::noise::{ChannelSpec, DensityMatrix, DeviceModel, GateRule, QubitProperties};
+    // cx: two-qubit depolarising (p = 0.012) and a coherent Z rotation of
+    // the control (θ = 0.12), with readout errors. Twirled, the noise of
+    // each cx is sparse Pauli–Lindblad: λ = −ln(1 − 16p/15)/16 on all 15
+    // Paulis of its pair, plus −ln(cos θ)/2 on Z of the control. Both
+    // terms commute with the cx, so its fidelities are symmetric, which
+    // learning assumes (an error that cx moves, like ZZ, is learnable only
+    // as a product with its image).
+    let (p, theta) = (0.012, 0.12);
+    let device = DeviceModel::new("learnable")
+        .with_rule(GateRule::for_gate("cx").with_depolarizing(p).with_channel(
+            ChannelSpec::Rotation {
+                pauli: "ZI".into(),
+                angle: theta,
+            },
+        ))
+        .with_default_qubit(QubitProperties::new().with_readout(0.02, 0.04))
+        .with_idle_noise(false);
+    let depolarising = -(1.0 - 16.0 * p / 15.0).ln() / 16.0;
+    let phase = -theta.cos().ln() / 2.0;
+    let mut layer = Circuit::new(4);
+    layer.cx(0, 1).cx(2, 3);
+    let learned = learn_layer(&layer, &device, &LearningOptions::default()).unwrap();
+    let model = &learned.model;
+    assert_eq!(model.generators.len(), 12 + 27);
+    for ((g, rate), se) in model
+        .generators
+        .iter()
+        .zip(&model.rates)
+        .zip(&learned.std_errors)
+    {
+        let qubits = g.x_mask() | g.z_mask();
+        let on_a_pair = qubits & !0b0011 == 0 || qubits & !0b1100 == 0;
+        let control_z = g.x_mask() == 0 && (qubits == 0b0001 || qubits == 0b0100);
+        let expected = match (on_a_pair, control_z) {
+            (true, true) => depolarising + phase,
+            (true, false) => depolarising,
+            _ => 0.0,
+        };
+        assert!(
+            (rate - expected).abs() < 4.0 * se,
+            "{g}: {rate} ± {se}, expected {expected}"
+        );
+    }
+    // Error cancellation with the learned model on three layers between
+    // random rotations.
+    let mut rng = Rng::seed_from_u64(17);
+    let blocks: Vec<Circuit> = (0..4)
+        .map(|_| {
+            let mut b = Circuit::new(4);
+            for q in 0..4 {
+                b.ry(q, rng.uniform_range(-3.0, 3.0))
+                    .rz(q, rng.uniform_range(-3.0, 3.0));
+            }
+            b
+        })
+        .collect();
+    let mut joined = Circuit::new(4);
+    for (i, b) in blocks.iter().enumerate() {
+        if i > 0 {
+            joined.append(&layer).unwrap();
+        }
+        joined.append(b).unwrap();
+    }
+    let h = zz_chain(4);
+    let exact = DensityMatrix::from_circuit(&joined, &[])
+        .unwrap()
+        .expectation(&h)
+        .unwrap();
+    let mut rho = DensityMatrix::zero(4).unwrap();
+    rho.apply_device(&joined, &[], &device).unwrap();
+    let noisy = rho.expectation(&h).unwrap();
+    let r = pec_layered(&blocks, &layer, model, &device, &h, 4000, 5).unwrap();
+    let se = r.estimate.std_error;
+    assert!(
+        (r.estimate.value - exact).abs() < 4.0 * se,
+        "{:?} vs {exact}",
+        r.estimate
+    );
+    assert!(
+        (noisy - exact).abs() > 5.0 * se,
+        "noisy {noisy}, exact {exact}, se {se}"
+    );
+}

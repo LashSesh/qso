@@ -209,7 +209,7 @@ fn learning_recovers_a_known_model_within_its_standard_errors() {
         let z = (rate - expected).abs() / (se + 2e-5);
         worst = worst.max(z);
         assert!(z < 4.0, "{g}: {rate} ± {se}, expected {expected}");
-        assert!(*se < 1e-3, "{g}: standard error {se}");
+        assert!(*se < 2e-3, "{g}: standard error {se}");
     }
     assert!(worst > 0.0);
     // cx(0, 1) moves X0, Z1, … ; those Paulis are listed as symmetrised.

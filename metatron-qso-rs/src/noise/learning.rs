@@ -15,8 +15,10 @@
 //! over several depths removes state preparation and measurement errors
 //! from the product of fidelities. Where `U b U ≠ b` the two fidelities are
 //! taken equal (the symmetry assumption of the paper; [`LearnedNoise`]
-//! lists those Paulis), and the rates follow by non-negative least squares,
-//! with standard errors from a parametric bootstrap.
+//! lists those Paulis), and the rates follow by non-negative least squares.
+//! Standard errors come from a bootstrap over the twirls; an error the
+//! layer moves to another Pauli (a ZZ error after a cx, say) is learnable
+//! only as a product with its image, and the assumption splits it evenly.
 //!
 //! With a model, [`pec_layered`] cancels the noise of every layer of a
 //! circuit (probabilistic error cancellation: one inverse channel per
@@ -160,7 +162,8 @@ impl SparsePauliLindblad {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LearnedNoise {
     pub model: SparsePauliLindblad,
-    /// Bootstrap standard error of each rate.
+    /// Bootstrap standard error of each rate (of the unconstrained
+    /// least-squares fit; see [`learn_layer`]).
     pub std_errors: Vec<f64>,
     /// Every generator's fidelity product `f_b f_{U b U}` per two layers,
     /// fitted over the depths, with its standard error.
@@ -381,22 +384,6 @@ fn measurable(b: &PauliString, basis: &[Pauli]) -> bool {
     })
 }
 
-/// Weighted least squares of `y` against `x`: slope and its standard
-/// error.
-fn weighted_slope(points: &[(f64, f64, f64)]) -> Option<(f64, f64)> {
-    let (mut sw, mut sx, mut sy, mut sxx, mut sxy) = (0.0, 0.0, 0.0, 0.0, 0.0);
-    for &(x, y, s) in points {
-        let w = 1.0 / (s * s);
-        sw += w;
-        sx += w * x;
-        sy += w * y;
-        sxx += w * x * x;
-        sxy += w * x * y;
-    }
-    let det = sw * sxx - sx * sx;
-    (points.len() >= 2 && det > 0.0).then(|| ((sw * sxy - sx * sy) / det, (sw / det).sqrt()))
-}
-
 /// Non-negative least squares `argmin_{x ≥ 0} ‖A x − b‖` (Lawson and
 /// Hanson); `a` holds the rows.
 pub(crate) fn nnls(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
@@ -527,7 +514,7 @@ pub fn learn_layer(
     let base = Rng::seed_from_u64(options.seed);
     // One task per (basis, depth, twirl): the estimate of every
     // measurable generator.
-    let results: Vec<Result<Vec<(usize, usize, f64)>>> = map_tasks(work, |t| {
+    let results: Vec<Result<Vec<(usize, f64)>>> = map_tasks(work, |t| {
         let (bi, rest) = (
             t / (options.depths.len() * options.twirls),
             t % (options.depths.len() * options.twirls),
@@ -583,42 +570,121 @@ pub fn learn_layer(
                         if parity == 0 { m as i64 } else { -(m as i64) }
                     })
                     .sum();
-                (k, di, total as f64 / options.shots as f64)
+                (k, total as f64 / options.shots as f64)
             })
             .collect())
     });
-    // Estimates per (generator, depth).
-    let mut samples: Vec<Vec<Vec<f64>>> = vec![vec![Vec::new(); options.depths.len()]; gens.len()];
-    for r in results {
-        for (k, di, e) in r? {
-            samples[k][di].push(e);
+    let results = results.into_iter().collect::<Result<Vec<_>>>()?;
+    let n_depths = options.depths.len();
+    // Mean of every generator at every depth over the twirls `pick(cell)`
+    // of each (basis, depth) cell.
+    let means = |pick: &mut dyn FnMut(usize) -> Vec<usize>| {
+        let mut sum = vec![vec![0.0; n_depths]; gens.len()];
+        let mut count = vec![vec![0usize; n_depths]; gens.len()];
+        for cell in 0..bases.len() * n_depths {
+            let di = cell % n_depths;
+            for w in pick(cell) {
+                for &(k, v) in &results[cell * options.twirls + w] {
+                    sum[k][di] += v;
+                    count[k][di] += 1;
+                }
+            }
+        }
+        (sum, count)
+    };
+    let (sum, count) = means(&mut |_| (0..options.twirls).collect());
+    let mut sq = vec![vec![0.0; n_depths]; gens.len()];
+    for (cell, chunk) in results.chunks(options.twirls).enumerate() {
+        let di = cell % n_depths;
+        for r in chunk {
+            for &(k, v) in r {
+                let mean = sum[k][di] / count[k][di] as f64;
+                sq[k][di] += (v - mean) * (v - mean);
+            }
         }
     }
-    let mut products = Vec::with_capacity(gens.len());
-    let mut y = Vec::with_capacity(gens.len());
-    let mut sigma = Vec::with_capacity(gens.len());
+    // Per generator: the depths that enter its fit (mean above three
+    // standard errors) and their coefficients in the least-squares slope
+    // of ln⟨b⟩ against d/2. The fit is unweighted: weights estimated from
+    // a few twirls bias it when coherent errors spread the twirls.
+    let mut coefficients: Vec<Vec<(usize, f64)>> = Vec::with_capacity(gens.len());
     for (k, g) in gens.iter().enumerate() {
-        let points: Vec<(f64, f64, f64)> = options
-            .depths
-            .iter()
-            .zip(&samples[k])
-            .filter_map(|(&d, s)| {
-                let e = Estimate::from_samples(s);
-                let se = e.std_error.max(0.5 / (s.len() * options.shots) as f64);
-                (e.value > 3.0 * se).then(|| (d as f64 / 2.0, e.value.ln(), se / e.value))
+        let points: Vec<(usize, f64)> = (0..n_depths)
+            .filter(|&di| {
+                let m = count[k][di];
+                let mean = sum[k][di] / m as f64;
+                let var = if m > 1 {
+                    sq[k][di] / (m - 1) as f64
+                } else {
+                    0.0
+                };
+                let se = (var / m as f64)
+                    .sqrt()
+                    .max(0.5 / (m * options.shots) as f64);
+                mean > 3.0 * se
             })
+            .map(|di| (di, options.depths[di] as f64 / 2.0))
             .collect();
-        let Some((slope, se)) = weighted_slope(&points) else {
+        let xbar = points.iter().map(|p| p.1).sum::<f64>() / points.len() as f64;
+        let sxx: f64 = points.iter().map(|p| (p.1 - xbar).powi(2)).sum();
+        if points.len() < 2 || sxx.is_nan() || sxx <= 0.0 {
             return Err(QsoError::invalid(
                 "depths",
                 format!("the fidelity of {g} decays too fast to fit at these depths"),
             ));
-        };
-        products.push((*g, slope.exp(), slope.exp() * se));
-        // f_b = sqrt(product): −ln f_b / 2 = −slope / 4.
-        y.push(-slope / 4.0);
-        sigma.push(se / 4.0);
+        }
+        coefficients.push(points.iter().map(|p| (p.0, (p.1 - xbar) / sxx)).collect());
     }
+    // f_b = sqrt(product) with ln(product) the slope: −ln f_b / 2 is
+    // −slope / 4.
+    let halved_logs = |sum: &[Vec<f64>], count: &[Vec<usize>]| -> Vec<f64> {
+        coefficients
+            .iter()
+            .enumerate()
+            .map(|(k, c)| {
+                let slope: f64 = c
+                    .iter()
+                    .map(|&(di, ci)| {
+                        let mean = sum[k][di] / count[k][di] as f64;
+                        ci * mean.max(f64::MIN_POSITIVE).ln()
+                    })
+                    .sum();
+                -slope / 4.0
+            })
+            .collect()
+    };
+    let y = halved_logs(&sum, &count);
+    // Bootstrap over the twirls of every cell, which keeps the
+    // correlations between generators measured on the same circuits.
+    let mut rng = base.fork(u64::MAX);
+    let replicas: Vec<Vec<f64>> = (0..BOOTSTRAP)
+        .map(|_| {
+            let (sum, count) = means(&mut |_| {
+                (0..options.twirls)
+                    .map(|_| rng.below(options.twirls as u64) as usize)
+                    .collect()
+            });
+            halved_logs(&sum, &count)
+        })
+        .collect();
+    let spread = |values: &[Vec<f64>], k: usize| {
+        Estimate::from_samples(&values.iter().map(|r| r[k]).collect::<Vec<_>>()).std_error
+            * (values.len() as f64).sqrt()
+    };
+    // Floor: an exactly reproducible fidelity (no noise at all) still gets
+    // a finite weight.
+    let sigma: Vec<f64> = (0..gens.len())
+        .map(|k| spread(&replicas, k).max(1e-9))
+        .collect();
+    let products = gens
+        .iter()
+        .zip(&y)
+        .zip(&sigma)
+        .map(|((g, v), s)| {
+            let product = (-4.0 * v).exp();
+            (*g, product, 4.0 * s * product)
+        })
+        .collect();
     let rows: Vec<Vec<f64>> = gens
         .iter()
         .zip(&sigma)
@@ -633,23 +699,28 @@ pub fn learn_layer(
         nnls(&rows, &rhs)
     };
     let rates = fit(&y);
-    let mut rng = base.fork(u64::MAX);
-    let replicas: Vec<Vec<f64>> = (0..BOOTSTRAP)
-        .map(|_| {
-            let yb: Vec<f64> = y
-                .iter()
-                .zip(&sigma)
-                .map(|(v, s)| v + s * rng.normal())
-                .collect();
-            fit(&yb)
+    // Standard errors of the unconstrained least-squares rates: where the
+    // constraint λ ≥ 0 is active, every replica of the constrained fit can
+    // sit at zero, and their spread says nothing about the error. The
+    // constrained fit is the projection of the unconstrained one onto
+    // λ ≥ 0 in the metric of the fit, which only brings it closer to the
+    // (non-negative) true rates in that metric.
+    let a = nalgebra::DMatrix::from_fn(gens.len(), gens.len(), |i, j| rows[i][j]);
+    let tolerance = 1e-12 * a.norm();
+    let pinv = a
+        .pseudo_inverse(tolerance)
+        .expect("the tolerance is non-negative");
+    let unconstrained: Vec<Vec<f64>> = replicas
+        .iter()
+        .map(|yb| {
+            let rhs = nalgebra::DVector::from_iterator(
+                gens.len(),
+                yb.iter().zip(&sigma).map(|(v, s)| v / s),
+            );
+            (&pinv * rhs).iter().copied().collect()
         })
         .collect();
-    let std_errors = (0..gens.len())
-        .map(|k| {
-            Estimate::from_samples(&replicas.iter().map(|r| r[k]).collect::<Vec<_>>()).std_error
-                * (BOOTSTRAP as f64).sqrt()
-        })
-        .collect();
+    let std_errors = (0..gens.len()).map(|k| spread(&unconstrained, k)).collect();
     let symmetrised = gens
         .iter()
         .filter(|g| conjugate(&gates, **g) != **g)
