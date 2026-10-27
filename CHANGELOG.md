@@ -28,14 +28,17 @@ Milestones 1.14 (Gaussian boson sampling and imperfect photons), 1.15
   - Overlap, kinetic, nuclear-attraction and electron-repulsion integrals
     over contracted Cartesian Gaussians (McMurchie–Davidson), STO-3G and
     6-31G for hydrogen to neon.
-  - Restricted and unrestricted Hartree–Fock with DIIS, ⟨S²⟩, and the
+  - Restricted and unrestricted Hartree–Fock with DIIS from a
+    superposition of atomic densities (or the core Hamiltonian), a
+    level-shifted fallback when DIIS does not converge, ⟨S²⟩, and the
     transformation to molecular orbitals with a frozen core and an active
     space, giving `MolecularIntegrals` (qubit Hamiltonians, full CI,
     FCIDUMP output).
-  - Tests against PySCF 2.14: integrals of H₂, LiH, H₂O and NH₃;
-    restricted energies of H₂, LiH, BeH₂ and H₂O and unrestricted
-    energies of OH, CH₂, H₂O⁺ and Li to 10⁻⁹ Ha; full CI and CASCI to
-    10⁻⁸ Ha; the bundled FCIDUMP files reproduced from geometries.
+  - Tests against PySCF 2.14 on the same geometries: integrals to
+    1.4·10⁻¹³; restricted energies of H₂, LiH, BeH₂, H₂O and N₂ and
+    unrestricted energies of OH, CH₂, H₂O⁺, Li, NH₂ and NO to 10⁻¹⁰ Ha;
+    full CI and CASCI to 10⁻⁹ Ha; the bundled FCIDUMP files reproduced
+    from geometries.
 - **Hafnians** (`photonics::hafnian`, Python `hafnian`,
   `hafnian_repeated`, `torontonian`).
   - Hafnians and loop hafnians by the formula of Björklund, Gupt and
@@ -67,7 +70,7 @@ Milestones 1.14 (Gaussian boson sampling and imperfect photons), 1.15
   - Tests: a simulation with the internal states as extra modes of an
     interferometer with environment modes; the Hong–Ou–Mandel
     visibility.
-- **Cross-validation** against PySCF 2.14 (integrals to 2·10⁻¹⁰,
+- **Cross-validation** against PySCF 2.14 (integrals to 1.4·10⁻¹³,
   energies to 10⁻¹⁰ Ha) and against The Walrus 0.22: probabilities differ by
   about 10⁻¹⁵ (absolute, 4 modes) and by 2·10⁻¹¹ relative at 20 photons;
   hafnians by 7·10⁻¹² relative up to 20 × 20.
@@ -79,9 +82,11 @@ Milestones 1.14 (Gaussian boson sampling and imperfect photons), 1.15
   (the same weights; where corrections weigh the same, it may pick
   another one).
 - `MolecularIntegrals.fci_energies` builds the determinant matrix by the
-  Slater–Condon rules instead of through the qubit Hamiltonian, and uses
-  Lanczos for a single root above 1024 determinants (full CI of LiH in
-  6-31G: from 69 s to under a second).
+  Slater–Condon rules instead of through the qubit Hamiltonian up to 1024
+  determinants (`DENSE_FCI_LIMIT`, was 4096), and above that runs
+  Davidson's method on `H c` computed from the integrals without the
+  matrix, for up to 32 roots (`MAX_FCI_ROOTS`; before, one root by
+  Lanczos). Full CI of LiH in 6-31G: 69 s before, now under a second.
 
 ## [1.6.0] — 2026-10-27
 

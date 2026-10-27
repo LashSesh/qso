@@ -444,17 +444,25 @@ def gaussian_vs_thewalrus(rng) -> dict:
 
 
 def chemistry_vs_pyscf() -> dict:
-    """Gaussian integrals and Hartree–Fock against PySCF."""
+    """Gaussian integrals and Hartree–Fock against PySCF, on the same
+    geometries (QSO's positions in bohr, so that the two codes' bohr
+    constants do not matter)."""
     import metatron_qso as q
     from pyscf import gto, mcscf, scf
+
+    def pyscf_molecule(m, basis):
+        symbols = ["H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne"]
+        atoms = [(symbols[z - 1], tuple(r)) for z, r in zip(m.charges, m.positions)]
+        return gto.M(atom=atoms, basis=basis, unit="Bohr", cart=True, charge=m.charge, spin=m.multiplicity - 1, verbose=0)
 
     water = "O 0 0 0.1173; H 0 0.7572 -0.4692; H 0 -0.7572 -0.4692"
     ammonia = "N 0.1 -0.05 0.12; H 0.9377 -0.3816 0.0; H -0.4689 -0.1 0.8121; H -0.4689 0.7 -0.8121"
     integral_err = 0.0
-    for atoms in (water, ammonia):
+    for atoms in (water, ammonia, "C 0 0 0; O 0 0 1.128", "F 0 0 0; F 0.3 0.2 1.41"):
         for basis in ("sto-3g", "6-31g"):
-            mol = gto.M(atom=atoms, basis=basis, unit="angstrom", cart=True, verbose=0)
-            ours = q.AoIntegrals(q.Molecule(atoms), basis)
+            m = q.Molecule(atoms)
+            mol = pyscf_molecule(m, basis)
+            ours = q.AoIntegrals(m, basis)
             for name, theirs in (
                 ("overlap", mol.intor("int1e_ovlp")),
                 ("kinetic", mol.intor("int1e_kin")),
@@ -465,15 +473,18 @@ def chemistry_vs_pyscf() -> dict:
     energy_err = 0.0
     for atoms, charge, mult, basis in (
         (water, 0, 1, "6-31g"),
+        ("N 0 0 0; N 0 0 1.0977", 0, 1, "sto-3g"),
         ("Be 0 0 0; H 0 0 1.326; H 0 0 -1.326", 0, 1, "6-31g"),
         ("O 0 0 0; H 0 0 0.97", 0, 2, "6-31g"),
         ("C 0 0 0.1; H 0 0.99 -0.5; H 0 -0.99 -0.5", 0, 3, "6-31g"),
+        ("N 0 0 0; O 0 0 1.151", 0, 2, "sto-3g"),
     ):
-        mol = gto.M(atom=atoms, basis=basis, unit="angstrom", cart=True, charge=charge, spin=mult - 1, verbose=0)
+        m = q.Molecule(atoms, charge, mult)
+        mol = pyscf_molecule(m, basis)
         mf = scf.RHF(mol) if mult == 1 else scf.UHF(mol)
         mf.conv_tol = 1e-12
         theirs = mf.kernel()
-        ours = q.hartree_fock(q.Molecule(atoms, charge, mult), basis, unrestricted=mult > 1)
+        ours = q.hartree_fock(m, basis, unrestricted=mult > 1)
         energy_err = max(energy_err, abs(ours.energy - theirs))
         if mult == 1:
             cas = mcscf.CASCI(mf, 6, mol.nelectron - 2)
@@ -485,7 +496,6 @@ def chemistry_vs_pyscf() -> dict:
         "integral_max_difference": integral_err,
         "energy_max_difference": energy_err,
     }
-
 
 TOLERANCES = {
     "state": 1e-12,
@@ -506,11 +516,10 @@ TOLERANCES = {
     # Both decoders round ln((1 − p)/p) to integers (QSO: the largest edge
     # at 2²⁰).
     "matching_weight": 1e-5,
-    # PySCF's integrals carry errors up to 3·10⁻¹¹ (a 40-digit evaluation
-    # agrees with QSO), and its CODATA 2010 bohr moves the geometries by
-    # 3·10⁻¹¹ relative.
-    "integral": 1e-9,
-    "scf_energy": 1e-8,
+    # Same geometries in bohr: integrals to rounding, energies to the
+    # convergence of both SCF codes.
+    "integral": 1e-12,
+    "scf_energy": 1e-9,
 }
 
 

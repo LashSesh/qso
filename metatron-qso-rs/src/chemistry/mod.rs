@@ -27,4 +27,4 @@ pub use fermion::{FermionOperator, Ladder};
 pub use integrals::{AoIntegrals, Basis, Molecule};
 pub use mapping::{Mapping, QubitEncoding, taper, two_qubit_reduction};
 pub use molecule::MolecularIntegrals;
-pub use scf::{ScfOptions, ScfResult, rhf, uhf};
+pub use scf::{Guess, ScfOptions, ScfResult, rhf, uhf};

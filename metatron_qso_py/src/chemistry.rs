@@ -4,8 +4,8 @@
 use metatron_qso::C64;
 use metatron_qso::chemistry::adapt::{AdaptOptions, adapt_vqe_molecule};
 use metatron_qso::chemistry::{
-    AoIntegrals, Basis, FermionOperator, Mapping, MolecularIntegrals, Molecule, QubitEncoding,
-    ScfOptions, ScfResult, k_upccgsd, rhf, uccsd, uhf,
+    AoIntegrals, Basis, FermionOperator, Guess, Mapping, MolecularIntegrals, Molecule,
+    QubitEncoding, ScfOptions, ScfResult, k_upccgsd, rhf, uccsd, uhf,
 };
 use metatron_qso::quantum::QubitOperator;
 use numpy::ndarray::{Array2, Array4};
@@ -459,24 +459,24 @@ impl PyMolecule {
     /// Atomic numbers.
     #[getter]
     fn charges(&self) -> Vec<u32> {
-        self.inner.charges.clone()
+        self.inner.charges().to_vec()
     }
 
     /// Positions in bohr, one row per atom.
     #[getter]
     fn positions<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f64>> {
-        let p = &self.inner.positions;
+        let p = self.inner.positions();
         Array2::from_shape_fn((p.len(), 3), |(i, k)| p[i][k]).into_pyarray(py)
     }
 
     #[getter]
     fn charge(&self) -> i32 {
-        self.inner.charge
+        self.inner.charge()
     }
 
     #[getter]
     fn multiplicity(&self) -> u32 {
-        self.inner.multiplicity
+        self.inner.multiplicity()
     }
 
     #[getter]
@@ -498,9 +498,9 @@ impl PyMolecule {
     fn __repr__(&self) -> String {
         format!(
             "Molecule(atoms={}, charge={}, multiplicity={})",
-            self.inner.charges.len(),
-            self.inner.charge,
-            self.inner.multiplicity
+            self.inner.charges().len(),
+            self.inner.charge(),
+            self.inner.multiplicity()
         )
     }
 }
@@ -596,7 +596,8 @@ impl PyAoIntegrals {
 #[pyclass(name = "HartreeFock", module = "metatron_qso", frozen)]
 pub struct PyHartreeFock {
     inner: ScfResult,
-    integrals: AoIntegrals,
+    /// Shared, not copied (the n⁴ tensor can be large).
+    integrals: Py<PyAoIntegrals>,
 }
 
 #[pymethods]
@@ -660,10 +661,8 @@ impl PyHartreeFock {
 
     /// The integrals the calculation used.
     #[getter]
-    fn integrals(&self) -> PyAoIntegrals {
-        PyAoIntegrals {
-            inner: self.integrals.clone(),
-        }
+    fn integrals(&self, py: Python<'_>) -> Py<PyAoIntegrals> {
+        self.integrals.clone_ref(py)
     }
 
     /// The Hamiltonian in the restricted orbitals, the lowest `frozen`
@@ -676,12 +675,10 @@ impl PyHartreeFock {
         frozen: usize,
         active: Option<usize>,
     ) -> PyResult<PyMolecularIntegrals> {
-        py.detach(|| {
-            self.inner
-                .molecular_integrals(&self.integrals, frozen, active)
-        })
-        .raise()
-        .map(|inner| PyMolecularIntegrals { inner })
+        let ints = &self.integrals.get().inner;
+        py.detach(|| self.inner.molecular_integrals(ints, frozen, active))
+            .raise()
+            .map(|inner| PyMolecularIntegrals { inner })
     }
 
     fn __repr__(&self) -> String {
@@ -695,7 +692,7 @@ impl PyHartreeFock {
 }
 
 /// Restricted (default) or unrestricted Hartree–Fock of `molecule` in
-/// `basis`, with DIIS.
+/// `basis`, with DIIS; `integrals` reuses integrals computed before.
 #[pyfunction]
 #[pyo3(signature = (
     molecule,
@@ -705,6 +702,10 @@ impl PyHartreeFock {
     energy_tolerance = 1e-10,
     gradient_tolerance = 1e-8,
     diis_space = 8,
+    linear_dependence = 1e-8,
+    level_shift = 0.0,
+    guess = "atoms",
+    integrals = None,
 ))]
 #[allow(clippy::too_many_arguments)]
 fn hartree_fock(
@@ -716,24 +717,61 @@ fn hartree_fock(
     energy_tolerance: f64,
     gradient_tolerance: f64,
     diis_space: usize,
+    linear_dependence: f64,
+    level_shift: f64,
+    guess: &str,
+    integrals: Option<Py<PyAoIntegrals>>,
 ) -> PyResult<PyHartreeFock> {
     let basis = Basis::from_name(basis).raise()?;
+    let guess = match guess {
+        "atoms" => Guess::Atoms,
+        "core" => Guess::Core,
+        other => {
+            return Err(invalid(format!(
+                "unknown guess '{other}' (expected atoms or core)"
+            )));
+        }
+    };
     let options = ScfOptions {
         max_iterations,
         energy_tolerance,
         gradient_tolerance,
         diis_space,
-        ..ScfOptions::default()
+        linear_dependence,
+        guess,
+        level_shift,
     };
+    if let Some(given) = &integrals
+        && given.get().inner.basis() != basis
+    {
+        return Err(invalid("the integrals were computed in another basis"));
+    }
     let mol = &molecule.inner;
-    py.detach(|| {
-        let integrals = AoIntegrals::compute(mol, basis)?;
-        let inner = if unrestricted {
-            uhf(mol, &integrals, &options)?
-        } else {
-            rhf(mol, &integrals, &options)?
-        };
-        Ok(PyHartreeFock { inner, integrals })
-    })
-    .raise()
+    let (inner, computed) = py
+        .detach(
+            || -> metatron_qso::Result<(ScfResult, Option<AoIntegrals>)> {
+                let computed = match &integrals {
+                    Some(_) => None,
+                    None => Some(AoIntegrals::compute(mol, basis)?),
+                };
+                let ints = match (&integrals, &computed) {
+                    (Some(p), _) => &p.get().inner,
+                    (None, Some(c)) => c,
+                    (None, None) => unreachable!(),
+                };
+                let inner = if unrestricted {
+                    uhf(mol, ints, &options)?
+                } else {
+                    rhf(mol, ints, &options)?
+                };
+                Ok((inner, computed))
+            },
+        )
+        .raise()?;
+    let integrals = match (integrals, computed) {
+        (Some(p), _) => p,
+        (None, Some(c)) => Py::new(py, PyAoIntegrals { inner: c })?,
+        (None, None) => unreachable!(),
+    };
+    Ok(PyHartreeFock { inner, integrals })
 }

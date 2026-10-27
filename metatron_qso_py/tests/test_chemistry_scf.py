@@ -11,8 +11,8 @@ def test_molecule_and_integrals():
     assert mol.charges == [8, 1, 1]
     assert mol.n_electrons == 10 and mol.n_alpha_beta == (5, 5)
     assert mol.positions.shape == (3, 3)
-    # PySCF's CODATA 2010 bohr differs from ours (CODATA 2018) by 3e-11.
-    assert abs(mol.nuclear_repulsion() - 9.189533762934902) < 1e-9
+    # PySCF 2.14 on the same geometry in bohr.
+    assert abs(mol.nuclear_repulsion() - 9.189533762639684) < 1e-12
     ints = q.AoIntegrals(mol, "sto-3g")
     n = ints.n_functions
     assert n == 7
@@ -30,17 +30,21 @@ def test_hartree_fock_and_full_ci():
     # PySCF 2.14 references.
     hf = q.hartree_fock(q.Molecule(H2O), "6-31g")
     assert hf.restricted
-    assert abs(hf.energy - -75.983974472722) < 1e-9
+    assert abs(hf.energy - -75.98397447272153) < 1e-10
     assert abs(hf.s_squared()) < 1e-12
     c = hf.coefficients[0]
     s = hf.integrals.overlap
     assert np.allclose(c.T @ s @ c, np.eye(c.shape[1]), atol=1e-10)
     mo = hf.molecular_integrals(frozen=1, active=8)
     assert abs(mo.hartree_fock_energy() - hf.energy) < 1e-10
-    assert abs(mo.fci_energies()[0] - -76.02472563260908) < 1e-8
+    assert abs(mo.fci_energies()[0] - -76.02472563261222) < 1e-9
+    # The integrals are shared, and can be passed in again.
+    assert hf.integrals is hf.integrals
+    again = q.hartree_fock(q.Molecule(H2O), "6-31g", integrals=hf.integrals)
+    assert again.energy == hf.energy and again.integrals is hf.integrals
     oh = q.hartree_fock(q.Molecule("O 0 0 0; H 0 0 0.97", multiplicity=2), "6-31g", unrestricted=True)
     assert not oh.restricted and len(oh.orbital_energies) == 2
-    assert abs(oh.energy - -75.36316824957647) < 1e-9
+    assert abs(oh.energy - -75.36316824957633) < 1e-10
     assert abs(oh.s_squared() - 0.7537742361406874) < 1e-7
 
 
@@ -58,3 +62,18 @@ def test_invalid_input():
         q.hartree_fock(oh, unrestricted=True).molecular_integrals()
     with pytest.raises(ValueError):
         q.hartree_fock(q.Molecule(H2O), max_iterations=2)
+
+
+def test_guesses_and_level_shift():
+    n2 = q.Molecule("N 0 0 0; N 0 0 1.0977")
+    ground = q.hartree_fock(n2).energy
+    assert abs(ground - -107.4958933078439) < 1e-10
+    assert q.hartree_fock(n2, guess="core").energy > ground + 0.5
+    shifted = q.hartree_fock(n2, level_shift=0.3, diis_space=0)
+    assert abs(shifted.energy - ground) < 1e-9
+    with pytest.raises(ValueError):
+        q.hartree_fock(n2, guess="huckel")  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        q.hartree_fock(n2, integrals=q.AoIntegrals(n2, "6-31g"))
+    with pytest.raises(ValueError):
+        q.hartree_fock(q.Molecule("H 0 0 0; H 0 0 0.7"), integrals=q.AoIntegrals(n2))

@@ -40,12 +40,17 @@ use crate::error::{QsoError, Result};
 use crate::linalg::{KrylovOptions, RMatrix, eigh_real, lanczos_ground_state};
 use crate::quantum::{Circuit, PauliString, PauliSum};
 
+mod fci;
+
 /// Largest number of spatial orbitals (64 spin orbitals).
 pub const MAX_ORBITALS: usize = 32;
 /// Largest determinant space diagonalised densely by
-/// [`MolecularIntegrals::fci_energies`]; larger spaces use Lanczos for the
-/// ground state only.
-pub const DENSE_FCI_LIMIT: usize = 4096;
+/// [`MolecularIntegrals::fci_energies`]; larger spaces use Davidson's
+/// method without storing the matrix.
+pub const DENSE_FCI_LIMIT: usize = 1024;
+/// Most roots [`MolecularIntegrals::fci_energies`] computes above
+/// [`DENSE_FCI_LIMIT`].
+pub const MAX_FCI_ROOTS: usize = 32;
 /// Largest determinant space [`MolecularIntegrals::fci_energies`] accepts.
 pub const MAX_DETERMINANTS: usize = 1 << 18;
 
@@ -486,18 +491,53 @@ impl MolecularIntegrals {
 
     /// The lowest `n_roots` full-CI energies (core energy included) in the
     /// space of determinants with `n_α` and `n_β` electrons. Spaces up to
-    /// [`DENSE_FCI_LIMIT`] determinants are diagonalised densely; larger
-    /// ones, up to [`MAX_DETERMINANTS`], give the ground state by Lanczos
-    /// (`n_roots` must then be 1), as does a single root above 1024
-    /// determinants. The matrix follows from the Slater–Condon rules.
+    /// [`DENSE_FCI_LIMIT`] determinants are diagonalised densely (the
+    /// matrix from the Slater–Condon rules); larger ones, up to
+    /// [`MAX_DETERMINANTS`], give up to [`MAX_FCI_ROOTS`] roots by
+    /// Davidson's method on `H c` computed from the integrals without the
+    /// matrix (residuals below 10⁻⁷, eigenvalues to about 10⁻¹² Ha).
     pub fn fci_energies(&self, n_roots: usize) -> Result<Vec<f64>> {
         let basis = self.determinants()?;
-        let index: HashMap<u64, usize> = basis.iter().enumerate().map(|(i, &b)| (b, i)).collect();
-        let columns = basis
-            .iter()
-            .map(|&d| self.slater_condon(d, &index))
-            .collect();
-        lowest_eigenvalues(columns, n_roots)
+        let dim = basis.len();
+        if n_roots == 0 || n_roots > dim {
+            return Err(QsoError::invalid(
+                "n_roots",
+                format!("need 1 to {dim} roots, got {n_roots}"),
+            ));
+        }
+        if dim <= DENSE_FCI_LIMIT {
+            let index: HashMap<u64, usize> =
+                basis.iter().enumerate().map(|(i, &b)| (b, i)).collect();
+            let columns = basis
+                .iter()
+                .map(|&d| self.slater_condon(d, &index))
+                .collect();
+            return lowest_eigenvalues(columns, n_roots, DENSE_FCI_LIMIT);
+        }
+        if n_roots > MAX_FCI_ROOTS {
+            return Err(QsoError::invalid(
+                "n_roots",
+                format!("at most {MAX_FCI_ROOTS} roots above {DENSE_FCI_LIMIT} determinants"),
+            ));
+        }
+        let ci = fci::DirectCi::new(self)?;
+        debug_assert_eq!(ci.dim(), dim);
+        let diagonal = ci.diagonal(&basis);
+        fci::davidson(|c| ci.sigma(c), &diagonal, n_roots, 1e-7, 1000)
+    }
+
+    /// `⟨d|H|d⟩` by the Slater–Condon rules.
+    fn diagonal_element(&self, d: u64) -> f64 {
+        let n = self.n_spin_orbitals();
+        let occ: Vec<usize> = (0..n).filter(|&p| d >> p & 1 == 1).collect();
+        let mut diag = self.core_energy;
+        for (k, &i) in occ.iter().enumerate() {
+            diag += self.spin_one_body(i, i);
+            for &j in &occ[..k] {
+                diag += self.antisymmetrised(i, j, i, j);
+            }
+        }
+        diag
     }
 
     /// Spin-orbital integral `⟨pq|rs⟩ = (pr|qs) δ_{σp σr} δ_{σq σs}`
@@ -528,16 +568,7 @@ impl MolecularIntegrals {
         let n = self.n_spin_orbitals();
         let occ: Vec<usize> = (0..n).filter(|&p| d >> p & 1 == 1).collect();
         let virt: Vec<usize> = (0..n).filter(|&p| d >> p & 1 == 0).collect();
-        let mut col = Vec::new();
-        // Diagonal.
-        let mut diag = self.core_energy;
-        for (k, &i) in occ.iter().enumerate() {
-            diag += self.spin_one_body(i, i);
-            for &j in &occ[..k] {
-                diag += self.antisymmetrised(i, j, i, j);
-            }
-        }
-        col.push((index[&d], diag));
+        let mut col = vec![(index[&d], self.diagonal_element(d))];
         // Singles i → a.
         for &i in &occ {
             for &a in &virt {
@@ -577,7 +608,8 @@ impl MolecularIntegrals {
     }
 
     /// [`MolecularIntegrals::fci_energies`] computed from the qubit
-    /// Hamiltonian of `encoding` in the span of the encoded determinants.
+    /// Hamiltonian of `encoding` in the span of the encoded determinants
+    /// (densely up to 4096 determinants, the ground state by Lanczos above).
     /// All encodings give the same energies; comparing them checks the
     /// mappings.
     pub fn fci_energies_with(&self, encoding: QubitEncoding, n_roots: usize) -> Result<Vec<f64>> {
@@ -695,12 +727,22 @@ pub(crate) fn sector_energies(h: &PauliSum, basis: &[u64], n_roots: usize) -> Re
         col.sort_by_key(|e| e.0);
         columns.push(col);
     }
-    lowest_eigenvalues(columns, n_roots)
+    lowest_eigenvalues(columns, n_roots, SECTOR_DENSE_LIMIT)
 }
 
+/// Largest sector diagonalised densely by
+/// [`MolecularIntegrals::fci_energies_with`] (above it, the ground state by
+/// Lanczos).
+const SECTOR_DENSE_LIMIT: usize = 4096;
+
 /// The lowest `n_roots` eigenvalues of the real symmetric matrix with
-/// sparse `columns`.
-fn lowest_eigenvalues(columns: Vec<Vec<(usize, f64)>>, n_roots: usize) -> Result<Vec<f64>> {
+/// sparse `columns`: densely up to `dense_limit`, else the ground state by
+/// Lanczos.
+fn lowest_eigenvalues(
+    columns: Vec<Vec<(usize, f64)>>,
+    n_roots: usize,
+    dense_limit: usize,
+) -> Result<Vec<f64>> {
     let dim = columns.len();
     if n_roots == 0 || n_roots > dim {
         return Err(QsoError::invalid(
@@ -708,9 +750,7 @@ fn lowest_eigenvalues(columns: Vec<Vec<(usize, f64)>>, n_roots: usize) -> Result
             format!("need 1 to {dim} roots, got {n_roots}"),
         ));
     }
-    // A dense eigensolver costs O(dim³): above 1024 determinants a single
-    // root comes from Lanczos.
-    if dim <= DENSE_FCI_LIMIT && (n_roots > 1 || dim <= 1024) {
+    if dim <= dense_limit {
         let mut m = RMatrix::zeros(dim, dim);
         for (c, col) in columns.iter().enumerate() {
             for &(r, v) in col {
@@ -723,7 +763,7 @@ fn lowest_eigenvalues(columns: Vec<Vec<(usize, f64)>>, n_roots: usize) -> Result
     if n_roots > 1 {
         return Err(QsoError::invalid(
             "n_roots",
-            format!("only the ground state is available above {DENSE_FCI_LIMIT} determinants"),
+            format!("only the ground state is available above {dense_limit} determinants"),
         ));
     }
     let apply = |x: &[C64], y: &mut [C64]| {

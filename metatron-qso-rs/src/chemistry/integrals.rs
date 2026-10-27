@@ -33,18 +33,54 @@ pub const MAX_BASIS_FUNCTIONS: usize = 64;
 
 const SYMBOLS: [&str; 10] = ["H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne"];
 
-/// A molecule: nuclei, total charge and spin multiplicity `2S + 1`.
+/// A molecule: nuclei, total charge and spin multiplicity `2S + 1`
+/// (checked on construction and deserialisation).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "MoleculeData")]
 pub struct Molecule {
-    /// Atomic numbers.
-    pub charges: Vec<u32>,
-    /// Positions in bohr.
-    pub positions: Vec<[f64; 3]>,
-    pub charge: i32,
-    pub multiplicity: u32,
+    charges: Vec<u32>,
+    positions: Vec<[f64; 3]>,
+    charge: i32,
+    multiplicity: u32,
+}
+
+#[derive(Deserialize)]
+struct MoleculeData {
+    charges: Vec<u32>,
+    positions: Vec<[f64; 3]>,
+    charge: i32,
+    multiplicity: u32,
+}
+
+impl TryFrom<MoleculeData> for Molecule {
+    type Error = QsoError;
+
+    fn try_from(d: MoleculeData) -> Result<Self> {
+        Molecule::new(d.charges, d.positions, d.charge, d.multiplicity)
+    }
 }
 
 impl Molecule {
+    /// Atomic numbers.
+    pub fn charges(&self) -> &[u32] {
+        &self.charges
+    }
+
+    /// Positions in bohr.
+    pub fn positions(&self) -> &[[f64; 3]] {
+        &self.positions
+    }
+
+    /// Total charge.
+    pub fn charge(&self) -> i32 {
+        self.charge
+    }
+
+    /// Spin multiplicity `2S + 1`.
+    pub fn multiplicity(&self) -> u32 {
+        self.multiplicity
+    }
+
     /// A molecule from `"H 0 0 0; H 0 0 0.735"` (element and position in
     /// ångström per atom, separated by `;` or new lines), as in PySCF.
     pub fn from_atoms(text: &str, charge: i32, multiplicity: u32) -> Result<Self> {
@@ -320,14 +356,14 @@ fn kinetic_primitive(
     term0 - 2.0 * b * b * term1 - 0.5 * term2
 }
 
-/// Boys function `F_n(T) = ∫₀¹ t^{2n} e^{−T t²} dt` for `n = 0..=nmax`.
-fn boys(nmax: usize, t: f64) -> Vec<f64> {
-    let mut f = vec![0.0; nmax + 1];
+/// Boys function `F_n(T) = ∫₀¹ t^{2n} e^{−T t²} dt` for `n = 0..f.len()`.
+fn boys(f: &mut [f64], t: f64) {
+    let nmax = f.len() - 1;
     if t < 1e-14 {
         for (n, v) in f.iter_mut().enumerate() {
             *v = 1.0 / (2 * n + 1) as f64;
         }
-        return f;
+        return;
     }
     if t > 60.0 {
         // Asymptotic: F_n = (2n−1)!! / 2^{n+1} √(π / T^{2n+1}); the
@@ -337,7 +373,7 @@ fn boys(nmax: usize, t: f64) -> Vec<f64> {
             *fv = v;
             v *= (2 * n + 1) as f64 / (2.0 * t);
         }
-        return f;
+        return;
     }
     // Series for F_nmax, then downward recursion (stable).
     let n = nmax as f64;
@@ -354,17 +390,23 @@ fn boys(nmax: usize, t: f64) -> Vec<f64> {
     for m in (0..nmax).rev() {
         f[m] = (2.0 * t * f[m + 1] + e) / (2 * m + 1) as f64;
     }
-    f
 }
 
+/// Largest total angular momentum of four functions (s and p shells).
+const MAX_L: usize = 4;
+const DIM: usize = MAX_L + 1;
+/// `R_{tuv}` indexed `[t][u][v]`.
+type HermiteR = [[[f64; DIM]; DIM]; DIM];
+
 /// Hermite Coulomb integrals `R_{tuv}` for `t + u + v ≤ l`, at exponent
-/// `p` and separation `pc`, indexed `[t][u][v]`.
-fn hermite_r(l: usize, p: f64, pc: [f64; 3]) -> Vec<Vec<Vec<f64>>> {
+/// `p` and separation `pc`.
+fn hermite_r(l: usize, p: f64, pc: [f64; 3]) -> HermiteR {
+    debug_assert!(l <= MAX_L);
     let r2 = pc[0] * pc[0] + pc[1] * pc[1] + pc[2] * pc[2];
-    let f = boys(l, p * r2);
+    let mut f = [0.0; DIM];
+    boys(&mut f[..=l], p * r2);
     // r[n][t][u][v]
-    let dim = l + 1;
-    let mut r = vec![vec![vec![vec![0.0; dim]; dim]; dim]; dim];
+    let mut r = [[[[0.0; DIM]; DIM]; DIM]; DIM];
     let mut factor = 1.0;
     for n in 0..=l {
         r[n][0][0][0] = factor * f[n];
@@ -402,130 +444,138 @@ fn hermite_r(l: usize, p: f64, pc: [f64; 3]) -> Vec<Vec<Vec<f64>>> {
             }
         }
     }
-    r.swap_remove(0)
+    r[0]
 }
 
-fn nuclear_primitive(
-    a: f64,
-    pa: [u32; 3],
-    ca: [f64; 3],
-    b: f64,
-    pb: [u32; 3],
-    cb: [f64; 3],
-    c: [f64; 3],
-) -> f64 {
-    let p = a + b;
-    let pp: Vec<f64> = (0..3).map(|k| (a * ca[k] + b * cb[k]) / p).collect();
-    let l = (pa.iter().sum::<u32>() + pb.iter().sum::<u32>()) as usize;
-    let r = hermite_r(l, p, [pp[0] - c[0], pp[1] - c[1], pp[2] - c[2]]);
-    let ex: Vec<Vec<f64>> = (0..3)
-        .map(|k| {
-            (0..=(pa[k] + pb[k]) as i32)
-                .map(|t| hermite_e(pa[k] as i32, pb[k] as i32, t, ca[k] - cb[k], a, b))
-                .collect()
-        })
-        .collect();
-    let mut v = 0.0;
-    for (t, et) in ex[0].iter().enumerate() {
-        for (u, eu) in ex[1].iter().enumerate() {
-            for (w, ev) in ex[2].iter().enumerate() {
-                v += et * eu * ev * r[t][u][w];
+/// A product of two primitives: exponent, centre, contraction
+/// coefficients and Hermite expansion `E_t` per direction.
+#[derive(Clone, Debug)]
+struct PrimPair {
+    p: f64,
+    center: [f64; 3],
+    coef: f64,
+    e: [[f64; 3]; 3],
+}
+
+/// The primitive products of two contracted functions.
+#[derive(Clone, Debug)]
+struct Pair {
+    /// Angular momentum per direction (`E_t` for `t ≤ l[k]`).
+    l: [usize; 3],
+    prims: Vec<PrimPair>,
+}
+
+impl Pair {
+    #[allow(clippy::needless_range_loop)]
+    fn new(fi: &Function, fj: &Function) -> Self {
+        let l = [0, 1, 2].map(|k| (fi.powers[k] + fj.powers[k]) as usize);
+        let mut prims = Vec::with_capacity(fi.exponents.len() * fj.exponents.len());
+        for (&a, &ca) in fi.exponents.iter().zip(&fi.coefficients) {
+            for (&b, &cb) in fj.exponents.iter().zip(&fj.coefficients) {
+                let p = a + b;
+                let center = [0, 1, 2].map(|k| (a * fi.center[k] + b * fj.center[k]) / p);
+                let mut e = [[0.0; 3]; 3];
+                for k in 0..3 {
+                    for t in 0..=l[k] {
+                        e[k][t] = hermite_e(
+                            fi.powers[k] as i32,
+                            fj.powers[k] as i32,
+                            t as i32,
+                            fi.center[k] - fj.center[k],
+                            a,
+                            b,
+                        );
+                    }
+                }
+                prims.push(PrimPair {
+                    p,
+                    center,
+                    coef: ca * cb,
+                    e,
+                });
             }
         }
+        Self { l, prims }
     }
-    2.0 * std::f64::consts::PI / p * v
+
+    fn total_l(&self) -> usize {
+        self.l.iter().sum()
+    }
 }
 
-/// `(ab|cd)` over primitives.
-#[allow(clippy::too_many_arguments)]
-fn eri_primitive(
-    a: f64,
-    pa: [u32; 3],
-    ca: [f64; 3],
-    b: f64,
-    pb: [u32; 3],
-    cb: [f64; 3],
-    c: f64,
-    pc: [u32; 3],
-    cc: [f64; 3],
-    d: f64,
-    pd: [u32; 3],
-    cd: [f64; 3],
-) -> f64 {
-    let p = a + b;
-    let q = c + d;
-    let alpha = p * q / (p + q);
-    let pp: Vec<f64> = (0..3).map(|k| (a * ca[k] + b * cb[k]) / p).collect();
-    let qq: Vec<f64> = (0..3).map(|k| (c * cc[k] + d * cd[k]) / q).collect();
-    let l = (pa.iter().sum::<u32>()
-        + pb.iter().sum::<u32>()
-        + pc.iter().sum::<u32>()
-        + pd.iter().sum::<u32>()) as usize;
-    let r = hermite_r(l, alpha, [pp[0] - qq[0], pp[1] - qq[1], pp[2] - qq[2]]);
-    let e1: Vec<Vec<f64>> = (0..3)
-        .map(|k| {
-            (0..=(pa[k] + pb[k]) as i32)
-                .map(|t| hermite_e(pa[k] as i32, pb[k] as i32, t, ca[k] - cb[k], a, b))
-                .collect()
-        })
-        .collect();
-    let e2: Vec<Vec<f64>> = (0..3)
-        .map(|k| {
-            (0..=(pc[k] + pd[k]) as i32)
-                .map(|t| hermite_e(pc[k] as i32, pd[k] as i32, t, cc[k] - cd[k], c, d))
-                .collect()
-        })
-        .collect();
+/// `⟨i| 1/|r − C| |j⟩` over contracted functions.
+#[allow(clippy::needless_range_loop)]
+fn nuclear_pair(pair: &Pair, c: [f64; 3]) -> f64 {
+    let l = pair.total_l();
     let mut v = 0.0;
-    for (t, et) in e1[0].iter().enumerate() {
-        for (u, eu) in e1[1].iter().enumerate() {
-            for (w, ev) in e1[2].iter().enumerate() {
-                let left = et * eu * ev;
-                if left == 0.0 {
-                    continue;
+    for pp in &pair.prims {
+        let r = hermite_r(
+            l,
+            pp.p,
+            [
+                pp.center[0] - c[0],
+                pp.center[1] - c[1],
+                pp.center[2] - c[2],
+            ],
+        );
+        let mut s = 0.0;
+        for t in 0..=pair.l[0] {
+            for u in 0..=pair.l[1] {
+                for w in 0..=pair.l[2] {
+                    s += pp.e[0][t] * pp.e[1][u] * pp.e[2][w] * r[t][u][w];
                 }
-                for (tau, ft) in e2[0].iter().enumerate() {
-                    for (nu, fu) in e2[1].iter().enumerate() {
-                        for (phi, fv) in e2[2].iter().enumerate() {
-                            let sign = if (tau + nu + phi) % 2 == 1 { -1.0 } else { 1.0 };
-                            v += left * sign * ft * fu * fv * r[t + tau][u + nu][w + phi];
+            }
+        }
+        v += pp.coef * 2.0 * std::f64::consts::PI / pp.p * s;
+    }
+    v
+}
+
+/// `(ij|kl)` over contracted functions, from the pairs `ij` and `kl`.
+#[allow(clippy::needless_range_loop)]
+fn eri_pairs(ab: &Pair, cd: &Pair) -> f64 {
+    let l = ab.total_l() + cd.total_l();
+    let mut v = 0.0;
+    for x in &ab.prims {
+        for y in &cd.prims {
+            let (p, q) = (x.p, y.p);
+            let alpha = p * q / (p + q);
+            let r = hermite_r(
+                l,
+                alpha,
+                [
+                    x.center[0] - y.center[0],
+                    x.center[1] - y.center[1],
+                    x.center[2] - y.center[2],
+                ],
+            );
+            let mut s = 0.0;
+            for t in 0..=ab.l[0] {
+                for u in 0..=ab.l[1] {
+                    for w in 0..=ab.l[2] {
+                        let left = x.e[0][t] * x.e[1][u] * x.e[2][w];
+                        if left == 0.0 {
+                            continue;
                         }
+                        let mut inner = 0.0;
+                        for tau in 0..=cd.l[0] {
+                            for nu in 0..=cd.l[1] {
+                                for phi in 0..=cd.l[2] {
+                                    let sign = if (tau + nu + phi) % 2 == 1 { -1.0 } else { 1.0 };
+                                    inner += sign
+                                        * y.e[0][tau]
+                                        * y.e[1][nu]
+                                        * y.e[2][phi]
+                                        * r[t + tau][u + nu][w + phi];
+                                }
+                            }
+                        }
+                        s += left * inner;
                     }
                 }
             }
-        }
-    }
-    2.0 * std::f64::consts::PI.powf(2.5) / (p * q * (p + q).sqrt()) * v
-}
-
-/// `(ij|kl)` over contracted functions.
-fn contracted_eri(functions: &[Function], (i, j): (usize, usize), (k, l): (usize, usize)) -> f64 {
-    let (fi, fj, fk, fl) = (&functions[i], &functions[j], &functions[k], &functions[l]);
-    let mut v = 0.0;
-    for a in 0..fi.exponents.len() {
-        for b in 0..fj.exponents.len() {
-            let cab = fi.coefficients[a] * fj.coefficients[b];
-            for c in 0..fk.exponents.len() {
-                for d in 0..fl.exponents.len() {
-                    v += cab
-                        * fk.coefficients[c]
-                        * fl.coefficients[d]
-                        * eri_primitive(
-                            fi.exponents[a],
-                            fi.powers,
-                            fi.center,
-                            fj.exponents[b],
-                            fj.powers,
-                            fj.center,
-                            fk.exponents[c],
-                            fk.powers,
-                            fk.center,
-                            fl.exponents[d],
-                            fl.powers,
-                            fl.center,
-                        );
-                }
-            }
+            v += x.coef * y.coef * 2.0 * std::f64::consts::PI.powf(2.5) / (p * q * (p + q).sqrt())
+                * s;
         }
     }
     v
@@ -544,6 +594,10 @@ pub struct AoIntegrals {
     atoms: Vec<usize>,
     /// Angular momentum of every basis function.
     angular: Vec<u32>,
+    /// The basis and the nuclei the integrals belong to.
+    basis: Basis,
+    charges: Vec<u32>,
+    positions: Vec<[f64; 3]>,
 }
 
 impl AoIntegrals {
@@ -575,72 +629,48 @@ impl AoIntegrals {
                 format!("{n} basis functions exceed the maximum {MAX_BASIS_FUNCTIONS}"),
             ));
         }
-        let one = |op: &dyn Fn(&Function, usize, &Function, usize) -> f64| -> Vec<f64> {
-            let mut m = vec![0.0; n * n];
-            for i in 0..n {
-                for j in 0..=i {
-                    let (fi, fj) = (&functions[i], &functions[j]);
-                    let mut v = 0.0;
-                    for a in 0..fi.exponents.len() {
-                        for b in 0..fj.exponents.len() {
-                            v += fi.coefficients[a] * fj.coefficients[b] * op(fi, a, fj, b);
-                        }
-                    }
-                    m[i * n + j] = v;
-                    m[j * n + i] = v;
+        // Primitive products of every pair i ≥ j, in the order of the
+        // quartets below.
+        let pairs: Vec<(usize, usize)> =
+            (0..n).flat_map(|i| (0..=i).map(move |j| (i, j))).collect();
+        let pair_data: Vec<Pair> = pairs
+            .iter()
+            .map(|&(i, j)| Pair::new(&functions[i], &functions[j]))
+            .collect();
+        let mut overlap = vec![0.0; n * n];
+        let mut kinetic = vec![0.0; n * n];
+        let mut nuclear = vec![0.0; n * n];
+        for (x, &(i, j)) in pairs.iter().enumerate() {
+            let (fi, fj) = (&functions[i], &functions[j]);
+            let mut sv = 0.0;
+            let mut tv = 0.0;
+            for a in 0..fi.exponents.len() {
+                for b in 0..fj.exponents.len() {
+                    let c = fi.coefficients[a] * fj.coefficients[b];
+                    let (ea, eb) = (fi.exponents[a], fj.exponents[b]);
+                    sv += c * overlap_primitive(ea, fi.powers, fi.center, eb, fj.powers, fj.center);
+                    tv += c * kinetic_primitive(ea, fi.powers, fi.center, eb, fj.powers, fj.center);
                 }
             }
-            m
-        };
-        let overlap = one(&|fi, a, fj, b| {
-            overlap_primitive(
-                fi.exponents[a],
-                fi.powers,
-                fi.center,
-                fj.exponents[b],
-                fj.powers,
-                fj.center,
-            )
-        });
-        let kinetic = one(&|fi, a, fj, b| {
-            kinetic_primitive(
-                fi.exponents[a],
-                fi.powers,
-                fi.center,
-                fj.exponents[b],
-                fj.powers,
-                fj.center,
-            )
-        });
-        let nuclear = one(&|fi, a, fj, b| {
-            molecule
+            let vv: f64 = molecule
                 .charges
                 .iter()
                 .zip(&molecule.positions)
-                .map(|(&z, &c)| {
-                    -(z as f64)
-                        * nuclear_primitive(
-                            fi.exponents[a],
-                            fi.powers,
-                            fi.center,
-                            fj.exponents[b],
-                            fj.powers,
-                            fj.center,
-                            c,
-                        )
-                })
-                .sum()
-        });
+                .map(|(&z, &c)| -(z as f64) * nuclear_pair(&pair_data[x], c))
+                .sum();
+            for (m, v) in [(&mut overlap, sv), (&mut kinetic, tv), (&mut nuclear, vv)] {
+                m[i * n + j] = v;
+                m[j * n + i] = v;
+            }
+        }
         // Unique quartets i ≥ j, k ≥ l, ij ≥ kl, in parallel.
-        let pairs: Vec<(usize, usize)> =
-            (0..n).flat_map(|i| (0..=i).map(move |j| (i, j))).collect();
         let quartets: Vec<(usize, usize)> = (0..pairs.len())
             .flat_map(|x| (0..=x).map(move |y| (x, y)))
             .collect();
         let chunk = 64;
         let values: Vec<f64> = parallel::map_tasks(quartets.len().div_ceil(chunk), |c| {
             (c * chunk..((c + 1) * chunk).min(quartets.len()))
-                .map(|k| contracted_eri(&functions, pairs[quartets[k].0], pairs[quartets[k].1]))
+                .map(|k| eri_pairs(&pair_data[quartets[k].0], &pair_data[quartets[k].1]))
                 .collect::<Vec<f64>>()
         })
         .into_iter()
@@ -670,7 +700,26 @@ impl AoIntegrals {
             eri,
             atoms,
             angular,
+            basis,
+            charges: molecule.charges.clone(),
+            positions: molecule.positions.clone(),
         })
+    }
+
+    /// The basis set.
+    pub fn basis(&self) -> Basis {
+        self.basis
+    }
+
+    /// Atomic numbers of the nuclei.
+    pub fn charges(&self) -> &[u32] {
+        &self.charges
+    }
+
+    /// Whether these are the integrals of `molecule` (same nuclei at the
+    /// same positions).
+    pub fn belongs_to(&self, molecule: &Molecule) -> bool {
+        self.charges == molecule.charges && self.positions == molecule.positions
     }
 
     pub fn n_functions(&self) -> usize {

@@ -1433,6 +1433,10 @@ def hartree_fock(
     energy_tolerance: float = 1e-10,
     gradient_tolerance: float = 1e-8,
     diis_space: int = 8,
+    linear_dependence: float = 1e-8,
+    level_shift: float = 0.0,
+    guess: Literal["atoms", "core"] = "atoms",
+    integrals: Optional[AoIntegrals] = None,
 ) -> HartreeFock: ...
 
 def uccsd(

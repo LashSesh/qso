@@ -3,14 +3,23 @@
 //! [`rhf`] and [`uhf`] solve the restricted (closed-shell) and unrestricted
 //! Roothaan–Hall equations `F C = S C ε` on [`AoIntegrals`]. The basis is
 //! orthogonalised canonically (`X = U s^{−1/2}`, dropping overlap
-//! eigenvalues below [`ScfOptions::linear_dependence`]); the iterations
-//! start from the core Hamiltonian (its orbitals filled with the average
-//! occupation `½(n_α + n_β)` for both spins) and are accelerated by Pulay's DIIS on
-//! the commutator `F D S − S D F` (Pulay, J. Comput. Chem. 3, 556 (1982)).
-//! The calculation converges when the energy changes by less than
-//! [`ScfOptions::energy_tolerance`] and the largest commutator entry is
-//! below [`ScfOptions::gradient_tolerance`]; a calculation that does not
-//! converge is an error.
+//! eigenvalues below [`ScfOptions::linear_dependence`]). The iterations
+//! start from a superposition of atomic densities ([`Guess::Atoms`]: each
+//! atom's spherically averaged Hartree–Fock density in the same basis, as
+//! PySCF's `atom` guess) and are accelerated by Pulay's DIIS on the
+//! commutator `F D S − S D F` (Pulay, J. Comput. Chem. 3, 556 (1982)).
+//! The calculation converges when the
+//! energy changes by less than [`ScfOptions::energy_tolerance`] and the
+//! largest entry of the orbital gradient `F_ia` (occupied `i`, virtual
+//! `a`) is below [`ScfOptions::gradient_tolerance`]; a
+//! calculation that does not converge is an error. If DIIS does not
+//! converge, a second run without DIIS and with a level shift of 0.5 Ha
+//! ([`ScfOptions::level_shift`]) follows.
+//!
+//! Like every Hartree–Fock code, the iterations find a stationary point
+//! near the guess, which need not be the lowest one. The core-Hamiltonian
+//! guess ([`Guess::Core`]) lands above the ground state for N₂ in STO-3G
+//! by 0.73 Ha; the atomic guess finds PySCF's solutions in the tests.
 //!
 //! [`ScfResult::molecular_integrals`] transforms the integrals to the
 //! restricted orbitals, optionally freezing core orbitals and keeping an
@@ -42,12 +51,33 @@ pub struct ScfOptions {
     pub max_iterations: usize,
     /// Largest change of the energy (hartree) at convergence.
     pub energy_tolerance: f64,
-    /// Largest entry of the orbital gradient `X^T (F D S − S D F) X`.
+    /// Largest entry of the orbital gradient `F_ia` (occupied `i`,
+    /// virtual `a`, in the orbitals of the density).
     pub gradient_tolerance: f64,
     /// Number of Fock matrices DIIS extrapolates over (0 switches it off).
     pub diis_space: usize,
     /// Overlap eigenvalues below this are dropped as linearly dependent.
     pub linear_dependence: f64,
+    /// Starting density.
+    #[serde(default)]
+    pub guess: Guess,
+    /// Level shift (hartree) added to the virtual orbitals while the
+    /// orbital gradient is above 10⁻³; it damps oscillations without
+    /// changing the converged solution. 0 switches it off.
+    #[serde(default)]
+    pub level_shift: f64,
+}
+
+/// Starting density of [`rhf`] and [`uhf`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Guess {
+    /// Superposition of spherically averaged atomic Hartree–Fock densities.
+    #[default]
+    Atoms,
+    /// Orbitals of the core Hamiltonian, both spins filled with the average
+    /// occupation `½(n_α + n_β)`.
+    Core,
 }
 
 impl Default for ScfOptions {
@@ -58,6 +88,8 @@ impl Default for ScfOptions {
             gradient_tolerance: 1e-8,
             diis_space: 8,
             linear_dependence: 1e-8,
+            guess: Guess::Atoms,
+            level_shift: 0.0,
         }
     }
 }
@@ -75,6 +107,12 @@ impl ScfOptions {
             if !(v.is_finite() && v > 0.0) {
                 return Err(QsoError::invalid(name, "must be positive and finite"));
             }
+        }
+        if !(self.level_shift.is_finite() && self.level_shift >= 0.0) {
+            return Err(QsoError::invalid(
+                "level_shift",
+                "must be non-negative and finite",
+            ));
         }
         Ok(())
     }
@@ -98,6 +136,16 @@ pub struct ScfResult {
     pub iterations: usize,
     /// Overlap matrix of the basis.
     overlap: RMatrix,
+    /// The nuclei and basis of the integrals used.
+    source: AoIntegralsId,
+}
+
+/// What identifies the integrals of a calculation.
+#[derive(Clone, Debug, PartialEq)]
+struct AoIntegralsId {
+    basis: super::integrals::Basis,
+    n_functions: usize,
+    molecule: Molecule,
 }
 
 impl ScfResult {
@@ -136,7 +184,16 @@ impl ScfResult {
         if !self.is_restricted() {
             return Err(QsoError::invalid(
                 "scf",
-                "molecular integrals need restricted orbitals (use rhf)",
+                "molecular integrals need restricted (closed-shell) orbitals; open shells are not supported",
+            ));
+        }
+        if !(ints.basis() == self.source.basis
+            && ints.n_functions() == self.source.n_functions
+            && ints.belongs_to(&self.source.molecule))
+        {
+            return Err(QsoError::invalid(
+                "ints",
+                "the integrals are not those of this Hartree–Fock calculation",
             ));
         }
         let c = &self.coefficients[0];
@@ -152,12 +209,29 @@ impl ScfResult {
             ));
         }
         let active = active.unwrap_or(m_all - frozen);
-        if active == 0 || frozen + active > m_all || frozen + active < self.n_alpha {
+        if active == 0 || frozen + active > m_all {
             return Err(QsoError::invalid(
                 "active",
                 format!(
-                    "{active} active orbitals after {frozen} frozen must hold the {} occupied ones within {m_all}",
+                    "{active} active orbitals after {frozen} frozen exceed the {m_all} orbitals"
+                ),
+            ));
+        }
+        if frozen + active < self.n_alpha {
+            return Err(QsoError::invalid(
+                "active",
+                format!(
+                    "{active} active orbitals after {frozen} frozen cannot hold the {} occupied ones",
                     self.n_alpha
+                ),
+            ));
+        }
+        if active > super::molecule::MAX_ORBITALS {
+            return Err(QsoError::invalid(
+                "active",
+                format!(
+                    "an active space of {active} orbitals exceeds the maximum {} (choose `active`)",
+                    super::molecule::MAX_ORBITALS
                 ),
             ));
         }
@@ -236,6 +310,12 @@ fn transform_eri(ints: &AoIntegrals, c: &RMatrix) -> Vec<f64> {
 }
 
 fn validate_inputs(molecule: &Molecule, ints: &AoIntegrals) -> Result<()> {
+    if !ints.belongs_to(molecule) {
+        return Err(QsoError::invalid(
+            "ints",
+            "the integrals belong to another molecule or geometry",
+        ));
+    }
     let n = ints.n_functions();
     let (na, nb) = molecule.n_alpha_beta();
     if na > n || nb > n {
@@ -381,8 +461,8 @@ impl Diis {
     }
 }
 
-/// Orbital gradient `X^T (F D S − S D F) X`, flattened.
-fn gradient(f: &RMatrix, d: &RMatrix, s: &RMatrix, x: &RMatrix) -> Vec<f64> {
+/// `X^T (F D S − S D F) X`, flattened.
+fn commutator(f: &RMatrix, d: &RMatrix, s: &RMatrix, x: &RMatrix) -> Vec<f64> {
     let fds = f * d * s;
     let e = &fds - fds.transpose();
     (x.transpose() * e * x).iter().copied().collect()
@@ -396,17 +476,41 @@ pub fn rhf(molecule: &Molecule, ints: &AoIntegrals, options: &ScfOptions) -> Res
     if na != nb {
         return Err(QsoError::invalid(
             "multiplicity",
-            "restricted Hartree–Fock needs a closed shell (use uhf)",
+            "restricted Hartree–Fock needs a closed shell; use unrestricted Hartree–Fock",
         ));
     }
-    scf(molecule, ints, options, true)
+    with_fallback(molecule, ints, options, true)
 }
 
 /// Unrestricted Hartree–Fock: separate α and β orbitals.
 pub fn uhf(molecule: &Molecule, ints: &AoIntegrals, options: &ScfOptions) -> Result<ScfResult> {
     options.validate()?;
     validate_inputs(molecule, ints)?;
-    scf(molecule, ints, options, false)
+    with_fallback(molecule, ints, options, false)
+}
+
+/// The SCF with `options`; if DIIS does not converge, once more without
+/// DIIS and with a level shift of 0.5 Ha (slower, but it settles
+/// oscillating cases such as CN in STO-3G).
+fn with_fallback(
+    molecule: &Molecule,
+    ints: &AoIntegrals,
+    options: &ScfOptions,
+    restricted: bool,
+) -> Result<ScfResult> {
+    match scf(molecule, ints, options, restricted) {
+        Err(e @ QsoError::NoConvergence { .. })
+            if options.diis_space > 0 && options.level_shift == 0.0 =>
+        {
+            let shifted = ScfOptions {
+                diis_space: 0,
+                level_shift: 0.5,
+                ..options.clone()
+            };
+            scf(molecule, ints, &shifted, restricted).map_err(|_| e)
+        }
+        other => other,
+    }
 }
 
 fn scf(
@@ -432,66 +536,71 @@ fn scf(
     let e_nuc = molecule.nuclear_repulsion();
     let spins = if restricted { 1 } else { 2 };
     let occupied = [na, nb];
-    let (e0, c0) = diagonalise(&h, &x);
-    let mut orbitals = vec![(e0, c0); spins];
+    // Both spins start from half the guessed total density.
+    let start = match options.guess {
+        Guess::Atoms => atomic_guess(ints)? * 0.5,
+        Guess::Core => {
+            let (_, c) = diagonalise(&h, &x);
+            RMatrix::from_fn(n, c.ncols(), |r, k| {
+                let occ = ((k < na) as u8 + (k < nb) as u8) as f64 / 2.0;
+                c[(r, k)] * occ
+            }) * c.transpose()
+        }
+    };
+    let mut orbitals: Vec<(Vec<f64>, RMatrix)> = Vec::new();
     let mut diis = Diis::new(options.diis_space);
     let mut previous = f64::INFINITY;
     let mut last_residual = f64::INFINITY;
     for iteration in 1..=options.max_iterations {
-        // Densities per spin. The first iteration gives both spins the
-        // core orbitals with the average occupation ½(n_α + n_β) (as
-        // PySCF does): starting from the aufbau occupation per spin can
-        // trap UHF in an excited state (OH in 6-31G does).
         let d: Vec<RMatrix> = if iteration == 1 {
-            let c = &orbitals[0].1;
-            let average = RMatrix::from_fn(n, c.ncols(), |r, k| {
-                let occ = ((k < na) as u8 + (k < nb) as u8) as f64 / 2.0;
-                c[(r, k)] * occ
-            }) * c.transpose();
-            vec![average.clone(), average]
+            vec![start.clone(), start.clone()]
         } else {
             (0..2)
                 .map(|sp| density(&orbitals[sp.min(spins - 1)].1, occupied[sp]))
                 .collect()
         };
-        let total = &d[0] + &d[1];
-        let (j, k0) = coulomb_exchange(ints, &d[0]);
-        let ks: Vec<RMatrix> = if restricted {
-            vec![k0]
-        } else {
-            vec![k0, coulomb_exchange(ints, &d[1]).1]
-        };
-        let j = if restricted {
-            j * 2.0
-        } else {
-            j + coulomb_exchange(ints, &d[1]).0
-        };
-        let focks: Vec<RMatrix> = ks.iter().map(|k| &h + &j - k).collect();
+        let focks = fock_matrices(ints, &h, &d, restricted);
         // E = ½ Σ_σ Tr[D_σ (H + F_σ)].
         let mut energy = e_nuc;
         for sp in 0..2 {
             let f = &focks[sp.min(spins - 1)];
             energy += 0.5 * (d[sp].component_mul(&(&h + f))).sum();
         }
-        let mut error = Vec::new();
-        for sp in 0..spins {
-            let dsp = if restricted {
-                &total * 0.5
-            } else {
-                d[sp].clone()
-            };
-            error.extend(gradient(&focks[sp], &dsp, &s, &x));
-        }
-        let residual = error.iter().fold(0.0f64, |m, v| m.max(v.abs()));
-        last_residual = residual;
         if !energy.is_finite() {
             break;
         }
+        if iteration == 1 {
+            // The guess is no determinant: no gradient, no DIIS.
+            orbitals = focks.iter().map(|f| diagonalise(f, &x)).collect();
+            previous = energy;
+            continue;
+        }
+        // Convergence: the orbital gradient F_ia in the orbitals of the
+        // density. DIIS: the commutator F D S − S D F in the atomic-orbital
+        // basis, which stays the same from one iteration to the next.
+        let mut gradient = Vec::new();
+        let mut error = Vec::new();
+        for sp in 0..spins {
+            let c = &orbitals[sp].1;
+            let occ = occupied[sp];
+            let fmo = c.transpose() * &focks[sp] * c;
+            for i in 0..occ {
+                for a in occ..c.ncols() {
+                    gradient.push(fmo[(i, a)]);
+                }
+            }
+            let fds = &focks[sp] * &d[sp] * &s;
+            error.extend((&fds - fds.transpose()).iter().copied());
+        }
+        let residual = gradient.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+        last_residual = residual;
         if (energy - previous).abs() < options.energy_tolerance
             && residual < options.gradient_tolerance
         {
-            let orbital_energies = orbitals.iter().map(|o| o.0.clone()).collect();
-            let coefficients = orbitals.into_iter().map(|o| o.1).collect();
+            // Orbitals and energies of the converged Fock matrix itself.
+            let last: Vec<(Vec<f64>, RMatrix)> = focks.iter().map(|f| diagonalise(f, &x)).collect();
+            let orbital_energies = last.iter().map(|o| o.0.clone()).collect();
+            let coefficients = last.into_iter().map(|o| o.1).collect();
             return Ok(ScfResult {
                 energy,
                 nuclear_repulsion: e_nuc,
@@ -501,10 +610,22 @@ fn scf(
                 n_beta: nb,
                 iterations: iteration,
                 overlap: s,
+                source: AoIntegralsId {
+                    basis: ints.basis(),
+                    n_functions: n,
+                    molecule: molecule.clone(),
+                },
             });
         }
         previous = energy;
-        let extrapolated = diis.extrapolate(focks, error);
+        let mut extrapolated = diis.extrapolate(focks, error);
+        if options.level_shift > 0.0 && residual > 1e-3 {
+            // F + σ (S − S D S) raises the virtual orbitals by σ.
+            for (sp, f) in extrapolated.iter_mut().enumerate() {
+                let sds = &s * &d[sp] * &s;
+                *f += (&s - sds) * options.level_shift;
+            }
+        }
         orbitals = extrapolated.iter().map(|f| diagonalise(f, &x)).collect();
     }
     Err(QsoError::NoConvergence {
@@ -512,6 +633,103 @@ fn scf(
         iterations: options.max_iterations,
         residual: last_residual,
     })
+}
+
+/// Fock matrices `H + J(D_α + D_β) − K(D_σ)`: one for restricted
+/// densities (equal spins), `[α, β]` otherwise.
+fn fock_matrices(ints: &AoIntegrals, h: &RMatrix, d: &[RMatrix], restricted: bool) -> Vec<RMatrix> {
+    if restricted {
+        let (j, k) = coulomb_exchange(ints, &d[0]);
+        vec![h + j * 2.0 - k]
+    } else {
+        let (ja, ka) = coulomb_exchange(ints, &d[0]);
+        let (jb, kb) = coulomb_exchange(ints, &d[1]);
+        let j = ja + jb;
+        vec![h + &j - ka, h + j - kb]
+    }
+}
+
+/// Superposition of atomic densities: each atom's spherically averaged
+/// restricted Hartree–Fock density (fractional occupations shared equally
+/// over degenerate orbitals), in the blocks of its basis functions.
+fn atomic_guess(ints: &AoIntegrals) -> Result<RMatrix> {
+    let n = ints.n_functions();
+    let atoms = ints.atoms();
+    let charges = ints.charges();
+    let mut d = RMatrix::zeros(n, n);
+    let mut cache: Vec<Option<RMatrix>> = vec![None; 11];
+    let mut start = 0;
+    while start < n {
+        let atom = atoms[start];
+        let mut end = start;
+        while end < n && atoms[end] == atom {
+            end += 1;
+        }
+        let z = charges[atom] as usize;
+        if cache[z].is_none() {
+            cache[z] = Some(atomic_density(z as u32, ints.basis())?);
+        }
+        let block = cache[z].as_ref().expect("cached");
+        debug_assert_eq!(block.nrows(), end - start);
+        d.view_mut((start, start), (end - start, end - start))
+            .copy_from(block);
+        start = end;
+    }
+    Ok(d)
+}
+
+/// Total density of an atom with spherically averaged occupations.
+fn atomic_density(z: u32, basis: super::integrals::Basis) -> Result<RMatrix> {
+    let multiplicity = if z % 2 == 1 { 2 } else { 1 };
+    let atom = Molecule::new(vec![z], vec![[0.0; 3]], 0, multiplicity)?;
+    let ints = AoIntegrals::compute(&atom, basis)?;
+    let n = ints.n_functions();
+    let s = RMatrix::from_fn(n, n, |i, j| ints.overlap(i, j));
+    let h = RMatrix::from_fn(n, n, |i, j| ints.core(i, j));
+    let x = orthogonaliser(&s, 1e-8)?;
+    let (mut eps, mut c) = diagonalise(&h, &x);
+    let mut diis = Diis::new(8);
+    let mut d = RMatrix::zeros(n, n);
+    let mut previous = f64::INFINITY;
+    for _ in 0..100 {
+        let occ = fractional_occupations(&eps, z as f64);
+        d = RMatrix::from_fn(n, c.ncols(), |r, k| c[(r, k)] * occ[k]) * c.transpose();
+        let half = &d * 0.5;
+        let (j, k) = coulomb_exchange(&ints, &half);
+        let f = &h + j * 2.0 - k;
+        let energy = 0.5 * (half.component_mul(&(&h + &f))).sum() * 2.0;
+        let error = commutator(&f, &half, &s, &x);
+        let residual = error.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+        if (energy - previous).abs() < 1e-10 && residual < 1e-6 {
+            break;
+        }
+        previous = energy;
+        let f = diis.extrapolate(vec![f], error).remove(0);
+        (eps, c) = diagonalise(&f, &x);
+    }
+    Ok(d)
+}
+
+/// Occupations (0 to 2) of orbitals with energies `eps` (ascending) for
+/// `electrons`, shared equally within groups of degenerate orbitals.
+fn fractional_occupations(eps: &[f64], electrons: f64) -> Vec<f64> {
+    let mut occ = vec![0.0; eps.len()];
+    let mut left = electrons;
+    let mut k = 0;
+    while k < eps.len() && left > 0.0 {
+        let mut end = k + 1;
+        while end < eps.len() && (eps[end] - eps[k]).abs() < 1e-6 * eps[k].abs().max(1.0) {
+            end += 1;
+        }
+        let size = (end - k) as f64;
+        let put = left.min(2.0 * size);
+        for o in &mut occ[k..end] {
+            *o = put / size;
+        }
+        left -= put;
+        k = end;
+    }
+    occ
 }
 
 #[cfg(test)]

@@ -126,8 +126,8 @@ or by the benchmark report you can run yourself.
 | Zero-noise extrapolation (Richardson, scales 1, 3, 5), depolarised 3-qubit circuit | error ÷ 380 | — |
 | Classical shadows, single-snapshot variance of a weight-k Pauli string | 3ᵏ − ⟨P⟩² | Huang, Kueng & Preskill 2020 |
 | Full CI of H₂ / LiH / BeH₂ (STO-3G), identical under Jordan–Wigner, parity, Bravyi–Kitaev and the reduced parity encoding | −1.1373060 / −7.8824019 / −15.5951824 Ha | PySCF full CI, to 10⁻⁸ Ha |
-| Hartree–Fock of H₂O from its geometry (6-31G), and full CI with a frozen core in 8 orbitals | −75.98397447 / −76.02472563 Ha | PySCF RHF and CASCI, to 10⁻⁹ / 10⁻⁸ Ha |
-| Unrestricted Hartree–Fock of OH (6-31G) | −75.36316825 Ha, ⟨S²⟩ = 0.75377 | PySCF UHF, to 10⁻⁹ Ha |
+| Hartree–Fock of H₂O from its geometry (6-31G), and full CI with a frozen core in 8 orbitals | −75.98397447 / −76.02472563 Ha | PySCF RHF and CASCI, to 10⁻¹⁰ / 10⁻⁹ Ha |
+| Unrestricted Hartree–Fock of OH (6-31G) | −75.36316825 Ha, ⟨S²⟩ = 0.75377 | PySCF UHF, to 10⁻¹⁰ Ha |
 | LiH on 10 qubits: UCCSD (92 parameters) / ADAPT-VQE (30 operators), error vs. full CI | 1.1·10⁻⁵ / 1.1·10⁻⁵ Ha | chemical accuracy 1.6·10⁻³ Ha |
 | VQD, all four levels of H₂ (Sz = 0) | equal to full CI to 10⁻⁶ Ha | PySCF full CI |
 | Trotter–Suzuki on a 4-qubit Heisenberg chain: error ratio when the steps double, orders 1 / 2 / 4 | 2.01 / 4.00 / 16.06, always below the error bound | 2, 4, 16 |
@@ -460,7 +460,7 @@ Know its boundaries:
 | Automorphism groups, canonical labelling | intended for up to a few thousand nodes | Exact search, worst-case exponential like every known algorithm |
 | OpenQASM | version 2.0 and an OpenQASM 3 subset | OpenQASM 3's classical variables and arithmetic, loops, subroutines, calibrations and timing are rejected with an error naming the feature. Exact distributions follow up to 4096 measurement branches; beyond that, sampling simulates shot by shot |
 | WebAssembly | 26 qubits; graphs and walks up to 2048 nodes | 4 GiB address space; single-threaded |
-| Full CI | 2¹⁸ determinants (dense up to 4096) | Determinant-space diagonalisation; molecules up to 32 spatial orbitals can be mapped to qubits |
+| Full CI | 2¹⁸ determinants, 32 roots (dense up to 1024) | Davidson on `H c` without the matrix above 1024 determinants; molecules up to 32 spatial orbitals can be mapped to qubits |
 | Product-formula bound, order ≥ 4 | rigorous but loose | Falls only as `r⁻²` with the steps until they are short; the actual error falls as `r⁻⁴` |
 
 Not included: GPU acceleration, tensor-network simulation, simulation of noisy Clifford circuits at scale (planned for 1.8),

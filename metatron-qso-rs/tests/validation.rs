@@ -1117,7 +1117,8 @@ fn hong_ou_mandel_dip_follows_the_photon_overlap() {
 fn hartree_fock_from_geometry_matches_pyscf() {
     use metatron_qso::chemistry::{AoIntegrals, Basis, Molecule, ScfOptions, rhf, uhf};
     // Water in 6-31G: RHF and full CI with the oxygen 1s frozen in 8
-    // orbitals (PySCF 2.14: scf.RHF, mcscf.CASCI(mf, 8, 8)).
+    // orbitals (PySCF 2.14 on the same geometry in bohr: scf.RHF,
+    // mcscf.CASCI(mf, 8, 8)).
     let water = Molecule::from_atoms(
         "O 0 0 0.1173; H 0 0.7572 -0.4692; H 0 -0.7572 -0.4692",
         0,
@@ -1126,15 +1127,15 @@ fn hartree_fock_from_geometry_matches_pyscf() {
     .unwrap();
     let ints = AoIntegrals::compute(&water, Basis::SixThirtyOneG).unwrap();
     let hf = rhf(&water, &ints, &ScfOptions::default()).unwrap();
-    assert!(close(hf.energy, -75.983974472722, 1e-9), "{}", hf.energy);
+    assert!(close(hf.energy, -75.98397447272153, 1e-10), "{}", hf.energy);
     let mo = hf.molecular_integrals(&ints, 1, Some(8)).unwrap();
     let cas = mo.fci_energies(1).unwrap()[0];
-    assert!(close(cas, -76.02472563260908, 1e-8), "{cas}");
+    assert!(close(cas, -76.02472563261222, 1e-9), "{cas}");
     // OH radical, unrestricted (scf.UHF): energy and spin contamination.
     let oh = Molecule::from_atoms("O 0 0 0; H 0 0 0.97", 0, 2).unwrap();
     let ints = AoIntegrals::compute(&oh, Basis::SixThirtyOneG).unwrap();
     let u = uhf(&oh, &ints, &ScfOptions::default()).unwrap();
-    assert!(close(u.energy, -75.36316824957647, 1e-9), "{}", u.energy);
+    assert!(close(u.energy, -75.36316824957633, 1e-10), "{}", u.energy);
     assert!(close(u.s_squared(), 0.7537742361406874, 1e-7));
     // The bundled LiH FCIDUMP, reproduced from the geometry.
     let lih = Molecule::from_atoms("Li 0 0 0; H 0 0 1.595", 0, 1).unwrap();

@@ -324,12 +324,17 @@ enum Command {
         /// Unrestricted Hartree–Fock (open shells).
         #[arg(long)]
         unrestricted: bool,
-        /// Doubly occupied orbitals folded into the core energy.
+        /// Doubly occupied orbitals folded into the core energy (with
+        /// --fci or --fcidump).
         #[arg(long, default_value_t = 0)]
         frozen: usize,
-        /// Orbitals kept after the frozen ones (default: all).
+        /// Orbitals kept after the frozen ones (default: all; with --fci or
+        /// --fcidump).
         #[arg(long)]
         active: Option<usize>,
+        /// Most self-consistent-field iterations.
+        #[arg(long, default_value_t = 200)]
+        max_iterations: usize,
         /// Full CI in the frozen-core active space.
         #[arg(long)]
         fci: bool,
@@ -1101,10 +1106,29 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             active,
             fci,
             fcidump,
+            max_iterations,
         } => {
+            if (*frozen > 0 || active.is_some()) && !*fci && fcidump.is_none() {
+                return Err(QsoError::invalid(
+                    "frozen",
+                    "--frozen and --active choose the space of --fci or --fcidump",
+                ));
+            }
             let mol = Molecule::from_atoms(atoms, *charge, *multiplicity)?;
+            if !*unrestricted {
+                let (na, nb) = mol.n_alpha_beta();
+                if na != nb {
+                    return Err(QsoError::invalid(
+                        "multiplicity",
+                        "an open shell needs --unrestricted",
+                    ));
+                }
+            }
             let ints = AoIntegrals::compute(&mol, Basis::from_name(basis)?)?;
-            let options = ScfOptions::default();
+            let options = ScfOptions {
+                max_iterations: *max_iterations,
+                ..ScfOptions::default()
+            };
             let hf = if *unrestricted {
                 uhf(&mol, &ints, &options)?
             } else {

@@ -12,18 +12,19 @@ const NH3: &str =
 #[test]
 fn integrals_match_pyscf() {
     // (atoms, basis, functions, fingerprints of S, T, V, (ij|kl), E_nuc)
-    // from PySCF 2.14 (`lib.fp(mol.intor(...))`).
+    // from PySCF 2.14 (`lib.fp(mol.intor(...))`, `cart=True`), with the
+    // geometry given in bohr (PySCF converts ångström with an older bohr).
     let cases: [(&str, Basis, usize, [f64; 5]); 5] = [
         (
             "H 0 0 0; H 0 0 0.735",
             Basis::Sto3g,
             2,
             [
-                0.09234067410414859,
-                0.03739762049204164,
-                -0.1684902171692054,
-                0.45470410260456423,
-                0.7199689944489797,
+                0.09234067410222924,
+                0.03739762049027994,
+                -0.1684902171638355,
+                0.4547041025986293,
+                0.7199689944258503,
             ],
         ),
         (
@@ -31,11 +32,11 @@ fn integrals_match_pyscf() {
             Basis::SixThirtyOneG,
             11,
             [
-                2.9947009462958385,
-                4.139410865923662,
-                -10.821682067184087,
-                7.06985317952099,
-                0.995317638094044,
+                2.994700946305486,
+                4.139410865927713,
+                -10.821682067201497,
+                7.069853179571066,
+                0.9953176380620689,
             ],
         ),
         (
@@ -43,11 +44,11 @@ fn integrals_match_pyscf() {
             Basis::Sto3g,
             7,
             [
-                1.359801838607179,
-                29.183974516271313,
-                -75.67223177200626,
-                3.0232344196352945,
-                9.189533762934902,
+                1.3598018385799495,
+                29.183974516206543,
+                -75.67223177172457,
+                3.0232344197428724,
+                9.189533762639684,
             ],
         ),
         (
@@ -55,11 +56,11 @@ fn integrals_match_pyscf() {
             Basis::SixThirtyOneG,
             13,
             [
-                0.22447320187304448,
-                29.58702464157765,
-                -72.81683514962818,
-                4.42449471658025,
-                9.189533762934902,
+                0.22447320186859715,
+                29.587024641562255,
+                -72.81683514962143,
+                4.424494716586154,
+                9.189533762639684,
             ],
         ),
         (
@@ -67,11 +68,11 @@ fn integrals_match_pyscf() {
             Basis::SixThirtyOneG,
             15,
             [
-                2.5244055798559435,
-                24.1957724289502,
-                -51.72862267693713,
-                -3.3859404095776315,
-                11.884381477669324,
+                2.5244055798721896,
+                24.19577242899616,
+                -51.728622677280256,
+                -3.385940409187806,
+                11.884381477287532,
             ],
         ),
     ];
@@ -79,6 +80,7 @@ fn integrals_match_pyscf() {
         let mol = Molecule::from_atoms(atoms, 0, 1).unwrap();
         let ints = AoIntegrals::compute(&mol, basis).unwrap();
         assert_eq!(ints.n_functions(), n, "{atoms}");
+        assert!(ints.belongs_to(&mol) && ints.basis() == basis);
         let got = [
             fingerprint(ints.overlap.iter().copied()),
             fingerprint(ints.kinetic.iter().copied()),
@@ -87,9 +89,8 @@ fn integrals_match_pyscf() {
             mol.nuclear_repulsion(),
         ];
         for (g, w) in got.iter().zip(&want) {
-            // PySCF's integrals carry errors up to ~3·10⁻¹¹ (see below).
             assert!(
-                (g - w).abs() < 1e-9 * w.abs().max(1.0),
+                (g - w).abs() < 1e-12 * w.abs().max(1.0),
                 "{atoms} {basis:?}: {g} vs {w}"
             );
         }
@@ -97,9 +98,8 @@ fn integrals_match_pyscf() {
             assert!((ints.overlap(i, i) - 1.0).abs() < 1e-12);
         }
     }
-    // The largest difference to PySCF in NH₃/6-31G, (N 2s, H₂ 1s | N 1s, N 1s):
-    // PySCF gives 0.32076593842573, a 40-digit evaluation of the closed form
-    // for s functions gives 0.320765938400474269.
+    // An integral of s functions against a 40-digit evaluation of its
+    // closed form: (N 2s, H₂ 1s | N 1s, N 1s) in NH₃/6-31G.
     let mol = Molecule::from_atoms(NH3, 0, 1).unwrap();
     let ints = AoIntegrals::compute(&mol, Basis::SixThirtyOneG).unwrap();
     assert!((ints.eri(1, 11, 0, 0) - 0.320_765_938_400_474_3).abs() < 1e-15);
@@ -109,7 +109,8 @@ fn integrals_match_pyscf() {
 fn boys_function_matches_its_series_and_asymptotics() {
     // F_0(T) = ½ √(π/T) erf(√T); erf from its series, F_n by quadrature.
     for &t in &[0.0, 1e-9, 0.3, 2.0, 11.5, 35.0, 59.9, 60.1, 120.0] {
-        let f = boys(8, t);
+        let mut f = [0.0; 9];
+        boys(&mut f, t);
         for (n, &value) in f.iter().enumerate() {
             // Simpson quadrature of ∫₀¹ x^{2n} e^{−T x²} dx.
             let m = 20_000;
@@ -131,10 +132,10 @@ fn boys_function_matches_its_series_and_asymptotics() {
 #[test]
 fn molecules_are_parsed_and_checked() {
     let h2o = Molecule::from_atoms("o 0 0 0\nH 0 0.757 0.587; h 0 -0.757 0.587", 0, 1).unwrap();
-    assert_eq!(h2o.charges, vec![8, 1, 1]);
+    assert_eq!(h2o.charges(), &[8, 1, 1]);
     assert_eq!(h2o.n_electrons(), 10);
     assert_eq!(h2o.n_alpha_beta(), (5, 5));
-    assert!((h2o.positions[1][1] - 0.757 * BOHR_PER_ANGSTROM).abs() < 1e-15);
+    assert!((h2o.positions()[1][1] - 0.757 * BOHR_PER_ANGSTROM).abs() < 1e-15);
     let oh = Molecule::from_atoms("O 0 0 0; H 0 0 0.97", 0, 2).unwrap();
     assert_eq!(oh.n_alpha_beta(), (5, 4));
     let cation = Molecule::from_atoms("H 0 0 0; H 0 0 1", 1, 2).unwrap();
@@ -175,8 +176,8 @@ fn integrals_have_their_symmetries() {
     }
     // Translation leaves every integral unchanged (to rounding).
     let shifted = Molecule::new(
-        mol.charges.clone(),
-        mol.positions
+        mol.charges().to_vec(),
+        mol.positions()
             .iter()
             .map(|r| [r[0] + 3.1, r[1] - 1.7, r[2] + 0.4])
             .collect(),
@@ -190,5 +191,40 @@ fn integrals_have_their_symmetries() {
     }
     for (a, b) in ints.nuclear.iter().zip(&moved.nuclear) {
         assert!((a - b).abs() < 1e-11);
+    }
+}
+
+#[test]
+fn limits_and_deserialisation_are_checked() {
+    // C₅H₁₂ in 6-31G has 69 basis functions, more than the maximum.
+    let pentane = Molecule::new(
+        [6; 5].into_iter().chain([1; 12]).collect(),
+        (0..17)
+            .map(|k| {
+                [
+                    1.4 * k as f64,
+                    if k % 2 == 0 { 0.0 } else { 1.0 },
+                    0.3 * k as f64,
+                ]
+            })
+            .collect(),
+        0,
+        1,
+    )
+    .unwrap();
+    let err = AoIntegrals::compute(&pentane, Basis::SixThirtyOneG).unwrap_err();
+    assert!(err.to_string().contains("exceed the maximum 64"), "{err}");
+    // Deserialisation validates like the constructor.
+    let ok: Molecule = serde_json::from_str(
+        r#"{"charges":[1,1],"positions":[[0,0,0],[0,0,1.4]],"charge":0,"multiplicity":1}"#,
+    )
+    .unwrap();
+    assert_eq!(ok.n_alpha_beta(), (1, 1));
+    for bad in [
+        r#"{"charges":[11],"positions":[[0,0,0]],"charge":0,"multiplicity":2}"#,
+        r#"{"charges":[1,1],"positions":[[0,0,0],[0,0,1.4]],"charge":0,"multiplicity":0}"#,
+        r#"{"charges":[1,1],"positions":[[0,0,0],[0,0,0]],"charge":0,"multiplicity":1}"#,
+    ] {
+        assert!(serde_json::from_str::<Molecule>(bad).is_err(), "{bad}");
     }
 }

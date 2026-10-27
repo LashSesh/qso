@@ -72,11 +72,14 @@ assert abs(h.expectation(q.simulate(hf)) - mol.hartree_fock_energy()) < 1e-12
 assert abs(h.ground_state_energy() - mol.fci_energies()[0]) < 1e-10
 ```
 
-`fci_energies(k)` diagonalises the Hamiltonian among all determinants
-with the given numbers of spin-up and spin-down electrons; its matrix
-follows from the Slater–Condon rules. Up to 4096 determinants it returns
-the lowest `k` levels. Above that, and for a single level above 1024
-determinants, it returns the ground state only, computed by Lanczos.
+`fci_energies(k)` returns the lowest `k` levels of the Hamiltonian among
+all determinants with the given numbers of spin-up and spin-down
+electrons. Up to 1024 determinants it diagonalises the matrix of the
+Slater–Condon rules. Above that, up to 2¹⁸ determinants and 32 levels, it
+uses Davidson's method on `H c` computed from the integrals without the
+matrix (the string-driven algorithm of Knowles and Handy). Water in 6-31G
+with a frozen core in 12 orbitals (245 025 determinants) takes 36 s and
+0.7 GB for the ground state.
 
 The tests check the whole chain against PySCF for H₂, LiH and BeH₂ in
 STO-3G:
@@ -95,15 +98,24 @@ Cartesian Gaussians by the McMurchie–Davidson scheme, in the STO-3G or
 6-31G basis (hydrogen to neon, at most 64 basis functions; functions in
 PySCF's order). `hartree_fock` solves the restricted (closed-shell) or
 unrestricted Hartree–Fock equations with DIIS. The iterations start from
-the orbitals of the core Hamiltonian, filled with the average occupation of
-both spins, as PySCF does: filling each spin separately trapped OH in an
-excited state. A calculation that does not converge raises an error.
+a superposition of atomic densities: every atom's spherically averaged
+Hartree–Fock density in the same basis, like PySCF's `atom` guess.
+Hartree–Fock finds a stationary point near its start, not always the
+lowest one. Starting from the core Hamiltonian (`guess="core"`) ends
+0.73 Ha above the ground state of N₂ in STO-3G. When DIIS does not
+converge, a second run without DIIS shifts the virtual orbitals by
+0.5 Ha (`level_shift`) while the gradient is large; this settles CN, where
+PySCF does not converge. A calculation that still does not converge
+raises an error. Bases with nearly dependent functions (atoms closer than
+0.01 Å) leave rounding noise above the default gradient tolerance.
+`integrals=` reuses integrals computed before.
 
 `molecular_integrals(frozen, active)` transforms the integrals to the
 restricted orbitals. The lowest `frozen` orbitals stay doubly occupied and
 move into the core energy; `active` orbitals are kept. The result is a
 `MolecularIntegrals`, so everything above applies, and `to_fcidump()`
-writes it:
+writes it. Open shells have no restricted orbitals, so their Hamiltonians
+cannot be built this way (QSO has no restricted open-shell method):
 
 ```python
 import metatron_qso as q
@@ -119,18 +131,19 @@ print(oh.energy, oh.s_squared())                       # −75.36317, 0.75377
 
 The tests compare with PySCF 2.14:
 
-- The integrals of H₂, LiH, H₂O and NH₃ agree to the last digits PySCF
-  gives. The largest difference, 2.5·10⁻¹¹ in one integral of NH₃, is
-  PySCF's: a 40-digit evaluation agrees with QSO to 10⁻¹⁶.
-- Restricted energies of H₂, LiH, BeH₂ and H₂O in both bases, and
-  unrestricted energies and ⟨S²⟩ of OH, triplet CH₂, H₂O⁺ and Li, agree to
-  10⁻⁹ Ha.
+- On the same geometries (in bohr), fingerprints of all integrals of H₂,
+  LiH, H₂O and NH₃ agree to 10⁻¹² relative, and in the cross-validation
+  every integral of H₂O, NH₃, CO and F₂ agrees to 1.4·10⁻¹³.
+- Restricted energies of H₂, LiH, BeH₂, H₂O and N₂ in both bases, and
+  unrestricted energies of OH, triplet CH₂, H₂O⁺, Li, NH₂ and NO, agree to
+  10⁻¹⁰ Ha, ⟨S²⟩ to 10⁻⁷.
 - Full CI and frozen-core active spaces (CASCI) agree to 10⁻⁸ Ha, and the
   FCIDUMP files of H₂, LiH and BeH₂ are reproduced from their geometries.
 
-PySCF converts ångström with the CODATA 2010 bohr, QSO with CODATA 2018;
-the geometries differ by 3·10⁻¹¹ relative, the energies by about
-10⁻¹⁰ Ha.
+PySCF converts ångström with the CODATA 2010 bohr, QSO with CODATA 2018:
+the same input in ångström gives geometries 3·10⁻¹¹ apart (relative) and
+energies about 10⁻¹⁰ Ha apart, so the comparisons give PySCF QSO's
+positions in bohr.
 
 ## UCCSD, k-UpCCGSD and ADAPT-VQE
 
