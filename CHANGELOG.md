@@ -8,9 +8,23 @@ All notable changes to this project are documented here. The format follows
 
 Milestones 1.14 (Gaussian boson sampling and imperfect photons), 1.15
 (molecular integrals), 1.16 (fast matching) and 1.17 (mitigation by
-purification) of the [roadmap](docs/ROADMAP.md): its third stage.
+purification) of the [roadmap](docs/ROADMAP.md), its third stage, and
+milestone 1.18 (pretty good state transfer) of the fourth.
 
 ### Added
+
+- **Pretty good state transfer, decided exactly** (`walks::pretty_good`,
+  Python `PrettyGoodTransfer`, in `qso transfer`).
+  - Kronecker's theorem on the integer relations among the eigenvalues,
+    computed exactly in cyclotomic fields (power-basis coordinates modulo
+    the cyclotomic polynomial, integer kernels by column reduction) for
+    paths (adjacency and Laplacian), cycles and Cayley graphs of abelian
+    groups; obstructions as witnesses; PST times from the same data.
+  - Tests: the theorems of Godsil, Kirkland, Severini and Smith (paths,
+    n ≤ 300), Banchi, Coutinho, Godsil and Severini (Heisenberg chains,
+    n ≤ 200) and Pal (cycles, n ≤ 512); agreement with `StateTransfer` on
+    hypercubes, circulants and paths; a PGST time checked against the
+    propagated walk.
 
 - **Virtual distillation** (`mitigation::distillation`, Python
   `distilled_expectation`, `dominant_expectation`, `DistillationCircuits`).

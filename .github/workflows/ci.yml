@@ -76,6 +76,7 @@ jobs:
           ./target/release/qso iso /tmp/j52.graphml johnson:5,2
           ./target/release/qso reduce --graph hypercube:12
           ./target/release/qso transfer --graph path:3
+          ./target/release/qso transfer --graph path:5 --t-max 200
           ./target/release/qso coined --graph hypercube:8
           ./target/release/qso hitting --graph cycle:64
           ./target/release/qso walk-circuit --graph cycle:16 > /tmp/walk.qasm

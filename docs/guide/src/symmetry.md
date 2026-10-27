@@ -81,6 +81,60 @@ assert abs(q30.perfect_transfer_time - math.pi / 2) < 1e-9   # antipodes of Q30
 The analysis runs on the quotient in which u is a cell of its own: v must be
 a cell of its own too, so symmetric graphs reduce to a few dimensions.
 
+## Pretty good state transfer
+
+Perfect state transfer is rare. *Pretty good* state transfer (PGST) asks
+less: fidelities arbitrarily close to 1 at suitable times. For strongly
+cospectral u and v the transfer amplitude is `Σ_r σ_r ‖E_r e_u‖² e^{−iθ_r t}`,
+and by Kronecker's theorem it comes arbitrarily close to modulus 1 exactly
+when every integer relation `Σ ℓ_r (θ_r − θ_0) = 0` among the eigenvalues in
+the support has an even `Σ ℓ_r δ_r`, where `δ_r` marks the eigenspaces in
+which u and v have opposite signs (Banchi, Coutinho, Godsil and Severini
+2017). The relations are a number-theoretic property of the eigenvalues
+that floating point cannot see, so `PrettyGoodTransfer` computes them
+exactly for graphs whose eigenvalues are known in a cyclotomic field
+`Q(ζ_N)`:
+
+- paths (adjacency and Laplacian),
+- cycles,
+- Cayley graphs of finite abelian groups `Z_{m_1} × … × Z_{m_k}`: circulants,
+  hypercubes and their relatives.
+
+Each eigenvalue becomes an integer vector in the power basis of `Q(ζ_N)`
+(powers of ζ reduced modulo the cyclotomic polynomial); the relations are
+the integer kernel of these vectors, found by integer column reduction,
+and the parity condition is checked on a basis of it. When there is no
+PGST, `obstruction` returns a relation with odd parity. The decision is
+exact; `best_transfer` searches a window for a high fidelity, but PGST
+times can lie far beyond any window.
+
+```python
+import metatron_qso as q
+
+for n in [4, 8, 9, 10]:
+    t = q.PrettyGoodTransfer.path(n, 0, n - 1)
+    print(n, t.pretty_good, t.perfect_time)        # True, False, True, True
+p4 = q.PrettyGoodTransfer.path(4, 0, 3)
+print(p4.best_transfer(2000.0, 200_000))           # fidelity > 0.999
+print(q.PrettyGoodTransfer.path(4, 0, 3, "laplacian").pretty_good)   # True: 4 = 2²
+print(q.PrettyGoodTransfer.cycle(12, 0, 6).pretty_good)              # False
+```
+
+The tests check three theorems for every size in a range: the ends of the
+path `P_n` have PGST exactly when n + 1 is a prime, twice a prime or a power
+of two (Godsil, Kirkland, Severini and Smith 2012; n ≤ 300), the ends of the
+Laplacian path (the Heisenberg chain) exactly when n is a power of two
+(Banchi et al. 2017; n ≤ 200), and antipodal vertices of the cycle `C_n`
+exactly when n is a power of two (Pal 2017; n ≤ 512). They also check
+strong cospectrality, PST times and fidelities against `StateTransfer` on
+hypercubes, circulants and paths, every obstruction, and a time with
+fidelity above 0.999 on `P_4` against the propagated walk.
+
+The integer arithmetic is exact or fails: on overflow the answer is an
+error, never a guess. Paths up to 800 nodes and cycles up to 4096 are
+decided in under a second (Q₁₆ in 50 ms); the path on 1000 nodes
+overflows. `qso transfer` prints the exact decision for paths and cycles.
+
 ## In Rust
 
 ```rust

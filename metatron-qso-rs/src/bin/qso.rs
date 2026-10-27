@@ -32,8 +32,8 @@ use metatron_qso::rng::Rng;
 use metatron_qso::stabilizer::StabilizerState;
 use metatron_qso::stabilizer::program::{is_clifford_program, sample_program};
 use metatron_qso::walks::{
-    Coin, CoinedWalk, ContinuousWalk, Generator, Quotient, QuotientWalk, SpatialSearch,
-    StateTransfer, SzegedyWalk, circuits, classical_hitting_times,
+    Coin, CoinedWalk, ContinuousWalk, Generator, PrettyGoodTransfer, Quotient, QuotientWalk,
+    SpatialSearch, StateTransfer, SzegedyWalk, circuits, classical_hitting_times,
 };
 use metatron_qso::{QsoError, Result};
 
@@ -105,7 +105,8 @@ enum Command {
         #[arg(long, value_enum, default_value_t = GeneratorArg::Laplacian)]
         generator: GeneratorArg,
     },
-    /// Perfect state transfer between two nodes, or the best transfer.
+    /// Perfect state transfer between two nodes, or the best transfer;
+    /// pretty good state transfer decided exactly on paths and cycles.
     Transfer {
         #[arg(long, default_value = "path:3")]
         graph: String,
@@ -678,6 +679,19 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             let to = to.unwrap_or(g.num_nodes().saturating_sub(1));
             let t = StateTransfer::new(&g, (*generator).into(), *gamma, *from, to)?;
             let best = t.best_transfer(*t_max, 4000)?;
+            // Exact PGST decision where the graph family allows it; perfect
+            // transfer implies it on every graph.
+            let pretty_good =
+                PrettyGoodTransfer::from_graph(&g, (*generator).into(), *gamma, *from, to)
+                    .ok()
+                    .map(|p| p.pretty_good())
+                    .or(t.perfect_transfer_time().map(|_| true));
+            let pgst_line = match pretty_good {
+                Some(true) => "\npretty good state transfer: yes".to_string(),
+                Some(false) => "\npretty good state transfer: no (exact)".to_string(),
+                None => "\npretty good state transfer: undecided (exact only for paths and cycles)"
+                    .to_string(),
+            };
             let text = match t.perfect_transfer_time() {
                 Some(tau) => format!(
                     "{}: perfect state transfer {from} → {to} at t = {tau:.10}",
@@ -694,8 +708,8 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             Ok((
                 json!({"perfect_transfer_time": t.perfect_transfer_time(),
                        "strongly_cospectral": t.strongly_cospectral(), "support": t.support(),
-                       "best": best}),
-                text,
+                       "pretty_good": pretty_good, "best": best}),
+                text + &pgst_line,
             ))
         }
         Command::Coined {

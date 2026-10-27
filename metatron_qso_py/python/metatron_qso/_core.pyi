@@ -672,6 +672,42 @@ class TransferResult(TypedDict):
     fidelity: float
 
 @final
+class PrettyGoodTransfer:
+    @staticmethod
+    def path(
+        n: int, u: int, v: int, generator: str = "adjacency", gamma: float = 1.0
+    ) -> PrettyGoodTransfer: ...
+    @staticmethod
+    def cycle(
+        n: int, u: int, v: int, generator: str = "adjacency", gamma: float = 1.0
+    ) -> PrettyGoodTransfer: ...
+    @staticmethod
+    def cayley(
+        moduli: Sequence[int],
+        connection: Sequence[Sequence[int]],
+        u: Sequence[int],
+        v: Sequence[int],
+        generator: str = "adjacency",
+        gamma: float = 1.0,
+    ) -> PrettyGoodTransfer: ...
+    @staticmethod
+    def from_graph(
+        graph: Graph, u: int, v: int, generator: str = "adjacency", gamma: float = 1.0
+    ) -> PrettyGoodTransfer: ...
+    @property
+    def strongly_cospectral(self) -> bool: ...
+    @property
+    def pretty_good(self) -> bool: ...
+    @property
+    def perfect_time(self) -> Optional[float]: ...
+    @property
+    def rank(self) -> int: ...
+    @property
+    def obstruction(self) -> Optional[list[int]]: ...
+    def fidelity(self, t: float) -> float: ...
+    def best_transfer(self, t_max: float, resolution: int = 2000) -> TransferResult: ...
+
+@final
 class StateTransfer:
     def __new__(
         cls, graph: Graph, u: int, v: int, generator: str = "laplacian", gamma: float = 1.0

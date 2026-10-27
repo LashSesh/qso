@@ -1212,3 +1212,33 @@ fn virtual_distillation_suppresses_depolarising_noise() {
         assert!(close(circuits.evaluate_on(&rho).unwrap(), exact, 1e-11));
     }
 }
+
+#[test]
+fn pretty_good_state_transfer_follows_number_theory() {
+    use metatron_qso::walks::{Generator, PrettyGoodTransfer};
+    let prime = |n: usize| {
+        n >= 2
+            && (2..)
+                .take_while(|d| d * d <= n)
+                .all(|d| !n.is_multiple_of(d))
+    };
+    // Ends of P_n (adjacency): PGST iff n + 1 is a prime, twice a prime or
+    // a power of two (Godsil, Kirkland, Severini and Smith 2012).
+    for n in 2..=300usize {
+        let m = n + 1;
+        let want = prime(m) || (m % 2 == 0 && prime(m / 2)) || m.is_power_of_two();
+        let t = PrettyGoodTransfer::path(n, Generator::Adjacency, 1.0, 0, n - 1).unwrap();
+        assert_eq!(t.pretty_good(), want, "P{n}");
+    }
+    // Heisenberg chains (Laplacian): PGST iff n is a power of two (Banchi,
+    // Coutinho, Godsil and Severini 2017).
+    for n in 2..=200usize {
+        let t = PrettyGoodTransfer::path(n, Generator::Laplacian, 1.0, 0, n - 1).unwrap();
+        assert_eq!(t.pretty_good(), n.is_power_of_two(), "P{n}");
+    }
+    // Antipodes of C_n: PGST iff n is a power of two (Pal 2017).
+    for n in (4..=512usize).step_by(2) {
+        let t = PrettyGoodTransfer::cycle(n, Generator::Adjacency, 1.0, 0, n / 2).unwrap();
+        assert_eq!(t.pretty_good(), n.is_power_of_two(), "C{n}");
+    }
+}
