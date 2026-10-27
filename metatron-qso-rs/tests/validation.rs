@@ -1172,3 +1172,41 @@ fn sparse_matching_has_the_weights_of_exact_matching() {
         }
     }
 }
+
+#[test]
+fn virtual_distillation_suppresses_depolarising_noise() {
+    use metatron_qso::mitigation::{
+        DistillationCircuits, distilled_expectation, dominant_expectation,
+    };
+    use metatron_qso::noise::{DensityMatrix, NoiseModel};
+    // A GHZ-like state under depolarising noise (1% after one-qubit and 4%
+    // after two-qubit gates; purity 0.84): the error of ⟨Z0 Z1 + X0 X1 X2⟩
+    // falls from 0.19 to 3.6·10⁻³ with two copies and 6.9·10⁻⁵ with three.
+    let mut prep = Circuit::new(3);
+    prep.h(0).cx(0, 1).cx(1, 2).ry(1, 0.3);
+    let o: PauliSum = "Z0 Z1 + X0 X1 X2".parse().unwrap();
+    let ideal = o
+        .expectation(&StateVector::from_circuit(&prep, &[]).unwrap())
+        .unwrap();
+    let mut rho = DensityMatrix::zero(3).unwrap();
+    rho.apply_circuit(
+        &prep,
+        &[],
+        Some(&NoiseModel::depolarizing(0.01, 0.04).unwrap()),
+    )
+    .unwrap();
+    let errors: Vec<f64> = (1..=3)
+        .map(|k| (distilled_expectation(&rho, &o, k).unwrap() - ideal).abs())
+        .collect();
+    for (e, want) in errors.iter().zip([0.194432, 0.0035535, 6.9202e-5]) {
+        assert!(close(*e, want, 1e-4 * want.max(1e-2)), "{errors:?}");
+    }
+    // Depolarising noise keeps the ideal state as the dominant eigenvector.
+    assert!(close(dominant_expectation(&rho, &o).unwrap(), ideal, 1e-12));
+    // The measurement circuits on copies of ρ give the same values.
+    for k in 2..=3 {
+        let circuits = DistillationCircuits::new(&prep, &o, k).unwrap();
+        let exact = distilled_expectation(&rho, &o, k).unwrap();
+        assert!(close(circuits.evaluate_on(&rho).unwrap(), exact, 1e-11));
+    }
+}

@@ -9,14 +9,17 @@ use metatron_qso::mitigation::twirl::{twirl as twirl_core, twirled_average as tw
 use metatron_qso::mitigation::zne::{
     Extrapolation, Folding, extrapolate as extrapolate_core, fold as fold_core, zne as zne_core,
 };
-use metatron_qso::mitigation::{ReadoutCalibration, nearest_probability_distribution as nearest};
+use metatron_qso::mitigation::{
+    DistillationCircuits, ReadoutCalibration, distilled_expectation as distilled_core,
+    dominant_expectation as dominant_core, nearest_probability_distribution as nearest,
+};
 use metatron_qso::quantum::{Counts, bitstring};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use crate::circuit::{PyCircuit, theta_or_empty};
 use crate::estimation::{PyEstimate, backend, extract_estimate, wrap_estimate};
-use crate::noise::{PyDeviceModel, PyNoiseModel};
+use crate::noise::{PyDensityMatrix, PyDeviceModel, PyNoiseModel};
 use crate::state::PyPauliSum;
 use crate::{Raise, RealArg, RealMatrixArg, check_finite, invalid, pydict};
 
@@ -372,7 +375,115 @@ fn twirled_average(
     result.raise().map(wrap_estimate)
 }
 
+/// `Tr(ρᵏ O) / Tr(ρᵏ)` for `k = copies` (virtual distillation, exact).
+#[pyfunction]
+#[pyo3(signature = (rho, observable, copies = 2))]
+fn distilled_expectation(
+    py: Python<'_>,
+    rho: &PyDensityMatrix,
+    observable: &PyPauliSum,
+    copies: usize,
+) -> PyResult<f64> {
+    let (r, o) = (&rho.inner, &observable.inner);
+    py.detach(|| distilled_core(r, o, copies)).raise()
+}
+
+/// `⟨v|O|v⟩` for the dominant eigenvector of `rho` (the limit of many
+/// copies).
+#[pyfunction]
+fn dominant_expectation(
+    py: Python<'_>,
+    rho: &PyDensityMatrix,
+    observable: &PyPauliSum,
+) -> PyResult<f64> {
+    let (r, o) = (&rho.inner, &observable.inner);
+    py.detach(|| dominant_core(r, o)).raise()
+}
+
+/// The measurement circuits of virtual distillation on `copies` copies of
+/// the state that `preparation` prepares, and their estimator.
+#[pyclass(name = "DistillationCircuits", module = "metatron_qso", frozen)]
+pub struct PyDistillationCircuits {
+    inner: DistillationCircuits,
+}
+
+#[pymethods]
+impl PyDistillationCircuits {
+    #[new]
+    #[pyo3(signature = (preparation, observable, copies = 2))]
+    fn new(preparation: &PyCircuit, observable: &PyPauliSum, copies: usize) -> PyResult<Self> {
+        DistillationCircuits::new(&preparation.inner, &observable.inner, copies)
+            .raise()
+            .map(|inner| Self { inner })
+    }
+
+    #[getter]
+    fn copies(&self) -> usize {
+        self.inner.copies()
+    }
+
+    /// One circuit per setting (setting 0 estimates Tr(ρᵏ)); measure every
+    /// qubit. Copy `c` of qubit `q` is qubit `c·n + q`.
+    #[getter]
+    fn circuits(&self) -> PyResult<Vec<PyCircuit>> {
+        self.inner
+            .settings()
+            .iter()
+            .map(|s| PyCircuit::wrap(s.circuit.clone()))
+            .collect()
+    }
+
+    /// The same circuits without the preparation of the copies.
+    #[getter]
+    fn measurement_circuits(&self) -> PyResult<Vec<PyCircuit>> {
+        self.inner
+            .settings()
+            .iter()
+            .map(|s| PyCircuit::wrap(s.measurement.clone()))
+            .collect()
+    }
+
+    /// The estimate from exact outcome probabilities, one array per
+    /// setting (indexed by the measured bits, qubit 0 least significant).
+    fn evaluate(&self, probabilities: Vec<Vec<f64>>) -> PyResult<f64> {
+        self.inner.evaluate(&probabilities).raise()
+    }
+
+    /// The estimate with its standard error from measured counts, one dict
+    /// per setting (bit strings, qubit n−1 first).
+    fn estimate(&self, counts: Vec<Bound<'_, PyDict>>) -> PyResult<PyEstimate> {
+        let width = self.inner.settings()[0].circuit.n_qubits();
+        let parsed = counts
+            .iter()
+            .map(|c| parse_counts(c, Some(width)))
+            .collect::<PyResult<Vec<Counts>>>()?;
+        self.inner.estimate(&parsed).raise().map(wrap_estimate)
+    }
+
+    /// The estimator on copies of `rho` (exact; `rho` replaces the
+    /// preparation).
+    fn evaluate_on(&self, py: Python<'_>, rho: &PyDensityMatrix) -> PyResult<f64> {
+        let r = &rho.inner;
+        py.detach(|| self.inner.evaluate_on(r)).raise()
+    }
+
+    fn __len__(&self) -> usize {
+        self.inner.settings().len()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "DistillationCircuits(copies={}, settings={})",
+            self.inner.copies(),
+            self.inner.settings().len()
+        )
+    }
+}
+
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyDistillationCircuits>()?;
+    m.add_function(wrap_pyfunction!(distilled_expectation, m)?)?;
+    m.add_function(wrap_pyfunction!(dominant_expectation, m)?)?;
     m.add_class::<PyReadoutCalibration>()?;
     m.add_function(wrap_pyfunction!(nearest_probability_distribution, m)?)?;
     m.add_function(wrap_pyfunction!(fold, m)?)?;

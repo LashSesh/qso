@@ -201,6 +201,55 @@ noise, a coherent phase error and readout errors is learned. All 39 rates
 lie within three standard errors of their exact values, and PEC with the
 learned model gives 0.534 ± 0.005 for a value of 0.533 (raw 0.492).
 
+## Virtual distillation
+
+Virtual distillation needs no noise model (Huggins et al., Phys. Rev. X 11,
+041036 (2021); Koczor, Phys. Rev. X 11, 031057 (2021)). Noise mixes other
+states into ρ, but the dominant eigenvector of ρ usually stays close to the
+ideal state. With k copies of ρ,
+
+    ⟨O⟩_k = Tr(ρᵏ O) / Tr(ρᵏ)
+
+weights each eigenvector by the k-th power of its probability, so the
+others fade and ⟨O⟩_k tends to the value of the dominant eigenvector.
+`distilled_expectation(rho, observable, copies)` computes it exactly from a
+density matrix (k = 1, 2, 3); `dominant_expectation` gives the limit.
+
+On hardware, `Tr(ρᵏ P)` for a Pauli string P is the expectation of S·P on
+the first copy in ρ^⊗k, where S shifts the copies cyclically. Both factor
+over the qubits: on the k copies of qubit q, `S_q P_q` is a k-qubit unitary,
+and the unitaries of different qubits commute. `DistillationCircuits`
+rotates every copy so that P becomes a product of Zs, turns each unitary
+into a diagonal one with a k-qubit gate (its eigenvectors) and measures in
+the computational basis. Each shot contributes the real part of the product
+of the eigenvalues it lands in. One setting per Pauli string estimates the
+numerator, one more estimates `Tr(ρᵏ)`, and `estimate` returns their ratio
+with a standard error from the delta method. Copy c of qubit q is qubit
+c·n + q.
+
+```python
+import metatron_qso as q
+
+prep = q.Circuit(3).h(0).cx(0, 1).cx(1, 2).ry(1, 0.3)
+rho = q.DensityMatrix.simulate(prep, noise=q.NoiseModel.depolarizing(0.01, 0.04))
+o = q.PauliSum("Z0 Z1 + X0 X1 X2")
+ideal = o.expectation(q.simulate(prep))
+for k in (1, 2, 3):
+    print(k, abs(q.distilled_expectation(rho, o, k) - ideal))   # 0.19, 3.6e-3, 6.9e-5
+
+vd = q.DistillationCircuits(prep, o, copies=2)       # 3 settings on 6 qubits
+counts = [q.simulate(c).sample(20_000, seed=s) for s, c in enumerate(vd.circuits)]
+print(vd.estimate(counts))                            # noiseless here: ≈ ideal
+```
+
+The tests check the exact values against `Σ_i p_iᵏ⟨v_i|O|v_i⟩ / Σ_i p_iᵏ`
+for random mixtures, the circuits on copies of ρ against the exact value
+(to 10⁻¹¹, for one, two and three copies and Pauli strings with X, Y and
+Z), sampled shots against the exact value within their standard error,
+and the suppression of depolarising noise above. Distillation does not
+remove coherent errors: the dominant eigenvector of ρ differs from the
+ideal state when the noise rotates it, and that difference remains.
+
 ## Classical shadows
 
 A `ClassicalShadow` records snapshots of a state, each measured in random

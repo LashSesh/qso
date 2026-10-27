@@ -7,10 +7,22 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 Milestones 1.14 (Gaussian boson sampling and imperfect photons), 1.15
-(molecular integrals) and 1.16 (fast matching) of the
-[roadmap](docs/ROADMAP.md), the first of its third stage.
+(molecular integrals), 1.16 (fast matching) and 1.17 (mitigation by
+purification) of the [roadmap](docs/ROADMAP.md): its third stage.
 
 ### Added
+
+- **Virtual distillation** (`mitigation::distillation`, Python
+  `distilled_expectation`, `dominant_expectation`, `DistillationCircuits`).
+  - `Tr(ρᵏO)/Tr(ρᵏ)` exactly for k = 1 to 3, and the limit of the dominant
+    eigenvector.
+  - Measurement circuits on k copies of the register: per qubit, the
+    k-qubit unitary `S_q P_q` diagonalised by one gate; estimates from
+    exact probabilities or from counts with a standard error.
+  - Tests: closed forms for random mixtures, the circuits on copies of ρ
+    against the exact value to 10⁻¹¹, shots within their standard error;
+    a depolarised GHZ-like state from an error of 0.19 to 3.6·10⁻³ (two
+    copies) and 6.9·10⁻⁵ (three).
 
 - **Sparse matching** (`qec::SparseMatchingDecoder`, Python
   `SparseMatchingDecoder`): minimum-weight perfect matching by growing
