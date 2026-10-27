@@ -14,7 +14,7 @@ Every algorithm is checked against an independent reference:
 | Dense matrices | every gate, the QFT against the DFT matrix, Lanczos and Krylov against full diagonalisation |
 | A second method | adjoint, parameter-shift and finite-difference gradients; statevector against density matrix; quantum trajectories against density matrices (χ² tests); the quantum Fisher information against finite differences of the fidelity; four fermion encodings against each other |
 | Exact sums | PEC summed over all corrections, Pauli twirls over all 16 frames, the variance 3ᵏ of classical shadows |
-| Statistics | coverage of confidence intervals over repeated runs; unbiased adaptive shot allocation over 2000 seeds; the 1/N error scaling of amplitude estimation over 200 seeds |
+| Statistics | coverage of confidence intervals over repeated runs; unbiased adaptive shot allocation over 2000 seeds; the 1/N error scaling of amplitude estimation over 200 seeds; learned noise rates of a known device within their bootstrap standard errors |
 | Rigorous bounds | product-formula errors below their bounds; qDRIFT channels below Campbell's bound; canonical amplitude estimation within its error bound with probability ≥ 8/π² |
 | Other codes | Qiskit Aer, Qulacs, Cirq, PennyLane Lightning and The Walrus; PySCF's Hartree–Fock and full-CI energies for H₂, LiH and BeH₂ |
 

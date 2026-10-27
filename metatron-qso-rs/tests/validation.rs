@@ -845,6 +845,7 @@ fn learned_noise_recovers_a_known_device_and_cancels_it() {
     let learned = learn_layer(&layer, &device, &LearningOptions::default()).unwrap();
     let model = &learned.model;
     assert_eq!(model.generators.len(), 12 + 27);
+    let mut worst: f64 = 0.0;
     for ((g, rate), se) in model
         .generators
         .iter()
@@ -859,6 +860,7 @@ fn learned_noise_recovers_a_known_device_and_cancels_it() {
             (true, false) => depolarising,
             _ => 0.0,
         };
+        worst = worst.max((rate - expected).abs() / se);
         assert!(
             (rate - expected).abs() < 4.0 * se,
             "{g}: {rate} ± {se}, expected {expected}"
@@ -903,4 +905,10 @@ fn learned_noise_recovers_a_known_device_and_cancels_it() {
         (noisy - exact).abs() > 5.0 * se,
         "noisy {noisy}, exact {exact}, se {se}"
     );
+    // The README's numbers: every rate within 3 standard errors; PEC
+    // 0.534 ± 0.005 against 0.533, raw 0.492, overhead 1.20.
+    assert!(worst < 3.0, "{worst}");
+    assert!(close(r.estimate.value, 0.534, 5e-4) && close(se, 0.005, 5e-4));
+    assert!(close(exact, 0.533, 5e-4) && close(noisy, 0.492, 5e-4));
+    assert!(close(r.overhead, 1.20, 5e-3));
 }

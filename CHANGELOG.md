@@ -7,8 +7,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 Milestones 1.9 (matrix-product states), 1.10 (exact decoding and Stim
-circuits) and 1.11 (the state-vector core at memory bandwidth) of the
-[roadmap](docs/ROADMAP.md). Results are checked against
+circuits), 1.11 (the state-vector core at memory bandwidth) and 1.12
+(noise learning) of the [roadmap](docs/ROADMAP.md). Results are checked against
 the state-vector simulator, exact free-fermion evolution, the QAOA ring
 optimum, enumeration, Stim and PyMatching (named below).
 
@@ -86,6 +86,21 @@ optimum, enumeration, Stim and PyMatching (named below).
   of gates inside a block are undone and differentiated block by block.
   The gradient terms are summed in block order, independent of the thread
   count.
+- **Noise learning** (`noise::learning`, Python `learn_layer`,
+  `SparsePauliLindblad`, `pec_layered`, `pea_layered`).
+  - `learn_layer` fits the sparse Pauli–Lindblad model of a twirled layer
+    of `cx`, `cy`, `cz` and `swap` gates on disjoint qubits (van den Berg
+    et al. 2023): one rate per one-qubit Pauli and per two-qubit Pauli on
+    neighbouring qubits, from decays over even depths in nine product
+    bases, with readout twirling and non-negative least squares.
+  - Standard errors from a bootstrap over the twirled circuits.
+  - `pec_layered` cancels the learned noise in circuits of blocks
+    separated by the layer; `pea_layered` amplifies it by inserting Paulis
+    and extrapolates to zero noise.
+  - Validation: on a four-qubit device with depolarising noise, a coherent
+    phase error and readout errors, all 39 learned rates lie within three
+    standard errors of the exact ones, and PEC with the learned model is
+    unbiased (0.534 ± 0.005 for 0.533, raw 0.492).
 - **Benchmark report:** every gate on 24 qubits against the fastest
   in-place pass over the state, the kernels' instruction set, and the
   adjoint gradient on 20 qubits.
