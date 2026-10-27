@@ -21,6 +21,10 @@
 //! * [`dephasing`] — open-system walks with site dephasing (Lindblad).
 //! * [`discrete`] — discrete-time walks: coined walks and their search,
 //!   the walk on the line, and Szegedy walks with quantum hitting times.
+//! * [`driven`] — walks with a time-dependent Hamiltonian (adiabatic and
+//!   driven walks), by a fourth-order commutator-free Magnus integrator.
+//! * [`decoherent`] — coined walks with coin and position dephasing, on
+//!   density matrices.
 //! * [`classical`] — classical random-walk baselines.
 //!
 //! ```
@@ -37,8 +41,10 @@
 
 pub mod circuits;
 pub mod classical;
+pub mod decoherent;
 pub mod dephasing;
 pub mod discrete;
+pub mod driven;
 pub mod quotient;
 pub mod search;
 pub mod transfer;
@@ -53,8 +59,10 @@ use crate::linalg::{
 };
 
 pub use classical::{classical_hitting_times, classical_walk_probabilities};
+pub use decoherent::DecoherentCoinedWalk;
 pub use dephasing::DephasingWalk;
 pub use discrete::{Coin, CoinedWalk, DiscreteSearchResult, LineWalk, SzegedyWalk};
+pub use driven::{DrivenEvolution, DrivenWalk, MagnusOptions};
 pub use quotient::{Quotient, QuotientSearch, QuotientWalk};
 pub use search::{MAX_RESOLUTION, SearchResult, SpatialSearch};
 pub use transfer::{StateTransfer, TransferResult};
