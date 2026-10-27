@@ -10,8 +10,8 @@ fixed its npm publication). Milestone 1.9 (matrix-product states) and the
 second stage — 1.10 (exact decoding and Stim circuits), 1.11 (the
 state-vector core at memory bandwidth), 1.12 (noise learning) and 1.13
 (walks beyond static Hamiltonians) — ship together as release 1.6.0;
-finished milestones are released together, not one by one. The third
-stage (1.14 to 1.17) is planned. Up to 1.3
+finished milestones are released together, not one by one. In the third
+stage (1.14 to 1.17), 1.14 is delivered and the others are planned. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -616,7 +616,7 @@ Planned October 2026, after release 1.6.0, from the gaps in the table of
 section 1. Each milestone closes a gap without a new dependency and has an
 independent reference.
 
-### 1.14 — Gaussian boson sampling and imperfect photons (M)
+### 1.14 — Gaussian boson sampling and imperfect photons (M, delivered)
 
 Use case: the photonic experiments that followed Aaronson–Arkhipov
 boson sampling, and photons as they are in the laboratory.
@@ -635,6 +635,32 @@ one; partial distinguishability interpolating between the permanent and the
 classical limit, with the Hong–Ou–Mandel visibility |⟨ψ₁|ψ₂⟩|²; hafnians,
 torontonians and GBS probabilities against The Walrus in the
 cross-validation.
+
+Delivered: `photonics::hafnian` (hafnians, loop hafnians, Kan's formula
+for repeated rows, torontonians), `GaussianState` and
+`ImperfectBosonSampler`, with Python bindings. The perfect matchings of
+the hypercubes Q₃ to Q₅ (9, 272, 589 185), the dodecahedron (36), the
+icosahedron (125), the Petersen (6) and Heawood (24) graphs, closed forms
+for squeezed, coherent, thermal and two-mode squeezed states and the
+Hong–Ou–Mandel dip are in the validation suite. Against The Walrus,
+hafnians agree to 7·10⁻¹² relative up to 20 × 20 and 20-photon
+probabilities to 2·10⁻¹¹.
+
+An independent review confirmed the hafnian terms, the symplectic updates
+(to 4·10⁻¹⁵ against The Walrus), Q, A and the prefactor, the click
+probabilities and the sampling (χ² tests). It found that input loss was
+wrong when partially distinguishable photons shared a lossy mode
+(dropping photons one by one loses the coherences of the survivor's
+internal state); loss now goes through environment modes, tested against
+a Fock-space simulation that fails on the old code. Probabilities of
+strongly squeezed states failed a symmetry check, lost 10⁻⁹ in a
+closed-form 4 × 4 inverse and overflowed in det Q for hundreds of modes;
+all three are fixed. Kan's formula, called stable, loses digits with the
+photon number and overflowed: pure states now use a loop hafnian over
+half the rows (20-photon errors from 10⁻⁶ down to 2·10⁻¹¹), Kan's formula
+is rescaled and limited to 40 rows, and the accuracy statements were
+corrected. Smaller findings (repeated modes in `reduced`, a scale-free
+uncertainty check, error messages) are fixed as well.
 
 ### 1.15 — Molecular integrals (M)
 
