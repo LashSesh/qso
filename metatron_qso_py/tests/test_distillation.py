@@ -17,7 +17,8 @@ def test_distillation_suppresses_noise():
     errors = [abs(q.distilled_expectation(rho, o, k) - ideal) for k in (1, 2, 3)]
     assert errors[1] < 0.2 * errors[0] and errors[2] < errors[1]
     assert abs(q.distilled_expectation(rho, o, 1) - rho.expectation(o)) < 1e-12
-    assert errors[2] >= abs(q.dominant_expectation(rho, o) - ideal) - 1e-12
+    # The rotation comes last: the ideal state stays the dominant eigenvector.
+    assert abs(q.dominant_expectation(rho, o) - ideal) < 1e-12
 
 
 def test_circuits_estimate_the_distilled_value():
@@ -40,5 +41,9 @@ def test_circuits_estimate_the_distilled_value():
         q.DistillationCircuits(prep, o, copies=4)
     with pytest.raises(ValueError):
         vd.evaluate(probs[:2])
+    with pytest.raises(ValueError):
+        vd.evaluate([[1.0]] * len(vd))
+    # The circuits export.
+    assert all(c.to_qasm3().startswith("OPENQASM 3") for c in vd.circuits)
     with pytest.raises(ValueError):
         q.dominant_expectation(q.DensityMatrix.maximally_mixed(2), q.PauliSum("Z0"))

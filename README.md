@@ -123,7 +123,7 @@ or by the benchmark report you can run yourself.
 | GHZ₅ on the toy device, ⟨Σ Z_i Z_{i+1}⟩: raw / readout-mitigated + ZNE (1, 3, 5) | 3.38 / 4.00 ± 0.01 | 4 |
 | Same with Pauli noise: probabilistic error cancellation (overhead 1.08) | 4.00 ± 0.01 | 4 |
 | Noise learning, 4 qubits (depolarising + coherent phase error + readout errors): 39 learned rates / PEC with them on 3 layers (raw 0.492) | all within 3 standard errors / 0.534 ± 0.005 | exact rates / 0.533 |
-| Virtual distillation of a depolarised GHZ-like state, error of ⟨Z0 Z1 + X0 X1 X2⟩ with 1 / 2 / 3 copies; circuits on copies vs. exact | 0.19 / 3.6·10⁻³ / 6.9·10⁻⁵; equal to 10⁻¹¹ | noiseless value; Tr(ρᵏO)/Tr(ρᵏ) |
+| Virtual distillation of a depolarised GHZ-like state (no noise floor: its rotation comes last), error of ⟨Z0 Z1 + X0 X1 X2⟩ with 1 / 2 / 3 copies; circuits on copies vs. exact | 0.19 / 3.6·10⁻³ / 6.9·10⁻⁵; equal to 10⁻¹¹ | noiseless value; Tr(ρᵏO)/Tr(ρᵏ) |
 | Zero-noise extrapolation (Richardson, scales 1, 3, 5), depolarised 3-qubit circuit | error ÷ 380 | — |
 | Classical shadows, single-snapshot variance of a weight-k Pauli string | 3ᵏ − ⟨P⟩² | Huang, Kueng & Preskill 2020 |
 | Full CI of H₂ / LiH / BeH₂ (STO-3G), identical under Jordan–Wigner, parity, Bravyi–Kitaev and the reduced parity encoding | −1.1373060 / −7.8824019 / −15.5951824 Ha | PySCF full CI, to 10⁻⁸ Ha |

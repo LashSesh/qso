@@ -1201,7 +1201,9 @@ fn virtual_distillation_suppresses_depolarising_noise() {
     for (e, want) in errors.iter().zip([0.194432, 0.0035535, 6.9202e-5]) {
         assert!(close(*e, want, 1e-4 * want.max(1e-2)), "{errors:?}");
     }
-    // Depolarising noise keeps the ideal state as the dominant eigenvector.
+    // In this circuit the only non-Clifford gate comes last, so every
+    // error leaves the ideal state an eigenvector of ρ: no noise floor (in
+    // general the dominant eigenvector moves and a floor remains).
     assert!(close(dominant_expectation(&rho, &o).unwrap(), ideal, 1e-12));
     // The measurement circuits on copies of ρ give the same values.
     for k in 2..=3 {

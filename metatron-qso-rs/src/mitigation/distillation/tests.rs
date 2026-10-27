@@ -161,9 +161,126 @@ fn distillation_suppresses_depolarising_errors() {
         errors[1] < 0.2 * errors[0] && errors[2] < 0.5 * errors[1],
         "{errors:?}"
     );
-    // What remains is the coherent mismatch of the dominant eigenvector.
-    let limit = (dominant_expectation(&rho, &o).unwrap() - ideal).abs();
-    assert!(errors[2] > limit - 1e-12);
+    // Here the ideal state stays an eigenvector of ρ (the only non-Clifford
+    // gate comes last), so nothing remains in the limit.
+    assert!((dominant_expectation(&rho, &o).unwrap() - ideal).abs() < 1e-12);
+    // With the rotation before the entangling gates the dominant
+    // eigenvector moves (Koczor's coherent mismatch): the error stops at a
+    // floor of about 9·10⁻⁴.
+    let mut early = Circuit::new(3);
+    early.ry(0, 0.3).h(0).cx(0, 1).cx(1, 2);
+    let ideal = o
+        .expectation(&StateVector::from_circuit(&early, &[]).unwrap())
+        .unwrap();
+    let mut rho = DensityMatrix::zero(3).unwrap();
+    rho.apply_circuit(&early, &[], Some(&noise)).unwrap();
+    let errors: Vec<f64> = (1..=3)
+        .map(|k| (distilled_expectation(&rho, &o, k).unwrap() - ideal).abs())
+        .collect();
+    let floor = (dominant_expectation(&rho, &o).unwrap() - ideal).abs();
+    assert!(floor > 5e-4 && floor < 2e-3, "{floor}");
+    assert!(
+        errors[1] < 0.05 * errors[0] && errors[2] < errors[1],
+        "{errors:?}"
+    );
+    assert!(errors[2] < 2.0 * floor, "{errors:?} {floor}");
+}
+
+#[test]
+fn coherent_errors_pass_through_unchanged() {
+    // An over-rotated but pure state is its own dominant eigenvector:
+    // every number of copies returns its (wrong) value.
+    let mut ideal = Circuit::new(2);
+    ideal.h(0).cx(0, 1);
+    let mut over = Circuit::new(2);
+    over.ry(0, std::f64::consts::FRAC_PI_2 + 0.3).cx(0, 1);
+    let o: PauliSum = "X0 X1 + Z0 Z1".parse().unwrap();
+    let want = o
+        .expectation(&StateVector::from_circuit(&over, &[]).unwrap())
+        .unwrap();
+    let truth = o
+        .expectation(&StateVector::from_circuit(&ideal, &[]).unwrap())
+        .unwrap();
+    let mut rho = DensityMatrix::zero(2).unwrap();
+    rho.apply_circuit(&over, &[], None).unwrap();
+    for k in 1..=3 {
+        let got = distilled_expectation(&rho, &o, k).unwrap();
+        assert!(
+            (got - want).abs() < 1e-12 && (got - truth).abs() > 0.04,
+            "{k}: {got}"
+        );
+    }
+}
+
+#[test]
+fn diagonalising_gates_are_exportable_two_level_rotations() {
+    // The two-level decomposition reproduces random unitaries on 1 to 3
+    // qubits (phases included).
+    let mut rng = Rng::seed_from_u64(31);
+    for k in 1..=3 {
+        let dim = 1usize << k;
+        let w = haar_unitary(dim, &mut rng).unwrap();
+        let targets: Vec<usize> = (0..k).map(|c| 2 * c + 1).collect();
+        let mut c = Circuit::new(2 * k);
+        append_two_level(&mut c, &w, &targets).unwrap();
+        for col in 0..dim {
+            // Basis state with local index `col` (targets[0] most significant).
+            let mut amps = vec![C64::new(0.0, 0.0); 1 << (2 * k)];
+            let index = |local: usize| {
+                (0..k)
+                    .map(|j| ((local >> (k - 1 - j)) & 1) << targets[j])
+                    .sum::<usize>()
+            };
+            amps[index(col)] = C64::new(1.0, 0.0);
+            let mut state = StateVector::from_amplitudes(amps).unwrap();
+            state.apply_circuit(&c, &[]).unwrap();
+            for row in 0..dim {
+                let got = state.amplitudes()[index(row)];
+                assert!(
+                    (got - w[(row, col)]).norm() < 1e-12,
+                    "k = {k} ({row}, {col})"
+                );
+            }
+        }
+    }
+    // The measurement circuits export to OpenQASM 2 and 3.
+    let o: PauliSum = "X0 Y1 + Z0".parse().unwrap();
+    let mut prep = Circuit::new(2);
+    prep.h(0);
+    for k in 2..=3 {
+        let vd = DistillationCircuits::new(&prep, &o, k).unwrap();
+        for s in vd.settings() {
+            assert!(crate::quantum::to_qasm3(&s.circuit, &[], true).is_ok());
+            assert!(crate::quantum::to_qasm2(&s.circuit, &[], true).is_ok());
+        }
+    }
+}
+
+#[test]
+fn malformed_results_are_rejected() {
+    let mut prep = Circuit::new(2);
+    prep.h(0).cx(0, 1);
+    let o: PauliSum = "Z0 Z1 + 0.5 X0".parse().unwrap();
+    let vd = DistillationCircuits::new(&prep, &o, 2).unwrap();
+    let n = vd.settings().len();
+    assert!(vd.evaluate(&vec![vec![1.0]; n]).is_err());
+    assert!(vd.evaluate(&vec![vec![0.0; 16]; n]).is_err());
+    let mut bad = vec![0.0; 16];
+    bad[0] = f64::NAN;
+    assert!(vd.evaluate(&vec![bad; n]).is_err());
+    let mut wide = Counts::new();
+    wide.insert(0b1011 << 4, 10);
+    let fine: Counts = [(0usize, 10usize)].into_iter().collect();
+    let mut counts = vec![fine; n];
+    counts[1] = wide;
+    assert!(vd.estimate(&counts).is_err());
+    // Deterministic outcomes give a zero standard error.
+    let one: Counts = [(0usize, 100usize)].into_iter().collect();
+    let e = DistillationCircuits::new(&Circuit::new(2), &"Z0".parse().unwrap(), 2)
+        .unwrap()
+        .estimate(&[one.clone(), one])
+        .unwrap();
+    assert_eq!((e.value, e.std_error), (1.0, 0.0));
 }
 
 #[test]

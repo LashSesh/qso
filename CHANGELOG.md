@@ -17,12 +17,15 @@ purification) of the [roadmap](docs/ROADMAP.md): its third stage.
   - `Tr(ρᵏO)/Tr(ρᵏ)` exactly for k = 1 to 3, and the limit of the dominant
     eigenvector.
   - Measurement circuits on k copies of the register: per qubit, the
-    k-qubit unitary `S_q P_q` diagonalised by one gate; estimates from
-    exact probabilities or from counts with a standard error.
+    k-qubit unitary `S_q P_q` diagonalised by two-level rotations
+    (controlled single-qubit gates, exportable to OpenQASM); estimates
+    from exact probabilities or from counts with a standard error.
   - Tests: closed forms for random mixtures, the circuits on copies of ρ
-    against the exact value to 10⁻¹¹, shots within their standard error;
-    a depolarised GHZ-like state from an error of 0.19 to 3.6·10⁻³ (two
-    copies) and 6.9·10⁻⁵ (three).
+    against the exact value to 10⁻¹¹, shots within 4 standard errors; a
+    depolarised GHZ-like state whose rotation comes last, from an error of
+    0.19 to 3.6·10⁻³ (two copies) and 6.9·10⁻⁵ (three), and one with the
+    rotation first, where the error stops at the dominant eigenvector's
+    floor of 9·10⁻⁴; an over-rotated pure state is unchanged.
 
 - **Sparse matching** (`qec::SparseMatchingDecoder`, Python
   `SparseMatchingDecoder`): minimum-weight perfect matching by growing

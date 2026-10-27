@@ -220,8 +220,10 @@ the first copy in ρ^⊗k, where S shifts the copies cyclically. Both factor
 over the qubits: on the k copies of qubit q, `S_q P_q` is a k-qubit unitary,
 and the unitaries of different qubits commute. `DistillationCircuits`
 rotates every copy so that P becomes a product of Zs, turns each unitary
-into a diagonal one with a k-qubit gate (its eigenvectors) and measures in
-the computational basis. Each shot contributes the real part of the product
+into a diagonal one with its eigenvectors and measures in the computational
+basis. That k-qubit transformation is built from two-level rotations,
+single-qubit gates controlled by the other copies, so the circuits export
+to OpenQASM 2 and 3. Noise in these measurement gates is not mitigated. Each shot contributes the real part of the product
 of the eigenvalues it lands in. One setting per Pauli string estimates the
 numerator, one more estimates `Tr(ρᵏ)`, and `estimate` returns their ratio
 with a standard error from the delta method. Copy c of qubit q is qubit
@@ -239,16 +241,30 @@ for k in (1, 2, 3):
 
 vd = q.DistillationCircuits(prep, o, copies=2)       # 3 settings on 6 qubits
 counts = [q.simulate(c).sample(20_000, seed=s) for s, c in enumerate(vd.circuits)]
-print(vd.estimate(counts))                            # noiseless here: ≈ ideal
+e = vd.estimate(counts)                               # noiseless circuits
+print(e.value - ideal, e.std_error)                   # within a few standard errors
 ```
+
+In this example the only non-Clifford gate comes last, so the ideal state
+remains an eigenvector of ρ and the error keeps falling. In general it
+does not: noise, incoherent noise included, also moves the dominant
+eigenvector away from the ideal state (the coherent mismatch Koczor
+describes), and the error stops at that floor. Rotating qubit 0 before the
+entangling gates gives errors 0.19, 4.6·10⁻³ and 1.0·10⁻³ against a floor
+of 9·10⁻⁴; in some circuits a second copy can even make the error larger.
+A coherent error alone, such as an over-rotation that leaves the state
+pure, is not reduced at all.
 
 The tests check the exact values against `Σ_i p_iᵏ⟨v_i|O|v_i⟩ / Σ_i p_iᵏ`
 for random mixtures, the circuits on copies of ρ against the exact value
 (to 10⁻¹¹, for one, two and three copies and Pauli strings with X, Y and
-Z), sampled shots against the exact value within their standard error,
-and the suppression of depolarising noise above. Distillation does not
-remove coherent errors: the dominant eigenvector of ρ differs from the
-ideal state when the noise rotates it, and that difference remains.
+Z), the two-level decomposition against random unitaries, sampled shots
+against the exact value (within 4 standard errors), both examples above
+and the unchanged value of an over-rotated pure state.
+
+`Tr(ρᵏP)` costs `O(4ⁿ)` per Pauli string for two copies and one matrix
+product for three (at 11 qubits 0.3 s and 29 s); `dominant_expectation`
+diagonalises ρ (about a minute at 11 qubits).
 
 ## Classical shadows
 

@@ -85,21 +85,23 @@ pub fn distilled_expectation(
     check_copies(copies)?;
     check_observable(observable, rho.n_qubits())?;
     let r = dense(rho)?;
-    let mut power = r.clone();
-    for _ in 1..copies {
-        power = &power * &r;
-    }
-    let trace = power.trace().re;
-    let mut numerator = 0.0;
     let n = rho.n_qubits();
+    if copies == 1 {
+        return rho.expectation(observable);
+    }
+    // Tr(ρᵏ P) = Tr(ρ^{k−1} · ρ P): one matrix product at most.
+    let left = if copies == 3 { &r * &r } else { r.clone() };
+    let trace = product_pauli_trace(&left, &r, PauliString::identity(), n);
+    let mut numerator = 0.0;
     for &(c, p) in observable.terms() {
-        numerator += c * pauli_trace(&power, p, n);
+        numerator += c * product_pauli_trace(&left, &r, p, n);
     }
     Ok(numerator / trace)
 }
 
-/// `Tr(M P)` for a Pauli string `P` (qubit 0 the least significant bit).
-fn pauli_trace(m: &CMatrix, p: PauliString, n: usize) -> f64 {
+/// `Re Tr(A B P)` for a Pauli string `P` in `O(4ⁿ)`: `P` has one entry
+/// per column, `P[a⊕x, a] = phase · (−1)^{|a∧z|}`.
+fn product_pauli_trace(a: &CMatrix, b: &CMatrix, p: PauliString, n: usize) -> f64 {
     let dim = 1usize << n;
     let (x, z) = (p.x_mask() as usize, p.z_mask() as usize);
     let y = (x & z).count_ones();
@@ -109,16 +111,18 @@ fn pauli_trace(m: &CMatrix, p: PauliString, n: usize) -> f64 {
         C64::new(-1.0, 0.0),
         C64::new(0.0, -1.0),
     ][(y % 4) as usize];
-    // P|b⟩ = phase · (−1)^{|b∧z|} |b ⊕ x⟩, so Tr(M P) = Σ_b M[b, b⊕x] · ….
-    let mut sum = C64::new(0.0, 0.0);
-    for b in 0..dim {
-        let sign = if (b & z).count_ones() % 2 == 1 {
+    let sum = crate::parallel::sum_c64(dim, |col| {
+        let sign = if (col & z).count_ones() % 2 == 1 {
             -1.0
         } else {
             1.0
         };
-        sum += m[(b, b ^ x)] * sign;
-    }
+        let mut v = C64::new(0.0, 0.0);
+        for row in 0..dim {
+            v += a[(col, row)] * b[(row, col ^ x)];
+        }
+        v * sign
+    });
     (sum * phase).re
 }
 
@@ -201,7 +205,9 @@ fn shift_operator(k: usize, with_z: bool) -> CMatrix {
 /// Eigenvectors (columns) and eigenvalues of a normal matrix, from the
 /// Hermitian combination `(U + U†)/2 + c (U − U†)/2i` with a generic `c`.
 fn diagonalise_unitary(u: &CMatrix) -> (CMatrix, Vec<C64>) {
-    let c = 1.0 / PI.sqrt();
+    // Eigenvalues are 2k-th roots of unity; any c that keeps
+    // Re λ + c Im λ apart for distinct λ separates them.
+    let c = 0.3;
     let i = C64::new(0.0, 1.0);
     let h =
         (u + u.adjoint()) * C64::new(0.5, 0.0) + (u - u.adjoint()) * (C64::new(c, 0.0) / (i * 2.0));
@@ -209,10 +215,96 @@ fn diagonalise_unitary(u: &CMatrix) -> (CMatrix, Vec<C64>) {
     let values = (0..u.nrows())
         .map(|b| {
             let v = vectors.column(b);
-            (v.adjoint() * u * v)[(0, 0)]
+            let lambda = (v.adjoint() * u * v)[(0, 0)];
+            // Snap to the exact root of unity e^{iπm/6} (k ≤ 3).
+            let m = (lambda.arg() / (PI / 6.0)).round();
+            C64::from_polar(1.0, m * PI / 6.0)
         })
         .collect();
     (vectors, values)
+}
+
+/// Append the unitary `w` on `targets` (`targets[0]` the most significant
+/// local bit) as two-level rotations, each a single-qubit gate controlled
+/// by the other targets (Gray-code order, so that neighbouring basis states
+/// differ in one bit): gates that export to OpenQASM and run anywhere.
+fn append_two_level(circuit: &mut Circuit, w: &CMatrix, targets: &[usize]) -> Result<()> {
+    let k = targets.len();
+    let dim = 1usize << k;
+    let gray: Vec<usize> = (0..dim).map(|i| i ^ (i >> 1)).collect();
+    // W in Gray order.
+    let mut m = CMatrix::from_fn(dim, dim, |r, c| w[(gray[r], gray[c])]);
+    // G_m … G_1 W = diag(1, …, 1, e^{iφ}); record the G.
+    let mut ops: Vec<(usize, usize, [C64; 4])> = Vec::new();
+    for col in 0..dim - 1 {
+        for row in (col + 1..dim).rev() {
+            let (a, b) = (m[(row - 1, col)], m[(row, col)]);
+            if b.norm() < 1e-15 && row > col + 1 {
+                continue;
+            }
+            let norm = (a.norm_sqr() + b.norm_sqr()).sqrt();
+            // [[a*, b*], [−b, a]] / norm sends (a, b) to (norm, 0).
+            let g = [a.conj() / norm, b.conj() / norm, -b / norm, a / norm];
+            for c2 in 0..dim {
+                let (x, y) = (m[(row - 1, c2)], m[(row, c2)]);
+                m[(row - 1, c2)] = g[0] * x + g[1] * y;
+                m[(row, c2)] = g[2] * x + g[3] * y;
+            }
+            ops.push((row - 1, row, g));
+        }
+    }
+    let phase = m[(dim - 1, dim - 1)];
+    // W = G_1† … G_m† · diag(…, e^{iφ}): in time, the phase first.
+    let mut apply = |s: usize, t: usize, g: [C64; 4]| -> Result<()> {
+        // States s and t differ in one local bit; the others are controls.
+        let diff = gray[s] ^ gray[t];
+        let bit = diff.trailing_zeros() as usize;
+        let target = targets[k - 1 - bit];
+        let mut controls = Vec::new();
+        let mut flips = Vec::new();
+        for (c, &q) in targets.iter().enumerate() {
+            let local = k - 1 - c;
+            if local == bit {
+                continue;
+            }
+            controls.push(q);
+            if (gray[s] >> local) & 1 == 0 {
+                flips.push(q);
+            }
+        }
+        // g acts on (state s, state t); order it as (bit 0, bit 1).
+        let matrix = if (gray[s] >> bit) & 1 == 0 {
+            g.to_vec()
+        } else {
+            vec![g[3], g[2], g[1], g[0]]
+        };
+        for &q in &flips {
+            circuit.x(q);
+        }
+        circuit.unitary(matrix, &[target], &controls)?;
+        for &q in &flips {
+            circuit.x(q);
+        }
+        Ok(())
+    };
+    if (phase - C64::new(1.0, 0.0)).norm() > 1e-15 {
+        let last = dim - 1;
+        apply(
+            last - 1,
+            last,
+            [
+                C64::new(1.0, 0.0),
+                C64::new(0.0, 0.0),
+                C64::new(0.0, 0.0),
+                phase,
+            ],
+        )?;
+    }
+    for &(s, t, g) in ops.iter().rev() {
+        // G† = [[g0*, g2*], [g1*, g3*]].
+        apply(s, t, [g[0].conj(), g[2].conj(), g[1].conj(), g[3].conj()])?;
+    }
+    Ok(())
 }
 
 impl DistillationCircuits {
@@ -237,14 +329,6 @@ impl DistillationCircuits {
         }
         let (plain_vectors, plain_values) = diagonalise_unitary(&shift_operator(copies, false));
         let (z_vectors, z_values) = diagonalise_unitary(&shift_operator(copies, true));
-        let gate = |v: &CMatrix| -> Vec<C64> {
-            // V†, row-major.
-            let dim = v.nrows();
-            (0..dim)
-                .flat_map(|r| (0..dim).map(move |c| (r, c)))
-                .map(|(r, c)| v[(c, r)].conj())
-                .collect()
-        };
         let build = |p: PauliString| -> Result<DistillationSetting> {
             let mut measurement = Circuit::new(copies * n);
             let mut eigenvalues = Vec::with_capacity(n);
@@ -269,7 +353,7 @@ impl DistillationCircuits {
                     (&z_vectors, &z_values)
                 };
                 if copies > 1 {
-                    measurement.unitary(gate(v), &targets, &[])?;
+                    append_two_level(&mut measurement, &v.adjoint(), &targets)?;
                     eigenvalues.push(values.clone());
                 } else {
                     // One copy: measure P itself (Z after the rotation).
@@ -344,6 +428,21 @@ impl DistillationCircuits {
     /// (indexed by the measured bit string, qubit 0 least significant).
     pub fn evaluate(&self, probabilities: &[Vec<f64>]) -> Result<f64> {
         self.check_results(probabilities.len())?;
+        let outcomes = 1usize << (self.copies * self.n_qubits);
+        for p in probabilities {
+            if p.len() != outcomes {
+                return Err(QsoError::DimensionMismatch {
+                    expected: outcomes,
+                    actual: p.len(),
+                });
+            }
+            if p.iter().any(|v| !v.is_finite() || *v < 0.0) {
+                return Err(QsoError::invalid(
+                    "probabilities",
+                    "probabilities must be finite and non-negative",
+                ));
+            }
+        }
         let means: Vec<f64> = self
             .settings
             .iter()
@@ -356,6 +455,12 @@ impl DistillationCircuits {
             })
             .collect();
         let numerator: f64 = self.terms.iter().map(|&(c, i)| c * means[i]).sum();
+        if means[0].abs() < 1e-12 {
+            return Err(QsoError::invalid(
+                "probabilities",
+                "the estimate of Tr(ρᵏ) vanishes",
+            ));
+        }
         Ok(numerator / means[0])
     }
 
@@ -366,7 +471,23 @@ impl DistillationCircuits {
         let mut means = Vec::with_capacity(counts.len());
         let mut variances = Vec::with_capacity(counts.len());
         let mut shots = 0;
-        for (s, cnt) in self.settings.iter().zip(counts) {
+        let outcomes = 1usize << (self.copies * self.n_qubits);
+        for (index, (s, cnt)) in self.settings.iter().zip(counts).enumerate() {
+            if index == 0 && self.copies == 1 {
+                // One copy: Tr(ρ) = 1, nothing to measure.
+                means.push(1.0);
+                variances.push(0.0);
+                continue;
+            }
+            if let Some((&b, _)) = cnt.iter().find(|&(&b, _)| b >= outcomes) {
+                return Err(QsoError::invalid(
+                    "counts",
+                    format!(
+                        "outcome {b} has more than {} bits",
+                        self.copies * self.n_qubits
+                    ),
+                ));
+            }
             let total: usize = cnt.values().sum();
             if total < 2 {
                 return Err(QsoError::invalid(
@@ -375,17 +496,17 @@ impl DistillationCircuits {
                 ));
             }
             shots += total;
-            let (mut sum, mut sum2) = (0.0, 0.0);
-            for (&b, &k) in cnt {
-                let v = self.value(s, b);
-                sum += v * k as f64;
-                sum2 += v * v * k as f64;
-            }
-            let mean = sum / total as f64;
-            let var =
-                (sum2 / total as f64 - mean * mean).max(0.0) * total as f64 / (total - 1) as f64;
+            let mean = cnt
+                .iter()
+                .map(|(&b, &n)| self.value(s, b) * n as f64)
+                .sum::<f64>()
+                / total as f64;
+            let ss: f64 = cnt
+                .iter()
+                .map(|(&b, &n)| (self.value(s, b) - mean).powi(2) * n as f64)
+                .sum();
             means.push(mean);
-            variances.push(var / total as f64);
+            variances.push(ss / (total - 1) as f64 / total as f64);
         }
         // Numerator N = Σ c_i m_i over the Pauli settings (independent of
         // the denominator setting except through identity terms).
@@ -428,10 +549,10 @@ impl DistillationCircuits {
                 actual: rho.n_qubits(),
             });
         }
-        let power = tensor_power(rho, k)?;
         let mut probabilities = Vec::with_capacity(self.settings.len());
         for s in &self.settings {
-            let mut state = power.clone();
+            // Rebuilt per setting rather than cloned: one 4^{kn} copy alive.
+            let mut state = tensor_power(rho, k)?;
             state.apply_circuit(&s.measurement, &[], None)?;
             probabilities.push(state.probabilities());
         }
