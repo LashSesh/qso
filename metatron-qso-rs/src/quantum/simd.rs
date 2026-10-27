@@ -593,6 +593,362 @@ mod avx {
     }
 }
 
+/// Single-precision versions of the run primitives: AVX on x86-64 (four
+/// amplitudes per register), NEON on aarch64 (two), the portable loops
+/// elsewhere. Same rounding rules as the double-precision ones.
+pub(crate) mod single {
+    use num_complex::Complex32 as C32;
+
+    #[cfg(target_arch = "x86_64")]
+    use super::{AVX, level};
+    #[cfg(target_arch = "aarch64")]
+    use super::{NEON, level};
+
+    macro_rules! dispatch {
+        ($name:ident ( $($arg:ident : $ty:ty),* )) => {
+            #[inline]
+            pub(crate) fn $name($($arg: $ty),*) {
+                #[cfg(target_arch = "aarch64")]
+                if level() == NEON {
+                    // SAFETY: NEON is available (detected).
+                    unsafe { super::neon32::$name($($arg),*) };
+                    return;
+                }
+                #[cfg(target_arch = "x86_64")]
+                if level() == AVX {
+                    // SAFETY: AVX is available (detected).
+                    unsafe { super::avx32::$name($($arg),*) };
+                    return;
+                }
+                super::super::scalar::portable::$name($($arg),*)
+            }
+        };
+    }
+
+    dispatch!(mat2_runs(a: &mut [C32], b: &mut [C32], m: &[C32; 4]));
+    dispatch!(mat2_strided(x: &mut [C32], stride: usize, m: &[C32; 4]));
+    dispatch!(mat2_strided_real(x: &mut [C32], stride: usize, m: &[f32; 4]));
+    dispatch!(scale2_strided(x: &mut [C32], stride: usize, d0: C32, d1: C32));
+    dispatch!(scale_upper_strided(x: &mut [C32], stride: usize, z: C32));
+    dispatch!(mat2_runs_real(a: &mut [C32], b: &mut [C32], m: &[f32; 4]));
+    dispatch!(scale_run(x: &mut [C32], z: C32));
+    dispatch!(mat4_runs(r: [&mut [C32]; 4], m: &[C32; 16]));
+}
+
+#[cfg(target_arch = "x86_64")]
+mod avx32 {
+    //! Four complex amplitudes per 256-bit register.
+    use std::arch::x86_64::*;
+
+    use num_complex::Complex32 as C32;
+
+    use super::super::scalar::portable;
+
+    /// `m·x` for all four lanes, `m = (re, im)` broadcast.
+    #[inline]
+    #[target_feature(enable = "avx")]
+    fn cmul(re: __m256, im: __m256, x: __m256) -> __m256 {
+        let p = _mm256_mul_ps(re, x);
+        let q = _mm256_mul_ps(im, _mm256_permute_ps::<0b1011_0001>(x));
+        _mm256_addsub_ps(p, q)
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx")]
+    fn split(z: C32) -> (__m256, __m256) {
+        (_mm256_set1_ps(z.re), _mm256_set1_ps(z.im))
+    }
+
+    /// # Safety
+    /// `p` is valid for reading four `C32`.
+    #[inline]
+    #[target_feature(enable = "avx")]
+    unsafe fn load(p: *const C32) -> __m256 {
+        // SAFETY: by the caller; `C32` is `repr(C)` with two `f32`.
+        unsafe { _mm256_loadu_ps(p.cast()) }
+    }
+
+    /// # Safety
+    /// `p` is valid for writing four `C32`.
+    #[inline]
+    #[target_feature(enable = "avx")]
+    unsafe fn store(p: *mut C32, v: __m256) {
+        // SAFETY: by the caller.
+        unsafe { _mm256_storeu_ps(p.cast(), v) }
+    }
+
+    /// # Safety
+    /// AVX is available.
+    #[target_feature(enable = "avx")]
+    pub(super) unsafe fn mat2_runs(a: &mut [C32], b: &mut [C32], m: &[C32; 4]) {
+        let n = a.len().min(b.len());
+        let full = n & !3;
+        let (m0r, m0i) = split(m[0]);
+        let (m1r, m1i) = split(m[1]);
+        let (m2r, m2i) = split(m[2]);
+        let (m3r, m3i) = split(m[3]);
+        let (pa, pb) = (a.as_mut_ptr(), b.as_mut_ptr());
+        for i in (0..full).step_by(4) {
+            // SAFETY: i + 3 < n ≤ both lengths.
+            unsafe {
+                let x = load(pa.add(i));
+                let y = load(pb.add(i));
+                let u = _mm256_add_ps(cmul(m0r, m0i, x), cmul(m1r, m1i, y));
+                let v = _mm256_add_ps(cmul(m2r, m2i, x), cmul(m3r, m3i, y));
+                store(pa.add(i), u);
+                store(pb.add(i), v);
+            }
+        }
+        portable::mat2_runs(&mut a[full..n], &mut b[full..n], m);
+    }
+
+    /// # Safety
+    /// AVX is available.
+    #[target_feature(enable = "avx")]
+    pub(super) unsafe fn mat2_runs_real(a: &mut [C32], b: &mut [C32], m: &[f32; 4]) {
+        let n = a.len().min(b.len());
+        let full = n & !3;
+        let [m0, m1, m2, m3] = m.map(|x| _mm256_set1_ps(x));
+        let (pa, pb) = (a.as_mut_ptr(), b.as_mut_ptr());
+        for i in (0..full).step_by(4) {
+            // SAFETY: i + 3 < n ≤ both lengths.
+            unsafe {
+                let x = load(pa.add(i));
+                let y = load(pb.add(i));
+                let u = _mm256_add_ps(_mm256_mul_ps(x, m0), _mm256_mul_ps(y, m1));
+                let v = _mm256_add_ps(_mm256_mul_ps(x, m2), _mm256_mul_ps(y, m3));
+                store(pa.add(i), u);
+                store(pb.add(i), v);
+            }
+        }
+        portable::mat2_runs_real(&mut a[full..n], &mut b[full..n], m);
+    }
+
+    /// # Safety
+    /// AVX is available.
+    #[target_feature(enable = "avx")]
+    pub(super) unsafe fn scale_run(x: &mut [C32], z: C32) {
+        let full = x.len() & !3;
+        let (zr, zi) = split(z);
+        let p = x.as_mut_ptr();
+        for i in (0..full).step_by(4) {
+            // SAFETY: i + 3 < x.len().
+            unsafe { store(p.add(i), cmul(zr, zi, load(p.add(i)))) };
+        }
+        portable::scale_run(&mut x[full..], z);
+    }
+
+    /// Lanes `[a, b, c, d]` (complex) from four values.
+    #[inline]
+    #[target_feature(enable = "avx")]
+    fn lanes(z: [C32; 4]) -> (__m256, __m256) {
+        (
+            _mm256_setr_ps(
+                z[0].re, z[0].re, z[1].re, z[1].re, z[2].re, z[2].re, z[3].re, z[3].re,
+            ),
+            _mm256_setr_ps(
+                z[0].im, z[0].im, z[1].im, z[1].im, z[2].im, z[2].im, z[3].im, z[3].im,
+            ),
+        )
+    }
+
+    /// Real lanes `[a, b, c, d]`, each on both parts of an amplitude.
+    #[inline]
+    #[target_feature(enable = "avx")]
+    fn real_lanes(r: [f32; 4]) -> __m256 {
+        _mm256_setr_ps(r[0], r[0], r[1], r[1], r[2], r[2], r[3], r[3])
+    }
+
+    /// The two halves of a register for the pairs of a gate with stride 1
+    /// (`[u₀, v₀, u₁, v₁]` → `[u₀, u₀, u₁, u₁]`, `[v₀, v₀, v₁, v₁]`) or 2
+    /// (`[u₀, u₁, v₀, v₁]` → `[u₀, u₁, u₀, u₁]`, `[v₀, v₁, v₀, v₁]`).
+    #[inline]
+    #[target_feature(enable = "avx")]
+    fn halves(w: __m256, stride: usize) -> (__m256, __m256) {
+        if stride == 1 {
+            let d = _mm256_castps_pd(w);
+            (
+                _mm256_castpd_ps(_mm256_permute_pd::<0b0000>(d)),
+                _mm256_castpd_ps(_mm256_permute_pd::<0b1111>(d)),
+            )
+        } else {
+            (
+                _mm256_permute2f128_ps::<0x00>(w, w),
+                _mm256_permute2f128_ps::<0x11>(w, w),
+            )
+        }
+    }
+
+    /// Coefficient lanes for [`halves`]: row 0 where the pair's lower
+    /// amplitude sits, row 1 where the upper one does.
+    #[inline]
+    fn rows<T: Copy>(lo: T, hi: T, stride: usize) -> [T; 4] {
+        if stride == 1 {
+            [lo, hi, lo, hi]
+        } else {
+            [lo, lo, hi, hi]
+        }
+    }
+
+    /// # Safety
+    /// AVX is available.
+    #[target_feature(enable = "avx")]
+    pub(super) unsafe fn mat2_strided(x: &mut [C32], stride: usize, m: &[C32; 4]) {
+        if stride > 2 {
+            for block in x.chunks_exact_mut(2 * stride) {
+                let (lo, hi) = block.split_at_mut(stride);
+                // SAFETY: AVX is available (by the caller).
+                unsafe { mat2_runs(lo, hi, m) };
+            }
+            return;
+        }
+        let (c0r, c0i) = lanes(rows(m[0], m[2], stride));
+        let (c1r, c1i) = lanes(rows(m[1], m[3], stride));
+        let full = x.len() & !3;
+        let p = x.as_mut_ptr();
+        for i in (0..full).step_by(4) {
+            // SAFETY: i + 3 < x.len().
+            unsafe {
+                let (u, v) = halves(load(p.add(i)), stride);
+                store(
+                    p.add(i),
+                    _mm256_add_ps(cmul(c0r, c0i, u), cmul(c1r, c1i, v)),
+                );
+            }
+        }
+        portable::mat2_strided(&mut x[full..], stride, m);
+    }
+
+    /// # Safety
+    /// AVX is available.
+    #[target_feature(enable = "avx")]
+    pub(super) unsafe fn mat2_strided_real(x: &mut [C32], stride: usize, m: &[f32; 4]) {
+        if stride > 2 {
+            for block in x.chunks_exact_mut(2 * stride) {
+                let (lo, hi) = block.split_at_mut(stride);
+                // SAFETY: AVX is available (by the caller).
+                unsafe { mat2_runs_real(lo, hi, m) };
+            }
+            return;
+        }
+        let c0 = real_lanes(rows(m[0], m[2], stride));
+        let c1 = real_lanes(rows(m[1], m[3], stride));
+        let full = x.len() & !3;
+        let p = x.as_mut_ptr();
+        for i in (0..full).step_by(4) {
+            // SAFETY: i + 3 < x.len().
+            unsafe {
+                let (u, v) = halves(load(p.add(i)), stride);
+                store(
+                    p.add(i),
+                    _mm256_add_ps(_mm256_mul_ps(u, c0), _mm256_mul_ps(v, c1)),
+                );
+            }
+        }
+        portable::mat2_strided_real(&mut x[full..], stride, m);
+    }
+
+    /// # Safety
+    /// AVX is available.
+    #[target_feature(enable = "avx")]
+    pub(super) unsafe fn scale2_strided(x: &mut [C32], stride: usize, d0: C32, d1: C32) {
+        if stride > 2 {
+            for block in x.chunks_exact_mut(2 * stride) {
+                let (lo, hi) = block.split_at_mut(stride);
+                // SAFETY: AVX is available (by the caller).
+                unsafe {
+                    scale_run(lo, d0);
+                    scale_run(hi, d1);
+                }
+            }
+            return;
+        }
+        let (re, im) = lanes(rows(d0, d1, stride));
+        let full = x.len() & !3;
+        let p = x.as_mut_ptr();
+        for i in (0..full).step_by(4) {
+            // SAFETY: i + 3 < x.len().
+            unsafe { store(p.add(i), cmul(re, im, load(p.add(i)))) };
+        }
+        portable::scale2_strided(&mut x[full..], stride, d0, d1);
+    }
+
+    /// # Safety
+    /// AVX is available.
+    #[target_feature(enable = "avx")]
+    pub(super) unsafe fn scale_upper_strided(x: &mut [C32], stride: usize, z: C32) {
+        if stride > 2 {
+            for block in x.chunks_exact_mut(2 * stride) {
+                // SAFETY: AVX is available (by the caller).
+                unsafe { scale_run(&mut block[stride..], z) };
+            }
+            return;
+        }
+        // Scale every lane, then keep the lower amplitudes as they were.
+        let (zr, zi) = split(z);
+        let full = x.len() & !3;
+        let p = x.as_mut_ptr();
+        for i in (0..full).step_by(4) {
+            // SAFETY: i + 3 < x.len().
+            unsafe {
+                let w = load(p.add(i));
+                let scaled = cmul(zr, zi, w);
+                let out = if stride == 1 {
+                    _mm256_blend_ps::<0b1100_1100>(w, scaled)
+                } else {
+                    _mm256_blend_ps::<0b1111_0000>(w, scaled)
+                };
+                store(p.add(i), out);
+            }
+        }
+        portable::scale_upper_strided(&mut x[full..], stride, z);
+    }
+
+    /// # Safety
+    /// AVX is available.
+    #[target_feature(enable = "avx")]
+    pub(super) unsafe fn mat4_runs(r: [&mut [C32]; 4], m: &[C32; 16]) {
+        let n = r.iter().map(|x| x.len()).min().unwrap_or(0);
+        let full = n & !3;
+        let c: [(__m256, __m256); 16] = std::array::from_fn(|k| split(m[k]));
+        let [r0, r1, r2, r3] = r;
+        let p = [
+            r0.as_mut_ptr(),
+            r1.as_mut_ptr(),
+            r2.as_mut_ptr(),
+            r3.as_mut_ptr(),
+        ];
+        for i in (0..full).step_by(4) {
+            // SAFETY: i + 3 < n ≤ every run's length.
+            unsafe {
+                let v = [
+                    load(p[0].add(i)),
+                    load(p[1].add(i)),
+                    load(p[2].add(i)),
+                    load(p[3].add(i)),
+                ];
+                for (k, &pk) in p.iter().enumerate() {
+                    let row = &c[4 * k..4 * k + 4];
+                    let mut s = cmul(row[0].0, row[0].1, v[0]);
+                    s = _mm256_add_ps(s, cmul(row[1].0, row[1].1, v[1]));
+                    s = _mm256_add_ps(s, cmul(row[2].0, row[2].1, v[2]));
+                    s = _mm256_add_ps(s, cmul(row[3].0, row[3].1, v[3]));
+                    store(pk.add(i), s);
+                }
+            }
+        }
+        portable::mat4_runs(
+            [
+                &mut r0[full..n],
+                &mut r1[full..n],
+                &mut r2[full..n],
+                &mut r3[full..n],
+            ],
+            m,
+        );
+    }
+}
+
 #[cfg(target_arch = "aarch64")]
 mod neon {
     //! One complex amplitude `[re, im]` per register. The product `m·x`
@@ -764,5 +1120,293 @@ mod neon {
                 }
             }
         }
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+mod neon32 {
+    //! Two complex amplitudes `[re₀, im₀, re₁, im₁]` per register. The
+    //! product `m·x` subtracts by adding the negated term, which rounds
+    //! the same.
+
+    use std::arch::aarch64::*;
+
+    use num_complex::Complex32 as C32;
+
+    use super::super::scalar::portable;
+
+    /// `m·x` for both lanes, `m = (re, im)` broadcast, `sign = [−1, 1, −1, 1]`.
+    #[inline]
+    #[target_feature(enable = "neon")]
+    fn cmul(re: float32x4_t, im: float32x4_t, sign: float32x4_t, x: float32x4_t) -> float32x4_t {
+        let p = vmulq_f32(re, x);
+        let q = vmulq_f32(vmulq_f32(im, vrev64q_f32(x)), sign);
+        vaddq_f32(p, q)
+    }
+
+    #[inline]
+    #[target_feature(enable = "neon")]
+    fn split(z: C32) -> (float32x4_t, float32x4_t) {
+        (vdupq_n_f32(z.re), vdupq_n_f32(z.im))
+    }
+
+    /// Lanes `[a, b]` (complex).
+    #[inline]
+    #[target_feature(enable = "neon")]
+    fn pair(a: C32, b: C32) -> (float32x4_t, float32x4_t) {
+        // SAFETY: four f32 on the stack.
+        unsafe {
+            (
+                vld1q_f32([a.re, a.re, b.re, b.re].as_ptr()),
+                vld1q_f32([a.im, a.im, b.im, b.im].as_ptr()),
+            )
+        }
+    }
+
+    #[inline]
+    #[target_feature(enable = "neon")]
+    fn sign() -> float32x4_t {
+        // SAFETY: four f32 on the stack.
+        unsafe { vld1q_f32([-1.0, 1.0, -1.0, 1.0].as_ptr()) }
+    }
+
+    /// # Safety
+    /// `p` is valid for reading two `C32`.
+    #[inline]
+    #[target_feature(enable = "neon")]
+    unsafe fn load(p: *const C32) -> float32x4_t {
+        // SAFETY: by the caller; `C32` is `repr(C)` with two `f32`.
+        unsafe { vld1q_f32(p.cast()) }
+    }
+
+    /// # Safety
+    /// `p` is valid for writing two `C32`.
+    #[inline]
+    #[target_feature(enable = "neon")]
+    unsafe fn store(p: *mut C32, v: float32x4_t) {
+        // SAFETY: by the caller.
+        unsafe { vst1q_f32(p.cast(), v) }
+    }
+
+    /// `[u, v]` → `[u, u]`, `[v, v]`.
+    #[inline]
+    #[target_feature(enable = "neon")]
+    fn halves(w: float32x4_t) -> (float32x4_t, float32x4_t) {
+        let (lo, hi) = (vget_low_f32(w), vget_high_f32(w));
+        (vcombine_f32(lo, lo), vcombine_f32(hi, hi))
+    }
+
+    /// # Safety
+    /// NEON is available.
+    #[target_feature(enable = "neon")]
+    pub(super) unsafe fn mat2_runs(a: &mut [C32], b: &mut [C32], m: &[C32; 4]) {
+        let n = a.len().min(b.len());
+        let full = n & !1;
+        let s = sign();
+        let (m0r, m0i) = split(m[0]);
+        let (m1r, m1i) = split(m[1]);
+        let (m2r, m2i) = split(m[2]);
+        let (m3r, m3i) = split(m[3]);
+        let (pa, pb) = (a.as_mut_ptr(), b.as_mut_ptr());
+        for i in (0..full).step_by(2) {
+            // SAFETY: i + 1 < n ≤ both lengths.
+            unsafe {
+                let x = load(pa.add(i));
+                let y = load(pb.add(i));
+                let u = vaddq_f32(cmul(m0r, m0i, s, x), cmul(m1r, m1i, s, y));
+                let v = vaddq_f32(cmul(m2r, m2i, s, x), cmul(m3r, m3i, s, y));
+                store(pa.add(i), u);
+                store(pb.add(i), v);
+            }
+        }
+        portable::mat2_runs(&mut a[full..n], &mut b[full..n], m);
+    }
+
+    /// # Safety
+    /// NEON is available.
+    #[target_feature(enable = "neon")]
+    pub(super) unsafe fn mat2_runs_real(a: &mut [C32], b: &mut [C32], m: &[f32; 4]) {
+        let n = a.len().min(b.len());
+        let full = n & !1;
+        let [m0, m1, m2, m3] = m.map(|x| vdupq_n_f32(x));
+        let (pa, pb) = (a.as_mut_ptr(), b.as_mut_ptr());
+        for i in (0..full).step_by(2) {
+            // SAFETY: i + 1 < n ≤ both lengths.
+            unsafe {
+                let x = load(pa.add(i));
+                let y = load(pb.add(i));
+                store(pa.add(i), vaddq_f32(vmulq_f32(x, m0), vmulq_f32(y, m1)));
+                store(pb.add(i), vaddq_f32(vmulq_f32(x, m2), vmulq_f32(y, m3)));
+            }
+        }
+        portable::mat2_runs_real(&mut a[full..n], &mut b[full..n], m);
+    }
+
+    /// # Safety
+    /// NEON is available.
+    #[target_feature(enable = "neon")]
+    pub(super) unsafe fn mat2_strided(x: &mut [C32], stride: usize, m: &[C32; 4]) {
+        if stride > 1 {
+            for block in x.chunks_exact_mut(2 * stride) {
+                let (lo, hi) = block.split_at_mut(stride);
+                // SAFETY: NEON is available (by the caller).
+                unsafe { mat2_runs(lo, hi, m) };
+            }
+            return;
+        }
+        let s = sign();
+        let (c0r, c0i) = pair(m[0], m[2]);
+        let (c1r, c1i) = pair(m[1], m[3]);
+        let p = x.as_mut_ptr();
+        for i in (0..x.len() & !1).step_by(2) {
+            // SAFETY: i + 1 < x.len().
+            unsafe {
+                let (u, v) = halves(load(p.add(i)));
+                store(
+                    p.add(i),
+                    vaddq_f32(cmul(c0r, c0i, s, u), cmul(c1r, c1i, s, v)),
+                );
+            }
+        }
+    }
+
+    /// # Safety
+    /// NEON is available.
+    #[target_feature(enable = "neon")]
+    pub(super) unsafe fn mat2_strided_real(x: &mut [C32], stride: usize, m: &[f32; 4]) {
+        if stride > 1 {
+            for block in x.chunks_exact_mut(2 * stride) {
+                let (lo, hi) = block.split_at_mut(stride);
+                // SAFETY: NEON is available (by the caller).
+                unsafe { mat2_runs_real(lo, hi, m) };
+            }
+            return;
+        }
+        // SAFETY: four f32 on the stack.
+        let (c0, c1) = unsafe {
+            (
+                vld1q_f32([m[0], m[0], m[2], m[2]].as_ptr()),
+                vld1q_f32([m[1], m[1], m[3], m[3]].as_ptr()),
+            )
+        };
+        let p = x.as_mut_ptr();
+        for i in (0..x.len() & !1).step_by(2) {
+            // SAFETY: i + 1 < x.len().
+            unsafe {
+                let (u, v) = halves(load(p.add(i)));
+                store(p.add(i), vaddq_f32(vmulq_f32(u, c0), vmulq_f32(v, c1)));
+            }
+        }
+    }
+
+    /// # Safety
+    /// NEON is available.
+    #[target_feature(enable = "neon")]
+    pub(super) unsafe fn scale2_strided(x: &mut [C32], stride: usize, d0: C32, d1: C32) {
+        if stride > 1 {
+            for block in x.chunks_exact_mut(2 * stride) {
+                let (lo, hi) = block.split_at_mut(stride);
+                // SAFETY: NEON is available (by the caller).
+                unsafe {
+                    scale_run(lo, d0);
+                    scale_run(hi, d1);
+                }
+            }
+            return;
+        }
+        let s = sign();
+        let (re, im) = pair(d0, d1);
+        let p = x.as_mut_ptr();
+        for i in (0..x.len() & !1).step_by(2) {
+            // SAFETY: i + 1 < x.len().
+            unsafe { store(p.add(i), cmul(re, im, s, load(p.add(i)))) };
+        }
+    }
+
+    /// # Safety
+    /// NEON is available.
+    #[target_feature(enable = "neon")]
+    pub(super) unsafe fn scale_upper_strided(x: &mut [C32], stride: usize, z: C32) {
+        if stride > 1 {
+            for block in x.chunks_exact_mut(2 * stride) {
+                // SAFETY: NEON is available (by the caller).
+                unsafe { scale_run(&mut block[stride..], z) };
+            }
+            return;
+        }
+        let s = sign();
+        let (zr, zi) = split(z);
+        let p = x.as_mut_ptr();
+        for i in (0..x.len() & !1).step_by(2) {
+            // SAFETY: i + 1 < x.len().
+            unsafe {
+                let w = load(p.add(i));
+                let scaled = cmul(zr, zi, s, w);
+                store(
+                    p.add(i),
+                    vcombine_f32(vget_low_f32(w), vget_high_f32(scaled)),
+                );
+            }
+        }
+    }
+
+    /// # Safety
+    /// NEON is available.
+    #[target_feature(enable = "neon")]
+    pub(super) unsafe fn scale_run(x: &mut [C32], z: C32) {
+        let full = x.len() & !1;
+        let s = sign();
+        let (zr, zi) = split(z);
+        let p = x.as_mut_ptr();
+        for i in (0..full).step_by(2) {
+            // SAFETY: i + 1 < x.len().
+            unsafe { store(p.add(i), cmul(zr, zi, s, load(p.add(i)))) };
+        }
+        portable::scale_run(&mut x[full..], z);
+    }
+
+    /// # Safety
+    /// NEON is available.
+    #[target_feature(enable = "neon")]
+    pub(super) unsafe fn mat4_runs(r: [&mut [C32]; 4], m: &[C32; 16]) {
+        let n = r.iter().map(|x| x.len()).min().unwrap_or(0);
+        let full = n & !1;
+        let s = sign();
+        let c: [(float32x4_t, float32x4_t); 16] = std::array::from_fn(|k| split(m[k]));
+        let [r0, r1, r2, r3] = r;
+        let p = [
+            r0.as_mut_ptr(),
+            r1.as_mut_ptr(),
+            r2.as_mut_ptr(),
+            r3.as_mut_ptr(),
+        ];
+        for i in (0..full).step_by(2) {
+            // SAFETY: i + 1 < n ≤ every run's length.
+            unsafe {
+                let v = [
+                    load(p[0].add(i)),
+                    load(p[1].add(i)),
+                    load(p[2].add(i)),
+                    load(p[3].add(i)),
+                ];
+                for (k, &pk) in p.iter().enumerate() {
+                    let row = &c[4 * k..4 * k + 4];
+                    let mut acc = cmul(row[0].0, row[0].1, s, v[0]);
+                    acc = vaddq_f32(acc, cmul(row[1].0, row[1].1, s, v[1]));
+                    acc = vaddq_f32(acc, cmul(row[2].0, row[2].1, s, v[2]));
+                    acc = vaddq_f32(acc, cmul(row[3].0, row[3].1, s, v[3]));
+                    store(pk.add(i), acc);
+                }
+            }
+        }
+        portable::mat4_runs(
+            [
+                &mut r0[full..n],
+                &mut r1[full..n],
+                &mut r2[full..n],
+                &mut r3[full..n],
+            ],
+            m,
+        );
     }
 }

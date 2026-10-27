@@ -67,7 +67,7 @@ or by the benchmark report you can run yourself.
 
 | Area | Contents |
 |---|---|
-| **Statevector simulator** | n-qubit pure states (up to 34 qubits) with multi-threaded kernels (AVX on x86-64, NEON on aarch64, bit-identical to the portable ones), gate fusion and cache blocking. Gates: H, X, Y, Z, S, S†, T, T†, √X, √X†, RX, RY, RZ, P, U, SWAP, RXX, RYY, RZZ and custom unitaries on up to 6 qubits, each with any number of control qubits. Sampling, mid-circuit measurement, reduced density matrices, entanglement entropy |
+| **Statevector simulator** | n-qubit pure states (up to 34 qubits; 35 in single precision, `StateVector32`) with multi-threaded kernels (AVX on x86-64, NEON on aarch64, bit-identical to the portable ones), gate fusion and cache blocking. Gates: H, X, Y, Z, S, S†, T, T†, √X, √X†, RX, RY, RZ, P, U, SWAP, RXX, RYY, RZZ and custom unitaries on up to 6 qubits, each with any number of control qubits. Sampling, mid-circuit measurement, reduced density matrices, entanglement entropy |
 | **Circuits** | Builder API with symbolic, differentiable parameters (`θ = a·p[i] + b`), inverse, binding, depth and gate counts. OpenQASM 2.0 and 3 export *and* import; multi-controlled gates are exported by exact, ancilla-free decomposition |
 | **Programs** | OpenQASM 2 and an OpenQASM 3 subset: gate definitions, `ctrl`/`negctrl`/`inv`/`pow` modifiers, mid-circuit measurement, reset and conditions. Exact outcome distributions by following every measurement branch, seeded sampling; checked against the OpenQASM project's example programs |
 | **Stabilizer simulation** | Aaronson–Gottesman tableaux for up to 16 384 qubits: Clifford gates (rotations by multiples of π/2 included), Pauli measurements, reset, expectation values, sampling. Graph states of any graph, local complementation, entanglement entropy from GF(2) cut-ranks. Clifford OpenQASM programs, mid-circuit measurement included, run on it automatically when they are too large for a state vector |
@@ -388,7 +388,7 @@ machine-readable output; `qso <command> --help` lists all options.
 | `qaoa` | QAOA for MaxCut with exact optimum and approximation ratio | `--graph`, `--p`, `--restarts`, `--seed`, `--layerwise` |
 | `vqe` | VQE with an EfficientSU2 ansatz, compared with the exact ground energy | `--model h2\|tfim:N,J,H\|heisenberg:N,J,Δ`, `--hamiltonian "<Pauli sum>"`, `--qubits`, `--layers`, `--method`, `--restarts`, `--seed` |
 | `grover` | Grover search, simulated vs. theoretical success | `--qubits`, `--marked`, `--iterations` |
-| `qasm FILE` | Run an OpenQASM 2 or 3 program and sample its bits, or convert it; Clifford programs beyond 34 qubits on the stabilizer simulator | `--shots`, `--seed`, `--export qasm2\|qasm3`, `--stabilizer`, `--mps`, `--max-bond N`, `--noise p1,p2`, `--device FILE`, `--trajectories N` |
+| `qasm FILE` | Run an OpenQASM 2 or 3 program and sample its bits, or convert it; Clifford programs beyond 34 qubits on the stabilizer simulator | `--shots`, `--seed`, `--export qasm2\|qasm3`, `--stabilizer`, `--mps`, `--max-bond N`, `--single`, `--noise p1,p2`, `--device FILE`, `--trajectories N` |
 | `qec` | Repetition, surface, colour or bivariate bicycle code memory experiment, or a Stim circuit file: logical error rate with union-find, matching or BP+OSD decoding | `--code surface\|repetition\|color\|bb`, `--basis z\|x`, `--decoder union-find\|matching\|bposd`, `--distance 3,5,7`, `--rounds`, `--p 0.001,0.01`, `--shots`, `--stim FILE`, `--circuit FILE` |
 | `estimate FILE` | ⟨H⟩ with standard error, optionally mitigated | `--observable`, `--shots`, `--device`, `--mitigate-readout`, `--zne 1,3,5`, `--pec N` |
 | `scf` | Hartree–Fock of a molecule from its geometry, full CI in an active space, FCIDUMP output | `--atoms`, `--basis`, `--charge`, `--multiplicity`, `--unrestricted`, `--frozen`, `--active`, `--fci`, `--fcidump` |
@@ -451,7 +451,7 @@ Know its boundaries:
 
 | Limit | Value | Reason |
 |---|---|---|
-| Pure-state register | 34 qubits | 2³⁴ amplitudes = 256 GiB; practical limit is your RAM (16 bytes per amplitude) |
+| Pure-state register | 34 qubits; 35 in single precision | 2³⁴ amplitudes = 256 GiB; practical limit is your RAM (16 bytes per amplitude, 8 in single precision) |
 | Stabilizer register | 16 384 qubits, Clifford gates only | n²/2 bytes, about twice that while measuring. A gate costs n/32 word operations, a measurement O(n²) (about a second at the limit), sampling every qubit O(n³/64) once (about two minutes at the limit) |
 | Matrix-product state | 65 536 qubits, bond dimension up to 4096, 2²⁸ tensor entries | A gate between neighbours costs O(χ³): about 15 ms at χ = 64, 0.13 s at χ = 128, 0.9 s at χ = 256 on one core; distant gates add two swaps per site in between. Highly entangled circuits need χ = 2^(n/2) and belong on the state vector |
 | Detector circuit | 65 536 qubits, 2²⁴ operations, 64 observables | Pauli-frame sampling: one word operation per operation and 64 shots. Surface code d = 21 with 21 rounds (881 qubits, 4840 detectors): error model 0.5 s, 100 000 decoded shots 15 s on one core |

@@ -2,7 +2,7 @@
 
 use metatron_qso::Rng;
 use metatron_qso::linalg::KrylovOptions;
-use metatron_qso::quantum::{MAX_QUBITS, PauliSum, StateVector};
+use metatron_qso::quantum::{MAX_QUBITS, MAX_QUBITS_SINGLE, PauliSum, StateVector, StateVector32};
 use numpy::{PyArray1, PyArray2};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -170,15 +170,156 @@ impl PyStateVector {
     }
 }
 
-/// Final state of `circuit(theta)` applied to |0…0⟩.
+/// Pure state of `n` qubits in single precision (`complex64` amplitudes):
+/// half the memory of `StateVector`, so one more qubit fits. Gate
+/// matrices are formed in double precision and rounded once; sums are
+/// taken in double precision, and probabilities and expectation values
+/// are divided by the squared norm, which rounding moves by about 10⁻⁶
+/// over a thousand gates.
+#[pyclass(name = "StateVector32", module = "metatron_qso")]
+#[derive(Clone)]
+pub struct PyStateVector32 {
+    pub inner: StateVector32,
+}
+
+fn check_qubits_single(n_qubits: usize) -> PyResult<()> {
+    if n_qubits == 0 || n_qubits > MAX_QUBITS_SINGLE {
+        return Err(invalid(format!(
+            "number of qubits must lie in 1..={MAX_QUBITS_SINGLE}, got {n_qubits}"
+        )));
+    }
+    Ok(())
+}
+
+#[pymethods]
+impl PyStateVector32 {
+    /// |0…0⟩.
+    #[staticmethod]
+    fn zero(py: Python<'_>, n_qubits: usize) -> PyResult<Self> {
+        check_qubits_single(n_qubits)?;
+        let inner = py.detach(|| StateVector32::zero(n_qubits)).raise()?;
+        Ok(Self { inner })
+    }
+
+    /// Computational basis state |index⟩.
+    #[staticmethod]
+    fn basis(n_qubits: usize, index: usize) -> PyResult<Self> {
+        check_qubits_single(n_qubits)?;
+        Ok(Self {
+            inner: StateVector32::basis(n_qubits, index).raise()?,
+        })
+    }
+
+    /// A double-precision state, rounded.
+    #[staticmethod]
+    fn from_state(state: &PyStateVector) -> Self {
+        Self {
+            inner: StateVector32::from_state(&state.inner),
+        }
+    }
+
+    /// The state in double precision (the stored amplitudes, norm kept).
+    fn to_state(&self) -> PyResult<PyStateVector> {
+        self.inner.to_state().raise().map(wrap)
+    }
+
+    #[getter]
+    fn n_qubits(&self) -> usize {
+        self.inner.n_qubits()
+    }
+
+    /// Amplitudes as a `complex64` array (a copy).
+    #[getter]
+    fn amplitudes<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<num_complex::Complex32>> {
+        PyArray1::from_slice(py, self.inner.amplitudes())
+    }
+
+    /// ‖ψ‖, summed in double precision.
+    fn norm(&self) -> f64 {
+        self.inner.norm()
+    }
+
+    /// Probabilities of all basis states (divided by the squared norm).
+    fn probabilities<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<f64>> {
+        real_array(py, self.inner.probabilities())
+    }
+
+    /// Measure all qubits `shots` times: `{bitstring: count}`.
+    #[pyo3(signature = (shots, seed = 0))]
+    fn sample<'py>(
+        &self,
+        py: Python<'py>,
+        shots: usize,
+        seed: u64,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let s = &self.inner;
+        let counts = py.detach(|| s.sample(shots, &mut Rng::seed_from_u64(seed)));
+        counts_dict(py, &counts, s.n_qubits())
+    }
+
+    /// ⟨ψ|H|ψ⟩ / ⟨ψ|ψ⟩.
+    fn expectation(&self, py: Python<'_>, observable: &PyPauliSum) -> PyResult<f64> {
+        let (s, h) = (&self.inner, &observable.inner);
+        py.detach(|| s.expectation(h)).raise()
+    }
+
+    /// |⟨self|other⟩|² / (‖self‖² ‖other‖²) against a double-precision
+    /// state.
+    fn fidelity(&self, py: Python<'_>, other: &PyStateVector) -> PyResult<f64> {
+        let (s, o) = (&self.inner, &other.inner);
+        py.detach(|| s.fidelity_with(o)).raise()
+    }
+
+    /// Apply `circuit(theta)` in place; returns the state.
+    #[pyo3(signature = (circuit, theta = None))]
+    fn apply<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        circuit: &PyCircuit,
+        theta: Option<RealArg<'_>>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        let theta = theta_or_empty(theta);
+        check_finite("theta", &theta)?;
+        let py = slf.py();
+        let s = &mut slf.inner;
+        let c = &circuit.inner;
+        py.detach(|| s.apply_circuit(c, &theta)).raise()?;
+        Ok(slf)
+    }
+
+    fn copy(&self) -> Self {
+        self.clone()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("StateVector32(n_qubits={})", self.inner.n_qubits())
+    }
+}
+
+/// Final state of `circuit(theta)` applied to |0…0⟩: a `StateVector`, or
+/// with `precision="single"` a `StateVector32`.
 #[pyfunction]
-#[pyo3(signature = (circuit, theta = None))]
+#[pyo3(signature = (circuit, theta = None, precision = "double"))]
 fn simulate(
     py: Python<'_>,
     circuit: &PyCircuit,
     theta: Option<RealArg<'_>>,
-) -> PyResult<PyStateVector> {
-    run_circuit(py, circuit, theta).map(wrap)
+    precision: &str,
+) -> PyResult<Py<PyAny>> {
+    match precision {
+        "double" => Ok(Py::new(py, run_circuit(py, circuit, theta).map(wrap)?)?.into_any()),
+        "single" => {
+            let theta = theta_or_empty(theta);
+            check_finite("theta", &theta)?;
+            let c = &circuit.inner;
+            let inner = py
+                .detach(|| StateVector32::from_circuit(c, &theta))
+                .raise()?;
+            Ok(Py::new(py, PyStateVector32 { inner })?.into_any())
+        }
+        other => Err(invalid(format!(
+            "unknown precision {other:?}; use \"double\" or \"single\""
+        ))),
+    }
 }
 
 /// Real linear combination of Pauli strings (a Hermitian observable).
@@ -386,5 +527,6 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyStateVector>()?;
     m.add_class::<PyPauliSum>()?;
     m.add_function(wrap_pyfunction!(simulate, m)?)?;
+    m.add_class::<PyStateVector32>()?;
     Ok(())
 }

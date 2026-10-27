@@ -3,8 +3,8 @@
 //!
 //! The kernels are generic over [`Amplitude`]. Double precision
 //! (`Complex64`) uses the vector primitives of [`super::simd`]; single
-//! precision (`Complex32`) uses the portable loops below, which the
-//! compiler vectorises (the complex products have no shuffles to hide).
+//! precision (`Complex32`) uses AVX versions with four amplitudes per
+//! register on x86-64 and the portable loops below elsewhere.
 //! Gate matrices are formed in double precision and rounded once per
 //! gate.
 
@@ -156,45 +156,45 @@ impl Amplitude for C32 {
     }
     #[inline]
     fn mat2_runs(a: &mut [Self], b: &mut [Self], m: &[Self; 4]) {
-        portable::mat2_runs(a, b, m)
+        simd::single::mat2_runs(a, b, m)
     }
     #[inline]
     fn mat2_runs_real(a: &mut [Self], b: &mut [Self], m: &[f32; 4]) {
-        portable::mat2_runs_real(a, b, m)
+        simd::single::mat2_runs_real(a, b, m)
     }
     #[inline]
     fn mat2_strided(x: &mut [Self], stride: usize, m: &[Self; 4]) {
-        portable::mat2_strided(x, stride, m)
+        simd::single::mat2_strided(x, stride, m)
     }
     #[inline]
     fn mat2_strided_real(x: &mut [Self], stride: usize, m: &[f32; 4]) {
-        portable::mat2_strided_real(x, stride, m)
+        simd::single::mat2_strided_real(x, stride, m)
     }
     #[inline]
     fn scale2_strided(x: &mut [Self], stride: usize, d0: Self, d1: Self) {
-        portable::scale2_strided(x, stride, d0, d1)
+        simd::single::scale2_strided(x, stride, d0, d1)
     }
     #[inline]
     fn scale_upper_strided(x: &mut [Self], stride: usize, z: Self) {
-        portable::scale_upper_strided(x, stride, z)
+        simd::single::scale_upper_strided(x, stride, z)
     }
     #[inline]
     fn scale_run(x: &mut [Self], z: Self) {
-        portable::scale_run(x, z)
+        simd::single::scale_run(x, z)
     }
     #[inline]
     fn mat4_runs(r: [&mut [Self]; 4], m: &[Self; 16]) {
-        portable::mat4_runs(r, m)
+        simd::single::mat4_runs(r, m)
     }
 }
 
 /// The primitives for any amplitude type, with the arithmetic of the
 /// double-precision portable versions.
-mod portable {
+pub(crate) mod portable {
     use super::Amplitude;
 
     #[inline]
-    pub(super) fn mat2_runs<A: Amplitude>(a: &mut [A], b: &mut [A], m: &[A; 4]) {
+    pub(crate) fn mat2_runs<A: Amplitude>(a: &mut [A], b: &mut [A], m: &[A; 4]) {
         for (x, y) in a.iter_mut().zip(b) {
             let (u, v) = (*x, *y);
             *x = m[0] * u + m[1] * v;
@@ -203,7 +203,7 @@ mod portable {
     }
 
     #[inline]
-    pub(super) fn mat2_runs_real<A: Amplitude>(a: &mut [A], b: &mut [A], m: &[A::Real; 4]) {
+    pub(crate) fn mat2_runs_real<A: Amplitude>(a: &mut [A], b: &mut [A], m: &[A::Real; 4]) {
         for (x, y) in a.iter_mut().zip(b) {
             let (u, v) = (*x, *y);
             *x = u.scale_real(m[0]) + v.scale_real(m[1]);
@@ -212,14 +212,14 @@ mod portable {
     }
 
     #[inline]
-    pub(super) fn scale_run<A: Amplitude>(x: &mut [A], z: A) {
+    pub(crate) fn scale_run<A: Amplitude>(x: &mut [A], z: A) {
         for a in x {
             *a *= z;
         }
     }
 
     #[inline]
-    pub(super) fn mat2_strided<A: Amplitude>(x: &mut [A], stride: usize, m: &[A; 4]) {
+    pub(crate) fn mat2_strided<A: Amplitude>(x: &mut [A], stride: usize, m: &[A; 4]) {
         if stride == 1 {
             for p in x.as_chunks_mut::<2>().0 {
                 let (u, v) = (p[0], p[1]);
@@ -235,7 +235,7 @@ mod portable {
     }
 
     #[inline]
-    pub(super) fn mat2_strided_real<A: Amplitude>(x: &mut [A], stride: usize, m: &[A::Real; 4]) {
+    pub(crate) fn mat2_strided_real<A: Amplitude>(x: &mut [A], stride: usize, m: &[A::Real; 4]) {
         if stride == 1 {
             for p in x.as_chunks_mut::<2>().0 {
                 let (u, v) = (p[0], p[1]);
@@ -251,14 +251,14 @@ mod portable {
     }
 
     #[inline]
-    pub(super) fn scale_upper_strided<A: Amplitude>(x: &mut [A], stride: usize, z: A) {
+    pub(crate) fn scale_upper_strided<A: Amplitude>(x: &mut [A], stride: usize, z: A) {
         for block in x.chunks_exact_mut(2 * stride) {
             scale_run(&mut block[stride..], z);
         }
     }
 
     #[inline]
-    pub(super) fn scale2_strided<A: Amplitude>(x: &mut [A], stride: usize, d0: A, d1: A) {
+    pub(crate) fn scale2_strided<A: Amplitude>(x: &mut [A], stride: usize, d0: A, d1: A) {
         for block in x.chunks_exact_mut(2 * stride) {
             let (lo, hi) = block.split_at_mut(stride);
             scale_run(lo, d0);
@@ -267,7 +267,7 @@ mod portable {
     }
 
     #[inline]
-    pub(super) fn mat4_runs<A: Amplitude>(r: [&mut [A]; 4], m: &[A; 16]) {
+    pub(crate) fn mat4_runs<A: Amplitude>(r: [&mut [A]; 4], m: &[A; 16]) {
         let [r0, r1, r2, r3] = r;
         for i in 0..r0.len() {
             let v = [r0[i], r1[i], r2[i], r3[i]];

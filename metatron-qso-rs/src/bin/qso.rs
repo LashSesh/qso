@@ -273,6 +273,10 @@ enum Command {
         /// Largest bond dimension of the matrix-product state.
         #[arg(long, default_value_t = 256, requires = "mps")]
         max_bond: usize,
+        /// Run on a single-precision state vector (half the memory, one
+        /// more qubit; programs without classical bits).
+        #[arg(long, conflicts_with_all = ["noise", "device", "stabilizer", "mps"])]
+        single: bool,
     },
     /// Estimate ⟨H⟩ of an OpenQASM circuit from shots, with standard
     /// errors and optional error mitigation.
@@ -995,6 +999,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             stabilizer,
             mps,
             max_bond,
+            single,
         } => {
             let src = read_text(file)?;
             let program = Program::from_qasm(&src)?;
@@ -1008,8 +1013,15 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             if noise.is_none() && device.is_none() {
                 // Exact simulation of the program; one without classical
                 // bits is measured on every qubit.
+                if *single && program.n_bits() != 0 {
+                    return Err(QsoError::invalid(
+                        "single",
+                        "single precision samples programs without classical bits (every qubit is measured at the end)",
+                    ));
+                }
                 let tableau = *stabilizer
                     || (!*mps
+                        && !*single
                         && program.n_qubits() > metatron_qso::quantum::MAX_QUBITS
                         && is_clifford_program(&program));
                 let mut bound = None;
@@ -1036,6 +1048,18 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                             .map(|(&r, &c)| (record_bitstring(r, program.n_bits()), c))
                             .collect()
                     }
+                } else if *single {
+                    let state = metatron_qso::quantum::StateVector32::from_circuit(
+                        &program.to_circuit()?,
+                        &[],
+                    )?;
+                    state
+                        .sample(*shots, &mut Rng::seed_from_u64(*seed))
+                        .iter()
+                        .map(|(&b, &c)| {
+                            (metatron_qso::quantum::bitstring(b, program.n_qubits()), c)
+                        })
+                        .collect()
                 } else if tableau {
                     if program.n_bits() == 0 {
                         let state = StabilizerState::from_circuit(&program.to_circuit()?, &[])?;
@@ -1060,6 +1084,8 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 };
                 let backend = if *mps {
                     "mps"
+                } else if *single {
+                    "statevector-single"
                 } else if tableau {
                     "stabilizer"
                 } else {

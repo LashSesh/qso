@@ -82,6 +82,7 @@ jobs:
           ./target/release/qso walk-circuit --graph cycle:16 > /tmp/walk.qasm
           ./target/release/qso qasm /tmp/walk.qasm --shots 100
           ./target/release/qso qasm /tmp/walk.qasm --shots 100 --mps --max-bond 64
+          ./target/release/qso qasm /tmp/walk.qasm --shots 100 --single
           ./target/release/qso qasm metatron-qso-rs/tests/data/openqasm/v3/teleport.qasm --shots 100
           ./target/release/qso qasm metatron-qso-rs/tests/data/openqasm/v2/qec.qasm --export qasm3
           ./target/release/qso qasm metatron-qso-rs/tests/data/openqasm/v2/qec.qasm --stabilizer --shots 100

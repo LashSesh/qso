@@ -111,23 +111,23 @@ def qiskit_circuit(n: int, ops: list, save: bool = True):
     return qc
 
 
-def aer_simulator(fusion: bool = True):
+def aer_simulator(fusion: bool = True, precision: str = "double"):
     from qiskit_aer import AerSimulator
 
-    return AerSimulator(method="statevector", fusion_enable=fusion)
+    return AerSimulator(method="statevector", fusion_enable=fusion, precision=precision)
 
 
-def aer_prepare(n: int, ops: list):
+def aer_prepare(n: int, ops: list, precision: str = "double"):
     """Transpile once at optimisation level 0 (keeps the gate list intact)."""
     from qiskit import transpile
 
-    sim = aer_simulator()
+    sim = aer_simulator(precision=precision)
     tqc = transpile(qiskit_circuit(n, ops), sim, optimization_level=0)
     return sim, tqc
 
 
-def aer_state(n: int, ops: list) -> np.ndarray:
-    sim, tqc = aer_prepare(n, ops)
+def aer_state(n: int, ops: list, precision: str = "double") -> np.ndarray:
+    sim, tqc = aer_prepare(n, ops, precision)
     return np.asarray(sim.run(tqc).result().get_statevector())
 
 

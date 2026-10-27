@@ -98,3 +98,62 @@ fn single_precision_states_convert_sample_and_measure() {
     d.apply_diagonal_evolution(&[0.0, 1.0], 0.5).unwrap();
     assert!((d.amplitudes()[1].arg() + 0.5).abs() < 1e-7);
 }
+
+#[test]
+fn vector_primitives_round_like_the_portable_ones() {
+    use crate::quantum::scalar::portable;
+    use crate::quantum::simd::single;
+    let mut rng = Rng::seed_from_u64(31);
+    let c = |rng: &mut Rng| C32::new(rng.normal() as f32, rng.normal() as f32);
+    for len in [0usize, 1, 3, 4, 7, 16, 33] {
+        let a: Vec<C32> = (0..len).map(|_| c(&mut rng)).collect();
+        let b: Vec<C32> = (0..len).map(|_| c(&mut rng)).collect();
+        let m: [C32; 4] = std::array::from_fn(|_| c(&mut rng));
+        let r: [f32; 4] = std::array::from_fn(|_| rng.normal() as f32);
+        let m4: [C32; 16] = std::array::from_fn(|_| c(&mut rng));
+        let (mut a1, mut b1, mut a2, mut b2) = (a.clone(), b.clone(), a.clone(), b.clone());
+        single::mat2_runs(&mut a1, &mut b1, &m);
+        portable::mat2_runs(&mut a2, &mut b2, &m);
+        assert_eq!((a1, b1), (a2, b2));
+        let (mut a1, mut b1, mut a2, mut b2) = (a.clone(), b.clone(), a.clone(), b.clone());
+        single::mat2_runs_real(&mut a1, &mut b1, &r);
+        portable::mat2_runs_real(&mut a2, &mut b2, &r);
+        assert_eq!((a1, b1), (a2, b2));
+        let (mut a1, mut a2) = (a.clone(), a.clone());
+        single::scale_run(&mut a1, m[0]);
+        portable::scale_run(&mut a2, m[0]);
+        assert_eq!(a1, a2);
+        let mut runs1 = [a.clone(), b.clone(), a.clone(), b.clone()];
+        let mut runs2 = runs1.clone();
+        let [p, q, s, t] = &mut runs1;
+        single::mat4_runs([p, q, s, t], &m4);
+        let [p, q, s, t] = &mut runs2;
+        portable::mat4_runs([p, q, s, t], &m4);
+        assert_eq!(runs1, runs2);
+    }
+    for stride in [1usize, 2, 4, 8] {
+        for blocks in [1usize, 2, 3, 5] {
+            let x: Vec<C32> = (0..2 * stride * blocks).map(|_| c(&mut rng)).collect();
+            let m: [C32; 4] = std::array::from_fn(|_| c(&mut rng));
+            let r: [f32; 4] = std::array::from_fn(|_| rng.normal() as f32);
+            let check = |f: &dyn Fn(&mut [C32]), g: &dyn Fn(&mut [C32])| {
+                let (mut p, mut q) = (x.clone(), x.clone());
+                f(&mut p);
+                g(&mut q);
+                assert_eq!(p, q, "stride {stride}, {blocks} blocks");
+            };
+            check(&|v| single::mat2_strided(v, stride, &m), &|v| {
+                portable::mat2_strided(v, stride, &m)
+            });
+            check(&|v| single::mat2_strided_real(v, stride, &r), &|v| {
+                portable::mat2_strided_real(v, stride, &r)
+            });
+            check(&|v| single::scale2_strided(v, stride, m[0], m[1]), &|v| {
+                portable::scale2_strided(v, stride, m[0], m[1])
+            });
+            check(&|v| single::scale_upper_strided(v, stride, m[2]), &|v| {
+                portable::scale_upper_strided(v, stride, m[2])
+            });
+        }
+    }
+}

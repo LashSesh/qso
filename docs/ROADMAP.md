@@ -12,7 +12,7 @@ state-vector core at memory bandwidth), 1.12 (noise learning) and 1.13
 (walks beyond static Hamiltonians) — ship together as release 1.6.0;
 finished milestones are released together, not one by one. The third
 stage (1.14 to 1.17) is delivered and not yet released; of the fourth
-stage (1.18 to 1.21), 1.18 and 1.19 are delivered and 1.20 is in progress. Up to 1.3
+stage (1.18 to 1.21), 1.18 to 1.20 are delivered and 1.21 is in progress. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -46,7 +46,7 @@ which withdraws the results of version 1.
 
 | Area | Now | Gap |
 |---|---|---|
-| Statevector speed | specialised kernels (1.1); gate fusion and cache blocking (1.3.0): 16-qubit layers 4.7× and 18–24-qubit layers 1.6–2.6× faster than in 1.2; batched evaluation; AVX and NEON kernels close to memory bandwidth and a blocked adjoint pass (1.11) | no single precision; worker threads sleep when idle, so short isolated simulations on virtual machines run cold — see [measurements](#measured-performance-against-established-simulators) |
+| Statevector speed | specialised kernels (1.1); gate fusion and cache blocking (1.3.0): 16-qubit layers 4.7× and 18–24-qubit layers 1.6–2.6× faster than in 1.2; batched evaluation; AVX and NEON kernels close to memory bandwidth and a blocked adjoint pass (1.11); single precision, one more qubit and about twice the speed on large registers (1.20) | worker threads sleep when idle, so short isolated simulations on virtual machines run cold — see [measurements](#measured-performance-against-established-simulators) |
 | Boson sampling | exact probabilities and exact sampling (1.1); partial distinguishability, loss and Gaussian boson sampling with hafnians and torontonians (1.14) | mixed Gaussian states with many photons spread over many modes are impractical (10¹² operations at 20 photons in 10 modes) |
 | Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | noise learning for layers of two-qubit Clifford gates only, on density matrices (1.12); no leakage or non-Markovian noise, channels on at most two qubits; virtual distillation (1.17) mitigates only its measured copies' preparation |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18) | time-dependent Hamiltonians and decoherent coined walks without symmetry reduction; pretty good transfer on other graphs |
@@ -881,7 +881,7 @@ bounded with errors, exponents are reduced, tie order and order 0 follow
 `ldpc`, and the cross-validation now times both decoders and checks the
 Steane case and exhaustive OSD.
 
-### 1.20 — Single precision (M)
+### 1.20 — Single precision (M, delivered)
 
 Use case: two more qubits in the same memory and faster gates where
 10⁻⁶ accuracy suffices (sampling, QAOA landscapes, large walks).
@@ -895,6 +895,23 @@ Validation: random circuits against the double-precision simulator
 (fidelity loss measured and bounded in the documentation); speed and
 memory against the `f64` path and against Qulacs and Qiskit Aer in single
 precision on the same machine.
+
+| Deliverable | Delivered | Not done, and why |
+|---|---|---|
+| `f32` state vectors | `quantum::StateVector32` (Python `StateVector32`, `simulate(..., precision="single")`, `qso qasm --single`): the kernels and the fused, blocked plan are generic over the amplitude type; AVX (four amplitudes per register) and NEON (two) primitives, bit for bit the portable arithmetic; sampling, measurement, probabilities, expectation values, conversion to and from double precision | single-precision density matrices, trajectories and mid-circuit programs: they keep double precision, and their registers are small or their cost is elsewhere |
+| Limits | `MAX_QUBITS_SINGLE` = `MAX_QUBITS` + 1 | — |
+
+Validation as planned: after 2800 gates on 18 qubits the direction stays
+within 1 − F < 10⁻¹¹ of the double-precision state (the norm drifts by
+about 10⁻⁶; probabilities and expectation values are divided by it), and
+expectation values agree to 10⁻⁶. In the cross-validation QSO's and
+Qiskit Aer's single precision both reach 1 − F ≈ 4·10⁻¹⁴ on 60-gate
+circuits. Speed on 4 cores: 1.6 to 2.1 times faster than QSO's double
+precision from 20 qubits on (24 qubits, one layer: 150 against 277 ms),
+and 7 to 13 times faster than Qiskit Aer, whose single precision was not
+faster than its double precision here. Qulacs offers no single precision on
+the CPU. The double-precision path was timed before and after the change
+and is unchanged within the noise of the machine.
 
 ### 1.21 — Coverage and differential testing (S–M)
 

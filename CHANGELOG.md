@@ -9,10 +9,22 @@ All notable changes to this project are documented here. The format follows
 Milestones 1.14 (Gaussian boson sampling and imperfect photons), 1.15
 (molecular integrals), 1.16 (fast matching) and 1.17 (mitigation by
 purification) of the [roadmap](docs/ROADMAP.md), its third stage, and
-milestones 1.18 (pretty good state transfer) and 1.19 (decoding beyond
-matching) of the fourth.
+milestones 1.18 (pretty good state transfer), 1.19 (decoding beyond
+matching) and 1.20 (single precision) of the fourth.
 
 ### Added
+
+- **Single-precision state vectors** (`quantum::StateVector32`, Python
+  `StateVector32` and `simulate(..., precision="single")`, `qso qasm
+  --single`).
+  - The gate kernels and the fused, blocked execution plan are generic
+    over the amplitude type; single precision has AVX versions with four
+    amplitudes per register (bit for bit the portable arithmetic).
+  - Half the memory, one more qubit (`MAX_QUBITS_SINGLE`); gate matrices
+    in double precision, rounded once; sums in double precision.
+  - Tests: 1 − F below 10⁻¹¹ after 2800 gates on 18 qubits, expectation
+    values to 10⁻⁶; in the cross-validation, against double precision
+    beside Qiskit Aer's single precision, and timed against both.
 
 - **BP+OSD decoding, colour and bivariate bicycle codes** (`qec::bposd`,
   `qec::css`; Python `BpOsdDecoder`, `CssCode`, `css_code_memory`; `qso qec

@@ -1291,3 +1291,37 @@ fn bposd_decodes_colour_and_bicycle_codes() {
     eprintln!("[[72, 12, 6]]: {bb}");
     assert!(bb < 0.01, "{bb}");
 }
+
+#[test]
+fn single_precision_states_follow_double_precision() {
+    use metatron_qso::quantum::{MAX_QUBITS, MAX_QUBITS_SINGLE, StateVector32};
+    // One qubit more in the same memory.
+    assert_eq!(MAX_QUBITS_SINGLE, MAX_QUBITS + 1);
+    // Layers of rotations and entanglers on 18 qubits, 40 layers (2800
+    // gates): rounding moves the norm by about 10⁻⁶ and the direction by
+    // 1 − F below 10⁻¹¹; expectation values agree to 10⁻⁶.
+    let n = 18;
+    let mut c = Circuit::new(n);
+    for r in 0..40 {
+        for q in 0..n {
+            c.rx(q, 0.3 + 0.1 * q as f64 + r as f64).rz(q, 0.2);
+        }
+        for q in (r % 2..n - 1).step_by(2) {
+            c.cx(q, q + 1);
+        }
+        for q in 0..n / 2 {
+            c.rzz(q, n - 1 - q, 0.7);
+        }
+    }
+    let exact = StateVector::from_circuit(&c, &[]).unwrap();
+    let single = StateVector32::from_circuit(&c, &[]).unwrap();
+    let infidelity = 1.0 - single.fidelity_with(&exact).unwrap();
+    eprintln!(
+        "1 − F = {infidelity:.2e}, ‖ψ‖ − 1 = {:.2e}",
+        single.norm() - 1.0
+    );
+    assert!(infidelity < 1e-11, "{infidelity}");
+    assert!((single.norm() - 1.0).abs() < 1e-5);
+    let h: PauliSum = "Z0 Z1 + 0.5 X3 X4 - 0.2 Y7".parse().unwrap();
+    assert!((single.expectation(&h).unwrap() - h.expectation(&exact).unwrap()).abs() < 1e-6);
+}

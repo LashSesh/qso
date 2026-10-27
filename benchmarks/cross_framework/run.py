@@ -75,11 +75,12 @@ def worker(lib: str, kind: str, n: int, reps: int, warmup: int) -> list[float]:
             run = lambda: f(theta)  # noqa: E731
     else:
         ops = fw.layer_ops(n, int(kind))
-        if lib == "qso":
+        if lib in ("qso", "qso-single"):
             import metatron_qso as q
 
             c = fw.qso_circuit(n, ops)
-            run = lambda: q.simulate(c)  # noqa: E731
+            precision = "single" if lib == "qso-single" else "double"
+            run = lambda: q.simulate(c, precision=precision)  # noqa: E731
         elif lib == "qulacs":
             from qulacs import QuantumState
 
@@ -89,8 +90,8 @@ def worker(lib: str, kind: str, n: int, reps: int, warmup: int) -> list[float]:
                 s = QuantumState(n)
                 c.update_quantum_state(s)
 
-        elif lib == "aer":
-            sim, tqc = fw.aer_prepare(n, ops)
+        elif lib in ("aer", "aer-single"):
+            sim, tqc = fw.aer_prepare(n, ops, "single" if lib == "aer-single" else "double")
             run = lambda: sim.run(tqc).result()  # noqa: E731
         elif lib == "pennylane":
             run = fw.pennylane_state_fn(n, ops)
@@ -121,6 +122,12 @@ def worker(lib: str, kind: str, n: int, reps: int, warmup: int) -> list[float]:
 
 # ----------------------------------------------------------------------------
 # Correctness
+
+
+def q_single_state(n: int, ops: list):
+    import metatron_qso as q
+
+    return q.simulate(fw.qso_circuit(n, ops), precision="single").amplitudes
 
 
 def correctness(quick: bool) -> dict:
@@ -181,7 +188,20 @@ def correctness(quick: bool) -> dict:
         a = rng.normal(size=(size, size)) + 1j * rng.normal(size=(size, size))
         ours, theirs = q.permanent(a), perm(a)
         perm_err = max(perm_err, abs(ours - theirs) / abs(theirs))
+    # Single precision: QSO's StateVector32 and Aer's single-precision
+    # simulator against QSO's double-precision state (directions; norms
+    # drift by rounding).
+    single = {"qso": 0.0, "qiskit-aer": 0.0}
+    for ops in circuits:
+        n = 1 + max(max(qs) for _, qs, _ in ops)
+        ref = fw.qso_state(n, ops)
+        ours = np.asarray(q_single_state(n, ops), dtype=np.complex128)
+        theirs = np.asarray(fw.aer_state(n, ops, "single"), dtype=np.complex128)
+        for name, v in (("qso", ours), ("qiskit-aer", theirs)):
+            f = abs(np.vdot(ref, v)) ** 2 / (np.vdot(v, v).real * np.vdot(ref, ref).real)
+            single[name] = max(single[name], 1 - f)
     return {
+        "single_precision_infidelity_vs_double": single,
         "random_circuits": len(circuits) - 1,
         "qubits": 8,
         "gates_per_circuit": 60,
@@ -673,6 +693,9 @@ TOLERANCES = {
     "hafnian": 1e-10,
     "gaussian_probability": 1e-12,
     "density_matrix": 1e-12,
+    # Single precision: 1 − F of the direction, measured 10⁻¹² for both
+    # simulators on 60-gate circuits.
+    "single_precision": 1e-9,
     "error_model": 1e-12,
     # Detection-event rates are sampled: |z| over up to 72 detectors.
     "detector_rate_z": 5.0,
@@ -718,6 +741,8 @@ def check(c: dict) -> list[str]:
     for key in ("covariance_max_difference", "gbs_probability_max_difference", "click_probability_max_difference"):
         if not g[key] <= TOLERANCES["gaussian_probability"]:
             failures.append(f"{key} against The Walrus is {g[key]:.3g}")
+    if not c["single_precision_infidelity_vs_double"]["qso"] <= TOLERANCES["single_precision"]:
+        failures.append(f"single-precision states differ: {c['single_precision_infidelity_vs_double']}")
     d = c["noisy_circuits"]["max_density_matrix_difference_vs_qiskit_aer"]
     if not d <= TOLERANCES["density_matrix"]:
         failures.append(f"noisy density matrices differ from Qiskit Aer by {d:.3g}")
@@ -763,7 +788,10 @@ def check(c: dict) -> list[str]:
 
 def configurations(quick: bool) -> list[tuple]:
     """(kind, n, libraries, reps per round, warm-up)."""
-    state_libs = ["qso", "qulacs", "aer", "pennylane"]
+    # Single precision: QSO's StateVector32 and Aer's single-precision
+    # state vector (Qulacs, PennyLane Lightning and Cirq's default build
+    # are double precision only).
+    state_libs = ["qso", "qulacs", "aer", "pennylane", "qso-single", "aer-single"]
     sizes = [16, 20] if quick else [16, 20, 22, 24]
     out = []
     for n in sizes:
