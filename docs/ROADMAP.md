@@ -11,7 +11,7 @@ second stage — 1.10 (exact decoding and Stim circuits), 1.11 (the
 state-vector core at memory bandwidth), 1.12 (noise learning) and 1.13
 (walks beyond static Hamiltonians) — ship together as release 1.6.0;
 finished milestones are released together, not one by one. In the third
-stage (1.14 to 1.17), 1.14 is delivered and the others are planned. Up to 1.3
+stage (1.14 to 1.17), 1.14 and 1.15 are delivered and the others are planned. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -662,7 +662,7 @@ is rescaled and limited to 40 rows, and the accuracy statements were
 corrected. Smaller findings (repeated modes in `reduced`, a scale-free
 uncertainty check, error messages) are fixed as well.
 
-### 1.15 — Molecular integrals (M)
+### 1.15 — Molecular integrals (M, delivered)
 
 Use case: molecules from their geometry, without an external
 quantum-chemistry code.
@@ -675,6 +675,34 @@ quantum-chemistry code.
 Validation: integrals, Hartree–Fock and full-CI energies of H₂, LiH, BeH₂
 and H₂O against PySCF (10⁻⁸ Ha), the existing FCIDUMP files reproduced
 from geometries.
+
+Delivered: `chemistry::integrals` (molecules, STO-3G and 6-31G for H to
+Ne, McMurchie–Davidson integrals) and `chemistry::scf` (RHF and UHF with
+DIIS from atomic densities, a level-shifted fallback, frozen-core active
+spaces as `MolecularIntegrals`), with Python bindings and `qso scf`. Full
+CI moved to the Slater–Condon rules and, above 1024 determinants, to
+Davidson's method on `H c` without the matrix. On identical geometries,
+integrals agree with PySCF to 1.4·10⁻¹³, Hartree–Fock energies to
+10⁻¹⁰ Ha, full CI and CASCI to 10⁻⁹ Ha.
+
+An independent review confirmed the integrals element by element on 20
+systems (to 3·10⁻¹⁴), the Boys function against 40-digit values, RHF and
+UHF energies on some 40 atoms and molecules (10⁻¹³ Ha where both codes
+reach the same state), CASCI on 20 active spaces, the FCIDUMP output read
+by PySCF and the Slater–Condon FCI in spin-polarised sectors. It found
+that the core-Hamiltonian guess converged silently to excited
+determinants (N₂ in STO-3G 0.73 Ha too high, also O₂, CH₂, NH₂ and
+stretched bonds); the atomic guess now reaches PySCF's states, with tests
+that fail on the old guess. DIIS failed for NO and CN; NO now converges
+and CN through the level-shifted fallback. Full CI near its limit needed
+6.6 GB and minutes and several roots were impractically slow; the
+matrix-free Davidson needs 0.7 GB and 36 s for 245 025 determinants. A
+claimed PySCF integral error was the difference of the two codes' bohr
+constants; the comparisons now use identical geometries. Smaller findings
+(unchecked deserialisation, integrals of another molecule, error
+messages, slow integrals, copies of the integral tensor in Python) are
+fixed; near-linearly-dependent bases (atoms within 0.01 Å) still leave
+rounding noise above the default gradient tolerance, as documented.
 
 ### 1.16 — Fast matching (M)
 
