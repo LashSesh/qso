@@ -4,14 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.6.0] — 2026-10-27
 
 Milestones 1.9 (matrix-product states), 1.10 (exact decoding and Stim
-circuits), 1.11 (the state-vector core at memory bandwidth), 1.12
-(noise learning) and 1.13 (walks beyond static Hamiltonians) of the
-[roadmap](docs/ROADMAP.md). Results are checked against
-the state-vector simulator, exact free-fermion evolution, the QAOA ring
-optimum, enumeration, Stim and PyMatching (named below).
+circuits), 1.11 (the state-vector core at memory bandwidth), 1.12 (noise
+learning) and 1.13 (walks beyond static Hamiltonians) of the
+[roadmap](docs/ROADMAP.md), released together. Results are checked
+against the state-vector simulator, exact free-fermion evolution, the
+QAOA ring optimum, enumeration, Stim, PyMatching, known device models,
+SciPy and the classical random walk (named below). No validated result
+of earlier releases changed; the public Rust API only grows
+(`cargo-semver-checks` against 1.5.1).
 
 ### Added
 

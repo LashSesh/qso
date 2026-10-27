@@ -5,12 +5,12 @@ milestones planned as "quantum walks" and "simulation performance".
 Milestones 1.4 (noise at scale and error mitigation), 1.5 (algorithms and
 physics) and 1.6 (interoperability) shipped together as release 1.4.0.
 Milestones 1.7 (stabilizer simulation and graph states) and 1.8
-(error-correction experiments) ship together as release 1.5.0 (1.5.1
-fixes its npm publication). Milestone 1.9 (matrix-product states) is
-delivered, and so is the second stage: 1.10 (exact decoding and Stim
-circuits), 1.11 (the state-vector core at memory bandwidth), 1.12 (noise
-learning) and 1.13 (walks beyond static Hamiltonians); finished milestones are released together, not one by one.
-Up to 1.3
+(error-correction experiments) shipped together as release 1.5.0 (1.5.1
+fixed its npm publication). Milestone 1.9 (matrix-product states) and the
+second stage — 1.10 (exact decoding and Stim circuits), 1.11 (the
+state-vector core at memory bandwidth), 1.12 (noise learning) and 1.13
+(walks beyond static Hamiltonians) — ship together as release 1.6.0;
+finished milestones are released together, not one by one. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -390,7 +390,7 @@ random circuits, and found no wrong result there. It found:
 * generators that allocated gigabytes before reaching the operation
   limit.
 
-### 1.9 — Matrix-product states (delivered)
+### 1.9 — Matrix-product states (delivered, release 1.6.0)
 
 Use case: circuits with little entanglement on far more qubits than a
 state vector holds — Trotterized dynamics of spin chains, shallow QAOA on
@@ -446,7 +446,7 @@ The first stage made every area QSO covers correct and validated. The
 second closes the gaps that the first stage measured but left open,
 in the order of what they block.
 
-### 1.10 — Exact decoding and Stim circuits (delivered)
+### 1.10 — Exact decoding and Stim circuits (delivered, release 1.6.0)
 
 Use case: logical error rates that are those of minimum-weight matching,
 not an approximation of them, on circuits written by Stim or by QSO.
@@ -489,7 +489,7 @@ random circuits. It found no wrong result there. It found:
 * noise without a probability was read as noiseless, and gate arguments
   were ignored; both are errors now, as in Stim.
 
-### 1.11 — The state-vector core at memory bandwidth (delivered)
+### 1.11 — The state-vector core at memory bandwidth (delivered, release 1.6.0)
 
 Use case: the precondition the roadmap sets for a GPU backend, measured
 instead of assumed.
@@ -534,7 +534,7 @@ phase gates on low qubits multiplied the other half by 1, flipping the
 sign of some zeros (fixed), and descriptions that overstated what the
 equality test covered (corrected, and the test extended).
 
-### 1.12 — Noise learning (delivered)
+### 1.12 — Noise learning (delivered, release 1.6.0)
 
 Use case: error mitigation whose noise model comes from data, as on a
 device, not from the simulator's own model.
@@ -569,7 +569,7 @@ relative weight floor, robust spreads, at least two twirls, model
 validation. The greedy colouring was replaced by DSatur and the bases by
 orthogonal arrays from GF(3)ᵏ (9 bases up to 4 colours, 27 up to 13).
 
-### 1.13 — Walks beyond static Hamiltonians (delivered)
+### 1.13 — Walks beyond static Hamiltonians (delivered, release 1.6.0)
 
 Use case: adiabatic and driven walks, and decoherent discrete-time walks.
 

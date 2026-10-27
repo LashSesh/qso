@@ -12,8 +12,9 @@ with `cargo bench -p metatron-qso-rs`. Numbers depend on the machine; run
 the report on yours before comparing.
 
 **Machine for the numbers below:** cloud VM, 4 vCPU Intel Xeon @ 2.10 GHz
-(AVX-512), 15 GB RAM, Linux 6.18, rustc 1.97.0, QSO 1.5.1 with the
-unreleased milestones 1.9 to 1.11 (AVX kernels), release profile
+(AVX-512), 15 GB RAM, Linux 6.18, rustc 1.97.0, QSO 1.6.0 as of
+milestone 1.11 (AVX kernels; 1.12 and 1.13 add modules these benchmarks do
+not use), release profile
 (`opt-level = 3`, thin LTO, `codegen-units = 1`), default features (rayon
 parallelism). A comparison with Qiskit Aer, Qulacs, Cirq, PennyLane
 Lightning and The Walrus on the same machine is
