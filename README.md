@@ -39,7 +39,7 @@ README is reproduced by
 [`metatron-qso-rs/tests/validation.rs`](metatron-qso-rs/tests/validation.rs)
 or by the benchmark report you can run yourself.
 
-> **Version 1.0.0** is the first stable release and a complete rewrite of
+> **Version 1.0.1** is the first stable release and a complete rewrite of
 > the 0.1 prototype. Version 0.1 simulated a single 13-level system instead
 > of qubits, and several of its results and subsystems did not hold up; the
 > [audit](docs/AUDIT_v0.1.md) documents why. The 0.1 code remains available
