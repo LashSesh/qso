@@ -91,6 +91,9 @@ jobs:
           ./target/release/qso qec --circuit /tmp/surface.stim --shots 2000 --decoder matching
           ./target/release/qso qec --code color --distance 3,5 --p 0.002 --shots 2000 --decoder bposd
           ./target/release/qso qec --code bb --distance 72 --p 0.001 --shots 200 --decoder bposd
+          ./target/release/qso qec --code bb --distance 72 --rounds 3 --shots 200 --decoder bposd --schedule bicycle --circuit-distance
+          ./target/release/qso qec --code color --distance 5 --shots 1000 --decoder bposd --schedule 0,1,2,3,4,5 --circuit-distance
+          ./target/release/qso qec --circuit metatron-qso-rs/tests/data/stim/surface_d5_memory_z.stim --shots 2000 --decoder correlated-matching --circuit-distance
           ./target/release/qso qasm /tmp/walk.qasm --shots 100 --device metatron-qso-rs/examples/devices/toy_device.json --trajectories 50
           ./target/release/qso estimate /tmp/walk.qasm --observable "Z0 Z1" --device metatron-qso-rs/examples/devices/toy_device.json --shots 4000 --mitigate-readout --zne 1,3
           ./target/release/qso molecule metatron-qso-rs/examples/molecules/lih_sto3g.fcidump --mapping parity --two-qubit-reduction --method adapt

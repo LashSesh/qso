@@ -52,6 +52,6 @@ def test_single_precision_samples_and_rejects_bad_input() -> None:
     with pytest.raises(ValueError):
         q.StateVector32.basis(2, 4)
     with pytest.raises(ValueError):
-        q.simulate(c, precision="half")
+        q.simulate(c, precision="half")  # type: ignore[call-overload]
     with pytest.raises(ValueError):
         q.StateVector32.zero(2).apply(c)

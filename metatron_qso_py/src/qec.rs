@@ -4,8 +4,8 @@
 
 use metatron_qso::qec::{
     self, BpMethod, BpOsdDecoder, BpOsdOptions, BpOsdOutcome, CircuitDistance, CircuitNoise,
-    CorrelatedError, CorrelatedErrorModel, CorrelatedMatchingDecoder, CssCode, Decoder,
-    DecoderChoice, DetectorCircuit, DetectorErrorModel, DistanceOptions, ErrorMechanism,
+    CorrelatedError, CorrelatedErrorModel, CorrelatedMatchingDecoder, CssCode, CssSchedule,
+    Decoder, DecoderChoice, DetectorCircuit, DetectorErrorModel, DistanceOptions, ErrorMechanism,
     MatchingDecoder, MatchingGraph, MemoryBasis, Noise, OsdMethod, SparseMatchingDecoder,
     UnionFindDecoder,
 };
@@ -903,7 +903,7 @@ impl PyCircuitDistance {
 /// `bposd_trials` BP+OSD searches per observable look for light logical
 /// errors.
 #[pyfunction]
-#[pyo3(signature = (model, max_weight = 12, max_work = 1 << 24, bposd_trials = 4, seed = 0))]
+#[pyo3(signature = (model, max_weight = 12, max_work = 16_777_216, bposd_trials = 4, seed = 0))]
 fn circuit_distance(
     py: Python<'_>,
     model: &PyDetectorErrorModel,
@@ -1181,21 +1181,51 @@ fn parse_basis(basis: &str) -> PyResult<MemoryBasis> {
     }
 }
 
-/// A memory experiment for a CSS code: every round measures all X checks,
-/// then all Z checks, with ancillas; detectors are the checks of `basis`
+/// The order of CNOTs: a name, or a colour code's order of directions.
+#[derive(FromPyObject)]
+enum ScheduleArg {
+    Name(String),
+    Directions(Vec<u8>),
+}
+
+/// A memory experiment for a CSS code; detectors are the checks of `basis`
 /// compared between rounds, observable i is logical i of that basis.
+/// `schedule`: `"greedy"` (every X check, then every Z check, in greedy
+/// CNOT layers), `"bicycle"` (the depth-8 cycle of Bravyi et al. for a
+/// bivariate bicycle code with three monomials per polynomial), or, for a
+/// colour code, the order in which every face visits its six directions
+/// (a permutation of 0..6).
 #[pyfunction]
-#[pyo3(signature = (code, rounds, noise = None, basis = "z"))]
+#[pyo3(signature = (code, rounds, noise = None, basis = "z", schedule = None))]
 fn css_code_memory(
     code: &PyCssCode,
     rounds: usize,
     noise: Option<NoiseArg>,
     basis: &str,
+    schedule: Option<ScheduleArg>,
 ) -> PyResult<PyDetectorCircuit> {
     let basis = parse_basis(basis)?;
     let noise = noise.map(NoiseArg::model).unwrap_or_default();
+    let schedule = match schedule {
+        None => CssSchedule::Greedy,
+        Some(ScheduleArg::Name(name)) => match name.as_str() {
+            "greedy" => CssSchedule::Greedy,
+            "bicycle" => CssSchedule::Bicycle,
+            other => {
+                return Err(invalid(format!(
+                    "unknown schedule {other:?}; use \"greedy\", \"bicycle\" or six directions"
+                )));
+            }
+        },
+        Some(ScheduleArg::Directions(order)) => {
+            let order: [u8; 6] = order
+                .try_into()
+                .map_err(|_| invalid("a schedule by directions lists six directions"))?;
+            CssSchedule::Directions(order)
+        }
+    };
     Ok(PyDetectorCircuit {
-        inner: qec::css_code_memory(&code.inner, rounds, &noise, basis).raise()?,
+        inner: qec::css_code_memory_with(&code.inner, rounds, &noise, basis, schedule).raise()?,
     })
 }
 

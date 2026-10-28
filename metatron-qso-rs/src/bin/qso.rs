@@ -421,6 +421,15 @@ enum Command {
         /// memory experiment (code, distance, rounds and p are ignored).
         #[arg(long, conflicts_with = "stim")]
         circuit: Option<std::path::PathBuf>,
+        /// Order of the CNOTs of the colour and bicycle codes: greedy,
+        /// bicycle (the depth-8 cycle of Bravyi et al.), or six directions
+        /// for the colour code, e.g. 0,1,2,3,4,5.
+        #[arg(long, default_value = "greedy")]
+        schedule: String,
+        /// Also bound the circuit distance: the fewest faults that flip a
+        /// logical observable undetected.
+        #[arg(long)]
+        circuit_distance: bool,
     },
 }
 
@@ -434,6 +443,7 @@ enum BasisArg {
 enum DecoderArg {
     UnionFind,
     Matching,
+    CorrelatedMatching,
     Bposd,
 }
 
@@ -1366,16 +1376,75 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             seed,
             stim,
             circuit: from_file,
+            schedule,
+            circuit_distance,
         } => {
             let kind = match decoder {
                 DecoderArg::UnionFind => qec::DecoderChoice::UnionFind,
                 DecoderArg::Matching => qec::DecoderChoice::Matching,
+                DecoderArg::CorrelatedMatching => qec::DecoderChoice::CorrelatedMatching,
                 DecoderArg::Bposd => qec::DecoderChoice::BpOsd,
             };
             let decoder_name = match decoder {
                 DecoderArg::UnionFind => "union-find",
                 DecoderArg::Matching => "matching",
+                DecoderArg::CorrelatedMatching => "correlated matching",
                 DecoderArg::Bposd => "BP+OSD",
+            };
+            let css_schedule = match schedule.as_str() {
+                "greedy" => qec::CssSchedule::Greedy,
+                "bicycle" => qec::CssSchedule::Bicycle,
+                list => {
+                    let order: Vec<u8> = list
+                        .split(',')
+                        .map(|x| x.trim().parse::<u8>())
+                        .collect::<std::result::Result<_, _>>()
+                        .map_err(|_| {
+                            QsoError::invalid(
+                                "schedule",
+                                format!("{list:?}: use greedy, bicycle or six directions"),
+                            )
+                        })?;
+                    let order: [u8; 6] = order.try_into().map_err(|_| {
+                        QsoError::invalid(
+                            "schedule",
+                            "a schedule by directions lists six directions",
+                        )
+                    })?;
+                    qec::CssSchedule::Directions(order)
+                }
+            };
+            if css_schedule != qec::CssSchedule::Greedy
+                && from_file.is_none()
+                && !matches!(code, CodeArg::Color | CodeArg::Bb)
+            {
+                return Err(QsoError::invalid(
+                    "schedule",
+                    "schedules are for the colour and bicycle codes",
+                ));
+            }
+            // Bounds on the circuit distance, as JSON and text.
+            let bound = |c: &qec::DetectorCircuit| -> Result<(serde_json::Value, String)> {
+                if !*circuit_distance {
+                    return Ok((serde_json::Value::Null, String::new()));
+                }
+                let r = qec::circuit_distance(
+                    &qec::detector_error_model(c, false)?,
+                    &qec::DistanceOptions::default(),
+                )?;
+                let text = match (r.distance(), r.upper_bound()) {
+                    (Some(d), _) => format!("; circuit distance {d}"),
+                    (None, Some(u)) => format!("; circuit distance {} to {u}", r.lower_bound),
+                    (None, None) if r.lower_bound == usize::MAX => {
+                        "; no undetectable logical error".to_string()
+                    }
+                    (None, None) => format!("; circuit distance at least {}", r.lower_bound),
+                };
+                let lower = (r.lower_bound != usize::MAX).then_some(r.lower_bound);
+                Ok((
+                    json!({"lower_bound": lower, "upper_bound": r.upper_bound()}),
+                    text,
+                ))
             };
             let memory_basis = match basis {
                 BasisArg::Z => qec::MemoryBasis::Z,
@@ -1387,8 +1456,9 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 })?;
                 let circuit = qec::DetectorCircuit::from_stim(&text)?;
                 let rate = qec::logical_error_rate_using(&circuit, *shots, *seed, kind)?;
+                let (distance_json, distance_text) = bound(&circuit)?;
                 let line = format!(
-                    "{}: {} qubits, {} detectors, {} observables; logical error rate {:.3e} ± {:.1e} ({} of {} shots, {decoder_name})",
+                    "{}: {} qubits, {} detectors, {} observables; logical error rate {:.3e} ± {:.1e} ({} of {} shots, {decoder_name}){distance_text}",
                     path.display(),
                     circuit.n_qubits(),
                     circuit.n_detectors(),
@@ -1406,6 +1476,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                         "observables": circuit.n_observables(),
                         "decoder": kind,
                         "logical_error_rate": rate,
+                        "circuit_distance": distance_json,
                     }),
                     line,
                 ));
@@ -1429,17 +1500,19 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                             qec::surface_code_memory_with(d, r, &noise, memory_basis)?
                         }
                         CodeArg::Repetition => qec::repetition_code_memory(d, r, &noise)?,
-                        CodeArg::Color => qec::css_code_memory(
+                        CodeArg::Color => qec::css_code_memory_with(
                             &qec::CssCode::color_code(d)?,
                             r,
                             &noise,
                             memory_basis,
+                            css_schedule,
                         )?,
-                        CodeArg::Bb => qec::css_code_memory(
+                        CodeArg::Bb => qec::css_code_memory_with(
                             bicycle.as_ref().expect("built above"),
                             r,
                             &noise,
                             memory_basis,
+                            css_schedule,
                         )?,
                     };
                     let label = match &bicycle {
@@ -1452,8 +1525,9 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                         })?;
                     }
                     let rate = qec::logical_error_rate_using(&circuit, *shots, *seed, kind)?;
+                    let (distance_json, distance_text) = bound(&circuit)?;
                     lines.push(format!(
-                        "p = {prob}, {label}, {r} rounds: {} qubits, {} detectors; logical error rate {:.3e} ± {:.1e} ({} of {} shots, {})",
+                        "p = {prob}, {label}, {r} rounds: {} qubits, {} detectors; logical error rate {:.3e} ± {:.1e} ({} of {} shots, {}){distance_text}",
                         circuit.n_qubits(),
                         circuit.n_detectors(),
                         rate.rate,
@@ -1470,7 +1544,9 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                         "qubits": circuit.n_qubits(),
                         "detectors": circuit.n_detectors(),
                         "decoder": kind,
+                        "schedule": css_schedule,
                         "logical_error_rate": rate,
+                        "circuit_distance": distance_json,
                     }));
                 }
             }

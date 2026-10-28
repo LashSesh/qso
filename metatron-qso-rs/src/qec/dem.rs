@@ -273,7 +273,7 @@ fn decomposed(basis: &[Signature], probabilities: &[f64]) -> Result<Vec<(Vec<Sig
                 return Err(QsoError::invalid(
                     "circuit",
                     format!(
-                        "an error flips {} detectors even after splitting into single-qubit X and Z parts; the model is not a matching graph",
+                        "an error flips {} detectors even after splitting into single-qubit X and Z parts; the model is not a matching graph (decode it with BP+OSD)",
                         b.0.len()
                     ),
                 ));

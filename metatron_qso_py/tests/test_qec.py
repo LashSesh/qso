@@ -74,7 +74,7 @@ def test_matching_decodes_at_least_as_well_as_union_find() -> None:
     # the same weight.
     sparse = q.SparseMatchingDecoder(dem)
     for row in det[:500]:
-        fired = list(np.flatnonzero(row))
+        fired = [int(d) for d in np.flatnonzero(row)]
         assert sparse.decode_with_weight(fired)[1] == matching.decode_with_weight(fired)[1]
     sparse_predicted = sparse.decode_batch(det)
     uf = q.logical_error_rate(c, 5000, seed=3)

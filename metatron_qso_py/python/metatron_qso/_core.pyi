@@ -2011,6 +2011,7 @@ def css_code_memory(
     rounds: int,
     noise: Union[CircuitNoise, float, None] = None,
     basis: Literal["z", "x", "Z", "X"] = "z",
+    schedule: Union[Literal["greedy", "bicycle"], Sequence[int], None] = None,
 ) -> DetectorCircuit: ...
 def logical_error_rate(
     circuit: DetectorCircuit,

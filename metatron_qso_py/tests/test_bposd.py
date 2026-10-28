@@ -27,8 +27,8 @@ def test_code_parameters() -> None:
     assert (gross.n, gross.k) == (144, 12)
     # Logicals pair up and commute with the other type's checks.
     hx = np.zeros((len(gross.x_checks), gross.n), dtype=np.uint8)
-    for i, c in enumerate(gross.x_checks):
-        hx[i, c] = 1
+    for i, row in enumerate(gross.x_checks):
+        hx[i, row] = 1
     zl = np.zeros((gross.k, gross.n), dtype=np.uint8)
     xl = np.zeros((gross.k, gross.n), dtype=np.uint8)
     for i, (x, z) in enumerate(zip(gross.x_logicals, gross.z_logicals)):
@@ -126,9 +126,9 @@ def test_invalid_input_raises() -> None:
         q.DetectorErrorModel(2, [(0.1, [0], 2)], n_observables=1)
     dem = q.DetectorErrorModel(2, [(0.1, [0, 1], 1)])
     with pytest.raises(ValueError):
-        q.BpOsdDecoder(dem, method="sum")
+        q.BpOsdDecoder(dem, method="sum")  # type: ignore[arg-type]
     with pytest.raises(ValueError):
-        q.BpOsdDecoder(dem, osd="osd2")
+        q.BpOsdDecoder(dem, osd="osd2")  # type: ignore[arg-type]
     with pytest.raises(ValueError):
         q.BpOsdDecoder(dem, scaling=2.0)
     d = q.BpOsdDecoder(dem)
@@ -140,7 +140,7 @@ def test_invalid_input_raises() -> None:
     with pytest.raises(ValueError):
         q.css_code_memory(q.CssCode.color_code(3), 0)
     with pytest.raises(ValueError):
-        q.logical_error_rate(q.css_code_memory(q.CssCode.color_code(3), 1), 10, decoder="bp")
+        q.logical_error_rate(q.css_code_memory(q.CssCode.color_code(3), 1), 10, decoder="bp")  # type: ignore[arg-type]
 
 
 def test_constructed_models_are_bounded() -> None:
