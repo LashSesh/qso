@@ -29,3 +29,6 @@ site/
 metatron_qso_wasm/js/qso.wasm
 metatron_qso_wasm/js/LICENSE
 metatron_qso_wasm/js/*.tgz
+
+# Coverage profiles of instrumented runs
+*.profraw
