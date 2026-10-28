@@ -895,7 +895,8 @@ TOLERANCES = {
     "scf_energy": 1e-9,
     # QAOA energy and gradient at 22–26 qubits, relative to |⟨C⟩|: double
     # precision against each other to rounding of 2^n-term sums; QSO's
-    # single precision against double (measured 10⁻⁹ and 10⁻⁶).
+    # single precision against double (measured up to 1.1·10⁻⁸ for the
+    # energy and 1.3·10⁻⁶ for the gradient).
     "qaoa_double": 1e-10,
     "qaoa_single": 1e-5,
 }

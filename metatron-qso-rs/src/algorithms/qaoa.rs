@@ -230,10 +230,12 @@ impl Phases<'_> {
 /// `S` and `S†` cancel, and the whole state is `S†^{⊗n}` applied to the
 /// state evolved with Y rotations from `S^{⊗n}|+⟩`. The Y rotation is a
 /// real matrix, which the kernels apply with a quarter of the products of
-/// the complex X rotation; ⟨C⟩ and the probabilities do not see `S†^{⊗n}`. The phases and the rotations of the qubits
-/// below the block size are applied block by block in one pass over
-/// memory; the higher qubits follow in tiles, one pass per group of up to
-/// seven ([`Tiles`]).
+/// the complex X rotation; ⟨C⟩ and the probabilities do not see
+/// `S†^{⊗n}`.
+///
+/// The phases and the rotations of the qubits below the block size are
+/// applied block by block in one pass over memory; the higher qubits
+/// follow in tiles, one pass per group ([`Tiles`]).
 fn layer<A: Amplitude>(amps: &mut [A], n: usize, cost: Option<&Phases<'_>>, beta: f64) {
     let m = mixer_matrix::<A>(beta);
     let low = BLOCK_QUBITS.min(n);

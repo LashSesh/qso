@@ -448,6 +448,10 @@ const TILE_RUN_QUBITS: usize = 1;
 #[cfg(miri)]
 const TILE_GROUP: usize = 2;
 
+// The runs of a tile lie below the block: every qubit a tile pass rotates
+// is above them.
+const _: () = assert!(TILE_RUN_QUBITS <= BLOCK_QUBITS);
+
 /// Tiles for gates on a group of qubits above the run qubits: a tile
 /// holds the 2^g runs of 2^r contiguous amplitudes that differ only in the
 /// group's bits, `2^(g + r)` amplitudes in all, so every gate on the group
@@ -469,7 +473,12 @@ impl Tiles {
     pub(crate) fn new(n: usize, group: &[usize]) -> Self {
         let mut group = group.to_vec();
         group.sort_unstable();
-        debug_assert!(group.iter().all(|&q| q >= TILE_RUN_QUBITS && q < n));
+        // A group qubit inside the runs would make two runs of a tile
+        // overlap (`apply_tile` relies on this).
+        assert!(
+            group.iter().all(|&q| q >= TILE_RUN_QUBITS && q < n),
+            "tile group {group:?} must lie in {TILE_RUN_QUBITS}..{n}"
+        );
         let offsets = (0..1usize << group.len())
             .map(|j| {
                 group
@@ -493,7 +502,8 @@ impl Tiles {
 
     /// The qubits `low..n` in groups of up to `TILE_GROUP`.
     pub(crate) fn groups(n: usize, low: usize) -> Vec<Tiles> {
-        let qubits: Vec<usize> = (low.max(TILE_RUN_QUBITS)..n).collect();
+        assert!(low >= n || low >= TILE_RUN_QUBITS, "qubits below the tiles' runs");
+        let qubits: Vec<usize> = (low..n).collect();
         qubits
             .chunks(TILE_GROUP)
             .map(|g| Tiles::new(n, g))

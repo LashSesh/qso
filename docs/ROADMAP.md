@@ -1501,14 +1501,14 @@ Validation as planned:
   1.1 times the evaluations in all. UCCSD for LiH (10 qubits, 16 794
   gates) ends 2·10⁻⁸ from double precision.
 - **Memory and time** (4-core VM, 15 GB, one call each, peak resident
-  memory):
+  memory, VmHWM in GiB):
 
   | qubits | case | single | double |
   |---:|---|---:|---:|
-  | 26 | VQE energy and gradient | 32.8 s, 1.05 GB | 39 s, 2.10 GB |
-  | 26 | `MaxCutQaoa` energy and gradient | 28.5 s, 1.18 GB | 35.8 s, 2.23 GB |
-  | 28 | VQE energy and gradient | 154 s, 4.20 GB | 235 s, 8.40 GB |
-  | 28 | `MaxCutQaoa` energy and gradient | 122 s, 4.72 GB | 160 s, 8.92 GB |
+  | 26 | VQE energy and gradient | 32.8 s, 1.00 GiB | 39 s, 2.00 GiB |
+  | 26 | `MaxCutQaoa` energy and gradient | 28.5 s, 1.13 GiB | 35.8 s, 2.13 GiB |
+  | 28 | VQE energy and gradient | 154 s, 4.01 GiB | 235 s, 8.01 GiB |
+  | 28 | `MaxCutQaoa` energy and gradient | 122 s, 4.50 GiB | 160 s, 8.51 GiB |
 
   Single precision halves the memory (from |0…0⟩; with an initial state
   `Vqe` keeps a double-precision copy of it) and saves a fifth to a third
@@ -1637,16 +1637,18 @@ layer to p = 10 reaches 0.97424 in 23 s; 30 L-BFGS iterations):
 | 28 | 38 | 0.96191 | 0.96635 | 0.61 | 36 | 2178 s | 4.51 GiB |
 
 At 28 qubits ⟨C⟩ = 36.72 of the maximum cut 38 (found by enumeration of
-the 2²⁸ cuts, 12 s), and the most likely string is an optimal cut with
-probability 0.61; the ratio lies within the spread of the smaller graphs
-(0.969–0.980), whose ratios depend on the graph more than on its size.
+the 2²⁸ cuts, 12 s), and a measurement gives one of the optimal cuts
+with probability 0.61 (an optimal cut and its complement, 0.31 each).
+The ratio is below those of the smaller graphs (0.969–0.980 refined,
+0.968–0.978 carried over): the angles from 16 nodes fit this graph less
+well, and 30 iterations recover only part of it.
 None of the runs converged in 30 iterations. Optimising layer by layer on
 the graph itself (two starts per depth) reached 0.97495 on 20 nodes
 (440 s), below the carried-over and refined 0.98046, and 0.98086 on 22
 nodes (1229 s), above its 0.97498: carried-over angles are a good start,
 not the optimum, and both ways end in local optima.
 The whole 28-qubit run took 37 minutes and
-4.5 GiB; in double precision it would take 8.9 GiB and about 30 % longer.
+4.5 GiB; in double precision it would take 8.5 GiB and about 30 % longer.
 
 **Comparison** (`run.py --qaoa`, same machine, one call each in a fresh
 process):
@@ -1657,21 +1659,25 @@ process):
 | 24 | 3.65 s, 0.57 GiB | 3.13 s, 0.32 GiB | 19.2 s | 163 s, 1.29 GiB | 13.8 s |
 | 26 | 16.4 s, 2.16 GiB | 13.3 s, 1.16 GiB | 80.9 s | 650 s, 5.04 GiB | 49.5 s |
 
-In double precision, energies and gradients agree to 2.4·10⁻¹⁴ relative
+In double precision, energies and gradients agree to 5.4·10⁻¹⁴ relative
 (all four double-precision paths); QSO's single precision to 1.1·10⁻⁸
-and 1.3·10⁻⁶. QSO's generic circuit is 2.5–4 times slower than its
-specialised path and 8 times faster than Qulacs' `backprop`; Aer takes
+and 1.3·10⁻⁶. QSO's generic circuit is 5–6 times slower than its
+specialised path and 8 times faster than Qulacs' `backprop` (which uses
+all four cores); Aer takes
 three times as long for the energy alone as `MaxCutQaoa` for energy and
 gradient.
 
 **The GPU decision, restated.** The use case runs on the CPU: 28 qubits
 at one minute per gradient, an optimisation from carried-over angles in
-under an hour, in 4.5 GiB. What a GPU would add: the kernels are bound by
-memory bandwidth and simple arithmetic, so a GPU with 300–1000 GB/s
-against the VM's 62 GB/s (the fastest pass over the state on all four
-threads, BENCHMARKS.md) could make each evaluation 5–15 times faster (an
-estimate from bandwidth, not a measurement), and 28 qubits in single precision fit
-in 8 GB of GPU memory. What it needs: hardware to test on (none here,
+under an hour, in 4.5 GiB. What a GPU would add: one QAOA layer at 26
+qubits moves about 8.6 GB through memory (a block pass and three tile
+passes, read and write), 0.14 s at the VM's 62 GB/s (the fastest pass
+over the state on all four threads, BENCHMARKS.md), but takes 0.43 s:
+the CPU is three times slower than its bandwidth, held back by the
+arithmetic of the blocks. A GPU has both more bandwidth (300–1000 GB/s)
+and far more arithmetic, so 5–15 times faster evaluations are plausible
+and more possible (an estimate, not a measurement), and 28 qubits in
+single precision fit in 8 GB of GPU memory. What it needs: hardware to test on (none here,
 none on GitHub's standard runners) and a dependency, `wgpu`, whose
 shading language has no double precision, so a WebGPU backend would be
 single precision only, which 1.27 makes usable and measurable against
@@ -1680,6 +1686,26 @@ available; the plan for it is then concrete: the QAOA layer (phase table,
 Y rotations, tiles) and the fused backward pass as compute shaders, with
 the CPU's single precision as the reference. Beyond 29 qubits memory
 ends on a 16 GB machine in either precision, which a GPU does not change.
+
+An independent review found no error in the code. It checked the Y
+frame (conventions, initial state, the phases of `state()`, the gradient
+in the frame and the overlap taken partway through the undone mixer)
+against the explicit circuit at 3–21 qubits including odd sizes (states
+to 8.4·10⁻¹⁶, gradients against central differences to 2·10⁻⁹),
+bit-identical results on 1–4 threads at 15–22 qubits in both precisions,
+the soundness of the tiles and the fused pass (disjoint tiles and runs,
+no aliasing; Miri with tree borrows), and the conventions of the Qulacs
+and Aer runners. It found claims the logs did not support, all
+corrected: the 28-qubit memory was in units of 10⁶ KiB, not GiB (8.5 and
+4.5 GiB, not 8.9 and 4.7; the same for the 1.27 table); the agreement of
+the four double-precision paths is 5.4·10⁻¹⁴, not 2.4·10⁻¹⁴; the generic
+circuit is 5–6 times slower than `MaxCutQaoa`, not 2.5–4; the 28-node
+ratio lies below the smaller graphs', not within their spread; 0.61 is
+the probability of all optimal cuts together, not of the most likely
+string; Qulacs' `backprop` uses all cores; and the CPU runs at a third of
+its bandwidth, not at it, which the GPU estimate now says. It also
+suggested making the tiles' preconditions run-time and compile-time
+assertions instead of debug assertions (done).
 
 ### Not in this stage
 

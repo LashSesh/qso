@@ -26,7 +26,7 @@ end) of the sixth, which completes it.
   graph, energy and gradient of QSO (`MaxCutQaoa` and the generic
   circuit, both precisions) and Qulacs (`backprop`), Aer's energy (it has
   no gradient), each in its own process with time and peak memory. In
-  double precision values and gradients agree to 2.4·10⁻¹⁴ (relative); at
+  double precision values and gradients agree to 5.4·10⁻¹⁴ (relative); at
   26 qubits `MaxCutQaoa` takes 16.4 s for energy and gradient, the
   generic circuit 81 s, Qulacs 650 s and 5.0 GiB, Aer 49.5 s for the
   energy alone.
@@ -41,8 +41,8 @@ end) of the sixth, which completes it.
   `MaxCutQaoa::with_precision` and `qaoa::optimize_layerwise_at` in Rust;
   `precision="single"` for `expectation_and_gradient`, `run_vqe`,
   `MaxCutQaoa` and `optimize_qaoa_layerwise` in Python; `--single` for
-  `qso vqe` and `qso qaoa`. Half the memory (28 qubits: 4.2 GB instead of
-  8.4 GB for VQE, 4.7 GB instead of 8.9 GB for `MaxCutQaoa`) and a fifth
+  `qso vqe` and `qso qaoa`. Half the memory (28 qubits: 4.0 GiB instead of
+  8.0 GiB for VQE, 4.5 GiB instead of 8.5 GiB for `MaxCutQaoa`) and a fifth
   to a third less time; energies agree with double precision to 3·10⁻⁸
   and gradients to 1.1·10⁻⁶ relative at 20–24 qubits. In single
   precision L-BFGS treats energies within their rounding (10⁻⁷ of the

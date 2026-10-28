@@ -65,7 +65,7 @@ The validated reference values are listed in the technical note:
 
 `MaxCutQaoa` stores the cut of every bit string and one state vector (two
 for gradients), so the memory is the limit: 26 qubits take 2.2 GiB in
-double precision and 1.2 GiB with `precision="single"`, 28 qubits 8.9 and
+double precision and 1.2 GiB with `precision="single"`, 28 qubits 8.5 and
 4.5 GiB. On a 4-core VM an energy and gradient at p = 10 takes 16 s at 26
 qubits and a minute at 28 (single precision). Optimising from random
 starts at that size takes hours; QAOA angles of random 3-regular graphs

@@ -84,8 +84,8 @@ print(qaoa.optimize(restarts=2)["approximation_ratio"])
 | QAOA energy (`MaxCutQaoa`, p = 10, 3-regular) | 3.2·10⁻⁹ | 1.9·10⁻⁹ | 3.0·10⁻⁹ |
 | QAOA gradient | 9.4·10⁻⁷ | 1.0·10⁻⁶ | 1.1·10⁻⁶ |
 
-At 28 qubits an energy and gradient takes 4.2 GB instead of 8.4 GB (VQE)
-and 4.7 GB instead of 8.9 GB (`MaxCutQaoa`), and a fifth to a third less
+At 28 qubits an energy and gradient takes 4.0 GiB instead of 8.0 GiB
+(VQE) and 4.5 GiB instead of 8.5 GiB (`MaxCutQaoa`), and a fifth to a third less
 time on a 4-core VM ([ROADMAP](https://github.com/LashSesh/qso/blob/main/docs/ROADMAP.md), 1.27). The
 gradient error grows with the depth of the circuit: 1.7·10⁻⁴ for a UCCSD
 ansatz of 16 794 gates (LiH, 10 qubits), whose VQE still ends 2·10⁻⁸

@@ -7,7 +7,7 @@
 //! gradients in single precision (half the memory of double precision).
 //!
 //! Run with `cargo run --release --example qaoa_large` (28 qubits: about
-//! 4.7 GB and, on a 4-core VM, a minute per gradient). Options:
+//! 4.5 GiB and, on a 4-core VM, a minute per gradient). Options:
 //! `--nodes N` (28), `--depth P` (10), `--steps K` (L-BFGS iterations, 30),
 //! `--from M` (nodes of the small graph, 16), `--double`, `--seed S` (1).
 
@@ -18,7 +18,7 @@ use metatron_qso::optimize::Options;
 use metatron_qso::prelude::*;
 use metatron_qso::quantum::Precision;
 
-/// Peak resident memory of this process in GB (Linux), if known.
+/// Peak resident memory of this process in GiB (Linux), if known.
 fn peak_gb() -> Option<f64> {
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
     let line = status.lines().find(|l| l.starts_with("VmHWM"))?;
@@ -112,7 +112,7 @@ fn main() -> Result<()> {
         r.converged
     );
     if let Some(gb) = peak_gb() {
-        println!("peak memory {gb:.2} GB");
+        println!("peak memory {gb:.2} GiB");
     }
     Ok(())
 }
