@@ -14,6 +14,7 @@ use metatron_qso::mps::{Mps, MpsOptions};
 use metatron_qso::quantum::Circuit;
 
 fn main() -> Result<()> {
+    // ANCHOR: quench
     // Néel state, then Trotter steps of the XX chain: the excitations
     // spread ballistically and the entanglement grows linearly.
     let n = 200;
@@ -53,7 +54,9 @@ fn main() -> Result<()> {
         state.fidelity_lower_bound().unwrap_or(0.0),
         state.discarded_weight()
     );
+    // ANCHOR_END: quench
 
+    // ANCHOR: qaoa
     // QAOA for MaxCut on a ring of 200 nodes with angles optimized on a
     // ring of 10: the cut fraction is the proven optimum (2p + 1)/(2p + 2).
     println!("\nQAOA on a ring of {n} nodes");
@@ -80,5 +83,6 @@ fn main() -> Result<()> {
             start.elapsed().as_secs_f64()
         );
     }
+    // ANCHOR_END: qaoa
     Ok(())
 }

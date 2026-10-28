@@ -16,7 +16,7 @@ Every algorithm is checked against an independent reference:
 | Exact sums | PEC summed over all corrections, Pauli twirls over all 16 frames, the variance 3ᵏ of classical shadows |
 | Statistics | coverage of confidence intervals over repeated runs; unbiased adaptive shot allocation over 2000 seeds; the 1/N error scaling of amplitude estimation over 200 seeds; learned noise rates of a known device within their bootstrap standard errors |
 | Rigorous bounds | product-formula errors below their bounds; qDRIFT channels below Campbell's bound; canonical amplitude estimation within its error bound with probability ≥ 8/π² |
-| Other codes | Qiskit Aer, Qulacs, Cirq, PennyLane Lightning and The Walrus; PySCF's Hartree–Fock and full-CI energies for H₂, LiH and BeH₂ |
+| Other codes | Qiskit Aer, Qulacs, Cirq, PennyLane Lightning and The Walrus (permanents, hafnians, Gaussian boson sampling); PySCF's integrals and its Hartree–Fock, full-CI and CASCI energies for H₂, LiH, BeH₂, H₂O, NH₃, OH and CH₂ |
 
 These checks live in the test suites, which run on every change on Linux
 (x86_64 and arm64), macOS and Windows:
@@ -63,8 +63,24 @@ deviation above rounding level fails the run.
 | Check | What it covers |
 |---|---|
 | Fuzzing | Each parser and deserialiser runs under cargo-fuzz for one minute on every pull request and ten minutes every week. The parsers are OpenQASM 2 and 3, Pauli sums, graph specifications and Stim circuits; the JSON forms are those of circuits, states, graphs, Pauli sums and device models; fermion operators and FCIDUMP files are fuzzed as well, and so are detector circuits built from random bytes. Beyond "no crash", the targets check that exported QASM re-imports to an equivalent circuit that prepares the same state on a matrix-product state, that the OpenQASM 2 and 3 exports of a program reproduce its outcome distribution, that accepted data are well-formed, that the union-find and matching decoders explain every syndrome that some set of matching-graph edges produces, and that Stim circuits (imported, or exported and read back) reproduce their text. Every input that ever failed is replayed on each run. |
+| Differential testing | `differential::compare` (Rust) runs one circuit on every simulator that takes it: the single-precision state vector, the noiseless density matrix, a noiseless trajectory, a matrix-product state of unlimited bond dimension, the stabilizer tableau (its generators and every Pauli expectation value, for Clifford circuits) and the OpenQASM 2 and 3 round trips. States are compared amplitude by amplitude after aligning the global phase, so an angle off by 10⁻⁸ shows as 10⁻⁸; norms and traces separately. The tolerance is 10⁻¹⁰ (single precision 10⁻⁷ per gate; the MPS within its own truncation bound, since even an unlimited bond drops singular values below about 10⁻⁸ of the largest). Property tests feed it random circuits of every gate kind, under up to three controls, dense unitaries on up to three qubits, symbolic and special angles, on 1 to 10 qubits: 256 per test on every change and 20 000 every week. A fuzz target decodes circuits from random bytes, for one minute on every pull request and ten minutes every week. The first runs and an independent review found three faults, now regression tests: the MPS turned to NaN when asked to keep everything, the tableau accepted rotations by huge angles as Clifford gates, and a test compared NaN bit patterns. |
 | Miri | The `unsafe` statevector kernels run under Miri on multi-threaded paths, which checks them for undefined behaviour and data races; so do the buffer exports of the WebAssembly module. |
 | Hostile input | Tests feed oversized, non-finite and inconsistent input to every public entry point and expect an error. |
+
+## Coverage
+
+CI measures line and branch coverage with `cargo-llvm-cov`
+(`scripts/coverage.sh`), merged from three sources: the crate's tests
+(unit, validation, property, differential and robustness tests), the
+command-line tool, which `tests/cli.rs` runs as a program, and the Python
+tests, run against an instrumented build of the extension module. The
+job summary lists the totals, the coverage of the library, the command
+line and the Python bindings separately, and the files with the most
+uncovered lines. The documentation site publishes the report of each
+build under [`coverage/`](coverage/html/index.html). At milestone 1.21 the
+crate's tests alone covered 90.5 % of lines, 92.8 % of functions and
+79.4 % of branches; until 1.25 the command line's source counted as
+uncovered.
 
 ## API stability
 

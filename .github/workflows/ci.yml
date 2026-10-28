@@ -76,20 +76,31 @@ jobs:
           ./target/release/qso iso /tmp/j52.graphml johnson:5,2
           ./target/release/qso reduce --graph hypercube:12
           ./target/release/qso transfer --graph path:3
+          ./target/release/qso transfer --graph path:5 --t-max 200
           ./target/release/qso coined --graph hypercube:8
           ./target/release/qso hitting --graph cycle:64
           ./target/release/qso walk-circuit --graph cycle:16 > /tmp/walk.qasm
           ./target/release/qso qasm /tmp/walk.qasm --shots 100
           ./target/release/qso qasm /tmp/walk.qasm --shots 100 --mps --max-bond 64
+          ./target/release/qso qasm /tmp/walk.qasm --shots 100 --single
           ./target/release/qso qasm metatron-qso-rs/tests/data/openqasm/v3/teleport.qasm --shots 100
           ./target/release/qso qasm metatron-qso-rs/tests/data/openqasm/v2/qec.qasm --export qasm3
           ./target/release/qso qasm metatron-qso-rs/tests/data/openqasm/v2/qec.qasm --stabilizer --shots 100
           ./target/release/qso qec --distance 3,5 --p 0.001 --shots 2000 --stim /tmp/surface.stim
           ./target/release/qso qec --distance 3,5 --p 0.005 --shots 2000 --decoder matching
           ./target/release/qso qec --circuit /tmp/surface.stim --shots 2000 --decoder matching
+          ./target/release/qso qec --code color --distance 3,5 --p 0.002 --shots 2000 --decoder bposd
+          ./target/release/qso qec --code bb --distance 72 --p 0.001 --shots 200 --decoder bposd
+          ./target/release/qso qec --code bb --distance 72 --rounds 3 --shots 200 --decoder bposd --schedule bicycle --circuit-distance
+          ./target/release/qso qec --code color --distance 5 --shots 1000 --decoder bposd --schedule 0,1,2,3,4,5 --circuit-distance
+          ./target/release/qso qec --circuit metatron-qso-rs/tests/data/stim/surface_d5_memory_z.stim --shots 2000 --decoder correlated-matching --circuit-distance
           ./target/release/qso qasm /tmp/walk.qasm --shots 100 --device metatron-qso-rs/examples/devices/toy_device.json --trajectories 50
           ./target/release/qso estimate /tmp/walk.qasm --observable "Z0 Z1" --device metatron-qso-rs/examples/devices/toy_device.json --shots 4000 --mitigate-readout --zne 1,3
           ./target/release/qso molecule metatron-qso-rs/examples/molecules/lih_sto3g.fcidump --mapping parity --two-qubit-reduction --method adapt
+          ./target/release/qso scf --atoms "Li 0 0 0; H 0 0 1.595" --basis 6-31g --frozen 1 --active 5 --fci --fcidump /tmp/lih.fcidump
+          ./target/release/qso molecule /tmp/lih.fcidump --method none
+          ./target/release/qso scf --atoms "O 0 0 0; O 0 0 1.2075" --multiplicity 3 --basis cc-pvdz --restricted-open --frozen 2 --active 8 --fci
+          ./target/release/qso scf --atoms "H 0 0 0; Cl 0 0 1.2746" --basis 6-31g* --cartesian
           ./target/release/qso trotter --hamiltonian "Z0 Z1 + 0.5 X0 + 0.5 X1" --steps 20 --order 4 --output /tmp/trotter.qasm
           ./target/release/qso qasm /tmp/trotter.qasm --shots 100
       - name: Benchmarks compile
@@ -97,7 +108,9 @@ jobs:
 
   python:
     name: python (${{ matrix.python }})
-    runs-on: ubuntu-latest
+    # setup-python has no 3.9 for Ubuntu 26.04 (ubuntu-latest since October
+    # 2026); the oldest supported Python is tested on 24.04.
+    runs-on: ${{ matrix.python == '3.9' && 'ubuntu-24.04' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -181,9 +194,41 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # Under Miri the parallel thresholds are lowered (src/parallel.rs), so
       # the multi-threaded kernel paths run on 7-qubit registers.
-      - run: "cargo miri test -p metatron-qso-rs --lib -- quantum::kernels:: quantum::plan:: parallel:: algorithms::gradients::tests::the_blocked"
+      - run: "cargo miri test -p metatron-qso-rs --lib -- quantum::kernels:: quantum::plan:: quantum::single::tests::vector_primitives parallel:: pool:: algorithms::gradients::tests::the_blocked algorithms::qaoa::tests::fast_path_matches_explicit_circuit_above_the_block"
       # The WebAssembly module's exports pass buffers as raw pointers.
       - run: cargo miri test -p metatron_qso_wasm --lib -- buffers_round_trip
+
+  coverage:
+    name: coverage (lines and branches)
+    runs-on: ubuntu-latest
+    env:
+      # Nightly may warn where stable does not.
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          # Branch coverage needs nightly's -Z coverage-options.
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      # The crate's tests, the command-line tool run by tests/cli.rs, and
+      # the Python tests on an instrumented extension, in one report.
+      - name: Rust, CLI and Python tests with coverage
+        run: |
+          scripts/coverage.sh coverage
+          python3 scripts/coverage_summary.py coverage/summary.json >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: |
+            coverage/summary.json
+            coverage/coverage.txt
 
   fuzz:
     name: fuzz (60 s per target)
@@ -199,10 +244,10 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz
-      - name: Fuzz the parsers and deserialisers
+      - name: Fuzz the parsers, the deserialisers and the simulators against each other
         working-directory: metatron-qso-rs
         run: |
-          for t in qasm openqasm pauli graph_spec graph_io json device chemistry qec stim; do
+          for t in qasm openqasm pauli graph_spec graph_io json device chemistry qec stim differential; do
             mkdir -p "fuzz/corpus/$t"
             # The prebuilt cargo-fuzz is a static musl binary and would
             # default to the musl target, which the sanitizer cannot use.

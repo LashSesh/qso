@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::f64::consts::PI;
 
 use metatron_qso::graph::{Graph, generators, io};
+use metatron_qso::mps::{Mps, MpsOptions};
 use metatron_qso::quantum::{MAX_QUBITS, Program, StateVector, bitstring, record_bitstring};
 use metatron_qso::rng::Rng;
 use metatron_qso::stabilizer::StabilizerState;
@@ -36,6 +37,8 @@ pub const MAX_AMPLITUDE_QUBITS: usize = 10;
 pub const MAX_LISTED_BITS: usize = 1 << 26;
 /// Points on a search's success-probability curve.
 pub const MAX_CURVE_POINTS: usize = 10_000;
+/// Most observables one `mps` call evaluates.
+pub const MAX_OBSERVABLES: usize = 10_000;
 
 type Outcome = std::result::Result<Value, String>;
 
@@ -76,6 +79,7 @@ fn dispatch(request: Value) -> Outcome {
         "walk" => walk(&mut p),
         "search" => search(&mut p),
         "isomorphism" => isomorphism(&mut p),
+        "mps" => mps(&mut p),
         other => return Err(format!("unknown method '{other}'")),
     }?;
     p.finish()?;
@@ -137,6 +141,22 @@ impl Params {
                 .collect::<Option<Vec<f64>>>()
                 .map(Some)
                 .ok_or_else(|| format!("{key} must be an array of finite numbers")),
+            Some(_) => Err(format!("{key} must be an array")),
+        }
+    }
+
+    fn strings(&mut self, key: &str) -> std::result::Result<Option<Vec<String>>, String> {
+        match self.take(key) {
+            None => Ok(None),
+            Some(Value::Array(items)) => items
+                .into_iter()
+                .map(|v| match v {
+                    Value::String(s) => Some(s),
+                    _ => None,
+                })
+                .collect::<Option<Vec<String>>>()
+                .map(Some)
+                .ok_or_else(|| format!("{key} must be an array of strings")),
             Some(_) => Err(format!("{key} must be an array")),
         }
     }
@@ -312,6 +332,119 @@ fn clifford_qasm(program: &Program, shots: usize, seed: u64) -> Outcome {
         "qasm2": program.to_qasm2().ok(),
         "method": "stabilizer",
     }))
+}
+
+/// Run an OpenQASM program on a matrix-product state: up to
+/// `MAX_PROGRAM_QUBITS` (16384) qubits when the entanglement stays low,
+/// exact up to the reported fidelity bound. A program without
+/// measurements or resets returns expectation values of Pauli strings, the
+/// bond dimensions and entanglement entropies of its final state (and its
+/// amplitudes for small registers). Samples are of the classical bits, as
+/// in `qasm`, or of every qubit for a program without bits.
+fn mps(p: &mut Params) -> Outcome {
+    let source = p.required_string("source")?;
+    let shots = p.index("shots")?.unwrap_or(0);
+    let seed = p.uint("seed")?.unwrap_or(0);
+    let defaults = MpsOptions::default();
+    let options = MpsOptions {
+        max_bond: p.index("max_bond")?.unwrap_or(defaults.max_bond),
+        cutoff: p.number("cutoff")?.unwrap_or(defaults.cutoff),
+    };
+    let observables = p.strings("observables")?.unwrap_or_default();
+    if shots > MAX_SHOTS {
+        return Err(format!("shots must be at most {MAX_SHOTS}"));
+    }
+    if observables.len() > MAX_OBSERVABLES {
+        return Err(format!("at most {MAX_OBSERVABLES} observables per call"));
+    }
+    if observables.iter().any(|o| o.trim().is_empty()) {
+        return Err("an observable is empty".into());
+    }
+    let program = Program::from_qasm(&source).map_err(|e| e.to_string())?;
+    let (nq, nb) = (program.n_qubits(), program.n_bits());
+    if nq == 0 {
+        return Err("the program has no qubits".into());
+    }
+    let width = if nb > 0 { nb } else { nq };
+    if shots.saturating_mul(width) > MAX_LISTED_BITS {
+        return Err(format!(
+            "shots × {} must be at most {MAX_LISTED_BITS}",
+            if nb > 0 { "bits" } else { "qubits" }
+        ));
+    }
+    let mut out = json!({
+        "qubits": nq,
+        "bits": nb,
+        "operations": program.len(),
+        "unitary": program.is_unitary(),
+        "max_bond": options.max_bond,
+        "cutoff": options.cutoff,
+        "counts": null,
+        "expectations": null,
+        "bond_dimensions": null,
+        "bond_entropies": null,
+        "amplitudes": null,
+        "discarded_weight": null,
+        "method": "mps",
+    });
+    if !program.is_unitary() {
+        if !observables.is_empty() {
+            return Err(
+                "observables need a program without measurements or resets (its final state)"
+                    .into(),
+            );
+        }
+        if shots == 0 {
+            return Err("a program with measurements or resets is sampled: give shots".into());
+        }
+        if nb == 0 {
+            return Err(
+                "a program with measurements or resets is sampled through its classical bits, and this one declares none"
+                    .into(),
+            );
+        }
+        let (counts, bound) =
+            metatron_qso::mps::program::sample_program(&program, shots, seed, options)
+                .map_err(|e| e.to_string())?;
+        let counts: BTreeMap<String, usize> = counts
+            .into_iter()
+            .map(|(r, c)| (record_bitstring(r, nb), c))
+            .collect();
+        out["counts"] = json!(counts);
+        out["fidelity_lower_bound"] = json!(bound);
+        return Ok(out);
+    }
+    let circuit = program.to_circuit().map_err(|e| e.to_string())?;
+    let mut state = Mps::from_circuit(&circuit, &[], options).map_err(|e| e.to_string())?;
+    let expectations = observables
+        .iter()
+        .map(|o| state.expectation_str(o))
+        .collect::<metatron_qso::Result<Vec<f64>>>()
+        .map_err(|e| e.to_string())?;
+    out["expectations"] = json!(expectations);
+    out["bond_dimensions"] = json!(state.bond_dimensions());
+    out["bond_entropies"] = json!(state.bond_entropies().map_err(|e| e.to_string())?);
+    if nq <= MAX_AMPLITUDE_QUBITS {
+        let psi = state.to_statevector().map_err(|e| e.to_string())?;
+        out["amplitudes"] = json!(
+            psi.amplitudes()
+                .iter()
+                .map(|a| [a.re, a.im])
+                .collect::<Vec<_>>()
+        );
+    }
+    out["discarded_weight"] = json!(state.discarded_weight());
+    out["fidelity_lower_bound"] = json!(state.fidelity_lower_bound());
+    if shots > 0 && nb > 0 {
+        // Nothing writes the bits of a program without measurements.
+        out["counts"] = json!({ "0".repeat(nb): shots });
+    } else if shots > 0 {
+        let counts = state
+            .sample_counts(shots, &mut Rng::seed_from_u64(seed))
+            .map_err(|e| e.to_string())?;
+        out["counts"] = json!(counts);
+    }
+    Ok(out)
 }
 
 /// Structure, spectra and symmetry group of a graph, with its edges and
@@ -655,5 +788,236 @@ mod tests {
             assert!(text.contains(env!("CARGO_PKG_VERSION")));
             qso_free(out, len);
         }
+    }
+
+    /// Rotations, a brick wall of CNOTs and a gate between the ends.
+    fn brickwork(n: usize, layers: usize) -> String {
+        let mut s = format!("OPENQASM 2.0;\ninclude \"qelib1.inc\";\nqreg q[{n}];\n");
+        for l in 0..layers {
+            for q in 0..n {
+                let a = 0.3 + 0.17 * ((q * 7 + l * 3) % 11) as f64;
+                let b = 0.1 * ((q + l) % 5) as f64;
+                s += &format!("ry({a}) q[{q}];\nrz({b}) q[{q}];\n");
+            }
+            for q in (l % 2..n - 1).step_by(2) {
+                s += &format!("cx q[{q}],q[{}];\n", q + 1);
+            }
+            s += &format!("rzz(0.4) q[0],q[{}];\n", n - 1);
+        }
+        s
+    }
+
+    fn ghz(n: usize) -> String {
+        let mut s = format!("OPENQASM 2.0;\ninclude \"qelib1.inc\";\nqreg q[{n}];\nh q[0];\n");
+        for q in 1..n {
+            s += &format!("cx q[{}],q[{q}];\n", q - 1);
+        }
+        s
+    }
+
+    #[test]
+    fn mps_equals_the_state_vector() {
+        let src = brickwork(8, 4);
+        let observables = ["Z0 Z7", "X3", "Y2 Y5", "Z0 X1 Y2 Z3 X4 Y5 Z6 X7"];
+        let r = ok("mps", json!({"source": src, "observables": observables}));
+        assert_eq!(r["method"], "mps");
+        let exact = ok("qasm", json!({"source": src}));
+        let a = r["amplitudes"].as_array().unwrap();
+        let b = exact["state"]["amplitudes"].as_array().unwrap();
+        assert_eq!(a.len(), 256);
+        for (x, y) in a.iter().zip(b) {
+            for k in 0..2 {
+                assert!((x[k].as_f64().unwrap() - y[k].as_f64().unwrap()).abs() < 1e-12);
+            }
+        }
+        let circuit = Program::from_qasm(&src).unwrap().to_circuit().unwrap();
+        let psi = StateVector::from_circuit(&circuit, &[]).unwrap();
+        for (o, e) in observables
+            .iter()
+            .zip(r["expectations"].as_array().unwrap())
+        {
+            let h: metatron_qso::quantum::PauliSum = o.parse().unwrap();
+            let want = h.expectation(&psi).unwrap();
+            assert!((e.as_f64().unwrap() - want).abs() < 1e-12, "{o}");
+        }
+        assert_eq!(r["fidelity_lower_bound"], 1.0);
+        assert_eq!(r["bond_entropies"].as_array().unwrap().len(), 7);
+    }
+
+    #[test]
+    fn mps_runs_far_beyond_state_vectors() {
+        let n = 500;
+        let r = ok(
+            "mps",
+            json!({"source": ghz(n), "shots": 100, "seed": 1, "observables": ["Z0 Z499", "X0", "-Z3 Z400"]}),
+        );
+        assert_eq!(r["qubits"], n);
+        let counts = r["counts"].as_object().unwrap();
+        assert_eq!(
+            counts.values().map(|v| v.as_u64().unwrap()).sum::<u64>(),
+            100
+        );
+        for key in counts.keys() {
+            assert!(key == &"0".repeat(n) || key == &"1".repeat(n));
+        }
+        let e: Vec<f64> = serde_json::from_value(r["expectations"].clone()).unwrap();
+        assert!((e[0] - 1.0).abs() < 1e-12 && e[1].abs() < 1e-12 && (e[2] + 1.0).abs() < 1e-12);
+        assert!(
+            r["bond_dimensions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|d| d == 2)
+        );
+        let s: Vec<f64> = serde_json::from_value(r["bond_entropies"].clone()).unwrap();
+        assert!(s.len() == n - 1 && s.iter().all(|x| (x - 1.0).abs() < 1e-12));
+        assert!(r["amplitudes"].is_null());
+    }
+
+    #[test]
+    fn mps_reports_truncation() {
+        let r = ok("mps", json!({"source": brickwork(16, 6), "max_bond": 2}));
+        assert_eq!(r["max_bond"], 2);
+        assert!(
+            r["bond_dimensions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|d| d.as_u64().unwrap() <= 2)
+        );
+        let w = r["discarded_weight"].as_f64().unwrap();
+        let f = r["fidelity_lower_bound"].as_f64().unwrap();
+        assert!(w > 1e-6 && f < 1.0, "{w} {f}");
+    }
+
+    #[test]
+    fn mps_samples_programs_with_measurements() {
+        let src = include_str!("../../metatron-qso-rs/tests/data/openqasm/v3/teleport.qasm");
+        let shots = 20_000;
+        let r = ok("mps", json!({"source": src, "shots": shots, "seed": 5}));
+        let exact = ok("qasm", json!({"source": src}));
+        let p = exact["probabilities"].as_object().unwrap();
+        let counts = r["counts"].as_object().unwrap();
+        assert!(counts.keys().all(|k| p.contains_key(k)));
+        for (k, q) in p {
+            let q = q.as_f64().unwrap();
+            let f = counts.get(k).map_or(0.0, |c| c.as_f64().unwrap()) / shots as f64;
+            let sigma = (q * (1.0 - q) / shots as f64).sqrt().max(1e-9);
+            assert!((f - q).abs() < 5.0 * sigma, "{k}: {f} vs {q}");
+        }
+        assert!(r["expectations"].is_null() && r["bond_dimensions"].is_null());
+    }
+
+    #[test]
+    fn mps_rejects_invalid_requests() {
+        let measured = "OPENQASM 3.0; include \"stdgates.inc\"; qubit[1] q; bit[1] c; h q[0]; c[0] = measure q[0];";
+        assert!(err("mps", json!({"source": measured})).contains("shots"));
+        assert!(
+            err(
+                "mps",
+                json!({"source": measured, "shots": 10, "observables": ["Z0"]})
+            )
+            .contains("observables")
+        );
+        assert!(err("mps", json!({"source": ghz(3), "max_bond": 0})).contains("bond dimension"));
+        assert!(err("mps", json!({"source": ghz(3), "observables": [1]})).contains("strings"));
+        assert!(err("mps", json!({"source": ghz(3), "observables": ["Z7"]})).contains('7'));
+        assert!(err("mps", json!({"source": ghz(3), "bond": 4})).contains("unknown parameter"));
+        assert!(err("mps", json!({"source": ghz(3), "observables": [" "]})).contains("empty"));
+        assert!(err("mps", json!({"source": "OPENQASM 3.0; bit[2] c;"})).contains("no qubits"));
+        let reset = "OPENQASM 2.0; include \"qelib1.inc\"; qreg q[2]; h q[0]; reset q[0];";
+        assert!(err("mps", json!({"source": reset, "shots": 5})).contains("declares none"));
+        // shots × qubits is bounded like the stabilizer path of `qasm`.
+        assert!(err("mps", json!({"source": ghz(1000), "shots": 100_000})).contains("at most"));
+    }
+
+    #[test]
+    fn mps_counts_follow_the_conventions_of_qasm() {
+        // Declared bits are sampled, as in `qasm`, even without measurements.
+        let src =
+            "OPENQASM 2.0; include \"qelib1.inc\"; qreg q[2]; creg c[1]; h q[0]; cx q[0],q[1];";
+        let r = ok("mps", json!({"source": src, "shots": 10}));
+        assert_eq!(
+            r["counts"],
+            ok("qasm", json!({"source": src, "shots": 10}))["counts"]
+        );
+        // Without bits, every qubit (qubit 0 on the right).
+        let x1 = "OPENQASM 2.0; include \"qelib1.inc\"; qreg q[3]; x q[1];";
+        assert_eq!(
+            ok("mps", json!({"source": x1, "shots": 7}))["counts"],
+            json!({"010": 7})
+        );
+    }
+
+    /// Requests whose native responses `js/test/mps_native.json` records;
+    /// the npm package's tests replay them in WebAssembly.
+    fn fixture_requests() -> Vec<Value> {
+        let teleport = include_str!("../../metatron-qso-rs/tests/data/openqasm/v3/teleport.qasm");
+        vec![
+            json!({"method": "mps", "params": {"source": brickwork(40, 6), "max_bond": 16,
+                "observables": ["Z0", "Z19 Z20", "X5 Y6 Z7", "Z0 Z39"]}}),
+            json!({"method": "mps", "params": {"source": brickwork(8, 4),
+                "observables": ["Z0 Z7", "X3"]}}),
+            json!({"method": "mps", "params": {"source": ghz(300), "shots": 50, "seed": 9,
+                "observables": ["Z0 Z299", "X0 X1"]}}),
+            json!({"method": "mps", "params": {"source": teleport, "shots": 2000, "seed": 5}}),
+        ]
+    }
+
+    fn native_fixture() -> Value {
+        let cases: Vec<Value> = fixture_requests()
+            .into_iter()
+            .map(|request| {
+                let response: Value = serde_json::from_str(&call(&request.to_string())).unwrap();
+                json!({"request": request, "response": response})
+            })
+            .collect();
+        json!({ "cases": cases })
+    }
+
+    fn close(a: &Value, b: &Value, path: &str) {
+        match (a, b) {
+            (Value::Number(x), Value::Number(y)) if x.is_f64() || y.is_f64() => {
+                let (x, y) = (x.as_f64().unwrap(), y.as_f64().unwrap());
+                assert!(
+                    (x - y).abs() <= 1e-10 * y.abs().max(1.0),
+                    "{path}: {x} vs {y}"
+                );
+            }
+            (Value::Array(x), Value::Array(y)) => {
+                assert_eq!(x.len(), y.len(), "{path}");
+                for (k, (u, v)) in x.iter().zip(y).enumerate() {
+                    close(u, v, &format!("{path}[{k}]"));
+                }
+            }
+            (Value::Object(x), Value::Object(y)) => {
+                assert_eq!(
+                    x.keys().collect::<Vec<_>>(),
+                    y.keys().collect::<Vec<_>>(),
+                    "{path}"
+                );
+                for (k, u) in x {
+                    close(u, &y[k], &format!("{path}.{k}"));
+                }
+            }
+            _ => assert_eq!(a, b, "{path}"),
+        }
+    }
+
+    /// The recorded responses are the native ones (regenerate with
+    /// `cargo test -p metatron_qso_wasm -- --ignored write_mps_fixture`).
+    #[test]
+    fn mps_fixture_matches_the_native_build() {
+        let recorded: Value =
+            serde_json::from_str(include_str!("../js/test/mps_native.json")).unwrap();
+        close(&native_fixture(), &recorded, "fixture");
+    }
+
+    #[test]
+    #[ignore = "writes js/test/mps_native.json"]
+    fn write_mps_fixture() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/js/test/mps_native.json");
+        let text = serde_json::to_string_pretty(&native_fixture()).unwrap();
+        std::fs::write(path, text + "\n").unwrap();
     }
 }

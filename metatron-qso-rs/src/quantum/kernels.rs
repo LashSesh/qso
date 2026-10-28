@@ -14,13 +14,10 @@ use num_complex::Complex64 as C64;
 
 use super::circuit::Instruction;
 use super::gates::{GateKind, dmatrix_1q, dmatrix_2q, matrix_1q, matrix_2q};
-use super::simd::{
-    mat2_runs, mat2_runs_real, mat2_strided, mat2_strided_real, mat4_runs, scale_run,
-    scale_upper_strided, scale2_strided,
-};
+use super::scalar::Amplitude;
 use crate::parallel::{
     CHUNK, SyncPtr, for_each_chunk, for_each_chunk_pair, for_each_index, for_each_item,
-    for_each_mut, for_each_pair, for_each_pair_runs,
+    for_each_mut, for_each_pair, for_each_pair_runs, sum_c64, sum_chunks_c64,
 };
 
 /// Runs shorter than this are handled element by element: the per-run
@@ -99,7 +96,7 @@ where
 
 /// Apply a 2×2 matrix to `target`, restricted to basis states whose bits in
 /// `controls` (a bit mask) are all 1.
-pub(crate) fn apply_1q(amps: &mut [C64], target: usize, controls: usize, m: &[C64; 4]) {
+pub(crate) fn apply_1q<A: Amplitude>(amps: &mut [A], target: usize, controls: usize, m: &[A; 4]) {
     debug_assert!(amps.len().is_power_of_two());
     debug_assert_eq!(controls & (1 << target), 0);
     let m = *m;
@@ -115,33 +112,33 @@ pub(crate) fn apply_1q(amps: &mut [C64], target: usize, controls: usize, m: &[C6
         // one call; above, runs of both halves are handled in step.
         let stride = 1usize << target;
         let small = stride < CHUNK;
-        if m[1] == C64::new(0.0, 0.0) && m[2] == C64::new(0.0, 0.0) {
+        if m[1] == A::ZERO && m[2] == A::ZERO {
             let (d0, d1) = (m[0], m[3]);
             if small {
-                for_each_chunk(amps, move |_, c| scale2_strided(c, stride, d0, d1));
+                for_each_chunk(amps, move |_, c| A::scale2_strided(c, stride, d0, d1));
             } else {
                 for_each_pair_runs(amps, stride, move |a, b| {
                     for (x, y) in a.chunks_mut(INTERLEAVE).zip(b.chunks_mut(INTERLEAVE)) {
-                        scale_run(x, d0);
-                        scale_run(y, d1);
+                        A::scale_run(x, d0);
+                        A::scale_run(y, d1);
                     }
                 });
             }
             return;
         }
-        if m.iter().all(|z| z.im == 0.0) {
-            let r = m.map(|z| z.re);
+        if m.iter().all(|&z| z == z.conj()) {
+            let r = m.map(A::re);
             if small {
-                for_each_chunk(amps, move |_, c| mat2_strided_real(c, stride, &r));
+                for_each_chunk(amps, move |_, c| A::mat2_strided_real(c, stride, &r));
             } else {
-                for_each_pair_runs(amps, stride, move |a, b| mat2_runs_real(a, b, &r));
+                for_each_pair_runs(amps, stride, move |a, b| A::mat2_runs_real(a, b, &r));
             }
             return;
         }
         if small {
-            for_each_chunk(amps, move |_, c| mat2_strided(c, stride, &m));
+            for_each_chunk(amps, move |_, c| A::mat2_strided(c, stride, &m));
         } else {
-            for_each_pair_runs(amps, stride, move |a, b| mat2_runs(a, b, &m));
+            for_each_pair_runs(amps, stride, move |a, b| A::mat2_runs(a, b, &m));
         }
         return;
     }
@@ -175,18 +172,18 @@ pub(crate) fn apply_1q(amps: &mut [C64], target: usize, controls: usize, m: &[C6
             let p = ptr.get();
             let lo = std::slice::from_raw_parts_mut(p.add(start), n);
             let hi = std::slice::from_raw_parts_mut(p.add(start + bit), n);
-            mat2_runs(lo, hi, &m);
+            A::mat2_runs(lo, hi, &m);
         }
     });
 }
 
 /// Apply a 4×4 matrix to `(first, second)` restricted to `controls`.
-pub(crate) fn apply_2q(
-    amps: &mut [C64],
+pub(crate) fn apply_2q<A: Amplitude>(
+    amps: &mut [A],
     first: usize,
     second: usize,
     controls: usize,
-    m: &[C64; 16],
+    m: &[A; 16],
 ) {
     debug_assert!(amps.len().is_power_of_two());
     debug_assert_ne!(first, second);
@@ -227,13 +224,13 @@ pub(crate) fn apply_2q(
         unsafe {
             let p = ptr.get();
             let run = |off: usize| std::slice::from_raw_parts_mut(p.add(start + off), n);
-            mat4_runs([run(0), run(bs), run(bf), run(bf | bs)], &m);
+            A::mat4_runs([run(0), run(bs), run(bf), run(bf | bs)], &m);
         }
     });
 }
 
 /// Pauli X on `target` restricted to `controls` (a pure permutation).
-pub(crate) fn apply_x(amps: &mut [C64], target: usize, controls: usize) {
+pub(crate) fn apply_x<A: Amplitude>(amps: &mut [A], target: usize, controls: usize) {
     if controls == 0 {
         assert!(
             1usize << target < amps.len(),
@@ -266,7 +263,7 @@ pub(crate) fn apply_x(amps: &mut [C64], target: usize, controls: usize) {
 /// and is swapped with the run `2^target` further on. Long runs are split
 /// into pieces of at most `CHUNK` elements so that gates on high qubits
 /// parallelise as well.
-fn apply_cx(amps: &mut [C64], control_mask: usize, target: usize, positions: &[usize]) {
+fn apply_cx<A: Amplitude>(amps: &mut [A], control_mask: usize, target: usize, positions: &[usize]) {
     let run = 1usize << positions[0];
     let piece = run.min(CHUNK);
     let pieces_per_run = run / piece;
@@ -288,7 +285,7 @@ fn apply_cx(amps: &mut [C64], control_mask: usize, target: usize, positions: &[u
 }
 
 /// Swap qubits `a` and `b` on the subspace selected by `controls`.
-pub(crate) fn apply_swap(amps: &mut [C64], a: usize, b: usize, controls: usize) {
+pub(crate) fn apply_swap<A: Amplitude>(amps: &mut [A], a: usize, b: usize, controls: usize) {
     let positions = sorted_positions(&[a, b], controls, amps.len());
     let count = amps.len() >> positions.len();
     let ba = 1usize << a;
@@ -309,7 +306,7 @@ pub(crate) const MAX_DENSE_TARGETS: usize = 6;
 
 /// Apply a dense `2^k × 2^k` matrix to `targets` (`targets[0]` is the most
 /// significant local bit) restricted to `controls`.
-pub(crate) fn apply_kq(amps: &mut [C64], targets: &[usize], controls: usize, m: &[C64]) {
+pub(crate) fn apply_kq<A: Amplitude>(amps: &mut [A], targets: &[usize], controls: usize, m: &[A]) {
     let k = targets.len();
     assert!(
         k <= MAX_DENSE_TARGETS,
@@ -333,7 +330,7 @@ pub(crate) fn apply_kq(amps: &mut [C64], targets: &[usize], controls: usize, m: 
     let ptr = SyncPtr::new(amps);
     for_each_index(count, move |kk| {
         let base = insert_zeros(kk, &positions) | controls;
-        let mut v = [C64::new(0.0, 0.0); 1 << MAX_DENSE_TARGETS];
+        let mut v = [A::ZERO; 1 << MAX_DENSE_TARGETS];
         // SAFETY: distinct `kk` map to disjoint index sets.
         unsafe {
             let p = ptr.get();
@@ -342,7 +339,7 @@ pub(crate) fn apply_kq(amps: &mut [C64], targets: &[usize], controls: usize, m: 
             }
             for (r, off) in offsets.iter().enumerate() {
                 let row = &m[r * d..(r + 1) * d];
-                let mut acc = C64::new(0.0, 0.0);
+                let mut acc = A::ZERO;
                 for c in 0..d {
                     acc += row[c] * v[c];
                 }
@@ -353,22 +350,22 @@ pub(crate) fn apply_kq(amps: &mut [C64], targets: &[usize], controls: usize, m: 
 }
 
 /// Multiply every amplitude by `phase(index)`.
-pub(crate) fn apply_diagonal<F>(amps: &mut [C64], phase: F)
+pub(crate) fn apply_diagonal<A: Amplitude, F>(amps: &mut [A], phase: F)
 where
-    F: Fn(usize) -> C64 + Sync + Send,
+    F: Fn(usize) -> A + Sync + Send,
 {
     for_each_mut(amps, |i, a| *a *= phase(i));
 }
 
 /// Multiply amplitudes whose `mask` bits are all set by `phase`.
-pub(crate) fn apply_phase_on_mask(amps: &mut [C64], mask: usize, phase: C64) {
+pub(crate) fn apply_phase_on_mask<A: Amplitude>(amps: &mut [A], mask: usize, phase: A) {
     if mask.is_power_of_two() {
         // Uncontrolled phase gate: scale the upper half of every block.
         assert!(mask < amps.len(), "qubit outside the register");
         if mask < CHUNK {
-            for_each_chunk(amps, move |_, c| scale_upper_strided(c, mask, phase));
+            for_each_chunk(amps, move |_, c| A::scale_upper_strided(c, mask, phase));
         } else {
-            for_each_pair_runs(amps, mask, move |_, b| scale_run(b, phase));
+            for_each_pair_runs(amps, mask, move |_, b| A::scale_run(b, phase));
         }
         return;
     }
@@ -389,7 +386,7 @@ pub(crate) fn apply_phase_on_mask(amps: &mut [C64], mask: usize, phase: C64) {
     for_each_run(len, &positions, mask, move |start, n| {
         // SAFETY: distinct calls address disjoint runs inside the register.
         unsafe {
-            scale_run(
+            A::scale_run(
                 std::slice::from_raw_parts_mut(ptr.get().add(start), n),
                 phase,
             );
@@ -400,9 +397,9 @@ pub(crate) fn apply_phase_on_mask(amps: &mut [C64], mask: usize, phase: C64) {
 /// Multiply each run of `2^low` amplitudes by `phase(start)` (`None`:
 /// leave it), for a diagonal whose phase depends only on bits at or above
 /// `low`.
-fn apply_diagonal_runs<F>(amps: &mut [C64], low: usize, phase: F)
+fn apply_diagonal_runs<A: Amplitude, F>(amps: &mut [A], low: usize, phase: F)
 where
-    F: Fn(usize) -> Option<C64> + Sync + Send,
+    F: Fn(usize) -> Option<A> + Sync + Send,
 {
     let run = 1usize << low;
     if run < MIN_RUN || amps.len() < 2 * CHUNK {
@@ -420,10 +417,10 @@ where
         for (j, (a, b)) in lo.chunks_mut(piece).zip(hi.chunks_mut(piece)).enumerate() {
             let i = offset + j * piece;
             if let Some(z) = phase(i) {
-                scale_run(a, z);
+                A::scale_run(a, z);
             }
             if let Some(z) = phase(half + i) {
-                scale_run(b, z);
+                A::scale_run(b, z);
             }
         }
     });
@@ -434,8 +431,8 @@ where
 /// `offset` shifts every qubit index and `conj` applies the complex
 /// conjugate matrix; together they let the density-matrix simulator apply
 /// `U ⊗ U*` to a vectorised ρ with the same kernels.
-pub(crate) fn apply_instruction(
-    amps: &mut [C64],
+pub(crate) fn apply_instruction<A: Amplitude>(
+    amps: &mut [A],
     inst: &Instruction,
     angles: &[f64],
     conj: bool,
@@ -452,8 +449,8 @@ pub(crate) fn apply_instruction(
 /// shifted by `offset`): the instruction's own controls are ignored. Used
 /// to apply a gate to a block of a larger register whose high control bits
 /// are known to be set.
-pub(crate) fn apply_instruction_masked(
-    amps: &mut [C64],
+pub(crate) fn apply_instruction_masked<A: Amplitude>(
+    amps: &mut [A],
     inst: &Instruction,
     angles: &[f64],
     conj: bool,
@@ -469,7 +466,8 @@ pub(crate) fn apply_instruction_masked(
         *slot = q + offset;
     }
     let t = &targets[..inst.targets.len()];
-    let cj = |z: C64| if conj { z.conj() } else { z };
+    // Matrices are formed in double precision and rounded once.
+    let cj = |z: C64| A::from_c64(if conj { z.conj() } else { z });
     match inst.kind {
         GateKind::Swap => apply_swap(amps, t[0], t[1], controls),
         GateKind::X => apply_x(amps, t[0], controls),
@@ -502,7 +500,7 @@ pub(crate) fn apply_instruction_masked(
                 .matrix
                 .as_ref()
                 .expect("unitary instruction carries a matrix");
-            let m: Vec<C64> = m.iter().map(|&z| cj(z)).collect();
+            let m: Vec<A> = m.iter().map(|&z| cj(z)).collect();
             match t.len() {
                 1 => apply_1q(amps, t[0], controls, &m[..].try_into().expect("2x2")),
                 2 => apply_2q(amps, t[0], t[1], controls, &m[..].try_into().expect("4x4")),
@@ -524,8 +522,8 @@ pub(crate) fn apply_instruction_masked(
 ///
 /// The derivative of a controlled gate vanishes on the uncontrolled
 /// subspace, so those amplitudes are zeroed.
-pub(crate) fn apply_instruction_derivative(
-    amps: &mut [C64],
+pub(crate) fn apply_instruction_derivative<A: Amplitude>(
+    amps: &mut [A],
     inst: &Instruction,
     angles: &[f64],
     which: usize,
@@ -536,8 +534,8 @@ pub(crate) fn apply_instruction_derivative(
 /// [`apply_instruction_derivative`] with the control mask given explicitly
 /// (the instruction's own controls ignored), for a block of a larger
 /// register whose high control bits are set.
-pub(crate) fn apply_instruction_derivative_masked(
-    amps: &mut [C64],
+pub(crate) fn apply_instruction_derivative_masked<A: Amplitude>(
+    amps: &mut [A],
     inst: &Instruction,
     angles: &[f64],
     which: usize,
@@ -548,29 +546,189 @@ pub(crate) fn apply_instruction_derivative_masked(
             amps,
             inst.targets[0],
             controls,
-            &dmatrix_1q(inst.kind, angles, which),
+            &dmatrix_1q(inst.kind, angles, which).map(A::from_c64),
         ),
         Some(2) => apply_2q(
             amps,
             inst.targets[0],
             inst.targets[1],
             controls,
-            &dmatrix_2q(inst.kind, angles),
+            &dmatrix_2q(inst.kind, angles).map(A::from_c64),
         ),
         _ => unreachable!("only fixed-arity parametrised gates have derivatives"),
     }
     if controls != 0 {
         for_each_mut(amps, |i, a| {
             if i & controls != controls {
-                *a = C64::new(0.0, 0.0);
+                *a = A::ZERO;
             }
         });
     }
 }
 
+/// `⟨λ|D|φ⟩` for the derivative `D` of a parametrised instruction's matrix
+/// with respect to its parameter `which`, acting on its targets and zero
+/// where the bits in `controls` (a mask) are not all set: the gradient term
+/// of the adjoint method in one reading pass, without copying a state.
+/// Summed in a fixed order of chunks, so independent of the thread count.
+pub(crate) fn derivative_element<A: Amplitude>(
+    lambda: &[A],
+    phi: &[A],
+    inst: &Instruction,
+    angles: &[f64],
+    which: usize,
+    controls: usize,
+) -> C64 {
+    debug_assert_eq!(lambda.len(), phi.len());
+    match inst.kind.num_targets() {
+        Some(1) => element_1q_matrix(
+            lambda,
+            phi,
+            inst.targets[0],
+            controls,
+            &dmatrix_1q(inst.kind, angles, which),
+        ),
+        Some(2) => {
+            let d = dmatrix_2q(inst.kind, angles);
+            let (bf, bs) = (1usize << inst.targets[0], 1usize << inst.targets[1]);
+            let positions = sorted_positions(&inst.targets, controls, phi.len());
+            sum_c64(phi.len() >> positions.len(), |k| {
+                let base = insert_zeros(k, &positions) | controls;
+                // Local order |x_first x_second⟩, as in `apply_2q`.
+                let idx = [base, base | bs, base | bf, base | bf | bs];
+                let v = idx.map(|i| phi[i].to_c64());
+                let mut acc = C64::new(0.0, 0.0);
+                for r in 0..4 {
+                    let row = &d[4 * r..4 * r + 4];
+                    acc += lambda[idx[r]].to_c64().conj()
+                        * (row[0] * v[0] + row[1] * v[1] + row[2] * v[2] + row[3] * v[3]);
+                }
+                acc
+            })
+        }
+        _ => unreachable!("only fixed-arity parametrised gates have derivatives"),
+    }
+}
+
+/// `⟨λ|M|φ⟩` for a 2×2 matrix `M` on `target`, zero where the bits in
+/// `controls` are not all set.
+pub(crate) fn element_1q_matrix<A: Amplitude>(
+    lambda: &[A],
+    phi: &[A],
+    target: usize,
+    controls: usize,
+    m: &[C64; 4],
+) -> C64 {
+    if controls == 0 {
+        return element_1q(lambda, phi, target, m);
+    }
+    let bt = 1usize << target;
+    let positions = sorted_positions(&[target], controls, phi.len());
+    sum_c64(phi.len() >> positions.len(), |k| {
+        let i0 = insert_zeros(k, &positions) | controls;
+        let i1 = i0 | bt;
+        let (a0, a1) = (phi[i0].to_c64(), phi[i1].to_c64());
+        lambda[i0].to_c64().conj() * (m[0] * a0 + m[1] * a1)
+            + lambda[i1].to_c64().conj() * (m[2] * a0 + m[3] * a1)
+    })
+}
+
+/// Multiply the amplitudes whose bits in `controls` are all set by `u`
+/// (a block of a register: serial).
+pub(crate) fn scale_masked<A: Amplitude>(amps: &mut [A], controls: usize, u: C64) {
+    let u = A::from_c64(u);
+    if controls == 0 {
+        amps.iter_mut().for_each(|a| *a *= u);
+    } else {
+        for (i, a) in amps.iter_mut().enumerate() {
+            if i & controls == controls {
+                *a *= u;
+            }
+        }
+    }
+}
+
+/// `⟨λ|φ⟩` over the amplitudes whose bits in `controls` are all set (a
+/// block of a register: serial, in index order).
+pub(crate) fn inner_masked<A: Amplitude>(lambda: &[A], phi: &[A], controls: usize) -> C64 {
+    lambda
+        .iter()
+        .zip(phi)
+        .enumerate()
+        .filter(|(i, _)| i & controls == controls)
+        .map(|(_, (l, p))| l.to_c64().conj() * p.to_c64())
+        .sum()
+}
+
+/// [`derivative_element`] of an uncontrolled single-qubit gate over
+/// contiguous runs: the pairs are visited in the order of the general path
+/// (pair `k` at `insert_zero(k, target)`), in the same chunks of `CHUNK`
+/// pairs, so the sum is the same bit for bit.
+fn element_1q<A: Amplitude>(lambda: &[A], phi: &[A], target: usize, d: &[C64; 4]) -> C64 {
+    let stride = 1usize << target;
+    let pairs = phi.len() / 2;
+    let term = |l0: C64, l1: C64, a0: C64, a1: C64| {
+        l0.conj() * (d[0] * a0 + d[1] * a1) + l1.conj() * (d[2] * a0 + d[3] * a1)
+    };
+    sum_chunks_c64(pairs.div_ceil(CHUNK), phi.len(), |c| {
+        let (first, last) = (c * CHUNK, ((c + 1) * CHUNK).min(pairs));
+        let mut acc = C64::new(0.0, 0.0);
+        let mut k = first;
+        while k < last {
+            // A run of consecutive pairs: up to the end of the current
+            // half-block or of the chunk.
+            let i0 = insert_zero(k, target);
+            let n = (stride - (k & (stride - 1))).min(last - k);
+            let (p0, p1) = (&phi[i0..i0 + n], &phi[i0 + stride..i0 + stride + n]);
+            let (l0, l1) = (&lambda[i0..i0 + n], &lambda[i0 + stride..i0 + stride + n]);
+            for j in 0..n {
+                acc += term(
+                    l0[j].to_c64(),
+                    l1[j].to_c64(),
+                    p0[j].to_c64(),
+                    p1[j].to_c64(),
+                );
+            }
+            k += n;
+        }
+        acc
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The run-based matrix element equals the pair-by-pair sum of the
+    /// general path bit for bit, for every target, on registers above and
+    /// below the parallel threshold.
+    #[test]
+    fn element_runs_match_the_pairwise_sum_bit_for_bit() {
+        let mut rng = crate::Rng::seed_from_u64(1261);
+        let m: [C64; 4] = std::array::from_fn(|_| C64::new(rng.normal(), rng.normal()));
+        let sizes: &[usize] = if cfg!(miri) { &[4, 7] } else { &[3, 13, 17] };
+        for &n in sizes {
+            let len = 1usize << n;
+            let phi: Vec<C64> = (0..len)
+                .map(|_| C64::new(rng.normal(), rng.normal()))
+                .collect();
+            let lam: Vec<C64> = (0..len)
+                .map(|_| C64::new(rng.normal(), rng.normal()))
+                .collect();
+            for t in 0..n {
+                let general = sum_c64(len / 2, |k| {
+                    let i0 = insert_zero(k, t);
+                    let i1 = i0 | 1 << t;
+                    let (a0, a1) = (phi[i0], phi[i1]);
+                    lam[i0].conj() * (m[0] * a0 + m[1] * a1)
+                        + lam[i1].conj() * (m[2] * a0 + m[3] * a1)
+                });
+                let runs = element_1q(&lam, &phi, t, &m);
+                assert_eq!(general.re.to_bits(), runs.re.to_bits(), "n {n} target {t}");
+                assert_eq!(general.im.to_bits(), runs.im.to_bits(), "n {n} target {t}");
+            }
+        }
+    }
 
     /// Apply the same gates with the vector and the portable primitives:
     /// the results must agree bit for bit (on processors without AVX both
@@ -755,17 +913,12 @@ mod tests {
         }
     }
 
-    /// Run `f` on several worker threads, so that the parallel paths of
-    /// the kernels really execute concurrently (Miri then checks them for
-    /// data races as well as for out-of-bounds and aliasing errors).
+    /// Run `f` where the parallel paths of the kernels execute concurrently
+    /// on the state-vector pool's workers (Miri then checks them for data
+    /// races as well as for out-of-bounds and aliasing errors). Not inside
+    /// a rayon pool: there the helpers take their rayon fallback, which is
+    /// safe code.
     fn on_threads(f: impl FnOnce() + Send) {
-        #[cfg(feature = "parallel")]
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(4)
-            .build()
-            .unwrap()
-            .install(f);
-        #[cfg(not(feature = "parallel"))]
         f();
     }
 

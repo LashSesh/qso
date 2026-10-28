@@ -8,13 +8,15 @@ use clap::{Parser, Subcommand, ValueEnum};
 use serde_json::{Value, json};
 
 use metatron_qso::algorithms::ansatz::{self, Entanglement};
-use metatron_qso::algorithms::qaoa::{MaxCutQaoa, QaoaConfig, optimize_layerwise};
+use metatron_qso::algorithms::qaoa::{MaxCutQaoa, QaoaConfig, optimize_layerwise_at};
 use metatron_qso::algorithms::time_evolution::{trotter_circuit, trotter_error_bound};
 use metatron_qso::algorithms::{grover, models, vqe::Vqe};
 use metatron_qso::backend::{Backend, DensityMatrixBackend, DeviceBackend, StatevectorBackend};
 use metatron_qso::chemistry::adapt::{AdaptOptions, adapt_vqe_molecule};
 use metatron_qso::chemistry::ansatz as chem_ansatz;
-use metatron_qso::chemistry::{Mapping, MolecularIntegrals, QubitEncoding};
+use metatron_qso::chemistry::{
+    AoIntegrals, Basis, Mapping, MolecularIntegrals, Molecule, QubitEncoding, ScfOptions, rhf, uhf,
+};
 use metatron_qso::estimation::{Estimate, EstimatorOptions, ShotAllocation, estimate};
 use metatron_qso::graph::{Graph, generators, io};
 use metatron_qso::mitigation::ReadoutCalibration;
@@ -24,14 +26,14 @@ use metatron_qso::noise::{DeviceModel, NoiseModel};
 use metatron_qso::optimize::{Method, Options};
 use metatron_qso::qec;
 use metatron_qso::quantum::{
-    Circuit, PauliSum, Program, bitstring, from_qasm2, record_bitstring, to_qasm2,
+    Circuit, PauliSum, Precision, Program, bitstring, from_qasm2, record_bitstring, to_qasm2,
 };
 use metatron_qso::rng::Rng;
 use metatron_qso::stabilizer::StabilizerState;
 use metatron_qso::stabilizer::program::{is_clifford_program, sample_program};
 use metatron_qso::walks::{
-    Coin, CoinedWalk, ContinuousWalk, Generator, Quotient, QuotientWalk, SpatialSearch,
-    StateTransfer, SzegedyWalk, circuits, classical_hitting_times,
+    Coin, CoinedWalk, ContinuousWalk, Generator, PrettyGoodTransfer, Quotient, QuotientWalk,
+    SpatialSearch, StateTransfer, SzegedyWalk, circuits, classical_hitting_times,
 };
 use metatron_qso::{QsoError, Result};
 
@@ -103,7 +105,8 @@ enum Command {
         #[arg(long, value_enum, default_value_t = GeneratorArg::Laplacian)]
         generator: GeneratorArg,
     },
-    /// Perfect state transfer between two nodes, or the best transfer.
+    /// Perfect state transfer between two nodes, or the best transfer;
+    /// pretty good state transfer decided exactly on paths and cycles.
     Transfer {
         #[arg(long, default_value = "path:3")]
         graph: String,
@@ -204,6 +207,9 @@ enum Command {
         /// Optimise depths 1..=p with INTERP initialisation.
         #[arg(long)]
         layerwise: bool,
+        /// Simulate in single precision (half the memory).
+        #[arg(long)]
+        single: bool,
     },
     /// Variational quantum eigensolver.
     Vqe {
@@ -225,6 +231,10 @@ enum Command {
         restarts: usize,
         #[arg(long, default_value_t = 0)]
         seed: u64,
+        /// Simulate in single precision (half the memory, adjoint
+        /// gradients).
+        #[arg(long)]
+        single: bool,
     },
     /// Grover search.
     Grover {
@@ -270,6 +280,10 @@ enum Command {
         /// Largest bond dimension of the matrix-product state.
         #[arg(long, default_value_t = 256, requires = "mps")]
         max_bond: usize,
+        /// Run on a single-precision state vector (half the memory, one
+        /// more qubit; programs without classical bits).
+        #[arg(long, conflicts_with_all = ["noise", "device", "stabilizer", "mps"])]
+        single: bool,
     },
     /// Estimate ⟨H⟩ of an OpenQASM circuit from shots, with standard
     /// errors and optional error mitigation.
@@ -305,6 +319,48 @@ enum Command {
         pec: Option<usize>,
         #[arg(long, default_value_t = 0)]
         seed: u64,
+    },
+    /// Hartree–Fock of a molecule from its geometry (STO-3G, 6-31G, 6-31G* or cc-pVDZ;
+    /// H to Ar), optionally full CI in an active space and an FCIDUMP file.
+    Scf {
+        /// Atoms in ångström, e.g. "H 0 0 0; H 0 0 0.735".
+        #[arg(long)]
+        atoms: String,
+        /// sto-3g, 6-31g, 6-31g* or cc-pvdz (H to Ar).
+        #[arg(long, default_value = "sto-3g")]
+        basis: String,
+        #[arg(long, default_value_t = 0, allow_hyphen_values = true)]
+        charge: i32,
+        /// Spin multiplicity 2S + 1.
+        #[arg(long, default_value_t = 1)]
+        multiplicity: u32,
+        /// Unrestricted Hartree–Fock (open shells).
+        #[arg(long, conflicts_with = "restricted_open")]
+        unrestricted: bool,
+        /// Restricted open-shell Hartree–Fock (open shells; its orbitals
+        /// serve --fci and --fcidump).
+        #[arg(long)]
+        restricted_open: bool,
+        /// Cartesian d (and higher) shells instead of spherical ones.
+        #[arg(long)]
+        cartesian: bool,
+        /// Doubly occupied orbitals folded into the core energy (with
+        /// --fci or --fcidump).
+        #[arg(long, default_value_t = 0)]
+        frozen: usize,
+        /// Orbitals kept after the frozen ones (default: all; with --fci or
+        /// --fcidump).
+        #[arg(long)]
+        active: Option<usize>,
+        /// Most self-consistent-field iterations.
+        #[arg(long, default_value_t = 200)]
+        max_iterations: usize,
+        /// Full CI in the frozen-core active space.
+        #[arg(long)]
+        fci: bool,
+        /// Write the active-space Hamiltonian as an FCIDUMP file.
+        #[arg(long)]
+        fcidump: Option<std::path::PathBuf>,
     },
     /// Molecular Hamiltonian from an FCIDUMP file: qubit Hamiltonian,
     /// Hartree–Fock and full-CI energies, and a variational solution.
@@ -343,18 +399,23 @@ enum Command {
         #[arg(long)]
         output: Option<std::path::PathBuf>,
     },
-    /// Memory experiment of a repetition or rotated surface code under
-    /// circuit-level depolarizing noise: sampled with Pauli frames and
-    /// decoded by union-find or minimum-weight matching.
+    /// Memory experiment of a repetition, rotated surface, triangular
+    /// colour or bivariate bicycle code under circuit-level depolarizing
+    /// noise: sampled with Pauli frames and decoded by union-find,
+    /// minimum-weight matching or BP+OSD (colour and bicycle codes need
+    /// BP+OSD).
     Qec {
         #[arg(long, value_enum, default_value_t = CodeArg::Surface)]
         code: CodeArg,
         #[arg(long, value_enum, default_value_t = DecoderArg::UnionFind)]
         decoder: DecoderArg,
-        /// Basis of the surface-code memory: z protects |0⟩_L, x |+⟩_L.
+        /// Basis of the memory (not for the repetition code): z protects
+        /// |0⟩_L, x |+⟩_L.
         #[arg(long, value_enum, default_value_t = BasisArg::Z)]
         basis: BasisArg,
-        /// Code distances (odd for the surface code), e.g. 3,5,7.
+        /// Code distances (odd for the surface and colour codes), e.g.
+        /// 3,5,7; for bivariate bicycle codes their qubit counts (72, 90,
+        /// 108, 144, 288).
         #[arg(long, value_delimiter = ',', default_value = "3,5")]
         distance: Vec<usize>,
         /// Rounds of syndrome extraction (default: the distance).
@@ -375,6 +436,15 @@ enum Command {
         /// memory experiment (code, distance, rounds and p are ignored).
         #[arg(long, conflicts_with = "stim")]
         circuit: Option<std::path::PathBuf>,
+        /// Order of the CNOTs of the colour and bicycle codes: greedy,
+        /// bicycle (the depth-8 cycle of Bravyi et al.), or six directions
+        /// for the colour code, e.g. 0,1,2,3,4,5 (not with --circuit).
+        #[arg(long, default_value = "greedy")]
+        schedule: String,
+        /// Also bound the circuit distance: the fewest faults that flip a
+        /// logical observable undetected.
+        #[arg(long)]
+        circuit_distance: bool,
     },
 }
 
@@ -388,12 +458,16 @@ enum BasisArg {
 enum DecoderArg {
     UnionFind,
     Matching,
+    CorrelatedMatching,
+    Bposd,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
 enum CodeArg {
     Surface,
     Repetition,
+    Color,
+    Bb,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -468,6 +542,15 @@ fn read_graph_file(path: &std::path::Path) -> Result<Graph> {
     };
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
     Ok(g.with_name(name.unwrap_or_default()))
+}
+
+/// Single or double precision, from `--single`.
+fn precision(single: bool) -> Precision {
+    if single {
+        Precision::Single
+    } else {
+        Precision::Double
+    }
 }
 
 /// A graph from a specification string or a file.
@@ -642,6 +725,31 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             let to = to.unwrap_or(g.num_nodes().saturating_sub(1));
             let t = StateTransfer::new(&g, (*generator).into(), *gamma, *from, to)?;
             let best = t.best_transfer(*t_max, 4000)?;
+            // Exact PGST decision where the graph family allows it; perfect
+            // transfer implies it on every graph.
+            let exact = PrettyGoodTransfer::from_graph(&g, (*generator).into(), *gamma, *from, to);
+            // Paths and cycles are recognised before any arithmetic, so an
+            // error on one means the decision itself failed.
+            let family = g.is_connected()
+                && g.is_unweighted()
+                && g.degrees().iter().all(|&d| d <= 2)
+                && g.num_edges() + 1 >= g.num_nodes();
+            let pretty_good = exact
+                .as_ref()
+                .ok()
+                .map(|p| p.pretty_good())
+                .or(t.perfect_transfer_time().map(|_| true));
+            let pgst_line = match (pretty_good, &exact) {
+                (Some(true), _) => "\npretty good state transfer: yes".to_string(),
+                (Some(false), _) => "\npretty good state transfer: no (exact)".to_string(),
+                (None, Err(e)) if family => {
+                    format!("\npretty good state transfer: undecided ({e})")
+                }
+                (None, _) => {
+                    "\npretty good state transfer: undecided (exact only for paths and cycles)"
+                        .to_string()
+                }
+            };
             let text = match t.perfect_transfer_time() {
                 Some(tau) => format!(
                     "{}: perfect state transfer {from} → {to} at t = {tau:.10}",
@@ -658,8 +766,8 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             Ok((
                 json!({"perfect_transfer_time": t.perfect_transfer_time(),
                        "strongly_cospectral": t.strongly_cospectral(), "support": t.support(),
-                       "best": best}),
-                text,
+                       "pretty_good": pretty_good, "best": best}),
+                text + &pgst_line,
             ))
         }
         Command::Coined {
@@ -819,6 +927,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             restarts,
             seed,
             layerwise,
+            single,
         } => {
             let g = graph(spec)?;
             let config = QaoaConfig {
@@ -826,24 +935,30 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 seed: *seed,
                 ..Default::default()
             };
+            let precision = precision(*single);
             let results = if *layerwise {
-                optimize_layerwise(&g, *p, &config)?
+                optimize_layerwise_at(&g, *p, &config, precision)?
             } else {
-                vec![MaxCutQaoa::new(&g, *p)?.optimize(&config)?]
+                vec![
+                    MaxCutQaoa::new(&g, *p)?
+                        .with_precision(precision)
+                        .optimize(&config)?,
+                ]
             };
             let n = g.num_nodes();
             let text = results
                 .iter()
                 .map(|r| {
                     format!(
-                        "p={}  <C>={:.6}  C_max={}  ratio={:.6}  P(optimal)={:.4}  most likely {} (cut {})",
+                        "p={}  <C>={:.6}  C_max={}  ratio={:.6}  P(optimal)={:.4}  most likely {} (cut {}){}",
                         r.p,
                         r.expectation,
                         r.max_cut,
                         r.approximation_ratio.unwrap_or(f64::NAN),
                         r.optimal_probability,
                         bitstring(r.most_likely, n),
-                        r.most_likely_cut
+                        r.most_likely_cut,
+                        if *single { "  [single precision]" } else { "" }
                     )
                 })
                 .collect::<Vec<_>>()
@@ -858,6 +973,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             method,
             restarts,
             seed,
+            single,
         } => {
             let (h, n, offset) = match hamiltonian {
                 Some(expr) => {
@@ -875,11 +991,13 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                     ..Default::default()
                 })
                 .with_restarts(*restarts)
-                .with_seed(*seed);
+                .with_seed(*seed)
+                .with_precision(precision(*single));
             let exact = vqe.exact_energy()?;
             let r = vqe.run()?;
             let text = format!(
-                "VQE ({method}, {n} qubits, {layers} layers): E = {:.10}  exact = {:.10}  error = {:.3e}{}",
+                "VQE ({method}, {n} qubits, {layers} layers, {} precision): E = {:.10}  exact = {:.10}  error = {:.3e}{}",
+                vqe.precision().name(),
                 r.energy,
                 exact,
                 r.energy - exact,
@@ -893,7 +1011,12 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 }
             );
             Ok((
-                json!({"result": r, "exact_energy": exact, "constant_offset": offset}),
+                json!({
+                    "result": r,
+                    "exact_energy": exact,
+                    "constant_offset": offset,
+                    "precision": vqe.precision().name(),
+                }),
                 text,
             ))
         }
@@ -925,6 +1048,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             stabilizer,
             mps,
             max_bond,
+            single,
         } => {
             let src = read_text(file)?;
             let program = Program::from_qasm(&src)?;
@@ -938,8 +1062,15 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             if noise.is_none() && device.is_none() {
                 // Exact simulation of the program; one without classical
                 // bits is measured on every qubit.
+                if *single && program.n_bits() != 0 {
+                    return Err(QsoError::invalid(
+                        "single",
+                        "single precision samples programs without classical bits (every qubit is measured at the end)",
+                    ));
+                }
                 let tableau = *stabilizer
                     || (!*mps
+                        && !*single
                         && program.n_qubits() > metatron_qso::quantum::MAX_QUBITS
                         && is_clifford_program(&program));
                 let mut bound = None;
@@ -966,6 +1097,18 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                             .map(|(&r, &c)| (record_bitstring(r, program.n_bits()), c))
                             .collect()
                     }
+                } else if *single {
+                    let state = metatron_qso::quantum::StateVector32::from_circuit(
+                        &program.to_circuit()?,
+                        &[],
+                    )?;
+                    state
+                        .sample(*shots, &mut Rng::seed_from_u64(*seed))
+                        .iter()
+                        .map(|(&b, &c)| {
+                            (metatron_qso::quantum::bitstring(b, program.n_qubits()), c)
+                        })
+                        .collect()
                 } else if tableau {
                     if program.n_bits() == 0 {
                         let state = StabilizerState::from_circuit(&program.to_circuit()?, &[])?;
@@ -990,6 +1133,8 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 };
                 let backend = if *mps {
                     "mps"
+                } else if *single {
+                    "statevector-single"
                 } else if tableau {
                     "stabilizer"
                 } else {
@@ -1058,6 +1203,112 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             Ok((
                 json!({"qubits": n, "gates": circuit.len(), "depth": circuit.depth(), "backend": backend_name, "counts": labelled}),
                 text,
+            ))
+        }
+        Command::Scf {
+            atoms,
+            basis,
+            charge,
+            multiplicity,
+            unrestricted,
+            restricted_open,
+            cartesian,
+            frozen,
+            active,
+            fci,
+            fcidump,
+            max_iterations,
+        } => {
+            if (*frozen > 0 || active.is_some()) && !*fci && fcidump.is_none() {
+                return Err(QsoError::invalid(
+                    "frozen",
+                    "--frozen and --active choose the space of --fci or --fcidump",
+                ));
+            }
+            let mol = Molecule::from_atoms(atoms, *charge, *multiplicity)?;
+            if !*unrestricted && !*restricted_open {
+                let (na, nb) = mol.n_alpha_beta();
+                if na != nb {
+                    return Err(QsoError::invalid(
+                        "multiplicity",
+                        "an open shell needs --unrestricted or --restricted-open",
+                    ));
+                }
+            }
+            let harmonics = if *cartesian {
+                metatron_qso::chemistry::Harmonics::Cartesian
+            } else {
+                metatron_qso::chemistry::Harmonics::Spherical
+            };
+            let ints = AoIntegrals::compute_with(&mol, Basis::from_name(basis)?, harmonics)?;
+            let options = ScfOptions {
+                max_iterations: *max_iterations,
+                ..ScfOptions::default()
+            };
+            let hf = if *unrestricted {
+                uhf(&mol, &ints, &options)?
+            } else if *restricted_open {
+                metatron_qso::chemistry::rohf(&mol, &ints, &options)?
+            } else {
+                rhf(&mol, &ints, &options)?
+            };
+            let method = if *unrestricted {
+                "UHF"
+            } else if *restricted_open {
+                "ROHF"
+            } else {
+                "RHF"
+            };
+            let (na, nb) = mol.n_alpha_beta();
+            let mut lines = vec![
+                format!(
+                    "{} basis functions, {na} + {nb} electrons",
+                    ints.n_functions()
+                ),
+                format!(
+                    "{method}   {:.10}  ({} iterations, <S²> = {:.6})",
+                    hf.energy,
+                    hf.iterations,
+                    hf.s_squared()
+                ),
+            ];
+            let mut fci_energy = Value::Null;
+            if *fci || fcidump.is_some() {
+                let mo = hf.molecular_integrals(&ints, *frozen, *active)?;
+                if *fci {
+                    let e = mo.fci_energies(1)?[0];
+                    lines.push(format!(
+                        "full CI ({} orbitals, {} + {} electrons)   {e:.10}  (correlation {:.10})",
+                        mo.n_orbitals(),
+                        mo.n_alpha(),
+                        mo.n_beta(),
+                        e - hf.energy
+                    ));
+                    fci_energy = json!(e);
+                }
+                if let Some(path) = fcidump {
+                    std::fs::write(path, mo.to_fcidump()).map_err(|e| {
+                        QsoError::invalid("fcidump", format!("{}: {e}", path.display()))
+                    })?;
+                    lines.push(format!("wrote {}", path.display()));
+                }
+            }
+            Ok((
+                json!({
+                    "basis_functions": ints.n_functions(),
+                    "electrons": [na, nb],
+                    "restricted": !unrestricted,
+                    "method": method,
+                    "basis": ints.basis().name(),
+                    "harmonics": if *cartesian { "cartesian" } else { "spherical" },
+                    "energy": hf.energy,
+                    "nuclear_repulsion": hf.nuclear_repulsion,
+                    "iterations": hf.iterations,
+                    "s_squared": hf.s_squared(),
+                    "orbital_energies": hf.orbital_energies,
+                    "fci": fci_energy,
+                }),
+                lines.join("\n"),
             ))
         }
         Command::Molecule {
@@ -1182,23 +1433,88 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             seed,
             stim,
             circuit: from_file,
+            schedule,
+            circuit_distance,
         } => {
             let kind = match decoder {
-                DecoderArg::UnionFind => qec::DecoderKind::UnionFind,
-                DecoderArg::Matching => qec::DecoderKind::Matching,
+                DecoderArg::UnionFind => qec::DecoderChoice::UnionFind,
+                DecoderArg::Matching => qec::DecoderChoice::Matching,
+                DecoderArg::CorrelatedMatching => qec::DecoderChoice::CorrelatedMatching,
+                DecoderArg::Bposd => qec::DecoderChoice::BpOsd,
             };
-            let decoder_name = match kind {
-                qec::DecoderKind::UnionFind => "union-find",
-                qec::DecoderKind::Matching => "matching",
+            let decoder_name = match decoder {
+                DecoderArg::UnionFind => "union-find",
+                DecoderArg::Matching => "matching",
+                DecoderArg::CorrelatedMatching => "correlated matching",
+                DecoderArg::Bposd => "BP+OSD",
+            };
+            let css_schedule = match schedule.as_str() {
+                "greedy" => qec::CssSchedule::Greedy,
+                "bicycle" => qec::CssSchedule::Bicycle,
+                list => {
+                    let order: Vec<u8> = list
+                        .split(',')
+                        .map(|x| x.trim().parse::<u8>())
+                        .collect::<std::result::Result<_, _>>()
+                        .map_err(|_| {
+                            QsoError::invalid(
+                                "schedule",
+                                format!("{list:?}: use greedy, bicycle or six directions"),
+                            )
+                        })?;
+                    let order: [u8; 6] = order.try_into().map_err(|_| {
+                        QsoError::invalid(
+                            "schedule",
+                            "a schedule by directions lists six directions",
+                        )
+                    })?;
+                    qec::CssSchedule::Directions(order)
+                }
+            };
+            if css_schedule != qec::CssSchedule::Greedy
+                && (from_file.is_some() || !matches!(code, CodeArg::Color | CodeArg::Bb))
+            {
+                return Err(QsoError::invalid(
+                    "schedule",
+                    "schedules are for the colour and bicycle codes",
+                ));
+            }
+            // Bounds on the circuit distance, as JSON and text.
+            let bound = |c: &qec::DetectorCircuit| -> Result<(serde_json::Value, String)> {
+                if !*circuit_distance {
+                    return Ok((serde_json::Value::Null, String::new()));
+                }
+                let r = qec::circuit_distance(
+                    &qec::detector_error_model(c, false)?,
+                    &qec::DistanceOptions::default(),
+                )?;
+                let text = match (r.distance(), r.upper_bound()) {
+                    (Some(d), _) => format!("; circuit distance {d}"),
+                    (None, Some(u)) => format!("; circuit distance {} to {u}", r.lower_bound),
+                    (None, None) if r.lower_bound == usize::MAX => {
+                        "; no undetectable logical error".to_string()
+                    }
+                    (None, None) => format!("; circuit distance at least {}", r.lower_bound),
+                };
+                let lower = (r.lower_bound != usize::MAX).then_some(r.lower_bound);
+                Ok((
+                    json!({"lower_bound": lower, "upper_bound": r.upper_bound()}),
+                    text,
+                ))
+            };
+            let memory_basis = match basis {
+                BasisArg::Z => qec::MemoryBasis::Z,
+                BasisArg::X => qec::MemoryBasis::X,
             };
             if let Some(path) = from_file {
                 let text = std::fs::read_to_string(path).map_err(|e| {
                     QsoError::invalid("circuit", format!("{}: {e}", path.display()))
                 })?;
                 let circuit = qec::DetectorCircuit::from_stim(&text)?;
-                let rate = qec::logical_error_rate_with(&circuit, *shots, *seed, kind)?;
+                let rate = qec::logical_error_rate_using(&circuit, *shots, *seed, kind)?;
+                let (distance_json, distance_text) = bound(&circuit)?;
                 let line = format!(
-                    "{}: {} qubits, {} detectors, {} observables; logical error rate {:.3e} ± {:.1e} ({} of {} shots, {decoder_name})",
+                    "{}: {} qubits, {} detectors, {} observables; logical error rate {:.3e} ± {:.1e} ({} of {} shots, {decoder_name}){distance_text}",
                     path.display(),
                     circuit.n_qubits(),
                     circuit.n_detectors(),
@@ -1216,6 +1532,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                         "observables": circuit.n_observables(),
                         "decoder": kind,
                         "logical_error_rate": rate,
+                        "circuit_distance": distance_json,
                     }),
                     line,
                 ));
@@ -1225,27 +1542,48 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             for &prob in p {
                 for &d in distance {
                     let noise = qec::CircuitNoise::uniform(prob);
-                    let r = rounds.unwrap_or(d);
+                    // The bicycle codes are named by their qubits.
+                    let (bicycle, code_distance) = match code {
+                        CodeArg::Bb => {
+                            let (c, cd) = qec::CssCode::bivariate_bicycle_code(d)?;
+                            (Some(c), cd)
+                        }
+                        _ => (None, d),
+                    };
+                    let r = rounds.unwrap_or(code_distance);
                     let circuit = match code {
-                        CodeArg::Surface => qec::surface_code_memory_with(
-                            d,
+                        CodeArg::Surface => {
+                            qec::surface_code_memory_with(d, r, &noise, memory_basis)?
+                        }
+                        CodeArg::Repetition => qec::repetition_code_memory(d, r, &noise)?,
+                        CodeArg::Color => qec::css_code_memory_with(
+                            &qec::CssCode::color_code(d)?,
                             r,
                             &noise,
-                            match basis {
-                                BasisArg::Z => qec::MemoryBasis::Z,
-                                BasisArg::X => qec::MemoryBasis::X,
-                            },
+                            memory_basis,
+                            css_schedule,
                         )?,
-                        CodeArg::Repetition => qec::repetition_code_memory(d, r, &noise)?,
+                        CodeArg::Bb => qec::css_code_memory_with(
+                            bicycle.as_ref().expect("built above"),
+                            r,
+                            &noise,
+                            memory_basis,
+                            css_schedule,
+                        )?,
+                    };
+                    let label = match &bicycle {
+                        Some(c) => format!("[[{}, {}, {code_distance}]]", c.n(), c.k()),
+                        None => format!("d = {d}"),
                     };
                     if let Some(path) = stim.as_ref().filter(|_| rows.is_empty()) {
                         std::fs::write(path, circuit.to_stim()?).map_err(|e| {
                             QsoError::invalid("stim", format!("{}: {e}", path.display()))
                         })?;
                     }
-                    let rate = qec::logical_error_rate_with(&circuit, *shots, *seed, kind)?;
+                    let rate = qec::logical_error_rate_using(&circuit, *shots, *seed, kind)?;
+                    let (distance_json, distance_text) = bound(&circuit)?;
                     lines.push(format!(
-                        "p = {prob}, d = {d}, {r} rounds: {} qubits, {} detectors; logical error rate {:.3e} ± {:.1e} ({} of {} shots, {})",
+                        "p = {prob}, {label}, {r} rounds: {} qubits, {} detectors; logical error rate {:.3e} ± {:.1e} ({} of {} shots, {}){distance_text}",
                         circuit.n_qubits(),
                         circuit.n_detectors(),
                         rate.rate,
@@ -1256,12 +1594,15 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                     ));
                     rows.push(json!({
                         "p": prob,
-                        "distance": d,
+                        "distance": code_distance,
+                        "code_qubits": bicycle.as_ref().map(|c| c.n()),
                         "rounds": r,
                         "qubits": circuit.n_qubits(),
                         "detectors": circuit.n_detectors(),
                         "decoder": kind,
+                        "schedule": css_schedule,
                         "logical_error_rate": rate,
+                        "circuit_distance": distance_json,
                     }));
                 }
             }

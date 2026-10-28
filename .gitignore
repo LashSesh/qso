@@ -22,9 +22,13 @@ docs/technical-note/build/
 # Documentation site (built by docs/build_site.py)
 docs/guide/book/
 docs/guide/src/tutorials/
+docs/guide/src/rust/
 site/
 
 # npm package contents built by scripts/build_wasm.py
 metatron_qso_wasm/js/qso.wasm
 metatron_qso_wasm/js/LICENSE
 metatron_qso_wasm/js/*.tgz
+
+# Coverage profiles of instrumented runs
+*.profraw

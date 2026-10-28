@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>QSO Playground</title>
-  <meta name="description" content="Run OpenQASM programs, quantum walks and spatial search in the browser with QSO compiled to WebAssembly.">
+  <meta name="description" content="Run OpenQASM programs (also on hundreds of qubits with matrix-product states), quantum walks and spatial search in the browser with QSO compiled to WebAssembly.">
   <link rel="stylesheet" href="playground.css">
   <script type="module" src="playground.js"></script>
 </head>
@@ -23,6 +23,7 @@
     <button role="tab" id="tab-circuits" aria-controls="circuits" aria-selected="true">Circuits</button>
     <button role="tab" id="tab-walks" aria-controls="walks" aria-selected="false">Quantum walks</button>
     <button role="tab" id="tab-search" aria-controls="search" aria-selected="false">Spatial search</button>
+    <button role="tab" id="tab-mps" aria-controls="mps" aria-selected="false">Many qubits (MPS)</button>
   </div>
 
   <main>
@@ -102,6 +103,39 @@
           <div>
             <h2>Success probability over time</h2>
             <div id="search-chart" class="chart"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="mps" role="tabpanel" aria-labelledby="tab-mps" hidden>
+      <p>The program on a matrix-product state: hundreds or thousands of qubits, as long as the entanglement
+        stays low. The bond dimension χ caps the entanglement each cut can hold; QSO reports how much weight
+        its truncations dropped and a lower bound on the fidelity with the exact state.</p>
+      <div class="controls">
+        <label>Example <select id="mps-example"></select></label>
+        <label>Max χ <input id="mps-bond" type="number" min="1" max="4096" value="64"></label>
+        <label>Shots <input id="mps-shots" type="number" min="0" max="1000000" value="100"></label>
+        <label>Seed <input id="mps-seed" type="number" min="0" value="1"></label>
+        <button id="run-mps" class="primary">Run</button>
+      </div>
+      <textarea id="mps-source" spellcheck="false" rows="10" aria-label="OpenQASM program"></textarea>
+      <label class="stacked"><span>Observables, one Pauli string per line (for example <code>Z0 Z1</code> or
+        <code>-X3</code>)</span>
+        <textarea id="mps-observables" spellcheck="false" rows="3"></textarea></label>
+      <p id="mps-status" class="status" role="status"></p>
+      <div id="mps-result" hidden>
+        <p id="mps-info" class="info"></p>
+        <div class="split">
+          <div>
+            <h2>Entanglement entropy across each bond</h2>
+            <div id="mps-chart" class="chart"></div>
+          </div>
+          <div>
+            <h2>Expectation values</h2>
+            <div id="mps-expectations" class="table-wrap"></div>
+            <h2 id="mps-counts-title">Samples</h2>
+            <div id="mps-counts" class="table-wrap"></div>
           </div>
         </div>
       </div>

@@ -4,7 +4,8 @@ QSO's chemistry chain starts from the molecular integrals. From them it
 builds the Hamiltonian, maps it to qubits and prepares the Hartree–Fock
 state. Full configuration interaction (CI) gives the exact reference
 energy, and UCCSD, k-UpCCGSD and ADAPT-VQE give variational estimates.
-QSO computes no integrals itself. It reads them from FCIDUMP files, which
+The integrals come either from a molecule's geometry, through QSO's own
+Gaussian integrals and Hartree–Fock, or from FCIDUMP files, which
 quantum-chemistry codes such as PySCF, Psi4 or Molpro write.
 
 ## Fermionic operators
@@ -71,10 +72,14 @@ assert abs(h.expectation(q.simulate(hf)) - mol.hartree_fock_energy()) < 1e-12
 assert abs(h.ground_state_energy() - mol.fci_energies()[0]) < 1e-10
 ```
 
-`fci_energies(k)` diagonalises the Hamiltonian among all determinants
-with the given numbers of spin-up and spin-down electrons. Up to 4096
-determinants it returns the lowest `k` levels. Above that it returns the
-ground state only, computed by Lanczos.
+`fci_energies(k)` returns the lowest `k` levels of the Hamiltonian among
+all determinants with the given numbers of spin-up and spin-down
+electrons. Up to 1024 determinants it diagonalises the matrix of the
+Slater–Condon rules. Above that, up to 2¹⁸ determinants and 32 levels, it
+uses Davidson's method on `H c` computed from the integrals without the
+matrix (the string-driven algorithm of Knowles and Handy). Water in 6-31G
+with a frozen core in 12 orbitals (245 025 determinants) takes 36 s and
+0.7 GB for the ground state.
 
 The tests check the whole chain against PySCF for H₂, LiH and BeH₂ in
 STO-3G:
@@ -83,6 +88,107 @@ STO-3G:
 - The determinant-space spectra agree under Jordan–Wigner, parity,
   Bravyi–Kitaev and the reduced parity encoding.
 - Their lowest roots equal PySCF's full-CI energies to 10⁻⁸ Ha.
+
+## Molecules from their geometry
+
+`Molecule` takes the atoms in ångström, the total charge and the spin
+multiplicity. `AoIntegrals` evaluates the overlap, kinetic,
+nuclear-attraction and electron-repulsion integrals over contracted
+Gaussians by the McMurchie–Davidson scheme, for shells up to g:
+
+- **Basis sets.** STO-3G, 6-31G, 6-31G* (d functions on Li to Ar) and
+  cc-pVDZ (p functions on H and He, d on Li to Ar), for hydrogen to argon.
+  The data come from PySCF's copy of the Basis Set Exchange
+  (`scripts/generate_basis_data.py`).
+- **Limits.** At most 64 basis functions. The repulsion integrals are
+  computed per quartet of shells, the columns of a general contraction
+  together; 64 functions with three chlorines in cc-pVDZ take about 3 s
+  on four cores and 0.35 GB (`benchmark_report`).
+- **Order.** Functions come in PySCF's order.
+- **Harmonics.** d and higher shells are spherical by default: real
+  solid harmonics, `m = −l, …, l`, with PySCF's signs. With
+  `harmonics="cartesian"` they are the monomials `xx, xy, xz, yy, yz, zz`,
+  each normalised to one; PySCF leaves its Cartesian d components with
+  squared norms 4π/5 (xx) and 4π/15 (xy), so its integrals differ from
+  QSO's by the square roots of these factors, one per index. 6-31G* is
+  defined, and run by Gaussian by default, with Cartesian d shells: use
+  `harmonics="cartesian"` to compare with such results.
+
+`hartree_fock` solves the restricted (closed-shell), unrestricted
+(`unrestricted=True`) or restricted open-shell (`restricted_open=True`)
+Hartree–Fock equations with DIIS. ROHF diagonalises Roothaan's
+effective Fock matrix with PySCF's blocks: ½(F_α + F_β) within the
+closed, open and virtual spaces and between closed and virtual orbitals,
+F_β between closed and open, F_α between open and virtual. Its energy
+does not depend on this choice; its orbital energies do. The iterations start from
+a superposition of atomic densities: every atom's spherically averaged
+Hartree–Fock density in the same basis, like PySCF's `atom` guess.
+Hartree–Fock finds a stationary point near its start, not always the
+lowest one. Starting from the core Hamiltonian (`guess="core"`) ends
+0.73 Ha above the ground state of N₂ in STO-3G. When DIIS does not
+converge, a second run without DIIS shifts the virtual orbitals by
+0.5 Ha (`level_shift`) while the gradient is large; this settles CN, where
+PySCF does not converge. A calculation that still does not converge
+raises an error. Bases with nearly dependent functions (atoms closer than
+0.01 Å) leave rounding noise above the default gradient tolerance.
+`integrals=` reuses integrals computed before.
+
+`molecular_integrals(frozen, active)` transforms the integrals to the
+restricted orbitals. The lowest `frozen` orbitals stay doubly occupied and
+move into the core energy; `active` orbitals are kept. The result is a
+`MolecularIntegrals`, so everything above applies, and `to_fcidump()`
+writes it. For an open shell this needs the restricted orbitals of ROHF
+(UHF's two sets of orbitals give no single Hamiltonian):
+
+```python
+import metatron_qso as q
+
+water = q.Molecule("O 0 0 0.1173; H 0 0.7572 -0.4692; H 0 -0.7572 -0.4692")
+hf = q.hartree_fock(water, "6-31g")
+mo = hf.molecular_integrals(frozen=1, active=8)        # 16 qubits
+print(hf.energy, mo.fci_energies()[0])                 # −75.98397, −76.02473
+oh = q.hartree_fock(q.Molecule("O 0 0 0; H 0 0 0.97", multiplicity=2),
+                    "6-31g", unrestricted=True)
+print(oh.energy, oh.s_squared())                       # −75.36317, 0.75377
+o2 = q.hartree_fock(q.Molecule("O 0 0 0; O 0 0 1.2075", multiplicity=3),
+                    "cc-pvdz", restricted_open=True)
+cas = o2.molecular_integrals(frozen=2, active=8)        # 12 electrons in 8 orbitals
+print(o2.energy, cas.fci_energies()[0])                # −149.60808, −149.68778
+```
+
+The tests compare with PySCF 2.14:
+
+- On the same geometries (in bohr), fingerprints of all integrals of H₂,
+  LiH, H₂O and NH₃ agree to 10⁻¹² relative, and in the cross-validation
+  every integral of H₂O, NH₃, CO and F₂ agrees to 1.4·10⁻¹³.
+- Restricted energies of H₂, LiH, BeH₂, H₂O and N₂ in both bases, and
+  unrestricted energies of OH, triplet CH₂, H₂O⁺, Li, NH₂ and NO, agree to
+  10⁻¹⁰ Ha, ⟨S²⟩ to 10⁻⁷.
+- Full CI and frozen-core active spaces (CASCI) agree to 10⁻⁸ Ha, and the
+  FCIDUMP files of H₂, LiH and BeH₂ are reproduced from their geometries.
+- With d functions and through the third row, RHF of H₂O (cc-pVDZ, and
+  6-31G* with Cartesian shells), NH₃ (6-31G*), HCl and H₂S (cc-pVDZ), UHF
+  and ROHF of triplet O₂ (cc-pVDZ), and ROHF of NH₂ (6-31G*) agree to
+  10⁻⁹ Ha. CASCI in the ROHF orbitals of O₂ (12 electrons in 8 orbitals)
+  and NH₂ agrees to 10⁻⁹ Ha.
+- Integrals of f and g shells (a custom basis on OH⁻) agree with PySCF:
+  its fingerprints of the overlap, core Hamiltonian and repulsion
+  integrals (Σ_k a_k cos k, so signs and order count) to 10⁻¹⁰, sums of
+  absolute values to 10⁻¹¹ relative, single integrals to 10⁻¹³, spherical
+  and Cartesian.
+- ROHF of ClO, PH₂ and triplet SO (Cartesian d shells for the last two)
+  agrees to 10⁻⁹ Ha, also with a level shift; ROHF of a closed shell is
+  RHF.
+- The cross-validation compares every integral of H₂O, NH₃, CO and F₂ in
+  all four bases, of HCl, H₂S, SiH₄ and NaF, and of two molecules with
+  Cartesian shells: the largest difference is 2.6·10⁻¹³. RHF, UHF, ROHF
+  and CASCI energies, ROHF ones up to 12 active electrons, agree to
+  2.4·10⁻¹⁰ Ha.
+
+PySCF converts ångström with the CODATA 2010 bohr, QSO with CODATA 2018:
+the same input in ångström gives geometries 3·10⁻¹¹ apart (relative) and
+energies about 10⁻¹⁰ Ha apart, so the comparisons give PySCF QSO's
+positions in bohr.
 
 ## UCCSD, k-UpCCGSD and ADAPT-VQE
 
@@ -172,4 +278,15 @@ $ qso molecule examples/molecules/lih_sto3g.fcidump --mapping parity --two-qubit
 Hartree–Fock   -7.8620238601
 full CI        -7.8824019323  -7.7664184751
 UCCSD          -7.8823912923  (92 parameters, error vs full CI 1.06e-5)
+```
+
+`qso scf` runs Hartree–Fock from a geometry and, with `--fci`, full CI in
+an active space; `--fcidump` writes the active-space Hamiltonian for
+`qso molecule`:
+
+```text
+$ qso scf --atoms "O 0 0 0.1173; H 0 0.7572 -0.4692; H 0 -0.7572 -0.4692" --basis 6-31g --frozen 1 --active 8 --fci
+13 basis functions, 5 + 5 electrons
+RHF   -75.9839744727  (13 iterations, <S²> = 0.000000)
+full CI (8 orbitals, 4 + 4 electrons)   -76.0247256325  (correlation -0.0407511598)
 ```

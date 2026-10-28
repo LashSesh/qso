@@ -2,7 +2,9 @@
 //! transfer.
 
 use metatron_qso::linalg::RMatrix;
-use metatron_qso::walks::{Quotient, QuotientSearch, QuotientWalk, StateTransfer};
+use metatron_qso::walks::{
+    PrettyGoodTransfer, Quotient, QuotientSearch, QuotientWalk, StateTransfer,
+};
 use numpy::{PyArray1, PyArray2};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -528,10 +530,167 @@ impl PyStateTransfer {
     }
 }
 
+/// Pretty good state transfer decided exactly (cyclotomic arithmetic and
+/// Kronecker's theorem) for paths, cycles and Cayley graphs of abelian
+/// groups.
+#[pyclass(name = "PrettyGoodTransfer", module = "metatron_qso", frozen)]
+pub struct PyPrettyGoodTransfer {
+    inner: PrettyGoodTransfer,
+}
+
+#[pymethods]
+impl PyPrettyGoodTransfer {
+    /// Nodes `u` and `v` of the path on `n` nodes.
+    #[staticmethod]
+    #[pyo3(signature = (n, u, v, generator = "adjacency", gamma = 1.0))]
+    fn path(
+        py: Python<'_>,
+        n: usize,
+        u: usize,
+        v: usize,
+        generator: &str,
+        gamma: f64,
+    ) -> PyResult<Self> {
+        let g = self::generator(generator)?;
+        py.detach(|| PrettyGoodTransfer::path(n, g, gamma, u, v))
+            .raise()
+            .map(|inner| Self { inner })
+    }
+
+    /// Nodes `u` and `v` of the cycle on `n` nodes.
+    #[staticmethod]
+    #[pyo3(signature = (n, u, v, generator = "adjacency", gamma = 1.0))]
+    fn cycle(
+        py: Python<'_>,
+        n: usize,
+        u: usize,
+        v: usize,
+        generator: &str,
+        gamma: f64,
+    ) -> PyResult<Self> {
+        let g = self::generator(generator)?;
+        py.detach(|| PrettyGoodTransfer::cycle(n, g, gamma, u, v))
+            .raise()
+            .map(|inner| Self { inner })
+    }
+
+    /// Elements `u` and `v` of the Cayley graph of `Z_{m_1} × … × Z_{m_k}`
+    /// with the symmetric connection set `connection`.
+    #[staticmethod]
+    #[pyo3(signature = (moduli, connection, u, v, generator = "adjacency", gamma = 1.0))]
+    fn cayley(
+        py: Python<'_>,
+        moduli: Vec<usize>,
+        connection: Vec<Vec<i64>>,
+        u: Vec<usize>,
+        v: Vec<usize>,
+        generator: &str,
+        gamma: f64,
+    ) -> PyResult<Self> {
+        let g = self::generator(generator)?;
+        py.detach(|| PrettyGoodTransfer::cayley(&moduli, &connection, g, gamma, &u, &v))
+            .raise()
+            .map(|inner| Self { inner })
+    }
+
+    /// A graph that is a path or a cycle (any node order).
+    #[staticmethod]
+    #[pyo3(signature = (graph, u, v, generator = "adjacency", gamma = 1.0))]
+    fn from_graph(
+        py: Python<'_>,
+        graph: &PyGraph,
+        u: usize,
+        v: usize,
+        generator: &str,
+        gamma: f64,
+    ) -> PyResult<Self> {
+        let g = self::generator(generator)?;
+        let gr = &graph.inner;
+        py.detach(|| PrettyGoodTransfer::from_graph(gr, g, gamma, u, v))
+            .raise()
+            .map(|inner| Self { inner })
+    }
+
+    #[getter]
+    fn strongly_cospectral(&self) -> bool {
+        self.inner.strongly_cospectral()
+    }
+
+    /// Whether there is pretty good state transfer (exact).
+    #[getter]
+    fn pretty_good(&self) -> bool {
+        self.inner.pretty_good()
+    }
+
+    /// Earliest time of perfect state transfer, or `None`.
+    #[getter]
+    fn perfect_time(&self) -> Option<f64> {
+        self.inner.perfect_time()
+    }
+
+    /// Dimension over Q of the span of the eigenvalue differences.
+    #[getter]
+    fn rank(&self) -> usize {
+        self.inner.rank()
+    }
+
+    /// An integer relation among the eigenvalue differences with odd
+    /// parity, which rules out PGST, or `None` (also when its coefficients
+    /// exceed 64 bits). Coefficient i belongs to `support[i + 1]`.
+    #[getter]
+    fn obstruction(&self) -> Option<Vec<i64>> {
+        self.inner.obstruction().map(<[i64]>::to_vec)
+    }
+
+    /// The eigenvalues of the Hamiltonian in the support of `u`, with the
+    /// sign σ of `v` on each (0 where the nodes are not strongly
+    /// cospectral).
+    #[getter]
+    fn support(&self) -> Vec<(f64, i8)> {
+        self.inner.support()
+    }
+
+    /// `|⟨v| exp(−iHt) |u⟩|²`, from the closed-form eigenvectors (any
+    /// pair of nodes).
+    fn fidelity(&self, t: f64) -> PyResult<f64> {
+        check_time("t", t)?;
+        Ok(self.inner.fidelity(t))
+    }
+
+    /// Highest fidelity over `[0, t_max]`, as `{"time", "fidelity"}`.
+    #[pyo3(signature = (t_max, resolution = 2000))]
+    fn best_transfer<'py>(
+        &self,
+        py: Python<'py>,
+        t_max: f64,
+        resolution: usize,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let s = &self.inner;
+        let r = py.detach(|| s.best_transfer(t_max, resolution)).raise()?;
+        Ok(pydict!(py, {"time" => r.time, "fidelity" => r.fidelity}))
+    }
+
+    fn __repr__(&self) -> String {
+        let d = self.inner.decision();
+        format!(
+            "PrettyGoodTransfer(strongly_cospectral={}, pretty_good={}, perfect_time={})",
+            if d.strongly_cospectral {
+                "True"
+            } else {
+                "False"
+            },
+            if d.pretty_good { "True" } else { "False" },
+            d.perfect_time
+                .map_or_else(|| "None".to_string(), |t| t.to_string())
+        )
+    }
+}
+
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyQuotient>()?;
     m.add_class::<PyQuotientWalk>()?;
     m.add_class::<PyQuotientSearch>()?;
     m.add_class::<PyStateTransfer>()?;
+    m.add_class::<PyPrettyGoodTransfer>()?;
     Ok(())
 }

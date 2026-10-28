@@ -222,7 +222,7 @@ API reference.
 | Chemistry | `FermionOperator`, `QubitOperator`, `MolecularIntegrals`, `uccsd`, `k_upccgsd`, `adapt_vqe` |
 | Excited states and geometry | `vqd`, `ssvqe`, `quantum_fisher_information`, `natural_gradient`, `quantum_natural_gradient`, `imaginary_time_evolution` |
 | Optimisation and estimation | `Qubo`, `Qaoa` (X, XY and warm-start mixers), `AmplitudeProblem`, `canonical_amplitude_estimation`, `iterative_amplitude_estimation`, `ml_amplitude_estimation` |
-| Boson sampling | `BosonSampler`, `permanent`, `haar_unitary`, `beam_splitter` |
+| Boson sampling | `BosonSampler`, `ImperfectBosonSampler`, `permanent`, `haar_unitary`, `beam_splitter`; Gaussian boson sampling: `GaussianState`, `hafnian`, `hafnian_repeated`, `torontonian` |
 
 `Graph.from_spec` accepts the graph specifications of the `qso` command-line
 tool, e.g. `"metatron"`, `"metatron:1"`, `"hypercube:4"`, `"platonic:cube"`

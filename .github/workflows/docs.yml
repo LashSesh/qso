@@ -1,17 +1,25 @@
 name: Docs
 
 # Builds the documentation site: the user guide (mdBook, docs/guide), the
-# tutorials (docs/tutorials, executed during the build), the Python API
-# reference (pdoc) and the playground (docs/playground), which runs QSO
-# compiled to WebAssembly. Every code block of the guide is run as part of the
-# build. Pull requests build the site; pushes to main also deploy it to
-# GitHub Pages (Settings → Pages → Source: GitHub Actions).
+# tutorials (docs/tutorials, executed during the build, and the Rust
+# tutorials, whose examples are compiled and run), the Python API
+# reference (pdoc), the playground (docs/playground), which runs QSO
+# compiled to WebAssembly, the guide and Python reference of every release
+# (/<version>/, built from its tag and cached), and the line and branch
+# coverage report of the crate's, the CLI's and the Python tests
+# (/coverage/). Every code block of the guide is run as part of the build.
+# Pull requests build the site; pushes to main also deploy it to GitHub
+# Pages (Settings → Pages → Source: GitHub Actions).
 
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # A release adds its documentation (once its wheel is on PyPI).
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
 
 permissions:
   contents: read
@@ -28,6 +36,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          # The release tags, for the documentation of every release.
+          fetch-depth: 0
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
@@ -45,8 +56,39 @@ jobs:
           python -m pip install -r docs/requirements.txt
           maturin build --release -m metatron_qso_py/Cargo.toml -o dist
           python -m pip install dist/*.whl
+      # Releases do not change: each is built once per version of the build
+      # script and kept.
+      - name: Release tags and the version of the release build
+        id: tags
+        run: |
+          echo "hash=$(git tag --list 'v*' | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+          echo "build=$(sed -n 's/^RELEASE_BUILD = //p' docs/build_site.py)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v6
+        with:
+          path: docs-releases
+          key: docs-releases-${{ steps.tags.outputs.build }}-${{ steps.tags.outputs.hash }}
+          restore-keys: docs-releases-${{ steps.tags.outputs.build }}-
       - name: Build the site
-        run: python docs/build_site.py --out site
+        run: python docs/build_site.py --out site --versions docs-releases
+      # The coverage report is published from main only (pull requests
+      # get it from the CI coverage job).
+      - uses: dtolnay/rust-toolchain@nightly
+        if: github.event_name != 'pull_request'
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@v2
+        if: github.event_name != 'pull_request'
+        with:
+          tool: cargo-llvm-cov
+      # The coverage report of this commit, published with the
+      # documentation at /coverage/.
+      - name: Coverage report
+        if: github.event_name != 'pull_request'
+        env:
+          RUSTFLAGS: ""
+        run: |
+          scripts/coverage.sh site/coverage --html
+          python3 scripts/coverage_summary.py site/coverage/summary.json
       - uses: actions/upload-pages-artifact@v5
         with:
           path: site

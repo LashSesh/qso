@@ -14,6 +14,7 @@ use metatron_qso::qec::{
 };
 
 fn main() -> Result<()> {
+    // ANCHOR: surface
     println!("rotated surface code, d rounds, circuit-level noise p");
     println!(
         "{:>7} {:>3} {:>9} {:>11} {:>8} {:>11} {:>8}",
@@ -37,7 +38,9 @@ fn main() -> Result<()> {
             );
         }
     }
+    // ANCHOR_END: surface
 
+    // ANCHOR: x_basis
     let shots = 100_000;
     println!(
         "
@@ -51,7 +54,9 @@ X basis (|+⟩_L), matching, {shots} shots"
             println!("{p:>7} {d:>3} {:>12.6} {:>10.6}", r.rate, r.standard_error);
         }
     }
+    // ANCHOR_END: x_basis
 
+    // ANCHOR: repetition
     println!("\nrepetition code, d rounds, circuit-level noise p, {shots} shots");
     for p in [0.01, 0.05] {
         for d in [3, 5, 9, 15] {
@@ -60,7 +65,9 @@ X basis (|+⟩_L), matching, {shots} shots"
             println!("{p:>7} {d:>3} {:>12.5} {:>10.5}", r.rate, r.standard_error);
         }
     }
+    // ANCHOR_END: repetition
 
+    // ANCHOR: dem
     let circuit = surface_code_memory(5, 5, &CircuitNoise::uniform(0.001))?;
     let dem = detector_error_model(&circuit, true)?;
     println!(
@@ -69,5 +76,6 @@ X basis (|+⟩_L), matching, {shots} shots"
         dem.n_detectors,
         dem.errors.len()
     );
+    // ANCHOR_END: dem
     Ok(())
 }

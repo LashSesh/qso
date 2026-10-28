@@ -1,0 +1,463 @@
+use super::*;
+use crate::chemistry::integrals::Basis;
+
+const H2: &str = "H 0 0 0; H 0 0 0.735";
+const LIH: &str = "Li 0 0 0; H 0 0 1.595";
+const BEH2: &str = "Be 0 0 0; H 0 0 1.326; H 0 0 -1.326";
+const H2O: &str = "O 0 0 0.1173; H 0 0.7572 -0.4692; H 0 -0.7572 -0.4692";
+const N2: &str = "N 0 0 0; N 0 0 1.0977";
+
+fn setup(atoms: &str, basis: Basis, charge: i32, multiplicity: u32) -> (Molecule, AoIntegrals) {
+    let mol = Molecule::from_atoms(atoms, charge, multiplicity).unwrap();
+    let ints = AoIntegrals::compute(&mol, basis).unwrap();
+    (mol, ints)
+}
+
+#[test]
+fn restricted_energies_match_pyscf() {
+    // PySCF 2.14, `scf.RHF(mol)` with conv_tol 1e-13, geometries in bohr.
+    // N₂: the core-Hamiltonian guess ends 0.73 Ha (STO-3G) above.
+    let cases = [
+        (N2, Basis::Sto3g, -107.4958933078439),
+        (N2, Basis::SixThirtyOneG, -108.86776337590582),
+        (H2, Basis::Sto3g, -1.116998996752976),
+        (H2, Basis::SixThirtyOneG, -1.1268093581278664),
+        (LIH, Basis::Sto3g, -7.862023860125529),
+        (LIH, Basis::SixThirtyOneG, -7.97926894842384),
+        (BEH2, Basis::Sto3g, -15.560334935984908),
+        (BEH2, Basis::SixThirtyOneG, -15.759328877923995),
+        (H2O, Basis::Sto3g, -74.9630231384672),
+        (H2O, Basis::SixThirtyOneG, -75.98397447272153),
+    ];
+    for (atoms, basis, want) in cases {
+        let (mol, ints) = setup(atoms, basis, 0, 1);
+        let hf = rhf(&mol, &ints, &ScfOptions::default()).unwrap();
+        assert!(
+            (hf.energy - want).abs() < 1e-9,
+            "{atoms} {basis:?}: {} vs {want}",
+            hf.energy
+        );
+        assert!(hf.is_restricted());
+        assert!(hf.s_squared().abs() < 1e-12);
+        // Orbitals are orthonormal in the overlap metric.
+        let c = &hf.coefficients[0];
+        let ctsc = c.transpose() * &hf.overlap * c;
+        for i in 0..c.ncols() {
+            for j in 0..c.ncols() {
+                let want = if i == j { 1.0 } else { 0.0 };
+                assert!((ctsc[(i, j)] - want).abs() < 1e-10);
+            }
+        }
+        let eps = &hf.orbital_energies[0];
+        assert!(eps.windows(2).all(|w| w[0] <= w[1]));
+        // UHF on a closed shell converges to the same determinant.
+        let u = uhf(&mol, &ints, &ScfOptions::default()).unwrap();
+        assert!((u.energy - hf.energy).abs() < 1e-9);
+    }
+}
+
+#[test]
+fn unrestricted_energies_and_spin_contamination_match_pyscf() {
+    // PySCF 2.14, `scf.UHF(mol)`: energy and ⟨S²⟩.
+    let cases = [
+        (
+            "O 0 0 0; H 0 0 0.97",
+            Basis::SixThirtyOneG,
+            0,
+            2,
+            -75.36316824957633,
+            0.7537742361413269,
+        ),
+        (
+            "C 0 0 0.1; H 0 0.99 -0.5; H 0 -0.99 -0.5",
+            Basis::SixThirtyOneG,
+            0,
+            3,
+            -38.89981456757777,
+            2.017357213374883,
+        ),
+        (
+            H2O,
+            Basis::Sto3g,
+            1,
+            2,
+            -74.65589871363201,
+            0.7552020403744817,
+        ),
+        (
+            "Li 0 0 0",
+            Basis::SixThirtyOneG,
+            0,
+            2,
+            -7.4312358110836705,
+            0.7500006790934605,
+        ),
+        // NH₂ (the core guess ends 0.1 Ha above) and NO (DIIS from the
+        // core guess did not converge).
+        (
+            "N 0 0 0; H 0 0.8 0.6; H 0 -0.8 0.6",
+            Basis::Sto3g,
+            0,
+            2,
+            -54.8319833767935,
+            0.7565683102942997,
+        ),
+        (
+            "N 0 0 0; O 0 0 1.151",
+            Basis::Sto3g,
+            0,
+            2,
+            -127.53046550455346,
+            0.965952258993954,
+        ),
+    ];
+    // ⟨S²⟩ follows the orbitals, which converge more slowly than the
+    // energy (PySCF with conv_tol_grad 1e-10 for NO).
+    let tight = ScfOptions {
+        gradient_tolerance: 1e-10,
+        ..ScfOptions::default()
+    };
+    for (atoms, basis, charge, mult, energy, s2) in cases {
+        let (mol, ints) = setup(atoms, basis, charge, mult);
+        let hf = uhf(&mol, &ints, &tight).unwrap();
+        assert!(
+            (hf.energy - energy).abs() < 1e-9,
+            "{atoms}: {} vs {energy}",
+            hf.energy
+        );
+        assert!(
+            (hf.s_squared() - s2).abs() < 1e-7,
+            "{atoms}: {} vs {s2}",
+            hf.s_squared()
+        );
+        assert!(!hf.is_restricted());
+        assert!(rhf(&mol, &ints, &ScfOptions::default()).is_err());
+        assert!(hf.molecular_integrals(&ints, 0, None).is_err());
+    }
+}
+
+#[test]
+fn molecular_orbital_hamiltonians_reproduce_hartree_fock_fci_and_casci() {
+    // The FCIDUMP files in examples/molecules were written by PySCF from
+    // the same RHF orbitals; their FCI energies are in reference.json.
+    for (atoms, file, fci) in [
+        (
+            H2,
+            include_str!("../../../examples/molecules/h2_sto3g.fcidump"),
+            -1.1373060357533946,
+        ),
+        (
+            LIH,
+            include_str!("../../../examples/molecules/lih_sto3g.fcidump"),
+            -7.882401932289461,
+        ),
+        (
+            BEH2,
+            include_str!("../../../examples/molecules/beh2_sto3g.fcidump"),
+            -15.595182356661152,
+        ),
+    ] {
+        let (mol, ints) = setup(atoms, Basis::Sto3g, 0, 1);
+        let hf = rhf(&mol, &ints, &ScfOptions::default()).unwrap();
+        let mo = hf.molecular_integrals(&ints, 0, None).unwrap();
+        let reference = MolecularIntegrals::from_fcidump(file).unwrap();
+        assert_eq!(mo.n_orbitals(), reference.n_orbitals());
+        assert!((mo.hartree_fock_energy() - hf.energy).abs() < 1e-10);
+        assert!((mo.hartree_fock_energy() - reference.hartree_fock_energy()).abs() < 1e-8);
+        let e = mo.fci_energies(1).unwrap()[0];
+        assert!((e - fci).abs() < 1e-8, "{atoms}: {e} vs {fci}");
+        assert!((e - reference.fci_energies(1).unwrap()[0]).abs() < 1e-8);
+    }
+    // PySCF `fci.FCI(mf)` and `mcscf.CASCI(mf, n_active, n_electrons)`.
+    let cases = [
+        (LIH, Basis::SixThirtyOneG, 0, None, -7.998276133496047),
+        (LIH, Basis::SixThirtyOneG, 1, Some(5), -7.981680259018377),
+        (H2O, Basis::Sto3g, 0, None, -75.01257824110033),
+        (H2O, Basis::Sto3g, 1, Some(6), -75.01250015396552),
+        (H2O, Basis::SixThirtyOneG, 1, Some(8), -76.02472563261222),
+    ];
+    for (atoms, basis, frozen, active, want) in cases {
+        let (mol, ints) = setup(atoms, basis, 0, 1);
+        let hf = rhf(&mol, &ints, &ScfOptions::default()).unwrap();
+        let mo = hf.molecular_integrals(&ints, frozen, active).unwrap();
+        // Freezing doubly occupied orbitals keeps the determinant energy.
+        assert!((mo.hartree_fock_energy() - hf.energy).abs() < 1e-10);
+        let e = mo.fci_energies(1).unwrap()[0];
+        assert!(
+            (e - want).abs() < 1e-8,
+            "{atoms} {basis:?} {frozen} {active:?}: {e} vs {want}"
+        );
+    }
+}
+
+#[test]
+fn invalid_inputs_are_rejected() {
+    let (mol, ints) = setup(H2O, Basis::Sto3g, 0, 1);
+    let hf = rhf(&mol, &ints, &ScfOptions::default()).unwrap();
+    assert!(hf.molecular_integrals(&ints, 6, None).is_err());
+    assert!(hf.molecular_integrals(&ints, 1, Some(3)).is_err());
+    assert!(hf.molecular_integrals(&ints, 1, Some(7)).is_err());
+    assert!(hf.molecular_integrals(&ints, 0, Some(0)).is_err());
+    let bad = ScfOptions {
+        energy_tolerance: 0.0,
+        ..ScfOptions::default()
+    };
+    assert!(rhf(&mol, &ints, &bad).is_err());
+    let few = ScfOptions {
+        max_iterations: 2,
+        ..ScfOptions::default()
+    };
+    assert!(matches!(
+        rhf(&mol, &ints, &few),
+        Err(QsoError::NoConvergence { .. })
+    ));
+    // Too many electrons of one spin for the basis.
+    let (he, he_ints) = setup("He 0 0 0", Basis::Sto3g, 0, 3);
+    assert!(uhf(&he, &he_ints, &ScfOptions::default()).is_err());
+}
+
+#[test]
+fn guesses_and_mismatched_integrals() {
+    // The core-Hamiltonian guess converges to an excited N₂ determinant;
+    // the atomic guess to the ground state.
+    let (mol, ints) = setup(N2, Basis::Sto3g, 0, 1);
+    let core = ScfOptions {
+        guess: Guess::Core,
+        ..ScfOptions::default()
+    };
+    let excited = rhf(&mol, &ints, &core).unwrap().energy;
+    let ground = rhf(&mol, &ints, &ScfOptions::default()).unwrap().energy;
+    assert!(excited > ground + 0.5, "{excited} {ground}");
+    // Integrals of another molecule, or of another calculation.
+    let (h2, h2_ints) = setup(H2, Basis::Sto3g, 0, 1);
+    assert!(rhf(&mol, &h2_ints, &ScfOptions::default()).is_err());
+    let hf = rhf(&h2, &h2_ints, &ScfOptions::default()).unwrap();
+    assert!(hf.molecular_integrals(&ints, 0, None).is_err());
+    let (_, h2_631) = setup(H2, Basis::SixThirtyOneG, 0, 1);
+    assert!(hf.molecular_integrals(&h2_631, 0, None).is_err());
+    // Orbital energies belong to the converged Fock matrix: F C = S C ε.
+    let hf = rhf(&mol, &ints, &ScfOptions::default()).unwrap();
+    let n = ints.n_functions();
+    let s = RMatrix::from_fn(n, n, |i, j| ints.overlap(i, j));
+    let c = &hf.coefficients[0];
+    let occ = density(c, 7) * 2.0;
+    let d = [&occ * 0.5, &occ * 0.5];
+    let h = RMatrix::from_fn(n, n, |i, j| ints.core(i, j));
+    let f = fock_matrices(&ints, &h, &d, true).remove(0);
+    let residual = &f * c
+        - &s * c
+            * RMatrix::from_diagonal(&nalgebra::DVector::from_vec(hf.orbital_energies[0].clone()));
+    assert!(residual.amax() < 1e-7, "{}", residual.amax());
+}
+
+#[test]
+fn oscillating_open_shells_converge_with_a_level_shift() {
+    // CN in STO-3G: DIIS oscillates (PySCF does not converge from its
+    // guesses either); the level-shifted fallback reaches a stationary
+    // point below every PySCF iterate (−90.989 Ha).
+    let (mol, ints) = setup("C 0 0 0; N 0 0 1.17", Basis::Sto3g, 0, 2);
+    let hf = uhf(&mol, &ints, &ScfOptions::default()).unwrap();
+    assert!(
+        (hf.energy - -91.02103183743569).abs() < 1e-8,
+        "{}",
+        hf.energy
+    );
+    let plain = ScfOptions {
+        level_shift: 0.0,
+        diis_space: 8,
+        max_iterations: 300,
+        ..ScfOptions::default()
+    };
+    assert!(scf(&mol, &ints, &plain, Kind::Unrestricted).is_err());
+    let bad = ScfOptions {
+        level_shift: -1.0,
+        ..ScfOptions::default()
+    };
+    assert!(uhf(&mol, &ints, &bad).is_err());
+}
+
+#[test]
+fn d_functions_and_open_shells_match_pyscf() {
+    // PySCF 2.14 (conv_tol 1e-12, geometries in bohr): RHF, UHF and ROHF
+    // with d functions, spherical and Cartesian, through the third row.
+    const NH3: &str = "N 0 0 0.1; H 0.94 0 -0.27; H -0.47 0.814 -0.27; H -0.47 -0.814 -0.27";
+    const HCL: &str = "H 0 0 0; Cl 0 0 1.2746";
+    const H2S: &str = "S 0 0 0.1030; H 0 0.9616 -0.8239; H 0 -0.9616 -0.8239";
+    const O2: &str = "O 0 0 0; O 0 0 1.2075";
+    const NH2: &str = "N 0 0 0; H 0 0.8 0.6; H 0 -0.8 0.6";
+    use crate::chemistry::integrals::Harmonics::{Cartesian, Spherical};
+    type Method = fn(&Molecule, &AoIntegrals, &ScfOptions) -> Result<ScfResult>;
+    let cases: [(&str, Basis, _, u32, Method, f64, usize); 8] = [
+        (
+            H2O,
+            Basis::CcPvdz,
+            Spherical,
+            1,
+            rhf,
+            -76.02677205339262,
+            24,
+        ),
+        (
+            H2O,
+            Basis::SixThirtyOneGStar,
+            Cartesian,
+            1,
+            rhf,
+            -76.01050498825595,
+            19,
+        ),
+        (
+            NH3,
+            Basis::SixThirtyOneGStar,
+            Spherical,
+            1,
+            rhf,
+            -56.18354910977892,
+            20,
+        ),
+        (
+            HCL,
+            Basis::CcPvdz,
+            Spherical,
+            1,
+            rhf,
+            -460.08944519174247,
+            23,
+        ),
+        (
+            H2S,
+            Basis::CcPvdz,
+            Spherical,
+            1,
+            rhf,
+            -398.6945373958902,
+            28,
+        ),
+        (
+            O2,
+            Basis::CcPvdz,
+            Spherical,
+            3,
+            rohf,
+            -149.60808446615613,
+            28,
+        ),
+        (
+            O2,
+            Basis::CcPvdz,
+            Spherical,
+            3,
+            uhf,
+            -149.62775750368843,
+            28,
+        ),
+        (
+            NH2,
+            Basis::SixThirtyOneGStar,
+            Spherical,
+            2,
+            rohf,
+            -55.552417572360966,
+            18,
+        ),
+    ];
+    for (atoms, basis, harmonics, multiplicity, method, expected, n) in cases {
+        let mol = Molecule::from_atoms(atoms, 0, multiplicity).unwrap();
+        let ints = AoIntegrals::compute_with(&mol, basis, harmonics).unwrap();
+        assert_eq!(ints.n_functions(), n);
+        let r = method(&mol, &ints, &ScfOptions::default()).unwrap();
+        assert!(
+            (r.energy - expected).abs() < 1e-9,
+            "{atoms} {basis:?}: {} vs {expected}",
+            r.energy
+        );
+    }
+}
+
+#[test]
+fn casci_in_open_shell_orbitals_matches_pyscf() {
+    // `mcscf.CASCI(rohf, ncas, (nα, nβ))` of PySCF 2.14: the active-space
+    // Hamiltonian of ROHF orbitals, lowest state of that Sz.
+    const O2: &str = "O 0 0 0; O 0 0 1.2075";
+    const NH2: &str = "N 0 0 0; H 0 0.8 0.6; H 0 -0.8 0.6";
+    for (atoms, basis, multiplicity, frozen, active, expected) in [
+        (O2, Basis::CcPvdz, 3, 2, 8, -149.68777965956423),
+        (NH2, Basis::SixThirtyOneGStar, 2, 2, 6, -55.561662593115784),
+        (H2O, Basis::CcPvdz, 1, 1, 6, -76.03283446073618),
+    ] {
+        let mol = Molecule::from_atoms(atoms, 0, multiplicity).unwrap();
+        let ints = AoIntegrals::compute(&mol, basis).unwrap();
+        let r = rohf(&mol, &ints, &ScfOptions::default()).unwrap();
+        assert!(r.is_restricted());
+        let sz = (multiplicity - 1) as f64 / 2.0;
+        assert!((r.s_squared() - sz * (sz + 1.0)).abs() < 1e-12);
+        let mo = r.molecular_integrals(&ints, frozen, Some(active)).unwrap();
+        // The determinant of the orbitals has the SCF energy.
+        assert!((mo.hartree_fock_energy() - r.energy).abs() < 1e-9);
+        let e = mo.fci_energies(1).unwrap()[0];
+        assert!((e - expected).abs() < 1e-9, "{atoms}: {e} vs {expected}");
+    }
+}
+
+#[test]
+fn restricted_open_shells_through_the_third_row() {
+    // PySCF 2.14 ROHF (conv_tol 1e-12, geometries in bohr), with Cartesian
+    // and spherical d shells.
+    use crate::chemistry::integrals::Harmonics::{Cartesian, Spherical};
+    for (atoms, basis, harmonics, multiplicity, expected) in [
+        (
+            "Cl 0 0 0; O 0 0 1.57",
+            Basis::CcPvdz,
+            Spherical,
+            2,
+            -534.2497028709555,
+        ),
+        (
+            "P 0 0 0; H 0 0 1.42; H 1.4 0 -0.1",
+            Basis::SixThirtyOneGStar,
+            Cartesian,
+            2,
+            -341.84532451058533,
+        ),
+        (
+            "S 0 0 0; O 0 0 1.48",
+            Basis::CcPvdz,
+            Cartesian,
+            3,
+            -472.33450345370113,
+        ),
+    ] {
+        let mol = Molecule::from_atoms(atoms, 0, multiplicity).unwrap();
+        let ints = AoIntegrals::compute_with(&mol, basis, harmonics).unwrap();
+        let r = rohf(&mol, &ints, &ScfOptions::default()).unwrap();
+        assert!(
+            (r.energy - expected).abs() < 1e-9,
+            "{atoms}: {} vs {expected}",
+            r.energy
+        );
+        // A level shift damps the iterations without moving the solution.
+        let shifted = ScfOptions {
+            level_shift: 0.5,
+            ..ScfOptions::default()
+        };
+        let s = rohf(&mol, &ints, &shifted).unwrap();
+        assert!(
+            (s.energy - expected).abs() < 1e-8,
+            "{atoms} shifted: {}",
+            s.energy
+        );
+    }
+}
+
+#[test]
+fn restricted_open_shell_of_a_closed_shell_is_rhf() {
+    for (atoms, basis) in [(H2O, Basis::CcPvdz), (N2, Basis::SixThirtyOneGStar)] {
+        let (mol, ints) = setup(atoms, basis, 0, 1);
+        let a = rhf(&mol, &ints, &ScfOptions::default()).unwrap();
+        let b = rohf(&mol, &ints, &ScfOptions::default()).unwrap();
+        assert!((a.energy - b.energy).abs() < 1e-10);
+        for (x, y) in a.orbital_energies[0].iter().zip(&b.orbital_energies[0]) {
+            assert!((x - y).abs() < 1e-7, "{x} vs {y}");
+        }
+    }
+}

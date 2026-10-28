@@ -39,8 +39,24 @@ fn cubic_min(a: f64, fa: f64, da: f64, b: f64, fb: f64, db: f64) -> f64 {
     }
 }
 
+/// With noise, gradients below this many noise units of the run's first
+/// gradient are rounding too (the gradient's rounding grows with its
+/// scale: QAOA at depth 5–6 otherwise wandered at its noise for four times
+/// the evaluations; 10 was not enough).
+const START_GRADIENT_NOISE: f64 = 30.0;
+
+/// Hager and Zhang's δ for the approximate Wolfe conditions.
+const APPROX_DELTA: f64 = 0.1;
+
 /// Returns a point satisfying the strong Wolfe conditions, or the best
 /// sufficient-decrease point found, or `None`.
+///
+/// For an objective with rounding noise (`obj.noise > 0`), values within
+/// the noise of each other are treated as equal, and a point within the
+/// noise of `f0` is accepted if its slope satisfies Hager and Zhang's
+/// approximate Wolfe condition `d(α) ≤ (2δ − 1)·d0` (SIAM J. Optim. 16,
+/// 2005): near a minimum, or on a plateau, decreases fall below the noise
+/// of the values while the gradient still shows the way.
 fn line_search(
     obj: &Counted<'_>,
     x: &[f64],
@@ -49,17 +65,33 @@ fn line_search(
     d0: f64,
     alpha0: f64,
 ) -> Option<Point> {
+    let resolution = obj.noise * f0.abs().max(1.0);
+    let noisy = obj.noise > 0.0;
     let eval = |alpha: f64| {
         let xa: Vec<f64> = x.iter().zip(p).map(|(xi, pi)| xi + alpha * pi).collect();
         let (f, g) = obj.value_and_gradient(&xa);
         let d = dot(&g, p);
         Point { alpha, f, g, d }
     };
+    // Sufficient decrease, exactly or (with noise) approximately.
+    let decreases = |pt: &Point| {
+        pt.f.is_finite()
+            && (pt.f <= f0 + C1 * pt.alpha * d0
+                || (noisy && pt.f <= f0 + resolution && pt.d <= (2.0 * APPROX_DELTA - 1.0) * d0))
+    };
+    // `pt` is no better than `other`: higher beyond the noise.
+    let higher = |pt: &Point, other: &Point| {
+        if noisy {
+            pt.f > other.f + resolution
+        } else {
+            pt.f >= other.f
+        }
+    };
     let zoom = |mut lo: Point, mut hi: Point| -> Option<Point> {
         for _ in 0..30 {
             let alpha = cubic_min(lo.alpha, lo.f, lo.d, hi.alpha, hi.f, hi.d);
             let pt = eval(alpha);
-            if !pt.f.is_finite() || pt.f > f0 + C1 * alpha * d0 || pt.f >= lo.f {
+            if !decreases(&pt) || higher(&pt, &lo) {
                 hi = pt;
             } else {
                 if pt.d.abs() <= -C2 * d0 {
@@ -74,7 +106,7 @@ fn line_search(
                 break;
             }
         }
-        (lo.alpha > 0.0 && lo.f <= f0 + C1 * lo.alpha * d0).then_some(lo)
+        (lo.alpha > 0.0 && decreases(&lo)).then_some(lo)
     };
 
     let mut prev = Point {
@@ -86,7 +118,7 @@ fn line_search(
     let mut alpha = alpha0;
     for i in 0..30 {
         let pt = eval(alpha);
-        if !pt.f.is_finite() || pt.f > f0 + C1 * alpha * d0 || (i > 0 && pt.f >= prev.f) {
+        if !decreases(&pt) || (i > 0 && higher(&pt, &prev)) {
             return zoom(prev, pt);
         }
         if pt.d.abs() <= -C2 * d0 {
@@ -118,8 +150,10 @@ pub(super) fn run(
     let mut converged = false;
     let mut iterations = 0;
 
+    let noisy = obj.noise > 0.0;
+    let start_floor = START_GRADIENT_NOISE * obj.noise * inf_norm(&g);
     for it in 0..options.max_iterations {
-        if inf_norm(&g) <= options.g_tol {
+        if inf_norm(&g) <= options.g_tol.max(obj.gradient_floor(f)).max(start_floor) {
             message = "gradient norm below tolerance".into();
             converged = true;
             break;
@@ -154,8 +188,14 @@ pub(super) fn run(
             1.0
         };
         let Some(pt) = line_search(obj, &x, &p, f, d0, alpha0) else {
-            message = "line search failed to make progress".into();
-            converged = inf_norm(&g) <= options.g_tol.sqrt();
+            if obj.noise > 0.0 {
+                // No decrease the objective resolves along this direction.
+                message = "no decrease beyond the objective's precision".into();
+                converged = true;
+            } else {
+                message = "line search failed to make progress".into();
+                converged = inf_norm(&g) <= options.g_tol.sqrt();
+            }
             iterations = it;
             break;
         };
@@ -176,7 +216,8 @@ pub(super) fn run(
             }
             pairs.push_back((s, y, 1.0 / sy));
         }
-        if decrease <= options.f_tol * f.abs().max(1.0) {
+        // With noise, decreases below it say nothing; the gradient decides.
+        if !noisy && decrease <= options.f_tol * f.abs().max(1.0) {
             message = "relative decrease below tolerance".into();
             converged = true;
             break;

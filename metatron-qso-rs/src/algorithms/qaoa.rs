@@ -18,17 +18,19 @@
 //! assert!((result.approximation_ratio.unwrap() - 0.75).abs() < 1e-6);
 //! ```
 
-use num_complex::Complex64 as C64;
+use num_complex::{Complex32 as C32, Complex64 as C64};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{QsoError, Result};
 use crate::graph::Graph;
-use crate::linalg::inner;
-use crate::optimize::{Method, Objective, Options, minimize};
-use crate::parallel::{for_each_mut, map_collect, map_tasks, sum_c64, sum_f64};
+use crate::optimize::{Method, Objective, Options, minimize_at};
+use crate::parallel::{
+    CHUNK, SyncPtr, for_each_item, for_each_mut, map_collect, map_tasks, sum_c64, sum_f64,
+};
 use crate::quantum::kernels;
-use crate::quantum::plan::{BLOCK_QUBITS, for_each_block};
-use crate::quantum::{MAX_QUBITS, StateVector};
+use crate::quantum::plan::{BLOCK_QUBITS, Tiles, for_each_block, y_overlap_im};
+use crate::quantum::scalar::Amplitude;
+use crate::quantum::{MAX_QUBITS, Precision, StateVector};
 use crate::rng::Rng;
 
 /// Optimisation settings for [`MaxCutQaoa::optimize`].
@@ -96,30 +98,105 @@ fn check_depth(p: usize) -> Result<()> {
 pub struct MaxCutQaoa {
     n: usize,
     p: usize,
-    cut: Vec<f64>,
+    cuts: Cuts,
     max_cut: f64,
-    /// Distinct cut values and the index of each string's value, when there
-    /// are at most 2¹⁶ of them (always for unweighted graphs): a cost layer
-    /// then looks phases up in a table instead of evaluating `e^{−iγc}`
-    /// for every amplitude.
-    levels: Option<(Vec<f64>, Vec<u16>)>,
+    precision: Precision,
+}
+
+/// The cut weight of every bit string.
+#[derive(Clone, Debug)]
+enum Cuts {
+    /// The distinct values and the index of each string's value, when there
+    /// are at most 2¹⁶ of them (always for unweighted graphs): two bytes
+    /// per string instead of eight, and a cost layer looks its phases up
+    /// in a table instead of evaluating `e^{−iγc}` for every amplitude.
+    Levels { values: Vec<f64>, index: Vec<u16> },
+    /// Every string's value.
+    Values(Vec<f64>),
+}
+
+impl Cuts {
+    fn len(&self) -> usize {
+        match self {
+            Cuts::Levels { index, .. } => index.len(),
+            Cuts::Values(v) => v.len(),
+        }
+    }
+
+    #[inline]
+    fn at(&self, b: usize) -> f64 {
+        match self {
+            Cuts::Levels { values, index } => values[index[b] as usize],
+            Cuts::Values(v) => v[b],
+        }
+    }
+}
+
+/// Most distinct cut values for which [`Cuts::Levels`] is used.
+const MAX_LEVELS: usize = 1 << 16;
+
+/// Sorted distinct values of `a` and `b` (sorted and distinct themselves),
+/// or `None` beyond [`MAX_LEVELS`].
+fn merge_levels(a: Option<Vec<f64>>, b: Option<Vec<f64>>) -> Option<Vec<f64>> {
+    let (a, b) = (a?, b?);
+    let mut out = Vec::with_capacity(a.len() + b.len());
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() || j < b.len() {
+        let next = match (a.get(i), b.get(j)) {
+            (Some(x), Some(y)) if x.total_cmp(y).is_lt() => {
+                i += 1;
+                *x
+            }
+            (Some(x), Some(y)) if x.total_cmp(y).is_gt() => {
+                j += 1;
+                *y
+            }
+            (Some(x), Some(_)) => {
+                i += 1;
+                j += 1;
+                *x
+            }
+            (Some(x), None) => {
+                i += 1;
+                *x
+            }
+            (None, Some(y)) => {
+                j += 1;
+                *y
+            }
+            (None, None) => unreachable!(),
+        };
+        out.push(next);
+        if out.len() > MAX_LEVELS {
+            return None;
+        }
+    }
+    Some(out)
 }
 
 /// Distinct values of `cut` and the index of every entry, if there are at
-/// most 2¹⁶ distinct values.
+/// most 2¹⁶ distinct values. The values are collected chunk by chunk and
+/// merged, without a sorted copy of the whole table.
 fn cut_levels(cut: &[f64]) -> Option<(Vec<f64>, Vec<u16>)> {
-    let mut values = cut.to_vec();
+    let distinct = |c: usize| {
+        let mut v = cut[c * CHUNK..((c + 1) * CHUNK).min(cut.len())].to_vec();
+        v.sort_unstable_by(f64::total_cmp);
+        v.dedup_by(|a, b| a.total_cmp(b).is_eq());
+        (v.len() <= MAX_LEVELS).then_some(v)
+    };
+    let chunks = cut.len().div_ceil(CHUNK);
     #[cfg(feature = "parallel")]
-    {
+    let values = {
         use rayon::prelude::*;
-        values.par_sort_unstable_by(f64::total_cmp);
-    }
+        (0..chunks)
+            .into_par_iter()
+            .map(distinct)
+            .reduce(|| Some(Vec::new()), merge_levels)?
+    };
     #[cfg(not(feature = "parallel"))]
-    values.sort_unstable_by(f64::total_cmp);
-    values.dedup_by(|a, b| a.total_cmp(b).is_eq());
-    if values.len() > 1 << 16 {
-        return None;
-    }
+    let values = (0..chunks)
+        .map(distinct)
+        .fold(Some(Vec::new()), merge_levels)?;
     let index = map_collect(cut.len(), |b| {
         values
             .binary_search_by(|v| v.total_cmp(&cut[b]))
@@ -145,64 +222,63 @@ impl Phases<'_> {
     }
 }
 
-/// Apply `e^{−iγC}` (if `cost` is given) and then `e^{−iβ Σ X}` (or its
-/// inverse for negative β). The phases and the rotations of the qubits
-/// below the block size are applied block by block in one pass over
-/// memory; the higher qubits follow one pass each.
-fn layer(amps: &mut [C64], n: usize, cost: Option<&Phases<'_>>, beta: f64) {
-    let (c, s) = (beta.cos(), beta.sin());
-    let m = [
-        C64::new(c, 0.0),
-        C64::new(0.0, -s),
-        C64::new(0.0, -s),
-        C64::new(c, 0.0),
-    ];
+/// Apply `e^{−iγC}` (if `cost` is given) and then the mixer, in the frame
+/// `S^{⊗n}` where it is `e^{−iβ Σ Y}` (or its inverse for negative β).
+///
+/// `e^{−iβX} = S†·e^{−iβY}·S` with `S = diag(1, i)`, and `S^{⊗n}` is
+/// diagonal, so it commutes with the cost layers: between two layers the
+/// `S` and `S†` cancel, and the whole state is `S†^{⊗n}` applied to the
+/// state evolved with Y rotations from `S^{⊗n}|+⟩`. The Y rotation is a
+/// real matrix, which the kernels apply with a quarter of the products of
+/// the complex X rotation; ⟨C⟩ and the probabilities do not see
+/// `S†^{⊗n}`.
+///
+/// The phases and the rotations of the qubits below the block size are
+/// applied block by block in one pass over memory; the higher qubits
+/// follow in tiles, one pass per group ([`Tiles`]).
+fn layer<A: Amplitude>(amps: &mut [A], n: usize, cost: Option<&Phases<'_>>, beta: f64) {
+    let m = mixer_matrix::<A>(beta);
     let low = BLOCK_QUBITS.min(n);
     for_each_block(amps, low, |base, block| {
         if let Some(phases) = cost {
             for (i, a) in block.iter_mut().enumerate() {
-                *a *= phases.at(base + i);
+                *a *= A::from_c64(phases.at(base + i));
             }
         }
         for q in 0..low {
             kernels::apply_1q(block, q, 0, &m);
         }
     });
-    for q in low..n {
-        kernels::apply_1q(amps, q, 0, &m);
+    for tiles in Tiles::groups(n, low) {
+        let gates: Vec<(usize, [A; 4])> = tiles.qubits().iter().map(|&q| (q, m)).collect();
+        tiles.apply_1q(amps, &gates);
     }
 }
 
-fn mixer(amps: &mut [C64], n: usize, beta: f64) {
-    layer(amps, n, None, beta);
+/// `Im ⟨λ|Y_q|φ⟩` on a block, `stride = 2^q`, over the contiguous halves
+/// of each pair of runs.
+fn y_overlap_1q<A: Amplitude>(lambda: &[A], phi: &[A], stride: usize) -> f64 {
+    lambda
+        .chunks_exact(2 * stride)
+        .zip(phi.chunks_exact(2 * stride))
+        .map(|(l, p)| {
+            let (l0, l1) = l.split_at(stride);
+            let (p0, p1) = p.split_at(stride);
+            y_overlap_im(l0, l1, p0, p1)
+        })
+        .sum()
 }
 
-/// `⟨λ|Σ_q X_q|φ⟩`: the qubits below the block size block by block, the
-/// others in one streaming pass each. The sum is ordered, so the result
-/// does not depend on the number of threads.
-fn mixer_overlap(lambda: &[C64], phi: &[C64], n: usize) -> C64 {
-    let low = BLOCK_QUBITS.min(n);
-    let block = 1usize << low;
-    let per_block = map_tasks(phi.len() / block, |k| {
-        let (l, p) = (
-            &lambda[k * block..(k + 1) * block],
-            &phi[k * block..(k + 1) * block],
-        );
-        let mut acc = C64::new(0.0, 0.0);
-        for q in 0..low {
-            let bit = 1usize << q;
-            for i in 0..block {
-                acc += l[i].conj() * p[i ^ bit];
-            }
-        }
-        acc
-    });
-    let mut total: C64 = per_block.into_iter().sum();
-    for q in low..n {
-        let bit = 1usize << q;
-        total += sum_c64(phi.len(), |b| lambda[b].conj() * phi[b ^ bit]);
-    }
-    total
+/// `e^{−iβY}`, the mixer of one qubit in the frame of [`layer`].
+fn mixer_matrix<A: Amplitude>(beta: f64) -> [A; 4] {
+    let (c, s) = (beta.cos(), beta.sin());
+    [
+        C64::new(c, 0.0),
+        C64::new(-s, 0.0),
+        C64::new(s, 0.0),
+        C64::new(c, 0.0),
+    ]
+    .map(A::from_c64)
 }
 
 impl MaxCutQaoa {
@@ -229,13 +305,16 @@ impl MaxCutQaoa {
                 .sum()
         });
         let max_cut = cut.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-        let levels = cut_levels(&cut);
+        let cuts = match cut_levels(&cut) {
+            Some((values, index)) => Cuts::Levels { values, index },
+            None => Cuts::Values(cut),
+        };
         Ok(Self {
             n,
             p,
-            cut,
+            cuts,
             max_cut,
-            levels,
+            precision: Precision::Double,
         })
     }
 
@@ -243,6 +322,18 @@ impl MaxCutQaoa {
     pub fn with_depth(&self, p: usize) -> Result<Self> {
         check_depth(p)?;
         Ok(Self { p, ..self.clone() })
+    }
+
+    /// Simulate in single precision (half the memory of the two state
+    /// vectors the gradient needs) or double precision (the default).
+    pub fn with_precision(mut self, precision: Precision) -> Self {
+        self.precision = precision;
+        self
+    }
+
+    /// The precision of the simulations.
+    pub fn precision(&self) -> Precision {
+        self.precision
     }
 
     pub fn n_qubits(&self) -> usize {
@@ -265,28 +356,28 @@ impl MaxCutQaoa {
 
     /// Weight of the cut encoded by bit string `b`.
     pub fn cut_value(&self, b: usize) -> f64 {
-        self.cut[b]
+        self.cuts.at(b)
     }
 
     /// All optimal bit strings.
     pub fn optimal_cuts(&self) -> Vec<usize> {
         let tol = 1e-9 * self.max_cut.abs().max(1.0);
-        (0..self.cut.len())
-            .filter(|&b| self.max_cut - self.cut[b] <= tol)
+        (0..self.cuts.len())
+            .filter(|&b| self.max_cut - self.cuts.at(b) <= tol)
             .collect()
     }
 
     /// Phases `e^{i·angle·cut[b]}`.
     fn phases(&self, angle: f64) -> Phases<'_> {
-        match &self.levels {
-            Some((values, index)) => Phases::Table(
+        match &self.cuts {
+            Cuts::Levels { values, index } => Phases::Table(
                 values
                     .iter()
                     .map(|&v| C64::from_polar(1.0, angle * v))
                     .collect(),
                 index,
             ),
-            None => Phases::Direct(&self.cut, angle),
+            Cuts::Values(cut) => Phases::Direct(cut, angle),
         }
     }
 
@@ -300,10 +391,20 @@ impl MaxCutQaoa {
         Ok(())
     }
 
-    fn evolve(&self, params: &[f64]) -> Vec<C64> {
+    /// The state in the frame of [`layer`]: evolved from
+    /// `S^{⊗n}|+⟩`, amplitude `i^{|b|}/√2ⁿ`.
+    fn evolve<A: Amplitude>(&self, params: &[f64]) -> Vec<A> {
         let (gammas, betas) = params.split_at(self.p);
-        let dim = self.cut.len();
-        let mut amps = vec![C64::new(1.0 / (dim as f64).sqrt(), 0.0); dim];
+        let dim = self.cuts.len();
+        let r = 1.0 / (dim as f64).sqrt();
+        let powers = [
+            C64::new(r, 0.0),
+            C64::new(0.0, r),
+            C64::new(-r, 0.0),
+            C64::new(0.0, -r),
+        ]
+        .map(A::from_c64);
+        let mut amps = map_collect(dim, |b| powers[(b.count_ones() % 4) as usize]);
         for l in 0..self.p {
             layer(&mut amps, self.n, Some(&self.phases(-gammas[l])), betas[l]);
         }
@@ -311,50 +412,162 @@ impl MaxCutQaoa {
     }
 
     /// QAOA state for `params`.
+    /// (In single precision, the amplitudes widened to double precision.)
     pub fn state(&self, params: &[f64]) -> Result<StateVector> {
         self.check(params)?;
-        StateVector::from_amplitudes(self.evolve(params))
+        let mut amps: Vec<C64> = match self.precision {
+            Precision::Double => self.evolve(params),
+            _ => {
+                let amps: Vec<C32> = self.evolve(params);
+                map_collect(amps.len(), |b| amps[b].to_c64())
+            }
+        };
+        // Out of the frame: S†^{⊗n}, the phase (−i)^{|b|} (exact).
+        for_each_mut(&mut amps, |b, a| {
+            *a = match b.count_ones() % 4 {
+                0 => *a,
+                1 => C64::new(a.im, -a.re),
+                2 => -*a,
+                _ => C64::new(-a.im, a.re),
+            }
+        });
+        StateVector::from_amplitudes(amps)
+    }
+
+    /// Probabilities of the bit strings (in single precision divided by
+    /// their sum, which rounding moves away from one).
+    fn probabilities(&self, params: &[f64]) -> Vec<f64> {
+        match self.precision {
+            Precision::Double => {
+                let amps: Vec<C64> = self.evolve(params);
+                map_collect(amps.len(), |b| amps[b].norm_sqr())
+            }
+            _ => {
+                let amps: Vec<C32> = self.evolve(params);
+                let norm2 = sum_f64(amps.len(), |b| amps[b].norm_sqr_f64());
+                map_collect(amps.len(), |b| amps[b].norm_sqr_f64() / norm2)
+            }
+        }
     }
 
     /// Expected cut weight `⟨C⟩`.
     pub fn expectation(&self, params: &[f64]) -> Result<f64> {
         self.check(params)?;
-        let amps = self.evolve(params);
-        Ok(sum_f64(amps.len(), |b| amps[b].norm_sqr() * self.cut[b]))
+        match self.precision {
+            Precision::Double => {
+                let amps: Vec<C64> = self.evolve(params);
+                Ok(sum_f64(amps.len(), |b| {
+                    amps[b].norm_sqr() * self.cuts.at(b)
+                }))
+            }
+            _ => {
+                let amps: Vec<C32> = self.evolve(params);
+                let norm2 = sum_f64(amps.len(), |b| amps[b].norm_sqr_f64());
+                Ok(sum_f64(amps.len(), |b| amps[b].norm_sqr_f64() * self.cuts.at(b)) / norm2)
+            }
+        }
     }
 
     /// `⟨C⟩` and its exact gradient.
     pub fn expectation_and_gradient(&self, params: &[f64]) -> Result<(f64, Vec<f64>)> {
         self.check(params)?;
+        match self.precision {
+            Precision::Double => Ok(self.adjoint::<C64>(params, false)),
+            _ => Ok(self.adjoint::<C32>(params, true)),
+        }
+    }
+
+    /// The adjoint pass specialised to QAOA, at the amplitudes' precision
+    /// (sums in double precision); with `normalise`, value and gradient
+    /// divided by the state's norm², which single-precision rounding moves
+    /// away from one.
+    fn adjoint<A: Amplitude>(&self, params: &[f64], normalise: bool) -> (f64, Vec<f64>) {
         let (gammas, betas) = params.split_at(self.p);
-        let mut phi = self.evolve(params);
-        let cut = &self.cut;
-        let mut lambda: Vec<C64> = map_collect(phi.len(), |b| phi[b] * cut[b]);
-        let value = inner(&phi, &lambda).re;
+        let mut phi: Vec<A> = self.evolve(params);
+        let cuts = &self.cuts;
+        let norm2 = sum_f64(phi.len(), |b| phi[b].norm_sqr_f64());
+        let mut lambda: Vec<A> =
+            map_collect(phi.len(), |b| A::from_c64(phi[b].to_c64() * cuts.at(b)));
+        let value = sum_c64(phi.len(), |b| phi[b].to_c64().conj() * lambda[b].to_c64()).re;
         let mut grad = vec![0.0; 2 * self.p];
         let n = self.n;
+        let low = BLOCK_QUBITS.min(n);
+        let block = 1usize << low;
+        let blocks = phi.len() / block;
+        let mut parts = vec![(0.0, 0.0); blocks];
         for l in (0..self.p).rev() {
-            // Mixer: ∂/∂β = 2·Im⟨λ|B|φ⟩ with B = Σ_q X_q.
-            let b_phi = mixer_overlap(&lambda, &phi, n);
-            grad[self.p + l] = 2.0 * b_phi.im;
-            mixer(&mut phi, n, -betas[l]);
-            mixer(&mut lambda, n, -betas[l]);
-            // Cost: ∂/∂γ = 2·Im⟨λ|C|φ⟩.
-            let c_phi = sum_c64(phi.len(), |b| lambda[b].conj() * phi[b] * cut[b]);
-            grad[l] = 2.0 * c_phi.im;
+            // Per layer two kinds of pass over φ and λ together. ∂/∂β =
+            // 2·Im⟨λ|B|φ⟩ with B = Σ_q Y_q (the mixer's generator in the
+            // frame of `layer`), which commutes with every rotation of the
+            // mixer: each part of the overlap is taken in the pass that
+            // undoes those rotations. The qubits above the block first,
+            // tile by tile:
+            let m = mixer_matrix::<A>(-betas[l]);
+            let mut b_phi = 0.0;
+            for tiles in Tiles::groups(n, low) {
+                let gates: Vec<(usize, [A; 4])> = tiles.qubits().iter().map(|&q| (q, m)).collect();
+                b_phi += tiles.y_overlap_then_apply(&mut lambda, &mut phi, &gates);
+            }
+            // Then block by block: the rest of the overlap, the low
+            // rotations undone, ∂/∂γ = 2·Im⟨λ|C|φ⟩ and the cost phases
+            // undone.
             let phases = self.phases(gammas[l]);
-            for_each_mut(&mut phi, |b, a| *a *= phases.at(b));
-            for_each_mut(&mut lambda, |b, a| *a *= phases.at(b));
+            let (pl, pp, pr) = (
+                SyncPtr::new(&mut lambda),
+                SyncPtr::new(&mut phi),
+                SyncPtr::new(&mut parts),
+            );
+            for_each_item(blocks, phi.len(), 1, |k| {
+                let base = k * block;
+                // SAFETY: block k of both vectors and slot k of `parts`
+                // belong to this task alone.
+                let (lam, ph, slot) = unsafe {
+                    (
+                        std::slice::from_raw_parts_mut(pl.get().add(base), block),
+                        std::slice::from_raw_parts_mut(pp.get().add(base), block),
+                        &mut *pr.get().add(k),
+                    )
+                };
+                let mut overlap = 0.0;
+                for q in 0..low {
+                    overlap += y_overlap_1q(lam, ph, 1 << q);
+                }
+                for q in 0..low {
+                    kernels::apply_1q(lam, q, 0, &m);
+                    kernels::apply_1q(ph, q, 0, &m);
+                }
+                // Im(conj(λ)·φ)·C: only the imaginary part is needed.
+                let mut cost = 0.0;
+                for i in 0..block {
+                    let (a, b) = (lam[i].to_c64(), ph[i].to_c64());
+                    cost += (a.re * b.im - a.im * b.re) * cuts.at(base + i);
+                    let z = A::from_c64(phases.at(base + i));
+                    lam[i] *= z;
+                    ph[i] *= z;
+                }
+                *slot = (overlap, cost);
+            });
+            let (overlap, c_phi) = parts
+                .iter()
+                .fold((b_phi, 0.0), |(a, b), (x, y)| (a + x, b + y));
+            grad[self.p + l] = 2.0 * overlap;
+            grad[l] = 2.0 * c_phi;
         }
-        Ok((value, grad))
+        if !normalise {
+            return (value, grad);
+        }
+        (value / norm2, grad.into_iter().map(|g| g / norm2).collect())
     }
 
     /// Full statistics of the state at `params`.
     pub fn analyze(&self, params: &[f64]) -> Result<QaoaResult> {
         self.check(params)?;
-        let amps = self.evolve(params);
-        let probs: Vec<f64> = amps.iter().map(|a| a.norm_sqr()).collect();
-        let expectation = probs.iter().zip(&self.cut).map(|(p, c)| p * c).sum();
+        let probs = self.probabilities(params);
+        let expectation = probs
+            .iter()
+            .enumerate()
+            .map(|(b, p)| p * self.cuts.at(b))
+            .sum();
         let optimal_probability = self.optimal_cuts().iter().map(|&b| probs[b]).sum();
         let most_likely = (0..probs.len())
             .max_by(|&a, &b| probs[a].total_cmp(&probs[b]))
@@ -368,7 +581,7 @@ impl MaxCutQaoa {
             approximation_ratio: (self.max_cut > 0.0).then(|| expectation / self.max_cut),
             optimal_probability,
             most_likely,
-            most_likely_cut: self.cut[most_likely],
+            most_likely_cut: self.cuts.at(most_likely),
             iterations: 0,
             evaluations: 0,
             converged: true,
@@ -394,7 +607,13 @@ impl MaxCutQaoa {
                 }
             };
             self.check(&x0)?;
-            minimize(&objective, &x0, &config.method, &config.options)
+            minimize_at(
+                &objective,
+                &x0,
+                &config.method,
+                &config.options,
+                self.precision,
+            )
         });
         let runs: Vec<_> = runs.into_iter().collect::<Result<Vec<_>>>()?;
         let evaluations = runs.iter().map(|r| r.evaluations).sum();
@@ -463,7 +682,17 @@ pub fn optimize_layerwise(
     p_max: usize,
     config: &QaoaConfig,
 ) -> Result<Vec<QaoaResult>> {
-    let base = MaxCutQaoa::new(graph, 1)?;
+    optimize_layerwise_at(graph, p_max, config, Precision::Double)
+}
+
+/// [`optimize_layerwise`] at the given precision.
+pub fn optimize_layerwise_at(
+    graph: &Graph,
+    p_max: usize,
+    config: &QaoaConfig,
+    precision: Precision,
+) -> Result<Vec<QaoaResult>> {
+    let base = MaxCutQaoa::new(graph, 1)?.with_precision(precision);
     let mut results: Vec<QaoaResult> = Vec::with_capacity(p_max);
     for p in 1..=p_max {
         let qaoa = base.with_depth(p)?;
@@ -497,9 +726,9 @@ mod tests {
         }
         let g = Graph::from_weighted_edges(11, &edges).unwrap();
         let tabled = MaxCutQaoa::new(&g, 2).unwrap();
-        assert!(tabled.levels.is_some());
+        assert!(matches!(tabled.cuts, Cuts::Levels { .. }));
         let mut direct = tabled.clone();
-        direct.levels = None;
+        direct.cuts = Cuts::Values((0..1 << 11).map(|b| tabled.cuts.at(b)).collect());
         let x = [0.3, 0.9, 0.7, 0.2];
         let (a, ga) = tabled.expectation_and_gradient(&x).unwrap();
         let (b, gb) = direct.expectation_and_gradient(&x).unwrap();
@@ -507,6 +736,118 @@ mod tests {
         assert!(ga.iter().zip(&gb).all(|(p, q)| (p - q).abs() < 1e-12));
         let many: Vec<f64> = (0..70_000).map(|k| k as f64).collect();
         assert!(cut_levels(&many).is_none());
+    }
+
+    /// Single precision: energy, gradient, state and statistics against
+    /// double precision, and an optimisation that reaches the same optimum.
+    #[test]
+    fn single_precision_matches_double_precision() {
+        let mut rng = Rng::seed_from_u64(1271);
+        let g = generators::random_regular(16, 3, &mut rng).unwrap();
+        let double = MaxCutQaoa::new(&g, 3).unwrap();
+        let single = double.clone().with_precision(Precision::Single);
+        assert_eq!(single.precision(), Precision::Single);
+        let x = [0.4, 0.7, 0.2, 0.6, 0.3, 0.1];
+        let (a, ga) = double.expectation_and_gradient(&x).unwrap();
+        let (b, gb) = single.expectation_and_gradient(&x).unwrap();
+        assert!((a - b).abs() < 1e-5 && (single.expectation(&x).unwrap() - a).abs() < 1e-5);
+        for (p, q) in ga.iter().zip(&gb) {
+            assert!((p - q).abs() < 1e-4, "{p} vs {q}");
+        }
+        let fidelity = double
+            .state(&x)
+            .unwrap()
+            .fidelity(&single.state(&x).unwrap())
+            .unwrap();
+        assert!(1.0 - fidelity < 1e-10, "{fidelity}");
+        let (ra, rb) = (double.analyze(&x).unwrap(), single.analyze(&x).unwrap());
+        assert!((ra.expectation - rb.expectation).abs() < 1e-5);
+        assert!((ra.optimal_probability - rb.optimal_probability).abs() < 1e-6);
+        let small = generators::random_regular(10, 3, &mut rng).unwrap();
+        let cfg = QaoaConfig::default();
+        let (oa, ob) = (
+            MaxCutQaoa::new(&small, 2).unwrap().optimize(&cfg).unwrap(),
+            MaxCutQaoa::new(&small, 2)
+                .unwrap()
+                .with_precision(Precision::Single)
+                .optimize(&cfg)
+                .unwrap(),
+        );
+        assert!(
+            (oa.expectation - ob.expectation).abs() < 1e-5,
+            "{oa:?} {ob:?}"
+        );
+        let la = optimize_layerwise_at(&small, 2, &cfg, Precision::Single).unwrap();
+        assert!((la[1].expectation - oa.expectation).abs() < 1e-4);
+    }
+
+    /// Single precision stops where its gradient reaches its rounding,
+    /// and its line searches treat energies within rounding as equal,
+    /// instead of following noise (before: twice the evaluations, and not
+    /// converged).
+    #[test]
+    fn single_precision_optimisation_converges_without_extra_evaluations() {
+        let g = generators::random_regular(12, 3, &mut Rng::seed_from_u64(1)).unwrap();
+        let cfg = QaoaConfig {
+            restarts: 2,
+            ..Default::default()
+        };
+        let double = MaxCutQaoa::new(&g, 4).unwrap().optimize(&cfg).unwrap();
+        let single = MaxCutQaoa::new(&g, 4)
+            .unwrap()
+            .with_precision(Precision::Single)
+            .optimize(&cfg)
+            .unwrap();
+        assert!(single.converged, "{single:?}");
+        assert!(
+            single.evaluations as f64 <= 1.5 * double.evaluations as f64,
+            "{} vs {}",
+            single.evaluations,
+            double.evaluations
+        );
+        assert!((single.expectation - double.expectation).abs() < 1e-6 * double.max_cut);
+    }
+
+    /// Above the block size (qubits in tiles, the mixer in the Y frame,
+    /// the fused backward pass): the state equals the explicit circuit's
+    /// and the gradient central differences, in both precisions.
+    #[test]
+    fn fast_path_matches_explicit_circuit_above_the_block() {
+        // Even, for a 3-regular graph (6 qubits under Miri).
+        let n = (BLOCK_QUBITS + 4) & !1;
+        let g = generators::random_regular(n, 3, &mut Rng::seed_from_u64(28)).unwrap();
+        let qaoa = MaxCutQaoa::new(&g, 2).unwrap();
+        let params = [0.4, 0.9, 0.3, 0.7];
+        let circuit = ansatz::qaoa_maxcut_circuit(&g, 2).unwrap();
+        let explicit = StateVector::from_circuit(&circuit, &params).unwrap();
+        let fast = qaoa.state(&params).unwrap();
+        // Equal up to the global phase of the circuit's RZZ gates.
+        assert!(1.0 - fast.fidelity(&explicit).unwrap() < 1e-12);
+        let (value, grad) = qaoa.expectation_and_gradient(&params).unwrap();
+        let cost = models::maxcut_cost(&g).unwrap();
+        assert!((value - cost.expectation(&explicit).unwrap()).abs() < 1e-9);
+        let h = 1e-5;
+        for k in 0..4 {
+            let mut x = params;
+            x[k] += h;
+            let up = qaoa.expectation(&x).unwrap();
+            x[k] -= 2.0 * h;
+            let down = qaoa.expectation(&x).unwrap();
+            let fd = (up - down) / (2.0 * h);
+            assert!(
+                (grad[k] - fd).abs() < 1e-6 * value,
+                "{k}: {} vs {fd}",
+                grad[k]
+            );
+        }
+        let single = qaoa.clone().with_precision(Precision::Single);
+        let (v32, g32) = single.expectation_and_gradient(&params).unwrap();
+        assert!((v32 - value).abs() < 1e-5 * value);
+        for (a, b) in grad.iter().zip(&g32) {
+            assert!((a - b).abs() < 1e-4 * value, "{a} vs {b}");
+        }
+        let f = single.state(&params).unwrap().fidelity(&explicit).unwrap();
+        assert!(1.0 - f < 1e-9, "{f}");
     }
 
     #[test]

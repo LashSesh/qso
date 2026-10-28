@@ -15,11 +15,14 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::gradients::{GradientMethod, expectation, expectation_and_gradient};
+use super::gradients::{
+    GradientMethod, expectation, expectation_and_gradient, expectation_and_gradient_single,
+    expectation_single,
+};
 use crate::error::{QsoError, Result};
-use crate::optimize::{Method, Objective, Options, minimize};
+use crate::optimize::{Method, Objective, Options, minimize_at};
 use crate::parallel::map_tasks;
-use crate::quantum::{Circuit, MAX_QUBITS, PauliSum, StateVector};
+use crate::quantum::{Circuit, MAX_QUBITS, PauliSum, Precision, StateVector, StateVector32};
 use crate::rng::Rng;
 
 /// VQE problem and solver configuration.
@@ -35,6 +38,9 @@ pub struct Vqe {
     init_range: f64,
     initial_parameters: Option<Vec<f64>>,
     initial_state: Option<StateVector>,
+    /// The initial state rounded once, in single precision.
+    initial_single: Option<StateVector32>,
+    precision: Precision,
 }
 
 /// Outcome of [`Vqe::run`].
@@ -64,24 +70,11 @@ impl Objective for Energy<'_> {
     }
 
     fn value(&self, x: &[f64]) -> f64 {
-        expectation(
-            &self.vqe.ansatz,
-            &self.vqe.hamiltonian,
-            x,
-            self.vqe.initial_state.as_ref(),
-        )
-        .unwrap_or(f64::INFINITY)
+        self.vqe.energy(x).unwrap_or(f64::INFINITY)
     }
 
     fn value_and_gradient(&self, x: &[f64]) -> Option<(f64, Vec<f64>)> {
-        expectation_and_gradient(
-            &self.vqe.ansatz,
-            &self.vqe.hamiltonian,
-            x,
-            self.vqe.initial_state.as_ref(),
-            self.vqe.gradient,
-        )
-        .ok()
+        self.vqe.energy_and_gradient(x).ok()
     }
 }
 
@@ -115,6 +108,8 @@ impl Vqe {
             init_range: std::f64::consts::PI,
             initial_parameters: None,
             initial_state: None,
+            initial_single: None,
+            precision: Precision::Double,
         })
     }
 
@@ -166,6 +161,7 @@ impl Vqe {
             });
         }
         self.initial_state = Some(state);
+        self.round_initial_state();
         Ok(self)
     }
 
@@ -184,14 +180,68 @@ impl Vqe {
         )
     }
 
+    /// Simulate in single precision (half the memory, adjoint gradients
+    /// only) or double precision (the default).
+    pub fn with_precision(mut self, precision: Precision) -> Self {
+        self.precision = precision;
+        self.round_initial_state();
+        self
+    }
+
+    /// Keep the single-precision copy of the initial state in step with
+    /// the precision, so that evaluations do not round it every time.
+    fn round_initial_state(&mut self) {
+        self.initial_single = match (self.precision, &self.initial_state) {
+            (Precision::Double, _) | (_, None) => None,
+            (_, Some(s)) => Some(StateVector32::from_state(s)),
+        };
+    }
+
+    /// The precision of the simulations.
+    pub fn precision(&self) -> Precision {
+        self.precision
+    }
+
     /// Energy at parameters `theta`.
     pub fn energy(&self, theta: &[f64]) -> Result<f64> {
-        expectation(
-            &self.ansatz,
-            &self.hamiltonian,
-            theta,
-            self.initial_state.as_ref(),
-        )
+        match self.precision {
+            Precision::Double => expectation(
+                &self.ansatz,
+                &self.hamiltonian,
+                theta,
+                self.initial_state.as_ref(),
+            ),
+            _ => expectation_single(
+                &self.ansatz,
+                &self.hamiltonian,
+                theta,
+                self.initial_single.as_ref(),
+            ),
+        }
+    }
+
+    /// Energy and its gradient at parameters `theta` (with the configured
+    /// gradient method; single precision needs the adjoint method).
+    pub fn energy_and_gradient(&self, theta: &[f64]) -> Result<(f64, Vec<f64>)> {
+        match (self.precision, self.gradient) {
+            (Precision::Double, method) => expectation_and_gradient(
+                &self.ansatz,
+                &self.hamiltonian,
+                theta,
+                self.initial_state.as_ref(),
+                method,
+            ),
+            (_, GradientMethod::Adjoint) => expectation_and_gradient_single(
+                &self.ansatz,
+                &self.hamiltonian,
+                theta,
+                self.initial_single.as_ref(),
+            ),
+            _ => Err(QsoError::invalid(
+                "gradient",
+                "single precision supports adjoint gradients only",
+            )),
+        }
     }
 
     /// Optimised state for parameters `theta`.
@@ -219,13 +269,7 @@ impl Vqe {
         // finite differences inside the optimiser.
         if self.method_uses_gradient() {
             let probe = vec![0.1; dim];
-            expectation_and_gradient(
-                &self.ansatz,
-                &self.hamiltonian,
-                &probe,
-                self.initial_state.as_ref(),
-                self.gradient,
-            )?;
+            self.energy_and_gradient(&probe)?;
         }
         let base = Rng::seed_from_u64(self.seed);
         let runs = map_tasks(self.restarts, |r| {
@@ -238,7 +282,13 @@ impl Vqe {
                         .collect()
                 }
             };
-            minimize(&Energy { vqe: self }, &x0, &self.method, &self.options)
+            minimize_at(
+                &Energy { vqe: self },
+                &x0,
+                &self.method,
+                &self.options,
+                self.precision,
+            )
         });
         let mut runs: Vec<_> = runs.into_iter().collect::<Result<Vec<_>>>()?;
         let restart_energies: Vec<f64> = runs.iter().map(|r| r.value).collect();
@@ -280,6 +330,124 @@ mod tests {
             res.energy
         );
         assert!(res.converged);
+    }
+
+    /// On a problem where double precision converges to the exact ground
+    /// energy, single precision does too.
+    #[test]
+    fn single_precision_reaches_the_exact_energy() {
+        let h = models::transverse_field_ising(4, 1.0, 0.8, false);
+        let circuit = ansatz::efficient_su2(4, 3, Entanglement::Linear);
+        let double = Vqe::new(h, circuit).unwrap().with_restarts(6).with_seed(3);
+        let exact = double.exact_energy().unwrap();
+        let single = double.clone().with_precision(Precision::Single);
+        assert_eq!(single.precision(), Precision::Single);
+        for vqe in [&double, &single] {
+            let r = vqe.run().unwrap();
+            assert!(
+                (r.energy - exact).abs() < 1e-5,
+                "{:?}: {} vs {exact}",
+                vqe.precision(),
+                r.energy
+            );
+        }
+        // Parameter shift needs double precision.
+        let shift = single.with_gradient(GradientMethod::ParameterShift);
+        assert!(shift.run().is_err());
+    }
+
+    /// On a slow plateau single precision keeps going where its energies
+    /// no longer resolve the decrease but its gradient still does, and
+    /// stops where double precision stops (with the decrease tolerance of
+    /// 10⁻⁸ it stopped 2.8·10⁻⁴ higher). Adam with an initial state
+    /// converges as in double precision (before: not after 3000 steps).
+    #[test]
+    fn single_precision_follows_double_precision_across_a_plateau() {
+        let h = models::transverse_field_ising(6, 1.0, 0.8, false);
+        let circuit = ansatz::efficient_su2(6, 2, Entanglement::Linear);
+        let double = Vqe::new(h.clone(), circuit.clone())
+            .unwrap()
+            .with_options(Options {
+                max_iterations: 5000,
+                ..Default::default()
+            });
+        let single = double.clone().with_precision(Precision::Single);
+        let (rd, rs) = (double.run().unwrap(), single.run().unwrap());
+        assert!(rs.converged, "{rs:?}");
+        assert!(
+            (rs.energy - rd.energy).abs() < 1e-6,
+            "{} vs {}",
+            rs.energy,
+            rd.energy
+        );
+        let start = StateVector::from_circuit(
+            &ansatz::efficient_su2(6, 1, Entanglement::Linear),
+            &[0.4; 24],
+        )
+        .unwrap();
+        let adam = |p: Precision| {
+            Vqe::new(h.clone(), circuit.clone())
+                .unwrap()
+                .with_method(Method::adam(0.05))
+                .with_restarts(2)
+                .with_seed(1)
+                .with_options(Options {
+                    max_iterations: 3000,
+                    ..Default::default()
+                })
+                .with_precision(p)
+                .with_initial_state(start.clone())
+                .unwrap()
+                .run()
+                .unwrap()
+        };
+        let (ad, as_) = (adam(Precision::Double), adam(Precision::Single));
+        assert!(ad.converged && as_.converged, "{ad:?} {as_:?}");
+        assert!(
+            (as_.energy - ad.energy).abs() < 1e-5,
+            "{} {} {} {} {} {}",
+            ad.energy,
+            as_.energy,
+            ad.evaluations,
+            as_.evaluations,
+            ad.iterations,
+            as_.iterations
+        );
+        assert!(as_.evaluations < 2 * ad.evaluations);
+    }
+
+    /// The rounded initial state does not depend on the order of the
+    /// builder calls.
+    #[test]
+    fn single_precision_initial_state_in_either_order() {
+        let h = models::transverse_field_ising(5, 1.0, 0.7, false);
+        let circuit = ansatz::efficient_su2(5, 2, Entanglement::Linear);
+        let start = StateVector::from_circuit(
+            &ansatz::efficient_su2(5, 1, Entanglement::Linear),
+            &[0.3; 20],
+        )
+        .unwrap();
+        let theta = vec![0.2; circuit.num_parameters()];
+        let base = Vqe::new(h, circuit).unwrap();
+        let a = base
+            .clone()
+            .with_precision(Precision::Single)
+            .with_initial_state(start.clone())
+            .unwrap();
+        let b = base
+            .clone()
+            .with_initial_state(start.clone())
+            .unwrap()
+            .with_precision(Precision::Single);
+        let d = base.with_initial_state(start).unwrap();
+        let (ea, ga) = a.energy_and_gradient(&theta).unwrap();
+        assert_eq!((ea, ga.clone()), b.energy_and_gradient(&theta).unwrap());
+        let (ed, gd) = d.energy_and_gradient(&theta).unwrap();
+        assert!((ea - ed).abs() < 1e-6);
+        assert!(ga.iter().zip(&gd).all(|(x, y)| (x - y).abs() < 1e-5));
+        // Back to double precision: the double-precision state again.
+        let back = b.with_precision(Precision::Double);
+        assert_eq!(back.energy_and_gradient(&theta).unwrap(), (ed, gd));
     }
 
     #[test]

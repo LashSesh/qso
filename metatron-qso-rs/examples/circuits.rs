@@ -5,6 +5,7 @@
 use metatron_qso::prelude::*;
 
 fn main() -> Result<()> {
+    // ANCHOR: ghz
     // GHZ state and its entanglement.
     let n = 5;
     let mut ghz = Circuit::new(n);
@@ -26,7 +27,9 @@ fn main() -> Result<()> {
         psi.entanglement_entropy(&[0])?
     );
     println!("OpenQASM:\n{}", to_qasm2(&ghz, &[], true)?);
+    // ANCHOR_END: ghz
 
+    // ANCHOR: grover
     // Grover search follows sin²((2k+1)θ).
     for k in 0..=6 {
         let r = grover::grover_search(6, &[42], Some(k))?;
@@ -35,7 +38,9 @@ fn main() -> Result<()> {
             r.success_probability, r.theoretical_success_probability
         );
     }
+    // ANCHOR_END: grover
 
+    // ANCHOR: qpe
     // Phase estimation of P(2π·0.3125) with 4 bits recovers 0.3125 exactly.
     let phi: f64 = 0.3125;
     let u = [
@@ -49,5 +54,6 @@ fn main() -> Result<()> {
         "phase estimate {} with probability {:.6}",
         est.phase, est.probability
     );
+    // ANCHOR_END: qpe
     Ok(())
 }

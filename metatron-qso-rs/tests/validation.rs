@@ -1034,3 +1034,432 @@ fn fully_dephased_coined_walk_on_metatrons_cube_is_classical() {
         assert!(quantum.iter().zip(&p).all(|(a, b)| (a - b).abs() < 1e-13));
     }
 }
+
+#[test]
+fn hafnians_count_perfect_matchings() {
+    use metatron_qso::graph::generators;
+    use metatron_qso::photonics::hafnian;
+    // Hypercubes Q₃, Q₄, Q₅ (OEIS A005271), the dodecahedron, icosahedron,
+    // Petersen and Heawood graphs.
+    let cases = [
+        (generators::hypercube(3), 9.0),
+        (generators::hypercube(4), 272.0),
+        (generators::hypercube(5), 589_185.0),
+        (
+            generators::platonic(generators::PlatonicSolid::Dodecahedron),
+            36.0,
+        ),
+        (
+            generators::platonic(generators::PlatonicSolid::Icosahedron),
+            125.0,
+        ),
+        (generators::petersen(), 6.0),
+        (generators::heawood(), 24.0),
+    ];
+    for (g, count) in cases {
+        let a = g.adjacency_matrix().map(|v| metatron_qso::C64::new(v, 0.0));
+        let h = hafnian(&a).unwrap();
+        assert!(
+            (h.re - count).abs() < 1e-7 * count && h.im.abs() < 1e-7 * count,
+            "{h} vs {count}"
+        );
+    }
+}
+
+#[test]
+fn gaussian_states_follow_their_photon_statistics() {
+    use metatron_qso::photonics::{GaussianState, beam_splitter};
+    // Squeezed vacuum r = 0.8: p(2k) = tanh^{2k} r (2k)! / (4^k k!² cosh r),
+    // to 18 photons in one mode (relative error below 10⁻¹⁰).
+    let r: f64 = 0.8;
+    let mut s = GaussianState::vacuum(1).unwrap();
+    s.squeeze(0, r, 0.3).unwrap();
+    let fact = |n: usize| (1..=n).map(|i| i as f64).product::<f64>();
+    for k in 0..=9 {
+        let want = r.tanh().powi(2 * k as i32) * fact(2 * k)
+            / (4f64.powi(k as i32) * fact(k).powi(2) * r.cosh());
+        let got = s.probability(&[2 * k]).unwrap();
+        assert!((got - want).abs() < 1e-10 * want, "{k}: {got} vs {want}");
+    }
+    // Two-mode squeezed vacuum from two single-mode squeezers and a 50:50
+    // beam splitter: p(n, n) = tanh^{2n} r / cosh² r.
+    let mut two = GaussianState::vacuum(2).unwrap();
+    two.squeeze(0, r, 0.0).unwrap().squeeze(1, -r, 0.0).unwrap();
+    let bs = beam_splitter(std::f64::consts::FRAC_PI_4, 0.0);
+    two.interferometer(&bs, &[0, 1]).unwrap();
+    for n in 0..6 {
+        let want = r.tanh().powi(2 * n as i32) / r.cosh().powi(2);
+        assert!((two.probability(&[n, n]).unwrap() - want).abs() < 1e-12);
+    }
+    // Threshold detectors on a thermal state with n̄ = 2: no click 1/3.
+    let t = GaussianState::thermal(&[2.0]).unwrap();
+    assert!((t.click_probability(&[false]).unwrap() - 1.0 / 3.0).abs() < 1e-14);
+}
+
+#[test]
+fn hong_ou_mandel_dip_follows_the_photon_overlap() {
+    use metatron_qso::photonics::{BosonSampler, ImperfectBosonSampler, beam_splitter};
+    // P(1, 1) = (1 − |⟨ψ₁|ψ₂⟩|²)/2 on a 50:50 beam splitter, also with
+    // detector efficiency 0.9 (times 0.81).
+    let sampler =
+        BosonSampler::new(beam_splitter(std::f64::consts::FRAC_PI_4, 0.0), &[1, 1]).unwrap();
+    for x in [0.0, 0.3, 0.7, 1.0] {
+        let s = ImperfectBosonSampler::new(sampler.clone())
+            .with_indistinguishability(x)
+            .unwrap();
+        assert!((s.probability(&[1, 1]).unwrap() - (1.0 - x) / 2.0).abs() < 1e-14);
+        let lossy = s.with_efficiency(&[0.9, 0.9]).unwrap();
+        assert!((lossy.probability(&[1, 1]).unwrap() - 0.81 * (1.0 - x) / 2.0).abs() < 1e-14);
+    }
+}
+
+#[test]
+fn hartree_fock_from_geometry_matches_pyscf() {
+    use metatron_qso::chemistry::{AoIntegrals, Basis, Molecule, ScfOptions, rhf, uhf};
+    // Water in 6-31G: RHF and full CI with the oxygen 1s frozen in 8
+    // orbitals (PySCF 2.14 on the same geometry in bohr: scf.RHF,
+    // mcscf.CASCI(mf, 8, 8)).
+    let water = Molecule::from_atoms(
+        "O 0 0 0.1173; H 0 0.7572 -0.4692; H 0 -0.7572 -0.4692",
+        0,
+        1,
+    )
+    .unwrap();
+    let ints = AoIntegrals::compute(&water, Basis::SixThirtyOneG).unwrap();
+    let hf = rhf(&water, &ints, &ScfOptions::default()).unwrap();
+    assert!(close(hf.energy, -75.98397447272153, 1e-10), "{}", hf.energy);
+    let mo = hf.molecular_integrals(&ints, 1, Some(8)).unwrap();
+    let cas = mo.fci_energies(1).unwrap()[0];
+    assert!(close(cas, -76.02472563261222, 1e-9), "{cas}");
+    // OH radical, unrestricted (scf.UHF): energy and spin contamination.
+    let oh = Molecule::from_atoms("O 0 0 0; H 0 0 0.97", 0, 2).unwrap();
+    let ints = AoIntegrals::compute(&oh, Basis::SixThirtyOneG).unwrap();
+    let u = uhf(&oh, &ints, &ScfOptions::default()).unwrap();
+    assert!(close(u.energy, -75.36316824957633, 1e-10), "{}", u.energy);
+    assert!(close(u.s_squared(), 0.7537742361406874, 1e-7));
+    // The bundled LiH FCIDUMP, reproduced from the geometry.
+    let lih = Molecule::from_atoms("Li 0 0 0; H 0 0 1.595", 0, 1).unwrap();
+    let ints = AoIntegrals::compute(&lih, Basis::Sto3g).unwrap();
+    let mo = rhf(&lih, &ints, &ScfOptions::default())
+        .unwrap()
+        .molecular_integrals(&ints, 0, None)
+        .unwrap();
+    assert!(close(
+        mo.fci_energies(1).unwrap()[0],
+        -7.882401932290221,
+        1e-8
+    ));
+}
+
+#[test]
+fn sparse_matching_has_the_weights_of_exact_matching() {
+    use metatron_qso::qec::{
+        CircuitNoise, MatchingDecoder, MatchingGraph, SparseMatchingDecoder, detector_error_model,
+        sample_detectors, surface_code_memory,
+    };
+    // Surface code d = 7, 7 rounds, at and above threshold noise: every
+    // shot's correction weighs as much as the exact decoder's.
+    for p in [0.003, 0.01] {
+        let c = surface_code_memory(7, 7, &CircuitNoise::uniform(p)).unwrap();
+        let dem = detector_error_model(&c, true).unwrap();
+        let graph = MatchingGraph::from_dem(&dem).unwrap();
+        let mut exact = MatchingDecoder::new(graph.clone());
+        let mut sparse = SparseMatchingDecoder::new(graph);
+        for fired in sample_detectors(&c, 1000, 1).unwrap().fired_by_shot() {
+            let (_, a) = exact.decode_with_weight(&fired).unwrap();
+            let (_, b) = sparse.decode_with_weight(&fired).unwrap();
+            assert_eq!(a, b, "{fired:?}");
+        }
+    }
+}
+
+#[test]
+fn virtual_distillation_suppresses_depolarising_noise() {
+    use metatron_qso::mitigation::{
+        DistillationCircuits, distilled_expectation, dominant_expectation,
+    };
+    use metatron_qso::noise::{DensityMatrix, NoiseModel};
+    // A GHZ-like state under depolarising noise (1% after one-qubit and 4%
+    // after two-qubit gates; purity 0.84): the error of ⟨Z0 Z1 + X0 X1 X2⟩
+    // falls from 0.19 to 3.6·10⁻³ with two copies and 6.9·10⁻⁵ with three.
+    let mut prep = Circuit::new(3);
+    prep.h(0).cx(0, 1).cx(1, 2).ry(1, 0.3);
+    let o: PauliSum = "Z0 Z1 + X0 X1 X2".parse().unwrap();
+    let ideal = o
+        .expectation(&StateVector::from_circuit(&prep, &[]).unwrap())
+        .unwrap();
+    let mut rho = DensityMatrix::zero(3).unwrap();
+    rho.apply_circuit(
+        &prep,
+        &[],
+        Some(&NoiseModel::depolarizing(0.01, 0.04).unwrap()),
+    )
+    .unwrap();
+    let errors: Vec<f64> = (1..=3)
+        .map(|k| (distilled_expectation(&rho, &o, k).unwrap() - ideal).abs())
+        .collect();
+    for (e, want) in errors.iter().zip([0.194432, 0.0035535, 6.9202e-5]) {
+        assert!(close(*e, want, 1e-4 * want.max(1e-2)), "{errors:?}");
+    }
+    // In this circuit the only non-Clifford gate comes last, so every
+    // error leaves the ideal state an eigenvector of ρ: no noise floor (in
+    // general the dominant eigenvector moves and a floor remains).
+    assert!(close(dominant_expectation(&rho, &o).unwrap(), ideal, 1e-12));
+    // The measurement circuits on copies of ρ give the same values.
+    for k in 2..=3 {
+        let circuits = DistillationCircuits::new(&prep, &o, k).unwrap();
+        let exact = distilled_expectation(&rho, &o, k).unwrap();
+        assert!(close(circuits.evaluate_on(&rho).unwrap(), exact, 1e-11));
+    }
+}
+
+#[test]
+fn pretty_good_state_transfer_follows_number_theory() {
+    use metatron_qso::walks::{Generator, PrettyGoodTransfer};
+    let prime = |n: usize| {
+        n >= 2
+            && (2..)
+                .take_while(|d| d * d <= n)
+                .all(|d| !n.is_multiple_of(d))
+    };
+    // Ends of P_n (adjacency): PGST iff n + 1 is a prime, twice a prime or
+    // a power of two (Godsil, Kirkland, Severini and Smith 2012).
+    for n in 2..=300usize {
+        let m = n + 1;
+        let want = prime(m) || (m % 2 == 0 && prime(m / 2)) || m.is_power_of_two();
+        let t = PrettyGoodTransfer::path(n, Generator::Adjacency, 1.0, 0, n - 1).unwrap();
+        assert_eq!(t.pretty_good(), want, "P{n}");
+    }
+    // Heisenberg chains (Laplacian): PGST iff n is a power of two (Banchi,
+    // Coutinho, Godsil and Severini 2017).
+    for n in 2..=200usize {
+        let t = PrettyGoodTransfer::path(n, Generator::Laplacian, 1.0, 0, n - 1).unwrap();
+        assert_eq!(t.pretty_good(), n.is_power_of_two(), "P{n}");
+    }
+    // Antipodes of C_n: PGST iff n is a power of two (Pal 2017).
+    // The cycle is regular, so the Laplacian gives the same answer.
+    for n in (4..=512usize).step_by(2) {
+        for generator in [Generator::Adjacency, Generator::Laplacian] {
+            let t = PrettyGoodTransfer::cycle(n, generator, 1.0, 0, n / 2).unwrap();
+            assert_eq!(t.pretty_good(), n.is_power_of_two(), "C{n} {generator:?}");
+        }
+    }
+}
+
+#[test]
+fn bposd_decodes_colour_and_bicycle_codes() {
+    use metatron_qso::qec::{
+        CircuitNoise, CssCode, DecoderChoice, MemoryBasis, css_code_memory,
+        logical_error_rate_using,
+    };
+    // The codes of the literature: triangular colour codes [[(3d² + 1)/4,
+    // 1, d]] and the bivariate bicycle codes of Bravyi et al. (2024).
+    for (d, n) in [(3, 7), (5, 19), (7, 37), (9, 61)] {
+        let c = CssCode::color_code(d).unwrap();
+        assert_eq!((c.n(), c.k()), (n, 1));
+    }
+    for (n, k) in [(72, 12), (90, 8), (108, 8), (144, 12), (288, 12)] {
+        let (c, _) = CssCode::bivariate_bicycle_code(n).unwrap();
+        assert_eq!((c.n(), c.k()), (n, k));
+    }
+    // Circuit-level noise p = 0.002, d rounds: the colour codes of distance
+    // 5 and 7 fail far less often than distance 3, and 7 less often than 5
+    // (3.2·10⁻², 4.7·10⁻³ and
+    // 2.2·10⁻³ at 20 000 shots), and the [[72, 12, 6]] code at p = 0.001
+    // protects its 12 qubits with a failure rate of about 1.5·10⁻³.
+    let rate = |code: &CssCode, rounds: usize, p: f64, shots: usize| {
+        let c = css_code_memory(code, rounds, &CircuitNoise::uniform(p), MemoryBasis::Z).unwrap();
+        logical_error_rate_using(&c, shots, 3, DecoderChoice::BpOsd)
+            .unwrap()
+            .rate
+    };
+    let colour: Vec<f64> = [3, 5, 7]
+        .iter()
+        .map(|&d| rate(&CssCode::color_code(d).unwrap(), d, 0.002, 4000))
+        .collect();
+    eprintln!("colour codes d = 3, 5, 7: {colour:?}");
+    assert!(colour[0] > 0.02, "{colour:?}");
+    assert!(
+        colour[1] < colour[0] / 3.0 && colour[2] < colour[1],
+        "{colour:?}"
+    );
+    let bb = rate(
+        &CssCode::bivariate_bicycle_code(72).unwrap().0,
+        6,
+        0.001,
+        1000,
+    );
+    eprintln!("[[72, 12, 6]]: {bb}");
+    assert!(bb < 0.01, "{bb}");
+}
+
+#[test]
+fn circuit_distances_of_memory_experiments() {
+    use metatron_qso::qec::{
+        CircuitNoise, CssCode, CssSchedule, DistanceOptions, MemoryBasis, circuit_distance,
+        css_code_memory, css_code_memory_with, detector_error_model, repetition_code_memory,
+        surface_code_memory_with,
+    };
+    let noise = CircuitNoise::uniform(0.001);
+    let distance = |c: &metatron_qso::qec::DetectorCircuit| {
+        circuit_distance(
+            &detector_error_model(c, false).unwrap(),
+            &DistanceOptions::default(),
+        )
+        .unwrap()
+        .distance()
+    };
+    // Repetition and rotated surface codes with the hook-safe order keep
+    // their distance.
+    for d in [3, 5, 7] {
+        assert_eq!(
+            distance(&repetition_code_memory(d, d, &noise).unwrap()),
+            Some(d)
+        );
+    }
+    for d in [3, 5] {
+        for basis in [MemoryBasis::Z, MemoryBasis::X] {
+            let c = surface_code_memory_with(d, d, &noise, basis).unwrap();
+            assert_eq!(distance(&c), Some(d), "surface d = {d}");
+        }
+    }
+    // [[72, 12, 6]]: the depth-8 cycle of Bravyi et al. keeps distance 6
+    // (their bound dcirc ≤ 6), the greedy schedule does not.
+    let (bb, _) = CssCode::bivariate_bicycle_code(72).unwrap();
+    for basis in [MemoryBasis::Z, MemoryBasis::X] {
+        let cycle = css_code_memory_with(&bb, 3, &noise, basis, CssSchedule::Bicycle).unwrap();
+        assert_eq!(distance(&cycle), Some(6));
+        assert_eq!(
+            distance(&css_code_memory(&bb, 3, &noise, basis).unwrap()),
+            Some(4)
+        );
+    }
+    // Triangular colour codes with one bare ancilla per face: a fault on
+    // the ancilla of a weight-6 check spreads to up to three data qubits,
+    // and the circuit distance is (d + 1)/2 for the greedy schedule and for
+    // every order of directions (all 720 checked for d = 3 and 5 in the
+    // long validation run).
+    for (d, dc) in [(3, 2), (5, 3), (7, 4)] {
+        let code = CssCode::color_code(d).unwrap();
+        let c = css_code_memory(&code, 2, &noise, MemoryBasis::Z).unwrap();
+        assert_eq!(distance(&c), Some(dc), "colour d = {d}");
+        let ordered = css_code_memory_with(
+            &code,
+            2,
+            &noise,
+            MemoryBasis::Z,
+            CssSchedule::Directions([0, 1, 2, 3, 4, 5]),
+        )
+        .unwrap();
+        assert_eq!(distance(&ordered), Some(dc), "colour d = {d}, ordered");
+    }
+}
+
+/// Long (minutes): run by the weekly benchmark workflow.
+#[test]
+#[ignore]
+fn bicycle_cycle_reaches_the_published_circuit_distances() {
+    use metatron_qso::qec::{
+        CircuitNoise, CssCode, CssSchedule, DistanceOptions, MemoryBasis, circuit_distance,
+        css_code_memory_with, detector_error_model,
+    };
+    // Bravyi et al. (2024), table 1, give dcirc ≤ 8, 8 and 10 for
+    // [[90, 8, 10]], [[108, 8, 10]] and [[144, 12, 12]] with the depth-8
+    // cycle, under noise that also strikes idle qubits. Three cycles of
+    // QSO's circuit noise (no idle errors): BP+OSD with 256 searches per
+    // observable finds logical errors of 8, 9 and 11 faults, and the
+    // exhaustive search proves that none has fewer than 7.
+    let noise = CircuitNoise::uniform(0.001);
+    for (n, bound) in [(90, 8), (108, 9), (144, 11)] {
+        let (code, _) = CssCode::bivariate_bicycle_code(n).unwrap();
+        let c =
+            css_code_memory_with(&code, 3, &noise, MemoryBasis::Z, CssSchedule::Bicycle).unwrap();
+        let r = circuit_distance(
+            &detector_error_model(&c, false).unwrap(),
+            &DistanceOptions {
+                max_work: 1 << 27,
+                bposd_trials: 256,
+                ..DistanceOptions::default()
+            },
+        )
+        .unwrap();
+        eprintln!("[[{n}]]: {} ..= {:?}", r.lower_bound, r.upper_bound());
+        assert!(r.upper_bound().unwrap() <= bound, "[[{n}]]: {r:?}");
+        assert!(r.lower_bound >= 7, "[[{n}]]: {r:?}");
+    }
+    // Every order of directions gives the colour codes of distance 3 and 5
+    // circuit distance 2 and 3.
+    for (d, dc) in [(3, 2), (5, 3)] {
+        let code = CssCode::color_code(d).unwrap();
+        let mut order = [0u8, 1, 2, 3, 4, 5];
+        let mut orders = Vec::new();
+        permutations(6, &mut order, &mut orders);
+        for order in orders {
+            for basis in [MemoryBasis::Z, MemoryBasis::X] {
+                let c =
+                    css_code_memory_with(&code, 2, &noise, basis, CssSchedule::Directions(order))
+                        .unwrap();
+                let r = circuit_distance(
+                    &detector_error_model(&c, false).unwrap(),
+                    &DistanceOptions::default(),
+                )
+                .unwrap();
+                assert_eq!(
+                    r.distance(),
+                    Some(dc),
+                    "colour d = {d}, {order:?}, {basis:?}"
+                );
+            }
+        }
+    }
+}
+
+/// Every permutation of `a[..k]` (Heap's algorithm).
+fn permutations(k: usize, a: &mut [u8; 6], out: &mut Vec<[u8; 6]>) {
+    if k == 1 {
+        out.push(*a);
+        return;
+    }
+    for i in 0..k {
+        permutations(k - 1, a, out);
+        if k.is_multiple_of(2) {
+            a.swap(i, k - 1);
+        } else {
+            a.swap(0, k - 1);
+        }
+    }
+}
+
+#[test]
+fn single_precision_states_follow_double_precision() {
+    use metatron_qso::quantum::{MAX_QUBITS, MAX_QUBITS_SINGLE, StateVector32};
+    // One qubit more in the same memory.
+    assert_eq!(MAX_QUBITS_SINGLE, MAX_QUBITS + 1);
+    // Layers of rotations and entanglers on 18 qubits, 40 layers (2140
+    // gates): rounding moves the norm by 8·10⁻⁶ and the direction by
+    // 1 − F = 2·10⁻¹²; expectation values agree to 10⁻⁶.
+    let n = 18;
+    let mut c = Circuit::new(n);
+    for r in 0..40 {
+        for q in 0..n {
+            c.rx(q, 0.3 + 0.1 * q as f64 + r as f64).rz(q, 0.2);
+        }
+        for q in (r % 2..n - 1).step_by(2) {
+            c.cx(q, q + 1);
+        }
+        for q in 0..n / 2 {
+            c.rzz(q, n - 1 - q, 0.7);
+        }
+    }
+    let exact = StateVector::from_circuit(&c, &[]).unwrap();
+    let single = StateVector32::from_circuit(&c, &[]).unwrap();
+    let infidelity = 1.0 - single.fidelity_with(&exact).unwrap();
+    eprintln!(
+        "1 − F = {infidelity:.2e}, ‖ψ‖ − 1 = {:.2e}",
+        single.norm() - 1.0
+    );
+    assert!(infidelity < 1e-11, "{infidelity}");
+    assert!((single.norm() - 1.0).abs() < 3e-5);
+    let h: PauliSum = "Z0 Z1 + 0.5 X3 X4 - 0.2 Y7".parse().unwrap();
+    assert!((single.expectation(&h).unwrap() - h.expectation(&exact).unwrap()).abs() < 1e-6);
+}

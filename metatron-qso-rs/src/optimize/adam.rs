@@ -36,7 +36,7 @@ pub(super) fn run(
             history.push(f);
         }
         iterations = t;
-        if inf_norm(&g) <= options.g_tol {
+        if inf_norm(&g) <= options.g_tol.max(obj.gradient_floor(f)) {
             converged = true;
             message = "gradient norm below tolerance".into();
             break;

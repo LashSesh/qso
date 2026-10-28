@@ -8,7 +8,7 @@ use metatron_qso::algorithms::qaoa::{self, MaxCutQaoa, QaoaConfig, QaoaResult};
 use metatron_qso::algorithms::{Vqe, grover, models, qft};
 use metatron_qso::graph::Graph;
 use metatron_qso::optimize::{Method, Options};
-use metatron_qso::quantum::bitstring;
+use metatron_qso::quantum::{Precision, StateVector32, bitstring};
 use numpy::{IntoPyArray, PyArray1, PyArray2};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -195,10 +195,24 @@ fn qaoa_maxcut_circuit(graph: &PyGraph, p: usize) -> PyResult<PyCircuit> {
     PyCircuit::wrap(ansatz::qaoa_maxcut_circuit(&graph.inner, p).raise()?)
 }
 
+/// `"double"` or `"single"`.
+fn precision(name: &str) -> PyResult<Precision> {
+    match name {
+        "double" => Ok(Precision::Double),
+        "single" => Ok(Precision::Single),
+        other => Err(invalid(format!(
+            "unknown precision {other:?}; use \"double\" or \"single\""
+        ))),
+    }
+}
+
 /// `⟨ψ(θ)|H|ψ(θ)⟩` and its gradient (`adjoint`, `parameter_shift` or
-/// `finite_difference` with step `step`).
+/// `finite_difference` with step `step`). With `precision="single"` the
+/// state is held in single precision (half the memory) and the gradient
+/// is adjoint; sums are taken in double precision.
 #[pyfunction]
-#[pyo3(signature = (circuit, observable, theta, method = "adjoint", step = 1e-5, initial_state = None))]
+#[pyo3(signature = (circuit, observable, theta, method = "adjoint", step = 1e-5, initial_state = None, precision = "double"))]
+#[allow(clippy::too_many_arguments)]
 fn expectation_and_gradient<'py>(
     py: Python<'py>,
     circuit: &PyCircuit,
@@ -207,14 +221,25 @@ fn expectation_and_gradient<'py>(
     method: &str,
     step: f64,
     initial_state: Option<&PyStateVector>,
+    precision: &str,
 ) -> PyResult<(f64, Bound<'py, PyArray1<f64>>)> {
     let theta = real_vec(&theta);
     check_finite("theta", &theta)?;
     let m = gradient_method(method, step)?;
+    let precision = self::precision(precision)?;
+    if precision == Precision::Single && m != GradientMethod::Adjoint {
+        return Err(invalid("single precision supports adjoint gradients only"));
+    }
     let (c, h) = (&circuit.inner, &observable.inner);
     let init = initial_state.map(|s| &s.inner);
     let (value, grad) = py
-        .detach(|| gradients::expectation_and_gradient(c, h, &theta, init, m))
+        .detach(|| match precision {
+            Precision::Double => gradients::expectation_and_gradient(c, h, &theta, init, m),
+            _ => {
+                let init = init.map(StateVector32::from_state);
+                gradients::expectation_and_gradient_single(c, h, &theta, init.as_ref())
+            }
+        })
         .raise()?;
     Ok((value, real_array(py, grad)))
 }
@@ -297,6 +322,7 @@ fn expectation_and_gradient_batch<'py>(
     gradient = "adjoint",
     initial_parameters = None,
     initial_state = None,
+    precision = "double",
 ))]
 #[allow(clippy::too_many_arguments)]
 fn run_vqe<'py>(
@@ -310,12 +336,18 @@ fn run_vqe<'py>(
     gradient: &str,
     initial_parameters: Option<RealArg<'_>>,
     initial_state: Option<&PyStateVector>,
+    precision: &str,
 ) -> PyResult<Bound<'py, PyDict>> {
+    // The solver rejects single precision with a gradient other than the
+    // adjoint method when its optimiser uses gradients.
+    let precision = self::precision(precision)?;
+    let gradient = gradient_method(gradient, 1e-5)?;
     let mut vqe = Vqe::new(hamiltonian.inner.clone(), ansatz.inner.clone())
         .raise()?
+        .with_precision(precision)
         .with_method(self::method(method)?)
         .with_options(options(max_iterations))
-        .with_gradient(gradient_method(gradient, 1e-5)?)
+        .with_gradient(gradient)
         .with_restarts(restarts)
         .with_seed(seed);
     if let Some(theta) = initial_parameters {
@@ -403,10 +435,14 @@ impl PyMaxCutQaoa {
 #[pymethods]
 impl PyMaxCutQaoa {
     #[new]
-    fn new(py: Python<'_>, graph: &PyGraph, p: usize) -> PyResult<Self> {
+    #[pyo3(signature = (graph, p, precision = "double"))]
+    fn new(py: Python<'_>, graph: &PyGraph, p: usize, precision: &str) -> PyResult<Self> {
         check_qubits(graph.inner.num_nodes())?;
+        let precision = self::precision(precision)?;
         let g = &graph.inner;
-        let inner = py.detach(|| MaxCutQaoa::new(g, p)).raise()?;
+        let inner = py
+            .detach(|| MaxCutQaoa::new(g, p).map(|q| q.with_precision(precision)))
+            .raise()?;
         Ok(Self { inner })
     }
 
@@ -480,6 +516,12 @@ impl PyMaxCutQaoa {
         self.inner.depth()
     }
 
+    /// `"double"` or `"single"`: the precision of the simulated state.
+    #[getter]
+    fn precision(&self) -> &'static str {
+        self.inner.precision().name()
+    }
+
     #[getter]
     fn n_qubits(&self) -> usize {
         self.inner.n_qubits()
@@ -503,10 +545,11 @@ impl PyMaxCutQaoa {
 
     fn __repr__(&self) -> String {
         format!(
-            "MaxCutQaoa(n_qubits={}, p={}, max_cut={})",
+            "MaxCutQaoa(n_qubits={}, p={}, max_cut={}, precision={:?})",
             self.inner.n_qubits(),
             self.inner.depth(),
-            self.inner.max_cut()
+            self.inner.max_cut(),
+            self.inner.precision().name()
         )
     }
 }
@@ -514,7 +557,8 @@ impl PyMaxCutQaoa {
 /// Optimise depths 1..=p_max, seeding each with the INTERP extrapolation of
 /// the previous optimum.
 #[pyfunction]
-#[pyo3(signature = (graph, p_max, restarts = 4, seed = 0, method = "lbfgs", max_iterations = 1000))]
+#[pyo3(signature = (graph, p_max, restarts = 4, seed = 0, method = "lbfgs", max_iterations = 1000, precision = "double"))]
+#[allow(clippy::too_many_arguments)]
 fn optimize_qaoa_layerwise<'py>(
     py: Python<'py>,
     graph: &PyGraph,
@@ -523,13 +567,15 @@ fn optimize_qaoa_layerwise<'py>(
     seed: u64,
     method: &str,
     max_iterations: usize,
+    precision: &str,
 ) -> PyResult<Vec<Bound<'py, PyDict>>> {
     let n = graph.inner.num_nodes();
     check_qubits(n)?;
     let config = qaoa_config(restarts, seed, method, max_iterations, None)?;
+    let precision = self::precision(precision)?;
     let g = &graph.inner;
     let results = py
-        .detach(|| qaoa::optimize_layerwise(g, p_max, &config))
+        .detach(|| qaoa::optimize_layerwise_at(g, p_max, &config, precision))
         .raise()?;
     results.into_iter().map(|r| qaoa_dict(py, r, n)).collect()
 }

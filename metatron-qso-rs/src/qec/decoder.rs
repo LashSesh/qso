@@ -17,7 +17,7 @@
 //! minimum-weight decoder, and with unequal weights it can fail on some
 //! errors of weight below d/2.
 
-use super::dem::DetectorErrorModel;
+use super::dem::{DetectorErrorModel, ErrorMechanism, MAX_MODEL_DETECTORS};
 use crate::error::{QsoError, Result};
 
 /// An edge of a matching graph.
@@ -50,6 +50,12 @@ impl MatchingGraph {
     /// [`detector_error_model`](super::dem::detector_error_model)).
     pub fn from_dem(dem: &DetectorErrorModel) -> Result<Self> {
         let n = dem.n_detectors;
+        if n > MAX_MODEL_DETECTORS {
+            return Err(QsoError::invalid(
+                "dem",
+                format!("{n} detectors; a model has at most {MAX_MODEL_DETECTORS}"),
+            ));
+        }
         let mut edges = Vec::new();
         let mut undetectable = Vec::new();
         for e in &dem.errors {
@@ -117,6 +123,44 @@ impl MatchingGraph {
 
     pub fn edges(&self) -> &[MatchingEdge] {
         &self.edges
+    }
+
+    /// The detector error model with one error per edge (and per
+    /// undetectable error).
+    pub fn to_dem(&self) -> DetectorErrorModel {
+        let n = self.n_detectors;
+        let mut errors: Vec<ErrorMechanism> = self
+            .edges
+            .iter()
+            .map(|e| ErrorMechanism {
+                probability: e.probability,
+                detectors: if e.b == n {
+                    vec![e.a]
+                } else {
+                    vec![e.a.min(e.b), e.a.max(e.b)]
+                },
+                observables: e.observables,
+            })
+            .collect();
+        errors.extend(
+            self.undetectable
+                .iter()
+                .map(|&(probability, observables)| ErrorMechanism {
+                    probability,
+                    detectors: Vec::new(),
+                    observables,
+                }),
+        );
+        let n_observables = errors
+            .iter()
+            .map(|e| 64 - e.observables.leading_zeros() as usize)
+            .max()
+            .unwrap_or(0);
+        DetectorErrorModel {
+            n_detectors: n,
+            n_observables,
+            errors,
+        }
     }
 
     /// Errors that flip observables without firing a detector, with their

@@ -16,7 +16,8 @@ The Clifford gates are:
   π/2.
 
 Any other gate is an error, and so is an angle that is not a multiple of
-π/2 to within 10⁻⁹ (plus the rounding of large angles). A stabilizer
+π/2 to within 10⁻⁹ (plus the rounding of large angles; beyond about 5·10⁸
+rad, where that rounding exceeds 10⁻⁶, angles are refused). A stabilizer
 state is defined only up to a global phase.
 
 ```python

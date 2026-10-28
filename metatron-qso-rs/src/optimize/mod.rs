@@ -219,6 +219,17 @@ pub struct Options {
     pub record_history: bool,
 }
 
+/// Relative rounding error of single-precision energies (measured: a few
+/// times 10⁻⁸ of the value): differences below it are noise.
+pub(crate) const SINGLE_PRECISION_NOISE: f64 = 1e-7;
+
+/// The gradient components a noisy objective resolves, in units of its
+/// value noise: `|g|∞ ≤ GRADIENT_NOISE · noise · max(1, |f|)` is treated as
+/// zero. Measured on VQE and QAOA in single precision: 10 stopped VQE on
+/// plateaus up to 7·10⁻⁴ above double precision, 2 and below cost two to
+/// a hundred times the evaluations of QAOA.
+const GRADIENT_NOISE: f64 = 4.0;
+
 impl Default for Options {
     fn default() -> Self {
         Self {
@@ -248,14 +259,24 @@ pub struct OptimizeResult {
 pub(crate) struct Counted<'a> {
     obj: &'a dyn Objective,
     pub(crate) evaluations: std::cell::Cell<usize>,
+    /// Relative error of the objective's values (0 when exact up to
+    /// double-precision rounding): changes below `noise·|f|` are not
+    /// resolved.
+    pub(crate) noise: f64,
 }
 
 impl<'a> Counted<'a> {
-    fn new(obj: &'a dyn Objective) -> Self {
+    fn new(obj: &'a dyn Objective, noise: f64) -> Self {
         Self {
             obj,
             evaluations: std::cell::Cell::new(0),
+            noise,
         }
+    }
+
+    /// Gradients below this ∞-norm are rounding (0 without noise).
+    pub(crate) fn gradient_floor(&self, f: f64) -> f64 {
+        GRADIENT_NOISE * self.noise * f.abs().max(1.0)
     }
 
     pub(crate) fn value(&self, x: &[f64]) -> f64 {
@@ -308,6 +329,33 @@ pub fn minimize(
     method: &Method,
     options: &Options,
 ) -> Result<OptimizeResult> {
+    minimize_noisy(objective, x0, method, options, 0.0)
+}
+
+/// [`minimize`] for an objective evaluated at `precision`: in single
+/// precision the line searches and stall tests stop at differences the
+/// energies no longer resolve instead of following rounding noise.
+pub(crate) fn minimize_at(
+    objective: &dyn Objective,
+    x0: &[f64],
+    method: &Method,
+    options: &Options,
+    precision: crate::quantum::Precision,
+) -> Result<OptimizeResult> {
+    let noise = match precision {
+        crate::quantum::Precision::Double => 0.0,
+        _ => SINGLE_PRECISION_NOISE,
+    };
+    minimize_noisy(objective, x0, method, options, noise)
+}
+
+fn minimize_noisy(
+    objective: &dyn Objective,
+    x0: &[f64],
+    method: &Method,
+    options: &Options,
+    noise: f64,
+) -> Result<OptimizeResult> {
     if x0.len() != objective.dim() {
         return Err(QsoError::DimensionMismatch {
             expected: objective.dim(),
@@ -317,7 +365,7 @@ pub fn minimize(
     if x0.iter().any(|v| !v.is_finite()) {
         return Err(QsoError::invalid("x0", "initial point must be finite"));
     }
-    let counted = Counted::new(objective);
+    let counted = Counted::new(objective, noise);
     let mut result = match *method {
         Method::Lbfgs { memory } => lbfgs::run(&counted, x0, memory.max(1), options),
         Method::Adam {

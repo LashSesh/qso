@@ -87,6 +87,14 @@ export class Qso {
     return this.call("qasm", { source, shots, seed });
   }
 
+  /**
+   * Run an OpenQASM program on a matrix-product state: many qubits at low
+   * entanglement, exact up to the reported fidelity bound.
+   */
+  mps(source, { shots, seed, maxBond, cutoff, observables } = {}) {
+    return this.call("mps", { source, shots, seed, max_bond: maxBond, cutoff, observables });
+  }
+
   /** Structure, spectra and symmetry group of a graph. */
   graph(graph) {
     return this.call("graph", graphParams(graph));

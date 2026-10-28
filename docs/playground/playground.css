@@ -136,3 +136,5 @@ th { color: var(--text-secondary); font-weight: 600; }
   background: var(--text-primary); color: var(--surface-1); font: 12px/1.4 var(--mono); white-space: pre;
 }
 footer { margin-top: 24px; font-size: 0.85rem; }
+.stacked { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.stacked textarea { width: 100%; }

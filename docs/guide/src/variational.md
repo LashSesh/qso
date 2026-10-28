@@ -61,6 +61,33 @@ The validated reference values are listed in the technical note:
 | 3-regular, triangle-free | 1 | 0.692450 | 0.6925 |
 | Heawood graph | 2 | 0.7559 | 0.7559 |
 
+### Large instances
+
+`MaxCutQaoa` stores the cut of every bit string and one state vector (two
+for gradients), so the memory is the limit: 26 qubits take 2.2 GiB in
+double precision and 1.2 GiB with `precision="single"`, 28 qubits 8.5 and
+4.5 GiB. On a 4-core VM an energy and gradient at p = 10 takes 16 s at 26
+qubits and a minute at 28 (single precision). Optimising from random
+starts at that size takes hours; QAOA angles of random 3-regular graphs
+concentrate, so angles optimised on a small graph are a good start on a
+large one:
+
+```python
+import metatron_qso as q
+
+small = q.Graph.random_regular(12, 3, seed=1)
+best = q.optimize_qaoa_layerwise(small, 4)[-1]
+angles = list(best["gammas"]) + list(best["betas"])
+
+large = q.MaxCutQaoa(q.Graph.random_regular(18, 3, seed=1), 4, precision="single")
+print(large.analyze(angles)["approximation_ratio"])             # carried over
+print(large.optimize(restarts=1, initial=angles, max_iterations=20)["approximation_ratio"])
+```
+
+`examples/qaoa_large.rs` does this at depth 10 on 28 qubits: angles from 16
+nodes give the ratio 0.962 at once and 0.966 after 30 L-BFGS iterations,
+in 37 minutes and 4.5 GiB ([ROADMAP](https://github.com/LashSesh/qso/blob/main/docs/ROADMAP.md), 1.28).
+
 ## Classifiers
 
 `VariationalClassifier` is a data re-uploading classifier for points in the

@@ -2,17 +2,28 @@
 
     python docs/build_site.py --out site            # everything
     python docs/build_site.py --out site --no-rust  # skip compiling Rust snippets
+                                                    # and running the examples
+    python docs/build_site.py --out site --versions cache  # with every release
 
 Steps:
 
 1. execute the notebooks in docs/tutorials and convert them (with their
-   outputs) to Markdown pages of the guide (docs/guide/src/tutorials);
+   outputs) to Markdown pages of the guide (docs/guide/src/tutorials), and
+   render the Rust tutorials (docs/guide/rust) into docs/guide/src/rust:
+   their code comes from the examples of the crate, between
+   `// ANCHOR: name` and `// ANCHOR_END: name` lines, and their output
+   from running those examples;
 2. run every ```python block of the guide, each in a fresh interpreter, and
    compile and run every ```rust block as an example program against the
    crate in this repository, so that no snippet can go stale;
 3. build the guide with mdBook and the Python API reference with pdoc;
 4. build the WebAssembly module (scripts/build_wasm.py) and add the
-   playground (docs/playground) with the npm package at /playground/.
+   playground (docs/playground) with the npm package at /playground/;
+5. with --versions, add the guide and the Python reference of every release
+   since 1.2.0 (the first with a guide) at /<version>/, built from the
+   release's tag with that release's package from PyPI (its notebooks are
+   executed against it), and a version selector on every guide page.
+   Releases are built once and kept in the given cache directory.
 
 Needs the `metatron_qso` package installed in the running interpreter,
 nbconvert, ipykernel, matplotlib and pdoc, `mdbook` on the PATH, and the
@@ -22,17 +33,22 @@ Rust target wasm32-unknown-unknown.
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 from pathlib import Path
 
 DOCS = Path(__file__).resolve().parent
 ROOT = DOCS.parent
 GUIDE = DOCS / "guide"
 TUTORIALS = DOCS / "tutorials"
+RUST_TUTORIALS = GUIDE / "rust"
+EXAMPLES = ROOT / "metatron-qso-rs" / "examples"
 
 FENCE = re.compile(r"^```(\w+)\n(.*?)^```", re.M | re.S)
 
@@ -49,6 +65,52 @@ def notebooks() -> None:
     for nb in sorted(TUTORIALS.glob("*.ipynb")):
         run([sys.executable, "-m", "jupyter", "nbconvert", "--to", "markdown", "--execute",
              "--ExecutePreprocessor.timeout=900", "--output-dir", str(out), str(nb)])
+
+
+# `{{example file.rs}}`, `{{example file.rs:anchor}}` and `{{output name}}`
+# on a line of their own.
+DIRECTIVE = re.compile(r"^\{\{(example|output) ([\w.]+)(?::(\w+))?\}\}$", re.M)
+ANCHOR = re.compile(r"^\s*// ANCHOR(?:_END)?: \w+$")
+
+
+def example_code(file: str, anchor: str | None) -> str:
+    lines = (EXAMPLES / file).read_text().splitlines()
+    if anchor:
+        marks = [k for k, line in enumerate(lines)
+                 if line.strip() in (f"// ANCHOR: {anchor}", f"// ANCHOR_END: {anchor}")]
+        if len(marks) != 2:
+            raise SystemExit(f"{file}: anchor {anchor!r} not found exactly once")
+        lines = lines[marks[0] + 1:marks[1]]
+    code = textwrap.dedent("\n".join(line for line in lines if not ANCHOR.match(line)))
+    return "```rust,noplayground\n" + code.strip("\n") + "\n```"
+
+
+def rust_tutorials(run_examples: bool) -> None:
+    out = GUIDE / "src" / "rust"
+    shutil.rmtree(out, ignore_errors=True)
+    out.mkdir(parents=True)
+    outputs: dict[str, str] = {}
+
+    def output(name: str) -> str:
+        if not run_examples:
+            return "```text\n(not run: the site was built with --no-rust)\n```"
+        if name not in outputs:
+            print(f"running example {name}", flush=True)
+            p = subprocess.run(["cargo", "run", "-q", "--release", "--example", name],
+                               cwd=ROOT / "metatron-qso-rs", check=True,
+                               capture_output=True, text=True)
+            outputs[name] = p.stdout.rstrip("\n")
+        return "```text\n" + outputs[name] + "\n```"
+
+    def expand(m: re.Match) -> str:
+        kind, name, anchor = m.groups()
+        return example_code(name, anchor) if kind == "example" else output(name)
+
+    for page in sorted(RUST_TUTORIALS.glob("*.md")):
+        text = DIRECTIVE.sub(expand, page.read_text())
+        if "{{" in text:
+            raise SystemExit(f"{page.name}: a directive was not understood")
+        (out / page.name).write_text(text)
 
 
 def snippets(rust: bool) -> None:
@@ -104,14 +166,117 @@ def playground(out: Path) -> None:
         shutil.copyfile(package / name, out / "qso" / name)
 
 
+# The first release with a guide.
+FIRST_VERSIONED = (1, 2, 0)
+# Where the site is served (GitHub Pages of LashSesh/qso); mdBook needs it
+# for the 404 page, which can be served at any depth.
+SITE_PATH = "/qso/"
+# Change when build_release changes: the docs workflow caches the release
+# builds under this number, so editing the rest of this script does not
+# rebuild every release.
+RELEASE_BUILD = 1
+
+
+def releases() -> list[str]:
+    """Release versions with a guide, newest first."""
+    tags = subprocess.run(["git", "tag", "--list", "v*"], cwd=ROOT, check=True,
+                          capture_output=True, text=True).stdout.split()
+    found = []
+    for tag in tags:
+        m = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", tag)
+        if m and tuple(map(int, m.groups())) >= FIRST_VERSIONED:
+            found.append(tuple(map(int, m.groups())))
+    return [".".join(map(str, v)) for v in sorted(found, reverse=True)]
+
+
+def build_release(version: str, dest: Path) -> None:
+    """The guide and Python reference of a release, from its tag."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tree = Path(tmp) / "tree"
+        tree.mkdir()
+        # The whole tree: notebooks read files elsewhere in the repository.
+        archive = subprocess.run(["git", "archive", f"v{version}"], cwd=ROOT,
+                                 check=True, capture_output=True).stdout
+        subprocess.run(["tar", "-x", "-C", str(tree)], input=archive, check=True)
+        venv = Path(tmp) / "venv"
+        run([sys.executable, "-m", "venv", str(venv)])
+        python = venv / "bin" / "python"
+        run([str(python), "-m", "pip", "install", "-q", f"metatron-qso=={version}",
+             "-r", str(tree / "docs" / "requirements.txt")])
+        guide = tree / "docs" / "guide"
+        pages = guide / "src" / "tutorials"
+        pages.mkdir(parents=True, exist_ok=True)
+        for nb in sorted((tree / "docs" / "tutorials").glob("*.ipynb")):
+            run([str(python), "-m", "jupyter", "nbconvert", "--to", "markdown", "--execute",
+                 "--ExecutePreprocessor.timeout=900", "--output-dir", str(pages), str(nb)])
+        # Served under /qso/<version>/, with "edit" links to the tag's files.
+        env = dict(os.environ,
+                   MDBOOK_OUTPUT__HTML__SITE_URL=f"{SITE_PATH}{version}/",
+                   MDBOOK_OUTPUT__HTML__EDIT_URL_TEMPLATE=(
+                       f"https://github.com/LashSesh/qso/blob/v{version}/docs/guide/{{path}}"))
+        run(["mdbook", "build", str(guide)], env=env)
+        run([str(python), "-m", "pdoc", "metatron_qso", "-o", str(guide / "book" / "python"),
+             "--docformat", "markdown"])
+        # Only a complete build enters the cache.
+        shutil.rmtree(dest, ignore_errors=True)
+        shutil.copytree(guide / "book", dest)
+
+
+def versions(out: Path, cache: Path) -> None:
+    """Every release at out/<version>/, versions.json and the selector."""
+    entries = [{"version": "development", "path": ""}]
+    for version in releases():
+        cached = cache / version
+        if not (cached / "index.html").exists():
+            print(f"building the documentation of {version}", flush=True)
+            try:
+                build_release(version, cached)
+            except subprocess.CalledProcessError as e:
+                # For example a tag pushed before its wheel reached PyPI:
+                # leave the version out this time (it is not cached, so the
+                # next build tries again) rather than block the site.
+                print(f"::warning title=Documentation of {version}::not built: {e}", flush=True)
+                continue
+        shutil.copytree(cached, out / version)
+        # The guides link the playground next to them; there is one, at
+        # the site's root.
+        playground = out / version / "playground"
+        playground.mkdir(exist_ok=True)
+        (playground / "index.html").write_text(
+            '<!doctype html><meta charset="utf-8"><title>QSO Playground</title>'
+            '<meta http-equiv="refresh" content="0; url=../../playground/">'
+            '<a href="../../playground/">QSO Playground</a>\n')
+        entries.append({"version": version, "path": f"{version}/"})
+    (out / "versions.json").write_text(json.dumps(entries, indent=1) + "\n")
+    shutil.copyfile(DOCS / "versions" / "version-selector.js", out / "version-selector.js")
+    # Guide pages only: not the Python reference, the playground or the
+    # coverage report.
+    skip = {"python", "playground", "coverage"}
+    for page in out.rglob("*.html"):
+        parts = page.relative_to(out).parts
+        if any(p in skip for p in parts[:-1]):
+            continue
+        prefix = "../" * (len(parts) - 1)
+        html = page.read_text()
+        if "version-selector.js" not in html and "</body>" in html:
+            tag = f'<script src="{prefix}version-selector.js"></script>\n</body>'
+            page.write_text(html.replace("</body>", tag, 1))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--out", type=Path, default=ROOT / "site")
-    ap.add_argument("--no-rust", action="store_true", help="do not compile the Rust snippets")
+    ap.add_argument("--no-rust", action="store_true",
+                    help="do not compile the Rust snippets or run the examples")
+    ap.add_argument("--versions", type=Path, metavar="CACHE",
+                    help="add every release, kept in (and reused from) CACHE")
     args = ap.parse_args()
     notebooks()
+    rust_tutorials(run_examples=not args.no_rust)
     snippets(rust=not args.no_rust)
     site(args.out.resolve())
+    if args.versions:
+        versions(args.out.resolve(), args.versions.resolve())
     print(f"site written to {args.out}")
 
 

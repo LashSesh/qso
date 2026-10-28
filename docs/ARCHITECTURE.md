@@ -400,21 +400,38 @@ VQD reuses the adjoint method with the observable `H + Σ β_j |ψ_j⟩⟨ψ_j|`
 
 ## Gradients (`algorithms/gradients.rs`)
 
-Adjoint differentiation (Jones & Gacon 2020) keeps three vectors: the state
-`φ`, the co-state `λ = H|ψ⟩`, and a scratch copy. Walking the circuit
-backwards, each gate is undone on `φ` and `λ`, and every parameter of the
-gate contributes `2·Re⟨λ|∂U φ⟩·scale`. On registers larger than a cache
-block, runs of gates whose targets lie inside a block are undone and
-differentiated block by block, like the forward plans: the block of `φ`
-and `λ` stays in cache through the whole run, and the contributions of
-each gate are summed over the blocks in block order, so the result does
-not depend on the number of threads. At 16–20 qubits this makes a
-gradient 2–3 times faster. The cost is about three circuit
-simulations regardless of the parameter count (0.53 ms vs 28 ms for
-parameter shift with 100 parameters, see BENCHMARKS.md). Parameter-shift rules are provided for
+Adjoint differentiation (Jones & Gacon 2020) keeps two vectors: the state
+`φ` and the co-state `λ = H|ψ⟩`. Walking the circuit backwards, each gate
+is undone on `φ` and `λ`, and every parameter of the gate contributes
+`2·Re⟨λ|∂U φ⟩·scale`; since 1.26 that matrix element is computed in one
+reading pass over both vectors (`kernels::derivative_element`) instead of
+applying the derivative to a copy of `φ`. On registers larger than a
+cache block, runs of gates whose targets lie inside a block, and diagonal
+gates on any qubits (per block a phase, or a diagonal gate on their one
+low target), are undone and differentiated block by block, like the
+forward plans: the block of `φ` and `λ` stays in cache through the whole
+run, and the contributions of each gate are summed over the blocks in
+block order, so the result does not depend on the number of threads. A
+gradient costs about four to six energy evaluations regardless of the
+parameter count (ROADMAP, 1.26; 0.53 ms vs 28 ms for parameter shift with
+100 parameters at 10 qubits, see BENCHMARKS.md). Diagonal observables
+are evaluated chunk by chunk: the probabilities of a chunk stay in cache
+while every `Z` string passes over them. Parameter-shift rules are provided for
 hardware-faithful gradients and as an independent check: two terms for
 `exp(−iθG/2)` with `G² = I` and phase gates, four terms for single-controlled
 rotations.
+
+The adjoint pass, the kernels it calls and the QAOA pass are generic over
+the amplitude type (`Amplitude`: `Complex64` or `Complex32`). In single
+precision the states are `Complex32`, and every inner product, matrix
+element and expectation value is summed in double precision; energy and
+gradient are divided by the state's norm², which rounding moves away from
+one, and the observable's constant term is added to the energy instead of
+entering the co-state (ROADMAP, 1.27). The optimisers are told the
+energies' rounding (`optimize::minimize_at`): the L-BFGS line search
+treats values within it as equal and accepts Hager and Zhang's
+approximate Wolfe condition there, and L-BFGS and Adam stop when the
+gradient reaches its rounding instead of on a relative decrease.
 
 QAOA has its own specialised adjoint pass: the cost layer generator is the
 diagonal cut vector and the mixer generator is `Σ X_q`, both applied in

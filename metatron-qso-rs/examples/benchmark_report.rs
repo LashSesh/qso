@@ -14,6 +14,7 @@ use metatron_qso::algorithms::gradients::{
 use metatron_qso::algorithms::qaoa::optimize_layerwise;
 use metatron_qso::noise;
 use metatron_qso::prelude::*;
+use metatron_qso::quantum::Precision;
 use num_complex::Complex64 as C64;
 
 fn median_seconds(repeats: usize, mut f: impl FnMut()) -> f64 {
@@ -80,6 +81,40 @@ fn main() -> Result<()> {
         println!("| {n} | {} | {} | {per:.3} |", layer.len(), fmt_time(t));
     }
 
+    println!("\n## First layer after a pause (an optimiser step, Python code): median of 21\n");
+    println!("| qubits | warm | after 0.5 ms | after 20 ms |");
+    println!("|---:|---:|---:|---:|");
+    for n in [12usize, 14, 16, 18] {
+        let mut layer = Circuit::new(n);
+        for q in 0..n {
+            layer.h(q).rz(q, 0.3);
+        }
+        for q in 0..n - 1 {
+            layer.cx(q, q + 1);
+        }
+        let mut psi = StateVector::zero(n);
+        let warm = median_seconds(21, || psi.apply_circuit(&layer, &[]).unwrap());
+        let mut row = vec![fmt_time(warm)];
+        for pause_us in [500u64, 20_000] {
+            let mut times: Vec<f64> = (0..21)
+                .map(|_| {
+                    std::thread::sleep(std::time::Duration::from_micros(pause_us));
+                    let t = Instant::now();
+                    psi.apply_circuit(&layer, &[]).unwrap();
+                    t.elapsed().as_secs_f64()
+                })
+                .collect();
+            times.sort_by(f64::total_cmp);
+            let t = times[times.len() / 2];
+            record(
+                format!("statevector_layer_after_pause/pause_us={pause_us}/qubits={n}"),
+                t,
+            );
+            row.push(fmt_time(t));
+        }
+        println!("| {n} | {} |", row.join(" | "));
+    }
+
     println!("\n## Cost per gate type (22 qubits, 5 passes over all qubits)\n");
     println!("| gate | time per pass | ns per gate·amplitude |");
     println!("|---|---:|---:|");
@@ -105,6 +140,45 @@ fn main() -> Result<()> {
 
     println!("\n## Kernels against memory bandwidth (24 qubits, all threads)\n");
     bandwidth_table(threads, &mut record);
+
+    println!("\n## Gaussian integrals (all threads; median of 3)\n");
+    println!("| molecule | basis | functions | time |");
+    println!("|---|---|---:|---:|");
+    for (name, atoms, basis, multiplicity) in [
+        (
+            "H2O",
+            "O 0 0 0.1173; H 0 0.7572 -0.4692; H 0 -0.7572 -0.4692",
+            "cc-pvdz",
+            1,
+        ),
+        (
+            "H2S",
+            "S 0 0 0.1030; H 0 0.9616 -0.8239; H 0 -0.9616 -0.8239",
+            "cc-pvdz",
+            1,
+        ),
+        // 64 functions, the limit: three chlorines and two hydrogens.
+        (
+            "Cl3H2",
+            "Cl 0 0 0; Cl 2.0 0.1 0; Cl 0.2 2.1 0.3; H 0 0 1.3; H 2 2 0.5",
+            "cc-pvdz",
+            2,
+        ),
+    ] {
+        use metatron_qso::chemistry::{AoIntegrals, Basis, Molecule};
+        let mol = Molecule::from_atoms(atoms, 0, multiplicity)?;
+        let basis = Basis::from_name(basis)?;
+        let mut functions = 0;
+        let t = median_seconds(3, || {
+            functions = AoIntegrals::compute(&mol, basis).unwrap().n_functions();
+        });
+        record(format!("integrals/{name}/{}", basis.name()), t);
+        println!(
+            "| {name} | {} | {functions} | {} |",
+            basis.name(),
+            fmt_time(t)
+        );
+    }
 
     println!("\n## Gradients (TFIM, 10 qubits, EfficientSU2 with 4 layers = 100 parameters)\n");
     let h = models::transverse_field_ising(10, 1.0, 0.7, false);
@@ -200,6 +274,27 @@ fn main() -> Result<()> {
         });
         record(format!("qaoa_value_gradient_p3/nodes={n}"), t);
         println!("| {n} | {} |", fmt_time(t));
+    }
+
+    println!("\n## QAOA value + gradient (p = 10, random 3-regular graphs, `MaxCutQaoa`)\n");
+    println!("| nodes | double precision | single precision |");
+    println!("|---:|---:|---:|");
+    for n in [22usize, 24] {
+        let g = generators::random_regular(n, 3, &mut Rng::seed_from_u64(1))?;
+        let x: Vec<f64> = (0..20).map(|k| 0.1 + 0.01 * k as f64).collect();
+        let mut row = Vec::new();
+        for precision in [Precision::Double, Precision::Single] {
+            let qaoa = MaxCutQaoa::new(&g, 10)?.with_precision(precision);
+            let t = median_seconds(3, || {
+                qaoa.expectation_and_gradient(&x).unwrap();
+            });
+            record(
+                format!("qaoa_value_gradient_p10/nodes={n}/{}", precision.name()),
+                t,
+            );
+            row.push(fmt_time(t));
+        }
+        println!("| {n} | {} | {} |", row[0], row[1]);
     }
 
     println!("\n## Quantum walks\n");

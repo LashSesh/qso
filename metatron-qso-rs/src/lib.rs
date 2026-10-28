@@ -50,6 +50,7 @@
 pub mod algorithms;
 pub mod backend;
 pub mod chemistry;
+pub mod differential;
 pub mod error;
 pub mod estimation;
 pub mod graph;
@@ -60,6 +61,8 @@ pub mod noise;
 pub mod optimize;
 pub(crate) mod parallel;
 pub mod photonics;
+#[cfg(feature = "parallel")]
+pub(crate) mod pool;
 pub mod qec;
 pub mod quantum;
 pub mod rng;

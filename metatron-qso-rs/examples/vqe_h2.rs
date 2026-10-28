@@ -6,6 +6,7 @@
 use metatron_qso::prelude::*;
 
 fn main() -> Result<()> {
+    // ANCHOR: model
     let h2 = models::h2_sto3g();
     println!("{}", h2.name);
     println!("H = {}", h2.hamiltonian);
@@ -16,7 +17,9 @@ fn main() -> Result<()> {
         "exact total energy              {:.10} Ha",
         exact + h2.nuclear_repulsion
     );
+    // ANCHOR_END: model
 
+    // ANCHOR: methods
     let ansatz = ansatz::real_amplitudes(2, 1, Entanglement::Linear);
     for method in [
         Method::lbfgs(),
@@ -40,7 +43,9 @@ fn main() -> Result<()> {
             r.evaluations
         );
     }
+    // ANCHOR_END: methods
 
+    // ANCHOR: shots
     // Measure the optimised state with finite shots, as on hardware.
     let best = Vqe::new(h2.hamiltonian.clone(), ansatz.clone())?
         .with_restarts(4)
@@ -56,7 +61,9 @@ fn main() -> Result<()> {
         )?;
         println!("shot estimate with {shots:>6} shots per basis: {e:.6} Ha");
     }
+    // ANCHOR_END: shots
 
+    // ANCHOR: noise
     // And with depolarising noise.
     let noisy = DensityMatrixBackend::new(NoiseModel::depolarizing(0.001, 0.01)?);
     let e = estimate_expectation(
@@ -68,5 +75,6 @@ fn main() -> Result<()> {
         2,
     )?;
     println!("noisy estimate (p1 = 0.1 %, p2 = 1 %):    {e:.6} Ha");
+    // ANCHOR_END: noise
     Ok(())
 }

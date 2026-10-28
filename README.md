@@ -19,8 +19,9 @@ them. It models noisy devices (relaxation, gate and readout errors) and
 simulates them with quantum trajectories beyond the reach of density
 matrices, and it mitigates their errors: readout mitigation, zero-noise
 extrapolation, probabilistic error cancellation and Pauli twirling, with a
-standard error on every estimate. For chemistry and physics it maps
-molecules from FCIDUMP files to qubits, solves them with UCCSD and
+standard error on every estimate. For chemistry and physics it computes
+Hartree–Fock from a molecule's geometry (STO-3G, 6-31G, 6-31G* and
+cc-pVDZ, hydrogen to argon) or reads FCIDUMP files, maps the molecules to qubits, solves them with UCCSD and
 ADAPT-VQE against full CI, finds excited states, builds Trotter–Suzuki
 circuits with rigorous error bounds, and estimates amplitudes with
 Heisenberg-limited scaling. It also simulates continuous- and discrete-time quantum walks on
@@ -66,26 +67,26 @@ or by the benchmark report you can run yourself.
 
 | Area | Contents |
 |---|---|
-| **Statevector simulator** | n-qubit pure states (up to 34 qubits) with multi-threaded kernels (AVX on x86-64, NEON on aarch64, bit-identical to the portable ones), gate fusion and cache blocking. Gates: H, X, Y, Z, S, S†, T, T†, √X, √X†, RX, RY, RZ, P, U, SWAP, RXX, RYY, RZZ and custom unitaries on up to 6 qubits, each with any number of control qubits. Sampling, mid-circuit measurement, reduced density matrices, entanglement entropy |
+| **Statevector simulator** | n-qubit pure states (up to 34 qubits; 35 in single precision, `StateVector32`) with multi-threaded kernels (AVX on x86-64, NEON on aarch64, bit-identical to the portable ones), gate fusion and cache blocking. Gates: H, X, Y, Z, S, S†, T, T†, √X, √X†, RX, RY, RZ, P, U, SWAP, RXX, RYY, RZZ and custom unitaries on up to 6 qubits, each with any number of control qubits. Sampling, mid-circuit measurement, reduced density matrices, entanglement entropy |
 | **Circuits** | Builder API with symbolic, differentiable parameters (`θ = a·p[i] + b`), inverse, binding, depth and gate counts. OpenQASM 2.0 and 3 export *and* import; multi-controlled gates are exported by exact, ancilla-free decomposition |
 | **Programs** | OpenQASM 2 and an OpenQASM 3 subset: gate definitions, `ctrl`/`negctrl`/`inv`/`pow` modifiers, mid-circuit measurement, reset and conditions. Exact outcome distributions by following every measurement branch, seeded sampling; checked against the OpenQASM project's example programs |
 | **Stabilizer simulation** | Aaronson–Gottesman tableaux for up to 16 384 qubits: Clifford gates (rotations by multiples of π/2 included), Pauli measurements, reset, expectation values, sampling. Graph states of any graph, local complementation, entanglement entropy from GF(2) cut-ranks. Clifford OpenQASM programs, mid-circuit measurement included, run on it automatically when they are too large for a state vector |
 | **Matrix-product states** | Circuits with little entanglement on up to 65 536 qubits: any gate of the gate set (controls included), routed by swaps; bond-dimension limit and cutoff with every truncation measured and a rigorous lower bound on the fidelity with the exact state; Pauli expectation values, exact sampling, amplitudes, measurement and reset, entanglement at every bond; OpenQASM programs |
-| **Error correction** | Detector circuits (Clifford gates, Pauli noise, measurement records, detectors, logical observables) in the style of Stim; Pauli-frame sampling, 64 shots per machine word; detector error models, equal to Stim's term by term; a weighted union-find decoder and an exact minimum-weight perfect matching decoder (blossom algorithm); repetition and rotated surface-code memory experiments (Z and X basis) with circuit-level noise; logical error rates; export to and import from Stim's circuit format |
+| **Error correction** | Detector circuits (Clifford gates, Pauli noise, measurement records, detectors, logical observables) in the style of Stim; Pauli-frame sampling, 64 shots per machine word; detector error models, equal to Stim's term by term; a weighted union-find decoder and exact minimum-weight perfect matching (sparse blossom: regions grown on the detector graph, 1.1 to 2.3 times PyMatching's time; and a blossom algorithm on the complete graph of events); BP+OSD (min-sum or product-sum belief propagation with ordered-statistics decoding) for models whose errors flip more than two detectors, with the same corrections as `ldpc` for min-sum BP and equal priors; two-pass (correlated) matching with PyMatching's reweighting rule, on decomposed models equal to Stim's; CSS codes from their checks, triangular colour codes and bivariate bicycle codes (including the [[144, 12, 12]] code); repetition, rotated surface-code (Z and X basis) and CSS-code memory experiments with circuit-level noise, for bicycle codes also with the depth-8 syndrome cycle of Bravyi et al.; circuit distance (exact for graph-like models, proven bounds otherwise); logical error rates; export to and import from Stim's circuit format |
 | **Observables** | Pauli strings and sums with a parser (`"0.5*Z0 Z1 - X2"`), matrix-free expectation values and `H\|ψ⟩`, exact ground states by Lanczos |
 | **Noise** | Density-matrix simulator (up to 14 qubits) on the same kernels. Depolarising (1 and 2 qubits), amplitude damping, phase damping, bit flip, phase flip, thermal relaxation (T₁/T₂), Pauli channels (correlated two-qubit noise), coherent rotations, custom Kraus channels, Pauli twirls. **Device models** (JSON): per-qubit T₁/T₂ and readout errors, per-gate durations, depolarising errors, over-rotations and channels, relaxation while qubits wait. **Quantum trajectories** for any register a state vector holds: one trajectory, compilation included, costs about three noiseless runs at 16–20 qubits, and 200 trajectories take 1.2–1.3 times as long as 200 noiseless runs |
-| **Mitigation and estimation** | Estimates with standard errors and confidence intervals; variance-optimal (Neyman) shot allocation over measurement groups; readout calibration (tensored and full) and mitigation; zero-noise extrapolation (global and random folding; linear, Richardson, polynomial and exponential fits); probabilistic error cancellation of Pauli noise with its sampling overhead; Pauli twirling; noise learning (sparse Pauli–Lindblad models of twirled two-qubit layers, with bootstrap standard errors) and error cancellation and amplification with the learned model; classical shadows |
+| **Mitigation and estimation** | Estimates with standard errors and confidence intervals; variance-optimal (Neyman) shot allocation over measurement groups; readout calibration (tensored and full) and mitigation; zero-noise extrapolation (global and random folding; linear, Richardson, polynomial and exponential fits); probabilistic error cancellation of Pauli noise with its sampling overhead; Pauli twirling; noise learning (sparse Pauli–Lindblad models of twirled two-qubit layers, with bootstrap standard errors) and error cancellation and amplification with the learned model; virtual distillation (exact, and the measurement circuits on 2 or 3 copies); classical shadows |
 | **Gradients** | Adjoint differentiation (all partial derivatives for about three circuit runs), parameter-shift rules (2-term, and 4-term for controlled rotations), finite differences; batched evaluation of many parameter vectors in parallel |
 | **Algorithms** | VQE with seeded parallel restarts; QAOA for weighted MaxCut (fast diagonal simulation, exact optimum by enumeration, INTERP layer-wise initialisation); Grover search with any number of marked items; QFT; phase estimation; variational classifier with data re-uploading; graph classifier with trainable QAOA-type layers |
 | **Excited states and geometry** | VQD and SSVQE; exact state derivatives, quantum Fisher information, quantum natural gradient; variational imaginary-time evolution |
 | **Hamiltonian simulation** | Pauli rotations for any string; Trotter–Suzuki circuits of order 1, 2, 4, 6, … with rigorous error bounds (commutator bounds for orders 1 and 2); qDRIFT with its error bound |
-| **Electronic structure** | Fermionic operators with normal ordering; Jordan–Wigner, parity (with two-qubit reduction) and Bravyi–Kitaev mappings; molecular integrals from FCIDUMP files (H₂, LiH, BeH₂ bundled with PySCF reference energies); Hartree–Fock states; full CI; UCCSD, k-UpCCGSD and ADAPT-VQE |
+| **Electronic structure** | Fermionic operators with normal ordering; Jordan–Wigner, parity (with two-qubit reduction) and Bravyi–Kitaev mappings; Gaussian integrals over shells up to g, spherical or Cartesian (STO-3G, 6-31G, 6-31G*, cc-pVDZ; H to Ar), restricted, unrestricted and restricted open-shell Hartree–Fock with DIIS, frozen-core active spaces (also of open shells); molecular integrals from FCIDUMP files (H₂, LiH, BeH₂ bundled with PySCF reference energies); Hartree–Fock states; full CI; UCCSD, k-UpCCGSD and ADAPT-VQE |
 | **Optimisation and estimation** | QUBO and Ising problems with exact enumeration; QAOA for any diagonal cost with X, XY (Hamming-weight conserving) and warm-start mixers; canonical, iterative and maximum-likelihood amplitude estimation |
 | **Models** | Transverse-field Ising, XXZ Heisenberg, MaxCut cost operator, H₂ / STO-3G (2 qubits, with full-CI reference), any molecule given as an FCIDUMP file |
 | **Optimisers** | L-BFGS with strong-Wolfe line search, Adam, gradient descent with momentum, Nelder–Mead, SPSA |
 | **Graphs** | Weighted graphs; complete, cycle, path, star, bipartite, hypercube, grid/torus, Petersen, Heawood, Johnson, Kneser, Hamming, rook's, Paley, Shrikhande, circulant, Cayley (Z₂ⁿ) and random graphs; the five Platonic solids; the Metatron's Cube / Fruit-of-Life family; Cartesian products; **exact automorphism groups, canonical labelling and isomorphism**; edge-list and GraphML files, NetworkX import |
-| **Quantum walks** | Continuous-time walks on any graph — exact on up to 2048 nodes, Krylov propagation and cyclic subspaces beyond — with limiting and time-averaged distributions and mixing times. **Symmetry reduction** by equitable partitions (hypercubes, Hamming and Johnson graphs of any size). Childs–Goldstone spatial search with optimised hopping rate, **perfect state transfer**, Lindblad dephasing, classical baselines. **Driven walks** with time-dependent Hamiltonians (fourth-order commutator-free Magnus integrator with step-size control), such as adiabatic search. **Discrete-time walks**: coined walks (Grover, Fourier, Hadamard coins; Shenvi–Kempe–Whaley search), the Hadamard walk on the line, Szegedy walks with quantum hitting times; coined walks with coin and position dephasing on density matrices. **Walk circuits**: exact for circulant and Cayley graphs, product formulas for any graph |
-| **Boson sampling** | Permanents (Glynn's formula, `O(n·2ⁿ)`), Haar-random interferometers, exact output probabilities for indistinguishable and distinguishable photons, exact sampling (Clifford & Clifford) |
+| **Quantum walks** | Continuous-time walks on any graph — exact on up to 2048 nodes, Krylov propagation and cyclic subspaces beyond — with limiting and time-averaged distributions and mixing times. **Symmetry reduction** by equitable partitions (hypercubes, Hamming and Johnson graphs of any size). Childs–Goldstone spatial search with optimised hopping rate, **perfect state transfer** and **pretty good state transfer decided exactly** (cyclotomic arithmetic and Kronecker's theorem, for paths, cycles and abelian Cayley graphs), Lindblad dephasing, classical baselines. **Driven walks** with time-dependent Hamiltonians (fourth-order commutator-free Magnus integrator with step-size control), such as adiabatic search. **Discrete-time walks**: coined walks (Grover, Fourier, Hadamard coins; Shenvi–Kempe–Whaley search), the Hadamard walk on the line, Szegedy walks with quantum hitting times; coined walks with coin and position dephasing on density matrices. **Walk circuits**: exact for circulant and Cayley graphs, product formulas for any graph |
+| **Boson sampling** | Permanents (Glynn's formula, `O(n·2ⁿ)`), Haar-random interferometers, exact output probabilities for indistinguishable and distinguishable photons, exact sampling (Clifford & Clifford); partially distinguishable photons and losses; **Gaussian boson sampling**: Gaussian states (squeezing, displacement, interferometers, loss), photon-number and threshold-click probabilities by hafnians, loop hafnians and torontonians, exact sampling |
 | **Backends** | Statevector, noisy density-matrix and device backends (density matrices or trajectories), shot-based estimation with qubit-wise-commuting measurement groups |
 | **Interfaces** | Rust library `metatron_qso`, Python package `metatron_qso` (NumPy I/O, type stubs), `qso` command-line tool with JSON output, npm package `metatron-qso` (WebAssembly, no dependencies) and a browser playground |
 | **Reproducibility** | One explicit, portable seeded RNG (xoshiro256++) for all randomness; parallel sums give bit-identical results for any thread count |
@@ -104,6 +105,7 @@ or by the benchmark report you can run yourself.
 | Spatial search on Metatron's Cube, γ = 1/13, t = π√13/2 | 1.000000 | 1 |
 | Walk on the hypercube Q₃₀ (2³⁰ nodes, 31 cells), P(antipode, γt = π/2) | 1 (to 2·10⁻¹⁵) | 1, Christandl et al. 2004 |
 | Perfect state transfer between the ends of P₂, P₃ / P₄ … P₁₂ | π/2, π/√2 / none | Christandl et al. 2004 |
+| Pretty good state transfer between the ends of P_n (n ≤ 300), of the Heisenberg chain (n ≤ 200), antipodes of C_n (n ≤ 512) | exactly when n + 1 is p, 2p or 2ᵏ / n = 2ᵏ / n = 2ᵏ | Godsil et al. 2012; Banchi et al. 2017; Pal 2017 |
 | Hadamard walk on the line, σ(t)/t at t = 1000 | 0.54120 | √(1 − 1/√2) = 0.54120, Konno 2002 |
 | Szegedy quantum hitting time on cycles Cₙ, n = 16 … 128 | n/4 | √ of the classical n²/6 up to a constant, Szegedy 2004 |
 | Local adiabatic search on K_N (ε = 0.1), success at T = N/(ε√(N−1))·arctan√(N−1) for N = 64 / 256 / 1024; linear schedule, same T | 0.99942 / 0.99987 / 0.99996; 0.765 / 0.525 / 0.315 | ≥ 1 − ε², Roland & Cerf 2002; SciPy integration to 10⁻⁶ |
@@ -113,14 +115,23 @@ or by the benchmark report you can run yourself.
 | Automorphism group orders: Metatron's Cube / Fruit of Life / dodecahedron | 6 227 020 800 / 12 / 120 | 13! / D₆ / I_h |
 | Hong–Ou–Mandel: two photons on a 50:50 beam splitter, coincidence probability | 0 (distinguishable: 0.5) | 0, Hong, Ou & Mandel 1987 |
 | Full bunching of n photons, boson / distinguishable probability | n! for n = 1 … 6 | n! |
+| Hong–Ou–Mandel with partially distinguishable photons, coincidence probability | (1 − \|⟨ψ₁\|ψ₂⟩\|²)/2 | Hong, Ou & Mandel 1987 |
+| Perfect matchings by hafnians: hypercubes Q₃ / Q₄ / Q₅, dodecahedron, icosahedron | 9 / 272 / 589 185, 36, 125 | OEIS A005271; known counts |
+| Squeezed vacuum (r = 0.8), photon-number distribution to 18 photons | closed form to 10⁻¹⁰ (relative) | tanh^{2k} r (2k)! / (4^k k!² cosh r) |
+| Gaussian boson sampling: photon-number and click probabilities, 4 modes with displacement and loss; 20 photons from 10 squeezed modes | about 10⁻¹⁵ absolute; 2·10⁻¹¹ relative at 20 photons | The Walrus 0.22 |
 | State vectors of random circuits, largest difference to Qiskit Aer, Qulacs, Cirq, PennyLane | ≤ 3 × 10⁻¹⁵ | — |
 | Quantum trajectories vs density matrices, χ² test of 20 000 samples on 3, 6 and 10 qubits | passes at the 0.1 % level | — |
 | GHZ₅ on the toy device, ⟨Σ Z_i Z_{i+1}⟩: raw / readout-mitigated + ZNE (1, 3, 5) | 3.38 / 4.00 ± 0.01 | 4 |
 | Same with Pauli noise: probabilistic error cancellation (overhead 1.08) | 4.00 ± 0.01 | 4 |
 | Noise learning, 4 qubits (depolarising + coherent phase error + readout errors): 39 learned rates / PEC with them on 3 layers (raw 0.492) | all within 3 standard errors / 0.534 ± 0.005 | exact rates / 0.533 |
+| Virtual distillation of a depolarised GHZ-like state (no noise floor: its rotation comes last), error of ⟨Z0 Z1 + X0 X1 X2⟩ with 1 / 2 / 3 copies; circuits on copies vs. exact | 0.19 / 3.6·10⁻³ / 6.9·10⁻⁵; equal to 10⁻¹¹ | noiseless value; Tr(ρᵏO)/Tr(ρᵏ) |
 | Zero-noise extrapolation (Richardson, scales 1, 3, 5), depolarised 3-qubit circuit | error ÷ 380 | — |
 | Classical shadows, single-snapshot variance of a weight-k Pauli string | 3ᵏ − ⟨P⟩² | Huang, Kueng & Preskill 2020 |
 | Full CI of H₂ / LiH / BeH₂ (STO-3G), identical under Jordan–Wigner, parity, Bravyi–Kitaev and the reduced parity encoding | −1.1373060 / −7.8824019 / −15.5951824 Ha | PySCF full CI, to 10⁻⁸ Ha |
+| Hartree–Fock of H₂O from its geometry (6-31G), and full CI with a frozen core in 8 orbitals | −75.98397447 / −76.02472563 Ha | PySCF RHF and CASCI, to 10⁻¹⁰ / 10⁻⁹ Ha |
+| Unrestricted Hartree–Fock of OH (6-31G) | −75.36316825 Ha, ⟨S²⟩ = 0.75377 | PySCF UHF, to 10⁻¹⁰ Ha |
+| Hartree–Fock with d functions: H₂O / HCl / H₂S (cc-pVDZ); ROHF of triplet O₂ (cc-pVDZ) and CASCI in its orbitals (12 electrons, 8 orbitals) | −76.02677205 / −460.08944519 / −398.69453740; −149.60808447, −149.68777966 Ha | PySCF RHF, ROHF and CASCI, to 10⁻⁹ Ha |
+| Gaussian integrals with d shells (6-31G*, cc-pVDZ, spherical and Cartesian) of H₂O, NH₃, CO, F₂, HCl, H₂S, SiH₄ and NaF; f and g shells in a custom basis | every integral to 2.6·10⁻¹³; f and g: PySCF's fingerprints to 10⁻¹⁰ | PySCF 2.14 |
 | LiH on 10 qubits: UCCSD (92 parameters) / ADAPT-VQE (30 operators), error vs. full CI | 1.1·10⁻⁵ / 1.1·10⁻⁵ Ha | chemical accuracy 1.6·10⁻³ Ha |
 | VQD, all four levels of H₂ (Sz = 0) | equal to full CI to 10⁻⁶ Ha | PySCF full CI |
 | Trotter–Suzuki on a 4-qubit Heisenberg chain: error ratio when the steps double, orders 1 / 2 / 4 | 2.01 / 4.00 / 16.06, always below the error bound | 2, 4, 16 |
@@ -133,12 +144,22 @@ or by the benchmark report you can run yourself.
 | Rotated surface code, d rounds, circuit-level noise p = 0.001, union-find decoding: logical error rate at d = 3 / 5 / 7 | 8.4·10⁻⁴ / 1.4·10⁻⁴ / 2.1·10⁻⁵ (10⁶ shots; falls with d; rises with d at p = 0.01) | below threshold ⇔ falls with d |
 | Minimum-weight matching: correction weight on random error models, every syndrome | equal to the lightest error set found by enumeration | enumeration |
 | Minimum-weight matching vs. PyMatching, same error model and syndromes, 8 circuits × 10⁵ shots | 1 of 800 000 predictions differs | PyMatching 2.4 |
+| Sparse matching vs. the exact decoder: every syndrome of 400 random models, 6400 sampled and random shots, odd cycles | equal correction weights on every shot | `MatchingDecoder`, enumeration |
+| BP+OSD with exhaustive OSD: every syndrome of 150 random models with hyperedges | the most likely correction | enumeration |
+| BP+OSD vs. ldpc: colour codes d = 7, 9, [[72, 12, 6]], [[144, 12, 12]], bit flips p = 0.05, three BP rules; exhaustive OSD on random models | identical corrections (product-sum on [[144, 12, 12]]: 0.3% differ) | ldpc 2.4 |
+| Colour and bivariate bicycle codes | [[(3d² + 1)/4, 1]] with distance d (searched for d = 3, 5); [[72, 12]], [[90, 8]], [[108, 8]], [[144, 12]], [[288, 12]]; every weight ≤ 2 error corrected on d = 5, 7 and [[72, 12, 6]] | Bravyi et al. 2024; enumeration |
 | Stim-generated repetition and surface-code circuits, imported | error models equal to Stim's, probabilities to 10⁻¹⁵ relative | Stim 1.16 |
 | Repetition code, one round of bit flips, union-find decoding, all 2ᵈ error patterns (d = 3 … 9) | fails exactly on the patterns with more than d/2 flips | majority vote |
 | Detector error models of memory experiments vs. Stim | identical terms, probabilities to 10⁻¹⁵ relative | Stim 1.16 |
+| Decomposed error models of Stim's surface and repetition circuits (d = 3 to 7) | identical errors and parts, probabilities to 10⁻¹⁵ relative | Stim 1.16 |
+| Two-pass matching vs. PyMatching `enable_correlations=True`, Stim's surface codes, same model and syndromes | 0.01–0.04% of predictions differ; d = 5, p = 0.006: 1.93·10⁻² against PyMatching's 1.94·10⁻² (plain matching 2.44·10⁻²) | PyMatching 2.4 |
+| Circuit distance: random models; Stim's surface and repetition circuits | equal to enumeration; equal to `shortest_graphlike_error` and no larger than `search_for_undetectable_logical_errors` | enumeration; Stim 1.16 |
+| [[72, 12, 6]] memory, depth-8 cycle of Bravyi et al. vs. greedy CNOT layers, 3 rounds | circuit distance 6 vs. 4 (both exact) | Bravyi et al. 2024: ≤ 6 |
 
-The test-suite (379 Rust tests and 249 Python tests, run in CI on Linux
-(x86_64 and arm64), macOS and Windows) also checks:
+The test-suite (576 Rust tests and 296 Python tests, run in CI on Linux
+(x86_64 and arm64), macOS and Windows; together with the command line
+and the Python tests they cover 92.0 % of the Rust lines and 81.5 % of
+the branches) also checks:
 
 - every gate against an independent dense-matrix reference, and the QFT
   against the DFT matrix;
@@ -368,16 +389,17 @@ machine-readable output; `qso <command> --help` lists all options.
 | `walk` | Node probabilities at time t and limiting distribution | `--graph`, `--start`, `--time`, `--gamma`, `--generator laplacian\|adjacency` |
 | `search` | Quantum-walk spatial search (rate and time optimised unless `--gamma` is given) | `--graph`, `--marked 3,7`, `--gamma`, `--generator`, `--t-max` |
 | `reduce` | Equitable partition from a start node and the reduced walk | `--graph`, `--start`, `--time` |
-| `transfer` | Perfect state transfer or the best transfer in a window | `--graph`, `--from`, `--to`, `--t-max` |
+| `transfer` | Perfect state transfer or the best transfer in a window; pretty good state transfer decided exactly on paths and cycles | `--graph`, `--from`, `--to`, `--t-max` |
 | `coined` | Coined-walk search | `--graph`, `--marked`, `--coin`, `--steps` |
 | `hitting` | Szegedy and classical hitting times | `--graph`, `--marked` |
 | `walk-circuit` | A walk as an OpenQASM circuit | `--graph`, `--time`, `--method exact\|trotter`, `--steps`, `--order` |
 | `qaoa` | QAOA for MaxCut with exact optimum and approximation ratio | `--graph`, `--p`, `--restarts`, `--seed`, `--layerwise` |
 | `vqe` | VQE with an EfficientSU2 ansatz, compared with the exact ground energy | `--model h2\|tfim:N,J,H\|heisenberg:N,J,Δ`, `--hamiltonian "<Pauli sum>"`, `--qubits`, `--layers`, `--method`, `--restarts`, `--seed` |
 | `grover` | Grover search, simulated vs. theoretical success | `--qubits`, `--marked`, `--iterations` |
-| `qasm FILE` | Run an OpenQASM 2 or 3 program and sample its bits, or convert it; Clifford programs beyond 34 qubits on the stabilizer simulator | `--shots`, `--seed`, `--export qasm2\|qasm3`, `--stabilizer`, `--mps`, `--max-bond N`, `--noise p1,p2`, `--device FILE`, `--trajectories N` |
-| `qec` | Repetition or surface-code memory experiment, or a Stim circuit file: logical error rate with union-find or matching decoding | `--code surface\|repetition`, `--basis z\|x`, `--decoder union-find\|matching`, `--distance 3,5,7`, `--rounds`, `--p 0.001,0.01`, `--shots`, `--stim FILE`, `--circuit FILE` |
+| `qasm FILE` | Run an OpenQASM 2 or 3 program and sample its bits, or convert it; Clifford programs beyond 34 qubits on the stabilizer simulator | `--shots`, `--seed`, `--export qasm2\|qasm3`, `--stabilizer`, `--mps`, `--max-bond N`, `--single`, `--noise p1,p2`, `--device FILE`, `--trajectories N` |
+| `qec` | Repetition, surface, colour or bivariate bicycle code memory experiment, or a Stim circuit file: logical error rate with union-find, matching, correlated matching or BP+OSD decoding; optionally the circuit distance | `--code surface\|repetition\|color\|bb`, `--basis z\|x`, `--decoder union-find\|matching\|correlated-matching\|bposd`, `--schedule greedy\|bicycle\|0,1,2,3,4,5`, `--circuit-distance`, `--distance 3,5,7`, `--rounds`, `--p 0.001,0.01`, `--shots`, `--stim FILE`, `--circuit FILE` |
 | `estimate FILE` | ⟨H⟩ with standard error, optionally mitigated | `--observable`, `--shots`, `--device`, `--mitigate-readout`, `--zne 1,3,5`, `--pec N` |
+| `scf` | Hartree–Fock of a molecule from its geometry, full CI in an active space, FCIDUMP output | `--atoms`, `--basis`, `--charge`, `--multiplicity`, `--unrestricted`, `--frozen`, `--active`, `--fci`, `--fcidump` |
 | `molecule FILE` | Qubit Hamiltonian, Hartree–Fock and full-CI energies of an FCIDUMP molecule, and a variational solution | `--mapping`, `--two-qubit-reduction`, `--method none\|uccsd\|upccgsd\|adapt`, `--roots` |
 | `trotter` | Trotter–Suzuki circuit for exp(−iHt) with its error bound | `--hamiltonian`, `--time`, `--steps`, `--order`, `--output FILE` |
 
@@ -423,12 +445,15 @@ sub-millisecond workloads, up to 1.5× for the larger ones).
 On the same machine, with every framework at its default settings and
 warmed up, QSO 1.3 simulates 20–24-qubit circuits 1.5–2.6× faster than
 Qulacs, 3.3–4.7× faster than Qiskit Aer and 3.7–9× faster than PennyLane
-Lightning; at 16 qubits Qulacs is 1.3× faster in the median. Its adjoint
+Lightning; at 16 qubits Qulacs was 1.3× faster in the median. Its adjoint
 gradient is the fastest of those compared (3.8× faster than Qulacs'
-backprop), and its permanents are 1.8–8.7× faster than The Walrus. On
-virtual machines QSO's worker threads need tens of milliseconds of work to
-reach full speed, so isolated short simulations run slower. Method and
-tables: [docs/BENCHMARKS.md](docs/BENCHMARKS.md#comparison-with-other-simulators-130).
+backprop), and its permanents are 1.8–8.7× faster than The Walrus. Since
+1.24 the state-vector kernels run on a worker pool that stays awake
+between short simulations: from 10 to 18 qubits QSO is ahead of Qulacs
+both warmed up and after pauses of 0.5 and 20 ms (one layer at 16 qubits:
+0.51 against 1.19 ms warm, 0.77 against 1.42 ms after 20 ms). Method and
+tables: [docs/BENCHMARKS.md](docs/BENCHMARKS.md#comparison-with-other-simulators-130)
+and the [roadmap](docs/ROADMAP.md) (1.24).
 
 ## Scope and limits
 
@@ -437,7 +462,7 @@ Know its boundaries:
 
 | Limit | Value | Reason |
 |---|---|---|
-| Pure-state register | 34 qubits | 2³⁴ amplitudes = 256 GiB; practical limit is your RAM (16 bytes per amplitude) |
+| Pure-state register | 34 qubits; 35 in single precision | 2³⁴ amplitudes = 256 GiB; practical limit is your RAM (16 bytes per amplitude, 8 in single precision) |
 | Stabilizer register | 16 384 qubits, Clifford gates only | n²/2 bytes, about twice that while measuring. A gate costs n/32 word operations, a measurement O(n²) (about a second at the limit), sampling every qubit O(n³/64) once (about two minutes at the limit) |
 | Matrix-product state | 65 536 qubits, bond dimension up to 4096, 2²⁸ tensor entries | A gate between neighbours costs O(χ³): about 15 ms at χ = 64, 0.13 s at χ = 128, 0.9 s at χ = 256 on one core; distant gates add two swaps per site in between. Highly entangled circuits need χ = 2^(n/2) and belong on the state vector |
 | Detector circuit | 65 536 qubits, 2²⁴ operations, 64 observables | Pauli-frame sampling: one word operation per operation and 64 shots. Surface code d = 21 with 21 rounds (881 qubits, 4840 detectors): error model 0.5 s, 100 000 decoded shots 15 s on one core |
@@ -451,12 +476,13 @@ Know its boundaries:
 | Automorphism groups, canonical labelling | intended for up to a few thousand nodes | Exact search, worst-case exponential like every known algorithm |
 | OpenQASM | version 2.0 and an OpenQASM 3 subset | OpenQASM 3's classical variables and arithmetic, loops, subroutines, calibrations and timing are rejected with an error naming the feature. Exact distributions follow up to 4096 measurement branches; beyond that, sampling simulates shot by shot |
 | WebAssembly | 26 qubits; graphs and walks up to 2048 nodes | 4 GiB address space; single-threaded |
-| Full CI | 2¹⁸ determinants (dense up to 4096) | Determinant-space diagonalisation; molecules up to 32 spatial orbitals can be mapped to qubits |
+| Full CI | 2¹⁸ determinants, 32 roots (dense up to 1024) | Davidson on `H c` without the matrix above 1024 determinants; molecules up to 32 spatial orbitals can be mapped to qubits |
 | Product-formula bound, order ≥ 4 | rigorous but loose | Falls only as `r⁻²` with the steps until they are short; the actual error falls as `r⁻⁴` |
 
 Not included: GPU acceleration, tensor-network simulation, simulation of noisy Clifford circuits at scale (planned for 1.8),
-computing molecular integrals (QSO reads them from FCIDUMP files written by
-a quantum-chemistry code), and submission to quantum hardware. To run on hardware, export a circuit or
+molecular integrals in larger basis sets (triple zeta and beyond) or beyond argon (QSO reads such
+integrals from FCIDUMP files written by a quantum-chemistry code), and
+submission to quantum hardware. To run on hardware, export a circuit or
 program to OpenQASM 2 or 3 and submit it with the vendor's SDK.
 
 ## Conventions
@@ -483,7 +509,7 @@ metatron-qso-rs/            Rust library `metatron_qso` and the `qso` CLI
   src/algorithms/           gradients, ansätze, models, VQE, QAOA, Grover, QFT/QPE, classifiers,
                             excited states, state geometry, time evolution, QUBO/QAOA mixers,
                             amplitude estimation
-  src/chemistry/            fermionic operators, qubit mappings, FCIDUMP molecules, UCC ansätze, ADAPT-VQE
+  src/chemistry/            fermionic operators, qubit mappings, Gaussian integrals, Hartree–Fock, FCIDUMP molecules, UCC ansätze, ADAPT-VQE
   src/optimize/             L-BFGS, Adam, gradient descent, Nelder–Mead, SPSA
   src/graph/                graphs, generators, Metatron family, automorphisms, canonical forms, file I/O
   src/walks/                continuous- and discrete-time walks, quotients, state transfer, search, circuits
@@ -491,7 +517,7 @@ metatron-qso-rs/            Rust library `metatron_qso` and the `qso` CLI
   src/stabilizer/           stabilizer tableaux, graph states, Clifford programs
   src/qec/                  detector circuits, frame sampling, error models, decoding, codes
   src/mps/                  matrix-product states, OpenQASM programs on them
-  src/photonics/            permanents, interferometers, boson sampling
+  src/photonics/            permanents, hafnians, boson sampling, Gaussian states
   src/backend.rs            execution backends and shot-based estimation
   src/bin/qso.rs            command-line tool
   tests/                    validation, robustness and property tests

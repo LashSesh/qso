@@ -32,6 +32,9 @@ pub struct ErrorMechanism {
     pub observables: u64,
 }
 
+/// Most detectors of a model: a circuit has at most one per operation.
+pub const MAX_MODEL_DETECTORS: usize = super::circuit::MAX_QEC_OPERATIONS;
+
 /// Independent error mechanisms of a circuit.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DetectorErrorModel {
@@ -97,15 +100,287 @@ fn independent(p: f64, qubits: u32) -> f64 {
 
 /// The detector error model of `circuit`; its detectors and observables
 /// must be deterministic without noise, as for
-/// [`sample_detectors`](super::sample_detectors). With `decompose`, an
-/// error that flips more than two detectors is split into its single-qubit X and Z
-/// parts (each must flip at most two), so that the model is a matching
-/// graph; this keeps every part's probability and so overestimates
-/// correlated errors slightly, as decoders do.
+/// [`sample_detectors`](super::sample_detectors). With `decompose`, every
+/// error is split into graph-like parts (each flipping at most two
+/// detectors) as Stim decomposes errors (see [`correlated_error_model`]),
+/// so that the model is a matching graph; every part keeps the error's
+/// probability, which overestimates correlated errors slightly, as
+/// decoders do.
 pub fn detector_error_model(
     circuit: &DetectorCircuit,
     decompose: bool,
 ) -> Result<DetectorErrorModel> {
+    let mut merged: BTreeMap<Signature, f64> = BTreeMap::new();
+    each_channel(circuit, |basis, probabilities| {
+        if !decompose {
+            for (k, &p) in probabilities.iter().enumerate().skip(1) {
+                let total = combination(basis, k);
+                if p > 0.0 && !is_empty(&total) {
+                    merge(&mut merged, total, p);
+                }
+            }
+            return Ok(());
+        }
+        for (parts, p) in decomposed(basis, probabilities)? {
+            for part in parts {
+                merge(&mut merged, part, p);
+            }
+        }
+        Ok(())
+    })?;
+    let errors = merged
+        .into_iter()
+        .map(|((detectors, observables), probability)| ErrorMechanism {
+            probability,
+            detectors,
+            observables,
+        })
+        .collect();
+    Ok(DetectorErrorModel {
+        n_detectors: circuit.n_detectors(),
+        n_observables: circuit.n_observables(),
+        errors,
+    })
+}
+
+/// Combine an independent error of probability `p` into the error with the
+/// same effect.
+fn merge<K: Ord>(merged: &mut BTreeMap<K, f64>, key: K, p: f64) {
+    let e = merged.entry(key).or_insert(0.0);
+    *e = *e * (1.0 - p) + p * (1.0 - *e);
+}
+
+fn is_empty(s: &Signature) -> bool {
+    s.0.is_empty() && s.1 == 0
+}
+
+/// The effect of the basis errors in the bits of `k`.
+fn combination(basis: &[Signature], k: usize) -> Signature {
+    basis
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| k >> i & 1 == 1)
+        .fold((Vec::new(), 0u64), |acc, (_, s)| xor(&acc, s))
+}
+
+/// The graph-like parts of every error of a channel with these basis
+/// errors (in Stim's order) and their probabilities, by combination of
+/// the basis errors; errors with no effect or probability 0 are left out.
+///
+/// Within the channel, as in Stim's error analysis: combinations that flip
+/// one detector are parts; so are combinations that flip two detectors,
+/// one of which no single-detector combination flips ("irreducible
+/// pairs"). Every other combination is written as at most two irreducible
+/// pairs whose remainder single-detector combinations flip, and finished
+/// with single-detector combinations. A combination that cannot be written
+/// so (Stim decomposes it later against the whole model's graph-like
+/// errors), or whose parts do not add up to it, is split into its basis
+/// errors.
+fn decomposed(basis: &[Signature], probabilities: &[f64]) -> Result<Vec<(Vec<Signature>, f64)>> {
+    let s = basis.len();
+    let combos: Vec<Signature> = (0..1usize << s).map(|k| combination(basis, k)).collect();
+    // Detectors of the channel as bits.
+    let mut involved: Vec<usize> = basis.iter().flat_map(|b| b.0.iter().copied()).collect();
+    involved.sort_unstable();
+    involved.dedup();
+    let wide = involved.len() > 64;
+    let mask = |sig: &Signature| -> u64 {
+        sig.0.iter().fold(0u64, |m, d| {
+            m | 1 << involved.binary_search(d).expect("an involved detector")
+        })
+    };
+    let masks: Vec<u64> = if wide {
+        Vec::new()
+    } else {
+        combos.iter().map(mask).collect()
+    };
+    let count = |k: usize| combos[k].0.len();
+    let mut singles = 0u64;
+    let mut solved = vec![false; combos.len()];
+    let mut pairs = Vec::new();
+    if !wide {
+        for k in 1..combos.len() {
+            if count(k) == 1 {
+                singles |= masks[k];
+                solved[k] = true;
+            }
+        }
+        for k in 1..combos.len() {
+            if count(k) == 2 && masks[k] & !singles != 0 {
+                pairs.push(k);
+                solved[k] = true;
+            }
+        }
+    }
+    // The parts of an unsolved combination, if Stim's rules find them.
+    let split = |k: usize| -> Option<Vec<Signature>> {
+        let goal = masks[k];
+        let mut parts = Vec::new();
+        let mut remnants = goal;
+        if goal & !singles != 0 {
+            let one = pairs
+                .iter()
+                .find(|&&j| goal & masks[j] == masks[j] && goal & !(singles | masks[j]) == 0);
+            if let Some(&j) = one {
+                parts.push(combos[j].clone());
+                remnants = goal & !masks[j];
+            } else {
+                let mut two = None;
+                'search: for (i1, &j1) in pairs.iter().enumerate() {
+                    for &j2 in &pairs[i1 + 1..] {
+                        let (m1, m2) = (masks[j1], masks[j2]);
+                        if m1 & m2 == 0 && goal & !(singles | m1 | m2) == 0 {
+                            two = Some((j1, j2));
+                            break 'search;
+                        }
+                    }
+                }
+                let (j1, j2) = two?;
+                parts.push(combos[j1].clone());
+                parts.push(combos[j2].clone());
+                remnants = goal & !(masks[j1] | masks[j2]);
+            }
+        }
+        for (j, m) in masks.iter().enumerate() {
+            if remnants == 0 {
+                break;
+            }
+            if count(j) == 1 && m & !remnants == 0 {
+                remnants &= !m;
+                parts.push(combos[j].clone());
+            }
+        }
+        Some(parts)
+    };
+    // A channel of one error (a Y error) is no family of combinations: as
+    // in Stim, it stays whole when it is graph-like.
+    let single = probabilities.iter().filter(|&&p| p > 0.0).count() == 1;
+    let mut out = Vec::new();
+    for (k, &p) in probabilities.iter().enumerate().skip(1) {
+        if p == 0.0 || is_empty(&combos[k]) {
+            continue;
+        }
+        // Stim's rules can leave parts whose effects do not add up to the
+        // error's (an observable lost, a detector added); those errors are
+        // split into their basis errors instead.
+        let adds_up = |parts: &Vec<Signature>| {
+            parts.iter().fold((Vec::new(), 0u64), |acc, s| xor(&acc, s)) == combos[k]
+        };
+        let parts = if count(k) == 0 || (!wide && solved[k]) || (single && count(k) <= 2) {
+            vec![combos[k].clone()]
+        } else if let Some(parts) = (!wide).then(|| split(k)).flatten().filter(adds_up) {
+            parts
+        } else if count(k) <= 2 {
+            vec![combos[k].clone()]
+        } else {
+            // Split into the basis errors.
+            let parts: Vec<Signature> = (0..s)
+                .filter(|i| k >> i & 1 == 1)
+                .map(|i| basis[i].clone())
+                .filter(|b| !is_empty(b))
+                .collect();
+            if let Some(b) = parts.iter().find(|b| b.0.len() > 2) {
+                return Err(QsoError::invalid(
+                    "circuit",
+                    format!(
+                        "an error flips {} detectors even after splitting into single-qubit X and Z parts; the model is not a matching graph (decode it with BP+OSD)",
+                        b.0.len()
+                    ),
+                ));
+            }
+            parts
+        };
+        out.push((parts, p));
+    }
+    Ok(out)
+}
+
+/// An error of a decomposed model and the graph-like parts it was split
+/// into, which happen together.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CorrelatedError {
+    pub probability: f64,
+    /// Detectors (ascending, at most two) and observables of each part.
+    pub parts: Vec<(Vec<usize>, u64)>,
+}
+
+/// A decomposed detector error model that remembers which parts belong to
+/// the same error, for correlated decoding.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CorrelatedErrorModel {
+    pub n_detectors: usize,
+    pub n_observables: usize,
+    pub errors: Vec<CorrelatedError>,
+}
+
+impl CorrelatedErrorModel {
+    /// The decomposed model: every part an independent error (equal to
+    /// `detector_error_model(circuit, true)` for the model of a circuit, up
+    /// to rounding).
+    pub fn to_dem(&self) -> DetectorErrorModel {
+        let mut merged: BTreeMap<Signature, f64> = BTreeMap::new();
+        for e in &self.errors {
+            for part in &e.parts {
+                if !is_empty(part) {
+                    merge(&mut merged, part.clone(), e.probability);
+                }
+            }
+        }
+        DetectorErrorModel {
+            n_detectors: self.n_detectors,
+            n_observables: self.n_observables,
+            errors: merged
+                .into_iter()
+                .map(|((detectors, observables), probability)| ErrorMechanism {
+                    probability,
+                    detectors,
+                    observables,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// The decomposed detector error model of `circuit` as in
+/// [`detector_error_model`] with `decompose`, keeping for every error the
+/// graph-like parts it was split into. The decomposition follows Stim's
+/// within each noise channel (a depolarizing channel's X and Z errors on
+/// its qubits and their combinations): combinations that flip one
+/// detector, or two of which one no such combination flips, are parts; the
+/// other combinations are written with at most two such pairs and
+/// single-detector combinations (a Y error is such a combination). A
+/// combination it cannot write so (Stim then decomposes against the
+/// graph-like errors of the whole model), or whose parts would not add up
+/// to it, is split into its single-qubit X and Z parts. Errors with the
+/// same parts are merged.
+pub fn correlated_error_model(circuit: &DetectorCircuit) -> Result<CorrelatedErrorModel> {
+    let mut merged: BTreeMap<Vec<Signature>, f64> = BTreeMap::new();
+    each_channel(circuit, |basis, probabilities| {
+        for (mut parts, p) in decomposed(basis, probabilities)? {
+            parts.sort();
+            merge(&mut merged, parts, p);
+        }
+        Ok(())
+    })?;
+    Ok(CorrelatedErrorModel {
+        n_detectors: circuit.n_detectors(),
+        n_observables: circuit.n_observables(),
+        errors: merged
+            .into_iter()
+            .map(|(parts, probability)| CorrelatedError { probability, parts })
+            .collect(),
+    })
+}
+
+/// Calls `f(basis, probabilities)` for every noise channel of the circuit:
+/// the effects of its basis errors in Stim's order (for a depolarizing
+/// channel Z then X on each qubit, as for a Y error; a measurement flip or
+/// a single-qubit X or Z error is one basis error) and the probability of each combination
+/// of them (index: bit `i` for basis error `i`), as independent errors.
+fn each_channel(
+    circuit: &DetectorCircuit,
+    mut f: impl FnMut(&[Signature], &[f64]) -> Result<()>,
+) -> Result<()> {
     super::frame::check_deterministic(circuit)?;
     // Elementary components.
     let mut components: Vec<Component> = Vec::new();
@@ -137,120 +412,70 @@ pub fn detector_error_model(
     components.sort();
     components.dedup();
     let signatures = propagate(circuit, &components)?;
-    let sig = |c: Component| -> &Signature {
-        &signatures[components
+    let sig = |c: Component| -> Signature {
+        signatures[components
             .binary_search(&c)
             .expect("every component was propagated")]
-    };
-
-    // Independent error terms and their effects.
-    let mut merged: BTreeMap<Signature, f64> = BTreeMap::new();
-    let mut add = |s: Signature, p: f64| {
-        if s.0.is_empty() && s.1 == 0 {
-            return;
-        }
-        let e = merged.entry(s).or_insert(0.0);
-        *e = *e * (1.0 - p) + p * (1.0 - *e);
-    };
-    let mut term = |parts: Vec<Component>, p: f64| -> Result<()> {
-        let total = parts
-            .iter()
-            .fold((Vec::new(), 0u64), |acc, &c| xor(&acc, sig(c)));
-        if !decompose || total.0.len() <= 2 {
-            add(total, p);
-            return Ok(());
-        }
-        for c in parts {
-            let s = sig(c).clone();
-            if s.0.len() > 2 {
-                return Err(QsoError::invalid(
-                    "circuit",
-                    format!(
-                        "an error flips {} detectors even after splitting into single-qubit X and Z parts; the model is not a matching graph",
-                        s.0.len()
-                    ),
-                ));
-            }
-            add(s, p);
-        }
-        Ok(())
+        .clone()
     };
     for (i, op) in circuit.operations().iter().enumerate() {
         match op {
             QecOp::Noise { noise, qubits } => {
-                let xq = |qubit: usize| Component {
-                    op: i,
-                    qubit,
-                    kind: Kind::X,
+                let x = |qubit: usize| {
+                    sig(Component {
+                        op: i,
+                        qubit,
+                        kind: Kind::X,
+                    })
                 };
-                let zq = |qubit: usize| Component {
-                    op: i,
-                    qubit,
-                    kind: Kind::Z,
+                let z = |qubit: usize| {
+                    sig(Component {
+                        op: i,
+                        qubit,
+                        kind: Kind::Z,
+                    })
                 };
                 match *noise {
-                    Noise::XError(p) => qubits.iter().try_for_each(|&q| term(vec![xq(q)], p))?,
-                    Noise::ZError(p) => qubits.iter().try_for_each(|&q| term(vec![zq(q)], p))?,
+                    Noise::XError(p) => qubits.iter().try_for_each(|&q| f(&[x(q)], &[0.0, p]))?,
+                    Noise::ZError(p) => qubits.iter().try_for_each(|&q| f(&[z(q)], &[0.0, p]))?,
+                    // As one error over the basis Z, X (so that it splits
+                    // into its X and Z parts like a depolarizing channel's).
                     Noise::YError(p) => qubits
                         .iter()
-                        .try_for_each(|&q| term(vec![xq(q), zq(q)], p))?,
+                        .try_for_each(|&q| f(&[z(q), x(q)], &[0.0, 0.0, 0.0, p]))?,
                     Noise::Depolarize1(p) => {
                         let r = independent(p, 1);
                         for &q in qubits {
-                            term(vec![xq(q)], r)?;
-                            term(vec![zq(q)], r)?;
-                            term(vec![xq(q), zq(q)], r)?;
+                            f(&[z(q), x(q)], &[0.0, r, r, r])?;
                         }
                     }
                     Noise::Depolarize2(p) => {
                         let r = independent(p, 2);
+                        let mut probabilities = [r; 16];
+                        probabilities[0] = 0.0;
                         for pair in qubits.chunks(2) {
-                            for k in 1..16u32 {
-                                let mut parts = Vec::new();
-                                if k & 1 != 0 {
-                                    parts.push(xq(pair[0]));
-                                }
-                                if k & 2 != 0 {
-                                    parts.push(zq(pair[0]));
-                                }
-                                if k & 4 != 0 {
-                                    parts.push(xq(pair[1]));
-                                }
-                                if k & 8 != 0 {
-                                    parts.push(zq(pair[1]));
-                                }
-                                term(parts, r)?;
-                            }
+                            f(
+                                &[z(pair[0]), x(pair[0]), z(pair[1]), x(pair[1])],
+                                &probabilities,
+                            )?;
                         }
                     }
                 }
             }
             QecOp::Measure { flip, .. } if *flip > 0.0 => {
-                term(
-                    vec![Component {
+                f(
+                    &[sig(Component {
                         op: i,
                         qubit: 0,
                         kind: Kind::Flip,
-                    }],
-                    *flip,
+                    })],
+                    &[0.0, *flip],
                 )?;
             }
             _ => {}
         }
     }
-    let errors = merged
-        .into_iter()
-        .map(|((detectors, observables), probability)| ErrorMechanism {
-            probability,
-            detectors,
-            observables,
-        })
-        .collect();
-    Ok(DetectorErrorModel {
-        n_detectors: circuit.n_detectors(),
-        n_observables: circuit.n_observables(),
-        errors,
-    })
+    Ok(())
 }
 
 /// Words of frame and record memory one propagation pass may use.

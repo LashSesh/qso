@@ -7,6 +7,7 @@ use metatron_qso::prelude::*;
 use metatron_qso::walks::{classical_hitting_times, total_variation};
 
 fn main() -> Result<()> {
+    // ANCHOR: geometry
     let cube = metatron::metatron_cube();
     let fol = metatron::fruit_of_life();
 
@@ -25,7 +26,9 @@ fn main() -> Result<()> {
     for (length, count) in metatron::line_lengths() {
         println!("  {length:.4} × {count}");
     }
+    // ANCHOR_END: geometry
 
+    // ANCHOR: coherent
     println!("\n== Coherent walk from the centre ==");
     for (graph, label) in [(&cube, "Metatron's Cube"), (&fol, "Fruit of Life")] {
         let walk = ContinuousWalk::new(graph, Generator::Laplacian, 1.0)?;
@@ -40,7 +43,9 @@ fn main() -> Result<()> {
         "(K13 closed form: P̄(centre) = 145/169 = {:.6})",
         145.0 / 169.0
     );
+    // ANCHOR_END: coherent
 
+    // ANCHOR: dephasing
     println!("\n== Dephasing turns the walk classical ==");
     let uniform = vec![1.0 / 13.0; 13];
     for rate in [0.0, 0.5, 5.0] {
@@ -51,7 +56,9 @@ fn main() -> Result<()> {
             total_variation(&p, &uniform)
         );
     }
+    // ANCHOR_END: dephasing
 
+    // ANCHOR: search
     println!("\n== Spatial search for an outer node ==");
     for (graph, label) in [(&cube, "Metatron's Cube"), (&fol, "Fruit of Life")] {
         let gamma_c = SpatialSearch::critical_gamma(graph)?;
@@ -64,5 +71,6 @@ fn main() -> Result<()> {
             r.gamma, r.time, r.success_probability, mean_classical
         );
     }
+    // ANCHOR_END: search
     Ok(())
 }

@@ -16,6 +16,8 @@
 //!   dimensions (equitable partitions), for graphs of any size.
 //! * [`transfer`] — perfect state transfer (decision and time) and the best
 //!   transfer fidelity between two nodes.
+//! * [`pretty_good`] — pretty good state transfer, decided exactly with
+//!   cyclotomic arithmetic for paths, cycles and abelian Cayley graphs.
 //! * [`circuits`] — walks as gate circuits: exact for circulant graphs and
 //!   Cayley graphs of `Z₂ⁿ`, product formulas for any graph.
 //! * [`dephasing`] — open-system walks with site dephasing (Lindblad).
@@ -45,6 +47,7 @@ pub mod decoherent;
 pub mod dephasing;
 pub mod discrete;
 pub mod driven;
+pub mod pretty_good;
 pub mod quotient;
 pub mod search;
 pub mod transfer;
@@ -63,6 +66,7 @@ pub use decoherent::DecoherentCoinedWalk;
 pub use dephasing::DephasingWalk;
 pub use discrete::{Coin, CoinedWalk, DiscreteSearchResult, LineWalk, SzegedyWalk};
 pub use driven::{DrivenEvolution, DrivenWalk, MagnusOptions};
+pub use pretty_good::{PrettyGoodTransfer, TransferDecision};
 pub use quotient::{Quotient, QuotientSearch, QuotientWalk};
 pub use search::{MAX_RESOLUTION, SearchResult, SpatialSearch};
 pub use transfer::{StateTransfer, TransferResult};

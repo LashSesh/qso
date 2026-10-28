@@ -51,6 +51,8 @@ pub struct MatchingDecoder {
     graph: MatchingGraph,
     /// Integer weight of every edge.
     pub(crate) weight: Vec<i64>,
+    /// Integer weight per unit of length (ln((1 − p)/p)).
+    scale: f64,
     /// Distance of every detector to the boundary (`i64::MAX` if it has
     /// no path there), and the observables along that path.
     to_boundary: Vec<i64>,
@@ -84,6 +86,7 @@ impl MatchingDecoder {
         let n = graph.n_detectors();
         let mut d = MatchingDecoder {
             weight,
+            scale,
             to_boundary: Vec::new(),
             boundary_flips: Vec::new(),
             dist: vec![i64::MAX; n + 1],
@@ -186,6 +189,14 @@ impl MatchingDecoder {
     /// listed twice cancels).
     pub fn decode(&mut self, fired: &[usize]) -> Result<u64> {
         Ok(self.decode_weighted(fired)?.0)
+    }
+
+    /// The prediction and the weight of the correction, `Σ ln((1 − p)/p)`
+    /// over its errors (errors with `p ≥ ½` count 0; up to the rounding of
+    /// the weights to integers).
+    pub fn decode_with_weight(&mut self, fired: &[usize]) -> Result<(u64, f64)> {
+        let (prediction, weight) = self.decode_weighted(fired)?;
+        Ok((prediction, weight as f64 / self.scale))
     }
 
     /// The prediction and the integer weight of the correction.

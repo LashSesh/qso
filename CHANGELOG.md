@@ -4,6 +4,327 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+## [1.7.0] — 2026-10-28
+
+Milestones 1.14 to 1.28 of the [roadmap](docs/ROADMAP.md), its third to
+sixth stages, released together:
+
+- **third stage**: 1.14 (Gaussian boson sampling and imperfect photons),
+  1.15 (molecular integrals), 1.16 (fast matching), 1.17 (mitigation by
+  purification);
+- **fourth stage**: 1.18 (pretty good state transfer), 1.19 (decoding
+  beyond matching), 1.20 (single precision), 1.21 (coverage and
+  differential testing);
+- **fifth stage**: 1.22 (error-correction circuits that keep their
+  distance), 1.23 (larger basis sets and open shells), 1.24 (short
+  simulations at full speed), 1.25 (documentation and reach);
+- **sixth stage**: 1.26 (gradients at the cost of a few simulations),
+  1.27 (variational training in single precision), 1.28 (28 qubits end to
+  end).
+
+New results are checked against The Walrus, PySCF, Stim, PyMatching,
+`ldpc`, Qulacs and Qiskit Aer, closed forms and enumeration (named
+below). Every validated result of 1.6.0 still holds (the validation tests
+only grew); energies and gradients differ from 1.6.0 by rounding where
+kernels changed. The public Rust API only grows (`cargo-semver-checks`
+against 1.6.0).
+
+### Added
+
+- **QAOA at 22–26 qubits against Qulacs and Qiskit Aer** (1.28) in the
+  cross-validation (`run.py --qaoa 22,24`): p = 10 on a random 3-regular
+  graph, energy and gradient of QSO (`MaxCutQaoa` and the generic
+  circuit, both precisions) and Qulacs (`backprop`), Aer's energy (it has
+  no gradient), each in its own process with time and peak memory. In
+  double precision values and gradients agree to 5.4·10⁻¹⁴ (relative); at
+  26 qubits `MaxCutQaoa` takes 16.4 s for energy and gradient, the
+  generic circuit 81 s, Qulacs 650 s and 5.0 GiB, Aer 49.5 s for the
+  energy alone.
+- **`examples/qaoa_large.rs`** (1.28): QAOA at depth 10 on 28 qubits on one
+  machine, with angles optimised layer by layer on 16 nodes, carried
+  over and refined with L-BFGS in single precision. `benchmark_report`
+  times p = 10 at 22 and 24 qubits in both precisions.
+- **Variational training in single precision** (1.27): energies and
+  adjoint gradients on single-precision states, with sums in double
+  precision and results divided by the state's norm²:
+  `gradients::expectation_and_gradient_single`, `Vqe::with_precision`,
+  `MaxCutQaoa::with_precision` and `qaoa::optimize_layerwise_at` in Rust;
+  `precision="single"` for `expectation_and_gradient`, `run_vqe`,
+  `MaxCutQaoa` and `optimize_qaoa_layerwise` in Python; `--single` for
+  `qso vqe` and `qso qaoa`. Half the memory (28 qubits: 4.0 GiB instead of
+  8.0 GiB for VQE, 4.5 GiB instead of 8.5 GiB for `MaxCutQaoa`) and a fifth
+  to a third less time; energies agree with double precision to 3·10⁻⁸
+  and gradients to 1.1·10⁻⁶ relative at 20–24 qubits. In single
+  precision L-BFGS treats energies within their rounding (10⁻⁷ of the
+  value) as equal and decides by the slope (Hager and Zhang's
+  approximate Wolfe condition), and L-BFGS and Adam stop when the
+  gradient reaches its rounding; QAOA reaches the same ratios as in
+  double precision to 10⁻⁸. Parameter-shift and finite-difference
+  gradients stay in double precision.
+
+- **Matrix-product states in WebAssembly**: the module's `mps` method and
+  npm `qso.mps(source, {shots, seed, maxBond, cutoff, observables})` run
+  OpenQASM programs on matrix-product states, with Pauli expectation
+  values, bond dimensions and entropies, amplitudes (up to 10 qubits),
+  the discarded weight, the fidelity bound and samples. The npm tests
+  replay requests whose native responses are recorded in
+  `js/test/mps_native.json` and require the same results to 10⁻¹⁰. The
+  playground has a tab for them (GHZ on 1000 qubits, a quench on 100).
+- **Documentation of every release**: the site carries the guide and
+  Python reference of each release since 1.2.0 at `/<version>/`, built
+  from the release's tag with its wheel from PyPI, and a version selector
+  on every guide page (`docs/build_site.py --versions`).
+- **Rust tutorials**: eight guide pages built from the crate's examples
+  (code between `// ANCHOR:` lines, output from running them in the
+  documentation build).
+- **CLI tests** (`tests/cli.rs`): every subcommand run as a program with
+  its JSON output checked against known values.
+- **Coverage of the CLI and the Python tests**: `scripts/coverage.sh`
+  merges the crate's tests, the CLI run by `tests/cli.rs` and the Python
+  tests on an instrumented extension into one report, with totals per
+  component.
+
+- **d and higher shells, 6-31G* and cc-pVDZ to argon, ROHF**
+  (`chemistry::integrals`, `chemistry::scf::rohf`; Python
+  `AoIntegrals(..., harmonics=...)`, `hartree_fock(...,
+  restricted_open=True, harmonics=...)`; `qso scf --restricted-open
+  --cartesian`).
+  - McMurchie–Davidson integrals for shells up to g, with Hermite tables
+    sized at run time; spherical shells (real solid harmonics in PySCF's
+    order and signs) or Cartesian ones, each normalised to one.
+  - STO-3G, 6-31G, 6-31G* and cc-pVDZ for H to Ar, generated by
+    `scripts/generate_basis_data.py` from PySCF's copy of the Basis Set
+    Exchange.
+  - Restricted open-shell Hartree–Fock with PySCF's effective Fock
+    matrix; its orbitals give active-space Hamiltonians of open shells.
+  - Repulsion integrals per quartet of shells, the columns of a general
+    contraction together (64 functions, three chlorines in cc-pVDZ: 3 s).
+  - Checked against PySCF 2.14: every integral of the cross-validation
+    molecules (d shells, H to Ar) to 2.6·10⁻¹³; f and g shells in a custom
+    basis by PySCF's fingerprints and single integrals; RHF, UHF, ROHF and
+    CASCI energies to 10⁻⁹ Ha.
+
+- **Circuit distance, syndrome schedules and correlated matching**
+  (`qec::distance`, `qec::correlated`, `css_code_memory_with`; Python
+  `circuit_distance`, `graphlike_distance`, `CorrelatedMatchingDecoder`,
+  `css_code_memory(..., schedule=...)`; `qso qec --decoder
+  correlated-matching --schedule ... --circuit-distance`).
+  - `graphlike_distance`: the lightest undetectable logical error among
+    errors that flip at most two detectors, exactly (as Stim's
+    `shortest_graphlike_error`). `circuit_distance`: exact for graph-like
+    models; otherwise a proven lower bound from an exhaustive search and an
+    upper bound with a witness from BP+OSD (whether any logical error
+    exists at all is decided by GF(2) linear algebra).
+  - `CssSchedule::Bicycle`: the depth-8 syndrome cycle of Bravyi et al.
+    (2024) for bivariate bicycle codes; [[72, 12, 6]] keeps circuit
+    distance 6 (greedy layers: 4). `CssSchedule::Directions` for colour
+    codes: every order gives (d + 1)/2 for d = 3 and 5, as greedy layers
+    do.
+  - `CorrelatedMatchingDecoder` and `correlated_error_model`: two-pass
+    matching with PyMatching 2.4's reweighting rule; on Stim's surface
+    codes it agrees with PyMatching on all but 0.01–0.04% of shots.
+  - `DecoderChoice` (non-exhaustive) and `logical_error_rate_using` for
+    every decoder.
+
+- **Differential testing and coverage** (`differential::compare`).
+  - One circuit on every simulator that takes it — single-precision state
+    vector, density matrix, trajectory, unbounded MPS, stabilizer tableau,
+    OpenQASM 2 and 3 round trips — with each deviation from the
+    double-precision state vector.
+  - Amplitudes compared after aligning the global phase (linear in the
+    error), norms and traces separately; property tests on random
+    circuits of every gate kind, controls, dense unitaries, parameters,
+    1 to 10 qubits (256 per test on every change, 20 000 in the weekly
+    job) and a `differential` fuzz target.
+  - Fixed on the way: an MPS without cutoff turned to NaN (singular
+    values below the rounding of the Gram matrix are now always
+    dropped); the tableau refuses rotations by angles above about 5.6·10⁸ rad,
+    where any angle passed as Clifford from 4·10¹⁴ on.
+  - Line and branch coverage measured in CI and published with the
+    documentation (90.5 % of lines, 79.4 % of branches).
+
+- **Single-precision state vectors** (`quantum::StateVector32`, Python
+  `StateVector32` and `simulate(..., precision="single")`, `qso qasm
+  --single`).
+  - The gate kernels and the fused, blocked execution plan are generic
+    over the amplitude type; single precision has AVX versions with four
+    amplitudes per register (bit for bit the portable arithmetic).
+  - Half the memory, one more qubit (`MAX_QUBITS_SINGLE`); gate matrices
+    in double precision, rounded once; sums in double precision.
+  - Tests: 1 − F below 10⁻¹¹ after 2140 gates on 18 qubits, expectation
+    values to 10⁻⁶; in the cross-validation, against double precision
+    beside Qiskit Aer's single precision, and timed against both.
+
+- **BP+OSD decoding, colour and bivariate bicycle codes** (`qec::bposd`,
+  `qec::css`; Python `BpOsdDecoder`, `CssCode`, `css_code_memory`; `qso qec
+  --code color|bb --decoder bposd`).
+  - Belief propagation on the Tanner graph of a detector error model
+    (min-sum with a fixed or adaptive factor, or product-sum; flooding
+    schedule), then ordered-statistics decoding (OSD-0, combination sweep,
+    exhaustive) on a reduced GF(2) basis; `DecoderChoice::BpOsd` decodes the
+    undecomposed model.
+  - `CssCode` from X and Z checks with paired logical operators;
+    triangular 6.6.6 colour codes, bivariate bicycle codes and the table
+    of Bravyi et al. (2024); memory experiments in either basis.
+  - `DetectorErrorModel` can be built from a list of errors in Python;
+    `MatchingGraph::to_dem`.
+  - Tests: exhaustive OSD against enumeration; every weight ≤ 2 error on
+    colour codes d = 5, 7 and the [[72, 12, 6]] code; code parameters; in
+    the cross-validation, shot-by-shot agreement with `ldpc` and Stim's
+    error models of the CSS circuits.
+
+- **Pretty good state transfer, decided exactly** (`walks::pretty_good`,
+  Python `PrettyGoodTransfer`, in `qso transfer`).
+  - Kronecker's theorem on the integer relations among the eigenvalues,
+    computed exactly in cyclotomic fields (power-basis coordinates modulo
+    the cyclotomic polynomial, integer kernels by column reduction) for
+    paths (adjacency and Laplacian), cycles and Cayley graphs of abelian
+    groups; obstructions as witnesses; PST times from the same data.
+  - Tests: the theorems of Godsil, Kirkland, Severini and Smith (paths,
+    n ≤ 300), Banchi, Coutinho, Godsil and Severini (Heisenberg chains,
+    n ≤ 200) and Pal (cycles, n ≤ 512); agreement with `StateTransfer` on
+    hypercubes, circulants and paths; a PGST time checked against the
+    propagated walk.
+
+- **Virtual distillation** (`mitigation::distillation`, Python
+  `distilled_expectation`, `dominant_expectation`, `DistillationCircuits`).
+  - `Tr(ρᵏO)/Tr(ρᵏ)` exactly for k = 1 to 3, and the limit of the dominant
+    eigenvector.
+  - Measurement circuits on k copies of the register: per qubit, the
+    k-qubit unitary `S_q P_q` diagonalised by two-level rotations
+    (controlled single-qubit gates, exportable to OpenQASM); estimates
+    from exact probabilities or from counts with a standard error.
+  - Tests: closed forms for random mixtures, the circuits on copies of ρ
+    against the exact value to 10⁻¹¹, shots within 4 standard errors; a
+    depolarised GHZ-like state whose rotation comes last, from an error of
+    0.19 to 3.6·10⁻³ (two copies) and 6.9·10⁻⁵ (three), and one with the
+    rotation first, where the error stops at the dominant eigenvector's
+    floor of 9·10⁻⁴; an over-rotated pure state is unchanged.
+
+- **Sparse matching** (`qec::SparseMatchingDecoder`, Python
+  `SparseMatchingDecoder`): minimum-weight perfect matching by growing
+  regions on the detector graph (the idea of sparse blossom), with
+  `decode_with_weight` on both matching decoders.
+  - The same correction weights as `MatchingDecoder` on every tested
+    shot (every syndrome of random models, sampled memory experiments,
+    dense random syndromes with nested and shattering blossoms).
+  - At d = 25, p = 0.001: 95 µs per shot instead of 94 ms; 1.1 to 1.9
+    times PyMatching's time on surface codes from d = 11 to 25 (up to 2.3
+    at p = 0.01 to 0.05); a chain of 2001 events that all fire (deeply
+    nested blossoms) 51 ms, PyMatching 1.3 s.
+
+- **Molecules from their geometry** (`chemistry::integrals`,
+  `chemistry::scf`; Python `Molecule`, `AoIntegrals`, `hartree_fock`;
+  CLI `qso scf`).
+  - Overlap, kinetic, nuclear-attraction and electron-repulsion integrals
+    over contracted Cartesian Gaussians (McMurchie–Davidson), STO-3G and
+    6-31G for hydrogen to neon.
+  - Restricted and unrestricted Hartree–Fock with DIIS from a
+    superposition of atomic densities (or the core Hamiltonian), a
+    level-shifted fallback when DIIS does not converge, ⟨S²⟩, and the
+    transformation to molecular orbitals with a frozen core and an active
+    space, giving `MolecularIntegrals` (qubit Hamiltonians, full CI,
+    FCIDUMP output).
+  - Tests against PySCF 2.14 on the same geometries: integrals to
+    1.4·10⁻¹³; restricted energies of H₂, LiH, BeH₂, H₂O and N₂ and
+    unrestricted energies of OH, CH₂, H₂O⁺, Li, NH₂ and NO to 10⁻¹⁰ Ha;
+    full CI and CASCI to 10⁻⁹ Ha; the bundled FCIDUMP files reproduced
+    from geometries.
+- **Hafnians** (`photonics::hafnian`, Python `hafnian`,
+  `hafnian_repeated`, `torontonian`).
+  - Hafnians and loop hafnians by the formula of Björklund, Gupt and
+    Quesada (2019), Kan's formula for matrices with repeated rows, and
+    torontonians.
+  - Tests: brute force, (2n − 1)!! and the telephone numbers for the
+    all-ones matrix, perm(B) for bipartite graphs, and the perfect
+    matchings of the hypercubes Q₃ to Q₅ (9, 272, 589 185), the
+    dodecahedron, icosahedron, Petersen and Heawood graphs.
+- **Gaussian states** (`photonics::GaussianState`, Python
+  `GaussianState`).
+  - Covariance matrices and means with ħ = 2, as in The Walrus.
+  - Squeezing, displacement, rotation, interferometers and loss, also
+    into a thermal environment.
+  - Photon-number probabilities (loop hafnians, over N rows instead of
+    2N for pure states; Kan's formula for mixed states with many photons
+    in few modes when it is cheaper), threshold-click probabilities
+    (torontonians), and exact samples drawn mode by mode.
+  - Tests: squeezed, coherent, thermal and two-mode squeezed states
+    against their closed forms, loss as binomial thinning, sums to one,
+    sampling frequencies.
+- **Imperfect photons** (`photonics::ImperfectBosonSampler`, Python
+  `ImperfectBosonSampler`).
+  - Partial distinguishability from the Gram matrix of the internal
+    states (Tichy; Shchesnovich).
+  - Losses at the inputs (through environment modes, exact also when
+    partially distinguishable photons share a lossy mode) and detector
+    efficiencies.
+  - Tests: a simulation with the internal states as extra modes of an
+    interferometer with environment modes; the Hong–Ou–Mandel
+    visibility.
+- **Cross-validation** against PySCF 2.14 (integrals to 1.4·10⁻¹³,
+  energies to 10⁻¹⁰ Ha) and against The Walrus 0.22: probabilities differ by
+  about 10⁻¹⁵ (absolute, 4 modes) and by 2·10⁻¹¹ relative at 20 photons;
+  hafnians by 7·10⁻¹² relative up to 20 × 20.
+
+### Changed
+
+- **`MaxCutQaoa` twice as fast at 22–28 qubits** (1.28). The mixer runs as
+  real Y rotations in the frame `S^{⊗n}`, which commutes with the cost
+  layers (only `state()` leaves it, with an exact phase); qubits above the
+  cache block are rotated in tiles, up to five per pass over memory; the
+  backward pass takes the mixer's overlap in the passes that undo it, with
+  the cost gradient and phases in the same block pass. Energy and
+  gradient at p = 10 on 4 cores: 26 qubits 16.3 s instead of 35.8 s
+  (single precision 13.9 s instead of 28.5 s), 28 qubits 79 s instead of
+  160 s (62 s instead of 122 s). Results change by rounding.
+- **Cheaper adjoint gradients** (1.26). Each gradient term is the matrix
+  element of the gate's derivative between the two states, in one
+  reading pass without copying the state; diagonal gates on qubits above
+  the cache block are undone and differentiated block by block; diagonal
+  observables (Z strings) are evaluated in one pass. On the 4-core VM the
+  energy and gradient of a 260-parameter VQE ansatz at 26 qubits take
+  41.6 s instead of 73.4 s, of QAOA p = 10 as a generic circuit 89 s
+  instead of 221 s, with two state vectors instead of three. Diagonal
+  observables (MaxCut, Ising and QUBO costs) are evaluated chunk by chunk,
+  2–4 times faster for a QAOA cost at 22–24 qubits. Energies and gradients
+  are bit for bit independent of the thread count; they differ from the
+  previous version by rounding.
+- **State-vector kernels on their own worker pool.** Rayon's workers
+  sleep as soon as they are idle, and on virtual machines the first
+  simulation after a pause paid for waking them. The gate kernels, cache
+  blocks and sums now run on a pool whose threads spin for 200 µs after
+  each job before parking (`QSO_POOL_SPIN_US`; threads from
+  `QSO_NUM_THREADS` or `RAYON_NUM_THREADS`) and yield the core while
+  they wait; rayon stays for batches, trajectories and the rest. Results
+  are bit for bit unchanged. On the 4-core development VM a 16-qubit
+  layer after a 20 ms pause takes 0.71–0.73 ms instead of 1.2–1.3 ms,
+  warm 0.50–0.75 ms instead of 0.76–0.87 ms; from 20 qubits on the times
+  are unchanged, and two QSO processes at once run faster than with
+  rayon. `benchmark_report` and the cross-validation time these cold
+  starts. Spinning costs CPU time; `QSO_POOL_SPIN_US=0` turns it off.
+- `detector_error_model(circuit, decompose=true)` now splits errors as
+  Stim does within each noise channel: decomposed models of Stim's
+  generated circuits equal Stim's error by error. Before, every error
+  with more than two detectors was split into all of its single-qubit
+  parts, which made correlated matching less effective.
+- `CssCode` equality compares the checks and logical operators only.
+- `DecoderKind` is back to its 1.6.0 form (union-find and matching;
+  `build` cannot fail): adding `BpOsd` to it (1.19) broke the 1.x
+  compatibility promise. BP+OSD and correlated matching are variants of
+  the new `DecoderChoice`; `logical_error_rate_with` keeps its signature.
+- The matching decoder of `logical_error_rate(..., decoder="matching")`
+  and `qso qec --decoder matching` is now `SparseMatchingDecoder`
+  (the same weights; where corrections weigh the same, it may pick
+  another one).
+- `MolecularIntegrals.fci_energies` builds the determinant matrix by the
+  Slater–Condon rules instead of through the qubit Hamiltonian up to 1024
+  determinants (`DENSE_FCI_LIMIT`, was 4096), and above that runs
+  Davidson's method on `H c` computed from the integrals without the
+  matrix, for up to 32 roots (`MAX_FCI_ROOTS`; before, one root by
+  Lanczos). Full CI of LiH in 6-31G: 69 s before, now under a second.
+
 ## [1.6.0] — 2026-10-27
 
 Milestones 1.9 (matrix-product states), 1.10 (exact decoding and Stim

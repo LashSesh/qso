@@ -14,8 +14,8 @@ machine-readable output; `qso <command> --help` lists all options.
 | `coined` | Coined (Shenvi–Kempe–Whaley) search | `--graph`, `--marked`, `--coin grover\|fourier\|hadamard`, `--steps` |
 | `hitting` | Szegedy quantum hitting time and the classical hitting time | `--graph`, `--marked`, `--max-steps` |
 | `walk-circuit` | A walk as an OpenQASM 2.0 circuit | `--graph`, `--time`, `--method exact\|trotter`, `--steps`, `--order` |
-| `qaoa` | QAOA for MaxCut with exact optimum and approximation ratio | `--graph`, `--p`, `--restarts`, `--seed`, `--layerwise` |
-| `vqe` | VQE with an EfficientSU2 ansatz, compared with the exact ground energy | `--model h2\|tfim:N,J,H\|heisenberg:N,J,Δ`, `--hamiltonian "<Pauli sum>"`, `--layers`, `--method`, `--restarts` |
+| `qaoa` | QAOA for MaxCut with exact optimum and approximation ratio | `--graph`, `--p`, `--restarts`, `--seed`, `--layerwise`, `--single` |
+| `vqe` | VQE with an EfficientSU2 ansatz, compared with the exact ground energy | `--model h2\|tfim:N,J,H\|heisenberg:N,J,Δ`, `--hamiltonian "<Pauli sum>"`, `--layers`, `--method`, `--restarts`, `--single` |
 | `grover` | Grover search, simulated against theoretical success | `--qubits`, `--marked`, `--iterations` |
 | `qasm FILE` | Run an OpenQASM 2 or 3 program (mid-circuit measurement, reset, conditions) and sample its bits; or convert it | `--shots`, `--seed`, `--export qasm2\|qasm3`, `--stabilizer`, `--mps`, `--max-bond N`, `--noise p1,p2`, `--device FILE`, `--trajectories N` |
 | `estimate FILE` | ⟨H⟩ of an OpenQASM circuit with standard error and 95 % interval, optionally mitigated | `--observable`, `--shots`, `--allocation`, `--device`, `--trajectories`, `--mitigate-readout`, `--zne 1,3,5`, `--extrapolation`, `--pec N` |

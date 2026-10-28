@@ -11,6 +11,7 @@ use metatron_qso::rng::Rng;
 use metatron_qso::stabilizer::{StabilizerState, local_complementation};
 
 fn main() -> Result<()> {
+    // ANCHOR: ghz
     // GHZ state on 10 000 qubits: H and a chain of CNOTs.
     let n = 10_000;
     let start = Instant::now();
@@ -29,7 +30,9 @@ fn main() -> Result<()> {
         u8::from(first),
         u8::from(last)
     );
+    // ANCHOR_END: ghz
 
+    // ANCHOR: graph_states
     // Graph states: entanglement across a cut equals the rank over GF(2)
     // of the adjacency matrix between the two sides.
     println!("\nentanglement of graph states (ebits):");
@@ -50,7 +53,9 @@ fn main() -> Result<()> {
             s.entanglement_entropy(&part)?
         );
     }
+    // ANCHOR_END: graph_states
 
+    // ANCHOR: local_complement
     // Metatron's Cube is K13. Local complementation at any node removes
     // every edge between the others: the star, whose graph state is a GHZ
     // state up to Hadamards on the leaves.
@@ -64,5 +69,6 @@ fn main() -> Result<()> {
         star.num_edges(),
         star.degree(0)
     );
+    // ANCHOR_END: local_complement
     Ok(())
 }

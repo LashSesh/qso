@@ -10,9 +10,10 @@ same workloads. The results enter the technical note
 | Qulacs 0.6 | state vectors, gradients (`backprop`), timing |
 | Cirq 1.7 (built-in simulator) | state vectors, timing up to 20 qubits |
 | PennyLane Lightning 0.45 | state vectors, adjoint gradients, timing |
-| The Walrus 0.22 | permanents |
+| The Walrus 0.22 | permanents, hafnians, torontonians, Gaussian boson sampling |
 | Stim 1.16 | detector error models, detection-event rates |
 | PyMatching 2.4 | logical error rates (minimum-weight matching, for reference) |
+| PySCF 2.14 | Gaussian integrals, Hartree–Fock and CASCI energies |
 
 ProjectQ, which the 2025 note listed, is not included: its last release
 (0.8.0, 2022) does not build on current CPython.
@@ -25,6 +26,11 @@ ProjectQ, which the 2025 note listed, is not included: its last release
 - energy and gradient of a 10-qubit transverse-field Ising model with a
   100-parameter ansatz;
 - permanents of random complex matrices up to 12 × 12;
+- hafnians up to 20 × 20, torontonians, and photon-number and click
+  probabilities of Gaussian states (also at 12 and 20 photons);
+- overlap, kinetic, nuclear-attraction and electron-repulsion integrals
+  of H₂O and NH₃ in STO-3G and 6-31G, and restricted, unrestricted and
+  frozen-core CASCI energies of H₂O, BeH₂, OH and triplet CH₂;
 - detector error models of repetition and surface-code memory experiments
   (exported with `DetectorCircuit.to_stim()`), term by term against Stim's,
   and their detection-event rates against Stim's sampler; QSO's union-find
@@ -40,9 +46,12 @@ ProjectQ, which the 2025 note listed, is not included: its last release
 Every framework runs with its default threading and is warmed up for at
 least 0.25 s (and at least one to three runs) before timing: on virtual
 machines, waking sleeping worker threads is slow, and a thread pool whose
-workers sleep as soon as they are idle (rayon, used by QSO) reaches full
-speed only after tens of milliseconds of sustained work, while OpenMP
-workers (as in Qulacs) spin and are fast at once. Circuit construction
+workers sleep as soon as they are idle (rayon, which QSO used for its
+kernels up to 1.23) reaches full speed only after tens of milliseconds of
+sustained work, while OpenMP workers (as in Qulacs) spin and are fast at
+once. The configurations `1@500` and `1@20000` time that cost: QSO,
+Qulacs and Aer at 10–18 qubits, every timed layer after a pause of 0.5 or
+20 ms (the first simulation after an optimiser step or Python code). Circuit construction
 and Aer's transpilation (at `optimization_level=0`, which keeps the gate
 list unchanged) are not timed. On shared machines timings fluctuate in bursts;
 the interleaved rounds spread the load over all frameworks, and the minimum
