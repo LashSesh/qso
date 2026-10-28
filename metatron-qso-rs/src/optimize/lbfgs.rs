@@ -39,6 +39,12 @@ fn cubic_min(a: f64, fa: f64, da: f64, b: f64, fb: f64, db: f64) -> f64 {
     }
 }
 
+/// With noise, gradients below this many noise units of the run's first
+/// gradient are rounding too (the gradient's rounding grows with its
+/// scale: QAOA at depth 5–6 otherwise wandered at its noise for four times
+/// the evaluations; 10 was not enough).
+const START_GRADIENT_NOISE: f64 = 30.0;
+
 /// Hager and Zhang's δ for the approximate Wolfe conditions.
 const APPROX_DELTA: f64 = 0.1;
 
@@ -145,8 +151,9 @@ pub(super) fn run(
     let mut iterations = 0;
 
     let noisy = obj.noise > 0.0;
+    let start_floor = START_GRADIENT_NOISE * obj.noise * inf_norm(&g);
     for it in 0..options.max_iterations {
-        if inf_norm(&g) <= options.g_tol.max(obj.gradient_floor(f)) {
+        if inf_norm(&g) <= options.g_tol.max(obj.gradient_floor(f)).max(start_floor) {
             message = "gradient norm below tolerance".into();
             converged = true;
             break;
