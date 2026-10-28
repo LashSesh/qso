@@ -6,9 +6,10 @@ name: Docs
 # reference (pdoc), the playground (docs/playground), which runs QSO
 # compiled to WebAssembly, the guide and Python reference of every release
 # (/<version>/, built from its tag and cached), and the line and branch
-# coverage report of the crate's tests (/coverage/). Every code block of the
-# guide is run as part of the build. Pull requests build the site; pushes to main also deploy it to
-# GitHub Pages (Settings → Pages → Source: GitHub Actions).
+# coverage report of the crate's, the CLI's and the Python tests
+# (/coverage/). Every code block of the guide is run as part of the build.
+# Pull requests build the site; pushes to main also deploy it to GitHub
+# Pages (Settings → Pages → Source: GitHub Actions).
 
 on:
   push:
@@ -80,8 +81,7 @@ jobs:
         env:
           RUSTFLAGS: ""
         run: |
-          cargo +nightly llvm-cov --release -p metatron-qso-rs --all-features --branch --html --output-dir site/coverage
-          cargo +nightly llvm-cov report --release -p metatron-qso-rs --branch --json --summary-only --output-path site/coverage/summary.json
+          scripts/coverage.sh site/coverage --html
           python3 scripts/coverage_summary.py site/coverage/summary.json
       - uses: actions/upload-pages-artifact@v5
         with:

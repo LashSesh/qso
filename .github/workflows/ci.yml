@@ -209,20 +209,24 @@ jobs:
           # Branch coverage needs nightly's -Z coverage-options.
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov
-      - name: Unit, validation, property and differential tests with coverage
+      # The crate's tests, the command-line tool run by tests/cli.rs, and
+      # the Python tests on an instrumented extension, in one report.
+      - name: Rust, CLI and Python tests with coverage
         run: |
-          cargo llvm-cov --release -p metatron-qso-rs --all-features --branch --json --summary-only --output-path coverage.json
-          cargo llvm-cov report --release -p metatron-qso-rs --branch --summary-only | tee coverage.txt
-          python3 scripts/coverage_summary.py coverage.json >> "$GITHUB_STEP_SUMMARY"
+          scripts/coverage.sh coverage
+          python3 scripts/coverage_summary.py coverage/summary.json >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: |
-            coverage.json
-            coverage.txt
+            coverage/summary.json
+            coverage/coverage.txt
 
   fuzz:
     name: fuzz (60 s per target)

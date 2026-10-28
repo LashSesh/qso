@@ -13,10 +13,32 @@ milestones 1.18 (pretty good state transfer), 1.19 (decoding beyond
 matching), 1.20 (single precision) and 1.21 (coverage and differential
 testing) of the fourth, which completes it; and milestones 1.22
 (error-correction circuits that keep their distance), 1.23 (larger
-basis sets and open shells) and 1.24 (short simulations at full speed) of
-the fifth.
+basis sets and open shells), 1.24 (short simulations at full speed) and
+1.25 (documentation and reach) of the fifth, which completes it.
 
 ### Added
+
+- **Matrix-product states in WebAssembly**: the module's `mps` method and
+  npm `qso.mps(source, {shots, seed, maxBond, cutoff, observables})` run
+  OpenQASM programs on matrix-product states, with Pauli expectation
+  values, bond dimensions and entropies, amplitudes (up to 10 qubits),
+  the discarded weight, the fidelity bound and samples. The npm tests
+  replay requests whose native responses are recorded in
+  `js/test/mps_native.json` and require the same results to 10⁻¹⁰. The
+  playground has a tab for them (GHZ on 1000 qubits, a quench on 100).
+- **Documentation of every release**: the site carries the guide and
+  Python reference of each release since 1.2.0 at `/<version>/`, built
+  from the release's tag with its wheel from PyPI, and a version selector
+  on every guide page (`docs/build_site.py --versions`).
+- **Rust tutorials**: eight guide pages built from the crate's examples
+  (code between `// ANCHOR:` lines, output from running them in the
+  documentation build).
+- **CLI tests** (`tests/cli.rs`): every subcommand run as a program with
+  its JSON output checked against known values.
+- **Coverage of the CLI and the Python tests**: `scripts/coverage.sh`
+  merges the crate's tests, the CLI run by `tests/cli.rs` and the Python
+  tests on an instrumented extension into one report, with totals per
+  component.
 
 - **d and higher shells, 6-31G* and cc-pVDZ to argon, ROHF**
   (`chemistry::integrals`, `chemistry::scf::rohf`; Python
