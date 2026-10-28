@@ -116,9 +116,30 @@ fn prepare_single(
     Ok(state)
 }
 
-/// [`expectation`] in single precision ([`StateVector32`], one more qubit,
-/// half the memory); the sum is taken in double precision and divided by
-/// the state's norm², which rounding moves away from one.
+/// ‖φ‖² of a single-precision state, which must be positive and finite
+/// (rounding moves it away from one; a zero or NaN state is an error).
+fn norm2_single(phi: &StateVector32) -> Result<f64> {
+    let norm2 = phi.norm().powi(2);
+    if !(norm2.is_finite() && norm2 > 0.0) {
+        return Err(QsoError::invalid(
+            "initial",
+            "the state's norm is zero or not finite",
+        ));
+    }
+    Ok(norm2)
+}
+
+/// An energy or gradient that left the range of single precision.
+fn overflowed() -> QsoError {
+    QsoError::invalid(
+        "observable",
+        "the energy or gradient overflows single precision; use double precision",
+    )
+}
+
+/// [`expectation`] in single precision ([`StateVector32`], half the
+/// memory); the sum is taken in double precision and divided by the
+/// state's norm², which rounding moves away from one.
 pub fn expectation_single(
     circuit: &Circuit,
     observable: &PauliSum,
@@ -127,13 +148,17 @@ pub fn expectation_single(
 ) -> Result<f64> {
     let mut state = prepare_single(circuit, observable, theta, initial)?;
     state.apply_circuit(circuit, theta)?;
+    norm2_single(&state)?;
     state.expectation(observable)
 }
 
 /// [`expectation_and_gradient`] by adjoint differentiation in single
 /// precision: two [`StateVector32`]s, the gradient terms summed in double
 /// precision; energy and gradient divided by the state's norm² (as
-/// [`StateVector32::expectation`] does).
+/// [`StateVector32::expectation`] does). The identity term of the
+/// observable is left out of the co-state `H·φ`, where its single-precision
+/// rounding would swamp the gradient of a large constant, and added to the
+/// energy afterwards.
 pub fn expectation_and_gradient_single(
     circuit: &Circuit,
     observable: &PauliSum,
@@ -142,17 +167,30 @@ pub fn expectation_and_gradient_single(
 ) -> Result<(f64, Vec<f64>)> {
     let mut phi = prepare_single(circuit, observable, theta, initial)?;
     phi.apply_circuit(circuit, theta)?;
-    let norm2 = phi.norm().powi(2);
-    if norm2.is_nan() || norm2 <= 0.0 {
-        return Err(QsoError::invalid("initial", "the state has zero norm"));
-    }
+    let norm2 = norm2_single(&phi)?;
+    let constant = observable.constant();
+    let varying = if observable.terms().iter().any(|(_, s)| s.is_identity()) {
+        std::borrow::Cow::Owned(PauliSum::from_terms(
+            observable
+                .terms()
+                .iter()
+                .filter(|(_, s)| !s.is_identity())
+                .cloned(),
+        ))
+    } else {
+        std::borrow::Cow::Borrowed(observable)
+    };
     let (value, mut grad) = adjoint_with(circuit, theta, phi.into_amplitudes(), |x, y| {
-        observable.apply_amplitudes(x, y)
+        varying.apply_amplitudes(x, y)
     });
     for g in &mut grad {
         *g /= norm2;
     }
-    Ok((value / norm2, grad))
+    let value = value / norm2 + constant;
+    if !value.is_finite() || grad.iter().any(|g| !g.is_finite()) {
+        return Err(overflowed());
+    }
+    Ok((value, grad))
 }
 
 /// [`expectation_and_gradient`] at the given precision; single precision
@@ -728,6 +766,54 @@ mod tests {
     /// shift-rule gates, diagonal and general observables), on registers
     /// below and above the cache block: energies to 10⁻⁵ and gradients to
     /// 10⁻⁴ of their scale.
+    #[test]
+    fn single_precision_leaves_the_constant_out_of_the_co_state() {
+        use super::*;
+        use crate::algorithms::{ansatz, ansatz::Entanglement, models};
+        use crate::quantum::PauliString;
+        // A large identity term: before, its rounding in H·φ cost the
+        // gradient 1.4·10⁻³ relative at an offset of 10⁴.
+        let n = 10;
+        let c = ansatz::efficient_su2(n, 2, Entanglement::Linear);
+        let theta: Vec<f64> = (0..c.num_parameters())
+            .map(|k| 0.1 + 0.37 * k as f64)
+            .collect();
+        let mut h = models::transverse_field_ising(n, 1.0, 0.8, false);
+        h.add_term(1e4, PauliString::identity());
+        let (e, g) =
+            expectation_and_gradient(&c, &h, &theta, None, GradientMethod::Adjoint).unwrap();
+        let (e32, g32) = expectation_and_gradient_single(&c, &h, &theta, None).unwrap();
+        let scale = g.iter().map(|x| x * x).sum::<f64>().sqrt();
+        let err = g
+            .iter()
+            .zip(&g32)
+            .map(|(a, b)| (a - b).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        assert!(err < 1e-5 * scale, "{err} vs {scale}");
+        assert!((e32 - e).abs() < 1e-6, "{e32} vs {e}");
+    }
+
+    #[test]
+    fn single_precision_rejects_zero_nan_and_overflow() {
+        use super::*;
+        use crate::algorithms::{ansatz, ansatz::Entanglement};
+        let c = ansatz::efficient_su2(3, 1, Entanglement::Linear);
+        let theta = vec![0.3; c.num_parameters()];
+        let h: PauliSum = "Z0 + X1".parse().unwrap();
+        let mut zero = StateVector32::zero(3).unwrap();
+        zero.amplitudes_mut().fill(Default::default());
+        let mut nan = StateVector32::zero(3).unwrap();
+        nan.amplitudes_mut()[1].re = f32::NAN;
+        for bad in [&zero, &nan] {
+            assert!(expectation_single(&c, &h, &theta, Some(bad)).is_err());
+            assert!(expectation_and_gradient_single(&c, &h, &theta, Some(bad)).is_err());
+        }
+        let huge: PauliSum = "1e39 Z0 + X1".parse().unwrap();
+        let err = expectation_and_gradient_single(&c, &huge, &theta, None).unwrap_err();
+        assert!(err.to_string().contains("overflows"), "{err}");
+    }
+
     #[test]
     fn single_precision_matches_double_precision() {
         use super::*;

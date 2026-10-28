@@ -950,14 +950,15 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 .iter()
                 .map(|r| {
                     format!(
-                        "p={}  <C>={:.6}  C_max={}  ratio={:.6}  P(optimal)={:.4}  most likely {} (cut {})",
+                        "p={}  <C>={:.6}  C_max={}  ratio={:.6}  P(optimal)={:.4}  most likely {} (cut {}){}",
                         r.p,
                         r.expectation,
                         r.max_cut,
                         r.approximation_ratio.unwrap_or(f64::NAN),
                         r.optimal_probability,
                         bitstring(r.most_likely, n),
-                        r.most_likely_cut
+                        r.most_likely_cut,
+                        if *single { "  [single precision]" } else { "" }
                     )
                 })
                 .collect::<Vec<_>>()
@@ -995,7 +996,8 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             let exact = vqe.exact_energy()?;
             let r = vqe.run()?;
             let text = format!(
-                "VQE ({method}, {n} qubits, {layers} layers): E = {:.10}  exact = {:.10}  error = {:.3e}{}",
+                "VQE ({method}, {n} qubits, {layers} layers, {} precision): E = {:.10}  exact = {:.10}  error = {:.3e}{}",
+                vqe.precision().name(),
                 r.energy,
                 exact,
                 r.energy - exact,

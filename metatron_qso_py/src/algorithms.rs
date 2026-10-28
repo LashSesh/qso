@@ -338,11 +338,10 @@ fn run_vqe<'py>(
     initial_state: Option<&PyStateVector>,
     precision: &str,
 ) -> PyResult<Bound<'py, PyDict>> {
+    // The solver rejects single precision with a gradient other than the
+    // adjoint method when its optimiser uses gradients.
     let precision = self::precision(precision)?;
     let gradient = gradient_method(gradient, 1e-5)?;
-    if precision == Precision::Single && gradient != GradientMethod::Adjoint {
-        return Err(invalid("single precision supports adjoint gradients only"));
-    }
     let mut vqe = Vqe::new(hamiltonian.inner.clone(), ansatz.inner.clone())
         .raise()?
         .with_precision(precision)
