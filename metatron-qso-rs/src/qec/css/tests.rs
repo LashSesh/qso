@@ -219,3 +219,38 @@ fn bicycle_exponents_reduce_and_sizes_are_bounded() {
     assert_eq!(huge, plain);
     assert!(CssCode::new(MAX_CSS_QUBITS + 1, vec![], vec![]).is_err());
 }
+
+#[test]
+fn the_bicycle_cycle_keeps_the_distance() {
+    use crate::qec::{
+        CssSchedule, DistanceOptions, circuit_distance, css_code_memory_with, detector_error_model,
+    };
+    // [[72, 12, 6]], three rounds of circuit noise: with the depth-8 cycle
+    // of Bravyi et al. the lightest undetectable logical error has 6 faults
+    // (proven: the exhaustive search excludes 5), as the paper's bound
+    // dcirc ≤ 6 allows; the greedy schedule loses two to hook errors.
+    let (code, _) = CssCode::bivariate_bicycle_code(72).unwrap();
+    let noise = CircuitNoise::uniform(0.001);
+    for basis in [MemoryBasis::Z, MemoryBasis::X] {
+        for (schedule, d) in [(CssSchedule::Bicycle, 6), (CssSchedule::Greedy, 4)] {
+            let c = css_code_memory_with(&code, 3, &noise, basis, schedule).unwrap();
+            let dem = detector_error_model(&c, false).unwrap();
+            let r = circuit_distance(&dem, &DistanceOptions::default()).unwrap();
+            assert_eq!(r.distance(), Some(d), "{basis:?} {schedule:?}");
+        }
+    }
+    // Only bicycle codes with three monomials per polynomial have the cycle.
+    let colour = CssCode::color_code(3).unwrap();
+    assert!(
+        css_code_memory_with(&colour, 2, &noise, MemoryBasis::Z, CssSchedule::Bicycle).is_err()
+    );
+    let two = CssCode::bivariate_bicycle(3, 3, &[(1, 0), (0, 1)], &[(0, 0), (1, 1)]);
+    if let Ok(two) = two {
+        if two.k() > 0 {
+            assert!(
+                css_code_memory_with(&two, 2, &noise, MemoryBasis::Z, CssSchedule::Bicycle)
+                    .is_err()
+            );
+        }
+    }
+}

@@ -362,7 +362,7 @@ fn bposd_is_close_to_matching_on_surface_codes() {
 
 #[test]
 fn sizes_are_checked_before_building() {
-    use crate::qec::DecoderKind;
+    use crate::qec::DecoderChoice;
     // More detectors than BP+OSD takes: an error, not a panic.
     let dem = DetectorErrorModel {
         n_detectors: MAX_BPOSD_DETECTORS + 1,
@@ -374,8 +374,8 @@ fn sizes_are_checked_before_building() {
         }],
     };
     let graph = MatchingGraph::from_dem(&dem).unwrap();
-    assert!(DecoderKind::BpOsd.build(graph.clone()).is_err());
-    assert!(DecoderKind::Matching.build(graph).is_ok());
+    assert!(DecoderChoice::BpOsd.build(graph.clone()).is_err());
+    assert!(DecoderChoice::Matching.build(graph).is_ok());
     let huge = DetectorErrorModel {
         n_detectors: usize::MAX,
         ..dem

@@ -1368,14 +1368,14 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             circuit: from_file,
         } => {
             let kind = match decoder {
-                DecoderArg::UnionFind => qec::DecoderKind::UnionFind,
-                DecoderArg::Matching => qec::DecoderKind::Matching,
-                DecoderArg::Bposd => qec::DecoderKind::BpOsd,
+                DecoderArg::UnionFind => qec::DecoderChoice::UnionFind,
+                DecoderArg::Matching => qec::DecoderChoice::Matching,
+                DecoderArg::Bposd => qec::DecoderChoice::BpOsd,
             };
-            let decoder_name = match kind {
-                qec::DecoderKind::UnionFind => "union-find",
-                qec::DecoderKind::Matching => "matching",
-                qec::DecoderKind::BpOsd => "BP+OSD",
+            let decoder_name = match decoder {
+                DecoderArg::UnionFind => "union-find",
+                DecoderArg::Matching => "matching",
+                DecoderArg::Bposd => "BP+OSD",
             };
             let memory_basis = match basis {
                 BasisArg::Z => qec::MemoryBasis::Z,
@@ -1386,7 +1386,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                     QsoError::invalid("circuit", format!("{}: {e}", path.display()))
                 })?;
                 let circuit = qec::DetectorCircuit::from_stim(&text)?;
-                let rate = qec::logical_error_rate_with(&circuit, *shots, *seed, kind)?;
+                let rate = qec::logical_error_rate_using(&circuit, *shots, *seed, kind)?;
                 let line = format!(
                     "{}: {} qubits, {} detectors, {} observables; logical error rate {:.3e} ± {:.1e} ({} of {} shots, {decoder_name})",
                     path.display(),
@@ -1451,7 +1451,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                             QsoError::invalid("stim", format!("{}: {e}", path.display()))
                         })?;
                     }
-                    let rate = qec::logical_error_rate_with(&circuit, *shots, *seed, kind)?;
+                    let rate = qec::logical_error_rate_using(&circuit, *shots, *seed, kind)?;
                     lines.push(format!(
                         "p = {prob}, {label}, {r} rounds: {} qubits, {} detectors; logical error rate {:.3e} ± {:.1e} ({} of {} shots, {})",
                         circuit.n_qubits(),

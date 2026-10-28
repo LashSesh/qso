@@ -3,9 +3,11 @@
 //! experiments.
 
 use metatron_qso::qec::{
-    self, BpMethod, BpOsdDecoder, BpOsdOptions, BpOsdOutcome, CircuitNoise, CssCode, Decoder,
-    DecoderKind, DetectorCircuit, DetectorErrorModel, ErrorMechanism, MatchingDecoder,
-    MatchingGraph, MemoryBasis, Noise, OsdMethod, SparseMatchingDecoder, UnionFindDecoder,
+    self, BpMethod, BpOsdDecoder, BpOsdOptions, BpOsdOutcome, CircuitDistance, CircuitNoise,
+    CorrelatedError, CorrelatedErrorModel, CorrelatedMatchingDecoder, CssCode, Decoder,
+    DecoderChoice, DetectorCircuit, DetectorErrorModel, DistanceOptions, ErrorMechanism,
+    MatchingDecoder, MatchingGraph, MemoryBasis, Noise, OsdMethod, SparseMatchingDecoder,
+    UnionFindDecoder,
 };
 use numpy::ndarray::Array2;
 use numpy::{AllowTypeChange, IntoPyArray, PyArray1, PyArray2, PyArrayLike2};
@@ -261,6 +263,15 @@ impl PyDetectorCircuit {
             inner: py
                 .detach(|| qec::detector_error_model(c, decompose))
                 .raise()?,
+        })
+    }
+
+    /// The decomposed model with, for every error, the graph-like parts it
+    /// was split into (for `CorrelatedMatchingDecoder`).
+    fn correlated_error_model(&self, py: Python<'_>) -> PyResult<PyCorrelatedErrorModel> {
+        let c = &self.inner;
+        Ok(PyCorrelatedErrorModel {
+            inner: py.detach(|| qec::correlated_error_model(c)).raise()?,
         })
     }
 
@@ -667,6 +678,263 @@ impl PySparseMatchingDecoder {
     }
 }
 
+/// A decomposed detector error model that keeps the parts of each error:
+/// `errors` lists `(probability, [(detectors, observables), ...])`, every
+/// part flipping one or two detectors (or none).
+#[pyclass(name = "CorrelatedErrorModel", module = "metatron_qso", frozen)]
+pub struct PyCorrelatedErrorModel {
+    inner: CorrelatedErrorModel,
+}
+
+type PyCorrelatedError = (f64, Vec<(Vec<usize>, u64)>);
+
+#[pymethods]
+impl PyCorrelatedErrorModel {
+    /// `n_observables` defaults to one more than the highest observable
+    /// bit used.
+    #[new]
+    #[pyo3(signature = (n_detectors, errors, n_observables = None))]
+    fn new(
+        n_detectors: usize,
+        errors: Vec<PyCorrelatedError>,
+        n_observables: Option<usize>,
+    ) -> PyResult<Self> {
+        if n_detectors > qec::MAX_MODEL_DETECTORS {
+            return Err(invalid(format!(
+                "at most {} detectors",
+                qec::MAX_MODEL_DETECTORS
+            )));
+        }
+        if n_observables.is_some_and(|o| o > qec::MAX_OBSERVABLES) {
+            return Err(invalid(format!(
+                "at most {} observables",
+                qec::MAX_OBSERVABLES
+            )));
+        }
+        let mut out = Vec::with_capacity(errors.len());
+        let mut used = 0;
+        for (k, (probability, parts)) in errors.into_iter().enumerate() {
+            if !(0.0..=1.0).contains(&probability) {
+                return Err(invalid(format!(
+                    "error {k}: {probability} is not a probability"
+                )));
+            }
+            let mut checked = Vec::with_capacity(parts.len());
+            for (mut detectors, observables) in parts {
+                detectors.sort_unstable();
+                if detectors.len() > 2 || detectors.windows(2).any(|w| w[0] == w[1]) {
+                    return Err(invalid(format!(
+                        "a part of error {k} must flip at most two distinct detectors"
+                    )));
+                }
+                if let Some(&d) = detectors.last().filter(|&&d| d >= n_detectors) {
+                    return Err(invalid(format!(
+                        "error {k} flips detector {d} of {n_detectors}"
+                    )));
+                }
+                used = used.max(64 - observables.leading_zeros() as usize);
+                checked.push((detectors, observables));
+            }
+            out.push(CorrelatedError {
+                probability,
+                parts: checked,
+            });
+        }
+        let n_observables = n_observables.unwrap_or(used);
+        if n_observables < used {
+            return Err(invalid(format!(
+                "observable {} is used but n_observables is {n_observables}",
+                used - 1
+            )));
+        }
+        Ok(Self {
+            inner: CorrelatedErrorModel {
+                n_detectors,
+                n_observables,
+                errors: out,
+            },
+        })
+    }
+
+    #[getter]
+    fn n_detectors(&self) -> usize {
+        self.inner.n_detectors
+    }
+
+    #[getter]
+    fn n_observables(&self) -> usize {
+        self.inner.n_observables
+    }
+
+    #[getter]
+    fn errors(&self) -> Vec<PyCorrelatedError> {
+        self.inner
+            .errors
+            .iter()
+            .map(|e| (e.probability, e.parts.clone()))
+            .collect()
+    }
+
+    /// The decomposed model, every part an independent error.
+    fn to_dem(&self) -> PyDetectorErrorModel {
+        PyDetectorErrorModel {
+            inner: self.inner.to_dem(),
+        }
+    }
+
+    fn __len__(&self) -> usize {
+        self.inner.errors.len()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "CorrelatedErrorModel(detectors={}, observables={}, errors={})",
+            self.inner.n_detectors,
+            self.inner.n_observables,
+            self.inner.errors.len()
+        )
+    }
+}
+
+/// Two-pass (correlated) matching: match, lower the weights of the edges
+/// that the correction's errors make likely, match again (PyMatching's
+/// `enable_correlations=True`).
+#[pyclass(name = "CorrelatedMatchingDecoder", module = "metatron_qso")]
+pub struct PyCorrelatedMatchingDecoder {
+    inner: CorrelatedMatchingDecoder,
+}
+
+#[pymethods]
+impl PyCorrelatedMatchingDecoder {
+    #[new]
+    fn new(py: Python<'_>, model: &PyCorrelatedErrorModel) -> PyResult<Self> {
+        let m = &model.inner;
+        Ok(Self {
+            inner: py.detach(|| CorrelatedMatchingDecoder::new(m)).raise()?,
+        })
+    }
+
+    #[getter]
+    fn n_detectors(&self) -> usize {
+        self.inner.graph().n_detectors()
+    }
+
+    /// Predicted observable flips (a bit mask) for the detectors that
+    /// fired.
+    fn decode(&mut self, fired: Vec<usize>) -> PyResult<u64> {
+        self.inner.decode(&fired).raise()
+    }
+
+    /// Decode each row of a (shots, n_detectors) boolean array; returns
+    /// the predicted observable masks.
+    fn decode_batch<'py>(
+        &mut self,
+        py: Python<'py>,
+        detectors: PyArrayLike2<'py, bool, AllowTypeChange>,
+    ) -> PyResult<Bound<'py, PyArray1<u64>>> {
+        let n = self.inner.graph().n_detectors();
+        decode_batch(py, &mut self.inner, n, detectors)
+    }
+
+    fn __repr__(&self) -> String {
+        let g = self.inner.graph();
+        format!(
+            "CorrelatedMatchingDecoder(detectors={}, edges={})",
+            g.n_detectors(),
+            g.edges().len()
+        )
+    }
+}
+
+/// Bounds on the circuit distance: `lower_bound` (no undetectable logical
+/// error is lighter; a huge number if none exists), the lightest found
+/// `witness` (indices into the model's errors, or None), the observables
+/// it flips, and `distance` when the bounds meet.
+#[pyclass(name = "CircuitDistance", module = "metatron_qso", frozen)]
+pub struct PyCircuitDistance {
+    inner: CircuitDistance,
+}
+
+#[pymethods]
+impl PyCircuitDistance {
+    #[getter]
+    fn lower_bound(&self) -> usize {
+        self.inner.lower_bound
+    }
+
+    #[getter]
+    fn upper_bound(&self) -> Option<usize> {
+        self.inner.upper_bound()
+    }
+
+    #[getter]
+    fn distance(&self) -> Option<usize> {
+        self.inner.distance()
+    }
+
+    #[getter]
+    fn witness(&self) -> Option<Vec<usize>> {
+        self.inner.witness.clone()
+    }
+
+    #[getter]
+    fn observables(&self) -> u64 {
+        self.inner.observables
+    }
+
+    fn __repr__(&self) -> String {
+        let bound = |b: Option<usize>| b.map_or("None".to_string(), |b| b.to_string());
+        let lower = if self.inner.lower_bound == usize::MAX {
+            "inf".to_string()
+        } else {
+            self.inner.lower_bound.to_string()
+        };
+        format!(
+            "CircuitDistance(lower_bound={lower}, upper_bound={}, distance={})",
+            bound(self.inner.upper_bound()),
+            bound(self.inner.distance())
+        )
+    }
+}
+
+/// Bounds on the circuit distance of a detector error model (exact when
+/// every error flips at most two detectors): an exhaustive search proves
+/// weights up to `max_weight` within `max_work` visited sets, and
+/// `bposd_trials` BP+OSD searches per observable look for light logical
+/// errors.
+#[pyfunction]
+#[pyo3(signature = (model, max_weight = 12, max_work = 1 << 24, bposd_trials = 4, seed = 0))]
+fn circuit_distance(
+    py: Python<'_>,
+    model: &PyDetectorErrorModel,
+    max_weight: usize,
+    max_work: u64,
+    bposd_trials: usize,
+    seed: u64,
+) -> PyResult<PyCircuitDistance> {
+    let options = DistanceOptions {
+        max_weight,
+        max_work,
+        bposd_trials,
+        seed,
+    };
+    let m = &model.inner;
+    Ok(PyCircuitDistance {
+        inner: py.detach(|| qec::circuit_distance(m, &options)).raise()?,
+    })
+}
+
+/// The lightest undetectable logical error among the model's graph-like
+/// errors (those flipping one or two detectors), as Stim's
+/// `shortest_graphlike_error`; exact.
+#[pyfunction]
+fn graphlike_distance(py: Python<'_>, model: &PyDetectorErrorModel) -> PyResult<PyCircuitDistance> {
+    let m = &model.inner;
+    Ok(PyCircuitDistance {
+        inner: py.detach(|| qec::graphlike_distance(m)).raise()?,
+    })
+}
+
 /// What one BP+OSD decoding found: the predicted observable mask, the
 /// correction (indices into the model's errors), whether belief
 /// propagation alone converged, its iterations, and the correction's
@@ -993,9 +1261,10 @@ fn surface_code_memory(
 }
 
 /// Sample `shots` shots of `circuit`, decode them with the decoder of its
-/// decomposed detector error model (`"union_find"` or `"matching"`) or of
-/// its whole model (`"bposd"`, default options) and count the logical
-/// failures. Every decoder sees the same shots.
+/// decomposed detector error model (`"union_find"`, `"matching"`, or
+/// `"correlated_matching"` with the parts of each error) or of its whole
+/// model (`"bposd"`, default options) and count the logical failures.
+/// Every decoder sees the same shots.
 #[pyfunction]
 #[pyo3(signature = (circuit, shots, seed = 0, decoder = "union_find"))]
 fn logical_error_rate(
@@ -1006,18 +1275,19 @@ fn logical_error_rate(
     decoder: &str,
 ) -> PyResult<PyLogicalErrorRate> {
     let kind = match decoder {
-        "union_find" => DecoderKind::UnionFind,
-        "matching" => DecoderKind::Matching,
-        "bposd" => DecoderKind::BpOsd,
+        "union_find" => DecoderChoice::UnionFind,
+        "matching" => DecoderChoice::Matching,
+        "correlated_matching" => DecoderChoice::CorrelatedMatching,
+        "bposd" => DecoderChoice::BpOsd,
         other => {
             return Err(invalid(format!(
-                "unknown decoder {other:?}; use \"union_find\", \"matching\" or \"bposd\""
+                "unknown decoder {other:?}; use \"union_find\", \"matching\", \"correlated_matching\" or \"bposd\""
             )));
         }
     };
     let c = &circuit.inner;
     let r = py
-        .detach(|| qec::logical_error_rate_with(c, shots, seed, kind))
+        .detach(|| qec::logical_error_rate_using(c, shots, seed, kind))
         .raise()?;
     Ok(PyLogicalErrorRate {
         shots: r.shots,
@@ -1034,6 +1304,11 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyUnionFindDecoder>()?;
     m.add_class::<PyMatchingDecoder>()?;
     m.add_class::<PySparseMatchingDecoder>()?;
+    m.add_class::<PyCorrelatedErrorModel>()?;
+    m.add_class::<PyCorrelatedMatchingDecoder>()?;
+    m.add_class::<PyCircuitDistance>()?;
+    m.add_function(wrap_pyfunction!(circuit_distance, m)?)?;
+    m.add_function(wrap_pyfunction!(graphlike_distance, m)?)?;
     m.add_class::<PyBpOsdDecoder>()?;
     m.add_class::<PyBpOsdOutcome>()?;
     m.add_class::<PyCssCode>()?;

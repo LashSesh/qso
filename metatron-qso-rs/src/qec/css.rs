@@ -5,6 +5,11 @@ use super::circuit::{DetectorCircuit, MAX_OBSERVABLES, Noise};
 use super::codes::{CircuitNoise, MAX_DISTANCE, MemoryBasis, Noisy, check_rounds, check_size};
 use super::gf2::{self, Basis};
 use crate::error::{QsoError, Result};
+use serde::{Deserialize, Serialize};
+
+/// The six directions from a face centre of [`CssCode::color_code`] to
+/// its qubits, in order around the hexagon (lattice steps `(Δi, Δj)`).
+pub const COLOR_DIRECTIONS: [(i64, i64); 6] = [(1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1)];
 
 /// Largest `l · m` of a bivariate bicycle code (it has `2 l m` qubits).
 pub const MAX_BICYCLE_SIZE: usize = 1 << 12;
@@ -23,6 +28,22 @@ pub struct CssCode {
     z_checks: Vec<Vec<usize>>,
     x_logicals: Vec<Vec<usize>>,
     z_logicals: Vec<Vec<usize>>,
+    /// For a bivariate bicycle code with three distinct monomials in each
+    /// polynomial: its structure, for the depth-8 cycle.
+    bicycle: Option<Bicycle>,
+    /// For a colour code: the qubit of every face (X check `f` = Z check
+    /// `f`) in each of the six directions around its centre.
+    faces: Option<Vec<[Option<usize>; 6]>>,
+}
+
+/// The torus `l × m` and the monomials (reduced exponents, in the given
+/// order) of a bivariate bicycle code.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Bicycle {
+    l: usize,
+    m: usize,
+    a: [(usize, usize); 3],
+    b: [(usize, usize); 3],
 }
 
 impl CssCode {
@@ -112,6 +133,8 @@ impl CssCode {
             z_checks,
             x_logicals: supports(xl),
             z_logicals: supports(zl),
+            bicycle: None,
+            faces: None,
         })
     }
 
@@ -141,24 +164,25 @@ impl CssCode {
                 }
             }
         }
-        let neighbours = [(1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1)];
         let mut faces = Vec::new();
+        let mut around = Vec::new();
         for i in -2..=l + 2 {
             for j in -2..=l + 2 {
                 if !centre(i, j) {
                     continue;
                 }
-                let f: Vec<usize> = neighbours
-                    .iter()
-                    .filter(|(a, b)| inside(i + a, j + b))
-                    .map(|(a, b)| index[&(i + a, j + b)])
-                    .collect();
+                let slots = COLOR_DIRECTIONS
+                    .map(|(a, b)| inside(i + a, j + b).then(|| index[&(i + a, j + b)]));
+                let f: Vec<usize> = slots.iter().flatten().copied().collect();
                 if f.len() >= 4 {
                     faces.push(f);
+                    around.push(slots);
                 }
             }
         }
-        CssCode::new(index.len(), faces.clone(), faces)
+        let mut code = CssCode::new(index.len(), faces.clone(), faces)?;
+        code.faces = Some(around);
+        Ok(code)
     }
 
     /// The bivariate bicycle code of Bravyi et al. (2024) on `2 l m`
@@ -217,7 +241,16 @@ impl CssCode {
         // A zero polynomial leaves empty rows: drop them.
         hx.retain(|r| !r.is_empty());
         hz.retain(|r| !r.is_empty());
-        CssCode::new(2 * lm, hx, hz)
+        let mut code = CssCode::new(2 * lm, hx, hz)?;
+        let reduce = |terms: &[(usize, usize)]| -> Option<[(usize, usize); 3]> {
+            let t: Vec<(usize, usize)> = terms.iter().map(|&(p, q)| (p % l, q % m)).collect();
+            let distinct = t.len() == 3 && t[0] != t[1] && t[0] != t[2] && t[1] != t[2];
+            distinct.then(|| [t[0], t[1], t[2]])
+        };
+        if let (Some(a), Some(b)) = (reduce(a), reduce(b)) {
+            code.bicycle = Some(Bicycle { l, m, a, b });
+        }
+        Ok(code)
     }
 
     /// One of the bivariate bicycle codes of Bravyi et al. (2024),
@@ -302,6 +335,31 @@ fn layers(checks: &[Vec<usize>], n: usize) -> Vec<Vec<(usize, usize)>> {
     out
 }
 
+/// The order of the CNOTs in a round of [`css_code_memory_with`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
+pub enum CssSchedule {
+    /// Every X check, then every Z check, each in CNOT layers found
+    /// greedily (the schedule of [`css_code_memory`]).
+    #[default]
+    Greedy,
+    /// The depth-8 cycle of Bravyi et al. (Nature 627, 778 (2024),
+    /// table 5) for a bivariate bicycle code whose polynomials have three
+    /// monomials each, `A = A1 + A2 + A3` and `B = B1 + B2 + B3` in the
+    /// order given to [`CssCode::bivariate_bicycle`]: X and Z checks
+    /// interleaved, seven CNOT layers, each X check visiting
+    /// `A2, B2, B1, B3, A1, A3` and each Z check `A1ᵀ, A3ᵀ, B1ᵀ, B2ᵀ, B3ᵀ,
+    /// A2ᵀ`.
+    Bicycle,
+    /// For a colour code of [`CssCode::color_code`]: every X check, then
+    /// every Z check, each face visiting its qubits in this order of the
+    /// directions [`COLOR_DIRECTIONS`] (a permutation of `0..6`), one
+    /// direction per CNOT layer (faces of weight 4 skip their missing
+    /// directions).
+    Directions([u8; 6]),
+}
+
 /// A memory experiment for a CSS code: data qubits `0..n`, then one
 /// ancilla per X check and one per Z check. Each of `rounds` rounds
 /// measures every X check (ancilla in `|+⟩`, CNOTs ancilla → data, H)
@@ -323,6 +381,12 @@ pub fn css_code_memory(
     basis: MemoryBasis,
 ) -> Result<DetectorCircuit> {
     check_rounds(rounds)?;
+    check_logicals(code)?;
+    check_size(rounds, |r| build_css(code, r, noise, basis))?;
+    build_css(code, rounds, noise, basis)
+}
+
+fn check_logicals(code: &CssCode) -> Result<()> {
     if code.k() > MAX_OBSERVABLES {
         return Err(QsoError::invalid(
             "code",
@@ -335,8 +399,205 @@ pub fn css_code_memory(
     if code.k() == 0 {
         return Err(QsoError::invalid("code", "the code has no logical qubit"));
     }
-    check_size(rounds, |r| build_css(code, r, noise, basis))?;
-    build_css(code, rounds, noise, basis)
+    Ok(())
+}
+
+/// [`css_code_memory`] with the given order of CNOTs: the same detectors
+/// (each round's checks of the memory basis, compared with the previous
+/// round) and observables. With [`CssSchedule::Bicycle`] (only for a
+/// bivariate bicycle code with three monomials per polynomial) qubits are
+/// the data `0..n`, then the X-check ancillas, then the Z-check ancillas;
+/// each round is the depth-8 cycle with noise after every reset, gate and
+/// measurement as in [`CircuitNoise`] and depolarizing noise on the data
+/// before it.
+pub fn css_code_memory_with(
+    code: &CssCode,
+    rounds: usize,
+    noise: &CircuitNoise,
+    basis: MemoryBasis,
+    schedule: CssSchedule,
+) -> Result<DetectorCircuit> {
+    match schedule {
+        CssSchedule::Greedy => css_code_memory(code, rounds, noise, basis),
+        CssSchedule::Directions(order) => {
+            check_rounds(rounds)?;
+            check_logicals(code)?;
+            let Some(faces) = &code.faces else {
+                return Err(QsoError::invalid(
+                    "schedule",
+                    "a schedule by directions needs a colour code (CssCode::color_code)",
+                ));
+            };
+            let mut seen = [false; 6];
+            for &d in &order {
+                if d >= 6 || std::mem::replace(&mut seen[d as usize], true) {
+                    return Err(QsoError::invalid(
+                        "schedule",
+                        format!("{order:?} is not a permutation of the six directions"),
+                    ));
+                }
+            }
+            let layers: Vec<Vec<(usize, usize)>> = order
+                .iter()
+                .map(|&d| {
+                    faces
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(f, slots)| slots[d as usize].map(|q| (f, q)))
+                        .collect()
+                })
+                .collect();
+            let build = |r: usize| build_layered(code, r, noise, basis, &layers, &layers);
+            check_size(rounds, build)?;
+            build(rounds)
+        }
+        CssSchedule::Bicycle => {
+            check_rounds(rounds)?;
+            check_logicals(code)?;
+            let Some(bicycle) = &code.bicycle else {
+                return Err(QsoError::invalid(
+                    "schedule",
+                    "the bicycle schedule needs a bivariate bicycle code with three monomials in each polynomial",
+                ));
+            };
+            check_size(rounds, |r| build_bicycle(code, bicycle, r, noise, basis))?;
+            build_bicycle(code, bicycle, rounds, noise, basis)
+        }
+    }
+}
+
+/// The depth-8 syndrome cycle of Bravyi et al. (table 5), `rounds` times.
+fn build_bicycle(
+    code: &CssCode,
+    bicycle: &Bicycle,
+    rounds: usize,
+    noise: &CircuitNoise,
+    basis: MemoryBasis,
+) -> Result<DetectorCircuit> {
+    let x_basis = basis == MemoryBasis::X;
+    let Bicycle { l, m, a, b } = *bicycle;
+    let lm = l * m;
+    let n = code.n;
+    debug_assert_eq!(
+        (n, code.x_checks.len(), code.z_checks.len()),
+        (2 * lm, lm, lm)
+    );
+    let (l64, m64) = (l as i64, m as i64);
+    let idx = |i: i64, j: i64| (i.rem_euclid(l64) * m64 + j.rem_euclid(m64)) as usize;
+    // Data qubit of check c under monomial t: c + t (forward) or c − t
+    // (transposed); left register 0..lm, right lm..2lm.
+    let shift = |c: usize, t: (usize, usize), sign: i64| {
+        idx(
+            (c / m) as i64 + sign * t.0 as i64,
+            (c % m) as i64 + sign * t.1 as i64,
+        )
+    };
+    let left = |c: usize, t: (usize, usize), sign: i64| shift(c, t, sign);
+    let right = |c: usize, t: (usize, usize), sign: i64| lm + shift(c, t, sign);
+    let x_anc = |c: usize| n + c;
+    let z_anc = |c: usize| n + lm + c;
+    let checks: Vec<usize> = (0..lm).collect();
+    let xs: Vec<usize> = checks.iter().map(|&c| x_anc(c)).collect();
+    let zs: Vec<usize> = checks.iter().map(|&c| z_anc(c)).collect();
+    let data: Vec<usize> = (0..n).collect();
+    let mut q = Noisy {
+        c: DetectorCircuit::new(2 * n)?,
+        noise,
+    };
+    q.reset(&(0..2 * n).collect::<Vec<_>>())?;
+    if x_basis {
+        q.h(&data)?;
+    }
+    // CNOT layers 1..=7: X checks (ancilla → data) and Z checks (data →
+    // ancilla).
+    let x_layer = |round: usize| -> Option<Vec<(usize, usize)>> {
+        let target = |c: usize| match round {
+            2 => Some(left(c, a[1], 1)),
+            3 => Some(right(c, b[1], 1)),
+            4 => Some(right(c, b[0], 1)),
+            5 => Some(right(c, b[2], 1)),
+            6 => Some(left(c, a[0], 1)),
+            7 => Some(left(c, a[2], 1)),
+            _ => None,
+        };
+        target(0)?;
+        Some(
+            checks
+                .iter()
+                .map(|&c| (x_anc(c), target(c).expect("a target")))
+                .collect(),
+        )
+    };
+    let z_layer = |round: usize| -> Option<Vec<(usize, usize)>> {
+        let control = |c: usize| match round {
+            1 => Some(right(c, a[0], -1)),
+            2 => Some(right(c, a[2], -1)),
+            3 => Some(left(c, b[0], -1)),
+            4 => Some(left(c, b[1], -1)),
+            5 => Some(left(c, b[2], -1)),
+            6 => Some(right(c, a[1], -1)),
+            _ => None,
+        };
+        control(0)?;
+        Some(
+            checks
+                .iter()
+                .map(|&c| (control(c).expect("a control"), z_anc(c)))
+                .collect(),
+        )
+    };
+    let mut previous: Option<Vec<usize>> = None;
+    for _ in 0..rounds {
+        q.c.noise(Noise::Depolarize1(noise.before_round), &data)?;
+        // Round 1: X ancillas to |+⟩.
+        q.reset(&xs)?;
+        q.h(&xs)?;
+        let mut z_results = Vec::new();
+        for round in 1..=7 {
+            let mut layer = x_layer(round).unwrap_or_default();
+            layer.extend(z_layer(round).unwrap_or_default());
+            q.cx(&layer)?;
+            if round == 7 {
+                z_results = q.measure(&zs)?;
+            }
+        }
+        // Round 8: X ancillas measured in the X basis, Z ancillas reset.
+        q.h(&xs)?;
+        let x_results = q.measure(&xs)?;
+        q.reset(&zs)?;
+        let detected = if x_basis { x_results } else { z_results };
+        for (c, &r) in detected.iter().enumerate() {
+            match &previous {
+                None => q.c.detector(&[r])?,
+                Some(p) => q.c.detector(&[r, p[c]])?,
+            };
+        }
+        previous = Some(detected);
+    }
+    let last = previous.expect("at least one round");
+    if x_basis {
+        q.h(&data)?;
+    }
+    let measured = q.measure(&data)?;
+    let checks_of_basis = if x_basis {
+        &code.x_checks
+    } else {
+        &code.z_checks
+    };
+    for (c, support) in checks_of_basis.iter().enumerate() {
+        let mut recs = vec![last[c]];
+        recs.extend(support.iter().map(|&d| measured[d]));
+        q.c.detector(&recs)?;
+    }
+    let logicals = if x_basis {
+        &code.x_logicals
+    } else {
+        &code.z_logicals
+    };
+    for (i, lg) in logicals.iter().enumerate() {
+        q.c.observable(i, &lg.iter().map(|&d| measured[d]).collect::<Vec<_>>())?;
+    }
+    Ok(q.c)
 }
 
 fn build_css(
@@ -344,6 +605,21 @@ fn build_css(
     rounds: usize,
     noise: &CircuitNoise,
     basis: MemoryBasis,
+) -> Result<DetectorCircuit> {
+    let x_layers = layers(&code.x_checks, code.n);
+    let z_layers = layers(&code.z_checks, code.n);
+    build_layered(code, rounds, noise, basis, &x_layers, &z_layers)
+}
+
+/// Rounds of every X check, then every Z check, with these CNOT layers of
+/// (check, qubit).
+fn build_layered(
+    code: &CssCode,
+    rounds: usize,
+    noise: &CircuitNoise,
+    basis: MemoryBasis,
+    x_layers: &[Vec<(usize, usize)>],
+    z_layers: &[Vec<(usize, usize)>],
 ) -> Result<DetectorCircuit> {
     let x_basis = basis == MemoryBasis::X;
     let n = code.n;
@@ -356,8 +632,6 @@ fn build_css(
     let data: Vec<usize> = (0..n).collect();
     let x_anc: Vec<usize> = (n..n + rx).collect();
     let all_anc: Vec<usize> = (n..total).collect();
-    let x_layers = layers(&code.x_checks, n);
-    let z_layers = layers(&code.z_checks, n);
     b.reset(&(0..total).collect::<Vec<_>>())?;
     if x_basis {
         b.h(&data)?;
@@ -374,12 +648,12 @@ fn build_css(
         b.c.noise(Noise::Depolarize1(noise.before_round), &data)?;
         if rx > 0 {
             b.h(&x_anc)?;
-            for layer in &x_layers {
+            for layer in x_layers {
                 b.cx(&layer.iter().map(|&(c, q)| (n + c, q)).collect::<Vec<_>>())?;
             }
             b.h(&x_anc)?;
         }
-        for layer in &z_layers {
+        for layer in z_layers {
             b.cx(&layer
                 .iter()
                 .map(|&(c, q)| (q, n + rx + c))

@@ -1249,7 +1249,8 @@ fn pretty_good_state_transfer_follows_number_theory() {
 #[test]
 fn bposd_decodes_colour_and_bicycle_codes() {
     use metatron_qso::qec::{
-        CircuitNoise, CssCode, DecoderKind, MemoryBasis, css_code_memory, logical_error_rate_with,
+        CircuitNoise, CssCode, DecoderChoice, MemoryBasis, css_code_memory,
+        logical_error_rate_using,
     };
     // The codes of the literature: triangular colour codes [[(3d² + 1)/4,
     // 1, d]] and the bivariate bicycle codes of Bravyi et al. (2024).
@@ -1268,7 +1269,7 @@ fn bposd_decodes_colour_and_bicycle_codes() {
     // protects its 12 qubits with a failure rate of about 1.5·10⁻³.
     let rate = |code: &CssCode, rounds: usize, p: f64, shots: usize| {
         let c = css_code_memory(code, rounds, &CircuitNoise::uniform(p), MemoryBasis::Z).unwrap();
-        logical_error_rate_with(&c, shots, 3, DecoderKind::BpOsd)
+        logical_error_rate_using(&c, shots, 3, DecoderChoice::BpOsd)
             .unwrap()
             .rate
     };

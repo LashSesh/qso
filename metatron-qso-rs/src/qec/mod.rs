@@ -9,6 +9,9 @@
 //!   and [`MatchingDecoder`]: decoding by weighted union-find with
 //!   peeling, or by exact minimum-weight perfect matching, grown on the
 //!   detector graph or computed on the complete graph of detection events;
+//! * [`CorrelatedMatchingDecoder`]: two-pass matching that reweights the
+//!   graph with the correlations of decomposed errors
+//!   ([`correlated_error_model`]);
 //! * [`BpOsdDecoder`]: belief propagation with ordered-statistics
 //!   post-processing, for models whose errors flip more than two
 //!   detectors (colour codes, quantum LDPC codes);
@@ -17,16 +20,20 @@
 //!   with circuit-level noise;
 //! * [`CssCode`] (triangular colour codes, bivariate bicycle codes, or any
 //!   checks) and [`css_code_memory`]: memory experiments for CSS codes;
-//! * [`logical_error_rate`] and [`logical_error_rate_with`]: sample,
-//!   decode and count;
+//! * [`logical_error_rate`], [`logical_error_rate_with`] and
+//!   [`logical_error_rate_using`]: sample, decode and count;
+//! * [`circuit_distance`] and [`graphlike_distance`]: the fewest errors
+//!   that flip a logical observable undetected;
 //! * [`DetectorCircuit::to_stim`]: export in Stim's text format.
 
 pub mod bposd;
 pub mod circuit;
 pub mod codes;
+pub mod correlated;
 pub mod css;
 pub mod decoder;
 pub mod dem;
+pub mod distance;
 pub mod frame;
 mod gf2;
 pub mod matching;
@@ -41,14 +48,21 @@ pub use codes::{
     CircuitNoise, MemoryBasis, repetition_code_memory, surface_code_memory,
     surface_code_memory_with,
 };
-pub use css::{CssCode, MAX_CSS_QUBITS, css_code_memory};
+pub use correlated::CorrelatedMatchingDecoder;
+pub use css::{
+    COLOR_DIRECTIONS, CssCode, CssSchedule, MAX_CSS_QUBITS, css_code_memory, css_code_memory_with,
+};
 pub use decoder::{MatchingEdge, MatchingGraph, UnionFindDecoder};
-pub use dem::{DetectorErrorModel, ErrorMechanism, MAX_MODEL_DETECTORS, detector_error_model};
+pub use dem::{
+    CorrelatedError, CorrelatedErrorModel, DetectorErrorModel, ErrorMechanism, MAX_MODEL_DETECTORS,
+    correlated_error_model, detector_error_model,
+};
+pub use distance::{CircuitDistance, DistanceOptions, circuit_distance, graphlike_distance};
 pub use frame::{DetectorSamples, sample_detectors};
 pub use matching::{MAX_MATCHING_PAIRS, MatchingDecoder};
 pub use sparse::SparseMatchingDecoder;
 
-use crate::error::Result;
+use crate::error::{QsoError, Result};
 use crate::rng::Rng;
 use serde::{Deserialize, Serialize};
 
@@ -76,7 +90,13 @@ impl Decoder for SparseMatchingDecoder {
     }
 }
 
-/// The decoders [`logical_error_rate_with`] can use.
+impl Decoder for CorrelatedMatchingDecoder {
+    fn decode(&mut self, fired: &[usize]) -> Result<u64> {
+        CorrelatedMatchingDecoder::decode(self, fired)
+    }
+}
+
+/// The decoders of 1.0 (see [`DecoderChoice`] for all of them).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DecoderKind {
@@ -87,32 +107,79 @@ pub enum DecoderKind {
     /// ([`SparseMatchingDecoder`]; the same weights as
     /// [`MatchingDecoder`]).
     Matching,
-    /// BP+OSD ([`BpOsdDecoder`] with its default options); for a circuit
-    /// ([`DecoderKind::build_for`]) on the model without decomposition.
-    BpOsd,
 }
 
 impl DecoderKind {
-    /// The decoder of a matching graph (BP+OSD on the graph's errors; it
-    /// takes at most [`MAX_BPOSD_DETECTORS`](bposd::MAX_BPOSD_DETECTORS)
-    /// detectors).
-    pub fn build(self, graph: MatchingGraph) -> Result<Box<dyn Decoder + Send>> {
-        Ok(match self {
+    /// The decoder of a matching graph.
+    pub fn build(self, graph: MatchingGraph) -> Box<dyn Decoder + Send> {
+        match self {
             DecoderKind::UnionFind => Box::new(UnionFindDecoder::new(graph)),
             DecoderKind::Matching => Box::new(SparseMatchingDecoder::new(graph)),
-            DecoderKind::BpOsd => {
+        }
+    }
+}
+
+impl From<DecoderKind> for DecoderChoice {
+    fn from(kind: DecoderKind) -> Self {
+        match kind {
+            DecoderKind::UnionFind => DecoderChoice::UnionFind,
+            DecoderKind::Matching => DecoderChoice::Matching,
+        }
+    }
+}
+
+/// The decoders [`logical_error_rate_using`] can use (more may be added).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
+pub enum DecoderChoice {
+    /// Weighted union-find ([`UnionFindDecoder`]): almost linear time.
+    #[default]
+    UnionFind,
+    /// Minimum-weight perfect matching by region growth
+    /// ([`SparseMatchingDecoder`]; the same weights as
+    /// [`MatchingDecoder`]).
+    Matching,
+    /// Two-pass matching with the correlations of the decomposed model
+    /// ([`CorrelatedMatchingDecoder`]); for circuits only.
+    CorrelatedMatching,
+    /// BP+OSD ([`BpOsdDecoder`] with its default options); for a circuit
+    /// ([`DecoderChoice::build_for`]) on the model without decomposition.
+    BpOsd,
+}
+
+impl DecoderChoice {
+    /// The decoder of a matching graph (BP+OSD on the graph's errors; it
+    /// takes at most [`MAX_BPOSD_DETECTORS`](bposd::MAX_BPOSD_DETECTORS)
+    /// detectors). A graph does not know which edges are parts of one
+    /// error, so correlated matching needs [`DecoderChoice::build_for`].
+    pub fn build(self, graph: MatchingGraph) -> Result<Box<dyn Decoder + Send>> {
+        Ok(match self {
+            DecoderChoice::UnionFind => DecoderKind::UnionFind.build(graph),
+            DecoderChoice::Matching => DecoderKind::Matching.build(graph),
+            DecoderChoice::CorrelatedMatching => {
+                return Err(QsoError::invalid(
+                    "decoder",
+                    "correlated matching needs the decomposed model of a circuit (build_for)",
+                ));
+            }
+            DecoderChoice::BpOsd => {
                 Box::new(BpOsdDecoder::new(&graph.to_dem(), BpOsdOptions::default())?)
             }
         })
     }
 
     /// The decoder of a circuit's detector error model: decomposed into a
-    /// matching graph for union-find and matching, whole for BP+OSD.
+    /// matching graph for union-find and matching, with the parts of each
+    /// error for correlated matching, whole for BP+OSD.
     pub fn build_for(self, circuit: &DetectorCircuit) -> Result<Box<dyn Decoder + Send>> {
         Ok(match self {
-            DecoderKind::BpOsd => Box::new(BpOsdDecoder::new(
+            DecoderChoice::BpOsd => Box::new(BpOsdDecoder::new(
                 &detector_error_model(circuit, false)?,
                 BpOsdOptions::default(),
+            )?),
+            DecoderChoice::CorrelatedMatching => Box::new(CorrelatedMatchingDecoder::new(
+                &correlated_error_model(circuit)?,
             )?),
             _ => self.build(MatchingGraph::from_dem(&detector_error_model(
                 circuit, true,
@@ -146,14 +213,25 @@ pub fn logical_error_rate(
     logical_error_rate_with(circuit, shots, seed, DecoderKind::UnionFind)
 }
 
-/// [`logical_error_rate`] with the given decoder (of the model
-/// [`DecoderKind::build_for`] gives); the shots are the same for every
-/// decoder.
+/// [`logical_error_rate`] with the given decoder; the shots are the same
+/// for every decoder.
 pub fn logical_error_rate_with(
     circuit: &DetectorCircuit,
     shots: usize,
     seed: u64,
     decoder: DecoderKind,
+) -> Result<LogicalErrorRate> {
+    logical_error_rate_using(circuit, shots, seed, decoder.into())
+}
+
+/// [`logical_error_rate`] with any decoder (of the model
+/// [`DecoderChoice::build_for`] gives); the shots are the same for every
+/// decoder.
+pub fn logical_error_rate_using(
+    circuit: &DetectorCircuit,
+    shots: usize,
+    seed: u64,
+    decoder: DecoderChoice,
 ) -> Result<LogicalErrorRate> {
     let mut decoder = decoder.build_for(circuit)?;
     let mut rng = Rng::seed_from_u64(seed);

@@ -143,9 +143,9 @@ enum Event {
 pub struct SparseMatchingDecoder {
     graph: MatchingGraph,
     /// Doubled integer weight of every edge.
-    weight: Vec<i64>,
+    pub(crate) weight: Vec<i64>,
     /// Integer weight (undoubled) per unit of length.
-    scale: f64,
+    pub(crate) scale: f64,
     nodes: Vec<Node>,
     touched: Vec<u32>,
     regions: Vec<Region>,
@@ -211,6 +211,27 @@ impl SparseMatchingDecoder {
     /// The prediction and the integer weight of the correction (in the
     /// units of `MatchingDecoder`).
     pub(crate) fn decode_weighted(&mut self, fired: &[usize]) -> Result<(u64, i64)> {
+        let events = self.events(fired)?;
+        // Clean state even if an earlier shot was interrupted.
+        self.reset();
+        let result = self.solve(&events).map(|()| self.extract(None));
+        self.reset();
+        result
+    }
+
+    /// The matched pairs of detection events (`u32::MAX` for the
+    /// boundary) of a minimum-weight correction.
+    pub(crate) fn decode_pairs(&mut self, fired: &[usize]) -> Result<Vec<(u32, u32)>> {
+        let events = self.events(fired)?;
+        self.reset();
+        let mut pairs = Vec::with_capacity(events.len());
+        let result = self.solve(&events).map(|()| self.extract(Some(&mut pairs)));
+        self.reset();
+        result.map(|_| pairs)
+    }
+
+    /// The fired detectors listed an odd number of times, ascending.
+    fn events(&self, fired: &[usize]) -> Result<Vec<u32>> {
         let n = self.graph.n_detectors();
         if let Some(&d) = fired.iter().find(|&&d| d >= n) {
             return Err(QsoError::invalid(
@@ -233,11 +254,7 @@ impl SparseMatchingDecoder {
             }
             k = end;
         }
-        // Clean state even if an earlier shot was interrupted.
-        self.reset();
-        let result = self.solve(&events);
-        self.reset();
-        result
+        Ok(events)
     }
 
     fn reset(&mut self) {
@@ -252,7 +269,7 @@ impl SparseMatchingDecoder {
         self.trees = 0;
     }
 
-    fn solve(&mut self, events: &[u32]) -> Result<(u64, i64)> {
+    fn solve(&mut self, events: &[u32]) -> Result<()> {
         for &d in events {
             let r = self.regions.len() as u32;
             self.regions.push(Region {
@@ -310,7 +327,7 @@ impl SparseMatchingDecoder {
                 }
             }
         }
-        Ok(self.extract())
+        Ok(())
     }
 
     fn push(&mut self, t: i64, event: Event) {
@@ -911,8 +928,14 @@ impl SparseMatchingDecoder {
     }
 
     /// The matched pairs below the top-level matching: total observables
-    /// and weight (in `MatchingDecoder` units).
-    fn extract(&self) -> (u64, i64) {
+    /// and weight (in `MatchingDecoder` units); the pairs of detection
+    /// events go to `pairs`.
+    fn extract(&self, mut pairs: Option<&mut Vec<(u32, u32)>>) -> (u64, i64) {
+        let mut pair = |e: &Edge| {
+            if let Some(p) = pairs.as_mut() {
+                p.push((e.u, e.v));
+            }
+        };
         let mut obs = 0u64;
         let mut len = 0i64;
         let mut stack: Vec<(u32, u32)> = Vec::new();
@@ -923,11 +946,13 @@ impl SparseMatchingDecoder {
             }
             match g.mate {
                 Mate::Boundary => {
+                    pair(&g.mate_edge);
                     obs ^= g.mate_edge.obs;
                     len += g.mate_edge.len;
                     stack.push((r, g.mate_edge.u));
                 }
                 Mate::Region(s) if r < s => {
+                    pair(&g.mate_edge);
                     obs ^= g.mate_edge.obs;
                     len += g.mate_edge.len;
                     stack.push((r, g.mate_edge.u));
@@ -949,6 +974,7 @@ impl SparseMatchingDecoder {
             let mut k = (j + 1) % len_c;
             while k != j {
                 let e = g.cycle[k];
+                pair(&e);
                 obs ^= e.obs;
                 len += e.len;
                 stack.push((g.children[k], e.u));
