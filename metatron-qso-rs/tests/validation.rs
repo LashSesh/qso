@@ -1294,6 +1294,143 @@ fn bposd_decodes_colour_and_bicycle_codes() {
 }
 
 #[test]
+fn circuit_distances_of_memory_experiments() {
+    use metatron_qso::qec::{
+        CircuitNoise, CssCode, CssSchedule, DistanceOptions, MemoryBasis, circuit_distance,
+        css_code_memory, css_code_memory_with, detector_error_model, repetition_code_memory,
+        surface_code_memory_with,
+    };
+    let noise = CircuitNoise::uniform(0.001);
+    let distance = |c: &metatron_qso::qec::DetectorCircuit| {
+        circuit_distance(
+            &detector_error_model(c, false).unwrap(),
+            &DistanceOptions::default(),
+        )
+        .unwrap()
+        .distance()
+    };
+    // Repetition and rotated surface codes with the hook-safe order keep
+    // their distance.
+    for d in [3, 5, 7] {
+        assert_eq!(
+            distance(&repetition_code_memory(d, d, &noise).unwrap()),
+            Some(d)
+        );
+    }
+    for d in [3, 5] {
+        for basis in [MemoryBasis::Z, MemoryBasis::X] {
+            let c = surface_code_memory_with(d, d, &noise, basis).unwrap();
+            assert_eq!(distance(&c), Some(d), "surface d = {d}");
+        }
+    }
+    // [[72, 12, 6]]: the depth-8 cycle of Bravyi et al. keeps distance 6
+    // (their bound dcirc ≤ 6), the greedy schedule does not.
+    let (bb, _) = CssCode::bivariate_bicycle_code(72).unwrap();
+    for basis in [MemoryBasis::Z, MemoryBasis::X] {
+        let cycle = css_code_memory_with(&bb, 3, &noise, basis, CssSchedule::Bicycle).unwrap();
+        assert_eq!(distance(&cycle), Some(6));
+        assert_eq!(
+            distance(&css_code_memory(&bb, 3, &noise, basis).unwrap()),
+            Some(4)
+        );
+    }
+    // Triangular colour codes with one bare ancilla per face: a fault on
+    // the ancilla of a weight-6 check spreads to up to three data qubits,
+    // and the circuit distance is (d + 1)/2 for the greedy schedule and for
+    // every order of directions (all 720 checked for d = 3 and 5 in the
+    // long validation run).
+    for (d, dc) in [(3, 2), (5, 3), (7, 4)] {
+        let code = CssCode::color_code(d).unwrap();
+        let c = css_code_memory(&code, 2, &noise, MemoryBasis::Z).unwrap();
+        assert_eq!(distance(&c), Some(dc), "colour d = {d}");
+        let ordered = css_code_memory_with(
+            &code,
+            2,
+            &noise,
+            MemoryBasis::Z,
+            CssSchedule::Directions([0, 1, 2, 3, 4, 5]),
+        )
+        .unwrap();
+        assert_eq!(distance(&ordered), Some(dc), "colour d = {d}, ordered");
+    }
+}
+
+/// Long (minutes): run by the weekly benchmark workflow.
+#[test]
+#[ignore]
+fn bicycle_cycle_reaches_the_published_circuit_distances() {
+    use metatron_qso::qec::{
+        CircuitNoise, CssCode, CssSchedule, DistanceOptions, MemoryBasis, circuit_distance,
+        css_code_memory_with, detector_error_model,
+    };
+    // Bravyi et al. (2024), table 1, give dcirc ≤ 8, 8 and 10 for
+    // [[90, 8, 10]], [[108, 8, 10]] and [[144, 12, 12]] with the depth-8
+    // cycle, under noise that also strikes idle qubits. Three cycles of
+    // QSO's circuit noise (no idle errors): BP+OSD with 256 searches per
+    // observable finds logical errors of 8, 9 and 11 faults, and the
+    // exhaustive search proves that none has fewer than 7.
+    let noise = CircuitNoise::uniform(0.001);
+    for (n, bound) in [(90, 8), (108, 9), (144, 11)] {
+        let (code, _) = CssCode::bivariate_bicycle_code(n).unwrap();
+        let c =
+            css_code_memory_with(&code, 3, &noise, MemoryBasis::Z, CssSchedule::Bicycle).unwrap();
+        let r = circuit_distance(
+            &detector_error_model(&c, false).unwrap(),
+            &DistanceOptions {
+                max_work: 1 << 27,
+                bposd_trials: 256,
+                ..DistanceOptions::default()
+            },
+        )
+        .unwrap();
+        eprintln!("[[{n}]]: {} ..= {:?}", r.lower_bound, r.upper_bound());
+        assert!(r.upper_bound().unwrap() <= bound, "[[{n}]]: {r:?}");
+        assert!(r.lower_bound >= 7, "[[{n}]]: {r:?}");
+    }
+    // Every order of directions gives the colour codes of distance 3 and 5
+    // circuit distance 2 and 3.
+    for (d, dc) in [(3, 2), (5, 3)] {
+        let code = CssCode::color_code(d).unwrap();
+        let mut order = [0u8, 1, 2, 3, 4, 5];
+        let mut orders = Vec::new();
+        permutations(6, &mut order, &mut orders);
+        for order in orders {
+            for basis in [MemoryBasis::Z, MemoryBasis::X] {
+                let c =
+                    css_code_memory_with(&code, 2, &noise, basis, CssSchedule::Directions(order))
+                        .unwrap();
+                let r = circuit_distance(
+                    &detector_error_model(&c, false).unwrap(),
+                    &DistanceOptions::default(),
+                )
+                .unwrap();
+                assert_eq!(
+                    r.distance(),
+                    Some(dc),
+                    "colour d = {d}, {order:?}, {basis:?}"
+                );
+            }
+        }
+    }
+}
+
+/// Every permutation of `a[..k]` (Heap's algorithm).
+fn permutations(k: usize, a: &mut [u8; 6], out: &mut Vec<[u8; 6]>) {
+    if k == 1 {
+        out.push(*a);
+        return;
+    }
+    for i in 0..k {
+        permutations(k - 1, a, out);
+        if k % 2 == 0 {
+            a.swap(i, k - 1);
+        } else {
+            a.swap(0, k - 1);
+        }
+    }
+}
+
+#[test]
 fn single_precision_states_follow_double_precision() {
     use metatron_qso::quantum::{MAX_QUBITS, MAX_QUBITS_SINGLE, StateVector32};
     // One qubit more in the same memory.

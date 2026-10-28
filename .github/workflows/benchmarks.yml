@@ -15,7 +15,9 @@ name: Benchmarks
 #   fuzz            – ten minutes per fuzz target, with the corpus kept
 #                     between runs;
 #   differential    – 20 000 random circuits per property test on every
-#                     simulator that takes them (tests/differential.rs).
+#                     simulator that takes them (tests/differential.rs),
+#                     and the long validation tests (circuit distances of
+#                     the bivariate bicycle codes, all colour-code orders).
 #
 # The JSON results are uploaded as artefacts.
 
@@ -133,6 +135,8 @@ jobs:
         env:
           QSO_DIFFERENTIAL_CASES: "20000"
         run: cargo test --release -p metatron-qso-rs --all-features --test differential
+      - name: Long validation tests
+        run: cargo test --release -p metatron-qso-rs --all-features --test validation -- --ignored
 
   fuzz:
     runs-on: ubuntu-latest

@@ -12,8 +12,8 @@
 //! * Errors that flip more detectors make the problem that of the minimum
 //!   distance of a linear code (NP-hard). [`circuit_distance`] gives
 //!   bounds: an upper bound from the lightest logical error it finds (among
-//!   the graph-like errors, and by BP+OSD on the checks with one
-//!   observable as an extra check that must fire), and a lower bound from
+//!   the graph-like errors, and by BP+OSD on the checks with the parity of
+//!   some observables as an extra check that must fire), and a lower bound from
 //!   an exhaustive search, by increasing weight, of the sets of errors
 //!   that cancel every detector, up to a weight and a work limit. When the
 //!   bounds meet, the distance is exact.
@@ -37,8 +37,9 @@ pub struct DistanceOptions {
     /// Most sets of errors the exhaustive search visits (about 10⁷ a
     /// second).
     pub max_work: u64,
-    /// BP+OSD searches per observable; the first with equal priors, the
-    /// others with randomly perturbed ones.
+    /// BP+OSD searches per observable: first each observable alone with
+    /// equal priors, then random sets of observables with randomly
+    /// perturbed priors.
     pub bposd_trials: usize,
     /// Seed of the perturbations.
     pub seed: u64,
@@ -306,12 +307,27 @@ pub fn circuit_distance(
         }
     };
     let bits = errors.iter().fold(0u64, |b, e| b | e.observables);
+    let singles: Vec<u64> = (0..64)
+        .filter(|&b| bits >> b & 1 == 1)
+        .map(|b| 1u64 << b)
+        .collect();
     let mut rng = Rng::seed_from_u64(options.seed);
-    for bit in (0..64).filter(|&b| bits >> b & 1 == 1) {
-        for trial in 0..options.bposd_trials {
-            if let Some(set) = bposd_logical(n, &errors, bit, trial, &mut rng)? {
-                consider(set, &mut best);
-            }
+    let trials = options.bposd_trials.saturating_mul(singles.len());
+    for trial in 0..trials {
+        // First every observable alone with equal priors, then random sets
+        // of observables (a light logical error often flips several) with
+        // perturbed priors.
+        let (target, perturbed) = match singles.get(trial) {
+            Some(&single) => (single, false),
+            None => loop {
+                let t = rng.next_u64() & bits;
+                if t != 0 {
+                    break (t, true);
+                }
+            },
+        };
+        if let Some(set) = bposd_logical(n, &errors, target, perturbed, &mut rng)? {
+            consider(set, &mut best);
         }
     }
     // Exhaustive search below the best found.
@@ -353,13 +369,15 @@ pub fn circuit_distance(
     })
 }
 
-/// A light undetectable error flipping observable `bit`, by BP+OSD on the
-/// checks with that observable as an extra check that fires.
+/// A light undetectable error flipping an odd number of the observables in
+/// `target`, by BP+OSD on the checks with their parity as an extra check
+/// that fires; with `perturbed`, the priors vary randomly by a factor of up
+/// to e³ either way.
 fn bposd_logical(
     n: usize,
     errors: &[Error],
-    bit: usize,
-    trial: usize,
+    target: u64,
+    perturbed: bool,
     rng: &mut Rng,
 ) -> Result<Option<Vec<usize>>> {
     if n + 1 > MAX_BPOSD_DETECTORS {
@@ -372,13 +390,13 @@ fn bposd_logical(
             .iter()
             .map(|e| {
                 let mut detectors = e.detectors.clone();
-                if e.observables >> bit & 1 == 1 {
+                if (e.observables & target).count_ones() % 2 == 1 {
                     detectors.push(n);
                 }
-                let jitter = if trial == 0 {
-                    1.0
+                let jitter = if perturbed {
+                    rng.uniform_range(-3.0, 3.0).exp()
                 } else {
-                    rng.uniform_range(-1.0, 1.0).exp()
+                    1.0
                 };
                 ErrorMechanism {
                     probability: 0.01 * jitter,
