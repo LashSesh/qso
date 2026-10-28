@@ -1215,6 +1215,40 @@ Validation as planned, on the development machine (4 cores, a VM):
   framework; QSO is ahead of Qulacs cold and warm at every size, and at
   14 qubits (one thread) equal warm.
 
+An independent review checked the pool's memory ordering and lifetime
+argument (sound), stress-tested it (6 threads × 3000 random jobs, calls
+from rayon and plain threads at once, 5·10⁷ tasks, nesting), ran Miri
+with 16 seeds, compared state hashes of the old build and of the pool on
+1–4 threads at 15–22 qubits (identical, single precision, gradients,
+sampling and trajectories included) and checked fork safety (the child
+runs serially; the old build hung). It found:
+
+- **A panic disabled the pool.** The lock of the running job was still
+  held while the task's panic unwound, which poisoned it, and every later
+  job of the process ran serially (under Miri, every test after the
+  panic test too). The lock is now released first, and a poisoned lock
+  is taken.
+- **Panics in serial runs.** When a job ran serially (pool busy, one
+  core), a panic stopped the remaining tasks, against the documented
+  contract; the test failed with `RAYON_NUM_THREADS=1`. Serial runs now
+  finish every task first, and a second payload is never dropped (a
+  panicking `Drop` escaped and aborted).
+- **Shared machines.** Two QSO processes at once lost 25–40 % of their
+  throughput: the caller spun on workers that the scheduler had
+  preempted. Waits now yield the core every 64 steps; two processes then
+  ran 2000–2170 16-qubit layers per second, against 1540–1710 with rayon
+  and about 1200 before the fix.
+- **Rayon still woken.** `StateVector::zero`, `probabilities` and other
+  maps still ran on rayon, so a simulation from scratch after a pause
+  paid for waking it. They run on the pool now.
+- **Smaller fixes:** workers that start after the first job join it;
+  threads that cannot be spawned are done without; `QSO_NUM_THREADS=0`
+  falls back to `RAYON_NUM_THREADS`; Miri's kernel test runs on the pool
+  rather than inside rayon (whose fallback is safe code); the guide
+  documents both variables and the CPU time spinning costs (about 40 %
+  more with a layer every millisecond); stale 16-qubit statements; the
+  warm Python column now comes from the cross-validation.
+
 ### 1.25 — Documentation and reach (S–M)
 
 Use case: users of released versions, Rust users, and the browser.

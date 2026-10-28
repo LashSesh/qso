@@ -42,8 +42,9 @@ distance to uniform at t = 20 for growing dephasing rates.
 
 Childs–Goldstone search adds a marked-node term to γ times the
 Laplacian. `critical_gamma` is their critical rate (1/N)·Σ 1/λ over the
-non-zero Laplacian eigenvalues, the optimal rate on vertex-transitive
-graphs; `SpatialSearch::optimize` searches γ and the time for
+non-zero Laplacian eigenvalues, which the best rate approaches on large
+vertex-transitive graphs (on K₁₃ it is 12/169, the best rate 1/13);
+`SpatialSearch::optimize` searches γ and the time for
 the highest success probability of finding outer node 9, which the
 program compares with the mean classical hitting time of a random walk.
 
