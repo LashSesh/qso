@@ -1568,7 +1568,7 @@ double), Adam with an initial state (converged, energies within 10⁻⁵,
 fewer than twice the evaluations), the offset of 10⁴, zero, NaN and
 overflowing inputs, and the order of the builder calls.
 
-### 1.28 — 28 qubits end to end (S–M)
+### 1.28 — 28 qubits end to end (S–M, delivered)
 
 | Deliverable | Detail |
 |---|---|
@@ -1579,11 +1579,110 @@ overflowing inputs, and the order of the builder calls.
 Validation: the 28-qubit optimum against the 20–24-qubit trend and the
 energy of the best cut; the comparison on the same machine.
 
+| Deliverable | Delivered | Not done, and why |
+|---|---|---|
+| The use case | `examples/qaoa_large.rs`: angles optimised layer by layer on a 16-node graph, carried over to 28 nodes (angles of random 3-regular graphs concentrate) and refined there with L-BFGS in single precision; `benchmark_report` times p = 10 at 22 and 24 qubits in both precisions. On the way, `MaxCutQaoa` became twice as fast (below) | a few hundred gradient steps at 28 qubits: 30 iterations took 36 minutes, a few hundred would take hours; with carried-over angles they are not needed. 28 qubits in `benchmark_report`: the weekly runner would spend minutes per run on it; 22 and 24 qubits track the same code |
+| Comparison | `run.py --qaoa 22,24` (and 26 locally): energy and gradient of `MaxCutQaoa` and the generic circuit in both precisions, Qulacs' `backprop` and Aer's energy, each in its own process with time and peak memory, checked against tolerances | Aer's gradient: Aer has none, and a parameter-shift gradient of shared QAOA angles needs two energies per gate (1300 at 26 nodes) |
+| GPU decision | below | — |
+
+**Faster `MaxCutQaoa`.** Profiling the 24-qubit energy showed the mixer
+compute-bound in the blocks (a complex 2×2 product per amplitude and
+qubit) and the qubits above the block one pass each. Three changes, each
+measured:
+
+- **Y frame.** `e^{−iβX} = S†·e^{−iβY}·S` with the diagonal
+  `S = diag(1, i)`, which commutes with the cost layers: the state evolves
+  with real Y rotations from `S^{⊗n}|+⟩`, and only `state()` applies
+  `S†^{⊗n}` (an exact phase). The real kernels need a quarter of the
+  products.
+- **Tiles** (`plan::Tiles`): the qubits above the block rotated in tiles of
+  2⁵ runs of 2¹² amplitudes, five qubits per pass over memory. Runs of
+  2⁷ in groups of seven (a block-sized tile) were slower than one pass
+  per qubit (0.117 s against 0.046 s per layer at 24 qubits; prefetchers
+  and the TLB do badly on 128 short runs), runs of 2¹² in groups of five
+  took 0.029 s.
+- **Fused backward pass.** `Σ Y` commutes with every rotation of the
+  mixer, so its overlap is taken in the passes that undo them: per layer
+  one tile pass per group and one block pass over φ and λ together, with
+  the cost gradient and the phases in the block pass, and only imaginary
+  parts summed (in double precision, four partial sums).
+
+Energy and gradient at p = 10 (4-core VM, one call):
+
+| qubits | double, before | after | single, before | after |
+|---:|---:|---:|---:|---:|
+| 24 | 8.55 s | 4.22 s | 6.58 s | 3.57 s |
+| 26 | 35.8 s | 16.3 s | 28.5 s | 13.9 s |
+| 28 | 160 s | 79.5 s | 122 s | 62.4 s |
+
+The gradient now costs four to five and a half energies (26 qubits:
+energy 4.3 s, energy and gradient 17.3 s in double precision; 2.5 s and
+13.8 s in single); the rest is the scalar
+overlap sums, which a kernel fused with the rotation could remove.
+Tests: tiles against gate after gate bit for bit in both precisions,
+their overlap against a direct sum, `MaxCutQaoa` above the block against
+the explicit circuit (state, energy) and central differences (gradient)
+in both precisions; the last runs under Miri too.
+
+**The use case end to end** (`examples/qaoa_large.rs`, single precision,
+random 3-regular graphs with seed 1, angles from 16 nodes, where layer by
+layer to p = 10 reaches 0.97424 in 23 s; 30 L-BFGS iterations):
+
+| nodes | maximum cut | ratio, carried over | refined | P(optimal cut) | evaluations | time | peak memory |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 20 | 26 | 0.97813 | 0.98046 | 0.62 | 37 | 6 s | 0.03 GiB |
+| 22 | 29 | 0.97357 | 0.97498 | 0.56 | 38 | 32 s | 0.08 GiB |
+| 24 | 32 | 0.96834 | 0.96917 | 0.35 | 40 | 128 s | 0.29 GiB |
+| 26 | 35 | 0.97562 | 0.97602 | 0.49 | 38 | 526 s | 1.14 GiB |
+| 28 | 38 | 0.96191 | 0.96635 | 0.61 | 36 | 2178 s | 4.51 GiB |
+
+At 28 qubits ⟨C⟩ = 36.72 of the maximum cut 38 (found by enumeration of
+the 2²⁸ cuts, 12 s), and the most likely string is an optimal cut with
+probability 0.61; the ratio lies within the spread of the smaller graphs
+(0.969–0.980), whose ratios depend on the graph more than on its size.
+None of the runs converged in 30 iterations. On 20 nodes, optimising layer by layer on the graph itself (two
+starts per depth, 440 s) reached only 0.97495: the carried-over angles
+started in a better basin. The whole 28-qubit run took 37 minutes and
+4.5 GiB; in double precision it would take 8.9 GiB and about 30 % longer.
+
+**Comparison** (`run.py --qaoa`, same machine, one call each in a fresh
+process):
+
+| qubits | `MaxCutQaoa` double | single | generic circuit | Qulacs `backprop` | Aer, energy only |
+|---:|---:|---:|---:|---:|---:|
+| 22 | 0.83 s, 0.17 GiB | 0.68 s, 0.11 GiB | 4.5 s | 34.6 s, 0.35 GiB | 2.7 s |
+| 24 | 3.65 s, 0.57 GiB | 3.13 s, 0.32 GiB | 19.2 s | 163 s, 1.29 GiB | 13.8 s |
+| 26 | 16.4 s, 2.16 GiB | 13.3 s, 1.16 GiB | 80.9 s | 650 s, 5.04 GiB | 49.5 s |
+
+In double precision, energies and gradients agree to 2.4·10⁻¹⁴ relative
+(all four double-precision paths); QSO's single precision to 1.1·10⁻⁸
+and 1.3·10⁻⁶. QSO's generic circuit is 2.5–4 times slower than its
+specialised path and 8 times faster than Qulacs' `backprop`; Aer takes
+three times as long for the energy alone as `MaxCutQaoa` for energy and
+gradient.
+
+**The GPU decision, restated.** The use case runs on the CPU: 28 qubits
+at one minute per gradient, an optimisation from carried-over angles in
+under an hour, in 4.5 GiB. What a GPU would add: the kernels are bound by
+memory bandwidth and simple arithmetic, so a GPU with 300–1000 GB/s
+against the VM's 62 GB/s (the fastest pass over the state on all four
+threads, BENCHMARKS.md) could make each evaluation 5–15 times faster (an
+estimate from bandwidth, not a measurement), and 28 qubits in single precision fit
+in 8 GB of GPU memory. What it needs: hardware to test on (none here,
+none on GitHub's standard runners) and a dependency, `wgpu`, whose
+shading language has no double precision, so a WebGPU backend would be
+single precision only, which 1.27 makes usable and measurable against
+the CPU. The track stays parked until a test machine with a GPU is
+available; the plan for it is then concrete: the QAOA layer (phase table,
+Y rotations, tiles) and the fused backward pass as compute shaders, with
+the CPU's single precision as the reference. Beyond 29 qubits memory
+ends on a 16 GB machine in either precision, which a GPU does not change.
+
 ### Not in this stage
 
 A GPU backend: it needs hardware to test on and a dependency (`wgpu`),
-neither available now (see 1.28). Multi-node simulation, which the use
-case does not need below 30 qubits.
+neither available now (1.28 restates the decision with the CPU numbers).
+Multi-node simulation, which the use case does not need below 30 qubits.
 
 ## 5. Order and reasoning
 
@@ -1693,6 +1792,11 @@ Taken (October 2026):
   training at 26–28 qubits; it is served on the CPU first (1.26–1.28),
   because no GPU is available to test on and the measurements show
   larger losses elsewhere.
+* After the sixth stage (October 2026): the use case runs on the CPU (28
+  qubits, one minute per gradient, 4.5 GiB); the GPU track stays parked
+  until a machine with a GPU is available to test on, and would then be a
+  single-precision `wgpu` backend for the QAOA layer, with the CPU's single
+  precision as reference (1.28).
 * The browser playground stays, because it costs little to maintain: it
   is plain HTML and JavaScript without dependencies or a build step, it
   uses only the npm package's JSON interface, which the package's tests
