@@ -6,18 +6,30 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-Milestones 1.14 (Gaussian boson sampling and imperfect photons), 1.15
-(molecular integrals), 1.16 (fast matching) and 1.17 (mitigation by
-purification) of the [roadmap](docs/ROADMAP.md), its third stage, and
-milestones 1.18 (pretty good state transfer), 1.19 (decoding beyond
-matching), 1.20 (single precision) and 1.21 (coverage and differential
-testing) of the fourth, which completes it; and milestones 1.22
-(error-correction circuits that keep their distance), 1.23 (larger
-basis sets and open shells), 1.24 (short simulations at full speed) and
-1.25 (documentation and reach) of the fifth, which completes it; and
-milestones 1.26 (gradients at the cost of a few simulations), 1.27
-(variational training in single precision) and 1.28 (28 qubits end to
-end) of the sixth, which completes it.
+## [1.7.0] — 2026-10-28
+
+Milestones 1.14 to 1.28 of the [roadmap](docs/ROADMAP.md), its third to
+sixth stages, released together:
+
+- **third stage**: 1.14 (Gaussian boson sampling and imperfect photons),
+  1.15 (molecular integrals), 1.16 (fast matching), 1.17 (mitigation by
+  purification);
+- **fourth stage**: 1.18 (pretty good state transfer), 1.19 (decoding
+  beyond matching), 1.20 (single precision), 1.21 (coverage and
+  differential testing);
+- **fifth stage**: 1.22 (error-correction circuits that keep their
+  distance), 1.23 (larger basis sets and open shells), 1.24 (short
+  simulations at full speed), 1.25 (documentation and reach);
+- **sixth stage**: 1.26 (gradients at the cost of a few simulations),
+  1.27 (variational training in single precision), 1.28 (28 qubits end to
+  end).
+
+New results are checked against The Walrus, PySCF, Stim, PyMatching,
+`ldpc`, Qulacs and Qiskit Aer, closed forms and enumeration (named
+below). Every validated result of 1.6.0 still holds (the validation tests
+only grew); energies and gradients differ from 1.6.0 by rounding where
+kernels changed. The public Rust API only grows (`cargo-semver-checks`
+against 1.6.0).
 
 ### Added
 
