@@ -385,6 +385,7 @@ def expectation_and_gradient(
     method: str = "adjoint",
     step: float = 1e-5,
     initial_state: Optional[StateVector] = None,
+    precision: Literal["double", "single"] = "double",
 ) -> Tuple[float, RealArray]: ...
 def expectation_batch(
     circuit: Circuit,
@@ -424,6 +425,7 @@ def run_vqe(
     gradient: str = "adjoint",
     initial_parameters: Optional[ArrayLike] = None,
     initial_state: Optional[StateVector] = None,
+    precision: Literal["double", "single"] = "double",
 ) -> VqeResult: ...
 
 @type_check_only
@@ -444,7 +446,9 @@ class QaoaResult(TypedDict):
 
 @final
 class MaxCutQaoa:
-    def __new__(cls, graph: Graph, p: int) -> MaxCutQaoa: ...
+    def __new__(
+        cls, graph: Graph, p: int, precision: Literal["double", "single"] = "double"
+    ) -> MaxCutQaoa: ...
     def expectation(self, params: ArrayLike) -> float: ...
     def expectation_and_gradient(self, params: ArrayLike) -> Tuple[float, RealArray]: ...
     def analyze(self, params: ArrayLike) -> QaoaResult: ...
@@ -464,6 +468,8 @@ class MaxCutQaoa:
     @property
     def p(self) -> int: ...
     @property
+    def precision(self) -> Literal["double", "single"]: ...
+    @property
     def n_qubits(self) -> int: ...
     def optimal_cuts(self) -> list[int]: ...
     def cut_value(self, b: int) -> float: ...
@@ -475,6 +481,7 @@ def optimize_qaoa_layerwise(
     seed: int = 0,
     method: str = "lbfgs",
     max_iterations: int = 1000,
+    precision: Literal["double", "single"] = "double",
 ) -> list[QaoaResult]: ...
 
 # ---------------------------------------------------------------------------

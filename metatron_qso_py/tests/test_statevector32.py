@@ -55,3 +55,52 @@ def test_single_precision_samples_and_rejects_bad_input() -> None:
         q.simulate(c, precision="half")  # type: ignore[call-overload]
     with pytest.raises(ValueError):
         q.StateVector32.zero(2).apply(c)
+
+
+def test_single_precision_gradients_match_double_precision() -> None:
+    h = q.transverse_field_ising(12, 1.0, 0.7)
+    c = q.efficient_su2(12, 2)
+    theta = np.random.default_rng(5).uniform(-np.pi, np.pi, c.num_parameters)
+    e, g = q.expectation_and_gradient(c, h, theta)
+    e32, g32 = q.expectation_and_gradient(c, h, theta, precision="single")
+    assert e32 == pytest.approx(e, abs=1e-5)
+    np.testing.assert_allclose(g32, g, atol=1e-4 * max(1.0, np.abs(g).max()))
+    # From an initial state, rounded to single precision.
+    start = q.simulate(q.efficient_su2(12, 1), np.full(q.efficient_su2(12, 1).num_parameters, 0.4))
+    e, g = q.expectation_and_gradient(c, h, theta, initial_state=start)
+    e32, g32 = q.expectation_and_gradient(c, h, theta, initial_state=start, precision="single")
+    assert e32 == pytest.approx(e, abs=1e-5)
+    np.testing.assert_allclose(g32, g, atol=1e-4 * max(1.0, np.abs(g).max()))
+    with pytest.raises(ValueError, match="adjoint"):
+        q.expectation_and_gradient(c, h, theta, method="parameter_shift", precision="single")
+    with pytest.raises(ValueError, match="precision"):
+        q.expectation_and_gradient(c, h, theta, precision="half")  # type: ignore[arg-type]
+
+
+def test_single_precision_vqe_reaches_the_exact_energy() -> None:
+    h = q.transverse_field_ising(4, 1.0, 0.7)
+    exact = float(np.linalg.eigvalsh(h.to_matrix())[0])
+    r = q.run_vqe(h, q.efficient_su2(4, 3), restarts=6, seed=3, precision="single")
+    assert r["energy"] == pytest.approx(exact, abs=1e-5)
+    with pytest.raises(ValueError, match="adjoint"):
+        q.run_vqe(h, q.efficient_su2(4, 1), gradient="parameter_shift", precision="single")
+
+
+def test_single_precision_qaoa_matches_double_precision() -> None:
+    g = q.Graph.from_edges(5, [(0, 1, 1.0), (1, 2, 0.5), (2, 3, 2.0), (3, 4, 1.0), (4, 0, 1.5)])
+    double, single = q.MaxCutQaoa(g, 2), q.MaxCutQaoa(g, 2, precision="single")
+    assert (double.precision, single.precision) == ("double", "single")
+    assert "precision=\"single\"" in repr(single)
+    x = np.array([0.4, 0.9, 0.3, 0.2])
+    v, grad = double.expectation_and_gradient(x)
+    v32, grad32 = single.expectation_and_gradient(x)
+    assert v32 == pytest.approx(v, abs=1e-5)
+    np.testing.assert_allclose(grad32, grad, atol=1e-5)
+    assert single.expectation(x) == pytest.approx(v, abs=1e-5)
+    assert single.state(x).fidelity(double.state(x)) == pytest.approx(1.0, abs=1e-6)
+    results = q.optimize_qaoa_layerwise(q.Graph.cycle(6), 3, restarts=2, precision="single")
+    ratios = [r["approximation_ratio"] for r in results]
+    assert ratios[0] == pytest.approx(0.75, abs=1e-5)
+    assert ratios[-1] == pytest.approx(1.0, abs=1e-5)
+    with pytest.raises(ValueError, match="precision"):
+        q.MaxCutQaoa(g, 1, precision="half")  # type: ignore[arg-type]
