@@ -46,6 +46,10 @@ WARMUP_SECONDS = 0.25
 
 
 def worker(lib: str, kind: str, n: int, reps: int, warmup: int) -> list[float]:
+    # "1@500": one layer, each timed run after a pause of 500 µs (the first
+    # simulation after an idle period: an optimiser step, Python code).
+    kind, _, pause = kind.partition("@")
+    pause_s = int(pause) * 1e-6 if pause else 0.0
     if kind == "permanent":
         rng = np.random.default_rng(n)
         a = rng.normal(size=(n, n)) + 1j * rng.normal(size=(n, n))
@@ -114,6 +118,8 @@ def worker(lib: str, kind: str, n: int, reps: int, warmup: int) -> list[float]:
         done += 1
     times = []
     for _ in range(reps):
+        if pause_s:
+            time.sleep(pause_s)
         t = time.perf_counter()
         run()
         times.append(time.perf_counter() - t)
@@ -987,6 +993,10 @@ def configurations(quick: bool) -> list[tuple]:
         out.append(("1", n, libs, reps, 3 if n <= 16 else 1))
     for n in ([20] if quick else [20, 22]):
         out.append(("10", n, state_libs, 3 if n == 20 else 2, 1))
+    # Cold starts: one layer after pauses of 0.5 and 20 ms.
+    for n in ([12, 16] if quick else [10, 12, 14, 16, 18]):
+        for pause in (500, 20000):
+            out.append((f"1@{pause}", n, ["qso", "qulacs", "aer"], 21, 3))
     out.append(("gradient", 10, ["qso", "pennylane", "qulacs"], 15, 3))
     for n in ([10, 14] if quick else [10, 14, 18, 20, 22, 24]):
         out.append(("permanent", n, ["qso", "thewalrus"], 5 if n <= 20 else 2, 1))

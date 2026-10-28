@@ -80,6 +80,40 @@ fn main() -> Result<()> {
         println!("| {n} | {} | {} | {per:.3} |", layer.len(), fmt_time(t));
     }
 
+    println!("\n## First layer after a pause (an optimiser step, Python code): median of 21\n");
+    println!("| qubits | warm | after 0.5 ms | after 20 ms |");
+    println!("|---:|---:|---:|---:|");
+    for n in [12usize, 14, 16, 18] {
+        let mut layer = Circuit::new(n);
+        for q in 0..n {
+            layer.h(q).rz(q, 0.3);
+        }
+        for q in 0..n - 1 {
+            layer.cx(q, q + 1);
+        }
+        let mut psi = StateVector::zero(n);
+        let warm = median_seconds(21, || psi.apply_circuit(&layer, &[]).unwrap());
+        let mut row = vec![fmt_time(warm)];
+        for pause_us in [500u64, 20_000] {
+            let mut times: Vec<f64> = (0..21)
+                .map(|_| {
+                    std::thread::sleep(std::time::Duration::from_micros(pause_us));
+                    let t = Instant::now();
+                    psi.apply_circuit(&layer, &[]).unwrap();
+                    t.elapsed().as_secs_f64()
+                })
+                .collect();
+            times.sort_by(f64::total_cmp);
+            let t = times[times.len() / 2];
+            record(
+                format!("statevector_layer_after_pause/pause_us={pause_us}/qubits={n}"),
+                t,
+            );
+            row.push(fmt_time(t));
+        }
+        println!("| {n} | {} |", row.join(" | "));
+    }
+
     println!("\n## Cost per gate type (22 qubits, 5 passes over all qubits)\n");
     println!("| gate | time per pass | ns per gate·amplitude |");
     println!("|---|---:|---:|");

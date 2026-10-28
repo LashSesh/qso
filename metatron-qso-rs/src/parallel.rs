@@ -35,8 +35,15 @@ pub(crate) const CHUNK: usize = 1 << 3;
 ///
 /// Safety contract: every user must guarantee that concurrent accesses
 /// through the pointer touch pairwise disjoint elements.
-#[derive(Clone, Copy)]
 pub(crate) struct SyncPtr<T>(*mut T);
+
+impl<T> Clone for SyncPtr<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for SyncPtr<T> {}
 
 unsafe impl<T: Send> Send for SyncPtr<T> {}
 unsafe impl<T: Send> Sync for SyncPtr<T> {}
@@ -54,6 +61,111 @@ impl<T> SyncPtr<T> {
     }
 }
 
+/// Whether to use rayon rather than the state-vector pool: inside a rayon
+/// task (nested parallelism, e.g. trajectories or restarts in parallel)
+/// rayon's work stealing balances the load; elsewhere the pool's workers,
+/// which stay awake between gates, are faster to start.
+#[cfg(feature = "parallel")]
+fn nested() -> bool {
+    rayon::current_thread_index().is_some()
+}
+
+/// Call `f(k, chunk)` for the consecutive chunks of `size` elements (the
+/// last may be shorter) on the pool, or with rayon when [`nested`].
+#[cfg(feature = "parallel")]
+fn chunk_tasks<T, F>(data: &mut [T], size: usize, f: F)
+where
+    T: Send,
+    F: Fn(usize, &mut [T]) + Sync + Send,
+{
+    if nested() {
+        data.par_chunks_mut(size)
+            .enumerate()
+            .for_each(|(k, c)| f(k, c));
+        return;
+    }
+    let len = data.len();
+    let ptr = SyncPtr::new(data);
+    crate::pool::run(len.div_ceil(size), |k| {
+        let start = k * size;
+        let end = (start + size).min(len);
+        // SAFETY: the ranges [start, end) of different k are disjoint and
+        // inside `data`, which outlives the call.
+        let chunk = unsafe { std::slice::from_raw_parts_mut(ptr.get().add(start), end - start) };
+        f(k, chunk);
+    });
+}
+
+/// Call `f(lo, hi)` for pieces of `CHUNK` elements of every pair of halves
+/// `(data[b·2s + p·CHUNK..], data[b·2s + s + p·CHUNK..])`, `s = stride ≥
+/// CHUNK`, on the pool, or with rayon when [`nested`].
+#[cfg(feature = "parallel")]
+fn pair_tasks<T, F>(data: &mut [T], stride: usize, f: F)
+where
+    T: Send,
+    F: Fn(&mut [T], &mut [T]) + Sync + Send,
+{
+    debug_assert!(stride >= CHUNK && stride.is_multiple_of(CHUNK));
+    if nested() {
+        data.par_chunks_mut(2 * stride).for_each(|chunk| {
+            let (lo, hi) = chunk.split_at_mut(stride);
+            lo.par_chunks_mut(CHUNK)
+                .zip(hi.par_chunks_mut(CHUNK))
+                .for_each(|(l, h)| f(l, h));
+        });
+        return;
+    }
+    let pieces = stride / CHUNK;
+    let blocks = data.len() / (2 * stride);
+    let ptr = SyncPtr::new(data);
+    crate::pool::run(blocks * pieces, |t| {
+        let lo = (t / pieces) * 2 * stride + (t % pieces) * CHUNK;
+        // SAFETY: the pieces [lo, lo + CHUNK) and [lo + stride, lo + stride
+        // + CHUNK) of different t are disjoint and inside `data`.
+        let (l, h) = unsafe {
+            (
+                std::slice::from_raw_parts_mut(ptr.get().add(lo), CHUNK),
+                std::slice::from_raw_parts_mut(ptr.get().add(lo + stride), CHUNK),
+            )
+        };
+        f(l, h);
+    });
+}
+
+/// Call `f(i)` for `i` in consecutive runs of at least `min_len` indices
+/// covering `0..n`, on the pool, or with rayon when [`nested`].
+#[cfg(feature = "parallel")]
+fn index_tasks<F>(n: usize, min_len: usize, f: F)
+where
+    F: Fn(usize) + Sync + Send,
+{
+    let min_len = min_len.max(1);
+    if nested() {
+        (0..n).into_par_iter().with_min_len(min_len).for_each(f);
+        return;
+    }
+    crate::pool::run(n.div_ceil(min_len), |k| {
+        (k * min_len..((k + 1) * min_len).min(n)).for_each(&f);
+    });
+}
+
+/// Call `f(k, block)` for every block of `size` elements (in parallel when
+/// there is more than one).
+pub(crate) fn for_each_block<T, F>(data: &mut [T], size: usize, f: F)
+where
+    T: Send,
+    F: Fn(usize, &mut [T]) + Sync + Send,
+{
+    #[cfg(feature = "parallel")]
+    if data.len() > size {
+        chunk_tasks(data, size, f);
+        return;
+    }
+    for (k, chunk) in data.chunks_mut(size).enumerate() {
+        f(k, chunk);
+    }
+}
+
 /// Call `f(i)` for every `i in 0..n`, in parallel when worthwhile.
 #[inline]
 pub(crate) fn for_each_index<F>(n: usize, f: F)
@@ -62,7 +174,7 @@ where
 {
     #[cfg(feature = "parallel")]
     if n >= PAR_THRESHOLD {
-        (0..n).into_par_iter().with_min_len(CHUNK).for_each(f);
+        index_tasks(n, CHUNK, f);
         return;
     }
     for i in 0..n {
@@ -80,10 +192,7 @@ where
 {
     #[cfg(feature = "parallel")]
     if work >= PAR_THRESHOLD {
-        (0..n_items)
-            .into_par_iter()
-            .with_min_len(min_len.max(1))
-            .for_each(f);
+        index_tasks(n_items, min_len, f);
         return;
     }
     let _ = (work, min_len);
@@ -111,15 +220,13 @@ where
     if data.len() >= PAR_THRESHOLD {
         if stride >= CHUNK {
             // Few large blocks: parallelise inside each block.
-            data.par_chunks_mut(2 * stride).for_each(|chunk| {
-                let (lo, hi) = chunk.split_at_mut(stride);
-                lo.par_chunks_mut(CHUNK)
-                    .zip(hi.par_chunks_mut(CHUNK))
-                    .for_each(|(l, h)| l.iter_mut().zip(h).for_each(|(a, b)| f(a, b)));
+            pair_tasks(data, stride, |l, h| {
+                l.iter_mut().zip(h).for_each(|(a, b)| f(a, b))
             });
         } else {
-            data.par_chunks_mut(CHUNK.max(2 * stride))
-                .for_each(|group| group.chunks_exact_mut(2 * stride).for_each(block));
+            chunk_tasks(data, CHUNK.max(2 * stride), |_, group| {
+                group.chunks_exact_mut(2 * stride).for_each(block)
+            });
         }
         return;
     }
@@ -143,15 +250,11 @@ where
     #[cfg(feature = "parallel")]
     if data.len() >= PAR_THRESHOLD {
         if stride >= CHUNK {
-            data.par_chunks_mut(2 * stride).for_each(|chunk| {
-                let (lo, hi) = chunk.split_at_mut(stride);
-                lo.par_chunks_mut(CHUNK)
-                    .zip(hi.par_chunks_mut(CHUNK))
-                    .for_each(|(l, h)| f(l, h));
-            });
+            pair_tasks(data, stride, &f);
         } else {
-            data.par_chunks_mut(CHUNK.max(2 * stride))
-                .for_each(|group| group.chunks_exact_mut(2 * stride).for_each(block));
+            chunk_tasks(data, CHUNK.max(2 * stride), |_, group| {
+                group.chunks_exact_mut(2 * stride).for_each(block)
+            });
         }
         return;
     }
@@ -168,15 +271,34 @@ where
     T: Send,
     F: Fn(usize, &mut [T], &mut [T]) + Sync + Send,
 {
-    let (lo, hi) = data.split_at_mut(data.len() / 2);
     #[cfg(feature = "parallel")]
-    if lo.len() + hi.len() >= PAR_THRESHOLD {
-        lo.par_chunks_mut(CHUNK)
-            .zip(hi.par_chunks_mut(CHUNK))
-            .enumerate()
-            .for_each(|(c, (l, h))| f(c * CHUNK, l, h));
+    if data.len() >= PAR_THRESHOLD {
+        let half = data.len() / 2;
+        if nested() {
+            let (lo, hi) = data.split_at_mut(half);
+            lo.par_chunks_mut(CHUNK)
+                .zip(hi.par_chunks_mut(CHUNK))
+                .enumerate()
+                .for_each(|(c, (l, h))| f(c * CHUNK, l, h));
+            return;
+        }
+        let ptr = SyncPtr::new(data);
+        crate::pool::run(half.div_ceil(CHUNK), |c| {
+            let start = c * CHUNK;
+            let len = CHUNK.min(half - start);
+            // SAFETY: [start, start + len) and its partner in the upper
+            // half are disjoint across c and inside `data`.
+            let (l, h) = unsafe {
+                (
+                    std::slice::from_raw_parts_mut(ptr.get().add(start), len),
+                    std::slice::from_raw_parts_mut(ptr.get().add(half + start), len),
+                )
+            };
+            f(start, l, h);
+        });
         return;
     }
+    let (lo, hi) = data.split_at_mut(data.len() / 2);
     for (c, (l, h)) in lo.chunks_mut(CHUNK).zip(hi.chunks_mut(CHUNK)).enumerate() {
         f(c * CHUNK, l, h);
     }
@@ -192,9 +314,7 @@ where
 {
     #[cfg(feature = "parallel")]
     if data.len() >= PAR_THRESHOLD {
-        data.par_chunks_mut(CHUNK)
-            .enumerate()
-            .for_each(|(c, chunk)| f(c * CHUNK, chunk));
+        chunk_tasks(data, CHUNK, |c, chunk| f(c * CHUNK, chunk));
         return;
     }
     for (c, chunk) in data.chunks_mut(CHUNK).enumerate() {
@@ -211,14 +331,12 @@ where
 {
     #[cfg(feature = "parallel")]
     if data.len() >= PAR_THRESHOLD {
-        data.par_chunks_mut(CHUNK)
-            .enumerate()
-            .for_each(|(c, chunk)| {
-                let offset = c * CHUNK;
-                for (j, x) in chunk.iter_mut().enumerate() {
-                    f(offset + j, x);
-                }
-            });
+        chunk_tasks(data, CHUNK, |c, chunk| {
+            let offset = c * CHUNK;
+            for (j, x) in chunk.iter_mut().enumerate() {
+                f(offset + j, x);
+            }
+        });
         return;
     }
     for (i, x) in data.iter_mut().enumerate() {
@@ -243,7 +361,8 @@ where
     let n_chunks = n.div_ceil(CHUNK);
     #[cfg(feature = "parallel")]
     if n >= PAR_THRESHOLD {
-        let parts: Vec<f64> = (0..n_chunks).into_par_iter().map(partial).collect();
+        let mut parts = vec![0.0; n_chunks];
+        chunk_tasks(&mut parts, 1, |c, slot| slot[0] = partial(c));
         return parts.iter().sum();
     }
     (0..n_chunks).map(partial).sum()
@@ -266,7 +385,8 @@ where
     let n_chunks = n.div_ceil(CHUNK);
     #[cfg(feature = "parallel")]
     if n >= PAR_THRESHOLD {
-        let parts: Vec<Complex64> = (0..n_chunks).into_par_iter().map(partial).collect();
+        let mut parts = vec![Complex64::new(0.0, 0.0); n_chunks];
+        chunk_tasks(&mut parts, 1, |c, slot| slot[0] = partial(c));
         return parts.iter().sum();
     }
     (0..n_chunks).map(partial).sum()

@@ -341,13 +341,7 @@ fn apply_run<A: Amplitude>(amps: &mut [A], c: usize, run: &[Local<'_>]) {
             apply_local(chunk, k * block, local);
         }
     };
-    #[cfg(feature = "parallel")]
-    if amps.len() > block {
-        use rayon::prelude::*;
-        amps.par_chunks_mut(block).enumerate().for_each(apply);
-        return;
-    }
-    amps.chunks_mut(block).enumerate().for_each(apply);
+    crate::parallel::for_each_block(amps, block, |k, chunk| apply((k, chunk)));
 }
 
 /// Apply `circuit` with parameters `theta` (already validated) to `amps`,
@@ -409,17 +403,7 @@ where
     F: Fn(usize, &mut [C64]) + Sync + Send,
 {
     let block = 1usize << c;
-    #[cfg(feature = "parallel")]
-    if amps.len() > block {
-        use rayon::prelude::*;
-        amps.par_chunks_mut(block)
-            .enumerate()
-            .for_each(|(k, chunk)| f(k * block, chunk));
-        return;
-    }
-    amps.chunks_mut(block)
-        .enumerate()
-        .for_each(|(k, chunk)| f(k * block, chunk));
+    crate::parallel::for_each_block(amps, block, |k, chunk| f(k * block, chunk));
 }
 
 /// Apply `circuit` with parameters `theta` (already validated) to `amps`.

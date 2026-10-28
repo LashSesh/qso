@@ -61,6 +61,8 @@ pub mod noise;
 pub mod optimize;
 pub(crate) mod parallel;
 pub mod photonics;
+#[cfg(feature = "parallel")]
+pub(crate) mod pool;
 pub mod qec;
 pub mod quantum;
 pub mod rng;
