@@ -158,7 +158,7 @@ or by the benchmark report you can run yourself.
 
 The test-suite (561 Rust tests and 293 Python tests, run in CI on Linux
 (x86_64 and arm64), macOS and Windows; together with the command line
-and the Python tests they cover 92.0 % of the Rust lines and 81.6 % of
+and the Python tests they cover 92.0 % of the Rust lines and 81.5 % of
 the branches) also checks:
 
 - every gate against an independent dense-matrix reference, and the QFT

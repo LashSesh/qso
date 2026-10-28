@@ -1294,7 +1294,7 @@ Validation as planned:
   with samples, a program with mid-circuit measurements) whose native
   responses are recorded in `js/test/mps_native.json`, and agree to
   10⁻¹⁰; a Rust test keeps the recording equal to the native build.
-- **Coverage.** The merged report covers 92.0 % of lines and 81.6 % of
+- **Coverage.** The merged report covers 92.0 % of lines and 81.5 % of
   branches: the library 93.9 % of its lines (the Python tests add
   0.9 points), the command line 78.0 % (before: counted as uncovered),
   the Python bindings 83.5 %.
