@@ -234,6 +234,22 @@ pub struct PauliSum {
     terms: Vec<(f64, PauliString)>,
 }
 
+/// `Σ_k c_k (−1)^{|b ∧ z_k|}`: the value of a sum of `Z` strings at basis
+/// state `b`.
+#[inline]
+fn diagonal_value(terms: &[(f64, u64)], b: u64) -> f64 {
+    terms
+        .iter()
+        .map(|&(c, z)| {
+            if (b & z).count_ones().is_multiple_of(2) {
+                c
+            } else {
+                -c
+            }
+        })
+        .sum()
+}
+
 impl PauliSum {
     /// The zero operator.
     pub fn new() -> Self {
@@ -327,20 +343,23 @@ impl PauliSum {
     /// precision.
     pub(crate) fn expectation_amplitudes<A: super::scalar::Amplitude>(&self, amps: &[A]) -> f64 {
         let n = amps.len();
+        // The diagonal terms (identity and Z strings: MaxCut, Ising and QUBO
+        // costs) together in one pass over the state.
+        let diagonal: Vec<(f64, u64)> = self
+            .terms
+            .iter()
+            .filter(|(_, s)| s.is_diagonal())
+            .map(|&(c, s)| (c, s.z))
+            .collect();
         let mut total = 0.0;
+        if !diagonal.is_empty() {
+            total += sum_f64(n, |b| {
+                amps[b].norm_sqr_f64() * diagonal_value(&diagonal, b as u64)
+            });
+        }
         for &(c, s) in &self.terms {
-            let value = if s.is_identity() {
-                sum_f64(n, |b| amps[b].norm_sqr_f64())
-            } else if s.is_diagonal() {
-                let z = s.z;
-                sum_f64(n, |b| {
-                    let p = amps[b].norm_sqr_f64();
-                    if ((b as u64) & z).count_ones().is_multiple_of(2) {
-                        p
-                    } else {
-                        -p
-                    }
-                })
+            let value = if s.is_diagonal() {
+                continue;
             } else {
                 sum_c64(n, |b| {
                     let (phase, image) = s.act(b);
@@ -356,6 +375,13 @@ impl PauliSum {
     /// `out = H·amps` without forming a matrix.
     pub(crate) fn apply_amplitudes(&self, amps: &[C64], out: &mut [C64]) {
         debug_assert_eq!(amps.len(), out.len());
+        if self.is_diagonal() {
+            let diagonal: Vec<(f64, u64)> = self.terms.iter().map(|&(c, s)| (c, s.z)).collect();
+            for_each_mut(out, |c, o| {
+                *o = diagonal_value(&diagonal, c as u64) * amps[c]
+            });
+            return;
+        }
         let terms = &self.terms;
         for_each_mut(out, |c, o| {
             let mut acc = C64::new(0.0, 0.0);

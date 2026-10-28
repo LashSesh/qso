@@ -17,7 +17,7 @@ use super::gates::{GateKind, dmatrix_1q, dmatrix_2q, matrix_1q, matrix_2q};
 use super::scalar::Amplitude;
 use crate::parallel::{
     CHUNK, SyncPtr, for_each_chunk, for_each_chunk_pair, for_each_index, for_each_item,
-    for_each_mut, for_each_pair, for_each_pair_runs,
+    for_each_mut, for_each_pair, for_each_pair_runs, sum_c64, sum_chunks_c64,
 };
 
 /// Runs shorter than this are handled element by element: the per-run
@@ -566,9 +566,162 @@ pub(crate) fn apply_instruction_derivative_masked<A: Amplitude>(
     }
 }
 
+/// `⟨λ|D|φ⟩` for the derivative `D` of a parametrised instruction's matrix
+/// with respect to its parameter `which`, acting on its targets and zero
+/// where the bits in `controls` (a mask) are not all set: the gradient term
+/// of the adjoint method in one reading pass, without copying a state.
+/// Summed in a fixed order of chunks, so independent of the thread count.
+pub(crate) fn derivative_element(
+    lambda: &[C64],
+    phi: &[C64],
+    inst: &Instruction,
+    angles: &[f64],
+    which: usize,
+    controls: usize,
+) -> C64 {
+    debug_assert_eq!(lambda.len(), phi.len());
+    match inst.kind.num_targets() {
+        Some(1) => element_1q_matrix(
+            lambda,
+            phi,
+            inst.targets[0],
+            controls,
+            &dmatrix_1q(inst.kind, angles, which),
+        ),
+        Some(2) => {
+            let d = dmatrix_2q(inst.kind, angles);
+            let (bf, bs) = (1usize << inst.targets[0], 1usize << inst.targets[1]);
+            let positions = sorted_positions(&inst.targets, controls, phi.len());
+            sum_c64(phi.len() >> positions.len(), |k| {
+                let base = insert_zeros(k, &positions) | controls;
+                // Local order |x_first x_second⟩, as in `apply_2q`.
+                let idx = [base, base | bs, base | bf, base | bf | bs];
+                let v = idx.map(|i| phi[i]);
+                let mut acc = C64::new(0.0, 0.0);
+                for r in 0..4 {
+                    let row = &d[4 * r..4 * r + 4];
+                    acc += lambda[idx[r]].conj()
+                        * (row[0] * v[0] + row[1] * v[1] + row[2] * v[2] + row[3] * v[3]);
+                }
+                acc
+            })
+        }
+        _ => unreachable!("only fixed-arity parametrised gates have derivatives"),
+    }
+}
+
+/// `⟨λ|M|φ⟩` for a 2×2 matrix `M` on `target`, zero where the bits in
+/// `controls` are not all set.
+pub(crate) fn element_1q_matrix(
+    lambda: &[C64],
+    phi: &[C64],
+    target: usize,
+    controls: usize,
+    m: &[C64; 4],
+) -> C64 {
+    if controls == 0 {
+        return element_1q(lambda, phi, target, m);
+    }
+    let bt = 1usize << target;
+    let positions = sorted_positions(&[target], controls, phi.len());
+    sum_c64(phi.len() >> positions.len(), |k| {
+        let i0 = insert_zeros(k, &positions) | controls;
+        let i1 = i0 | bt;
+        let (a0, a1) = (phi[i0], phi[i1]);
+        lambda[i0].conj() * (m[0] * a0 + m[1] * a1) + lambda[i1].conj() * (m[2] * a0 + m[3] * a1)
+    })
+}
+
+/// Multiply the amplitudes whose bits in `controls` are all set by `u`
+/// (a block of a register: serial).
+pub(crate) fn scale_masked(amps: &mut [C64], controls: usize, u: C64) {
+    if controls == 0 {
+        amps.iter_mut().for_each(|a| *a *= u);
+    } else {
+        for (i, a) in amps.iter_mut().enumerate() {
+            if i & controls == controls {
+                *a *= u;
+            }
+        }
+    }
+}
+
+/// `⟨λ|φ⟩` over the amplitudes whose bits in `controls` are all set (a
+/// block of a register: serial, in index order).
+pub(crate) fn inner_masked(lambda: &[C64], phi: &[C64], controls: usize) -> C64 {
+    lambda
+        .iter()
+        .zip(phi)
+        .enumerate()
+        .filter(|(i, _)| i & controls == controls)
+        .map(|(_, (l, p))| l.conj() * p)
+        .sum()
+}
+
+/// [`derivative_element`] of an uncontrolled single-qubit gate over
+/// contiguous runs: the pairs are visited in the order of the general path
+/// (pair `k` at `insert_zero(k, target)`), in the same chunks of `CHUNK`
+/// pairs, so the sum is the same bit for bit.
+fn element_1q(lambda: &[C64], phi: &[C64], target: usize, d: &[C64; 4]) -> C64 {
+    let stride = 1usize << target;
+    let pairs = phi.len() / 2;
+    let term = |l0: C64, l1: C64, a0: C64, a1: C64| {
+        l0.conj() * (d[0] * a0 + d[1] * a1) + l1.conj() * (d[2] * a0 + d[3] * a1)
+    };
+    sum_chunks_c64(pairs.div_ceil(CHUNK), phi.len(), |c| {
+        let (first, last) = (c * CHUNK, ((c + 1) * CHUNK).min(pairs));
+        let mut acc = C64::new(0.0, 0.0);
+        let mut k = first;
+        while k < last {
+            // A run of consecutive pairs: up to the end of the current
+            // half-block or of the chunk.
+            let i0 = insert_zero(k, target);
+            let n = (stride - (k & (stride - 1))).min(last - k);
+            let (p0, p1) = (&phi[i0..i0 + n], &phi[i0 + stride..i0 + stride + n]);
+            let (l0, l1) = (&lambda[i0..i0 + n], &lambda[i0 + stride..i0 + stride + n]);
+            for j in 0..n {
+                acc += term(l0[j], l1[j], p0[j], p1[j]);
+            }
+            k += n;
+        }
+        acc
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The run-based matrix element equals the pair-by-pair sum of the
+    /// general path bit for bit, for every target, on registers above and
+    /// below the parallel threshold.
+    #[test]
+    fn element_runs_match_the_pairwise_sum_bit_for_bit() {
+        let mut rng = crate::Rng::seed_from_u64(1261);
+        let m: [C64; 4] = std::array::from_fn(|_| C64::new(rng.normal(), rng.normal()));
+        let sizes: &[usize] = if cfg!(miri) { &[4, 7] } else { &[3, 13, 17] };
+        for &n in sizes {
+            let len = 1usize << n;
+            let phi: Vec<C64> = (0..len)
+                .map(|_| C64::new(rng.normal(), rng.normal()))
+                .collect();
+            let lam: Vec<C64> = (0..len)
+                .map(|_| C64::new(rng.normal(), rng.normal()))
+                .collect();
+            for t in 0..n {
+                let general = sum_c64(len / 2, |k| {
+                    let i0 = insert_zero(k, t);
+                    let i1 = i0 | 1 << t;
+                    let (a0, a1) = (phi[i0], phi[i1]);
+                    lam[i0].conj() * (m[0] * a0 + m[1] * a1)
+                        + lam[i1].conj() * (m[2] * a0 + m[3] * a1)
+                });
+                let runs = element_1q(&lam, &phi, t, &m);
+                assert_eq!(general.re.to_bits(), runs.re.to_bits(), "n {n} target {t}");
+                assert_eq!(general.im.to_bits(), runs.im.to_bits(), "n {n} target {t}");
+            }
+        }
+    }
 
     /// Apply the same gates with the vector and the portable primitives:
     /// the results must agree bit for bit (on processors without AVX both

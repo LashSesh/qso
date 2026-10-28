@@ -20,6 +20,7 @@ use crate::error::{QsoError, Result};
 use crate::linalg::inner;
 use crate::parallel::{SyncPtr, map_tasks};
 use crate::quantum::Instruction;
+use crate::quantum::gates::{dmatrix_1q, dmatrix_2q, matrix_1q, matrix_2q};
 use crate::quantum::kernels;
 use crate::quantum::plan::BLOCK_QUBITS;
 use crate::quantum::{Circuit, GateKind, MAX_QUBITS, Param, PauliSum, StateVector};
@@ -214,12 +215,15 @@ where
     apply(&phi, &mut lambda);
     let value = inner(&phi, &lambda).re;
     let mut grad = vec![0.0; theta.len()];
-    let mut mu = Vec::new();
     // Gates whose targets lie in a cache block are differentiated block by
     // block (when the register is larger than a block); the others one at
     // a time over the whole register.
     let blocked = phi.len() > 1 << c;
-    let local = |inst: &Instruction| blocked && inst.targets.iter().all(|&t| t < c);
+    // Diagonal gates act element by element, so they can be undone and
+    // differentiated block by block on any qubits.
+    let local = |inst: &Instruction| {
+        blocked && (inst.kind.is_diagonal() || inst.targets.iter().all(|&t| t < c))
+    };
     let insts = circuit.instructions();
     let mut k = insts.len();
     while k > 0 {
@@ -242,10 +246,15 @@ where
         if inst.is_parametrised() {
             for (slot, param) in inst.params.iter().enumerate() {
                 if let Param::Symbol(p) = param {
-                    mu.clear();
-                    mu.extend_from_slice(&phi);
-                    kernels::apply_instruction_derivative(&mut mu, inst, &angles, slot);
-                    grad[p.index] += 2.0 * p.scale * inner(&lambda, &mu).re;
+                    let term = kernels::derivative_element(
+                        &lambda,
+                        &phi,
+                        inst,
+                        &angles,
+                        slot,
+                        inst.control_mask(),
+                    );
+                    grad[p.index] += 2.0 * p.scale * term.re;
                 }
             }
         }
@@ -277,6 +286,14 @@ fn backward_blocked(
         slots: Vec<(usize, usize, f64)>,
         low: usize,
         high: usize,
+        /// For diagonal gates: the diagonal of the inverse and of each
+        /// derivative, by local index (first target the high bit).
+        diagonal: Option<(Vec<C64>, Vec<Vec<C64>>)>,
+    }
+    /// The diagonal of a gate's 2×2 or 4×4 matrix.
+    fn diag(n_targets: usize, m: &[C64]) -> Vec<C64> {
+        let d = 1 << n_targets;
+        (0..d).map(|k| m[k * d + k]).collect()
     }
     let block = 1usize << c;
     let steps: Vec<Step<'_>> = run
@@ -285,22 +302,46 @@ fn backward_blocked(
         .map(|inst| {
             let inverse = inst.inverse();
             let controls = inst.control_mask();
+            let angles = inst.angles(theta);
+            let inv_angles = inverse.angles(theta);
+            let slots: Vec<(usize, usize, f64)> = inst
+                .params
+                .iter()
+                .enumerate()
+                .filter_map(|(slot, p)| match p {
+                    Param::Symbol(s) => Some((slot, s.index, s.scale)),
+                    Param::Value(_) => None,
+                })
+                .collect();
+            let high_target = inst.targets.iter().any(|&t| t >= c);
+            let diagonal = (inst.kind.is_diagonal() && high_target).then(|| {
+                let t = inst.targets.len();
+                let (inv, derivs) = if t == 1 {
+                    let inv = diag(1, &matrix_1q(inverse.kind, &inv_angles));
+                    let d = slots
+                        .iter()
+                        .map(|&(slot, _, _)| diag(1, &dmatrix_1q(inst.kind, &angles, slot)))
+                        .collect();
+                    (inv, d)
+                } else {
+                    let inv = diag(2, &matrix_2q(inverse.kind, &inv_angles));
+                    let d = slots
+                        .iter()
+                        .map(|_| diag(2, &dmatrix_2q(inst.kind, &angles)))
+                        .collect();
+                    (inv, d)
+                };
+                (inv, derivs)
+            });
             Step {
                 inst,
-                angles: inst.angles(theta),
-                inv_angles: inverse.angles(theta),
+                angles,
+                inv_angles,
                 inverse,
-                slots: inst
-                    .params
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(slot, p)| match p {
-                        Param::Symbol(s) => Some((slot, s.index, s.scale)),
-                        Param::Value(_) => None,
-                    })
-                    .collect(),
+                slots,
                 low: controls & (block - 1),
                 high: controls & !(block - 1),
+                diagonal,
             }
         })
         .collect();
@@ -314,21 +355,57 @@ fn backward_blocked(
                 std::slice::from_raw_parts_mut(lp.get().add(base), block),
             )
         };
-        let mut mu = Vec::new();
         let mut out = Vec::new();
         for s in &steps {
+            if let Some((inv, derivs)) = &s.diagonal {
+                // A diagonal gate with a target above the block: the high
+                // target bits are fixed by `base`, so in this block the gate
+                // is a phase (all targets high) or a diagonal gate on its
+                // one low target, applied with the vector kernels.
+                if base & s.high != s.high {
+                    out.extend(std::iter::repeat_n(0.0, derivs.len()));
+                    continue;
+                }
+                let targets = &s.inst.targets;
+                let low_target = targets.iter().copied().find(|&t| t < c);
+                // Local index of the gate (first target the high bit) with
+                // the low target's bit set to `x`.
+                let index = |x: usize| {
+                    targets.iter().fold(0, |acc, &t| {
+                        let bit = if t < c { x } else { (base >> t) & 1 };
+                        (acc << 1) | bit
+                    })
+                };
+                match low_target {
+                    None => {
+                        let (u, i) = (inv[index(0)], index(0));
+                        kernels::scale_masked(p, s.low, u);
+                        for d in derivs {
+                            out.push((d[i] * kernels::inner_masked(l, p, s.low)).re);
+                        }
+                        kernels::scale_masked(l, s.low, u);
+                    }
+                    Some(t) => {
+                        let zero = C64::new(0.0, 0.0);
+                        let u = [inv[index(0)], zero, zero, inv[index(1)]];
+                        kernels::apply_1q(p, t, s.low, &u);
+                        for d in derivs {
+                            let dm = [d[index(0)], zero, zero, d[index(1)]];
+                            out.push(kernels::element_1q_matrix(l, p, t, s.low, &dm).re);
+                        }
+                        kernels::apply_1q(l, t, s.low, &u);
+                    }
+                }
+                continue;
+            }
             let on = base & s.high == s.high;
             if on {
                 kernels::apply_instruction_masked(p, &s.inverse, &s.inv_angles, false, 0, s.low);
             }
             for &(slot, _, _) in &s.slots {
                 if on {
-                    mu.clear();
-                    mu.extend_from_slice(p);
-                    kernels::apply_instruction_derivative_masked(
-                        &mut mu, s.inst, &s.angles, slot, s.low,
-                    );
-                    out.push(inner(l, &mu).re);
+                    let term = kernels::derivative_element(l, p, s.inst, &s.angles, slot, s.low);
+                    out.push(term.re);
                 } else {
                     // The derivative vanishes where the controls are off.
                     out.push(0.0);
@@ -454,6 +531,73 @@ mod tests {
             assert!((a - b).abs() < 1e-12, "{a} vs {b}");
         }
         assert!(g0.iter().filter(|x| x.abs() > 1e-6).count() > 20);
+    }
+
+    /// Random circuits over the gates with shift rules, with diagonal gates
+    /// (controlled too) on qubits above the block, shared and scaled
+    /// parameters: the blocked pass equals the plain one to 10⁻¹², and both
+    /// equal the parameter-shift gradient to 10⁻¹⁰.
+    #[test]
+    fn random_circuits_match_the_parameter_shift_rule() {
+        use super::*;
+        let n = 7;
+        let mut rng = Rng::seed_from_u64(1260);
+        for round in 0..6 {
+            let mut c = Circuit::new(n);
+            let p = c.new_parameters(8);
+            let q = |rng: &mut Rng| rng.below(n as u64) as usize;
+            for _ in 0..40 {
+                let (a, b) = loop {
+                    let (a, b) = (q(&mut rng), q(&mut rng));
+                    if a != b {
+                        break (a, b);
+                    }
+                };
+                let k = rng.below(8) as usize;
+                // A parameter, sometimes scaled and shifted.
+                let x = if rng.below(3) == 0 {
+                    2.0 * p[k] - 0.3
+                } else {
+                    p[k]
+                };
+                match rng.below(13) {
+                    0 => c.rx(a, x),
+                    1 => c.ry(a, x),
+                    2 => c.rz(a, x),
+                    3 => c.p(a, x),
+                    4 => c.rzz(a, b, x),
+                    5 => c.rxx(a, b, x),
+                    6 => c.ryy(a, b, x),
+                    7 => c.crz(a, b, x),
+                    8 => c.cp(a, b, x),
+                    9 => c.crx(a, b, x),
+                    10 => c.cry(a, b, x),
+                    11 => c.cx(a, b).h(b),
+                    _ => c.s(a).t(b),
+                };
+            }
+            let theta: Vec<f64> = (0..8).map(|_| rng.uniform_range(-3.0, 3.0)).collect();
+            let h: PauliSum = if round % 2 == 0 {
+                "Z0 Z6 - 0.5 Z3 + 0.25 Z1 Z2 Z5 + 0.1".parse().unwrap()
+            } else {
+                "Z0 Z6 + 0.5 X2 Y6 - 0.3 Y3 Z4 + 0.2 X5".parse().unwrap()
+            };
+            let mut psi = StateVector::zero(n);
+            psi.apply_circuit(&c, &theta).unwrap();
+            let phi = psi.into_amplitudes();
+            let apply = |x: &[C64], y: &mut [C64]| h.apply_amplitudes(x, y);
+            let (v0, g0) = adjoint_with_block(&c, &theta, phi.clone(), apply, 20);
+            let (v1, g1) = adjoint_with_block(&c, &theta, phi, apply, 3);
+            assert_eq!(v0, v1);
+            let (vs, gs) =
+                expectation_and_gradient(&c, &h, &theta, None, GradientMethod::ParameterShift)
+                    .unwrap();
+            assert!((v0 - vs).abs() < 1e-12);
+            for ((a, b), s) in g0.iter().zip(&g1).zip(&gs) {
+                assert!((a - b).abs() < 1e-12, "plain {a} vs blocked {b}");
+                assert!((a - s).abs() < 1e-10, "adjoint {a} vs parameter shift {s}");
+            }
+        }
     }
 
     #[test]
