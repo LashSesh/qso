@@ -20,26 +20,32 @@ cd "$root"
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
 
-# Instrument every build below and collect the profiles in one place.
+# Instrument every build below (cargo-llvm-cov 0.9 does it through a rustc
+# wrapper) in a target directory of its own, so that cleaning it and the
+# instrumented binaries leave the normal build alone.
+export CARGO_TARGET_DIR=$root/target/llvm-cov-target
 source <(cargo +nightly llvm-cov show-env --export-prefix --branch)
-export CARGO_TARGET_DIR=$CARGO_LLVM_COV_TARGET_DIR
 cargo +nightly llvm-cov clean --workspace
 
-cargo +nightly test --release -p metatron-qso-rs --all-features
+# A failing test does not discard the report; the script fails at the end.
+status=0
+cargo +nightly test --release -p metatron-qso-rs --all-features --no-fail-fast || status=$?
 
 venv=$CARGO_TARGET_DIR/coverage-venv
 python3 -m venv "$venv"
 "$venv/bin/python" -m pip install -q maturin pytest numpy
 (
-  # maturin builds with the instrumented RUSTFLAGS from show-env.
-  source "$venv/bin/activate"
-  cd metatron_qso_py
-  maturin develop --release -q
-  python -m pytest -q tests
-)
+  # maturin builds through cargo, so with the instrumentation of show-env.
+  # (set -e does not apply inside a subshell tested by ||: chain with &&.)
+  source "$venv/bin/activate" &&
+    cd metatron_qso_py &&
+    maturin develop --release -q &&
+    python -m pytest -q tests
+) || status=$?
 
-# Only the crate and the Python bindings; test code is left out.
-ignore='(/tests/|/benches/|/examples/|metatron_qso_wasm/)'
+# Only the crate and the Python bindings, without test files (test modules
+# inside source files still count).
+ignore='(/tests/|/tests\.rs$|/benches/|/examples/|metatron_qso_wasm/)'
 cargo +nightly llvm-cov report --release --branch --ignore-filename-regex "$ignore" \
   --json --summary-only --output-path "$out/summary.json"
 cargo +nightly llvm-cov report --release --branch --ignore-filename-regex "$ignore" \
@@ -48,3 +54,4 @@ if [ "$html" = "--html" ]; then
   cargo +nightly llvm-cov report --release --branch --ignore-filename-regex "$ignore" \
     --html --output-dir "$out"
 fi
+exit $status

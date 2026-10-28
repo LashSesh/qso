@@ -16,6 +16,10 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # A release adds its documentation (once its wheel is on PyPI).
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
 
 permissions:
   contents: read
@@ -54,14 +58,16 @@ jobs:
           python -m pip install dist/*.whl
       # Releases do not change: each is built once per version of the build
       # script and kept.
-      - name: Release tags
+      - name: Release tags and the version of the release build
         id: tags
-        run: echo "hash=$(git tag --list 'v*' | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "hash=$(git tag --list 'v*' | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+          echo "build=$(sed -n 's/^RELEASE_BUILD = //p' docs/build_site.py)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v6
         with:
           path: docs-releases
-          key: docs-releases-${{ hashFiles('docs/build_site.py') }}-${{ steps.tags.outputs.hash }}
-          restore-keys: docs-releases-${{ hashFiles('docs/build_site.py') }}-
+          key: docs-releases-${{ steps.tags.outputs.build }}-${{ steps.tags.outputs.hash }}
+          restore-keys: docs-releases-${{ steps.tags.outputs.build }}-
       - name: Build the site
         run: python docs/build_site.py --out site --versions docs-releases
       # The coverage report is published from main only (pull requests

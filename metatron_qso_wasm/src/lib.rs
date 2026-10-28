@@ -334,12 +334,13 @@ fn clifford_qasm(program: &Program, shots: usize, seed: u64) -> Outcome {
     }))
 }
 
-/// Run an OpenQASM program on a matrix-product state: up to tens of
-/// thousands of qubits when the entanglement stays low, exact up to the
-/// reported fidelity bound. A program without measurements returns
-/// expectation values of Pauli strings, the bond dimensions and
-/// entanglement entropies of its final state (and its amplitudes for
-/// small registers); any program can be sampled.
+/// Run an OpenQASM program on a matrix-product state: up to
+/// `MAX_PROGRAM_QUBITS` (16384) qubits when the entanglement stays low,
+/// exact up to the reported fidelity bound. A program without
+/// measurements or resets returns expectation values of Pauli strings, the
+/// bond dimensions and entanglement entropies of its final state (and its
+/// amplitudes for small registers). Samples are of the classical bits, as
+/// in `qasm`, or of every qubit for a program without bits.
 fn mps(p: &mut Params) -> Outcome {
     let source = p.required_string("source")?;
     let shots = p.index("shots")?.unwrap_or(0);
@@ -356,8 +357,21 @@ fn mps(p: &mut Params) -> Outcome {
     if observables.len() > MAX_OBSERVABLES {
         return Err(format!("at most {MAX_OBSERVABLES} observables per call"));
     }
+    if observables.iter().any(|o| o.trim().is_empty()) {
+        return Err("an observable is empty".into());
+    }
     let program = Program::from_qasm(&source).map_err(|e| e.to_string())?;
     let (nq, nb) = (program.n_qubits(), program.n_bits());
+    if nq == 0 {
+        return Err("the program has no qubits".into());
+    }
+    let width = if nb > 0 { nb } else { nq };
+    if shots.saturating_mul(width) > MAX_LISTED_BITS {
+        return Err(format!(
+            "shots × {} must be at most {MAX_LISTED_BITS}",
+            if nb > 0 { "bits" } else { "qubits" }
+        ));
+    }
     let mut out = json!({
         "qubits": nq,
         "bits": nb,
@@ -382,6 +396,12 @@ fn mps(p: &mut Params) -> Outcome {
         }
         if shots == 0 {
             return Err("a program with measurements or resets is sampled: give shots".into());
+        }
+        if nb == 0 {
+            return Err(
+                "a program with measurements or resets is sampled through its classical bits, and this one declares none"
+                    .into(),
+            );
         }
         let (counts, bound) =
             metatron_qso::mps::program::sample_program(&program, shots, seed, options)
@@ -415,7 +435,10 @@ fn mps(p: &mut Params) -> Outcome {
     }
     out["discarded_weight"] = json!(state.discarded_weight());
     out["fidelity_lower_bound"] = json!(state.fidelity_lower_bound());
-    if shots > 0 {
+    if shots > 0 && nb > 0 {
+        // Nothing writes the bits of a program without measurements.
+        out["counts"] = json!({ "0".repeat(nb): shots });
+    } else if shots > 0 {
         let counts = state
             .sample_counts(shots, &mut Rng::seed_from_u64(seed))
             .map_err(|e| e.to_string())?;
@@ -900,6 +923,30 @@ mod tests {
         assert!(err("mps", json!({"source": ghz(3), "observables": [1]})).contains("strings"));
         assert!(err("mps", json!({"source": ghz(3), "observables": ["Z7"]})).contains('7'));
         assert!(err("mps", json!({"source": ghz(3), "bond": 4})).contains("unknown parameter"));
+        assert!(err("mps", json!({"source": ghz(3), "observables": [" "]})).contains("empty"));
+        assert!(err("mps", json!({"source": "OPENQASM 3.0; bit[2] c;"})).contains("no qubits"));
+        let reset = "OPENQASM 2.0; include \"qelib1.inc\"; qreg q[2]; h q[0]; reset q[0];";
+        assert!(err("mps", json!({"source": reset, "shots": 5})).contains("declares none"));
+        // shots × qubits is bounded like the stabilizer path of `qasm`.
+        assert!(err("mps", json!({"source": ghz(1000), "shots": 100_000})).contains("at most"));
+    }
+
+    #[test]
+    fn mps_counts_follow_the_conventions_of_qasm() {
+        // Declared bits are sampled, as in `qasm`, even without measurements.
+        let src =
+            "OPENQASM 2.0; include \"qelib1.inc\"; qreg q[2]; creg c[1]; h q[0]; cx q[0],q[1];";
+        let r = ok("mps", json!({"source": src, "shots": 10}));
+        assert_eq!(
+            r["counts"],
+            ok("qasm", json!({"source": src, "shots": 10}))["counts"]
+        );
+        // Without bits, every qubit (qubit 0 on the right).
+        let x1 = "OPENQASM 2.0; include \"qelib1.inc\"; qreg q[3]; x q[1];";
+        assert_eq!(
+            ok("mps", json!({"source": x1, "shots": 7}))["counts"],
+            json!({"010": 7})
+        );
     }
 
     /// Requests whose native responses `js/test/mps_native.json` records;

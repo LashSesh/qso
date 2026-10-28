@@ -44,10 +44,12 @@ reports them in full.
 | [WebAssembly and JavaScript](webassembly.md) | The npm package and the browser playground |
 | [Command line](cli.md) | The `qso` tool |
 
-The **tutorials** are Jupyter notebooks from
-[`docs/tutorials`](https://github.com/LashSesh/qso/tree/main/docs/tutorials).
-They are executed every time this site is built, so their output always comes
-from the current code.
+The **Python tutorials** are Jupyter notebooks from
+[`docs/tutorials`](https://github.com/LashSesh/qso/tree/main/docs/tutorials);
+the **Rust tutorials** are the crate's example programs
+([`metatron-qso-rs/examples`](https://github.com/LashSesh/qso/tree/main/metatron-qso-rs/examples)),
+explained piece by piece. Both are run every time this site is built, so
+their output always comes from the current code.
 
 Examples use the Python package, with Rust equivalents where the interfaces
 differ. The two share one implementation. Every code block in this guide is
@@ -58,7 +60,8 @@ run when the site is built.
 This guide describes the code on the `main` branch (the "development"
 version in the selector at the top of each page). The guide and the Python
 reference of every release since 1.2.0 are on this site too: choose the
-version in the selector, or open `/<version>/`, for example `/1.6.0/`.
+version in the selector, or add the version to this site's address, for
+example `…/qso/1.6.0/`.
 Released versions are on [PyPI](https://pypi.org/project/metatron-qso/) and
 [crates.io](https://crates.io/crates/metatron-qso-rs); the
 [changelog](https://github.com/LashSesh/qso/blob/main/CHANGELOG.md) lists what

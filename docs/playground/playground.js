@@ -659,8 +659,10 @@ const shorten = (s) => (s.length > 40 ? `${s.slice(0, 16)}…${s.slice(-16)}` : 
 function runMps() {
   const shots = Number($("mps-shots").value) || 0;
   const seed = Number($("mps-seed").value) || 0;
-  const maxBond = Number($("mps-bond").value) || 1;
+  const maxBond = Number($("mps-bond").value);
   const observables = $("mps-observables").value.split("\n").map((l) => l.trim()).filter(Boolean);
+  // Results of an earlier run must not stand under a new error.
+  $("mps-result").hidden = true;
   return busy($("run-mps"), $("mps-status"), async () => {
     const r = await call("mps", { source: $("mps-source").value, shots, seed, max_bond: maxBond, observables });
     $("mps-result").hidden = false;
@@ -701,7 +703,9 @@ call("version").then(
     runQasm();
     runWalk();
     runSearch();
-    runMps();
+    // The MPS examples are heavier: run them when their tab is first shown.
+    if ($("tab-mps").getAttribute("aria-selected") === "true") runMps();
+    else $("tab-mps").addEventListener("click", runMps, { once: true });
   },
   (e) => {
     $("qasm-status").textContent = `Could not load QSO: ${e.message}`;

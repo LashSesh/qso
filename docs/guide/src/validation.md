@@ -69,14 +69,18 @@ deviation above rounding level fails the run.
 
 ## Coverage
 
-CI measures line and branch coverage of the crate's tests (unit,
-validation, property, differential and robustness tests) with
-`cargo-llvm-cov`. The job summary lists the totals and the files with the
-most uncovered lines. The documentation site publishes the report of each
+CI measures line and branch coverage with `cargo-llvm-cov`
+(`scripts/coverage.sh`), merged from three sources: the crate's tests
+(unit, validation, property, differential and robustness tests), the
+command-line tool, which `tests/cli.rs` runs as a program, and the Python
+tests, run against an instrumented build of the extension module. The
+job summary lists the totals, the coverage of the library, the command
+line and the Python bindings separately, and the files with the most
+uncovered lines. The documentation site publishes the report of each
 build under [`coverage/`](coverage/html/index.html). At milestone 1.21 the
-crate's tests covered 90.5 % of lines, 92.8 % of functions and 79.4 % of
-branches. The command line's source counts as uncovered: its smoke tests
-run a separately built binary.
+crate's tests alone covered 90.5 % of lines, 92.8 % of functions and
+79.4 % of branches; until 1.25 the command line's source counted as
+uncovered.
 
 ## API stability
 

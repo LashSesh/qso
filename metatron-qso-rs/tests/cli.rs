@@ -65,9 +65,8 @@ struct Scratch(PathBuf);
 
 impl Scratch {
     fn new(name: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!("qso-cli-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        Scratch(dir.join(name))
+        let file = format!("qso-cli-{}-{name}", std::process::id());
+        Scratch(std::env::temp_dir().join(file))
     }
 
     fn path(&self) -> &str {
@@ -127,8 +126,10 @@ fn walks_reduction_and_transfer() {
     close(f(&s["success_probability"]), 1.0, 1e-9);
     close(f(&s["gamma"]), 1.0 / 13.0, 1e-6);
 
+    // Deterministic: the value of the library (SKW search on Q5).
     let c = qso(&["coined", "--graph", "hypercube:5"]);
-    assert!(f(&c["success_probability"]) > 0.3);
+    close(f(&c["success_probability"]), 0.4137588512, 1e-9);
+    assert_eq!(c["steps"], 6);
     let h = qso(&["hitting", "--graph", "cycle:16"]);
     assert!(f(&h["quantum"]) < f(&h["classical"]));
 }

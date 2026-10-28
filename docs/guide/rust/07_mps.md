@@ -21,9 +21,11 @@ fidelity with the exact state, so the result comes with an error bar.
 
 ## QAOA on a ring of 200 nodes
 
-For MaxCut on a ring, depth-p QAOA sees only 2p + 1 nodes around each
-edge, so angles optimised on a ring of 10 work on a ring of 200, and the
-expected cut fraction is the proven value (2p + 1)/(2p + 2). The program
+For MaxCut on a ring, the term of an edge (a, b) after depth-p QAOA
+depends only on the 2p + 2 nodes from a − p to b + p. On every ring
+longer than that the expectation is the same, so angles optimised on a
+ring of 10 (enough for p ≤ 3) work on a ring of 200, and the expected
+cut fraction is the proven value (2p + 1)/(2p + 2). The program
 optimises on the small ring with the state-vector simulator, then
 evaluates every edge's ⟨Z_a Z_b⟩ on the large ring with an MPS.
 

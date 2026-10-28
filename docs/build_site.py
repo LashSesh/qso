@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -106,7 +107,10 @@ def rust_tutorials(run_examples: bool) -> None:
         return example_code(name, anchor) if kind == "example" else output(name)
 
     for page in sorted(RUST_TUTORIALS.glob("*.md")):
-        (out / page.name).write_text(DIRECTIVE.sub(expand, page.read_text()))
+        text = DIRECTIVE.sub(expand, page.read_text())
+        if "{{" in text:
+            raise SystemExit(f"{page.name}: a directive was not understood")
+        (out / page.name).write_text(text)
 
 
 def snippets(rust: bool) -> None:
@@ -164,6 +168,13 @@ def playground(out: Path) -> None:
 
 # The first release with a guide.
 FIRST_VERSIONED = (1, 2, 0)
+# Where the site is served (GitHub Pages of LashSesh/qso); mdBook needs it
+# for the 404 page, which can be served at any depth.
+SITE_PATH = "/qso/"
+# Change when build_release changes: the docs workflow caches the release
+# builds under this number, so editing the rest of this script does not
+# rebuild every release.
+RELEASE_BUILD = 1
 
 
 def releases() -> list[str]:
@@ -198,7 +209,12 @@ def build_release(version: str, dest: Path) -> None:
         for nb in sorted((tree / "docs" / "tutorials").glob("*.ipynb")):
             run([str(python), "-m", "jupyter", "nbconvert", "--to", "markdown", "--execute",
                  "--ExecutePreprocessor.timeout=900", "--output-dir", str(pages), str(nb)])
-        run(["mdbook", "build", str(guide)])
+        # Served under /qso/<version>/, with "edit" links to the tag's files.
+        env = dict(os.environ,
+                   MDBOOK_OUTPUT__HTML__SITE_URL=f"{SITE_PATH}{version}/",
+                   MDBOOK_OUTPUT__HTML__EDIT_URL_TEMPLATE=(
+                       f"https://github.com/LashSesh/qso/blob/v{version}/docs/guide/{{path}}"))
+        run(["mdbook", "build", str(guide)], env=env)
         run([str(python), "-m", "pdoc", "metatron_qso", "-o", str(guide / "book" / "python"),
              "--docformat", "markdown"])
         # Only a complete build enters the cache.
@@ -213,8 +229,23 @@ def versions(out: Path, cache: Path) -> None:
         cached = cache / version
         if not (cached / "index.html").exists():
             print(f"building the documentation of {version}", flush=True)
-            build_release(version, cached)
+            try:
+                build_release(version, cached)
+            except subprocess.CalledProcessError as e:
+                # For example a tag pushed before its wheel reached PyPI:
+                # leave the version out this time (it is not cached, so the
+                # next build tries again) rather than block the site.
+                print(f"::warning title=Documentation of {version}::not built: {e}", flush=True)
+                continue
         shutil.copytree(cached, out / version)
+        # The guides link the playground next to them; there is one, at
+        # the site's root.
+        playground = out / version / "playground"
+        playground.mkdir(exist_ok=True)
+        (playground / "index.html").write_text(
+            '<!doctype html><meta charset="utf-8"><title>QSO Playground</title>'
+            '<meta http-equiv="refresh" content="0; url=../../playground/">'
+            '<a href="../../playground/">QSO Playground</a>\n')
         entries.append({"version": version, "path": f"{version}/"})
     (out / "versions.json").write_text(json.dumps(entries, indent=1) + "\n")
     shutil.copyfile(DOCS / "versions" / "version-selector.js", out / "version-selector.js")

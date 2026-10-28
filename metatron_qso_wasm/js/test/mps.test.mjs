@@ -35,7 +35,7 @@ test("matrix-product states give the native results", () => {
   }
 });
 
-test("mps() on 1000 qubits, with truncation reported", () => {
+test("mps() on 1000 qubits, and its input checks", () => {
   const n = 1000;
   let src = `OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[${n}];\nh q[0];\n`;
   for (let k = 1; k < n; k++) src += `cx q[${k - 1}],q[${k}];\n`;

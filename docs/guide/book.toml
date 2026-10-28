@@ -12,6 +12,9 @@ build-dir = "book"
 create-missing = false
 
 [output.html]
+# Where the site is served; the 404 page needs it (see SITE_PATH in
+# docs/build_site.py).
+site-url = "/qso/"
 git-repository-url = "https://github.com/LashSesh/qso"
 edit-url-template = "https://github.com/LashSesh/qso/edit/main/docs/guide/{path}"
 mathjax-support = true

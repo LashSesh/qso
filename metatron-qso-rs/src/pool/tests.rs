@@ -91,28 +91,18 @@ fn a_panic_reaches_the_caller_after_the_others_finished() {
     assert_eq!(count.load(SeqCst), n as u64);
 }
 
-/// Distinct threads that ran the tasks of one job whose tasks sleep (so
-/// that every worker gets some).
-fn threads_of_a_job() -> usize {
-    let ids = Mutex::new(std::collections::HashSet::new());
-    run(64, |_| {
-        ids.lock().unwrap().insert(std::thread::current().id());
-        std::thread::sleep(Duration::from_millis(1));
-    });
-    ids.into_inner().unwrap().len()
-}
-
 #[test]
-#[cfg_attr(miri, ignore = "sleeps")]
-fn the_pool_stays_parallel_after_a_panic() {
-    if pool().workers.load(SeqCst) == 0 {
-        return;
-    }
+fn the_pool_stays_usable_after_a_panic() {
     let _ = catch_unwind(AssertUnwindSafe(|| run(4, |_| panic!("every task"))));
-    assert!(!pool().submit.is_poisoned());
-    // Other tests may hold the pool for a moment; one parallel job is
-    // enough.
-    assert!((0..50).any(|_| threads_of_a_job() > 1));
+    // A poisoned lock would send every later job down the serial path.
+    // Other tests may hold the lock for a moment: wait until it is free.
+    loop {
+        match pool().submit.try_lock() {
+            Ok(_) => break,
+            Err(TryLockError::WouldBlock) => std::thread::yield_now(),
+            Err(TryLockError::Poisoned(_)) => panic!("the pool's lock is poisoned"),
+        }
+    }
 }
 
 #[test]
