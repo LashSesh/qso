@@ -11,9 +11,8 @@ second stage — 1.10 (exact decoding and Stim circuits), 1.11 (the
 state-vector core at memory bandwidth), 1.12 (noise learning) and 1.13
 (walks beyond static Hamiltonians) — ship together as release 1.6.0;
 finished milestones are released together, not one by one. The third
-stage (1.14 to 1.17) is delivered and not yet released; the fourth
-stage (1.18 to 1.21) is delivered too; neither stage is released yet. Of
-the fifth stage (1.22 to 1.25), 1.22 and 1.23 are delivered. Up to 1.3
+(1.14 to 1.17), fourth (1.18 to 1.21), fifth (1.22 to 1.25) and sixth
+(1.26 to 1.28) stages are delivered and not yet released. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever

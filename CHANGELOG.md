@@ -15,11 +15,25 @@ testing) of the fourth, which completes it; and milestones 1.22
 (error-correction circuits that keep their distance), 1.23 (larger
 basis sets and open shells), 1.24 (short simulations at full speed) and
 1.25 (documentation and reach) of the fifth, which completes it; and
-milestones 1.26 (gradients at the cost of a few simulations) and 1.27
-(variational training in single precision) of the sixth.
+milestones 1.26 (gradients at the cost of a few simulations), 1.27
+(variational training in single precision) and 1.28 (28 qubits end to
+end) of the sixth, which completes it.
 
 ### Added
 
+- **QAOA at 22–26 qubits against Qulacs and Qiskit Aer** (1.28) in the
+  cross-validation (`run.py --qaoa 22,24`): p = 10 on a random 3-regular
+  graph, energy and gradient of QSO (`MaxCutQaoa` and the generic
+  circuit, both precisions) and Qulacs (`backprop`), Aer's energy (it has
+  no gradient), each in its own process with time and peak memory. In
+  double precision values and gradients agree to 2.4·10⁻¹⁴ (relative); at
+  26 qubits `MaxCutQaoa` takes 16.4 s for energy and gradient, the
+  generic circuit 81 s, Qulacs 650 s and 5.0 GiB, Aer 49.5 s for the
+  energy alone.
+- **`examples/qaoa_large.rs`** (1.28): QAOA at depth 10 on 28 qubits on one
+  machine, with angles optimised layer by layer on 16 nodes, carried
+  over and refined with L-BFGS in single precision. `benchmark_report`
+  times p = 10 at 22 and 24 qubits in both precisions.
 - **Variational training in single precision** (1.27): energies and
   adjoint gradients on single-precision states, with sums in double
   precision and results divided by the state's norm²:
@@ -244,6 +258,15 @@ milestones 1.26 (gradients at the cost of a few simulations) and 1.27
 
 ### Changed
 
+- **`MaxCutQaoa` twice as fast at 22–28 qubits** (1.28). The mixer runs as
+  real Y rotations in the frame `S^{⊗n}`, which commutes with the cost
+  layers (only `state()` leaves it, with an exact phase); qubits above the
+  cache block are rotated in tiles, up to five per pass over memory; the
+  backward pass takes the mixer's overlap in the passes that undo it, with
+  the cost gradient and phases in the same block pass. Energy and
+  gradient at p = 10 on 4 cores: 26 qubits 16.3 s instead of 35.8 s
+  (single precision 13.9 s instead of 28.5 s), 28 qubits 79 s instead of
+  160 s (62 s instead of 122 s). Results change by rounding.
 - **Cheaper adjoint gradients** (1.26). Each gradient term is the matrix
   element of the gate's derivative between the two states, in one
   reading pass without copying the state; diagonal gates on qubits above

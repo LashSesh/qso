@@ -244,6 +244,27 @@ QSO is now ahead of Qulacs cold and warm from 10 to 18 qubits (the
 [roadmap](ROADMAP.md), 1.24, has both comparisons). The cross-validation
 times these cold starts (`1@500`, `1@20000`) beside the warmed-up runs.
 
+## QAOA at 22–28 qubits (1.28)
+
+QAOA for MaxCut at depth p = 10 (20 parameters) on random 3-regular
+graphs, one energy and gradient, on the machine above: at 22–26 qubits
+from [`run.py --qaoa`](../benchmarks/cross_framework/) (a fresh process
+per measurement, with its peak resident memory), at 28 qubits from one
+call each in a process of its own.
+
+| qubits | `MaxCutQaoa` double | single | generic circuit (QSO) | Qulacs `backprop` | Qiskit Aer, energy only |
+|---:|---:|---:|---:|---:|---:|
+| 22 | 0.83 s, 0.17 GiB | 0.68 s, 0.11 GiB | 4.5 s | 34.6 s, 0.35 GiB | 2.7 s |
+| 24 | 3.65 s, 0.57 GiB | 3.13 s, 0.32 GiB | 19.2 s | 163 s, 1.29 GiB | 13.8 s |
+| 26 | 16.4 s, 2.16 GiB | 13.3 s, 1.16 GiB | 80.9 s | 650 s, 5.04 GiB | 49.5 s |
+| 28 | 79 s, 8.9 GiB | 62 s, 4.7 GiB | — | — | — |
+
+Energies and gradients in double precision agree to 2.4·10⁻¹⁴ relative;
+QSO's single precision to 1.1·10⁻⁸ (energy) and 1.3·10⁻⁶ (gradient).
+Aer has no gradient of its own: a parameter-shift gradient of a shared
+QAOA angle needs two energies per gate that uses it (for p = 10 on 26
+nodes, 1300 energies). Qulacs' `backprop` ran on one thread here.
+
 ## Reading the numbers
 
 * **ns per gate·amplitude** normalises a layer's time by gates × 2ⁿ.
