@@ -36,5 +36,5 @@ pub use program::{Condition, Operation, Program, Register, record_bitstring};
 pub use qasm::{from_qasm2, to_qasm2};
 pub use qubit_operator::QubitOperator;
 pub use simd::{set_simd, simd_level};
-pub use single::{MAX_QUBITS_SINGLE, StateVector32};
+pub use single::{MAX_QUBITS_SINGLE, Precision, StateVector32};
 pub use state::{Counts, MAX_QUBITS, StateVector, bitstring};

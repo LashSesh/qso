@@ -390,13 +390,14 @@ impl PauliSum {
         total
     }
 
-    /// `out = H·amps` without forming a matrix.
-    pub(crate) fn apply_amplitudes(&self, amps: &[C64], out: &mut [C64]) {
+    /// `out = H·amps` without forming a matrix (computed in double
+    /// precision, then stored at the amplitudes' precision).
+    pub(crate) fn apply_amplitudes<A: super::scalar::Amplitude>(&self, amps: &[A], out: &mut [A]) {
         debug_assert_eq!(amps.len(), out.len());
         if self.is_diagonal() {
             let diagonal: Vec<(f64, u64)> = self.terms.iter().map(|&(c, s)| (c, s.z)).collect();
             for_each_mut(out, |c, o| {
-                *o = diagonal_value(&diagonal, c as u64) * amps[c]
+                *o = A::from_c64(diagonal_value(&diagonal, c as u64) * amps[c].to_c64())
             });
             return;
         }
@@ -407,9 +408,9 @@ impl PauliSum {
                 // (Pψ)[c] = i^{#Y} (−1)^{|(c⊕x)∧z|} ψ[c⊕x]
                 let (phase, source) = s.act(c ^ s.x as usize);
                 debug_assert_eq!(source, c);
-                acc += coef * phase * amps[c ^ s.x as usize];
+                acc += coef * phase * amps[c ^ s.x as usize].to_c64();
             }
-            *o = acc;
+            *o = A::from_c64(acc);
         });
     }
 

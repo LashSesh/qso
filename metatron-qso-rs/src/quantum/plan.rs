@@ -398,9 +398,10 @@ pub(crate) fn run_with_block<A: Amplitude>(
 
 /// Call `f(base, block)` for every block of `2^c` amplitudes (`base` is the
 /// register index of its first amplitude), blocks in parallel.
-pub(crate) fn for_each_block<F>(amps: &mut [C64], c: usize, f: F)
+pub(crate) fn for_each_block<A, F>(amps: &mut [A], c: usize, f: F)
 where
-    F: Fn(usize, &mut [C64]) + Sync + Send,
+    A: Amplitude,
+    F: Fn(usize, &mut [A]) + Sync + Send,
 {
     let block = 1usize << c;
     crate::parallel::for_each_block(amps, block, |k, chunk| f(k * block, chunk));

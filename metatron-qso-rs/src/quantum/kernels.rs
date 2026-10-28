@@ -571,9 +571,9 @@ pub(crate) fn apply_instruction_derivative_masked<A: Amplitude>(
 /// where the bits in `controls` (a mask) are not all set: the gradient term
 /// of the adjoint method in one reading pass, without copying a state.
 /// Summed in a fixed order of chunks, so independent of the thread count.
-pub(crate) fn derivative_element(
-    lambda: &[C64],
-    phi: &[C64],
+pub(crate) fn derivative_element<A: Amplitude>(
+    lambda: &[A],
+    phi: &[A],
     inst: &Instruction,
     angles: &[f64],
     which: usize,
@@ -596,11 +596,11 @@ pub(crate) fn derivative_element(
                 let base = insert_zeros(k, &positions) | controls;
                 // Local order |x_first x_second⟩, as in `apply_2q`.
                 let idx = [base, base | bs, base | bf, base | bf | bs];
-                let v = idx.map(|i| phi[i]);
+                let v = idx.map(|i| phi[i].to_c64());
                 let mut acc = C64::new(0.0, 0.0);
                 for r in 0..4 {
                     let row = &d[4 * r..4 * r + 4];
-                    acc += lambda[idx[r]].conj()
+                    acc += lambda[idx[r]].to_c64().conj()
                         * (row[0] * v[0] + row[1] * v[1] + row[2] * v[2] + row[3] * v[3]);
                 }
                 acc
@@ -612,9 +612,9 @@ pub(crate) fn derivative_element(
 
 /// `⟨λ|M|φ⟩` for a 2×2 matrix `M` on `target`, zero where the bits in
 /// `controls` are not all set.
-pub(crate) fn element_1q_matrix(
-    lambda: &[C64],
-    phi: &[C64],
+pub(crate) fn element_1q_matrix<A: Amplitude>(
+    lambda: &[A],
+    phi: &[A],
     target: usize,
     controls: usize,
     m: &[C64; 4],
@@ -627,14 +627,16 @@ pub(crate) fn element_1q_matrix(
     sum_c64(phi.len() >> positions.len(), |k| {
         let i0 = insert_zeros(k, &positions) | controls;
         let i1 = i0 | bt;
-        let (a0, a1) = (phi[i0], phi[i1]);
-        lambda[i0].conj() * (m[0] * a0 + m[1] * a1) + lambda[i1].conj() * (m[2] * a0 + m[3] * a1)
+        let (a0, a1) = (phi[i0].to_c64(), phi[i1].to_c64());
+        lambda[i0].to_c64().conj() * (m[0] * a0 + m[1] * a1)
+            + lambda[i1].to_c64().conj() * (m[2] * a0 + m[3] * a1)
     })
 }
 
 /// Multiply the amplitudes whose bits in `controls` are all set by `u`
 /// (a block of a register: serial).
-pub(crate) fn scale_masked(amps: &mut [C64], controls: usize, u: C64) {
+pub(crate) fn scale_masked<A: Amplitude>(amps: &mut [A], controls: usize, u: C64) {
+    let u = A::from_c64(u);
     if controls == 0 {
         amps.iter_mut().for_each(|a| *a *= u);
     } else {
@@ -648,13 +650,13 @@ pub(crate) fn scale_masked(amps: &mut [C64], controls: usize, u: C64) {
 
 /// `⟨λ|φ⟩` over the amplitudes whose bits in `controls` are all set (a
 /// block of a register: serial, in index order).
-pub(crate) fn inner_masked(lambda: &[C64], phi: &[C64], controls: usize) -> C64 {
+pub(crate) fn inner_masked<A: Amplitude>(lambda: &[A], phi: &[A], controls: usize) -> C64 {
     lambda
         .iter()
         .zip(phi)
         .enumerate()
         .filter(|(i, _)| i & controls == controls)
-        .map(|(_, (l, p))| l.conj() * p)
+        .map(|(_, (l, p))| l.to_c64().conj() * p.to_c64())
         .sum()
 }
 
@@ -662,7 +664,7 @@ pub(crate) fn inner_masked(lambda: &[C64], phi: &[C64], controls: usize) -> C64 
 /// contiguous runs: the pairs are visited in the order of the general path
 /// (pair `k` at `insert_zero(k, target)`), in the same chunks of `CHUNK`
 /// pairs, so the sum is the same bit for bit.
-fn element_1q(lambda: &[C64], phi: &[C64], target: usize, d: &[C64; 4]) -> C64 {
+fn element_1q<A: Amplitude>(lambda: &[A], phi: &[A], target: usize, d: &[C64; 4]) -> C64 {
     let stride = 1usize << target;
     let pairs = phi.len() / 2;
     let term = |l0: C64, l1: C64, a0: C64, a1: C64| {
@@ -680,7 +682,12 @@ fn element_1q(lambda: &[C64], phi: &[C64], target: usize, d: &[C64; 4]) -> C64 {
             let (p0, p1) = (&phi[i0..i0 + n], &phi[i0 + stride..i0 + stride + n]);
             let (l0, l1) = (&lambda[i0..i0 + n], &lambda[i0 + stride..i0 + stride + n]);
             for j in 0..n {
-                acc += term(l0[j], l1[j], p0[j], p1[j]);
+                acc += term(
+                    l0[j].to_c64(),
+                    l1[j].to_c64(),
+                    p0[j].to_c64(),
+                    p1[j].to_c64(),
+                );
             }
             k += n;
         }

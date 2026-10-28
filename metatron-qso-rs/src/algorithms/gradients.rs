@@ -17,13 +17,17 @@ use num_complex::Complex64 as C64;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{QsoError, Result};
+#[cfg(test)]
 use crate::linalg::inner;
-use crate::parallel::{SyncPtr, map_tasks};
+use crate::parallel::{SyncPtr, map_tasks, sum_c64};
 use crate::quantum::Instruction;
 use crate::quantum::gates::{dmatrix_1q, dmatrix_2q, matrix_1q, matrix_2q};
 use crate::quantum::kernels;
 use crate::quantum::plan::BLOCK_QUBITS;
-use crate::quantum::{Circuit, GateKind, MAX_QUBITS, Param, PauliSum, StateVector};
+use crate::quantum::scalar::Amplitude;
+use crate::quantum::{
+    Circuit, GateKind, MAX_QUBITS, Param, PauliSum, Precision, StateVector, StateVector32,
+};
 
 /// How gradients are computed.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Default)]
@@ -81,6 +85,111 @@ pub fn expectation(
     let mut state = prepare(circuit, observable, theta, initial)?;
     state.apply_circuit(circuit, theta)?;
     observable.expectation(&state)
+}
+
+/// The initial state of a single-precision evaluation, checked.
+fn prepare_single(
+    circuit: &Circuit,
+    observable: &PauliSum,
+    theta: &[f64],
+    initial: Option<&StateVector32>,
+) -> Result<StateVector32> {
+    circuit.check_parameters(theta)?;
+    let state = match initial {
+        Some(s) => {
+            if s.n_qubits() != circuit.n_qubits() {
+                return Err(QsoError::DimensionMismatch {
+                    expected: circuit.n_qubits(),
+                    actual: s.n_qubits(),
+                });
+            }
+            s.clone()
+        }
+        None => StateVector32::zero(circuit.n_qubits())?,
+    };
+    if observable.min_qubits() > circuit.n_qubits() {
+        return Err(QsoError::QubitOutOfRange {
+            qubit: observable.min_qubits() - 1,
+            n_qubits: circuit.n_qubits(),
+        });
+    }
+    Ok(state)
+}
+
+/// [`expectation`] in single precision ([`StateVector32`], one more qubit,
+/// half the memory); the sum is taken in double precision and divided by
+/// the state's norm², which rounding moves away from one.
+pub fn expectation_single(
+    circuit: &Circuit,
+    observable: &PauliSum,
+    theta: &[f64],
+    initial: Option<&StateVector32>,
+) -> Result<f64> {
+    let mut state = prepare_single(circuit, observable, theta, initial)?;
+    state.apply_circuit(circuit, theta)?;
+    state.expectation(observable)
+}
+
+/// [`expectation_and_gradient`] by adjoint differentiation in single
+/// precision: two [`StateVector32`]s, the gradient terms summed in double
+/// precision; energy and gradient divided by the state's norm² (as
+/// [`StateVector32::expectation`] does).
+pub fn expectation_and_gradient_single(
+    circuit: &Circuit,
+    observable: &PauliSum,
+    theta: &[f64],
+    initial: Option<&StateVector32>,
+) -> Result<(f64, Vec<f64>)> {
+    let mut phi = prepare_single(circuit, observable, theta, initial)?;
+    phi.apply_circuit(circuit, theta)?;
+    let norm2 = phi.norm().powi(2);
+    if norm2.is_nan() || norm2 <= 0.0 {
+        return Err(QsoError::invalid("initial", "the state has zero norm"));
+    }
+    let (value, mut grad) = adjoint_with(circuit, theta, phi.into_amplitudes(), |x, y| {
+        observable.apply_amplitudes(x, y)
+    });
+    for g in &mut grad {
+        *g /= norm2;
+    }
+    Ok((value / norm2, grad))
+}
+
+/// [`expectation_and_gradient`] at the given precision; single precision
+/// supports the adjoint method only (parameter shift and finite differences
+/// need double precision to resolve their differences).
+pub fn expectation_and_gradient_at(
+    circuit: &Circuit,
+    observable: &PauliSum,
+    theta: &[f64],
+    method: GradientMethod,
+    precision: Precision,
+) -> Result<(f64, Vec<f64>)> {
+    match precision {
+        Precision::Double => expectation_and_gradient(circuit, observable, theta, None, method),
+        _ => match method {
+            GradientMethod::Adjoint => {
+                expectation_and_gradient_single(circuit, observable, theta, None)
+            }
+            _ => Err(QsoError::invalid(
+                "method",
+                "single precision supports adjoint gradients only",
+            )),
+        },
+    }
+}
+
+/// [`expectation`] at the given precision.
+pub fn expectation_at(
+    circuit: &Circuit,
+    observable: &PauliSum,
+    theta: &[f64],
+    precision: Precision,
+) -> Result<f64> {
+    match precision {
+        Precision::Double => expectation(circuit, observable, theta, None),
+        _ => expectation_single(circuit, observable, theta, None),
+    }
 }
 
 /// Expectation value and its gradient with respect to `theta`.
@@ -188,32 +297,35 @@ fn adjoint(
 /// Adjoint differentiation of `⟨ψ|O|ψ⟩` for any Hermitian `O` given by
 /// `apply(x, y)`: `y = O x`. `phi` is the final state `U(θ)|ψ₀⟩` (checked
 /// by the caller).
-pub(crate) fn adjoint_with<F>(
+pub(crate) fn adjoint_with<A, F>(
     circuit: &Circuit,
     theta: &[f64],
-    phi: Vec<C64>,
+    phi: Vec<A>,
     apply: F,
 ) -> (f64, Vec<f64>)
 where
-    F: Fn(&[C64], &mut [C64]),
+    A: Amplitude,
+    F: Fn(&[A], &mut [A]),
 {
     adjoint_with_block(circuit, theta, phi, apply, BLOCK_QUBITS)
 }
 
 /// [`adjoint_with`] with blocks of `2^c` amplitudes.
-fn adjoint_with_block<F>(
+fn adjoint_with_block<A, F>(
     circuit: &Circuit,
     theta: &[f64],
-    mut phi: Vec<C64>,
+    mut phi: Vec<A>,
     apply: F,
     c: usize,
 ) -> (f64, Vec<f64>)
 where
-    F: Fn(&[C64], &mut [C64]),
+    A: Amplitude,
+    F: Fn(&[A], &mut [A]),
 {
-    let mut lambda = vec![C64::new(0.0, 0.0); phi.len()];
+    let mut lambda = vec![A::ZERO; phi.len()];
     apply(&phi, &mut lambda);
-    let value = inner(&phi, &lambda).re;
+    // Summed in double precision whatever the amplitudes.
+    let value = sum_c64(phi.len(), |i| phi[i].to_c64().conj() * lambda[i].to_c64()).re;
     let mut grad = vec![0.0; theta.len()];
     // Gates whose targets lie in a cache block are differentiated block by
     // block (when the register is larger than a block); the others one at
@@ -269,11 +381,11 @@ where
 /// gate of the run is undone and differentiated on it. The gradient terms
 /// are summed over blocks in block order, so the result does not depend
 /// on the number of threads.
-fn backward_blocked(
+fn backward_blocked<A: Amplitude>(
     run: &[Instruction],
     theta: &[f64],
-    phi: &mut [C64],
-    lambda: &mut [C64],
+    phi: &mut [A],
+    lambda: &mut [A],
     c: usize,
     grad: &mut [f64],
 ) {
@@ -399,7 +511,7 @@ fn backward_blocked(
                     }
                     Some(t) => {
                         let zero = C64::new(0.0, 0.0);
-                        let u = [inv[index(0)], zero, zero, inv[index(1)]];
+                        let u = [inv[index(0)], zero, zero, inv[index(1)]].map(A::from_c64);
                         kernels::apply_1q(p, t, s.low, &u);
                         for d in derivs {
                             let dm = [d[index(0)], zero, zero, d[index(1)]];
@@ -610,6 +722,71 @@ mod tests {
                 assert!((a - s).abs() < 1e-10, "adjoint {a} vs parameter shift {s}");
             }
         }
+    }
+
+    /// Single precision against double precision on random circuits (the
+    /// shift-rule gates, diagonal and general observables), on registers
+    /// below and above the cache block: energies to 10⁻⁵ and gradients to
+    /// 10⁻⁴ of their scale.
+    #[test]
+    fn single_precision_matches_double_precision() {
+        use super::*;
+        let mut rng = Rng::seed_from_u64(1270);
+        for (round, n) in [7usize, 9, 16].into_iter().enumerate() {
+            let mut c = Circuit::new(n);
+            let p = c.new_parameters(10);
+            for _ in 0..60 {
+                let (a, b) = loop {
+                    let (a, b) = (rng.below(n as u64) as usize, rng.below(n as u64) as usize);
+                    if a != b {
+                        break (a, b);
+                    }
+                };
+                let x = p[rng.below(10) as usize];
+                match rng.below(7) {
+                    0 => c.rx(a, x),
+                    1 => c.ry(a, x),
+                    2 => c.rz(a, x),
+                    3 => c.rzz(a, b, x),
+                    4 => c.crx(a, b, x),
+                    5 => c.cx(a, b),
+                    _ => c.h(a),
+                };
+            }
+            let theta: Vec<f64> = (0..10).map(|_| rng.uniform_range(-3.0, 3.0)).collect();
+            let h: PauliSum = if round % 2 == 0 {
+                "Z0 Z1 - 0.5 Z2 + 0.25 Z3 Z5 Z6 + 0.1".parse().unwrap()
+            } else {
+                "Z0 Z1 + 0.5 X2 Y6 - 0.3 Y3 Z4 + 0.2 X5".parse().unwrap()
+            };
+            let (e64, g64) =
+                expectation_and_gradient(&c, &h, &theta, None, GradientMethod::Adjoint).unwrap();
+            let (e32, g32) = expectation_and_gradient_single(&c, &h, &theta, None).unwrap();
+            let scale = g64.iter().fold(1.0f64, |m, x| m.max(x.abs()));
+            assert!((e64 - e32).abs() < 1e-5, "{e64} vs {e32}");
+            assert!((expectation_single(&c, &h, &theta, None).unwrap() - e64).abs() < 1e-5);
+            for (a, b) in g64.iter().zip(&g32) {
+                assert!((a - b).abs() < 1e-4 * scale, "{a} vs {b}");
+            }
+        }
+        // Single precision has no shift rules or differences.
+        let c = test_circuit();
+        let h: PauliSum = "Z0".parse().unwrap();
+        let theta = [0.1; 6];
+        assert!(
+            expectation_and_gradient_at(
+                &c,
+                &h,
+                &theta,
+                GradientMethod::ParameterShift,
+                Precision::Single
+            )
+            .is_err()
+        );
+        let (a, _) =
+            expectation_and_gradient_at(&c, &h, &theta, GradientMethod::Adjoint, Precision::Single)
+                .unwrap();
+        assert!((a - expectation_at(&c, &h, &theta, Precision::Double).unwrap()).abs() < 1e-5);
     }
 
     #[test]

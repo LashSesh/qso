@@ -10,6 +10,7 @@
 //! both). Probabilities and samples are normalised by the actual norm.
 
 use num_complex::{Complex32 as C32, Complex64 as C64};
+use serde::{Deserialize, Serialize};
 
 use super::circuit::{Circuit, Instruction};
 use super::kernels;
@@ -23,6 +24,33 @@ use crate::rng::{Rng, sample_cumulative};
 /// Largest register a [`StateVector32`] may hold: one qubit more than
 /// [`MAX_QUBITS`] in the same memory.
 pub const MAX_QUBITS_SINGLE: usize = MAX_QUBITS + 1;
+
+/// Floating-point precision of the amplitudes of a simulation.
+///
+/// Single precision halves the memory (8 bytes per amplitude), allows one
+/// more qubit and is about twice as fast on large registers; sums
+/// (expectation values, inner products, gradient terms) are still taken in
+/// double precision, so energies and gradients carry relative errors of
+/// about 10⁻⁶ rather than 10⁻¹⁵.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Precision {
+    /// `Complex<f64>` amplitudes.
+    #[default]
+    Double,
+    /// `Complex<f32>` amplitudes ([`StateVector32`]).
+    Single,
+}
+
+impl Precision {
+    /// `"double"` or `"single"`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Precision::Double => "double",
+            Precision::Single => "single",
+        }
+    }
+}
 
 fn check_size(n_qubits: usize) -> Result<()> {
     if n_qubits > MAX_QUBITS_SINGLE {
@@ -112,6 +140,11 @@ impl StateVector32 {
 
     pub fn amplitudes(&self) -> &[C32] {
         &self.amps
+    }
+
+    /// The amplitudes, taken out of the state.
+    pub(crate) fn into_amplitudes(self) -> Vec<C32> {
+        self.amps
     }
 
     /// Mutable amplitudes; the caller keeps the state normalised.
