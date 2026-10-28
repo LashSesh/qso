@@ -143,7 +143,7 @@ fn molecules_are_parsed_and_checked() {
     assert!(Molecule::from_atoms("O 0 0 0; H 0 0 0.97", 0, 1).is_err());
     assert!(Molecule::from_atoms("H 0 0 0; H 0 0 1", 0, 0).is_err());
     assert!(Molecule::from_atoms("H 0 0 0; H 0 0 1", 3, 1).is_err());
-    assert!(Molecule::from_atoms("Na 0 0 0", 1, 1).is_err());
+    assert!(Molecule::from_atoms("K 0 0 0", 1, 1).is_err());
     assert!(Molecule::from_atoms("H 0 0", 0, 2).is_err());
     assert!(Molecule::from_atoms("H 0 0 x", 0, 2).is_err());
     assert!(Molecule::from_atoms("H 0 0 0; H 0 0 0", 0, 1).is_err());
@@ -151,7 +151,20 @@ fn molecules_are_parsed_and_checked() {
     assert!(Molecule::from_atoms("H 0 0 inf", 0, 2).is_err());
     assert_eq!(Basis::from_name("STO-3G").unwrap(), Basis::Sto3g);
     assert_eq!(Basis::from_name("6-31g").unwrap(), Basis::SixThirtyOneG);
-    assert!(Basis::from_name("cc-pvdz").is_err());
+    assert_eq!(Basis::from_name("cc-pVDZ").unwrap(), Basis::CcPvdz);
+    assert_eq!(
+        Basis::from_name("6-31G(d)").unwrap(),
+        Basis::SixThirtyOneGStar
+    );
+    for b in [
+        Basis::Sto3g,
+        Basis::SixThirtyOneG,
+        Basis::SixThirtyOneGStar,
+        Basis::CcPvdz,
+    ] {
+        assert_eq!(Basis::from_name(b.name()).unwrap(), b);
+    }
+    assert!(Basis::from_name("cc-pvtz").is_err());
 }
 
 #[test]
@@ -221,10 +234,103 @@ fn limits_and_deserialisation_are_checked() {
     .unwrap();
     assert_eq!(ok.n_alpha_beta(), (1, 1));
     for bad in [
-        r#"{"charges":[11],"positions":[[0,0,0]],"charge":0,"multiplicity":2}"#,
+        r#"{"charges":[19],"positions":[[0,0,0]],"charge":0,"multiplicity":2}"#,
         r#"{"charges":[1,1],"positions":[[0,0,0],[0,0,1.4]],"charge":0,"multiplicity":0}"#,
         r#"{"charges":[1,1],"positions":[[0,0,0],[0,0,0]],"charge":0,"multiplicity":1}"#,
     ] {
         assert!(serde_json::from_str::<Molecule>(bad).is_err(), "{bad}");
     }
+}
+
+#[test]
+fn f_and_g_shells_match_pyscf() {
+    // O with s, p, d, f and g shells, H with s and f, at (0.3, 0.4, 1.8)
+    // bohr: PySCF 2.14's integrals (its Cartesian components rescaled to
+    // norm one), summed in absolute value and at single entries.
+    static O: [(f64, f64); 2] = [(5.0, 0.6), (1.0, 0.5)];
+    static H: [(f64, f64); 2] = [(1.5, 0.5), (0.3, 0.6)];
+    static P: [(f64, f64); 1] = [(2.0, 1.0)];
+    static D: [(f64, f64); 1] = [(1.2, 1.0)];
+    static F: [(f64, f64); 1] = [(0.9, 1.0)];
+    static G: [(f64, f64); 1] = [(0.7, 1.0)];
+    static HF: [(f64, f64); 1] = [(0.6, 1.0)];
+    let shells = |z: u32| -> Vec<ShellData> {
+        if z == 8 {
+            vec![(0, &O), (1, &P), (2, &D), (3, &F), (4, &G)]
+        } else {
+            vec![(0, &H), (3, &HF)]
+        }
+    };
+    let mol = Molecule::new(vec![8, 1], vec![[0.0; 3], [0.3, 0.4, 1.8]], -1, 1).unwrap();
+    let sum = |n: usize, f: &dyn Fn(usize, usize) -> f64| -> f64 {
+        (0..n)
+            .flat_map(|i| (0..n).map(move |j| (i, j)))
+            .map(|(i, j)| f(i, j).abs())
+            .sum()
+    };
+    for (harmonics, n, s_sum, h_sum, eri_sum) in [
+        (
+            Harmonics::Spherical,
+            33,
+            59.786700494518165,
+            234.69935673141197,
+            3803.304395263438,
+        ),
+        (
+            Harmonics::Cartesian,
+            46,
+            191.7366215078348,
+            1008.1530870184897,
+            32513.07582190359,
+        ),
+    ] {
+        let ints = AoIntegrals::from_shells(&mol, Basis::Sto3g, harmonics, &shells).unwrap();
+        assert_eq!(ints.n_functions(), n);
+        assert!((sum(n, &|i, j| ints.overlap(i, j)) - s_sum).abs() < 1e-11 * s_sum);
+        assert!((sum(n, &|i, j| ints.core(i, j)) - h_sum).abs() < 1e-11 * h_sum);
+        let e: f64 = ints.eri_tensor().iter().map(|v| v.abs()).sum();
+        assert!((e - eri_sum).abs() < 1e-11 * eri_sum, "{e} vs {eri_sum}");
+        if harmonics == Harmonics::Spherical {
+            for ((i, j, k, l), v) in [
+                ((0, 5, 9, 30), 0.0010527254138130967),
+                ((12, 13, 20, 25), 0.0012704485597235984),
+                ((24, 27, 26, 31), -0.003320832750801069),
+            ] {
+                assert!((ints.eri(i, j, k, l) - v).abs() < 1e-13, "({i}{j}|{k}{l})");
+            }
+            assert!((ints.core(7, 22) - -0.013020531670640087).abs() < 1e-13);
+        } else {
+            assert!((ints.core(7, 22) - -0.002719710180330567).abs() < 1e-13);
+        }
+    }
+}
+
+#[test]
+fn solid_harmonics_have_pyscfs_signs() {
+    // PySCF's cart2sph(2) and (3), columns m = −l..l, scaled to unit
+    // leading coefficient: same signs and ratios.
+    let d = [
+        (-2, vec![(1, 1.0)]),
+        (0, vec![(0, -0.5), (3, -0.5), (5, 1.0)]),
+        (2, vec![(0, 1.0), (3, -1.0)]),
+    ];
+    for (m, entries) in d {
+        let c = solid_harmonic(2, m);
+        let scale = entries[entries.len() - 1].1 / c[entries[entries.len() - 1].0];
+        for (k, v) in entries {
+            assert!((c[k] * scale - v).abs() < 1e-12, "d m = {m}");
+        }
+    }
+    // f, m = 1: x(4z² − x² − y²) over xxx, xyy, xzz.
+    let c = solid_harmonic(3, 1);
+    let powers = cartesian_powers(3);
+    let at = |p: [u32; 3]| c[powers.iter().position(|q| *q == p).unwrap()];
+    assert!((at([1, 0, 2]) / at([3, 0, 0]) - -4.0).abs() < 1e-12);
+    assert!((at([1, 2, 0]) / at([3, 0, 0]) - 1.0).abs() < 1e-12);
+    assert!(at([1, 0, 2]) > 0.0);
+    // f, m = −3: 3x²y − y³.
+    let c = solid_harmonic(3, -3);
+    let at = |p: [u32; 3]| c[powers.iter().position(|q| *q == p).unwrap()];
+    assert!((at([2, 1, 0]) / at([0, 3, 0]) - -3.0).abs() < 1e-12);
+    assert!(at([2, 1, 0]) > 0.0);
 }

@@ -19,7 +19,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::basis_data::{SIX_31G, STO_3G, ShellData};
+use super::basis_data::{CC_PVDZ, ELEMENTS, SIX_31G, SIX_31G_STAR, STO_3G, ShellData};
 use crate::error::{QsoError, Result};
 use crate::parallel;
 
@@ -30,8 +30,16 @@ pub const BOHR_PER_ANGSTROM: f64 = 1.0 / 0.529_177_210_903;
 
 /// Most basis functions: the electron-repulsion tensor has `n⁴` entries.
 pub const MAX_BASIS_FUNCTIONS: usize = 64;
+/// Most Cartesian components behind spherical basis functions (a d shell
+/// has six for its five functions); their integrals are computed first.
+pub const MAX_CARTESIAN_FUNCTIONS: usize = 80;
+/// Largest angular momentum of a shell (g functions).
+pub const MAX_SHELL_L: u32 = 4;
 
-const SYMBOLS: [&str; 10] = ["H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne"];
+const SYMBOLS: [&str; 18] = [
+    "H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne", "Na", "Mg", "Al", "Si", "P", "S", "Cl",
+    "Ar",
+];
 
 /// A molecule: nuclei, total charge and spin multiplicity `2S + 1`
 /// (checked on construction and deserialisation).
@@ -104,7 +112,7 @@ impl Molecule {
                 .ok_or_else(|| {
                     QsoError::invalid(
                         "atoms",
-                        format!("element '{}' is not one of H to Ne", fields[0]),
+                        format!("element '{}' is not one of H to Ar", fields[0]),
                     )
                 })?;
             let mut r = [0.0; 3];
@@ -120,7 +128,7 @@ impl Molecule {
         Self::new(charges, positions, charge, multiplicity)
     }
 
-    /// A molecule from atomic numbers (1 to 10) and positions in bohr.
+    /// A molecule from atomic numbers (1 to 18) and positions in bohr.
     pub fn new(
         charges: Vec<u32>,
         positions: Vec<[f64; 3]>,
@@ -133,10 +141,10 @@ impl Molecule {
                 "at least one atom, with one position per atom",
             ));
         }
-        if charges.iter().any(|&z| !(1..=10).contains(&z)) {
+        if charges.iter().any(|&z| !(1..=ELEMENTS as u32).contains(&z)) {
             return Err(QsoError::invalid(
                 "atoms",
-                "atomic numbers must lie in 1..=10 (H to Ne)",
+                "atomic numbers must lie in 1..=18 (H to Ar)",
             ));
         }
         if positions.iter().flatten().any(|v| !v.is_finite()) {
@@ -205,34 +213,128 @@ fn distance(a: [f64; 3], b: [f64; 3]) -> f64 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
 }
 
-/// A basis set.
+/// A basis set (H to Ar).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum Basis {
     /// STO-3G (minimal).
     Sto3g,
     /// 6-31G (split valence).
     SixThirtyOneG,
+    /// 6-31G* (6-31G(d)): 6-31G with d functions on Li to Ar.
+    SixThirtyOneGStar,
+    /// cc-pVDZ (correlation consistent, double zeta): p functions on H
+    /// and He, d functions on Li to Ar.
+    CcPvdz,
 }
 
 impl Basis {
-    /// `"sto-3g"` or `"6-31g"` (case-insensitive).
+    /// `"sto-3g"`, `"6-31g"`, `"6-31g*"` (or `"6-31g(d)"`) or `"cc-pvdz"`
+    /// (case-insensitive).
     pub fn from_name(name: &str) -> Result<Self> {
         match name.to_ascii_lowercase().replace(['_', ' '], "-").as_str() {
             "sto-3g" | "sto3g" => Ok(Basis::Sto3g),
             "6-31g" | "631g" => Ok(Basis::SixThirtyOneG),
+            "6-31g*" | "631g*" | "6-31g(d)" => Ok(Basis::SixThirtyOneGStar),
+            "cc-pvdz" | "ccpvdz" => Ok(Basis::CcPvdz),
             _ => Err(QsoError::invalid(
                 "basis",
-                format!("unknown basis '{name}' (expected sto-3g or 6-31g)"),
+                format!("unknown basis '{name}' (expected sto-3g, 6-31g, 6-31g* or cc-pvdz)"),
             )),
         }
     }
 
-    fn shells(self, z: u32) -> &'static [ShellData] {
+    /// The name `from_name` reads.
+    pub fn name(self) -> &'static str {
         match self {
-            Basis::Sto3g => STO_3G[z as usize - 1],
-            Basis::SixThirtyOneG => SIX_31G[z as usize - 1],
+            Basis::Sto3g => "sto-3g",
+            Basis::SixThirtyOneG => "6-31g",
+            Basis::SixThirtyOneGStar => "6-31g*",
+            Basis::CcPvdz => "cc-pvdz",
         }
     }
+
+    fn shells(self, z: u32) -> &'static [ShellData] {
+        let z = z as usize - 1;
+        match self {
+            Basis::Sto3g => STO_3G[z],
+            Basis::SixThirtyOneG => SIX_31G[z],
+            Basis::SixThirtyOneGStar => SIX_31G_STAR[z],
+            Basis::CcPvdz => CC_PVDZ[z],
+        }
+    }
+}
+
+/// The angular functions of shells with `l ≥ 2`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Harmonics {
+    /// Real solid harmonics, `2l + 1` per shell, ordered `m = −l, …, l` (p
+    /// shells `x, y, z`), as PySCF's default and as cc-pVDZ is defined.
+    #[default]
+    Spherical,
+    /// Cartesian monomials `x^a y^b z^c`, `(l + 1)(l + 2)/2` per shell, in
+    /// PySCF's order (`xx, xy, xz, yy, yz, zz`), each normalised to one
+    /// (PySCF normalises the `d` and higher components differently).
+    Cartesian,
+}
+
+/// The exponents `(a, b, c)` of the Cartesian components of a shell, in
+/// PySCF's order.
+fn cartesian_powers(l: u32) -> Vec<[u32; 3]> {
+    let mut out = Vec::new();
+    for a in (0..=l).rev() {
+        for b in (0..=l - a).rev() {
+            out.push([a, b, l - a - b]);
+        }
+    }
+    out
+}
+
+fn binomial(n: i64, k: i64) -> f64 {
+    if k < 0 || k > n {
+        return 0.0;
+    }
+    (0..k).fold(1.0, |acc, i| acc * (n - i) as f64 / (i + 1) as f64)
+}
+
+/// The real solid harmonic `S_lm` (unnormalised) as coefficients of the
+/// Cartesian monomials of [`cartesian_powers`] (Helgaker, Jørgensen and
+/// Olsen, eq. 6.4.47; the signs of PySCF's functions).
+fn solid_harmonic(l: u32, m: i32) -> Vec<f64> {
+    let powers = cartesian_powers(l);
+    let mut c = vec![0.0; powers.len()];
+    let (l, am) = (l as i64, m.unsigned_abs() as i64);
+    // v runs over integers (m ≥ 0) or half-integers (m < 0): w = 2v.
+    let w0 = if m < 0 { 1 } else { 0 };
+    for t in 0..=(l - am) / 2 {
+        for u in 0..=t {
+            let mut w = w0;
+            while w <= am {
+                let sign = if (t + (w - w0) / 2) % 2 == 0 {
+                    1.0
+                } else {
+                    -1.0
+                };
+                let value = sign
+                    * 0.25f64.powi(t as i32)
+                    * binomial(l, t)
+                    * binomial(l - t, am + t)
+                    * binomial(t, u)
+                    * binomial(am, w);
+                let x = 2 * t + am - 2 * u - w;
+                let y = 2 * u + w;
+                let z = l - 2 * t - am;
+                let k = powers
+                    .iter()
+                    .position(|p| p == &[x as u32, y as u32, z as u32])
+                    .expect("a monomial of degree l");
+                c[k] += value;
+                w += 2;
+            }
+        }
+    }
+    c
 }
 
 /// One contracted Cartesian Gaussian `x^l y^m z^n Σ_k c_k e^{−α_k r²}`.
@@ -392,24 +494,24 @@ fn boys(f: &mut [f64], t: f64) {
     }
 }
 
-/// Largest total angular momentum of four functions (s and p shells).
-const MAX_L: usize = 4;
-const DIM: usize = MAX_L + 1;
-/// `R_{tuv}` indexed `[t][u][v]`.
-type HermiteR = [[[f64; DIM]; DIM]; DIM];
+/// Entries of `E_t` per direction: `t ≤ 2 MAX_SHELL_L`.
+const EDIM: usize = 2 * MAX_SHELL_L as usize + 1;
 
 /// Hermite Coulomb integrals `R_{tuv}` for `t + u + v ≤ l`, at exponent
-/// `p` and separation `pc`.
-fn hermite_r(l: usize, p: f64, pc: [f64; 3]) -> HermiteR {
-    debug_assert!(l <= MAX_L);
+/// `p` and separation `pc`, in `out` at `(t·(l+1) + u)·(l+1) + v`
+/// (`work` holds the intermediate orders).
+fn hermite_r(l: usize, p: f64, pc: [f64; 3], out: &mut Vec<f64>, work: &mut Vec<f64>) {
+    let d = l + 1;
+    let at = |n: usize, t: usize, u: usize, v: usize| ((n * d + t) * d + u) * d + v;
     let r2 = pc[0] * pc[0] + pc[1] * pc[1] + pc[2] * pc[2];
-    let mut f = [0.0; DIM];
+    let mut f = [0.0; 4 * MAX_SHELL_L as usize + 1];
     boys(&mut f[..=l], p * r2);
-    // r[n][t][u][v]
-    let mut r = [[[[0.0; DIM]; DIM]; DIM]; DIM];
+    work.clear();
+    work.resize(d * d * d * d, 0.0);
+    let r = work;
     let mut factor = 1.0;
-    for n in 0..=l {
-        r[n][0][0][0] = factor * f[n];
+    for (n, &fv) in f[..=l].iter().enumerate() {
+        r[at(n, 0, 0, 0)] = factor * fv;
         factor *= -2.0 * p;
     }
     for total in 1..=l {
@@ -419,32 +521,33 @@ fn hermite_r(l: usize, p: f64, pc: [f64; 3]) -> HermiteR {
                     let v = total - t - u;
                     let value = if t > 0 {
                         let prev = if t >= 2 {
-                            (t - 1) as f64 * r[n + 1][t - 2][u][v]
+                            (t - 1) as f64 * r[at(n + 1, t - 2, u, v)]
                         } else {
                             0.0
                         };
-                        prev + pc[0] * r[n + 1][t - 1][u][v]
+                        prev + pc[0] * r[at(n + 1, t - 1, u, v)]
                     } else if u > 0 {
                         let prev = if u >= 2 {
-                            (u - 1) as f64 * r[n + 1][t][u - 2][v]
+                            (u - 1) as f64 * r[at(n + 1, t, u - 2, v)]
                         } else {
                             0.0
                         };
-                        prev + pc[1] * r[n + 1][t][u - 1][v]
+                        prev + pc[1] * r[at(n + 1, t, u - 1, v)]
                     } else {
                         let prev = if v >= 2 {
-                            (v - 1) as f64 * r[n + 1][t][u][v - 2]
+                            (v - 1) as f64 * r[at(n + 1, t, u, v - 2)]
                         } else {
                             0.0
                         };
-                        prev + pc[2] * r[n + 1][t][u][v - 1]
+                        prev + pc[2] * r[at(n + 1, t, u, v - 1)]
                     };
-                    r[n][t][u][v] = value;
+                    r[at(n, t, u, v)] = value;
                 }
             }
         }
     }
-    r[0]
+    out.clear();
+    out.extend_from_slice(&r[..d * d * d]);
 }
 
 /// A product of two primitives: exponent, centre, contraction
@@ -454,7 +557,7 @@ struct PrimPair {
     p: f64,
     center: [f64; 3],
     coef: f64,
-    e: [[f64; 3]; 3],
+    e: [[f64; EDIM]; 3],
 }
 
 /// The primitive products of two contracted functions.
@@ -474,7 +577,7 @@ impl Pair {
             for (&b, &cb) in fj.exponents.iter().zip(&fj.coefficients) {
                 let p = a + b;
                 let center = [0, 1, 2].map(|k| (a * fi.center[k] + b * fj.center[k]) / p);
-                let mut e = [[0.0; 3]; 3];
+                let mut e = [[0.0; EDIM]; 3];
                 for k in 0..3 {
                     for t in 0..=l[k] {
                         e[k][t] = hermite_e(
@@ -507,9 +610,11 @@ impl Pair {
 #[allow(clippy::needless_range_loop)]
 fn nuclear_pair(pair: &Pair, c: [f64; 3]) -> f64 {
     let l = pair.total_l();
+    let d = l + 1;
+    let (mut r, mut work) = (Vec::new(), Vec::new());
     let mut v = 0.0;
     for pp in &pair.prims {
-        let r = hermite_r(
+        hermite_r(
             l,
             pp.p,
             [
@@ -517,12 +622,14 @@ fn nuclear_pair(pair: &Pair, c: [f64; 3]) -> f64 {
                 pp.center[1] - c[1],
                 pp.center[2] - c[2],
             ],
+            &mut r,
+            &mut work,
         );
         let mut s = 0.0;
         for t in 0..=pair.l[0] {
             for u in 0..=pair.l[1] {
                 for w in 0..=pair.l[2] {
-                    s += pp.e[0][t] * pp.e[1][u] * pp.e[2][w] * r[t][u][w];
+                    s += pp.e[0][t] * pp.e[1][u] * pp.e[2][w] * r[(t * d + u) * d + w];
                 }
             }
         }
@@ -533,14 +640,15 @@ fn nuclear_pair(pair: &Pair, c: [f64; 3]) -> f64 {
 
 /// `(ij|kl)` over contracted functions, from the pairs `ij` and `kl`.
 #[allow(clippy::needless_range_loop)]
-fn eri_pairs(ab: &Pair, cd: &Pair) -> f64 {
+fn eri_pairs(ab: &Pair, cd: &Pair, r: &mut Vec<f64>, work: &mut Vec<f64>) -> f64 {
     let l = ab.total_l() + cd.total_l();
+    let d = l + 1;
     let mut v = 0.0;
     for x in &ab.prims {
         for y in &cd.prims {
             let (p, q) = (x.p, y.p);
             let alpha = p * q / (p + q);
-            let r = hermite_r(
+            hermite_r(
                 l,
                 alpha,
                 [
@@ -548,6 +656,8 @@ fn eri_pairs(ab: &Pair, cd: &Pair) -> f64 {
                     x.center[1] - y.center[1],
                     x.center[2] - y.center[2],
                 ],
+                r,
+                work,
             );
             let mut s = 0.0;
             for t in 0..=ab.l[0] {
@@ -566,7 +676,7 @@ fn eri_pairs(ab: &Pair, cd: &Pair) -> f64 {
                                         * y.e[0][tau]
                                         * y.e[1][nu]
                                         * y.e[2][phi]
-                                        * r[t + tau][u + nu][w + phi];
+                                        * r[((t + tau) * d + u + nu) * d + w + phi];
                                 }
                             }
                         }
@@ -579,6 +689,85 @@ fn eri_pairs(ab: &Pair, cd: &Pair) -> f64 {
         }
     }
     v
+}
+
+/// Overlap, kinetic, nuclear-attraction and electron-repulsion integrals
+/// over Cartesian functions (`n × n` and `n⁴`, row-major).
+type Integrals = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
+
+fn cartesian_integrals(molecule: &Molecule, functions: &[Function]) -> Integrals {
+    let n = functions.len();
+    // Primitive products of every pair i ≥ j, in the order of the
+    // quartets below.
+    let pairs: Vec<(usize, usize)> = (0..n).flat_map(|i| (0..=i).map(move |j| (i, j))).collect();
+    let pair_data: Vec<Pair> = pairs
+        .iter()
+        .map(|&(i, j)| Pair::new(&functions[i], &functions[j]))
+        .collect();
+    let mut overlap = vec![0.0; n * n];
+    let mut kinetic = vec![0.0; n * n];
+    let mut nuclear = vec![0.0; n * n];
+    for (x, &(i, j)) in pairs.iter().enumerate() {
+        let (fi, fj) = (&functions[i], &functions[j]);
+        let mut sv = 0.0;
+        let mut tv = 0.0;
+        for a in 0..fi.exponents.len() {
+            for b in 0..fj.exponents.len() {
+                let c = fi.coefficients[a] * fj.coefficients[b];
+                let (ea, eb) = (fi.exponents[a], fj.exponents[b]);
+                sv += c * overlap_primitive(ea, fi.powers, fi.center, eb, fj.powers, fj.center);
+                tv += c * kinetic_primitive(ea, fi.powers, fi.center, eb, fj.powers, fj.center);
+            }
+        }
+        let vv: f64 = molecule
+            .charges
+            .iter()
+            .zip(&molecule.positions)
+            .map(|(&z, &c)| -(z as f64) * nuclear_pair(&pair_data[x], c))
+            .sum();
+        for (m, v) in [(&mut overlap, sv), (&mut kinetic, tv), (&mut nuclear, vv)] {
+            m[i * n + j] = v;
+            m[j * n + i] = v;
+        }
+    }
+    // Unique quartets i ≥ j, k ≥ l, ij ≥ kl, in parallel.
+    let quartets: Vec<(usize, usize)> = (0..pairs.len())
+        .flat_map(|x| (0..=x).map(move |y| (x, y)))
+        .collect();
+    let chunk = 64;
+    let values: Vec<f64> = parallel::map_tasks(quartets.len().div_ceil(chunk), |c| {
+        let (mut r, mut work) = (Vec::new(), Vec::new());
+        (c * chunk..((c + 1) * chunk).min(quartets.len()))
+            .map(|k| {
+                eri_pairs(
+                    &pair_data[quartets[k].0],
+                    &pair_data[quartets[k].1],
+                    &mut r,
+                    &mut work,
+                )
+            })
+            .collect::<Vec<f64>>()
+    })
+    .into_iter()
+    .flatten()
+    .collect();
+    let mut eri = vec![0.0; n * n * n * n];
+    for (&(x, y), &v) in quartets.iter().zip(&values) {
+        let ((i, j), (k, l)) = (pairs[x], pairs[y]);
+        for (p, q, r, s) in [
+            (i, j, k, l),
+            (j, i, k, l),
+            (i, j, l, k),
+            (j, i, l, k),
+            (k, l, i, j),
+            (l, k, i, j),
+            (k, l, j, i),
+            (l, k, j, i),
+        ] {
+            eri[((p * n + q) * n + r) * n + s] = v;
+        }
+    }
+    (overlap, kinetic, nuclear, eri)
 }
 
 /// Integrals over the atomic orbitals of a molecule.
@@ -596,102 +785,165 @@ pub struct AoIntegrals {
     angular: Vec<u32>,
     /// The basis and the nuclei the integrals belong to.
     basis: Basis,
+    harmonics: Harmonics,
     charges: Vec<u32>,
     positions: Vec<[f64; 3]>,
 }
 
+/// `out[L, i, j, k] = Σ_l a[i, j, k, l] T[l, L]` for a sparse `T` given by
+/// its columns: transforms the last index and moves it to the front.
+fn quarter_transform(a: &[f64], dims: [usize; 4], columns: &[Vec<(usize, f64)>]) -> Vec<f64> {
+    let [d0, d1, d2, d3] = dims;
+    let inner = d0 * d1 * d2;
+    let mut out = vec![0.0; columns.len() * inner];
+    for (big, col) in columns.iter().enumerate() {
+        let dst = &mut out[big * inner..(big + 1) * inner];
+        for &(l, c) in col {
+            for (x, v) in dst.iter_mut().enumerate() {
+                *v += c * a[x * d3 + l];
+            }
+        }
+    }
+    out
+}
+
 impl AoIntegrals {
-    /// The integrals of `molecule` in `basis`. Functions are ordered by
-    /// atom, then by shell as the basis lists them, `p` functions as
-    /// `x, y, z` (the order of PySCF).
+    /// The integrals of `molecule` in `basis`, with spherical `d` and
+    /// higher shells ([`AoIntegrals::compute_with`]).
     pub fn compute(molecule: &Molecule, basis: Basis) -> Result<Self> {
+        Self::compute_with(molecule, basis, Harmonics::Spherical)
+    }
+
+    /// The integrals of `molecule` in `basis`. Functions are ordered by
+    /// atom, then by shell as the basis lists them, and within a shell as
+    /// [`Harmonics`] says (`p` functions as `x, y, z`): the order of PySCF.
+    pub fn compute_with(molecule: &Molecule, basis: Basis, harmonics: Harmonics) -> Result<Self> {
+        Self::from_shells(molecule, basis, harmonics, &|z| basis.shells(z).to_vec())
+    }
+
+    /// The integrals with the shells `shells(z)` on every atom of atomic
+    /// number `z` (`basis` only labels them).
+    pub(crate) fn from_shells(
+        molecule: &Molecule,
+        basis: Basis,
+        harmonics: Harmonics,
+        shells_of: &dyn Fn(u32) -> Vec<ShellData>,
+    ) -> Result<Self> {
+        // Cartesian components of every shell: (first component, l, atom).
         let mut functions = Vec::new();
-        let mut atoms = Vec::new();
-        let mut angular = Vec::new();
+        let mut shells = Vec::new();
         for (atom, (&z, &pos)) in molecule.charges.iter().zip(&molecule.positions).enumerate() {
-            for &(l, prims) in basis.shells(z) {
-                let powers: &[[u32; 3]] = match l {
-                    0 => &[[0, 0, 0]],
-                    1 => &[[1, 0, 0], [0, 1, 0], [0, 0, 1]],
-                    _ => unreachable!("the bundled bases have s and p shells only"),
-                };
-                for &p in powers {
+            for (l, prims) in shells_of(z) {
+                let l = l as u32;
+                debug_assert!(l <= MAX_SHELL_L);
+                shells.push((functions.len(), l, atom));
+                for p in cartesian_powers(l) {
                     functions.push(Function::new(pos, p, prims));
-                    atoms.push(atom);
-                    angular.push(l as u32);
                 }
             }
         }
-        let n = functions.len();
+        let spherical = |l: u32| harmonics == Harmonics::Spherical && l >= 2;
+        let n: usize = shells
+            .iter()
+            .map(|&(_, l, _)| {
+                if spherical(l) {
+                    2 * l as usize + 1
+                } else {
+                    ((l + 1) * (l + 2) / 2) as usize
+                }
+            })
+            .sum();
+        let nc = functions.len();
         if n > MAX_BASIS_FUNCTIONS {
             return Err(QsoError::invalid(
                 "molecule",
                 format!("{n} basis functions exceed the maximum {MAX_BASIS_FUNCTIONS}"),
             ));
         }
-        // Primitive products of every pair i ≥ j, in the order of the
-        // quartets below.
-        let pairs: Vec<(usize, usize)> =
-            (0..n).flat_map(|i| (0..=i).map(move |j| (i, j))).collect();
-        let pair_data: Vec<Pair> = pairs
-            .iter()
-            .map(|&(i, j)| Pair::new(&functions[i], &functions[j]))
-            .collect();
-        let mut overlap = vec![0.0; n * n];
-        let mut kinetic = vec![0.0; n * n];
-        let mut nuclear = vec![0.0; n * n];
-        for (x, &(i, j)) in pairs.iter().enumerate() {
-            let (fi, fj) = (&functions[i], &functions[j]);
-            let mut sv = 0.0;
-            let mut tv = 0.0;
-            for a in 0..fi.exponents.len() {
-                for b in 0..fj.exponents.len() {
-                    let c = fi.coefficients[a] * fj.coefficients[b];
-                    let (ea, eb) = (fi.exponents[a], fj.exponents[b]);
-                    sv += c * overlap_primitive(ea, fi.powers, fi.center, eb, fj.powers, fj.center);
-                    tv += c * kinetic_primitive(ea, fi.powers, fi.center, eb, fj.powers, fj.center);
+        if nc > MAX_CARTESIAN_FUNCTIONS {
+            return Err(QsoError::invalid(
+                "molecule",
+                format!("{nc} Cartesian components exceed the maximum {MAX_CARTESIAN_FUNCTIONS}"),
+            ));
+        }
+        let (overlap, kinetic, nuclear, eri) = cartesian_integrals(molecule, &functions);
+        // Every final function as a combination of Cartesian components.
+        let mut columns: Vec<Vec<(usize, f64)>> = Vec::with_capacity(n);
+        let mut atoms = Vec::with_capacity(n);
+        let mut angular = Vec::with_capacity(n);
+        for &(first, l, atom) in &shells {
+            if spherical(l) {
+                let k = ((l + 1) * (l + 2) / 2) as usize;
+                // The monomial x^a y^b z^c is the unit-normalised component
+                // times √((2a−1)!!(2b−1)!!(2c−1)!!), up to a common factor.
+                let monomial: Vec<f64> = cartesian_powers(l)
+                    .iter()
+                    .map(|p| {
+                        p.iter()
+                            .map(|&e| double_factorial(2 * e as i64 - 1))
+                            .product::<f64>()
+                            .sqrt()
+                    })
+                    .collect();
+                for m in -(l as i32)..=l as i32 {
+                    let c: Vec<f64> = solid_harmonic(l, m)
+                        .iter()
+                        .zip(&monomial)
+                        .map(|(c, f)| c * f)
+                        .collect();
+                    let mut norm = 0.0;
+                    for a in 0..k {
+                        for b in 0..k {
+                            norm += c[a] * c[b] * overlap[(first + a) * nc + first + b];
+                        }
+                    }
+                    let scale = norm.sqrt().recip();
+                    columns.push(
+                        c.iter()
+                            .enumerate()
+                            .filter(|(_, v)| **v != 0.0)
+                            .map(|(a, v)| (first + a, v * scale))
+                            .collect(),
+                    );
+                    atoms.push(atom);
+                    angular.push(l);
+                }
+            } else {
+                for a in 0..((l + 1) * (l + 2) / 2) as usize {
+                    columns.push(vec![(first + a, 1.0)]);
+                    atoms.push(atom);
+                    angular.push(l);
                 }
             }
-            let vv: f64 = molecule
-                .charges
-                .iter()
-                .zip(&molecule.positions)
-                .map(|(&z, &c)| -(z as f64) * nuclear_pair(&pair_data[x], c))
-                .sum();
-            for (m, v) in [(&mut overlap, sv), (&mut kinetic, tv), (&mut nuclear, vv)] {
-                m[i * n + j] = v;
-                m[j * n + i] = v;
-            }
         }
-        // Unique quartets i ≥ j, k ≥ l, ij ≥ kl, in parallel.
-        let quartets: Vec<(usize, usize)> = (0..pairs.len())
-            .flat_map(|x| (0..=x).map(move |y| (x, y)))
-            .collect();
-        let chunk = 64;
-        let values: Vec<f64> = parallel::map_tasks(quartets.len().div_ceil(chunk), |c| {
-            (c * chunk..((c + 1) * chunk).min(quartets.len()))
-                .map(|k| eri_pairs(&pair_data[quartets[k].0], &pair_data[quartets[k].1]))
-                .collect::<Vec<f64>>()
-        })
-        .into_iter()
-        .flatten()
-        .collect();
-        let mut eri = vec![0.0; n * n * n * n];
-        for (&(x, y), &v) in quartets.iter().zip(&values) {
-            let ((i, j), (k, l)) = (pairs[x], pairs[y]);
-            for (p, q, r, s) in [
-                (i, j, k, l),
-                (j, i, k, l),
-                (i, j, l, k),
-                (j, i, l, k),
-                (k, l, i, j),
-                (l, k, i, j),
-                (k, l, j, i),
-                (l, k, j, i),
-            ] {
-                eri[((p * n + q) * n + r) * n + s] = v;
+        let identity = n == nc;
+        let two = |m: &[f64]| -> Vec<f64> {
+            if identity {
+                return m.to_vec();
             }
-        }
+            let mut out = vec![0.0; n * n];
+            for (i, ci) in columns.iter().enumerate() {
+                for (j, cj) in columns.iter().enumerate() {
+                    let mut v = 0.0;
+                    for &(a, x) in ci {
+                        for &(b, y) in cj {
+                            v += x * y * m[a * nc + b];
+                        }
+                    }
+                    out[i * n + j] = v;
+                }
+            }
+            out
+        };
+        let (overlap, kinetic, nuclear) = (two(&overlap), two(&kinetic), two(&nuclear));
+        let eri = if identity {
+            eri
+        } else {
+            let a = quarter_transform(&eri, [nc, nc, nc, nc], &columns);
+            let a = quarter_transform(&a, [n, nc, nc, nc], &columns);
+            let a = quarter_transform(&a, [n, n, nc, nc], &columns);
+            quarter_transform(&a, [n, n, n, nc], &columns)
+        };
         Ok(Self {
             n,
             overlap,
@@ -701,9 +953,15 @@ impl AoIntegrals {
             atoms,
             angular,
             basis,
+            harmonics,
             charges: molecule.charges.clone(),
             positions: molecule.positions.clone(),
         })
+    }
+
+    /// Spherical or Cartesian `d` and higher shells.
+    pub fn harmonics(&self) -> Harmonics {
+        self.harmonics
     }
 
     /// The basis set.

@@ -268,7 +268,7 @@ fn oscillating_open_shells_converge_with_a_level_shift() {
         max_iterations: 300,
         ..ScfOptions::default()
     };
-    assert!(scf(&mol, &ints, &plain, false).is_err());
+    assert!(scf(&mol, &ints, &plain, Kind::Unrestricted).is_err());
     let bad = ScfOptions {
         level_shift: -1.0,
         ..ScfOptions::default()

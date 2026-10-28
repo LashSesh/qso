@@ -144,6 +144,7 @@ pub struct ScfResult {
 #[derive(Clone, Debug, PartialEq)]
 struct AoIntegralsId {
     basis: super::integrals::Basis,
+    harmonics: super::integrals::Harmonics,
     n_functions: usize,
     molecule: Molecule,
 }
@@ -188,6 +189,7 @@ impl ScfResult {
             ));
         }
         if !(ints.basis() == self.source.basis
+            && ints.harmonics() == self.source.harmonics
             && ints.n_functions() == self.source.n_functions
             && ints.belongs_to(&self.source.molecule))
         {
@@ -479,14 +481,35 @@ pub fn rhf(molecule: &Molecule, ints: &AoIntegrals, options: &ScfOptions) -> Res
             "restricted Hartree–Fock needs a closed shell; use unrestricted Hartree–Fock",
         ));
     }
-    with_fallback(molecule, ints, options, true)
+    with_fallback(molecule, ints, options, Kind::Restricted)
 }
 
 /// Unrestricted Hartree–Fock: separate α and β orbitals.
 pub fn uhf(molecule: &Molecule, ints: &AoIntegrals, options: &ScfOptions) -> Result<ScfResult> {
     options.validate()?;
     validate_inputs(molecule, ints)?;
-    with_fallback(molecule, ints, options, false)
+    with_fallback(molecule, ints, options, Kind::Unrestricted)
+}
+
+/// Restricted open-shell Hartree–Fock: one set of orbitals, the lowest
+/// `n_β` doubly occupied and the next `n_α − n_β` singly (α). The
+/// orbitals diagonalise Roothaan's effective Fock matrix with PySCF's
+/// blocks: `F_c = ½(F_α + F_β)` within the closed, open and virtual
+/// spaces and between closed and virtual orbitals, `F_β` between closed
+/// and open, `F_α` between open and virtual. The energy does not depend on
+/// this choice; the orbital energies do. For a closed shell it is RHF.
+pub fn rohf(molecule: &Molecule, ints: &AoIntegrals, options: &ScfOptions) -> Result<ScfResult> {
+    options.validate()?;
+    validate_inputs(molecule, ints)?;
+    with_fallback(molecule, ints, options, Kind::RestrictedOpen)
+}
+
+/// The kind of determinant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    Restricted,
+    Unrestricted,
+    RestrictedOpen,
 }
 
 /// The SCF with `options`; if DIIS does not converge, once more without
@@ -496,9 +519,9 @@ fn with_fallback(
     molecule: &Molecule,
     ints: &AoIntegrals,
     options: &ScfOptions,
-    restricted: bool,
+    kind: Kind,
 ) -> Result<ScfResult> {
-    match scf(molecule, ints, options, restricted) {
+    match scf(molecule, ints, options, kind) {
         Err(e @ QsoError::NoConvergence { .. })
             if options.diis_space > 0 && options.level_shift == 0.0 =>
         {
@@ -507,7 +530,7 @@ fn with_fallback(
                 level_shift: 0.5,
                 ..options.clone()
             };
-            scf(molecule, ints, &shifted, restricted).map_err(|_| e)
+            scf(molecule, ints, &shifted, kind).map_err(|_| e)
         }
         other => other,
     }
@@ -517,8 +540,10 @@ fn scf(
     molecule: &Molecule,
     ints: &AoIntegrals,
     options: &ScfOptions,
-    restricted: bool,
+    kind: Kind,
 ) -> Result<ScfResult> {
+    let restricted = kind == Kind::Restricted;
+    let open = kind == Kind::RestrictedOpen;
     let n = ints.n_functions();
     let (na, nb) = molecule.n_alpha_beta();
     let s = RMatrix::from_fn(n, n, |i, j| ints.overlap(i, j));
@@ -534,7 +559,8 @@ fn scf(
         ));
     }
     let e_nuc = molecule.nuclear_repulsion();
-    let spins = if restricted { 1 } else { 2 };
+    // Sets of orbitals.
+    let spins = if kind == Kind::Unrestricted { 2 } else { 1 };
     let occupied = [na, nb];
     // Both spins start from half the guessed total density.
     let start = match options.guess {
@@ -563,7 +589,7 @@ fn scf(
         // E = ½ Σ_σ Tr[D_σ (H + F_σ)].
         let mut energy = e_nuc;
         for sp in 0..2 {
-            let f = &focks[sp.min(spins - 1)];
+            let f = &focks[sp.min(focks.len() - 1)];
             energy += 0.5 * (d[sp].component_mul(&(&h + f))).sum();
         }
         if !energy.is_finite() {
@@ -571,7 +597,11 @@ fn scf(
         }
         if iteration == 1 {
             // The guess is no determinant: no gradient, no DIIS.
-            orbitals = focks.iter().map(|f| diagonalise(f, &x)).collect();
+            orbitals = if open {
+                vec![diagonalise(&((&focks[0] + &focks[1]) * 0.5), &x)]
+            } else {
+                focks.iter().map(|f| diagonalise(f, &x)).collect()
+            };
             previous = energy;
             continue;
         }
@@ -580,7 +610,32 @@ fn scf(
         // basis, which stays the same from one iteration to the next.
         let mut gradient = Vec::new();
         let mut error = Vec::new();
-        for sp in 0..spins {
+        // ROHF: the gradient between closed, open and virtual orbitals,
+        // and the effective Fock matrix's commutators with both densities.
+        let effective = open.then(|| roothaan_fock(&focks, &d, &s));
+        if let Some(f) = &effective {
+            let c = &orbitals[0].1;
+            let fa = c.transpose() * &focks[0] * c;
+            let fb = c.transpose() * &focks[1] * c;
+            for i in 0..c.ncols() {
+                for j in i + 1..c.ncols() {
+                    let g = match (i < nb, i < na, j < nb, j < na) {
+                        // closed–open: F_β; closed–virtual: F_α + F_β.
+                        (true, _, false, true) => fb[(i, j)],
+                        (true, _, false, false) => fa[(i, j)] + fb[(i, j)],
+                        // open–virtual: F_α.
+                        (false, true, false, false) => fa[(i, j)],
+                        _ => continue,
+                    };
+                    gradient.push(g);
+                }
+            }
+            for dm in &d {
+                let fds = f * dm * &s;
+                error.extend((&fds - fds.transpose()).iter().copied());
+            }
+        }
+        for sp in 0..if open { 0 } else { spins } {
             let c = &orbitals[sp].1;
             let occ = occupied[sp];
             let fmo = c.transpose() * &focks[sp] * c;
@@ -598,7 +653,10 @@ fn scf(
             && residual < options.gradient_tolerance
         {
             // Orbitals and energies of the converged Fock matrix itself.
-            let last: Vec<(Vec<f64>, RMatrix)> = focks.iter().map(|f| diagonalise(f, &x)).collect();
+            let last: Vec<(Vec<f64>, RMatrix)> = match &effective {
+                Some(f) => vec![diagonalise(f, &x)],
+                None => focks.iter().map(|f| diagonalise(f, &x)).collect(),
+            };
             let orbital_energies = last.iter().map(|o| o.0.clone()).collect();
             let coefficients = last.into_iter().map(|o| o.1).collect();
             return Ok(ScfResult {
@@ -612,15 +670,17 @@ fn scf(
                 overlap: s,
                 source: AoIntegralsId {
                     basis: ints.basis(),
+                    harmonics: ints.harmonics(),
                     n_functions: n,
                     molecule: molecule.clone(),
                 },
             });
         }
         previous = energy;
-        let mut extrapolated = diis.extrapolate(focks, error);
+        let mut extrapolated = diis.extrapolate(effective.map_or(focks, |f| vec![f]), error);
         if options.level_shift > 0.0 && residual > 1e-3 {
-            // F + σ (S − S D S) raises the virtual orbitals by σ.
+            // F + σ (S − S D S) raises the virtual orbitals by σ (ROHF:
+            // those empty in both spins).
             for (sp, f) in extrapolated.iter_mut().enumerate() {
                 let sds = &s * &d[sp] * &s;
                 *f += (&s - sds) * options.level_shift;
@@ -629,10 +689,32 @@ fn scf(
         orbitals = extrapolated.iter().map(|f| diagonalise(f, &x)).collect();
     }
     Err(QsoError::NoConvergence {
-        method: if restricted { "RHF" } else { "UHF" },
+        method: match kind {
+            Kind::Restricted => "RHF",
+            Kind::Unrestricted => "UHF",
+            Kind::RestrictedOpen => "ROHF",
+        },
         iterations: options.max_iterations,
         residual: last_residual,
     })
+}
+
+/// Roothaan's effective Fock matrix of a restricted open shell (PySCF's
+/// blocks, see [`rohf`]) from `[F_α, F_β]` and `[D_α, D_β]`.
+fn roothaan_fock(f: &[RMatrix], d: &[RMatrix], s: &RMatrix) -> RMatrix {
+    let n = s.nrows();
+    let fc = (&f[0] + &f[1]) * 0.5;
+    let pc = &d[1] * s;
+    let po = (&d[0] - &d[1]) * s;
+    let pv = RMatrix::identity(n, n) - &d[0] * s;
+    let mut g = (pc.transpose() * &fc * &pc) * 0.5
+        + (po.transpose() * &fc * &po) * 0.5
+        + (pv.transpose() * &fc * &pv) * 0.5
+        + po.transpose() * &f[1] * &pc
+        + po.transpose() * &f[0] * &pv
+        + pv.transpose() * &fc * &pc;
+    g = &g + g.transpose();
+    g
 }
 
 /// Fock matrices `H + J(D_α + D_β) − K(D_σ)`: one for restricted
@@ -657,7 +739,7 @@ fn atomic_guess(ints: &AoIntegrals) -> Result<RMatrix> {
     let atoms = ints.atoms();
     let charges = ints.charges();
     let mut d = RMatrix::zeros(n, n);
-    let mut cache: Vec<Option<RMatrix>> = vec![None; 11];
+    let mut cache: Vec<Option<RMatrix>> = vec![None; super::basis_data::ELEMENTS + 1];
     let mut start = 0;
     while start < n {
         let atom = atoms[start];
@@ -667,7 +749,7 @@ fn atomic_guess(ints: &AoIntegrals) -> Result<RMatrix> {
         }
         let z = charges[atom] as usize;
         if cache[z].is_none() {
-            cache[z] = Some(atomic_density(z as u32, ints.basis())?);
+            cache[z] = Some(atomic_density(z as u32, ints.basis(), ints.harmonics())?);
         }
         let block = cache[z].as_ref().expect("cached");
         debug_assert_eq!(block.nrows(), end - start);
@@ -679,10 +761,14 @@ fn atomic_guess(ints: &AoIntegrals) -> Result<RMatrix> {
 }
 
 /// Total density of an atom with spherically averaged occupations.
-fn atomic_density(z: u32, basis: super::integrals::Basis) -> Result<RMatrix> {
+fn atomic_density(
+    z: u32,
+    basis: super::integrals::Basis,
+    harmonics: super::integrals::Harmonics,
+) -> Result<RMatrix> {
     let multiplicity = if z % 2 == 1 { 2 } else { 1 };
     let atom = Molecule::new(vec![z], vec![[0.0; 3]], 0, multiplicity)?;
-    let ints = AoIntegrals::compute(&atom, basis)?;
+    let ints = AoIntegrals::compute_with(&atom, basis, harmonics)?;
     let n = ints.n_functions();
     let s = RMatrix::from_fn(n, n, |i, j| ints.overlap(i, j));
     let h = RMatrix::from_fn(n, n, |i, j| ints.core(i, j));
