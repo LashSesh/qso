@@ -20,16 +20,20 @@ cd "$root"
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
 
+# Nightly for every cargo below, maturin's included (branch coverage needs
+# -Z coverage-options, which stable rustc rejects).
+export RUSTUP_TOOLCHAIN=nightly
+
 # Instrument every build below (cargo-llvm-cov 0.9 does it through a rustc
 # wrapper) in a target directory of its own, so that cleaning it and the
 # instrumented binaries leave the normal build alone.
 export CARGO_TARGET_DIR=$root/target/llvm-cov-target
-source <(cargo +nightly llvm-cov show-env --export-prefix --branch)
-cargo +nightly llvm-cov clean --workspace
+source <(cargo llvm-cov show-env --export-prefix --branch)
+cargo llvm-cov clean --workspace
 
 # A failing test does not discard the report; the script fails at the end.
 status=0
-cargo +nightly test --release -p metatron-qso-rs --all-features --no-fail-fast || status=$?
+cargo test --release -p metatron-qso-rs --all-features --no-fail-fast || status=$?
 
 venv=$CARGO_TARGET_DIR/coverage-venv
 python3 -m venv "$venv"
@@ -46,12 +50,12 @@ python3 -m venv "$venv"
 # Only the crate and the Python bindings, without test files (test modules
 # inside source files still count).
 ignore='(/tests/|/tests\.rs$|/benches/|/examples/|metatron_qso_wasm/)'
-cargo +nightly llvm-cov report --release --branch --ignore-filename-regex "$ignore" \
+cargo llvm-cov report --release --branch --ignore-filename-regex "$ignore" \
   --json --summary-only --output-path "$out/summary.json"
-cargo +nightly llvm-cov report --release --branch --ignore-filename-regex "$ignore" \
+cargo llvm-cov report --release --branch --ignore-filename-regex "$ignore" \
   --summary-only | tee "$out/coverage.txt"
 if [ "$html" = "--html" ]; then
-  cargo +nightly llvm-cov report --release --branch --ignore-filename-regex "$ignore" \
+  cargo llvm-cov report --release --branch --ignore-filename-regex "$ignore" \
     --html --output-dir "$out"
 fi
 exit $status
