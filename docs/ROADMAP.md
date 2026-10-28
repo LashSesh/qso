@@ -47,16 +47,16 @@ which withdraws the results of version 1.
 
 | Area | Now | Gap |
 |---|---|---|
-| Statevector speed | specialised kernels (1.1); gate fusion and cache blocking (1.3.0): 16-qubit layers 4.7× and 18–24-qubit layers 1.6–2.6× faster than in 1.2; batched evaluation; AVX and NEON kernels close to memory bandwidth and a blocked adjoint pass (1.11); single precision, one more qubit and about twice the speed on large registers (1.20) | worker threads sleep when idle, so short isolated simulations on virtual machines run cold — see [measurements](#measured-performance-against-established-simulators) |
+| Statevector speed | specialised kernels (1.1); gate fusion and cache blocking (1.3.0): 16-qubit layers 4.7× and 18–24-qubit layers 1.6–2.6× faster than in 1.2; batched evaluation; AVX and NEON kernels close to memory bandwidth and a blocked adjoint pass (1.11); single precision, one more qubit and about twice the speed on large registers (1.20); a worker pool that stays awake between short simulations (1.24) | spinning workers cost CPU time between simulations (`QSO_POOL_SPIN_US=0` turns it off) |
 | Boson sampling | exact probabilities and exact sampling (1.1); partial distinguishability, loss and Gaussian boson sampling with hafnians and torontonians (1.14) | mixed Gaussian states with many photons spread over many modes are impractical (10¹² operations at 20 photons in 10 modes) |
 | Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | noise learning for layers of two-qubit Clifford gates only, on density matrices (1.12); no leakage or non-Markovian noise, channels on at most two qubits; virtual distillation (1.17) mitigates only its measured copies' preparation |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18) | time-dependent Hamiltonians and decoherent coined walks without symmetry reduction; pretty good transfer on other graphs |
-| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5) | Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); no d functions (no larger bases, nothing beyond neon), no restricted open-shell Hamiltonians, no tight commutator bound for product formulas of order 4 and higher |
+| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5) | Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23) | no integral screening (every integral is computed, seconds at the 64-function limit), no tight commutator bound for product formulas of order 4 and higher |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
-| Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19) | no correlated decoding; syndrome circuits of CSS codes are not tuned against hook errors |
-| Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9) | no MPS in the browser build |
-| Documentation | user guide, executed tutorials and Python reference on GitHub Pages (1.2) | no Rust-specific tutorials; no hosted documentation per released version |
-| Engineering | CI on Linux (x86_64, arm64), macOS and Windows; Miri, fuzzing, API checks, weekly cross-validation and benchmark tracking; Trusted Publishing (1.2); line and branch coverage, and differential tests of all simulators on random circuits (1.21) | coverage of the Python bindings and the CLI |
+| Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22) | circuit distances of hypergraph models are bounds, not always exact |
+| Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9), in the browser build too (1.25) | — |
+| Documentation | user guide, executed tutorials and Python reference on GitHub Pages (1.2); Rust tutorials from the examples and the documentation of every release since 1.2.0 (1.25) | — |
+| Engineering | CI on Linux (x86_64, arm64), macOS and Windows; Miri, fuzzing, API checks, weekly cross-validation and benchmark tracking; Trusted Publishing (1.2); line and branch coverage, and differential tests of all simulators on random circuits (1.21); coverage of the CLI and of the Python tests (1.25) | — |
 
 ### Measured performance against established simulators
 
@@ -84,8 +84,8 @@ in [BENCHMARKS.md](BENCHMARKS.md#comparison-with-other-simulators-130)):
   a warm one 0.55 ms). Qulacs' OpenMP workers spin. Since 1.24 the
   state-vector kernels run on their own pool, whose workers spin briefly
   before parking: a 16-qubit layer after a 20 ms pause takes about
-  0.7 ms in Rust, and QSO is ahead of Qulacs cold and warm from 10 to 18
-  qubits. The comparison still warms every framework up for 0.25 s and
+  0.7 ms in Rust (1.2–1.3 ms before), and in Python QSO is ahead of
+  Qulacs cold and warm from 10 to 18 qubits. The comparison still warms every framework up for 0.25 s and
   times cold starts separately.
 * **Gradients:** the adjoint gradient of a 100-parameter, 10-qubit ansatz
   takes about 0.5 ms, against 2–5 ms with Qulacs' `backprop` and about
@@ -1174,7 +1174,7 @@ Miri for data races.
 
 | Deliverable | Delivered | Not done, and why |
 |---|---|---|
-| Worker pool | `pool` (crate-private): standard-library threads that spin for 200 µs after a job before parking (`QSO_POOL_SPIN_US`), one job at a time with the caller working too; calls from inside a job or while another job runs run serially; thread count from `QSO_NUM_THREADS` or `RAYON_NUM_THREADS`. Every state-vector helper of `parallel` (gate kernels, cache blocks, sums) runs on it; the parallel threshold stays at 2¹⁶ amplitudes after measuring 2¹⁴ and 2¹⁵ again | rayon stays for batches, trajectories, maps and the rest of the crate, as planned; inside rayon tasks the helpers keep using rayon |
+| Worker pool | `pool` (crate-private): standard-library threads that spin for 200 µs after a job before parking (`QSO_POOL_SPIN_US`), yielding the core regularly while they wait; one job at a time with the caller working too; calls from inside a job or while another job runs run serially, with the same panic contract; thread count from `QSO_NUM_THREADS` or `RAYON_NUM_THREADS`. Every state-vector helper of `parallel` (gate kernels, cache blocks, sums, and the maps behind `StateVector::zero` and `probabilities`) runs on it; the parallel threshold stays at 2¹⁶ amplitudes after measuring 2¹⁴ and 2¹⁵ again | rayon stays for batches, trajectories, restarts and the rest of the crate, as planned; inside rayon tasks the helpers keep using rayon |
 | Cold timings | `benchmark_report` times one layer at 12–18 qubits warm and after pauses of 0.5 and 20 ms; the cross-validation has the same configurations (`1@500`, `1@20000`) for QSO, Qulacs and Aer at 10–18 qubits | — |
 
 Validation as planned, on the development machine (4 cores, a VM):
@@ -1183,37 +1183,44 @@ Validation as planned, on the development machine (4 cores, a VM):
   same with the old rayon build, with the pool, and with the pool on one
   thread; the differential and library tests pass unchanged.
 - **Miri.** The pool's tests (many jobs, nesting, concurrent callers,
-  panics) and the plan tests run under Miri with two workers.
-- **Parameters.** Lower thresholds were slower (14 qubits in parallel:
-  380–400 µs a layer, serial 230–280 µs). Without spinning a layer took
+  panics), the plan tests and the unsafe kernels, run on the pool, pass
+  under Miri with two workers (CI's filter, 16 tests).
+- **Parameters.** Lower thresholds were not faster: 14 qubits in parallel
+  took 380–400 µs a layer against 230–280 µs serial, and with 2¹⁵ a
+  15-qubit layer took 0.36–0.44 ms warm and 0.52–0.54 ms after 20 ms,
+  as with 2¹⁶ (0.36–0.47 and 0.53–0.54 ms). Without spinning a layer took
   1.3–1.7 times as long at 16 and 17 qubits, warm too (the workers
-  parked between gates);
-  1 ms of spinning was not measurably better than 200 µs.
-- **Against the old build** (Rust, one layer, medians of two runs):
+  parked between gates); 1 ms of spinning was not measurably better than
+  200 µs.
+- **Against the old build** (Rust, one layer, three interleaved runs,
+  the range of their medians):
 
   | qubits | warm, old | warm, pool | after 20 ms, old | after 20 ms, pool |
   |---:|---:|---:|---:|---:|
-  | 15 | 0.41–0.44 ms | 0.43–0.45 ms | 0.78–0.85 ms | 0.50–0.51 ms |
-  | 16 | 0.77 ms | 0.45–0.48 ms | 1.16–1.22 ms | 0.66–0.68 ms |
-  | 17 | 1.23–1.30 ms | 0.97–1.05 ms | 1.90–1.92 ms | 1.09–1.22 ms |
-  | 18 | 2.4–2.9 ms | 1.7–1.8 ms | 2.95–2.98 ms | 2.10–2.19 ms |
+  | 14 | 0.21–0.27 ms | 0.25–0.27 ms | 0.32–0.33 ms | 0.32–0.34 ms |
+  | 15 | 0.43–0.54 ms | 0.36–0.47 ms | 0.78–0.83 ms | 0.53–0.54 ms |
+  | 16 | 0.76–0.87 ms | 0.50–0.75 ms | 1.22–1.34 ms | 0.71–0.73 ms |
+  | 17 | 1.43–1.62 ms | 0.87–1.04 ms | 1.90–1.98 ms | 1.21–1.28 ms |
+  | 18 | 2.3–2.9 ms | 2.0–2.4 ms | 3.30–3.42 ms | 2.30–2.77 ms |
 
-  From 20 to 26 qubits both builds take the same time within the noise
-  (22 qubits: 34–40 ms, 26 qubits: 0.89–0.93 s a layer).
+  At 14 qubits (one thread in both) they are equal. From 20 to 26
+  qubits the pool is not slower (22 qubits: 36–39 ms old, 37–39 ms pool;
+  26 qubits: 0.98–1.02 s and 0.95–1.02 s a layer).
 - **Against Qulacs and Aer** (Python, a fresh process per measurement,
   three interleaved rounds of 21 runs, medians):
 
   | qubits | QSO warm | after 0.5 ms | after 20 ms | Qulacs warm | after 0.5 ms | after 20 ms | Aer after 20 ms |
   |---:|---:|---:|---:|---:|---:|---:|---:|
-  | 10 | 10 µs | 15 µs | 81 µs | 56 µs | 62 µs | 136 µs | 1.8 ms |
-  | 12 | 53 µs | 58 µs | 126 µs | 152 µs | 169 µs | 409 µs | 2.8 ms |
-  | 14 | 0.32 ms | 0.31 ms | 0.37 ms | 0.32 ms | 0.34 ms | 0.62 ms | 4.4 ms |
-  | 16 | 0.55 ms | 0.61 ms | 0.88 ms | 0.82 ms | 0.86 ms | 1.35 ms | 7.8 ms |
-  | 18 | 2.17 ms | 2.56 ms | 2.56 ms | 3.08 ms | 3.31 ms | 4.55 ms | 15.9 ms |
+  | 10 | 10 µs | 25 µs | 93 µs | 53 µs | 85 µs | 159 µs | 2.2 ms |
+  | 12 | 55 µs | 80 µs | 170 µs | 139 µs | 187 µs | 464 µs | 2.9 ms |
+  | 14 | 0.31 ms | 0.33 ms | 0.41 ms | 0.39 ms | 0.43 ms | 0.68 ms | 4.5 ms |
+  | 16 | 0.51 ms | 0.57 ms | 0.77 ms | 1.19 ms | 0.90 ms | 1.42 ms | 7.8 ms |
+  | 18 | 2.21 ms | 2.33 ms | 2.78 ms | 4.04 ms | 3.93 ms | 5.50 ms | 18.0 ms |
 
-  The times after 20 ms include Python waking up from the pause for every
-  framework; QSO is ahead of Qulacs cold and warm at every size, and at
-  14 qubits (one thread) equal warm.
+  The times after a pause include Python waking up from it, for every
+  framework; QSO is ahead of Qulacs cold and warm at every size. The
+  configurations are those of the cross-validation (`1`, `1@500`,
+  `1@20000`).
 
 An independent review checked the pool's memory ordering and lifetime
 argument (sound), stress-tested it (6 threads × 3000 random jobs, calls
@@ -1249,7 +1256,7 @@ runs serially; the old build hung). It found:
   more with a layer every millisecond); stale 16-qubit statements; the
   warm Python column now comes from the cross-validation.
 
-### 1.25 — Documentation and reach (S–M)
+### 1.25 — Documentation and reach (S–M, delivered)
 
 Use case: users of released versions, Rust users, and the browser.
 
@@ -1264,6 +1271,67 @@ Validation: the documentation build produces every released version; the
 tutorials compile and run on every change; the browser build's MPS gives
 the native results on the npm package's tests; the coverage report lists
 the CLI's lines.
+
+| Deliverable | Delivered | Not done, and why |
+|---|---|---|
+| Versioned documentation | `docs/build_site.py --versions`: the guide and Python reference of every release since 1.2.0 at `/<version>/`, built from the release's tag with its wheel from PyPI (its notebooks executed against it), cached per release in the docs workflow, which also runs after a release; a version selector on every guide page; release pages link the playground and their tag's sources | 1.0 and 1.1 had no guide |
+| Rust tutorials | eight guide pages from the ten examples: code between `// ANCHOR:` lines, explained, and the output of running the examples in the documentation build (about 140 s) | — |
+| MPS in the browser | the WebAssembly module's `mps` method and npm `qso.mps()` (expectation values, bond dimensions and entropies, amplitudes, fidelity bound, samples); a playground tab with GHZ on 1000 qubits, a quench on 100 and a truncated brick wall | — |
+| Coverage | `tests/cli.rs` runs every subcommand of `qso` as a program; `scripts/coverage.sh` merges the crate's tests, the CLI and the Python tests (on an instrumented wheel) into one report, with lines per component in the CI summary | — |
+
+Validation as planned:
+
+- **Every release.** 1.2.0, 1.4.0, 1.5.1 and 1.6.0 were built from their
+  tags with today's mdBook; their notebooks ran against their own wheels
+  (the output shows the version). The version selector was tested in
+  Chromium on a site served under `/qso/`: the current version on every
+  page and depth, the same page in another version, the start page where
+  a page is missing, query and anchor kept, keyboard use.
+- **Tutorials.** Every statement of the eight pages was checked against
+  the code and the printed output (the review found one error, below).
+- **Native results in the browser.** The npm tests replay four requests
+  (40 qubits with truncation, 8 with amplitudes, a 300-qubit GHZ state
+  with samples, a program with mid-circuit measurements) whose native
+  responses are recorded in `js/test/mps_native.json`, and agree to
+  10⁻¹⁰; a Rust test keeps the recording equal to the native build.
+- **Coverage.** The merged report covers 92.0 % of lines and 81.6 % of
+  branches: the library 93.9 % of its lines (the Python tests add
+  0.9 points), the command line 78.0 % (before: counted as uncovered),
+  the Python bindings 83.5 %.
+
+An independent review built 1.4.0 from its tag, checked the eight
+tutorials against their output, the selector in Chromium, the `mps`
+method's limits and conventions, the workflows and the coverage flow. It
+found:
+
+- **Coverage build directory.** With cargo-llvm-cov 0.9 the script built
+  into the normal `target/` (cleaning it, and racing with other builds
+  of the CLI binary); it now uses its own directory, reports even when a
+  test fails, and fails at the end. Running it also showed that maturin
+  called stable cargo with nightly flags, and that `maturin develop` put
+  the instrumented module into the source tree (300 times slower
+  simulations afterwards); it uses nightly throughout and installs a
+  wheel into its own environment.
+- **`mps` conventions.** Counts were keyed by qubits even when the
+  program declares classical bits; they now follow `qasm`. Samples had
+  no output limit (16 384 qubits × 16 000 shots took a minute and 262 MB);
+  they are capped at 2²⁶ bits like the stabilizer path. Programs without
+  qubits, empty observables and measured programs without bits are
+  refused.
+- **Release documentation.** A tag pushed before its wheel reached PyPI
+  failed the whole build; such a release is now skipped with a warning
+  and tried again. Release guides linked a playground that did not exist
+  under `/<version>/`, their 404 pages lacked the site URL, and their
+  "edit" links pointed to `main`.
+- **Selector.** The arrow keys switched versions at once; the keyboard
+  now steps through them and switches on Enter. Query and anchor were
+  dropped.
+- **Smaller fixes:** the QAOA light cone in the MPS tutorial (2p + 2
+  nodes, not 2p + 1); the validation page's coverage section; the
+  introduction (Rust tutorials, version paths); stale playground results
+  after an error; a misnamed npm test; CLI tests leaving directories in
+  the temporary folder and a loose assertion; release caches keyed by a
+  build number instead of the whole script.
 
 ### Not in this stage
 

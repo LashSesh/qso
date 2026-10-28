@@ -40,11 +40,14 @@ python3 -m venv "$venv"
 "$venv/bin/python" -m pip install -q maturin pytest numpy
 (
   # maturin builds through cargo, so with the instrumentation of show-env.
+  # A wheel installed into this venv only: `maturin develop` would put the
+  # instrumented module into the source tree, in place of the normal one.
   # (set -e does not apply inside a subshell tested by ||: chain with &&.)
   source "$venv/bin/activate" &&
-    cd metatron_qso_py &&
-    maturin develop --release -q &&
-    python -m pytest -q tests
+    rm -rf "$CARGO_TARGET_DIR/coverage-wheels" &&
+    maturin build --release -q -m metatron_qso_py/Cargo.toml -o "$CARGO_TARGET_DIR/coverage-wheels" &&
+    python -m pip install -q --force-reinstall "$CARGO_TARGET_DIR"/coverage-wheels/*.whl &&
+    python -m pytest -q metatron_qso_py/tests
 ) || status=$?
 
 # Only the crate and the Python bindings, without test files (test modules

@@ -156,9 +156,10 @@ or by the benchmark report you can run yourself.
 | Circuit distance: random models; Stim's surface and repetition circuits | equal to enumeration; equal to `shortest_graphlike_error` and no larger than `search_for_undetectable_logical_errors` | enumeration; Stim 1.16 |
 | [[72, 12, 6]] memory, depth-8 cycle of Bravyi et al. vs. greedy CNOT layers, 3 rounds | circuit distance 6 vs. 4 (both exact) | Bravyi et al. 2024: ≤ 6 |
 
-The test-suite (553 Rust tests and 293 Python tests, run in CI on Linux
-(x86_64 and arm64), macOS and Windows; 90.5 % of the crate's lines and
-79.4 % of its branches covered) also checks:
+The test-suite (561 Rust tests and 293 Python tests, run in CI on Linux
+(x86_64 and arm64), macOS and Windows; together with the command line
+and the Python tests they cover 92.0 % of the Rust lines and 81.6 % of
+the branches) also checks:
 
 - every gate against an independent dense-matrix reference, and the QFT
   against the DFT matrix;
@@ -444,12 +445,15 @@ sub-millisecond workloads, up to 1.5× for the larger ones).
 On the same machine, with every framework at its default settings and
 warmed up, QSO 1.3 simulates 20–24-qubit circuits 1.5–2.6× faster than
 Qulacs, 3.3–4.7× faster than Qiskit Aer and 3.7–9× faster than PennyLane
-Lightning; at 16 qubits Qulacs is 1.3× faster in the median. Its adjoint
+Lightning; at 16 qubits Qulacs was 1.3× faster in the median. Its adjoint
 gradient is the fastest of those compared (3.8× faster than Qulacs'
-backprop), and its permanents are 1.8–8.7× faster than The Walrus. On
-virtual machines QSO's worker threads need tens of milliseconds of work to
-reach full speed, so isolated short simulations run slower. Method and
-tables: [docs/BENCHMARKS.md](docs/BENCHMARKS.md#comparison-with-other-simulators-130).
+backprop), and its permanents are 1.8–8.7× faster than The Walrus. Since
+1.24 the state-vector kernels run on a worker pool that stays awake
+between short simulations: from 10 to 18 qubits QSO is ahead of Qulacs
+both warmed up and after pauses of 0.5 and 20 ms (one layer at 16 qubits:
+0.51 against 1.19 ms warm, 0.77 against 1.42 ms after 20 ms). Method and
+tables: [docs/BENCHMARKS.md](docs/BENCHMARKS.md#comparison-with-other-simulators-130)
+and the [roadmap](docs/ROADMAP.md) (1.24).
 
 ## Scope and limits
 

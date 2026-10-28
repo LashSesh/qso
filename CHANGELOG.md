@@ -229,12 +229,14 @@ basis sets and open shells), 1.24 (short simulations at full speed) and
   simulation after a pause paid for waking them. The gate kernels, cache
   blocks and sums now run on a pool whose threads spin for 200 µs after
   each job before parking (`QSO_POOL_SPIN_US`; threads from
-  `QSO_NUM_THREADS` or `RAYON_NUM_THREADS`); rayon stays for everything
-  else. Results are bit for bit unchanged. On the 4-core development VM a
-  16-qubit layer after a 20 ms pause takes 0.62–0.68 ms instead of
-  1.2 ms, warm 0.42–0.48 ms instead of 0.77 ms; from 20 qubits on the
-  times are unchanged. `benchmark_report` and the cross-validation time
-  these cold starts.
+  `QSO_NUM_THREADS` or `RAYON_NUM_THREADS`) and yield the core while
+  they wait; rayon stays for batches, trajectories and the rest. Results
+  are bit for bit unchanged. On the 4-core development VM a 16-qubit
+  layer after a 20 ms pause takes 0.71–0.73 ms instead of 1.2–1.3 ms,
+  warm 0.50–0.75 ms instead of 0.76–0.87 ms; from 20 qubits on the times
+  are unchanged, and two QSO processes at once run faster than with
+  rayon. `benchmark_report` and the cross-validation time these cold
+  starts. Spinning costs CPU time; `QSO_POOL_SPIN_US=0` turns it off.
 - `detector_error_model(circuit, decompose=true)` now splits errors as
   Stim does within each noise channel: decomposed models of Stim's
   generated circuits equal Stim's error by error. Before, every error

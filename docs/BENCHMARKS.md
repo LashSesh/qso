@@ -234,12 +234,12 @@ pause (`benchmark_report`, 4 cores, median of 21):
 
 | qubits | warm | after 0.5 ms | after 20 ms |
 |---:|---:|---:|---:|
-| 12 | 52.5 µs | 57.6 µs | 74.1 µs |
-| 14 | 234 µs | 253 µs | 260 µs |
-| 16 | 418 µs | 522 µs | 624 µs |
-| 18 | 1.65 ms | 1.93 ms | 1.97 ms |
+| 12 | 56.5 µs | 81.6 µs | 100 µs |
+| 14 | 273 µs | 278 µs | 384 µs |
+| 16 | 612 µs | 663 µs | 756 µs |
+| 18 | 2.25 ms | 2.32 ms | 2.26 ms |
 
-With rayon a 16-qubit layer after 20 ms took 1.16–1.22 ms, and in Python
+With rayon a 16-qubit layer after 20 ms took 1.2–1.3 ms, and in Python
 QSO is now ahead of Qulacs cold and warm from 10 to 18 qubits (the
 [roadmap](ROADMAP.md), 1.24, has both comparisons). The cross-validation
 times these cold starts (`1@500`, `1@20000`) beside the warmed-up runs.
