@@ -421,6 +421,14 @@ hardware-faithful gradients and as an independent check: two terms for
 `exp(−iθG/2)` with `G² = I` and phase gates, four terms for single-controlled
 rotations.
 
+The adjoint pass, the kernels it calls and the QAOA pass are generic over
+the amplitude type (`Amplitude`: `Complex64` or `Complex32`). In single
+precision the states are `Complex32`, and every inner product, matrix
+element and expectation value is summed in double precision; energy and
+gradient are divided by the state's norm², which rounding moves away from
+one (ROADMAP, 1.27). The optimisers then stop at a relative decrease of
+10⁻⁸ (`Options::at_precision`), which single-precision energies resolve.
+
 QAOA has its own specialised adjoint pass: the cost layer generator is the
 diagonal cut vector and the mixer generator is `Σ X_q`, both applied in
 O(n·2ⁿ). Cost phases come from a table over the distinct cut values (at

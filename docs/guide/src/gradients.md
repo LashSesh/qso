@@ -50,6 +50,48 @@ faster than parameter shift ([BENCHMARKS.md](https://github.com/LashSesh/qso/blo
 Shared parameters and affine angles are handled by the chain rule: in the
 example, `b` enters two gates with factors 2 and 1.
 
+### Single precision
+
+With `precision="single"`, the state and the co-state of the adjoint pass
+are single-precision vectors: half the memory, so a register one qubit
+larger fits in the same space. Inner products, matrix elements and
+expectation values are summed in double precision, and energy and
+gradient are divided by the state's squared norm, which rounding moves
+away from one. `run_vqe`, `MaxCutQaoa` and `optimize_qaoa_layerwise` take
+the same argument, and `qso vqe` and `qso qaoa` take `--single`:
+
+```python
+import numpy as np
+import metatron_qso as q
+
+h = q.transverse_field_ising(12, 1.0, 0.7)
+c = q.efficient_su2(12, 2)
+theta = np.random.default_rng(5).uniform(-np.pi, np.pi, c.num_parameters)
+e, g = q.expectation_and_gradient(c, h, theta)
+e32, g32 = q.expectation_and_gradient(c, h, theta, precision="single")
+print(abs(e32 - e) / abs(e), np.abs(g32 - g).max() / np.abs(g).max())
+
+qaoa = q.MaxCutQaoa(q.Graph.cycle(10), 3, precision="single")
+print(qaoa.optimize(restarts=2)["approximation_ratio"])
+```
+
+| Measured (one call, relative error) | 20 qubits | 22 qubits | 24 qubits |
+|---|---:|---:|---:|
+| VQE energy (EfficientSU2, 4 layers, Ising chain) | 3.1·10⁻⁸ | 2.7·10⁻⁸ | 8.0·10⁻⁹ |
+| VQE gradient | 6.0·10⁻⁷ | 7.2·10⁻⁷ | 6.7·10⁻⁷ |
+| QAOA energy (`MaxCutQaoa`, p = 10, 3-regular) | 3.2·10⁻⁹ | 1.9·10⁻⁹ | 3.0·10⁻⁹ |
+| QAOA gradient | 9.4·10⁻⁷ | 1.0·10⁻⁶ | 1.1·10⁻⁶ |
+
+At 28 qubits an energy and gradient takes 4.2 GB instead of 8.4 GB (VQE)
+and 4.7 GB instead of 8.9 GB (`MaxCutQaoa`), and a fifth to a third less
+time on a 4-core VM ([ROADMAP](https://github.com/LashSesh/qso/blob/main/docs/ROADMAP.md), 1.27). The
+optimisers stop in single precision when the relative decrease of the
+objective falls below 10⁻⁸, the finest that single-precision energies
+resolve; optimisations reach the same optimum as in double precision to
+about 10⁻⁸. Only the adjoint method is available in single precision:
+parameter shift and finite differences subtract nearby energies and would
+lose the digits single precision has.
+
 ## Optimisers
 
 `run_vqe` and `MaxCutQaoa.optimize` accept `method=` with one of:

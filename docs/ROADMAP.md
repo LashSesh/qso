@@ -1457,7 +1457,7 @@ precision. Its tests are part of the suite now. It found:
 - **Small savings:** phases that are one and derivatives that are zero
   (Z, S, T and P where the target bit is 0) are skipped in the blocks.
 
-### 1.27 — Variational training in single precision (M)
+### 1.27 — Variational training in single precision (M, delivered)
 
 | Deliverable | Detail |
 |---|---|
@@ -1468,6 +1468,59 @@ Validation: single against double precision on random circuits and on
 the use case at 20–24 qubits (energy and gradient errors, optimisation
 trajectories that reach the same optimum); memory measured at 26 and 28
 qubits.
+
+| Deliverable | Delivered | Not done, and why |
+|---|---|---|
+| Single-precision gradients | the adjoint pass, the matrix elements, the blocked diagonal gates, the diagonal observables and the QAOA layer generic over the amplitude type; `gradients::expectation_and_gradient_single` and `expectation_single`, `Vqe::with_precision`, `MaxCutQaoa::with_precision`, `qaoa::optimize_layerwise_at`; `precision="single"` for `expectation_and_gradient`, `run_vqe`, `MaxCutQaoa` and `optimize_qaoa_layerwise` in Python; `--single` for `qso vqe` and `qso qaoa`. Energies and gradients are divided by the state's norm², which rounding moves away from one; the optimisers stop at a relative decrease of 10⁻⁸, which single-precision energies still resolve | parameter-shift and finite-difference gradients in single precision: their differences of nearby energies lose the digits single precision has, and the adjoint pass is the one the use case needs; batches (`expectation_batch`) stay in double precision |
+| Accuracy | measured below and stated in the guide (gradients page) | — |
+
+Validation as planned:
+
+- **Random circuits** (7, 9 and 16 qubits, the whole gate set, every
+  observable kind): energies agree with double precision to 10⁻⁵ and
+  gradients to 10⁻⁴ of their largest component (the tests' bounds; the
+  measured errors are two orders smaller).
+- **The use case** at 20–24 qubits (one call each, relative errors; the
+  VQE ansatz of 1.26, `MaxCutQaoa` with p = 10 on random 3-regular
+  graphs):
+
+  | qubits | VQE energy | VQE gradient | QAOA energy | QAOA gradient |
+  |---:|---:|---:|---:|---:|
+  | 20 | 3.1·10⁻⁸ | 6.0·10⁻⁷ | 3.2·10⁻⁹ | 9.4·10⁻⁷ |
+  | 22 | 2.7·10⁻⁸ | 7.2·10⁻⁷ | 1.9·10⁻⁹ | 1.0·10⁻⁶ |
+  | 24 | 8.0·10⁻⁹ | 6.7·10⁻⁷ | 3.0·10⁻⁹ | 1.1·10⁻⁶ |
+
+- **Optimisation.** QAOA layer by layer to p = 6 on a 16-qubit 3-regular
+  graph reaches the same approximation ratios to seven digits (0.7480050
+  … 0.9500122) with 458 evaluations instead of 423, in 2.8 s instead of
+  3.7 s; QAOA at p = 4 on 12–16 qubits converges with at most as many
+  evaluations as double precision, to the same ratio within 1.1·10⁻⁸;
+  VQE (Ising chain, 8 and 10 qubits, one start) stops where its relative
+  decrease falls below 10⁻⁸, after 241 and 567 iterations, within
+  7·10⁻⁷ of the double-precision run at the same iteration (which had
+  not converged after 1000).
+- **Memory and time** (4-core VM, 15 GB, one call each, peak resident
+  memory):
+
+  | qubits | case | single | double |
+  |---:|---|---:|---:|
+  | 26 | VQE energy and gradient | 32.8 s, 1.05 GB | 39 s, 2.10 GB |
+  | 26 | `MaxCutQaoa` energy and gradient | 28.5 s, 1.18 GB | 35.8 s, 2.23 GB |
+  | 28 | VQE energy and gradient | 154 s, 4.20 GB | 235 s, 8.40 GB |
+  | 28 | `MaxCutQaoa` energy and gradient | 122 s, 4.72 GB | 160 s, 8.92 GB |
+
+  Single precision halves the memory and saves a fifth to a third of the
+  time. On this VM 28 qubits fit in double precision as well; on a
+  machine with 8 GB only single precision runs them.
+
+It found one fault of its own: with the optimisers' default tolerances
+(relative decrease 10⁻¹², gradient 10⁻⁸), which single-precision
+energies cannot resolve, the last line searches followed rounding noise:
+twice the evaluations and no convergence reported (QAOA at 12 qubits:
+318 evaluations instead of 161, 2× slower at 16 qubits). Single
+precision now stops at a relative decrease of 10⁻⁸; 10⁻⁷ stopped VQE on
+slow plateaus 9·10⁻⁵ above double precision, 10⁻⁹ doubled the
+evaluations again. A test runs the 12-qubit case.
 
 ### 1.28 — 28 qubits end to end (S–M)
 

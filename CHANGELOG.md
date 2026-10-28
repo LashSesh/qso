@@ -15,9 +15,25 @@ testing) of the fourth, which completes it; and milestones 1.22
 (error-correction circuits that keep their distance), 1.23 (larger
 basis sets and open shells), 1.24 (short simulations at full speed) and
 1.25 (documentation and reach) of the fifth, which completes it; and
-milestone 1.26 (gradients at the cost of a few simulations) of the sixth.
+milestones 1.26 (gradients at the cost of a few simulations) and 1.27
+(variational training in single precision) of the sixth.
 
 ### Added
+
+- **Variational training in single precision** (1.27): energies and
+  adjoint gradients on single-precision states, with sums in double
+  precision and results divided by the state's norm²:
+  `gradients::expectation_and_gradient_single`, `Vqe::with_precision`,
+  `MaxCutQaoa::with_precision` and `qaoa::optimize_layerwise_at` in Rust;
+  `precision="single"` for `expectation_and_gradient`, `run_vqe`,
+  `MaxCutQaoa` and `optimize_qaoa_layerwise` in Python; `--single` for
+  `qso vqe` and `qso qaoa`. Half the memory (28 qubits: 4.2 GB instead of
+  8.4 GB for VQE, 4.7 GB instead of 8.9 GB for `MaxCutQaoa`) and a fifth
+  to a third less time; energies agree with double precision to 3·10⁻⁸
+  and gradients to 1.1·10⁻⁶ relative at 20–24 qubits. The optimisers
+  stop at a relative decrease of 10⁻⁸ in single precision, which its
+  energies still resolve. Parameter-shift and finite-difference gradients
+  stay in double precision.
 
 - **Matrix-product states in WebAssembly**: the module's `mps` method and
   npm `qso.mps(source, {shots, seed, maxBond, cutoff, observables})` run
