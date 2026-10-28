@@ -12,8 +12,8 @@ state-vector core at memory bandwidth), 1.12 (noise learning) and 1.13
 (walks beyond static Hamiltonians) — ship together as release 1.6.0;
 finished milestones are released together, not one by one. The third
 stage (1.14 to 1.17) is delivered and not yet released; the fourth
-stage (1.18 to 1.21) is delivered too; neither stage is released yet. The
-fifth stage (1.22 to 1.25) is planned. Up to 1.3
+stage (1.18 to 1.21) is delivered too; neither stage is released yet. Of
+the fifth stage (1.22 to 1.25), 1.22 is delivered. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -981,7 +981,7 @@ The rules stay: no new dependency of the crate, an independent reference
 for every deliverable, reference tools (Stim, PySCF, Qulacs, Qiskit Aer)
 in the cross-validation only.
 
-### 1.22 — Error-correction circuits that keep their distance (M–L)
+### 1.22 — Error-correction circuits that keep their distance (M–L, delivered)
 
 Use case: experiments with colour and bivariate bicycle codes. The generic
 syndrome schedule of 1.19 measures X and then Z checks in greedy layers;
@@ -1004,6 +1004,51 @@ cycle reaches the circuit distance and logical error rates reported in the
 paper (within sampling error); correlated matching against exhaustive
 maximum-likelihood decoding on small codes and against plain matching on
 surface codes (logical error rates measured side by side).
+
+| Deliverable | Delivered | Not done, and why |
+|---|---|---|
+| Circuit distance | `graphlike_distance` (exact: shortest cycle with odd observable parity, by breadth-first search on the graph doubled by parity) and `circuit_distance` (exact for graph-like models; otherwise an exhaustive search by increasing weight gives a proven lower bound, and the graph-like errors and BP+OSD searches, with the parity of observable sets as an extra check, give an upper bound with its witness); Python, `qso qec --circuit-distance` | — |
+| Schedules | `css_code_memory_with` with `CssSchedule::Bicycle`, the depth-8 cycle of Bravyi et al.: [[72, 12, 6]] keeps circuit distance 6, proven (greedy layers: 4); `CssSchedule::Directions` for colour codes | colour-code orders that keep distance d: none exists with one bare ancilla per face. All 720 orders of directions give (d + 1)/2 for d = 3 and 5 (in the Steane code every pair of qubits lies on a weight-3 logical, so every two-qubit hook loses distance); this needs flag qubits or other extraction circuits, not a better order |
+| Correlated decoding | `CorrelatedMatchingDecoder` with PyMatching 2.4's rule (implied weights from joint and marginal probabilities of decomposed parts, two passes); `correlated_error_model`, and decomposition by Stim's rule within each noise channel, so that QSO's decomposed models equal Stim's | Fowler's original rule (arXiv:1310.0863) in its own form: PyMatching's is a version of it and a stronger reference, since its results can be compared shot by shot |
+
+Validation:
+
+- **Distances.** Exact results equal enumeration on 600 random models,
+  graph-like and with hyperedges. On Stim's generated surface and
+  repetition circuits (d = 3 to 7), the graph-like distance equals Stim's
+  `shortest_graphlike_error`. The exact circuit distance is never larger
+  than what `search_for_undetectable_logical_errors` finds, and equal on
+  these circuits.
+- **Surface and repetition codes.** QSO's memory experiments keep
+  distance d.
+- **Bicycle codes.** With three cycles of QSO's noise, the circuit
+  distances lie in 7 to 8, 7 to 9 and 7 to 11 for [[90, 8, 10]],
+  [[108, 8, 10]] and [[144, 12, 12]], against the paper's ≤ 8, ≤ 8 and
+  ≤ 10. The paper's noise also strikes idle qubits; the upper bounds are
+  the lightest errors 256 BP+OSD searches per observable found.
+- **Correlated matching.** QSO's decomposition of Stim's circuits equals
+  Stim's, error by error with its parts. On Stim's model and syndromes,
+  QSO's two-pass decoder and PyMatching's disagree on 0.01–0.04% of
+  shots. At d = 5 and p = 0.006, both lower the logical error rate from
+  2.44·10⁻² to 1.93–1.94·10⁻².
+
+Not done:
+
+- **Exhaustive maximum-likelihood decoding.** Against PyMatching the
+  comparison is shot by shot, which is stronger than comparing rates.
+- **The paper's logical error rates.** Its noise model has idle errors,
+  which QSO's circuit noise lacks, and 10⁻⁵ to 10⁻¹² per cycle needs far
+  more shots than a test can afford.
+- **A "bad" surface-code order losing distance.** QSO's surface code
+  builds only the hook-safe order. The loss is shown on the
+  [[72, 12, 6]] code instead (greedy 4 against the cycle's 6).
+
+Also in this milestone:
+
+- `DecoderKind` went back to its 1.6.0 form. 1.19 had added a variant to
+  this exhaustive enum and made `build` fallible, both breaking for 1.x;
+  `cargo-semver-checks` reported the first.
+- The non-exhaustive `DecoderChoice` takes all decoders.
 
 ### 1.23 — Larger basis sets and open shells (M–L)
 
