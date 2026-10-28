@@ -22,7 +22,8 @@ Steps:
 5. with --versions, add the guide and the Python reference of every release
    since 1.2.0 (the first with a guide) at /<version>/, built from the
    release's tag with that release's package from PyPI (its notebooks are
-   executed against it), and a version selector on every guide page.
+   executed against it, and the examples of its Rust tutorials are run from
+   the tag), and a version selector on every guide page.
    Releases are built once and kept in the given cache directory.
 
 Needs the `metatron_qso` package installed in the running interpreter,
@@ -47,8 +48,6 @@ DOCS = Path(__file__).resolve().parent
 ROOT = DOCS.parent
 GUIDE = DOCS / "guide"
 TUTORIALS = DOCS / "tutorials"
-RUST_TUTORIALS = GUIDE / "rust"
-EXAMPLES = ROOT / "metatron-qso-rs" / "examples"
 
 FENCE = re.compile(r"^```(\w+)\n(.*?)^```", re.M | re.S)
 
@@ -73,8 +72,8 @@ DIRECTIVE = re.compile(r"^\{\{(example|output) ([\w.]+)(?::(\w+))?\}\}$", re.M)
 ANCHOR = re.compile(r"^\s*// ANCHOR(?:_END)?: \w+$")
 
 
-def example_code(file: str, anchor: str | None) -> str:
-    lines = (EXAMPLES / file).read_text().splitlines()
+def example_code(examples: Path, file: str, anchor: str | None) -> str:
+    lines = (examples / file).read_text().splitlines()
     if anchor:
         marks = [k for k, line in enumerate(lines)
                  if line.strip() in (f"// ANCHOR: {anchor}", f"// ANCHOR_END: {anchor}")]
@@ -85,8 +84,11 @@ def example_code(file: str, anchor: str | None) -> str:
     return "```rust,noplayground\n" + code.strip("\n") + "\n```"
 
 
-def rust_tutorials(run_examples: bool) -> None:
-    out = GUIDE / "src" / "rust"
+def rust_tutorials(root: Path, run_examples: bool, target: Path | None = None) -> None:
+    """The Rust tutorials of the repository at `root` (this one, or the tree
+    of a release), with the examples built in `target` if given."""
+    crate = root / "metatron-qso-rs"
+    out = root / "docs" / "guide" / "src" / "rust"
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
     outputs: dict[str, str] = {}
@@ -96,17 +98,20 @@ def rust_tutorials(run_examples: bool) -> None:
             return "```text\n(not run: the site was built with --no-rust)\n```"
         if name not in outputs:
             print(f"running example {name}", flush=True)
-            p = subprocess.run(["cargo", "run", "-q", "--release", "--example", name],
-                               cwd=ROOT / "metatron-qso-rs", check=True,
+            cmd = ["cargo", "run", "-q", "--release", "--example", name]
+            if target:
+                cmd += ["--target-dir", str(target)]
+            p = subprocess.run(cmd, cwd=crate, check=True,
                                capture_output=True, text=True)
             outputs[name] = p.stdout.rstrip("\n")
         return "```text\n" + outputs[name] + "\n```"
 
     def expand(m: re.Match) -> str:
         kind, name, anchor = m.groups()
-        return example_code(name, anchor) if kind == "example" else output(name)
+        return (example_code(crate / "examples", name, anchor) if kind == "example"
+                else output(name))
 
-    for page in sorted(RUST_TUTORIALS.glob("*.md")):
+    for page in sorted((root / "docs" / "guide" / "rust").glob("*.md")):
         text = DIRECTIVE.sub(expand, page.read_text())
         if "{{" in text:
             raise SystemExit(f"{page.name}: a directive was not understood")
@@ -209,6 +214,11 @@ def build_release(version: str, dest: Path) -> None:
         for nb in sorted((tree / "docs" / "tutorials").glob("*.ipynb")):
             run([str(python), "-m", "jupyter", "nbconvert", "--to", "markdown", "--execute",
                  "--ExecutePreprocessor.timeout=900", "--output-dir", str(pages), str(nb)])
+        # The Rust tutorials (since 1.7.0), with the examples of the tag run
+        # in a target directory that all releases share, apart from this
+        # commit's build.
+        if (guide / "rust").is_dir():
+            rust_tutorials(tree, run_examples=True, target=ROOT / "target" / "docs-releases")
         # Served under /qso/<version>/, with "edit" links to the tag's files.
         env = dict(os.environ,
                    MDBOOK_OUTPUT__HTML__SITE_URL=f"{SITE_PATH}{version}/",
@@ -272,7 +282,7 @@ def main() -> None:
                     help="add every release, kept in (and reused from) CACHE")
     args = ap.parse_args()
     notebooks()
-    rust_tutorials(run_examples=not args.no_rust)
+    rust_tutorials(ROOT, run_examples=not args.no_rust)
     snippets(rust=not args.no_rust)
     site(args.out.resolve())
     if args.versions:

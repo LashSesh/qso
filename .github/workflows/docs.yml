@@ -24,9 +24,14 @@ on:
 permissions:
   contents: read
 
+# One build per ref at a time. Pull requests cancel their outdated
+# builds; on main a new build waits instead. A release starts two builds
+# there: the push of its merge and, once the release workflow is done, the
+# build that adds its documentation; cancelling the first threw away a
+# nearly finished build and left the site without a deployment.
 concurrency:
   group: docs-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
