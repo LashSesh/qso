@@ -108,7 +108,9 @@ jobs:
 
   python:
     name: python (${{ matrix.python }})
-    runs-on: ubuntu-latest
+    # setup-python has no 3.9 for Ubuntu 26.04 (ubuntu-latest since October
+    # 2026); the oldest supported Python is tested on 24.04.
+    runs-on: ${{ matrix.python == '3.9' && 'ubuntu-24.04' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:

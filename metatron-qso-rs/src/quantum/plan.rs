@@ -502,7 +502,10 @@ impl Tiles {
 
     /// The qubits `low..n` in groups of up to `TILE_GROUP`.
     pub(crate) fn groups(n: usize, low: usize) -> Vec<Tiles> {
-        assert!(low >= n || low >= TILE_RUN_QUBITS, "qubits below the tiles' runs");
+        assert!(
+            low >= n || low >= TILE_RUN_QUBITS,
+            "qubits below the tiles' runs"
+        );
         let qubits: Vec<usize> = (low..n).collect();
         qubits
             .chunks(TILE_GROUP)

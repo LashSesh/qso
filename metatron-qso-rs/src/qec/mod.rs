@@ -150,7 +150,7 @@ pub enum DecoderChoice {
 
 impl DecoderChoice {
     /// The decoder of a matching graph (BP+OSD on the graph's errors; it
-    /// takes at most [`MAX_BPOSD_DETECTORS`](bposd::MAX_BPOSD_DETECTORS)
+    /// takes at most [`MAX_BPOSD_DETECTORS`]
     /// detectors). A graph does not know which edges are parts of one
     /// error, so correlated matching needs [`DecoderChoice::build_for`].
     pub fn build(self, graph: MatchingGraph) -> Result<Box<dyn Decoder + Send>> {
