@@ -14,6 +14,7 @@ use metatron_qso::algorithms::gradients::{
 use metatron_qso::algorithms::qaoa::optimize_layerwise;
 use metatron_qso::noise;
 use metatron_qso::prelude::*;
+use metatron_qso::quantum::Precision;
 use num_complex::Complex64 as C64;
 
 fn median_seconds(repeats: usize, mut f: impl FnMut()) -> f64 {
@@ -273,6 +274,27 @@ fn main() -> Result<()> {
         });
         record(format!("qaoa_value_gradient_p3/nodes={n}"), t);
         println!("| {n} | {} |", fmt_time(t));
+    }
+
+    println!("\n## QAOA value + gradient (p = 10, random 3-regular graphs, `MaxCutQaoa`)\n");
+    println!("| nodes | double precision | single precision |");
+    println!("|---:|---:|---:|");
+    for n in [22usize, 24] {
+        let g = generators::random_regular(n, 3, &mut Rng::seed_from_u64(1))?;
+        let x: Vec<f64> = (0..20).map(|k| 0.1 + 0.01 * k as f64).collect();
+        let mut row = Vec::new();
+        for precision in [Precision::Double, Precision::Single] {
+            let qaoa = MaxCutQaoa::new(&g, 10)?.with_precision(precision);
+            let t = median_seconds(3, || {
+                qaoa.expectation_and_gradient(&x).unwrap();
+            });
+            record(
+                format!("qaoa_value_gradient_p10/nodes={n}/{}", precision.name()),
+                t,
+            );
+            row.push(fmt_time(t));
+        }
+        println!("| {n} | {} | {} |", row[0], row[1]);
     }
 
     println!("\n## Quantum walks\n");

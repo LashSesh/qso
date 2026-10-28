@@ -893,6 +893,11 @@ TOLERANCES = {
     # convergence of both SCF codes.
     "integral": 1e-12,
     "scf_energy": 1e-9,
+    # QAOA energy and gradient at 22–26 qubits, relative to |⟨C⟩|: double
+    # precision against each other to rounding of 2^n-term sums; QSO's
+    # single precision against double (measured 10⁻⁹ and 10⁻⁶).
+    "qaoa_double": 1e-10,
+    "qaoa_single": 1e-5,
 }
 
 
@@ -967,12 +972,90 @@ def check(c: dict) -> list[str]:
             failures.append(f"decomposed error model of {name} differs from Stim's: {r}")
         if not r["correlated_disagreement_with_pymatching"] <= TOLERANCES["correlated_disagreement"]:
             failures.append(f"two-pass matching on {name} differs from PyMatching's: {r}")
+    for n, rows in c.get("qaoa_vs_qso", {}).items():
+        for lib, r in rows.items():
+            tol = TOLERANCES["qaoa_single" if lib.endswith("single") else "qaoa_double"]
+            diff = max(r["value_rel_diff"], r.get("gradient_rel_diff", 0.0))
+            if not diff <= tol:
+                failures.append(f"QAOA energy or gradient of {lib} at {n} qubits differs from QSO's by {diff:.3g}")
     chem = c["chemistry_vs_pyscf"]
     if not chem["integral_max_difference"] <= TOLERANCES["integral"]:
         failures.append(f"integrals differ from PySCF by {chem['integral_max_difference']:.3g}")
     if not chem["energy_max_difference"] <= TOLERANCES["scf_energy"]:
         failures.append(f"Hartree–Fock or CASCI energies differ from PySCF by {chem['energy_max_difference']:.3g}")
     return failures
+
+
+# ----------------------------------------------------------------------------
+# QAOA at 22–26 qubits: p = 10 on a random 3-regular graph, energy and
+# gradient of every framework in its own process (time and peak memory).
+
+QAOA_LIBS = ["qso", "qso-single", "qso-circuit", "qso-circuit-single", "qulacs", "aer"]
+
+
+def qaoa_problem(n: int, p: int = 10):
+    import metatron_qso as q
+
+    g = q.Graph.random_regular(n, 3, seed=1)
+    ops, n_params = fw.qaoa_ops(n, g.edges, p)
+    theta = 0.1 + 0.01 * np.arange(n_params)
+    return g, ops, n_params, theta
+
+
+def qaoa_worker(lib: str, n: int) -> dict:
+    """One energy and gradient (Aer: energy only) of the QAOA problem at
+    n qubits, after one untimed call below 24 qubits."""
+    import resource
+
+    g, ops, n_params, theta = qaoa_problem(n)
+    terms, constant = fw.maxcut_terms(g.edges)
+    if lib in ("qso", "qso-single"):
+        import metatron_qso as q
+
+        qaoa = q.MaxCutQaoa(g, n_params // 2, precision="single" if lib == "qso-single" else "double")
+        run = lambda: qaoa.expectation_and_gradient(theta)  # noqa: E731
+    elif lib in ("qso-circuit", "qso-circuit-single"):
+        import metatron_qso as q
+
+        c, h = fw.qso_qaoa_circuit(n, ops, n_params), q.maxcut_cost(g)
+        precision = "single" if lib.endswith("single") else "double"
+        run = lambda: q.expectation_and_gradient(c, h, theta, precision=precision)  # noqa: E731
+    elif lib == "qulacs":
+        run = lambda f=fw.qulacs_qaoa_value_and_grad_fn(n, ops, terms, constant, n_params): f(theta)  # noqa: E731
+    else:
+        f = fw.aer_qaoa_energy_fn(n, ops, terms, constant)
+        run = lambda: (f(theta), None)  # noqa: E731
+    if n < 24:
+        run()
+    start = time.perf_counter()
+    value, grad = run()
+    seconds = time.perf_counter() - start
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20  # KiB → GiB
+    return {
+        "value": float(value),
+        "gradient": None if grad is None else [float(x) for x in grad],
+        "seconds": seconds,
+        "peak_gib": peak,
+    }
+
+
+def qaoa_large(sizes: list[int]) -> dict:
+    out = {}
+    for n in sizes:
+        rows = {}
+        for lib in QAOA_LIBS:
+            cmd = [sys.executable, str(Path(__file__)), "--qaoa-worker", lib, str(n)]
+            res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            rows[lib] = json.loads(res.stdout.strip().splitlines()[-1])
+        ref = rows["qso"]
+        scale = max(abs(ref["value"]), 1.0)
+        for lib, r in rows.items():
+            r["value_rel_diff"] = abs(r["value"] - ref["value"]) / scale
+            if r["gradient"] is not None:
+                r["gradient_rel_diff"] = float(np.max(np.abs(np.subtract(r["gradient"], ref["gradient"])))) / scale
+        out[str(n)] = rows
+        print(f"qaoa {n}: " + ", ".join(f"{k} {v['seconds']:.2f} s" for k, v in rows.items()), file=sys.stderr)
+    return out
 
 
 # ----------------------------------------------------------------------------
@@ -1068,6 +1151,9 @@ def environment() -> dict:
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "--qaoa-worker":
+        print(json.dumps(qaoa_worker(sys.argv[2], int(sys.argv[3]))))
+        return
     if len(sys.argv) > 1 and sys.argv[1] == "--worker":
         lib, kind, n, reps, warm = sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5]), int(sys.argv[6])
         print(json.dumps(worker(lib, kind, n, reps, warm)))
@@ -1079,10 +1165,14 @@ def main() -> None:
     ap.add_argument("--check", action="store_true",
                     help="exit with status 1 if a correctness deviation exceeds its tolerance")
     ap.add_argument("--no-timing", action="store_true", help="correctness only")
+    ap.add_argument("--qaoa", default="22,24",
+                    help="qubit counts of the QAOA p = 10 comparison (comma-separated; empty: none)")
     args = ap.parse_args()
     started = time.time()
     report = {"environment": environment()}
     report["correctness"] = correctness(args.quick)
+    sizes = [int(x) for x in args.qaoa.split(",") if x] if not args.quick else [16]
+    report["correctness"]["qaoa_vs_qso"] = qaoa_large(sizes)
     print("correctness:", json.dumps(report["correctness"]["max_amplitude_difference_vs_qso"]), file=sys.stderr)
     failures = check(report["correctness"])
     report["correctness"]["failures"] = failures

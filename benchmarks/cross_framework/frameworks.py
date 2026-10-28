@@ -327,3 +327,97 @@ def qulacs_value_and_grad_fn(n: int, ops: list, terms: list, n_params: int):
         return float(value), g
 
     return run
+
+
+# --------------------------------------------------------------------------- QAOA
+# QAOA for MaxCut with parameters [γ_1…γ_p, β_1…β_p]: |+⟩^n, then per layer
+# e^{−iγC} with C = Σ w (1 − Z_a Z_b)/2 (RZZ(−w·γ) per edge, up to a global
+# phase) and e^{−iβ Σ X} (RX(2β) per qubit). Angle references are
+# ("p", k, scale): scale·θ_k.
+def qaoa_ops(n: int, edges: list, p: int) -> tuple[list, int]:
+    ops = [("h", (q,), ()) for q in range(n)]
+    for layer in range(p):
+        ops += [("rzz", (a, b), (("p", layer, -w),)) for a, b, w in edges]
+        ops += [("rx", (q,), (("p", p + layer, 2.0),)) for q in range(n)]
+    return ops, 2 * p
+
+
+def maxcut_terms(edges: list) -> tuple[list, float]:
+    """C = constant + Σ (−w/2) Z_a Z_b."""
+    return [(-w / 2, {a: "Z", b: "Z"}) for a, b, w in edges], sum(w for *_, w in edges) / 2
+
+
+def qso_qaoa_circuit(n: int, ops: list, n_params: int):
+    import metatron_qso as q
+
+    c = q.Circuit(n)
+    params = c.new_parameters(n_params)
+    for g, qs, ps in ops:
+        args = [a[2] * params[a[1]] for a in ps]
+        getattr(c, g)(*qs, *args)
+    return c
+
+
+def qulacs_qaoa_value_and_grad_fn(n: int, ops: list, terms: list, constant: float, n_params: int):
+    """Value and gradient with Qulacs' `backprop`; parametric rotations
+    (RX and the ZZ Pauli rotation) use exp(+i t P/2), so −scale·θ is stored
+    and the gradient flipped."""
+    from qulacs import Observable, ParametricQuantumCircuit, QuantumState
+
+    obs = Observable(n)
+    for c, t in terms:
+        obs.add_operator(c, " ".join(f"{p} {q}" for q, p in sorted(t.items())))
+    circuit = ParametricQuantumCircuit(n)
+    slots = []  # (parameter index, scale) per circuit parameter
+    for g, qs, ps in ops:
+        if ps:
+            _, k, scale = ps[0]
+            if g == "rx":
+                circuit.add_parametric_RX_gate(qs[0], 0.0)
+            else:
+                circuit.add_parametric_multi_Pauli_rotation_gate(list(qs), [3, 3], 0.0)
+            slots.append((k, scale))
+        else:
+            getattr(circuit, _QULACS[g])(*qs)
+
+    def run(theta):
+        for slot, (k, scale) in enumerate(slots):
+            circuit.set_parameter(slot, -scale * float(theta[k]))
+        grads = circuit.backprop(obs)
+        state = QuantumState(n)
+        circuit.update_quantum_state(state)
+        value = obs.get_expectation_value(state) + constant
+        g = np.zeros(n_params)
+        for slot, (k, scale) in enumerate(slots):
+            g[k] -= scale * grads[slot]
+        return float(value), g
+
+    return run
+
+
+def aer_qaoa_energy_fn(n: int, ops: list, terms: list, constant: float, precision: str = "double"):
+    """⟨C⟩ with Aer's statevector method and `save_expectation_value`
+    (Aer has no gradient of its own)."""
+    import qiskit_aer  # noqa: F401  (adds save_expectation_value)
+    from qiskit import QuantumCircuit, transpile
+    from qiskit.circuit import ParameterVector
+    from qiskit.quantum_info import SparsePauliOp
+
+    k_max = 1 + max(a[1] for _, _, ps in ops for a in ps)
+    theta = ParameterVector("t", k_max)
+    qc = QuantumCircuit(n)
+    for g, qs, ps in ops:
+        args = [a[2] * theta[a[1]] for a in ps]
+        getattr(qc, g)(*args, *qs)
+    op = SparsePauliOp.from_sparse_list(
+        [("ZZ", sorted(t), c) for c, t in terms] + [("", [], constant)], num_qubits=n
+    )
+    qc.save_expectation_value(op, list(range(n)))
+    sim = aer_simulator(precision=precision)
+    tqc = transpile(qc, sim, optimization_level=0)
+
+    def run(values):
+        bound = tqc.assign_parameters(list(map(float, values)))
+        return float(sim.run(bound).result().data()["expectation_value"].real)
+
+    return run
