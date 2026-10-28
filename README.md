@@ -156,7 +156,7 @@ or by the benchmark report you can run yourself.
 | Circuit distance: random models; Stim's surface and repetition circuits | equal to enumeration; equal to `shortest_graphlike_error` and no larger than `search_for_undetectable_logical_errors` | enumeration; Stim 1.16 |
 | [[72, 12, 6]] memory, depth-8 cycle of Bravyi et al. vs. greedy CNOT layers, 3 rounds | circuit distance 6 vs. 4 (both exact) | Bravyi et al. 2024: ≤ 6 |
 
-The test-suite (525 Rust tests and 286 Python tests, run in CI on Linux
+The test-suite (548 Rust tests and 293 Python tests, run in CI on Linux
 (x86_64 and arm64), macOS and Windows; 90.5 % of the crate's lines and
 79.4 % of its branches covered) also checks:
 
