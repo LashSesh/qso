@@ -219,9 +219,11 @@ pub struct Options {
     pub record_history: bool,
 }
 
-/// The smallest relative decrease that single-precision energies resolve
-/// (their rounding error is a few times 10⁻⁸ of the value).
-pub(crate) const SINGLE_F_TOL: f64 = 1e-7;
+/// The smallest relative decrease that single-precision energies resolve:
+/// below it, steps follow rounding (energies are off by a few times 10⁻⁸
+/// of the value). Measured on QAOA and VQE: 10⁻⁷ stops on slow plateaus,
+/// 10⁻⁹ doubles the evaluations of the line searches.
+pub(crate) const SINGLE_F_TOL: f64 = 1e-8;
 
 impl Options {
     /// These options with a decrease tolerance no finer than the
