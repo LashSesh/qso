@@ -1428,11 +1428,34 @@ Validation as planned:
   | 26 | 9.4 s | 73.4 s | 41.6 s | 221 s | 89.1 s | 3.15 GB | 2.10 GB |
 
   The gradient now costs 4.4–4.6 energies for the VQE ansatz and 4.6–5.7
-  for QAOA as a generic circuit, short of the planned "about four": the
-  energies themselves are compute-bound in the cache blocks (QAOA's 36
-  phases per block), and gates on high qubits still take three passes in
-  the backward pass. `MaxCutQaoa` stays the faster way to QAOA (34.8 s at
-  26 qubits), and the memory is one state less (two instead of three).
+  for QAOA as a generic circuit (the energies themselves did not change
+  much), short of the planned "about four": the forward simulation is
+  compute-bound in the cache blocks (QAOA's RZZ phases), and gates on
+  high qubits still take three passes in
+  the backward pass. `MaxCutQaoa`, which 1.26 does not change, stays the
+  faster way to QAOA (34.8–37.4 s at 26 qubits in two runs), and the
+  memory is one state less (two instead of three).
+
+An independent review found no error in the new code: against an
+independent reference (a plain pass that copies the state for every
+derivative) on 540 random circuits of 6–10 qubits with every block size
+from 1 to 32 amplitudes, the whole gate set with up to two controls,
+shared and scaled parameters and every kind of observable, the gradients
+agree to 2.8·10⁻¹⁶, and against the previous build to 1.5·10⁻¹⁴ at 16–18
+qubits; they are bit for bit the same on 1–4 threads, also in single
+precision. Its tests are part of the suite now. It found:
+
+- **Slower energies.** The one-pass diagonal expectation looped over all
+  terms for every amplitude and was compute-bound: 1.5 times slower than
+  the per-term passes at 20–22 qubits. It now goes chunk by chunk, every
+  term over a chunk of probabilities in cache: for the QAOA cost 2–4 times
+  faster than before 1.26 (24 qubits: 0.24 s instead of 0.97 s), for the
+  VQE Hamiltonian as fast or faster.
+- **Docs.** ARCHITECTURE.md still described three vectors and blocking by
+  targets only; two `MaxCutQaoa` timings disagreed; the changelog did not
+  say that energies change by rounding too.
+- **Small savings:** phases that are one and derivatives that are zero
+  (Z, S, T and P where the target bit is 0) are skipped in the blocks.
 
 ### 1.27 — Variational training in single precision (M)
 

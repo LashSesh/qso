@@ -378,12 +378,24 @@ fn backward_blocked(
                 };
                 match low_target {
                     None => {
+                        // A phase (one for Z, S, T and P where the target
+                        // bit is 0, whose derivative is then zero too).
                         let (u, i) = (inv[index(0)], index(0));
-                        kernels::scale_masked(p, s.low, u);
-                        for d in derivs {
-                            out.push((d[i] * kernels::inner_masked(l, p, s.low)).re);
+                        let one = C64::new(1.0, 0.0);
+                        if u != one {
+                            kernels::scale_masked(p, s.low, u);
                         }
-                        kernels::scale_masked(l, s.low, u);
+                        for d in derivs {
+                            let term = if d[i] == C64::new(0.0, 0.0) {
+                                0.0
+                            } else {
+                                (d[i] * kernels::inner_masked(l, p, s.low)).re
+                            };
+                            out.push(term);
+                        }
+                        if u != one {
+                            kernels::scale_masked(l, s.low, u);
+                        }
                     }
                     Some(t) => {
                         let zero = C64::new(0.0, 0.0);
@@ -719,5 +731,262 @@ mod tests {
             expectation_and_gradient(&c, &z, &[0.7], Some(&one), GradientMethod::Adjoint).unwrap();
         assert!((e + 0.7f64.cos()).abs() < 1e-12);
         assert!((g[0] - 0.7f64.sin()).abs() < 1e-12);
+    }
+}
+
+#[cfg(test)]
+/// Independent references for the adjoint pass (from the review of 1.26): a
+/// plain pass that copies the state for every derivative, finite
+/// differences, and the derivative kernel, on random circuits over the
+/// whole gate set with controls and every block size.
+mod against_references {
+    use super::*;
+    use crate::quantum::{Parameter, PauliString};
+    use crate::rng::Rng;
+
+    fn rand_state(n: usize, rng: &mut Rng) -> Vec<C64> {
+        (0..1usize << n)
+            .map(|_| C64::new(rng.normal(), rng.normal()))
+            .collect()
+    }
+
+    /// Old-style reference: copy + derivative + inner, no blocking.
+    fn reference(
+        circuit: &Circuit,
+        theta: &[f64],
+        mut phi: Vec<C64>,
+        h: &PauliSum,
+    ) -> (f64, Vec<f64>) {
+        let mut lambda = vec![C64::new(0.0, 0.0); phi.len()];
+        h.apply_amplitudes(&phi, &mut lambda);
+        let value = inner(&phi, &lambda).re;
+        let mut grad = vec![0.0; theta.len()];
+        for inst in circuit.instructions().iter().rev() {
+            let angles = inst.angles(theta);
+            let inverse = inst.inverse();
+            let inv_angles = inverse.angles(theta);
+            kernels::apply_instruction(&mut phi, &inverse, &inv_angles, false, 0);
+            for (slot, param) in inst.params.iter().enumerate() {
+                if let Param::Symbol(p) = param {
+                    let mut mu = phi.clone();
+                    kernels::apply_instruction_derivative(&mut mu, inst, &angles, slot);
+                    grad[p.index] += 2.0 * p.scale * inner(&lambda, &mu).re;
+                }
+            }
+            kernels::apply_instruction(&mut lambda, &inverse, &inv_angles, false, 0);
+        }
+        (value, grad)
+    }
+
+    fn distinct(rng: &mut Rng, n: usize, k: usize) -> Vec<usize> {
+        let mut v: Vec<usize> = Vec::new();
+        while v.len() < k {
+            let q = rng.below(n as u64) as usize;
+            if !v.contains(&q) {
+                v.push(q);
+            }
+        }
+        v
+    }
+
+    fn random_circuit(
+        n: usize,
+        n_params: usize,
+        n_gates: usize,
+        rng: &mut Rng,
+        diag_bias: bool,
+    ) -> Circuit {
+        use GateKind::*;
+        let mut c = Circuit::new(n);
+        let p = c.new_parameters(n_params);
+        let kinds = [
+            H, X, Y, Z, S, Sdg, T, Tdg, SX, SXdg, RX, RY, RZ, P, U, Swap, RXX, RYY, RZZ,
+        ];
+        let diag = [Z, S, Sdg, T, Tdg, RZ, P, RZZ];
+        for _ in 0..n_gates {
+            let kind = if diag_bias && rng.below(2) == 0 {
+                diag[rng.below(diag.len() as u64) as usize]
+            } else {
+                kinds[rng.below(kinds.len() as u64) as usize]
+            };
+            let nt = kind.num_targets().unwrap();
+            let nc = match rng.below(4) {
+                0 | 1 => 0,
+                2 => 1,
+                _ => 2,
+            };
+            let q = distinct(rng, n, nt + nc);
+            let (targets, controls) = q.split_at(nt);
+            let params: Vec<Param> = (0..kind.num_params())
+                .map(|_| {
+                    let k = rng.below(n_params as u64) as usize;
+                    match rng.below(4) {
+                        0 => Param::Value(rng.uniform_range(-2.0, 2.0)),
+                        1 => Param::Symbol(Parameter {
+                            index: k,
+                            scale: -1.7,
+                            offset: 0.4,
+                        }),
+                        _ => Param::Symbol(p[k]),
+                    }
+                })
+                .collect();
+            c.controlled(kind, targets, controls, &params).unwrap();
+        }
+        c
+    }
+
+    fn observables() -> Vec<PauliSum> {
+        let mut v: Vec<PauliSum> = vec![
+            "Z0 Z5 - 0.5 Z3 + 0.25 Z1 Z2 Z4 + 0.1".parse().unwrap(),
+            "Z0 Z5 + 0.5 X2 Y5 - 0.3 Y3 Z4 + 0.2 X1 - 0.7 + 0.4 Z2"
+                .parse()
+                .unwrap(),
+        ];
+        // repeated strings, identity twice, zero coefficient
+        let mut h = PauliSum::new();
+        let z = |q| PauliString::single(q, crate::quantum::Pauli::Z);
+        h.add_term(0.3, z(1))
+            .add_term(-0.8, z(1))
+            .add_term(0.5, PauliString::identity())
+            .add_term(0.25, PauliString::identity())
+            .add_term(0.0, PauliString::single(0, crate::quantum::Pauli::X))
+            .add_term(1.1, z(4));
+        v.push(h);
+        v
+    }
+
+    #[test]
+    fn blocked_pass_matches_a_plain_reference_on_random_circuits() {
+        let mut rng = Rng::seed_from_u64(99);
+        let mut worst = (0.0f64, 0.0f64);
+        let mut count = 0;
+        for n in 6..=10 {
+            for round in 0..6 {
+                let np = 6;
+                let c = random_circuit(n, np, 60, &mut rng, round % 2 == 0);
+                let theta: Vec<f64> = (0..np).map(|_| rng.uniform_range(-3.0, 3.0)).collect();
+                for h in observables() {
+                    let mut psi = StateVector::zero(n);
+                    // random initial state to avoid symmetric zeros
+                    let init = rand_state(n, &mut rng);
+                    let nrm = init.iter().map(|a| a.norm_sqr()).sum::<f64>().sqrt();
+                    psi = StateVector::from_amplitudes(init.iter().map(|a| a / nrm).collect())
+                        .unwrap_or(psi);
+                    psi.apply_circuit(&c, &theta).unwrap();
+                    let phi = psi.into_amplitudes();
+                    let (vr, gr) = reference(&c, &theta, phi.clone(), &h);
+                    for cb in 0..=5 {
+                        let apply = |x: &[C64], y: &mut [C64]| h.apply_amplitudes(x, y);
+                        let (v, g) = adjoint_with_block(&c, &theta, phi.clone(), apply, cb);
+                        assert!((v - vr).abs() < 1e-12);
+                        for (k, (a, b)) in g.iter().zip(&gr).enumerate() {
+                            let e = (a - b).abs();
+                            if e > worst.0 {
+                                worst = (e, *b);
+                            }
+                            assert!(
+                                e < 1e-11,
+                                "n {n} round {round} block {cb} param {k}: {a} vs {b}\n{:?}",
+                                c.instructions()
+                            );
+                        }
+                        count += 1;
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "REVIEW blocked-vs-reference worst {:e} (|g| {}), cases {count}",
+            worst.0, worst.1
+        );
+    }
+
+    #[test]
+    fn the_reference_matches_finite_differences() {
+        let mut rng = Rng::seed_from_u64(7);
+        let mut worst = 0.0f64;
+        for n in [6, 8] {
+            for _ in 0..4 {
+                let np = 5;
+                let c = random_circuit(n, np, 40, &mut rng, true);
+                let theta: Vec<f64> = (0..np).map(|_| rng.uniform_range(-3.0, 3.0)).collect();
+                for h in observables() {
+                    let mut psi = StateVector::zero(n);
+                    psi.apply_circuit(&c, &theta).unwrap();
+                    let (_, g) = adjoint_with_block(
+                        &c,
+                        &theta,
+                        psi.into_amplitudes(),
+                        |x, y| h.apply_amplitudes(x, y),
+                        2,
+                    );
+                    for k in 0..np {
+                        let e = |s: f64| {
+                            let mut t = theta.clone();
+                            t[k] += s;
+                            expectation(&c, &h, &t, None).unwrap()
+                        };
+                        let st = 1e-4;
+                        let fd =
+                            (8.0 * (e(st) - e(-st)) - (e(2.0 * st) - e(-2.0 * st))) / (12.0 * st);
+                        worst = worst.max((fd - g[k]).abs());
+                        assert!((fd - g[k]).abs() < 1e-8, "{fd} vs {}", g[k]);
+                    }
+                }
+            }
+        }
+        eprintln!("REVIEW fd worst {worst:e}");
+    }
+
+    #[test]
+    fn derivative_elements_of_every_gate_kind_match_copies() {
+        use GateKind::*;
+        let mut rng = Rng::seed_from_u64(3);
+        let mut worst = 0.0f64;
+        for n in [5usize, 17] {
+            let phi = rand_state(n, &mut rng);
+            let lam = rand_state(n, &mut rng);
+            for kind in [RX, RY, RZ, P, U, RXX, RYY, RZZ] {
+                for nc in 0..=2usize {
+                    for _ in 0..(if n == 5 { 6 } else { 2 }) {
+                        let nt = kind.num_targets().unwrap();
+                        let q = distinct(&mut rng, n, nt + nc);
+                        let (targets, controls) = q.split_at(nt);
+                        let angles: Vec<f64> = (0..kind.num_params())
+                            .map(|_| rng.uniform_range(-7.0, 7.0))
+                            .collect();
+                        let inst = Instruction {
+                            kind,
+                            targets: targets.to_vec(),
+                            controls: controls.to_vec(),
+                            params: angles.iter().map(|&a| Param::Value(a)).collect(),
+                            matrix: None,
+                        };
+                        for which in 0..kind.num_params() {
+                            let mut mu = phi.clone();
+                            kernels::apply_instruction_derivative(&mut mu, &inst, &angles, which);
+                            let r = inner(&lam, &mu);
+                            let d = kernels::derivative_element(
+                                &lam,
+                                &phi,
+                                &inst,
+                                &angles,
+                                which,
+                                inst.control_mask(),
+                            );
+                            let scale = (phi.len() as f64).sqrt();
+                            let e = (r - d).norm() / scale;
+                            worst = worst.max(e);
+                            assert!(
+                                e < 1e-13,
+                                "{kind:?} t {targets:?} c {controls:?} w {which}: {r} vs {d}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("REVIEW derivative_element worst rel {worst:e}");
     }
 }

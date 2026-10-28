@@ -420,6 +420,21 @@ where
     (0..n).map(f).collect()
 }
 
+/// [`sum_chunks_c64`] for real sums.
+pub(crate) fn sum_chunks_f64<F>(n_chunks: usize, work: usize, f: F) -> f64
+where
+    F: Fn(usize) -> f64 + Sync + Send,
+{
+    #[cfg(feature = "parallel")]
+    if work >= PAR_THRESHOLD && n_chunks > 1 {
+        let mut parts = vec![0.0; n_chunks];
+        chunk_tasks(&mut parts, 1, |c, slot| slot[0] = f(c));
+        return parts.iter().sum();
+    }
+    let _ = work;
+    (0..n_chunks).map(f).sum()
+}
+
 /// `Σ_c f(c)` over `n_chunks` pieces of work that together touch `work`
 /// elements, summed in chunk order (so independent of the thread count),
 /// with the pieces in parallel once `work` reaches the threshold.

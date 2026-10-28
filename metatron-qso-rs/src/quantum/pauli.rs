@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use super::state::StateVector;
 use crate::error::{QsoError, Result};
 use crate::linalg::{CMatrix, KrylovOptions, LanczosResult, lanczos_ground_state};
-use crate::parallel::{for_each_mut, sum_c64, sum_f64};
+use crate::parallel::{CHUNK, for_each_mut, sum_c64, sum_chunks_f64};
 
 /// Single-qubit Pauli operator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -353,8 +353,26 @@ impl PauliSum {
             .collect();
         let mut total = 0.0;
         if !diagonal.is_empty() {
-            total += sum_f64(n, |b| {
-                amps[b].norm_sqr_f64() * diagonal_value(&diagonal, b as u64)
+            // Chunk by chunk: the probabilities of a chunk stay in L1 while
+            // every term passes over them; the chunk sums are added in
+            // chunk order.
+            total += sum_chunks_f64(n.div_ceil(CHUNK), n, |c| {
+                let start = c * CHUNK;
+                let len = CHUNK.min(n - start);
+                let mut prob = [0.0f64; CHUNK];
+                for (j, p) in prob[..len].iter_mut().enumerate() {
+                    *p = amps[start + j].norm_sqr_f64();
+                }
+                let mut acc = 0.0;
+                for &(coef, z) in &diagonal {
+                    let mut s = 0.0;
+                    for (j, &p) in prob[..len].iter().enumerate() {
+                        let odd = (((start + j) as u64) & z).count_ones() & 1;
+                        s += if odd == 0 { p } else { -p };
+                    }
+                    acc += coef * s;
+                }
+                acc
             });
         }
         for &(c, s) in &self.terms {
@@ -862,5 +880,116 @@ mod tests {
         );
         let xx = &"X0".parse::<PauliSum>().unwrap() * &"X0".parse::<PauliSum>().unwrap();
         assert_eq!(xx.constant(), 1.0);
+    }
+}
+
+#[cfg(test)]
+/// Expectation values and `H·ψ` against dense matrices and per-term sums
+/// (from the review of 1.26).
+mod against_references {
+    use super::*;
+    use crate::quantum::StateVector32;
+
+    fn sums() -> Vec<PauliSum> {
+        let mut v: Vec<PauliSum> = [
+            "0.7 Z0 Z1 - 0.2 Z2 + 1.3 Z0 Z3 Z4 - 0.9",
+            "0.7 X0 Y1 - 0.2 Z2 + 1.3 Y0 Z1 X2 + 0.4 Z1 Z4 - 0.9 + 0.3 Z3",
+            "0.5 X1 + 0.25 Y3",
+            "1.5",
+        ]
+        .iter()
+        .map(|s| s.parse().unwrap())
+        .collect();
+        let mut h = PauliSum::new();
+        let z = |q| PauliString::single(q, Pauli::Z);
+        h.add_term(0.3, z(1))
+            .add_term(-0.8, z(1))
+            .add_term(0.5, PauliString::identity())
+            .add_term(0.25, PauliString::identity())
+            .add_term(1.1, z(4))
+            .add_term(
+                0.6,
+                PauliString::new(&[(0, Pauli::Z), (4, Pauli::Z)]).unwrap(),
+            );
+        v.push(h.clone());
+        // same plus a zero-coefficient X term: general path
+        let mut g = h.clone();
+        g.add_term(0.0, PauliString::single(2, Pauli::X));
+        v.push(g);
+        v.push(PauliSum::new());
+        v
+    }
+
+    #[test]
+    fn expectation_and_apply_match_dense_matrices() {
+        let mut rng = crate::rng::Rng::seed_from_u64(5);
+        let n = 5;
+        let psi = StateVector::random(n, &mut rng);
+        let s32 = StateVector32::from_state(&psi);
+        let back: Vec<C64> = s32
+            .amplitudes()
+            .iter()
+            .map(|a| C64::new(a.re as f64, a.im as f64))
+            .collect();
+        let mut worst = (0.0f64, 0.0f64);
+        for h in sums() {
+            let dense = h.to_dense(n).unwrap();
+            let v = nalgebra::DVector::from_column_slice(psi.amplitudes());
+            let hv = &dense * &v;
+            let exact = v.dotc(&hv).re;
+            let e = h.expectation(&psi).unwrap();
+            worst.0 = worst.0.max((e - exact).abs());
+            assert!((e - exact).abs() < 1e-13, "{h:?}: {e} vs {exact}");
+            let applied = h.apply(&psi).unwrap();
+            for (a, b) in applied.iter().zip(hv.iter()) {
+                worst.1 = worst.1.max((a - b).norm());
+                assert!((a - b).norm() < 1e-13);
+            }
+            // single precision: same as double on the widened amplitudes, bit for bit
+            let e32 = h.expectation_amplitudes(s32.amplitudes());
+            let e64 = h.expectation_amplitudes(&back);
+            assert_eq!(e32.to_bits(), e64.to_bits(), "{h:?}");
+        }
+        // fast path vs general path
+        let all = sums();
+        let (a, b) = (&all[4], &all[5]);
+        let mut o1 = vec![C64::new(0.0, 0.0); 1 << n];
+        let mut o2 = o1.clone();
+        a.apply_amplitudes(psi.amplitudes(), &mut o1);
+        b.apply_amplitudes(psi.amplitudes(), &mut o2);
+        let d = o1
+            .iter()
+            .zip(&o2)
+            .map(|(x, y)| (x - y).norm())
+            .fold(0.0, f64::max);
+        eprintln!(
+            "REVIEW pauli worst exp {:e} apply {:e}; fast vs general {d:e}",
+            worst.0, worst.1
+        );
+        assert!(d < 1e-14);
+    }
+
+    #[test]
+    fn large_register_expectation_matches_a_per_term_sum() {
+        // 17 qubits: parallel sum_f64
+        let mut rng = crate::rng::Rng::seed_from_u64(6);
+        let n = 17;
+        let psi = StateVector::random(n, &mut rng);
+        let h: PauliSum = "0.7 Z0 Z16 - 0.2 Z2 + 1.3 Z5 Z9 Z12 - 0.9 + 0.4 X3 Z7"
+            .parse()
+            .unwrap();
+        let e = h.expectation(&psi).unwrap();
+        // naive reference term by term
+        let mut r = 0.0;
+        for &(c, s) in h.terms() {
+            let mut acc = C64::new(0.0, 0.0);
+            for b in 0..psi.dim() {
+                let (ph, im) = s.act(b);
+                acc += psi.amplitudes()[im].conj() * ph * psi.amplitudes()[b];
+            }
+            r += c * acc.re;
+        }
+        eprintln!("REVIEW 17q exp diff {:e}", (e - r).abs());
+        assert!((e - r).abs() < 1e-12);
     }
 }

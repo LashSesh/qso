@@ -232,7 +232,9 @@ milestone 1.26 (gradients at the cost of a few simulations) of the sixth.
   observables (Z strings) are evaluated in one pass. On the 4-core VM the
   energy and gradient of a 260-parameter VQE ansatz at 26 qubits take
   41.6 s instead of 73.4 s, of QAOA p = 10 as a generic circuit 89 s
-  instead of 221 s, with two state vectors instead of three. Gradients
+  instead of 221 s, with two state vectors instead of three. Diagonal
+  observables (MaxCut, Ising and QUBO costs) are evaluated chunk by chunk,
+  2–4 times faster for a QAOA cost at 22–24 qubits. Energies and gradients
   are bit for bit independent of the thread count; they differ from the
   previous version by rounding.
 - **State-vector kernels on their own worker pool.** Rayon's workers
