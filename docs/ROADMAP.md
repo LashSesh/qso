@@ -1348,26 +1348,32 @@ Planned October 2026. The GPU research track asked for a use case; this
 is it, and the stage serves it on the CPU first.
 
 **Use case: variational training at 26 to 28 qubits on one machine.**
-QAOA for MaxCut with p = 10 (or a VQE ansatz of similar depth) on 26–28
+QAOA for MaxCut with p = 10 or a VQE ansatz of similar depth on 26–28
 qubits, optimised with exact gradients for a few hundred steps, on a
 workstation or cloud VM. Measured before the stage on the 4-core test VM
-(random 3-regular graphs, 20 parameters, double precision, one call each):
+(double precision, one call each): QAOA on random 3-regular graphs
+(20 parameters) as a generic circuit through
+`gradients::expectation_and_gradient`, and through `MaxCutQaoa`, whose
+adjoint pass is specialised to QAOA (phase tables, since 1.4):
 
-| qubits | gates | energy | energy and adjoint gradient | peak memory |
-|---:|---:|---:|---:|---:|
-| 20 | 520 | 0.16 s | 1.7 s | 54 MB |
-| 22 | 572 | 0.68 s | 10.0 s | 0.20 GB |
-| 24 | 624 | 4.4 s | 47.7 s | 0.79 GB |
-| 26 | 676 | 18.4 s | 221 s | 3.15 GB |
+| qubits | gates | generic: energy | energy and gradient | `MaxCutQaoa`: energy | energy and gradient | peak memory (generic) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 20 | 520 | 0.16 s | 1.7 s | 0.07 s | 0.29 s | 54 MB |
+| 22 | 572 | 0.68 s | 10.0 s | 0.36 s | 1.7 s | 0.20 GB |
+| 24 | 624 | 4.4 s | 47.7 s | 1.8 s | 8.5 s | 0.79 GB |
+| 26 | 676 | 18.4 s | 221 s | 12.7 s | 37.4 s | 3.15 GB |
 
-A step at 26 qubits takes almost four minutes, and 28 qubits need about
+A VQE ansatz (EfficientSU2, 4 layers, linear entanglement, transverse-field
+Ising Hamiltonian) has no specialised path: at 24 and 26 qubits its energy
+and gradient took 13.9 s and 73.4 s, 7–8.5 energies. A step at 26 qubits
+takes between half a minute and four minutes, and 28 qubits need about
 12.6 GB in double precision, more than such a machine has to spare. A GPU
 would help, but none is available to test on (not on this machine, not
 in headless Chromium's WebGPU, not on GitHub's standard runners), and the
 rule "no claim without a test" holds for a backend too. The measurements
 show where the CPU loses instead:
 
-- **The gradient costs 11–13 energies.** The backward pass copies the
+- **The generic gradient costs 7–13 energies.** The backward pass copies the
   whole state for every parametrised gate outside a cache block, applies
   the derivative to the copy and takes an inner product: about five
   passes over memory per gate instead of one. Almost every QAOA gate is
@@ -1382,7 +1388,7 @@ show where the CPU loses instead:
 The rules stay: no new dependency, an independent reference for every
 deliverable, results bit for bit independent of the number of threads.
 
-### 1.26 — Gradients at the cost of a few simulations (M)
+### 1.26 — Gradients at the cost of a few simulations (M, delivered)
 
 | Deliverable | Detail |
 |---|---|
@@ -1395,6 +1401,38 @@ the old adjoint pass to 10⁻¹² on random circuits over the whole gate set
 (controls, shared and scaled parameters, every observable kind); results
 independent of the thread count; the table above measured again, with the
 gradient at no more than about four energies.
+
+| Deliverable | Delivered | Not done, and why |
+|---|---|---|
+| Matrix elements | `kernels::derivative_element`: the gradient term of every parametrised gate as `⟨λ|D|φ⟩` in one reading pass, without the copy of the state (uncontrolled single-qubit gates over contiguous runs, bit for bit the pairwise sum); in cache blocks and over the whole register | undoing and differentiating a gate on a high qubit in one pass: it trades memory passes for scalar complex arithmetic and was not expected to pay without vector code |
+| Diagonal observables | expectation values take all diagonal terms (Z strings, identity) in one pass; `H·ψ` of a diagonal sum is one multiplication per amplitude | — |
+| Shared parameters | diagonal gates on qubits above the cache block are undone and differentiated block by block (per block a phase, or a diagonal gate on their one low target), so a QAOA cost layer no longer costs three passes per gate | one pass for a whole run of diagonal gates with one parameter: `MaxCutQaoa` already does it with phase tables, and in generic circuits the blocked run removed most of the cost |
+
+Validation as planned:
+
+- **References.** On random 7-qubit circuits over the gates with shift
+  rules, with diagonal gates (controlled from inside and above the
+  block) across the block boundary and shared and scaled parameters, the
+  gradients equal the parameter-shift gradients to 10⁻¹⁰ and the
+  unblocked pass to 10⁻¹², for diagonal and general observables; the
+  existing adjoint, parameter-shift and finite-difference tests pass.
+- **Threads.** Energies and gradients of a 20-qubit VQE and QAOA circuit
+  are bit for bit the same on 1, 2, 3 and 4 threads and without spinning.
+- **Speed and memory** (4-core VM, one call each):
+
+  | qubits | VQE energy | VQE gradient, before | after | QAOA (generic) gradient, before | after | peak memory, before | after |
+  |---:|---:|---:|---:|---:|---:|---:|---:|
+  | 20 | 0.10 s | — | 0.44 s | 1.7 s | 1.2 s | 54 MB | 36 MB |
+  | 22 | 0.43 s | — | 1.9 s | 10.0 s | 4.9 s | 0.20 GB | 0.13 GB |
+  | 24 | 2.1 s | 13.9 s | 9.2 s | 47.7 s | 21.1 s | 0.79 GB | 0.53 GB |
+  | 26 | 9.4 s | 73.4 s | 41.6 s | 221 s | 89.1 s | 3.15 GB | 2.10 GB |
+
+  The gradient now costs 4.4–4.6 energies for the VQE ansatz and 4.6–5.7
+  for QAOA as a generic circuit, short of the planned "about four": the
+  energies themselves are compute-bound in the cache blocks (QAOA's 36
+  phases per block), and gates on high qubits still take three passes in
+  the backward pass. `MaxCutQaoa` stays the faster way to QAOA (34.8 s at
+  26 qubits), and the memory is one state less (two instead of three).
 
 ### 1.27 — Variational training in single precision (M)
 

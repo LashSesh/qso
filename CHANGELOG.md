@@ -14,7 +14,8 @@ matching), 1.20 (single precision) and 1.21 (coverage and differential
 testing) of the fourth, which completes it; and milestones 1.22
 (error-correction circuits that keep their distance), 1.23 (larger
 basis sets and open shells), 1.24 (short simulations at full speed) and
-1.25 (documentation and reach) of the fifth, which completes it.
+1.25 (documentation and reach) of the fifth, which completes it; and
+milestone 1.26 (gradients at the cost of a few simulations) of the sixth.
 
 ### Added
 
@@ -224,6 +225,16 @@ basis sets and open shells), 1.24 (short simulations at full speed) and
 
 ### Changed
 
+- **Cheaper adjoint gradients** (1.26). Each gradient term is the matrix
+  element of the gate's derivative between the two states, in one
+  reading pass without copying the state; diagonal gates on qubits above
+  the cache block are undone and differentiated block by block; diagonal
+  observables (Z strings) are evaluated in one pass. On the 4-core VM the
+  energy and gradient of a 260-parameter VQE ansatz at 26 qubits take
+  41.6 s instead of 73.4 s, of QAOA p = 10 as a generic circuit 89 s
+  instead of 221 s, with two state vectors instead of three. Gradients
+  are bit for bit independent of the thread count; they differ from the
+  previous version by rounding.
 - **State-vector kernels on their own worker pool.** Rayon's workers
   sleep as soon as they are idle, and on virtual machines the first
   simulation after a pause paid for waking them. The gate kernels, cache
