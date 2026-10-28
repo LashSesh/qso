@@ -30,10 +30,13 @@ milestones 1.26 (gradients at the cost of a few simulations) and 1.27
   `qso vqe` and `qso qaoa`. Half the memory (28 qubits: 4.2 GB instead of
   8.4 GB for VQE, 4.7 GB instead of 8.9 GB for `MaxCutQaoa`) and a fifth
   to a third less time; energies agree with double precision to 3·10⁻⁸
-  and gradients to 1.1·10⁻⁶ relative at 20–24 qubits. The optimisers
-  stop at a relative decrease of 10⁻⁸ in single precision, which its
-  energies still resolve. Parameter-shift and finite-difference gradients
-  stay in double precision.
+  and gradients to 1.1·10⁻⁶ relative at 20–24 qubits. In single
+  precision L-BFGS treats energies within their rounding (10⁻⁷ of the
+  value) as equal and decides by the slope (Hager and Zhang's
+  approximate Wolfe condition), and L-BFGS and Adam stop when the
+  gradient reaches its rounding; QAOA reaches the same ratios as in
+  double precision to 10⁻⁸. Parameter-shift and finite-difference
+  gradients stay in double precision.
 
 - **Matrix-product states in WebAssembly**: the module's `mps` method and
   npm `qso.mps(source, {shots, seed, maxBond, cutoff, observables})` run

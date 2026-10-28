@@ -30,8 +30,9 @@ pub const MAX_QUBITS_SINGLE: usize = MAX_QUBITS + 1;
 /// Single precision halves the memory (8 bytes per amplitude), allows one
 /// more qubit and is about twice as fast on large registers; sums
 /// (expectation values, inner products, gradient terms) are still taken in
-/// double precision, so energies and gradients carry relative errors of
-/// about 10⁻⁶ rather than 10⁻¹⁵.
+/// double precision, so energies carry relative errors of about 10⁻⁸ and
+/// adjoint gradients of about 10⁻⁶, growing with the depth of the circuit
+/// (ROADMAP, 1.27).
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Precision {

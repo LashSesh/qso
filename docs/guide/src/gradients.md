@@ -53,12 +53,14 @@ example, `b` enters two gates with factors 2 and 1.
 ### Single precision
 
 With `precision="single"`, the state and the co-state of the adjoint pass
-are single-precision vectors: half the memory, so a register one qubit
-larger fits in the same space. Inner products, matrix elements and
-expectation values are summed in double precision, and energy and
-gradient are divided by the state's squared norm, which rounding moves
-away from one. `run_vqe`, `MaxCutQaoa` and `optimize_qaoa_layerwise` take
-the same argument, and `qso vqe` and `qso qaoa` take `--single`:
+are single-precision vectors: half the memory (`run_vqe` keeps a given
+`initial_state` in double precision as well). Inner products, matrix
+elements and expectation values are summed in double precision, energy
+and gradient are divided by the state's squared norm, which rounding
+moves away from one, and the observable's constant term is added to the
+energy instead of entering the co-state. `run_vqe`, `MaxCutQaoa` and
+`optimize_qaoa_layerwise` take the same argument, and `qso vqe` and
+`qso qaoa` take `--single`:
 
 ```python
 import numpy as np
@@ -85,12 +87,24 @@ print(qaoa.optimize(restarts=2)["approximation_ratio"])
 At 28 qubits an energy and gradient takes 4.2 GB instead of 8.4 GB (VQE)
 and 4.7 GB instead of 8.9 GB (`MaxCutQaoa`), and a fifth to a third less
 time on a 4-core VM ([ROADMAP](https://github.com/LashSesh/qso/blob/main/docs/ROADMAP.md), 1.27). The
-optimisers stop in single precision when the relative decrease of the
-objective falls below 10⁻⁸, the finest that single-precision energies
-resolve; optimisations reach the same optimum as in double precision to
-about 10⁻⁸. Only the adjoint method is available in single precision:
-parameter shift and finite differences subtract nearby energies and would
-lose the digits single precision has.
+gradient error grows with the depth of the circuit: 1.7·10⁻⁴ for a UCCSD
+ansatz of 16 794 gates (LiH, 10 qubits), whose VQE still ends 2·10⁻⁸
+from double precision (with 69 evaluations instead of 27).
+
+The optimisers know that single-precision energies are only good to about
+10⁻⁷ of their value: L-BFGS treats energies within that noise as equal and
+lets the slope decide (Hager and Zhang's approximate Wolfe condition),
+and L-BFGS and Adam stop when the gradient reaches its own rounding. QAOA
+then reaches the same approximation ratios as double precision to 10⁻⁸,
+with up to 1.4 times the evaluations. VQE on rugged landscapes may end in
+a different local minimum, because rounding perturbs every step: in 12
+runs from the same starts, 6 ended where double precision did (to
+3·10⁻⁸), 2 lower and 4 higher, by 6·10⁻⁵ to 4·10⁻² (double precision
+started 10⁻⁷ away does so in 2 of the 12); restarts take the best. A
+reported single-precision energy carries its rounding and can lie a few
+10⁻⁸ below an exact bound. Only the adjoint method is available in single
+precision: parameter shift and finite differences subtract nearby
+energies and would lose the digits single precision has.
 
 ## Optimisers
 

@@ -426,8 +426,12 @@ the amplitude type (`Amplitude`: `Complex64` or `Complex32`). In single
 precision the states are `Complex32`, and every inner product, matrix
 element and expectation value is summed in double precision; energy and
 gradient are divided by the state's norm², which rounding moves away from
-one (ROADMAP, 1.27). The optimisers then stop at a relative decrease of
-10⁻⁸ (`Options::at_precision`), which single-precision energies resolve.
+one, and the observable's constant term is added to the energy instead of
+entering the co-state (ROADMAP, 1.27). The optimisers are told the
+energies' rounding (`optimize::minimize_at`): the L-BFGS line search
+treats values within it as equal and accepts Hager and Zhang's
+approximate Wolfe condition there, and L-BFGS and Adam stop when the
+gradient reaches its rounding instead of on a relative decrease.
 
 QAOA has its own specialised adjoint pass: the cost layer generator is the
 diagonal cut vector and the mixer generator is `Σ X_q`, both applied in

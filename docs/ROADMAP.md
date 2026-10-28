@@ -1471,7 +1471,7 @@ qubits.
 
 | Deliverable | Delivered | Not done, and why |
 |---|---|---|
-| Single-precision gradients | the adjoint pass, the matrix elements, the blocked diagonal gates, the diagonal observables and the QAOA layer generic over the amplitude type; `gradients::expectation_and_gradient_single` and `expectation_single`, `Vqe::with_precision`, `MaxCutQaoa::with_precision`, `qaoa::optimize_layerwise_at`; `precision="single"` for `expectation_and_gradient`, `run_vqe`, `MaxCutQaoa` and `optimize_qaoa_layerwise` in Python; `--single` for `qso vqe` and `qso qaoa`. Energies and gradients are divided by the state's norm², which rounding moves away from one; the optimisers stop at a relative decrease of 10⁻⁸, which single-precision energies still resolve | parameter-shift and finite-difference gradients in single precision: their differences of nearby energies lose the digits single precision has, and the adjoint pass is the one the use case needs; batches (`expectation_batch`) stay in double precision |
+| Single-precision gradients | the adjoint pass, the matrix elements, the blocked diagonal gates, the diagonal observables and the QAOA layer generic over the amplitude type; `gradients::expectation_and_gradient_single` and `expectation_single`, `Vqe::with_precision`, `MaxCutQaoa::with_precision`, `qaoa::optimize_layerwise_at`; `precision="single"` for `expectation_and_gradient`, `run_vqe`, `MaxCutQaoa` and `optimize_qaoa_layerwise` in Python; `--single` for `qso vqe` and `qso qaoa`. Energies and gradients are divided by the state's norm², which rounding moves away from one, and the observable's constant term stays out of the co-state; the optimisers are told the energies' rounding (`optimize::minimize_at`): the L-BFGS line search treats values within it as equal and accepts Hager and Zhang's approximate Wolfe condition there, and L-BFGS and Adam stop when the gradient reaches its rounding | parameter-shift and finite-difference gradients in single precision: their differences of nearby energies lose the digits single precision has, and the adjoint pass is the one the use case needs; batches (`expectation_batch`) stay in double precision |
 | Accuracy | measured below and stated in the guide (gradients page) | — |
 
 Validation as planned:
@@ -1492,13 +1492,15 @@ Validation as planned:
 
 - **Optimisation.** QAOA layer by layer to p = 6 on a 16-qubit 3-regular
   graph reaches the same approximation ratios to seven digits (0.7480050
-  … 0.9500122) with 458 evaluations instead of 423, in 2.8 s instead of
-  3.7 s; QAOA at p = 4 on 12–16 qubits converges with at most as many
-  evaluations as double precision, to the same ratio within 1.1·10⁻⁸;
-  VQE (Ising chain, 8 and 10 qubits, one start) stops where its relative
-  decrease falls below 10⁻⁸, after 241 and 567 iterations, within
-  7·10⁻⁷ of the double-precision run at the same iteration (which had
-  not converged after 1000).
+  … 0.9500122) with 591 evaluations instead of 423; QAOA at p = 4 on
+  12–16 qubits reaches the same ratios to 4·10⁻⁹ with at most 1.2 times
+  the evaluations. VQE (Ising chain, `EfficientSU2` with 2–3 layers, 6–10
+  qubits, 12 runs from the same random starts): 6 end where double
+  precision does (to 3·10⁻⁸ relative); 6 end in another local minimum, 2
+  lower and 4 higher, by 6·10⁻⁵ to 4·10⁻² (rounding perturbs every step;
+  double precision started 10⁻⁷ away does the same in 2 of the 12), with
+  1.1 times the evaluations in all. UCCSD for LiH (10 qubits, 16 794
+  gates) ends 2·10⁻⁸ from double precision.
 - **Memory and time** (4-core VM, 15 GB, one call each, peak resident
   memory):
 
@@ -1509,18 +1511,63 @@ Validation as planned:
   | 28 | VQE energy and gradient | 154 s, 4.20 GB | 235 s, 8.40 GB |
   | 28 | `MaxCutQaoa` energy and gradient | 122 s, 4.72 GB | 160 s, 8.92 GB |
 
-  Single precision halves the memory and saves a fifth to a third of the
-  time. On this VM 28 qubits fit in double precision as well; on a
+  Single precision halves the memory (from |0…0⟩; with an initial state
+  `Vqe` keeps a double-precision copy of it) and saves a fifth to a third
+  of the time. On this VM 28 qubits fit in double precision as well; on a
   machine with 8 GB only single precision runs them.
 
-It found one fault of its own: with the optimisers' default tolerances
-(relative decrease 10⁻¹², gradient 10⁻⁸), which single-precision
-energies cannot resolve, the last line searches followed rounding noise:
-twice the evaluations and no convergence reported (QAOA at 12 qubits:
-318 evaluations instead of 161, 2× slower at 16 qubits). Single
-precision now stops at a relative decrease of 10⁻⁸; 10⁻⁷ stopped VQE on
-slow plateaus 9·10⁻⁵ above double precision, 10⁻⁹ doubled the
-evaluations again. A test runs the 12-qubit case.
+The measurements found one fault: with the optimisers' default
+tolerances (relative decrease 10⁻¹², gradient 10⁻⁸), which
+single-precision energies cannot resolve, the last line searches followed
+rounding noise: twice the evaluations and no convergence reported (QAOA
+at 12 qubits: 318 evaluations instead of 161). A floor of 10⁻⁸ on the
+decrease, the first fix, did not survive the review (below).
+
+An independent review checked the division by the norm on every path,
+the error handling, that no sum is accumulated in single precision (none
+is), bit-identical results on 1–4 threads (18 qubits: VQE and QAOA
+energies, gradients and a QAOA optimisation), the builder interactions,
+every optimiser in single precision, and the stubs. It found:
+
+- **VQE stopped early.** The decrease floor of 10⁻⁸ stopped L-BFGS on
+  slow plateaus up to 1.3·10⁻² above double precision (the same
+  tolerance in double precision stops at the same energies), and Adam's
+  gradient tolerance of 10⁻⁸ was never reached (not converged after 3000
+  steps). The optimisers are now told the energies' rounding (10⁻⁷ of
+  the value) instead: values within it count as equal in the line search,
+  where Hager and Zhang's approximate Wolfe condition decides by the
+  slope, and L-BFGS and Adam stop when the gradient is below 4·10⁻⁷·|f|
+  or, for L-BFGS, 3·10⁻⁶ of the run's first gradient (the gradient's
+  rounding grows with its scale; without that, QAOA at depth 5–6 wandered
+  at its noise for four times the evaluations). A stall test over ten
+  iterations, tried in between, stopped VQE on plateaus again.
+- **Large constants.** The identity term of the observable entered the
+  single-precision co-state `H·φ` and its rounding the gradient: at an
+  offset of 10⁴, 1.4·10⁻³ relative error. It is now added to the energy
+  afterwards (1.9·10⁻⁷ at any offset). The error that grows with depth
+  remains (1.7·10⁻⁴ for the LiH UCCSD ansatz) and is documented.
+- **Memory with an initial state.** With an initial state the peak is 40
+  bytes per amplitude against 48 in double precision, not half: `Vqe`
+  keeps the double-precision initial state beside the rounded one (which
+  it rounded at every evaluation; now once). Documented; the use case
+  starts from |0…0⟩.
+- **Small inconsistencies:** a zero or NaN state gave 0 from
+  `expectation_single` but an error from the gradient (both are errors
+  now); coefficients beyond the range of single precision gave `inf` and
+  NaN (an error now); Python refused gradient-free methods with a
+  parameter-shift gradient in single precision, which Rust runs; the CLI's
+  text output did not name the precision; the guide promised one more
+  qubit, which `Vqe` and `MaxCutQaoa` do not allow (removed).
+- **Left as they are:** `MaxCutQaoa::state` in single precision holds both
+  vectors while widening; reported single-precision energies carry their
+  rounding and may lie a few 10⁻⁸ beyond an exact bound (documented);
+  `qso qaoa --single` keeps its JSON a list of results without a
+  precision key.
+
+Tests for each: the plateau case (6 qubits, single within 10⁻⁶ of
+double), Adam with an initial state (converged, energies within 10⁻⁵,
+fewer than twice the evaluations), the offset of 10⁴, zero, NaN and
+overflowing inputs, and the order of the builder calls.
 
 ### 1.28 — 28 qubits end to end (S–M)
 
