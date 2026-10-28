@@ -400,7 +400,22 @@ where
 {
     #[cfg(feature = "parallel")]
     if n >= PAR_THRESHOLD {
-        return (0..n).into_par_iter().with_min_len(CHUNK).map(f).collect();
+        if nested() {
+            return (0..n).into_par_iter().with_min_len(CHUNK).map(f).collect();
+        }
+        let mut out: Vec<T> = Vec::with_capacity(n);
+        let ptr = SyncPtr(out.as_mut_ptr());
+        crate::pool::run(n.div_ceil(CHUNK), |k| {
+            for i in k * CHUNK..((k + 1) * CHUNK).min(n) {
+                // SAFETY: every index below n is written exactly once (the
+                // chunks are disjoint), inside the capacity.
+                unsafe { ptr.get().add(i).write(f(i)) };
+            }
+        });
+        // SAFETY: all n elements were initialised (a panic in `f` is
+        // resumed by `run` before this line, leaking the written ones).
+        unsafe { out.set_len(n) };
+        return out;
     }
     (0..n).map(f).collect()
 }

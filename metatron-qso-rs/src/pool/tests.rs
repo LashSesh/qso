@@ -66,10 +66,75 @@ fn a_panic_reaches_the_caller_after_the_others_finished() {
     }));
     assert!(result.is_err());
     assert_eq!(done.load(SeqCst), n as u64 - 1);
+    // The same when the pool is busy and the job runs serially.
+    // A panic must not leave the pool's lock poisoned (it would run every
+    // later job serially).
+    assert!(!pool().submit.is_poisoned());
+    let busy = pool().submit.lock().unwrap_or_else(|e| e.into_inner());
+    let done = AtomicU64::new(0);
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        run(n, |i| {
+            if i == 3 {
+                panic!("task 3");
+            }
+            done.fetch_add(1, SeqCst);
+        })
+    }));
+    drop(busy);
+    assert!(result.is_err());
+    assert_eq!(done.load(SeqCst), n as u64 - 1);
     // The pool still works.
     let count = AtomicU64::new(0);
     run(n, |_| {
         count.fetch_add(1, SeqCst);
     });
     assert_eq!(count.load(SeqCst), n as u64);
+}
+
+/// Distinct threads that ran the tasks of one job whose tasks sleep (so
+/// that every worker gets some).
+fn threads_of_a_job() -> usize {
+    let ids = Mutex::new(std::collections::HashSet::new());
+    run(64, |_| {
+        ids.lock().unwrap().insert(std::thread::current().id());
+        std::thread::sleep(Duration::from_millis(1));
+    });
+    ids.into_inner().unwrap().len()
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "sleeps")]
+fn the_pool_stays_parallel_after_a_panic() {
+    if pool().workers.load(SeqCst) == 0 {
+        return;
+    }
+    let _ = catch_unwind(AssertUnwindSafe(|| run(4, |_| panic!("every task"))));
+    assert!(!pool().submit.is_poisoned());
+    // Other tests may hold the pool for a moment; one parallel job is
+    // enough.
+    assert!((0..50).any(|_| threads_of_a_job() > 1));
+}
+
+#[test]
+fn a_panicking_payload_drop_is_contained() {
+    struct Bomb;
+    impl Drop for Bomb {
+        fn drop(&mut self) {
+            if !std::thread::panicking() {
+                panic!("dropping a payload");
+            }
+        }
+    }
+    let n = if cfg!(miri) { 8 } else { 100 };
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        run(n, |i| {
+            if i % 2 == 0 {
+                std::panic::panic_any(Bomb);
+            }
+        })
+    }));
+    // The first payload comes back; the others were not dropped.
+    let payload = result.expect_err("a task panicked");
+    assert!(payload.is::<Bomb>());
+    std::mem::forget(payload);
 }

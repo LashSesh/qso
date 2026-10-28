@@ -214,9 +214,10 @@ Cirq 1.7.0 (built-in simulator), The Walrus 0.22.0. Final states agree to
 | 22 | 30.3 ms | 264 ms (8.7×) |
 | 24 | 178 ms | 853 ms (4.8×) |
 
-From 20 qubits on QSO is the fastest of these simulators. At 16 qubits
-Qulacs is faster in the median; QSO's 16-qubit times vary more (fastest run
-0.44 ms against Qulacs' 0.60 ms).
+In 1.3.0, from 20 qubits on QSO was the fastest of these simulators. At
+16 qubits Qulacs was faster in the median; QSO's 16-qubit times varied
+more (fastest run 0.44 ms against Qulacs' 0.60 ms). Since 1.24 QSO is
+ahead at 16 qubits too (below).
 
 **Warm-up mattered on virtual machines.** Up to 1.23 QSO's worker threads
 (rayon) slept as soon as they were idle, and on this VM waking them is

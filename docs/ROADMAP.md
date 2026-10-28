@@ -76,8 +76,8 @@ in [BENCHMARKS.md](BENCHMARKS.md#comparison-with-other-simulators-130)):
   was 2× faster on 16 qubits, where handing every gate to sleeping worker
   threads dominated. With cache blocking (1.3.0) Qulacs takes 1.5–2.6
   times as long as QSO on 20–24 qubits, Qiskit Aer 3.3–4.7 times and
-  PennyLane Lightning 3.7–9 times; on 16 qubits Qulacs is still 1.3×
-  faster in the median.
+  PennyLane Lightning 3.7–9 times; on 16 qubits Qulacs was still 1.3×
+  faster in the median, until the worker pool of 1.24 (next item).
 * **Thread wake-up:** rayon workers sleep as soon as they are idle; on the
   test VM waking them is slow, and a burst of short simulations needed tens
   of milliseconds to reach full speed (a cold 16-qubit layer took 1.5 ms,

@@ -753,17 +753,12 @@ mod tests {
         }
     }
 
-    /// Run `f` on several worker threads, so that the parallel paths of
-    /// the kernels really execute concurrently (Miri then checks them for
-    /// data races as well as for out-of-bounds and aliasing errors).
+    /// Run `f` where the parallel paths of the kernels execute concurrently
+    /// on the state-vector pool's workers (Miri then checks them for data
+    /// races as well as for out-of-bounds and aliasing errors). Not inside
+    /// a rayon pool: there the helpers take their rayon fallback, which is
+    /// safe code.
     fn on_threads(f: impl FnOnce() + Send) {
-        #[cfg(feature = "parallel")]
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(4)
-            .build()
-            .unwrap()
-            .install(f);
-        #[cfg(not(feature = "parallel"))]
         f();
     }
 

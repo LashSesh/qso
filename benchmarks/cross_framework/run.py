@@ -993,8 +993,11 @@ def configurations(quick: bool) -> list[tuple]:
         out.append(("1", n, libs, reps, 3 if n <= 16 else 1))
     for n in ([20] if quick else [20, 22]):
         out.append(("10", n, state_libs, 3 if n == 20 else 2, 1))
-    # Cold starts: one layer after pauses of 0.5 and 20 ms.
+    # Cold starts: one layer after pauses of 0.5 and 20 ms, next to the same
+    # layer warm (16 qubits is timed warm above).
     for n in ([12, 16] if quick else [10, 12, 14, 16, 18]):
+        if n not in sizes:
+            out.append(("1", n, ["qso", "qulacs", "aer"], 21, 3))
         for pause in (500, 20000):
             out.append((f"1@{pause}", n, ["qso", "qulacs", "aer"], 21, 3))
     out.append(("gradient", 10, ["qso", "pennylane", "qulacs"], 15, 3))
