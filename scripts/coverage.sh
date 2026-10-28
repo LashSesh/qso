@@ -36,8 +36,10 @@ cargo llvm-cov clean --workspace
 status=0
 cargo test --release -p metatron-qso-rs --all-features --no-fail-fast || status=$?
 
+# A fresh venv every time: the target directory is restored from the CI
+# cache, which can bring back an incomplete one (pip without __main__.py).
 venv=$CARGO_TARGET_DIR/coverage-venv
-python3 -m venv "$venv"
+python3 -m venv --clear "$venv"
 "$venv/bin/python" -m pip install -q maturin pytest numpy
 (
   # maturin builds through cargo, so with the instrumentation of show-env.
