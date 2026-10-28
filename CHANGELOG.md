@@ -11,9 +11,30 @@ Milestones 1.14 (Gaussian boson sampling and imperfect photons), 1.15
 purification) of the [roadmap](docs/ROADMAP.md), its third stage, and
 milestones 1.18 (pretty good state transfer), 1.19 (decoding beyond
 matching), 1.20 (single precision) and 1.21 (coverage and differential
-testing) of the fourth, which completes it.
+testing) of the fourth, which completes it; and milestone 1.22
+(error-correction circuits that keep their distance) of the fifth.
 
 ### Added
+
+- **Circuit distance, syndrome schedules and correlated matching**
+  (`qec::distance`, `qec::correlated`, `css_code_memory_with`; Python
+  `circuit_distance`, `graphlike_distance`, `CorrelatedMatchingDecoder`,
+  `css_code_memory(..., schedule=...)`; `qso qec --decoder
+  correlated-matching --schedule ... --circuit-distance`).
+  - `graphlike_distance`: the lightest undetectable logical error among
+    errors that flip at most two detectors, exactly (as Stim's
+    `shortest_graphlike_error`). `circuit_distance`: exact for graph-like
+    models; otherwise a proven lower bound from an exhaustive search and an
+    upper bound with a witness from BP+OSD.
+  - `CssSchedule::Bicycle`: the depth-8 syndrome cycle of Bravyi et al.
+    (2024) for bivariate bicycle codes; [[72, 12, 6]] keeps circuit
+    distance 6 (greedy layers: 4). `CssSchedule::Directions` for colour
+    codes: every order gives (d + 1)/2, as with greedy layers.
+  - `CorrelatedMatchingDecoder` and `correlated_error_model`: two-pass
+    matching with PyMatching 2.4's reweighting rule; on Stim's surface
+    codes it agrees with PyMatching on all but 0.01–0.04% of shots.
+  - `DecoderChoice` (non-exhaustive) and `logical_error_rate_using` for
+    every decoder.
 
 - **Differential testing and coverage** (`differential::compare`).
   - One circuit on every simulator that takes it — single-precision state
@@ -50,7 +71,7 @@ testing) of the fourth, which completes it.
   - Belief propagation on the Tanner graph of a detector error model
     (min-sum with a fixed or adaptive factor, or product-sum; flooding
     schedule), then ordered-statistics decoding (OSD-0, combination sweep,
-    exhaustive) on a reduced GF(2) basis; `DecoderKind::BpOsd` decodes the
+    exhaustive) on a reduced GF(2) basis; `DecoderChoice::BpOsd` decodes the
     undecomposed model.
   - `CssCode` from X and Z checks with paired logical operators;
     triangular 6.6.6 colour codes, bivariate bicycle codes and the table
@@ -157,6 +178,15 @@ testing) of the fourth, which completes it.
 
 ### Changed
 
+- `detector_error_model(circuit, decompose=true)` now splits errors as
+  Stim does within each noise channel: decomposed models of Stim's
+  generated circuits equal Stim's error by error. Before, every error
+  with more than two detectors was split into all of its single-qubit
+  parts, which made correlated matching less effective.
+- `DecoderKind` is back to its 1.6.0 form (union-find and matching;
+  `build` cannot fail): adding `BpOsd` to it (1.19) broke the 1.x
+  compatibility promise. BP+OSD and correlated matching are variants of
+  the new `DecoderChoice`; `logical_error_rate_with` keeps its signature.
 - The matching decoder of `logical_error_rate(..., decoder="matching")`
   and `qso qec --decoder matching` is now `SparseMatchingDecoder`
   (the same weights; where corrections weigh the same, it may pick

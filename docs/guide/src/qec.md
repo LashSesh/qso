@@ -86,12 +86,30 @@ circuit as `(probability, detectors, observables)` triples, with
   frame, 64 errors per word and up to 4096 per pass.
 - Errors with the same effect are merged: p = p₁(1 − p₂) + p₂(1 − p₁).
 
-With `decompose=True`, an error that flips more than two detectors (a Y
-error, or a two-qubit error) is split into its single-qubit X and Z
-parts. Each part must then flip at most two detectors, and the model
-becomes a matching graph. Each part keeps the error's full probability,
-so correlated errors are counted slightly too often; matching decoders do
-the same.
+With `decompose=True`, every error is split into graph-like parts, each
+flipping at most two detectors, so that the model becomes a matching
+graph. The split follows Stim's rule within each noise channel (the X
+and Z errors of a depolarizing channel on its qubits, and their
+combinations):
+
+- A combination that flips one detector is a part.
+- So is a combination that flips two detectors, at least one of which no
+  single-detector combination flips (an "irreducible pair").
+- Every other combination is written as at most two irreducible pairs,
+  whose remainder single-detector combinations flip, and finished with
+  single-detector combinations.
+- A combination that this rule cannot write is split into its
+  single-qubit X and Z parts; each must then flip at most two detectors
+  (Stim instead decomposes it against the graph-like errors of the whole
+  model).
+
+Each part keeps the error's full probability, so correlated errors are
+counted slightly too often; matching decoders do the same.
+`correlated_error_model()` returns the same decomposition, but keeps the
+parts of each error together (see [Correlated matching](#correlated-matching)).
+On Stim's generated surface-code and repetition-code circuits, both give
+Stim's decomposed model error by error, parts included, to 10⁻¹⁵
+relative (cross-validation).
 
 The scheduled cross-validation compares QSO's error models with Stim
 1.16 on repetition and surface-code memory experiments, term by term. All
@@ -261,6 +279,60 @@ to a factor 2), so the ratios, 1.1 to 1.9 here and up to 2.3 at
 p = 0.01 to 0.05, are approximate.
 `MatchingDecoder`, on the complete graph of events, takes 94 000 µs per
 shot at d = 25 and p = 0.001.
+
+## Correlated matching
+
+Decomposition forgets that the parts of an error happen together: a Y
+error on a data qubit of a surface code flips two X-type and two Z-type
+detectors, and matching sees two independent edges. Two-pass matching
+(`CorrelatedMatchingDecoder`) uses this knowledge, with the rule of
+PyMatching 2.4's `enable_correlations=True`:
+
+1. For every two edges e ≠ f that are parts of the same errors, the
+   probability of f given e is q = min(½, P(e and f)/P(e)). Here P(e)
+   combines, as independent errors, every error with part e, and
+   P(e and f) every error with both. This gives the rule "if e happened,
+   f weighs ln((1 − q)/q)".
+2. The first pass matches as usual. The correction is the set of edges
+   on shortest paths between the matched detection events; edges used an
+   even number of times cancel.
+3. Every rule of a correction edge lowers the weight of its edge f, but
+   never raises it. The second pass matches again on the reweighted
+   graph, and its prediction is the result.
+
+```python
+import metatron_qso as q
+
+circuit = q.surface_code_memory(3, 3, 0.004)
+model = circuit.correlated_error_model()
+decoder = q.CorrelatedMatchingDecoder(model)
+det, obs = circuit.sample(1000, seed=1)
+predicted = decoder.decode_batch(det)
+assert (predicted != obs[:, 0]).mean() < 0.05
+rate = q.logical_error_rate(circuit, 1000, seed=1, decoder="correlated_matching")
+```
+
+QSO's own memory experiments use only the checks of the memory basis as
+detectors. The parts of a Y error then fall on one kind of detector, and
+correlations change little. Circuits whose detectors include both kinds,
+such as Stim's generated ones, gain the most. The cross-validation runs
+Stim's rotated surface code (d = 5, 5 rounds, p = 0.006, 50 000 shots)
+on Stim's model and syndromes:
+
+| Decoder | Logical error rate |
+|---|---:|
+| PyMatching | 2.44·10⁻² |
+| PyMatching, `enable_correlations=True` | 1.94·10⁻² |
+| QSO, two-pass, on Stim's model | 1.93·10⁻² |
+| QSO, two-pass, on QSO's own decomposition | 1.93·10⁻² |
+
+The two two-pass decoders disagree on 0.01% of shots: when the first
+pass finds shortest paths of equal weight, the choice can differ from
+PyMatching's, and the second pass then starts from other weights. The
+check allows 10⁻³; the unrotated surface code, with more ties, measures
+4·10⁻⁴. `correlations_lower_the_logical_error_rate` in the unit tests
+checks the gain on Stim's d = 5 circuit, read from
+`tests/data/stim/surface_d5_memory_z.stim`.
 
 ## Memory experiments
 
@@ -440,6 +512,94 @@ the ordering of the colour codes (d = 3, 5, 7 at p = 0.002) and that the
 [[72, 12, 6]] code fails in under 1% of shots at p = 0.001 with 6 rounds
 (about 1.5·10⁻³).
 
+## Circuit distance and CNOT schedules
+
+The circuit distance is the fewest faults that flip a logical observable
+without firing any detector. A poor order of CNOTs can make it smaller
+than the code distance: a fault on an ancilla spreads to several data
+qubits ("hook errors").
+
+- **`graphlike_distance(model)`** considers only the errors that flip at
+  most two detectors, as Stim's `shortest_graphlike_error` does. It is
+  exact. Such errors form a graph with a boundary node, and an
+  undetectable set of them has even degree at every detector. It flips an
+  observable when it holds an odd number of edges that flip it. The
+  lightest such set is a cycle, found by breadth-first search on the
+  graph doubled by parity.
+- **`circuit_distance(model)`** is exact when every error flips at most
+  two detectors. Otherwise the question is that of a code's minimum
+  distance, which is NP-hard, and it returns bounds:
+  - The upper bound is the lightest logical error found, among the
+    graph-like errors and by BP+OSD. BP+OSD runs on the checks with the
+    parity of some observables as an extra check that must fire: first
+    each observable alone, then random sets with perturbed priors
+    (`bposd_trials` per observable).
+  - The lower bound comes from an exhaustive search of the sets of
+    errors that cancel every detector, by increasing weight. It
+    branches on the errors that flip the lowest fired detector and stops
+    at `max_weight` or after `max_work` sets.
+
+  When the bounds meet, `distance` is set. The witness lists the errors,
+  as indices into the model.
+
+```python
+import metatron_qso as q
+
+model = q.surface_code_memory(5, 5, 0.001).detector_error_model()
+assert q.circuit_distance(model).distance == 5
+code, _ = q.CssCode.bivariate_bicycle_code(72)
+for schedule, d in [("bicycle", 6), ("greedy", 4)]:
+    c = q.css_code_memory(code, 3, 0.001, schedule=schedule)
+    assert q.circuit_distance(c.detector_error_model()).distance == d
+```
+
+`css_code_memory(..., schedule=...)` chooses the order of the CNOTs:
+
+- **`"greedy"`** (the default): every X check, then every Z check, in
+  layers found greedily.
+- **`"bicycle"`**: the depth-8 cycle of Bravyi et al. (table 5) for a
+  bivariate bicycle code with three monomials in each polynomial. X and
+  Z checks are interleaved over seven CNOT layers.
+- **Six directions**, for a colour code: every face visits its qubits in
+  this order of the directions around its centre, one direction per
+  layer.
+
+The results, all with three rounds of uniform circuit noise:
+
+| Code | Schedule | Circuit distance | Bravyi et al. |
+|---|---|---|---|
+| [[72, 12, 6]] | depth-8 cycle | 6 (exact) | ≤ 6 |
+| [[72, 12, 6]] | greedy | 4 (exact) | |
+| [[90, 8, 10]] | depth-8 cycle | 7 to 8 | ≤ 8 |
+| [[108, 8, 10]] | depth-8 cycle | 7 to 9 | ≤ 8 |
+| [[144, 12, 12]] | depth-8 cycle | 7 to 11 | ≤ 10 |
+| Colour code, d = 3, 5, 7 | greedy, or any order of directions | (d + 1)/2 (exact) | |
+
+- **Bicycle codes.** The upper bounds of the three larger codes come from
+  256 BP+OSD searches per observable. The paper's bounds hold under its
+  own noise model, which also strikes idle qubits; QSO's has no idle
+  errors.
+- **Colour codes.** No order of directions keeps the distance: all 720
+  give (d + 1)/2 for d = 3 and 5. With one bare ancilla per face, a
+  fault halfway through a weight-6 check spreads to three data qubits. In
+  the Steane code every pair of qubits lies on a logical operator of
+  weight 3, so any hook of two qubits already loses one. Keeping the
+  distance needs flag qubits or other extraction circuits.
+
+The checks:
+
+- Exact results equal brute-force enumeration on 600 random models, both
+  graph-like and with hyperedges.
+- The repetition and surface codes keep their distance d.
+- `circuit_distances_of_memory_experiments` in `tests/validation.rs`
+  checks the table above.
+- `bicycle_cycle_reaches_the_published_circuit_distances`, a long test
+  run weekly, checks the bicycle bounds and all 720 colour-code orders.
+- The cross-validation compares Stim's generated circuits with
+  `shortest_graphlike_error` (equal) and with
+  `search_for_undetectable_logical_errors` (QSO's exact distance is never
+  larger).
+
 ## Stim circuits and the command line
 
 `to_stim()` writes a circuit in Stim's text format, with relative
@@ -484,9 +644,14 @@ qso qec --code repetition --distance 9 --p 0.05 --stim rep9.stim
 qso qec --circuit surface.stim --decoder matching --shots 100000
 qso qec --code color --distance 5,7 --decoder bposd --p 0.002
 qso qec --code bb --distance 72,144 --decoder bposd --p 0.001 --shots 2000
+qso qec --code bb --distance 72 --rounds 3 --decoder bposd --schedule bicycle --circuit-distance
+qso qec --circuit surface.stim --decoder correlated-matching
 ```
 
 For `--code bb`, `--distance` names the code by its qubits.
+`--schedule` takes `greedy`, `bicycle` or six directions (`0,1,2,3,4,5`,
+colour codes only). `--circuit-distance` adds the bounds on the circuit
+distance to each line and to the JSON output.
 
 ## Limits and costs
 
@@ -504,6 +669,7 @@ For `--code bb`, `--distance` names the code by its qubits.
 | BP+OSD decoder | 16 384 detectors; OSD keeps a dense basis and its combinations, about 2 · (detectors)² bits (64 MiB at the limit), and takes time in proportion to errors × rank × detectors / 64 per shot that BP does not settle |
 | CSS codes | 8192 qubits (the logical operators cost about n³/64 word operations); bivariate bicycle codes l · m ≤ 4096 |
 | Detector error models built directly | 2²⁴ detectors, 64 observables |
+| Circuit distance | exact and polynomial for graph-like models (a breadth-first search per start node, bounded by the best cycle found); otherwise BP+OSD searches (each like one decoding) and an exhaustive search of at most `max_work` sets (2²⁴ by default, about 10⁷ a second) |
 
 - **Sampling.** Each operation costs one word operation per 64 shots.
 - **Error model.** The model takes one pass through the circuit per 4096
