@@ -23,6 +23,7 @@ console.log(qso.search("metatron", [0]).success_probability);
 | Method | Result |
 |---|---|
 | `qasm(source, {shots, seed})` | exact outcome probabilities, seeded samples, the final state of a program without measurements, and exports to OpenQASM 3 and 2 |
+| `mps(source, {shots, seed, maxBond, cutoff, observables})` | the program on a [matrix-product state](mps.md): Pauli expectation values, bond dimensions and entropies, the fidelity bound, and samples, for hundreds or thousands of qubits at low entanglement |
 | `graph(graph)` | nodes, edges, positions, summary, automorphism group, spectra |
 | `walk(graph, {start, times, gamma, generator})` | node probabilities of a continuous-time walk |
 | `search(graph, marked, options)` | optimised spatial search and its success curve |
@@ -35,8 +36,9 @@ message of the Rust error. The package README lists all parameters.
 ## Playground
 
 The [playground](playground/) runs the package in the browser: it
-simulates OpenQASM programs, animates quantum walks on Metatron's Cube and
-other graphs, and plots spatial search. The module runs in a Web Worker,
+simulates OpenQASM programs (on a matrix-product state too, for hundreds
+of qubits), animates quantum walks on Metatron's Cube and other graphs,
+and plots spatial search. The module runs in a Web Worker,
 so long computations do not block the page; one that runs longer than
 30 seconds is stopped. Nothing is sent to a server.
 
@@ -49,14 +51,23 @@ native threads and run natively only. Tests that expect a panic are
 skipped, because WebAssembly aborts on a panic.
 
 The package has its own tests (`npm test`), which check the OpenQASM
-examples and graph results against the native values.
+examples and graph results against the native values. For matrix-product
+states they replay requests whose native responses are recorded in
+`js/test/mps_native.json` (a 40-qubit circuit with truncation, an
+8-qubit one with amplitudes, a 300-qubit GHZ state with samples and a
+program with mid-circuit measurements) and require the same results to
+10⁻¹⁰; a test of the Rust crate checks that the recording still matches
+the native build.
 
 ## Limits
 
 WebAssembly has a 4 GiB address space, so a state vector holds at most
 26 qubits (1 GiB). Clifford programs with more qubits run on the
 [stabilizer simulator](stabilizers.md) (up to 16384 qubits); they are
-sampled, so they need `shots`. The graph and walk methods accept up to 2048 nodes,
+sampled, so they need `shots`. Matrix-product states take up to 16384
+qubits; their memory grows with the square of the bond dimension, so
+strongly entangling programs on many qubits need a small `maxBond`.
+The graph and walk methods accept up to 2048 nodes,
 because they use dense eigendecompositions. One call samples at most
 10⁶ shots and evaluates at most 10⁴ times.
 

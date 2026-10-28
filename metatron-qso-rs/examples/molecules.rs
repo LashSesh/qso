@@ -17,6 +17,7 @@ use metatron_qso::linalg::expm_hermitian;
 use metatron_qso::quantum::{PauliSum, StateVector};
 
 fn main() -> Result<()> {
+    // ANCHOR: encodings
     let lih = MolecularIntegrals::from_fcidump(include_str!("molecules/lih_sto3g.fcidump"))?;
     let fci = lih.fci_energies(3)?;
     println!(
@@ -44,7 +45,9 @@ fn main() -> Result<()> {
             lih.fci_energies_with(encoding, 1)?[0]
         );
     }
+    // ANCHOR_END: encodings
 
+    // ANCHOR: ansatze
     let encoding = QubitEncoding::parity_reduced();
     let h = lih.qubit_hamiltonian(encoding)?;
     println!("\n| method | parameters | energy (Ha) | error vs full CI |");
@@ -79,7 +82,9 @@ fn main() -> Result<()> {
         "| full CI (PySCF reference −7.882401932) | — | {:.8} | 0 |",
         fci[0]
     );
+    // ANCHOR_END: ansatze
 
+    // ANCHOR: excited
     // Excited states of H2 on two qubits (parity, two-qubit reduction).
     let h2 = MolecularIntegrals::from_fcidump(include_str!("molecules/h2_sto3g.fcidump"))?;
     let h2_ham = h2.qubit_hamiltonian(encoding)?;
@@ -94,7 +99,9 @@ fn main() -> Result<()> {
     for (k, (e, f)) in states.energies.iter().zip(&exact).enumerate() {
         println!("  E{k} = {e:.10}  (full CI {f:.10})");
     }
+    // ANCHOR_END: excited
 
+    // ANCHOR: dynamics
     // Time evolution under the H2 Hamiltonian: product formulas.
     let traceless = PauliSum::from_terms(
         h2_ham
@@ -126,5 +133,6 @@ fn main() -> Result<()> {
             trotter_error_bound(&h2_ham, 2.0, 4, order)?
         );
     }
+    // ANCHOR_END: dynamics
     Ok(())
 }

@@ -55,8 +55,11 @@ run when the site is built.
 
 ## Versions
 
-This guide describes the code on the `main` branch. Released versions are on
-[PyPI](https://pypi.org/project/metatron-qso/) and
+This guide describes the code on the `main` branch (the "development"
+version in the selector at the top of each page). The guide and the Python
+reference of every release since 1.2.0 are on this site too: choose the
+version in the selector, or open `/<version>/`, for example `/1.6.0/`.
+Released versions are on [PyPI](https://pypi.org/project/metatron-qso/) and
 [crates.io](https://crates.io/crates/metatron-qso-rs); the
 [changelog](https://github.com/LashSesh/qso/blob/main/CHANGELOG.md) lists what
 changed in each release.

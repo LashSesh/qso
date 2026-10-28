@@ -47,6 +47,31 @@ export interface QasmResult {
   qasm2: string | null;
 }
 
+export interface MpsResult {
+  qubits: number;
+  bits: number;
+  operations: number;
+  /** Whether the program has no measurements or resets. */
+  unitary: boolean;
+  max_bond: number;
+  cutoff: number;
+  /** Counts of the classical bits, or of every qubit for a program without bits; null without shots. */
+  counts: Record<string, number> | null;
+  /** ⟨P⟩ for each requested Pauli string (programs without measurements). */
+  expectations: number[] | null;
+  /** Bond dimension between qubits k and k + 1 (programs without measurements). */
+  bond_dimensions: number[] | null;
+  /** Entanglement entropy in bits between qubits 0..=k and the rest. */
+  bond_entropies: number[] | null;
+  /** Amplitudes [re, im] for at most 10 qubits (programs without measurements). */
+  amplitudes: [number, number][] | null;
+  /** Total weight the truncations dropped (programs without measurements). */
+  discarded_weight: number | null;
+  /** Lower bound on the fidelity with the exact state; null if a measurement followed a truncation. */
+  fidelity_lower_bound: number | null;
+  method: "mps";
+}
+
 export interface GraphSummary {
   name: string;
   nodes: number;
@@ -105,6 +130,20 @@ export class Qso {
   call(method: string, params?: Record<string, unknown>): any;
   version(): string;
   qasm(source: string, options?: { shots?: number; seed?: number }): QasmResult;
+  /** Run an OpenQASM program on a matrix-product state. */
+  mps(
+    source: string,
+    options?: {
+      shots?: number;
+      seed?: number;
+      /** Most singular values kept per bond (default 256). */
+      maxBond?: number;
+      /** Largest weight a split may drop (default 1e-14). */
+      cutoff?: number;
+      /** Pauli strings such as "Z0 Z1" or "-X3". */
+      observables?: string[];
+    },
+  ): MpsResult;
   graph(graph: GraphInput): GraphResult;
   walk(
     graph: GraphInput,

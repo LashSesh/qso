@@ -24,6 +24,7 @@ use metatron_qso::noise::{
 };
 use metatron_qso::quantum::{Circuit, PauliSum};
 
+// ANCHOR: helpers
 fn ghz(n: usize) -> Circuit {
     let mut c = Circuit::new(n);
     c.h(0);
@@ -46,8 +47,10 @@ fn row(label: &str, e: &Estimate, exact: f64) {
         e.value - exact
     );
 }
+// ANCHOR_END: helpers
 
 fn main() -> Result<()> {
+    // ANCHOR: exact
     let device = DeviceModel::from_json(include_str!("devices/toy_device.json"))?;
     let n = 5;
     let c = ghz(n);
@@ -72,7 +75,9 @@ fn main() -> Result<()> {
         ideal,
     );
     row("4000 trajectories", &trajectories, ideal);
+    // ANCHOR_END: exact
 
+    // ANCHOR: shots
     // Shots on the device include its readout errors.
     let backend = DeviceBackend::density_matrix(device.clone())?;
     let shots = 200_000;
@@ -100,7 +105,9 @@ fn main() -> Result<()> {
         )?;
         row(label, &r.estimate, ideal);
     }
+    // ANCHOR_END: shots
 
+    // ANCHOR: pec
     // PEC needs Pauli noise: the device's CX errors as Pauli channels.
     let pauli = DeviceModel::new("toy, Pauli noise")
         .with_rule(
@@ -129,7 +136,9 @@ fn main() -> Result<()> {
         &shadow.estimate(&h)?,
         ideal,
     );
+    // ANCHOR_END: pec
 
+    // ANCHOR: trajectories
     // Beyond density matrices: 20 qubits with trajectories.
     let big = 20;
     let wide = DeviceModel::new("uniform")
@@ -153,5 +162,6 @@ fn main() -> Result<()> {
         big - 1,
         start.elapsed().as_secs_f64()
     );
+    // ANCHOR_END: trajectories
     Ok(())
 }

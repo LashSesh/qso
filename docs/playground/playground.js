@@ -153,12 +153,12 @@ function barChart(container, items, { max } = {}) {
   svg.setAttribute("aria-label", items.map((d) => `${d.label}: ${fmt(d.value)}`).join(", "));
 }
 
-/** One line over [0, tMax] with a crosshair tooltip and a marked point. */
-function lineChart(container, xs, ys, { mark, xLabel, yLabel }) {
+/** One line over [0, xs.at(-1)] with a crosshair tooltip and a marked point. */
+function lineChart(container, xs, ys, { mark, xLabel, yLabel, xName = "t", yMax = 1 }) {
   container.replaceChildren();
   const W = 520, H = 260, left = 44, right = 12, top = 10, bottom = 36;
   const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" }, container);
-  const xMax = xs.at(-1), yMax = 1;
+  const xMax = xs.at(-1);
   const x = (v) => left + (v / xMax) * (W - left - right);
   const y = (v) => top + (1 - v / yMax) * (H - top - bottom);
   for (const t of ticks(yMax)) {
@@ -184,7 +184,8 @@ function lineChart(container, xs, ys, { mark, xLabel, yLabel }) {
     dot.setAttribute("cy", y(ys[i]));
     cross.setAttribute("visibility", "visible");
     dot.setAttribute("visibility", "visible");
-    showTip(e, `t = ${xs[i].toFixed(3)}\n${yLabel} = ${fmt(ys[i])}`);
+    const xv = Number.isInteger(xs[i]) ? xs[i] : xs[i].toFixed(3);
+    showTip(e, `${xName} = ${xv}\n${yLabel} = ${fmt(ys[i])}`);
   });
   hit.addEventListener("mouseleave", () => {
     cross.setAttribute("visibility", "hidden");
@@ -587,6 +588,110 @@ function runSearch() {
 $("run-search").addEventListener("click", runSearch);
 
 // ---------------------------------------------------------------------------
+// Matrix-product states.
+// ---------------------------------------------------------------------------
+
+const qasmHeader = (n) => `OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[${n}];\n`;
+const MPS_EXAMPLES = {
+  "GHZ state, 1000 qubits": {
+    source: () => {
+      let s = qasmHeader(1000) + "h q[0];\n";
+      for (let k = 1; k < 1000; k++) s += `cx q[${k - 1}],q[${k}];\n`;
+      return s;
+    },
+    observables: "Z0 Z999\nX0",
+    bond: 64,
+  },
+  "XX-chain quench, 100 qubits": {
+    // Néel state, then 6 Trotter steps: the excitations spread and the
+    // entanglement grows.
+    source: () => {
+      const n = 100;
+      let s = qasmHeader(n);
+      for (let k = 0; k < n; k += 2) s += `x q[${k}];\n`;
+      for (let step = 0; step < 6; step++) {
+        for (const start of [0, 1]) {
+          for (let k = start; k < n - 1; k += 2) s += `rxx(0.25) q[${k}],q[${k + 1}];\nryy(0.25) q[${k}],q[${k + 1}];\n`;
+        }
+      }
+      return s;
+    },
+    observables: "Z50\nZ49 Z50\nZ0",
+    bond: 64,
+  },
+  "Random brick wall, 40 qubits (truncated)": {
+    source: () => {
+      const n = 40;
+      let s = qasmHeader(n);
+      for (let l = 0; l < 12; l++) {
+        for (let q = 0; q < n; q++) {
+          s += `ry(${(0.3 + 0.17 * ((q * 7 + l * 3) % 11)).toFixed(2)}) q[${q}];\n`;
+          s += `rz(${(0.2 + 0.1 * ((q + l) % 5)).toFixed(2)}) q[${q}];\n`;
+        }
+        for (let q = l % 2; q < n - 1; q += 2) s += `cx q[${q}],q[${q + 1}];\n`;
+      }
+      return s;
+    },
+    observables: "Z0\nZ19 Z20",
+    bond: 16,
+  },
+};
+
+const mpsSelect = $("mps-example");
+for (const name of Object.keys(MPS_EXAMPLES)) mpsSelect.add(new Option(name, name));
+function loadMpsExample() {
+  const e = MPS_EXAMPLES[mpsSelect.value];
+  $("mps-source").value = e.source();
+  $("mps-observables").value = e.observables;
+  $("mps-bond").value = e.bond;
+}
+mpsSelect.addEventListener("change", () => {
+  loadMpsExample();
+  runMps();
+});
+loadMpsExample();
+
+const escape = (t) => t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+/** A long bit string as its two ends. */
+const shorten = (s) => (s.length > 40 ? `${s.slice(0, 16)}…${s.slice(-16)}` : s);
+
+function runMps() {
+  const shots = Number($("mps-shots").value) || 0;
+  const seed = Number($("mps-seed").value) || 0;
+  const maxBond = Number($("mps-bond").value) || 1;
+  const observables = $("mps-observables").value.split("\n").map((l) => l.trim()).filter(Boolean);
+  return busy($("run-mps"), $("mps-status"), async () => {
+    const r = await call("mps", { source: $("mps-source").value, shots, seed, max_bond: maxBond, observables });
+    $("mps-result").hidden = false;
+    const bound = r.fidelity_lower_bound;
+    const parts = [`${r.qubits} qubits`];
+    if (r.bond_dimensions) parts.push(`largest bond dimension ${Math.max(1, ...r.bond_dimensions)} (max χ ${r.max_bond})`);
+    if (r.discarded_weight !== null) parts.push(`discarded weight ${fmt(r.discarded_weight)}`);
+    parts.push(bound === null ? "no fidelity bound (a measurement followed a truncation)" : `fidelity ≥ ${bound.toFixed(6)}`);
+    $("mps-info").textContent = parts.join(" · ");
+    const entropies = r.bond_entropies ?? [];
+    if (entropies.length > 0) {
+      lineChart($("mps-chart"), entropies.map((_, k) => k + 1), entropies, {
+        xLabel: "bond (between qubits k − 1 and k)",
+        yLabel: "S (bits)",
+        xName: "bond",
+        yMax: Math.max(1, Math.ceil(Math.max(...entropies))),
+      });
+    } else {
+      $("mps-chart").textContent = "Programs with measurements are sampled only.";
+    }
+    table($("mps-expectations"), ["observable", "value"],
+      (r.expectations ?? []).map((v, k) => [`<code>${escape(observables[k])}</code>`, v.toFixed(6)]));
+    const counts = Object.entries(r.counts ?? {}).sort((a, b) => b[1] - a[1]);
+    $("mps-counts-title").textContent = counts.length ? `Samples (${shots} shots)` : "Samples";
+    table($("mps-counts"), ["outcome", "counts"], counts.slice(0, 64).map(([k, c]) => [`<code>${shorten(k)}</code>`, c]));
+    return `${r.operations} operations`;
+  });
+}
+$("run-mps").addEventListener("click", runMps);
+
+// ---------------------------------------------------------------------------
 // Start.
 // ---------------------------------------------------------------------------
 
@@ -596,6 +701,7 @@ call("version").then(
     runQasm();
     runWalk();
     runSearch();
+    runMps();
   },
   (e) => {
     $("qasm-status").textContent = `Could not load QSO: ${e.message}`;
