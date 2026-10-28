@@ -142,6 +142,29 @@ fn algorithms() {
 
     let v = qso(&["vqe", "--model", "h2"]);
     close(f(&v["result"]["energy"]), f(&v["exact_energy"]), 1e-6);
+    assert_eq!(v["precision"], "double");
+    // The same in single precision, and QAOA by layers.
+    let v = qso(&[
+        "vqe",
+        "--model",
+        "tfim:4,1,0.7",
+        "--layers",
+        "3",
+        "--single",
+    ]);
+    close(f(&v["result"]["energy"]), f(&v["exact_energy"]), 1e-5);
+    assert_eq!(v["precision"], "single");
+    let q = qso(&[
+        "qaoa",
+        "--graph",
+        "cycle:6",
+        "--p",
+        "3",
+        "--layerwise",
+        "--single",
+    ]);
+    close(f(&q[0]["approximation_ratio"]), 0.75, 1e-5);
+    close(f(&q[2]["approximation_ratio"]), 1.0, 1e-5);
 
     let g = qso(&["grover", "--qubits", "4", "--marked", "3"]);
     close(

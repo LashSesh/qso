@@ -527,6 +527,7 @@ impl MaxCutQaoa {
     pub fn optimize(&self, config: &QaoaConfig) -> Result<QaoaResult> {
         crate::optimize::check_restarts(config.restarts)?;
         let objective = NegativeCut { qaoa: self };
+        let options = config.options.at_precision(self.precision);
         let base = Rng::seed_from_u64(config.seed);
         let p = self.p;
         let runs = map_tasks(config.restarts.max(1), |r| {
@@ -542,7 +543,7 @@ impl MaxCutQaoa {
                 }
             };
             self.check(&x0)?;
-            minimize(&objective, &x0, &config.method, &config.options)
+            minimize(&objective, &x0, &config.method, &options)
         });
         let runs: Vec<_> = runs.into_iter().collect::<Result<Vec<_>>>()?;
         let evaluations = runs.iter().map(|r| r.evaluations).sum();
@@ -708,6 +709,32 @@ mod tests {
         );
         let la = optimize_layerwise_at(&small, 2, &cfg, Precision::Single).unwrap();
         assert!((la[1].expectation - oa.expectation).abs() < 1e-4);
+    }
+
+    /// Single precision stops where its energies stop resolving decreases,
+    /// instead of spending line searches on rounding noise (before the
+    /// tolerance floor: twice the evaluations, and not converged).
+    #[test]
+    fn single_precision_optimisation_converges_without_extra_evaluations() {
+        let g = generators::random_regular(12, 3, &mut Rng::seed_from_u64(1)).unwrap();
+        let cfg = QaoaConfig {
+            restarts: 2,
+            ..Default::default()
+        };
+        let double = MaxCutQaoa::new(&g, 4).unwrap().optimize(&cfg).unwrap();
+        let single = MaxCutQaoa::new(&g, 4)
+            .unwrap()
+            .with_precision(Precision::Single)
+            .optimize(&cfg)
+            .unwrap();
+        assert!(single.converged, "{single:?}");
+        assert!(
+            single.evaluations as f64 <= 1.2 * double.evaluations as f64,
+            "{} vs {}",
+            single.evaluations,
+            double.evaluations
+        );
+        assert!((single.expectation - double.expectation).abs() < 1e-6 * double.max_cut);
     }
 
     #[test]

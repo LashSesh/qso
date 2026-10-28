@@ -219,6 +219,23 @@ pub struct Options {
     pub record_history: bool,
 }
 
+/// The smallest relative decrease that single-precision energies resolve
+/// (their rounding error is a few times 10⁻⁸ of the value).
+pub(crate) const SINGLE_F_TOL: f64 = 1e-7;
+
+impl Options {
+    /// These options with a decrease tolerance no finer than the
+    /// objective's precision resolves: below it, steps only follow
+    /// rounding and the line search spends its evaluations on noise.
+    pub(crate) fn at_precision(&self, precision: crate::quantum::Precision) -> Options {
+        let mut o = self.clone();
+        if precision != crate::quantum::Precision::Double {
+            o.f_tol = o.f_tol.max(SINGLE_F_TOL);
+        }
+        o
+    }
+}
+
 impl Default for Options {
     fn default() -> Self {
         Self {

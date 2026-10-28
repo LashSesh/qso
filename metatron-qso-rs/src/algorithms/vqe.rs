@@ -272,7 +272,12 @@ impl Vqe {
                         .collect()
                 }
             };
-            minimize(&Energy { vqe: self }, &x0, &self.method, &self.options)
+            minimize(
+                &Energy { vqe: self },
+                &x0,
+                &self.method,
+                &self.options.at_precision(self.precision),
+            )
         });
         let mut runs: Vec<_> = runs.into_iter().collect::<Result<Vec<_>>>()?;
         let restart_energies: Vec<f64> = runs.iter().map(|r| r.value).collect();

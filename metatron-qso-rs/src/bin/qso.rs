@@ -8,7 +8,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use serde_json::{Value, json};
 
 use metatron_qso::algorithms::ansatz::{self, Entanglement};
-use metatron_qso::algorithms::qaoa::{MaxCutQaoa, QaoaConfig, optimize_layerwise};
+use metatron_qso::algorithms::qaoa::{MaxCutQaoa, QaoaConfig, optimize_layerwise_at};
 use metatron_qso::algorithms::time_evolution::{trotter_circuit, trotter_error_bound};
 use metatron_qso::algorithms::{grover, models, vqe::Vqe};
 use metatron_qso::backend::{Backend, DensityMatrixBackend, DeviceBackend, StatevectorBackend};
@@ -26,7 +26,7 @@ use metatron_qso::noise::{DeviceModel, NoiseModel};
 use metatron_qso::optimize::{Method, Options};
 use metatron_qso::qec;
 use metatron_qso::quantum::{
-    Circuit, PauliSum, Program, bitstring, from_qasm2, record_bitstring, to_qasm2,
+    Circuit, PauliSum, Precision, Program, bitstring, from_qasm2, record_bitstring, to_qasm2,
 };
 use metatron_qso::rng::Rng;
 use metatron_qso::stabilizer::StabilizerState;
@@ -207,6 +207,9 @@ enum Command {
         /// Optimise depths 1..=p with INTERP initialisation.
         #[arg(long)]
         layerwise: bool,
+        /// Simulate in single precision (half the memory).
+        #[arg(long)]
+        single: bool,
     },
     /// Variational quantum eigensolver.
     Vqe {
@@ -228,6 +231,10 @@ enum Command {
         restarts: usize,
         #[arg(long, default_value_t = 0)]
         seed: u64,
+        /// Simulate in single precision (half the memory, adjoint
+        /// gradients).
+        #[arg(long)]
+        single: bool,
     },
     /// Grover search.
     Grover {
@@ -535,6 +542,15 @@ fn read_graph_file(path: &std::path::Path) -> Result<Graph> {
     };
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
     Ok(g.with_name(name.unwrap_or_default()))
+}
+
+/// Single or double precision, from `--single`.
+fn precision(single: bool) -> Precision {
+    if single {
+        Precision::Single
+    } else {
+        Precision::Double
+    }
 }
 
 /// A graph from a specification string or a file.
@@ -911,6 +927,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             restarts,
             seed,
             layerwise,
+            single,
         } => {
             let g = graph(spec)?;
             let config = QaoaConfig {
@@ -918,10 +935,15 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 seed: *seed,
                 ..Default::default()
             };
+            let precision = precision(*single);
             let results = if *layerwise {
-                optimize_layerwise(&g, *p, &config)?
+                optimize_layerwise_at(&g, *p, &config, precision)?
             } else {
-                vec![MaxCutQaoa::new(&g, *p)?.optimize(&config)?]
+                vec![
+                    MaxCutQaoa::new(&g, *p)?
+                        .with_precision(precision)
+                        .optimize(&config)?,
+                ]
             };
             let n = g.num_nodes();
             let text = results
@@ -950,6 +972,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             method,
             restarts,
             seed,
+            single,
         } => {
             let (h, n, offset) = match hamiltonian {
                 Some(expr) => {
@@ -967,7 +990,8 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                     ..Default::default()
                 })
                 .with_restarts(*restarts)
-                .with_seed(*seed);
+                .with_seed(*seed)
+                .with_precision(precision(*single));
             let exact = vqe.exact_energy()?;
             let r = vqe.run()?;
             let text = format!(
@@ -985,7 +1009,12 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 }
             );
             Ok((
-                json!({"result": r, "exact_energy": exact, "constant_offset": offset}),
+                json!({
+                    "result": r,
+                    "exact_energy": exact,
+                    "constant_offset": offset,
+                    "precision": vqe.precision().name(),
+                }),
                 text,
             ))
         }
