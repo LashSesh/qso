@@ -401,10 +401,10 @@ fn logical_exists(n: usize, errors: &[Error]) -> Option<bool> {
                 .filter(|b| e.observables >> b & 1 == 1)
                 .map(|b| n + b),
         );
-        if let Some(k) = basis.insert(&super::gf2::from_ones(len, &ones)) {
-            if basis.pivot(k) >= n {
-                return Some(true);
-            }
+        if let Some(k) = basis.insert(&super::gf2::from_ones(len, &ones))
+            && basis.pivot(k) >= n
+        {
+            return Some(true);
         }
     }
     Some(false)

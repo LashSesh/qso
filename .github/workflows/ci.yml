@@ -99,6 +99,8 @@ jobs:
           ./target/release/qso molecule metatron-qso-rs/examples/molecules/lih_sto3g.fcidump --mapping parity --two-qubit-reduction --method adapt
           ./target/release/qso scf --atoms "Li 0 0 0; H 0 0 1.595" --basis 6-31g --frozen 1 --active 5 --fci --fcidump /tmp/lih.fcidump
           ./target/release/qso molecule /tmp/lih.fcidump --method none
+          ./target/release/qso scf --atoms "O 0 0 0; O 0 0 1.2075" --multiplicity 3 --basis cc-pvdz --restricted-open --frozen 2 --active 8 --fci
+          ./target/release/qso scf --atoms "H 0 0 0; Cl 0 0 1.2746" --basis 6-31g* --cartesian
           ./target/release/qso trotter --hamiltonian "Z0 Z1 + 0.5 X0 + 0.5 X1" --steps 20 --order 4 --output /tmp/trotter.qasm
           ./target/release/qso qasm /tmp/trotter.qasm --shots 100
       - name: Benchmarks compile

@@ -313,12 +313,13 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         seed: u64,
     },
-    /// Hartree–Fock of a molecule from its geometry (STO-3G or 6-31G,
-    /// H to Ne), optionally full CI in an active space and an FCIDUMP file.
+    /// Hartree–Fock of a molecule from its geometry (STO-3G, 6-31G, 6-31G* or cc-pVDZ;
+    /// H to Ar), optionally full CI in an active space and an FCIDUMP file.
     Scf {
         /// Atoms in ångström, e.g. "H 0 0 0; H 0 0 0.735".
         #[arg(long)]
         atoms: String,
+        /// sto-3g, 6-31g, 6-31g* or cc-pvdz (H to Ar).
         #[arg(long, default_value = "sto-3g")]
         basis: String,
         #[arg(long, default_value_t = 0, allow_hyphen_values = true)]
@@ -327,8 +328,15 @@ enum Command {
         #[arg(long, default_value_t = 1)]
         multiplicity: u32,
         /// Unrestricted Hartree–Fock (open shells).
-        #[arg(long)]
+        #[arg(long, conflicts_with = "restricted_open")]
         unrestricted: bool,
+        /// Restricted open-shell Hartree–Fock (open shells; its orbitals
+        /// serve --fci and --fcidump).
+        #[arg(long)]
+        restricted_open: bool,
+        /// Cartesian d (and higher) shells instead of spherical ones.
+        #[arg(long)]
+        cartesian: bool,
         /// Doubly occupied orbitals folded into the core energy (with
         /// --fci or --fcidump).
         #[arg(long, default_value_t = 0)]
@@ -1172,6 +1180,8 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             charge,
             multiplicity,
             unrestricted,
+            restricted_open,
+            cartesian,
             frozen,
             active,
             fci,
@@ -1185,24 +1195,38 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 ));
             }
             let mol = Molecule::from_atoms(atoms, *charge, *multiplicity)?;
-            if !*unrestricted {
+            if !*unrestricted && !*restricted_open {
                 let (na, nb) = mol.n_alpha_beta();
                 if na != nb {
                     return Err(QsoError::invalid(
                         "multiplicity",
-                        "an open shell needs --unrestricted",
+                        "an open shell needs --unrestricted or --restricted-open",
                     ));
                 }
             }
-            let ints = AoIntegrals::compute(&mol, Basis::from_name(basis)?)?;
+            let harmonics = if *cartesian {
+                metatron_qso::chemistry::Harmonics::Cartesian
+            } else {
+                metatron_qso::chemistry::Harmonics::Spherical
+            };
+            let ints = AoIntegrals::compute_with(&mol, Basis::from_name(basis)?, harmonics)?;
             let options = ScfOptions {
                 max_iterations: *max_iterations,
                 ..ScfOptions::default()
             };
             let hf = if *unrestricted {
                 uhf(&mol, &ints, &options)?
+            } else if *restricted_open {
+                metatron_qso::chemistry::rohf(&mol, &ints, &options)?
             } else {
                 rhf(&mol, &ints, &options)?
+            };
+            let method = if *unrestricted {
+                "UHF"
+            } else if *restricted_open {
+                "ROHF"
+            } else {
+                "RHF"
             };
             let (na, nb) = mol.n_alpha_beta();
             let mut lines = vec![
@@ -1211,8 +1235,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                     ints.n_functions()
                 ),
                 format!(
-                    "{}   {:.10}  ({} iterations, <S²> = {:.6})",
-                    if *unrestricted { "UHF" } else { "RHF" },
+                    "{method}   {:.10}  ({} iterations, <S²> = {:.6})",
                     hf.energy,
                     hf.iterations,
                     hf.s_squared()
@@ -1244,6 +1267,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                     "basis_functions": ints.n_functions(),
                     "electrons": [na, nb],
                     "restricted": !unrestricted,
+                    "method": method,
                     "energy": hf.energy,
                     "nuclear_repulsion": hf.nuclear_repulsion,
                     "iterations": hf.iterations,

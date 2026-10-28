@@ -245,12 +245,11 @@ fn the_bicycle_cycle_keeps_the_distance() {
         css_code_memory_with(&colour, 2, &noise, MemoryBasis::Z, CssSchedule::Bicycle).is_err()
     );
     let two = CssCode::bivariate_bicycle(3, 3, &[(1, 0), (0, 1)], &[(0, 0), (1, 1)]);
-    if let Ok(two) = two {
-        if two.k() > 0 {
-            assert!(
-                css_code_memory_with(&two, 2, &noise, MemoryBasis::Z, CssSchedule::Bicycle)
-                    .is_err()
-            );
-        }
+    if let Ok(two) = two
+        && two.k() > 0
+    {
+        assert!(
+            css_code_memory_with(&two, 2, &noise, MemoryBasis::Z, CssSchedule::Bicycle).is_err()
+        );
     }
 }

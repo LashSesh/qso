@@ -20,8 +20,8 @@ simulates them with quantum trajectories beyond the reach of density
 matrices, and it mitigates their errors: readout mitigation, zero-noise
 extrapolation, probabilistic error cancellation and Pauli twirling, with a
 standard error on every estimate. For chemistry and physics it computes
-Hartree–Fock from a molecule's geometry (STO-3G and 6-31G, hydrogen to
-neon) or reads FCIDUMP files, maps the molecules to qubits, solves them with UCCSD and
+Hartree–Fock from a molecule's geometry (STO-3G, 6-31G, 6-31G* and
+cc-pVDZ, hydrogen to argon) or reads FCIDUMP files, maps the molecules to qubits, solves them with UCCSD and
 ADAPT-VQE against full CI, finds excited states, builds Trotter–Suzuki
 circuits with rigorous error bounds, and estimates amplitudes with
 Heisenberg-limited scaling. It also simulates continuous- and discrete-time quantum walks on
@@ -80,7 +80,7 @@ or by the benchmark report you can run yourself.
 | **Algorithms** | VQE with seeded parallel restarts; QAOA for weighted MaxCut (fast diagonal simulation, exact optimum by enumeration, INTERP layer-wise initialisation); Grover search with any number of marked items; QFT; phase estimation; variational classifier with data re-uploading; graph classifier with trainable QAOA-type layers |
 | **Excited states and geometry** | VQD and SSVQE; exact state derivatives, quantum Fisher information, quantum natural gradient; variational imaginary-time evolution |
 | **Hamiltonian simulation** | Pauli rotations for any string; Trotter–Suzuki circuits of order 1, 2, 4, 6, … with rigorous error bounds (commutator bounds for orders 1 and 2); qDRIFT with its error bound |
-| **Electronic structure** | Fermionic operators with normal ordering; Jordan–Wigner, parity (with two-qubit reduction) and Bravyi–Kitaev mappings; Gaussian integrals (STO-3G, 6-31G; H to Ne), restricted and unrestricted Hartree–Fock with DIIS, frozen-core active spaces; molecular integrals from FCIDUMP files (H₂, LiH, BeH₂ bundled with PySCF reference energies); Hartree–Fock states; full CI; UCCSD, k-UpCCGSD and ADAPT-VQE |
+| **Electronic structure** | Fermionic operators with normal ordering; Jordan–Wigner, parity (with two-qubit reduction) and Bravyi–Kitaev mappings; Gaussian integrals over shells up to g, spherical or Cartesian (STO-3G, 6-31G, 6-31G*, cc-pVDZ; H to Ar), restricted, unrestricted and restricted open-shell Hartree–Fock with DIIS, frozen-core active spaces (also of open shells); molecular integrals from FCIDUMP files (H₂, LiH, BeH₂ bundled with PySCF reference energies); Hartree–Fock states; full CI; UCCSD, k-UpCCGSD and ADAPT-VQE |
 | **Optimisation and estimation** | QUBO and Ising problems with exact enumeration; QAOA for any diagonal cost with X, XY (Hamming-weight conserving) and warm-start mixers; canonical, iterative and maximum-likelihood amplitude estimation |
 | **Models** | Transverse-field Ising, XXZ Heisenberg, MaxCut cost operator, H₂ / STO-3G (2 qubits, with full-CI reference), any molecule given as an FCIDUMP file |
 | **Optimisers** | L-BFGS with strong-Wolfe line search, Adam, gradient descent with momentum, Nelder–Mead, SPSA |
@@ -130,6 +130,8 @@ or by the benchmark report you can run yourself.
 | Full CI of H₂ / LiH / BeH₂ (STO-3G), identical under Jordan–Wigner, parity, Bravyi–Kitaev and the reduced parity encoding | −1.1373060 / −7.8824019 / −15.5951824 Ha | PySCF full CI, to 10⁻⁸ Ha |
 | Hartree–Fock of H₂O from its geometry (6-31G), and full CI with a frozen core in 8 orbitals | −75.98397447 / −76.02472563 Ha | PySCF RHF and CASCI, to 10⁻¹⁰ / 10⁻⁹ Ha |
 | Unrestricted Hartree–Fock of OH (6-31G) | −75.36316825 Ha, ⟨S²⟩ = 0.75377 | PySCF UHF, to 10⁻¹⁰ Ha |
+| Hartree–Fock with d functions: H₂O / HCl / H₂S (cc-pVDZ); ROHF of triplet O₂ (cc-pVDZ) and CASCI in its orbitals (12 electrons, 8 orbitals) | −76.02677205 / −460.08944519 / −398.69453740; −149.60808447, −149.68777966 Ha | PySCF RHF, ROHF and CASCI, to 10⁻⁹ Ha |
+| Gaussian integrals with d, f and g shells (6-31G*, cc-pVDZ, spherical and Cartesian; H to Ar) | largest difference 2.6·10⁻¹³ | PySCF 2.14 |
 | LiH on 10 qubits: UCCSD (92 parameters) / ADAPT-VQE (30 operators), error vs. full CI | 1.1·10⁻⁵ / 1.1·10⁻⁵ Ha | chemical accuracy 1.6·10⁻³ Ha |
 | VQD, all four levels of H₂ (Sz = 0) | equal to full CI to 10⁻⁶ Ha | PySCF full CI |
 | Trotter–Suzuki on a 4-qubit Heisenberg chain: error ratio when the steps double, orders 1 / 2 / 4 | 2.01 / 4.00 / 16.06, always below the error bound | 2, 4, 16 |
@@ -474,7 +476,7 @@ Know its boundaries:
 | Product-formula bound, order ≥ 4 | rigorous but loose | Falls only as `r⁻²` with the steps until they are short; the actual error falls as `r⁻⁴` |
 
 Not included: GPU acceleration, tensor-network simulation, simulation of noisy Clifford circuits at scale (planned for 1.8),
-molecular integrals beyond STO-3G and 6-31G or beyond neon (QSO reads such
+molecular integrals in larger basis sets (triple zeta and beyond) or beyond argon (QSO reads such
 integrals from FCIDUMP files written by a quantum-chemistry code), and
 submission to quantum hardware. To run on hardware, export a circuit or
 program to OpenQASM 2 or 3 and submit it with the vendor's SDK.

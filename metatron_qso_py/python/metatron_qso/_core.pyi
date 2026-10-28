@@ -1466,9 +1466,18 @@ class Molecule:
 
 @final
 class AoIntegrals:
-    def __new__(cls, molecule: Molecule, basis: str = "sto-3g") -> AoIntegrals: ...
+    def __new__(
+        cls,
+        molecule: Molecule,
+        basis: str = "sto-3g",
+        harmonics: Literal["spherical", "cartesian"] = "spherical",
+    ) -> AoIntegrals: ...
     @property
     def n_functions(self) -> int: ...
+    @property
+    def basis(self) -> str: ...
+    @property
+    def harmonics(self) -> str: ...
     @property
     def overlap(self) -> RealArray: ...
     @property
@@ -1513,6 +1522,8 @@ def hartree_fock(
     molecule: Molecule,
     basis: str = "sto-3g",
     unrestricted: bool = False,
+    restricted_open: bool = False,
+    harmonics: Literal["spherical", "cartesian"] = "spherical",
     max_iterations: int = 200,
     energy_tolerance: float = 1e-10,
     gradient_tolerance: float = 1e-8,

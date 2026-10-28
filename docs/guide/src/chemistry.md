@@ -94,10 +94,29 @@ STO-3G:
 `Molecule` takes the atoms in ångström, the total charge and the spin
 multiplicity. `AoIntegrals` evaluates the overlap, kinetic,
 nuclear-attraction and electron-repulsion integrals over contracted
-Cartesian Gaussians by the McMurchie–Davidson scheme, in the STO-3G or
-6-31G basis (hydrogen to neon, at most 64 basis functions; functions in
-PySCF's order). `hartree_fock` solves the restricted (closed-shell) or
-unrestricted Hartree–Fock equations with DIIS. The iterations start from
+Gaussians by the McMurchie–Davidson scheme, for shells up to g:
+
+- **Basis sets.** STO-3G, 6-31G, 6-31G* (d functions on Li to Ar) and
+  cc-pVDZ (p functions on H and He, d on Li to Ar), for hydrogen to argon.
+  The data come from PySCF's copy of the Basis Set Exchange
+  (`scripts/generate_basis_data.py`).
+- **Limits.** At most 64 basis functions (and 80 Cartesian components
+  behind them).
+- **Order.** Functions come in PySCF's order.
+- **Harmonics.** d and higher shells are spherical by default: real
+  solid harmonics, `m = −l, …, l`, with PySCF's signs. With
+  `harmonics="cartesian"` they are the monomials `xx, xy, xz, yy, yz, zz`,
+  each normalised to one; PySCF leaves its Cartesian d components with
+  norms 4π/5 and 4π/15, so its integrals differ from QSO's by these
+  factors.
+
+`hartree_fock` solves the restricted (closed-shell), unrestricted
+(`unrestricted=True`) or restricted open-shell (`restricted_open=True`)
+Hartree–Fock equations with DIIS. ROHF diagonalises Roothaan's
+effective Fock matrix with PySCF's blocks: ½(F_α + F_β) within the
+closed, open and virtual spaces and between closed and virtual orbitals,
+F_β between closed and open, F_α between open and virtual. Its energy
+does not depend on this choice; its orbital energies do. The iterations start from
 a superposition of atomic densities: every atom's spherically averaged
 Hartree–Fock density in the same basis, like PySCF's `atom` guess.
 Hartree–Fock finds a stationary point near its start, not always the
@@ -114,8 +133,8 @@ raises an error. Bases with nearly dependent functions (atoms closer than
 restricted orbitals. The lowest `frozen` orbitals stay doubly occupied and
 move into the core energy; `active` orbitals are kept. The result is a
 `MolecularIntegrals`, so everything above applies, and `to_fcidump()`
-writes it. Open shells have no restricted orbitals, so their Hamiltonians
-cannot be built this way (QSO has no restricted open-shell method):
+writes it. For an open shell this needs the restricted orbitals of ROHF
+(UHF's two sets of orbitals give no single Hamiltonian):
 
 ```python
 import metatron_qso as q
@@ -127,6 +146,10 @@ print(hf.energy, mo.fci_energies()[0])                 # −75.98397, −76.0247
 oh = q.hartree_fock(q.Molecule("O 0 0 0; H 0 0 0.97", multiplicity=2),
                     "6-31g", unrestricted=True)
 print(oh.energy, oh.s_squared())                       # −75.36317, 0.75377
+o2 = q.hartree_fock(q.Molecule("O 0 0 0; O 0 0 1.2075", multiplicity=3),
+                    "cc-pvdz", restricted_open=True)
+cas = o2.molecular_integrals(frozen=2, active=8)        # 12 electrons in 8 orbitals
+print(o2.energy, cas.fci_energies()[0])                # −149.60808, −149.68778
 ```
 
 The tests compare with PySCF 2.14:
@@ -139,6 +162,19 @@ The tests compare with PySCF 2.14:
   10⁻¹⁰ Ha, ⟨S²⟩ to 10⁻⁷.
 - Full CI and frozen-core active spaces (CASCI) agree to 10⁻⁸ Ha, and the
   FCIDUMP files of H₂, LiH and BeH₂ are reproduced from their geometries.
+- With d functions and through the third row, RHF of H₂O (cc-pVDZ, and
+  6-31G* with Cartesian shells), NH₃ (6-31G*), HCl and H₂S (cc-pVDZ), UHF
+  and ROHF of triplet O₂ (cc-pVDZ), and ROHF of NH₂ (6-31G*) agree to
+  10⁻⁹ Ha. CASCI in the ROHF orbitals of O₂ (12 electrons in 8 orbitals)
+  and NH₂ agrees to 10⁻⁹ Ha.
+- Integrals of f and g shells agree with PySCF (sums over every
+  integral to 10⁻¹¹ relative, single integrals to 10⁻¹³), spherical and
+  Cartesian.
+- The cross-validation compares every integral of H₂O, NH₃, CO and F₂ in
+  all four bases, of HCl, H₂S, SiH₄ and NaF, and of two molecules with
+  Cartesian shells: the largest difference is 2.6·10⁻¹³. RHF, UHF, ROHF
+  and CASCI energies, ROHF ones up to 12 active electrons, agree to
+  2.4·10⁻¹⁰ Ha.
 
 PySCF converts ångström with the CODATA 2010 bohr, QSO with CODATA 2018:
 the same input in ångström gives geometries 3·10⁻¹¹ apart (relative) and

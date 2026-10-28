@@ -1422,7 +1422,7 @@ fn permutations(k: usize, a: &mut [u8; 6], out: &mut Vec<[u8; 6]>) {
     }
     for i in 0..k {
         permutations(k - 1, a, out);
-        if k % 2 == 0 {
+        if k.is_multiple_of(2) {
             a.swap(i, k - 1);
         } else {
             a.swap(0, k - 1);

@@ -4,8 +4,8 @@
 use metatron_qso::C64;
 use metatron_qso::chemistry::adapt::{AdaptOptions, adapt_vqe_molecule};
 use metatron_qso::chemistry::{
-    AoIntegrals, Basis, FermionOperator, Guess, Mapping, MolecularIntegrals, Molecule,
-    QubitEncoding, ScfOptions, ScfResult, k_upccgsd, rhf, uccsd, uhf,
+    AoIntegrals, Basis, FermionOperator, Guess, Harmonics, Mapping, MolecularIntegrals, Molecule,
+    QubitEncoding, ScfOptions, ScfResult, k_upccgsd, rhf, rohf, uccsd, uhf,
 };
 use metatron_qso::quantum::QubitOperator;
 use numpy::ndarray::{Array2, Array4};
@@ -447,7 +447,7 @@ pub struct PyMolecule {
 #[pymethods]
 impl PyMolecule {
     /// From `"H 0 0 0; H 0 0 0.735"` (element and position in ångström
-    /// per atom, separated by `;` or new lines), H to Ne.
+    /// per atom, separated by `;` or new lines), H to Ar.
     #[new]
     #[pyo3(signature = (atoms, charge = 0, multiplicity = 1))]
     fn new(atoms: &str, charge: i32, multiplicity: u32) -> PyResult<Self> {
@@ -523,15 +523,33 @@ fn matrix<'py>(
 
 #[pymethods]
 impl PyAoIntegrals {
-    /// The integrals of `molecule` in `basis` (`"sto-3g"` or `"6-31g"`).
+    /// The integrals of `molecule` in `basis` (`"sto-3g"`, `"6-31g"`,
+    /// `"6-31g*"` or `"cc-pvdz"`), with `"spherical"` (default, as PySCF)
+    /// or `"cartesian"` d shells.
     #[new]
-    #[pyo3(signature = (molecule, basis = "sto-3g"))]
-    fn new(py: Python<'_>, molecule: &PyMolecule, basis: &str) -> PyResult<Self> {
+    #[pyo3(signature = (molecule, basis = "sto-3g", harmonics = "spherical"))]
+    fn new(py: Python<'_>, molecule: &PyMolecule, basis: &str, harmonics: &str) -> PyResult<Self> {
         let basis = Basis::from_name(basis).raise()?;
+        let harmonics = parse_harmonics(harmonics)?;
         let mol = &molecule.inner;
-        py.detach(|| AoIntegrals::compute(mol, basis))
+        py.detach(|| AoIntegrals::compute_with(mol, basis, harmonics))
             .raise()
             .map(|inner| Self { inner })
+    }
+
+    /// The basis set's name.
+    #[getter]
+    fn basis(&self) -> &'static str {
+        self.inner.basis().name()
+    }
+
+    /// `"spherical"` or `"cartesian"`.
+    #[getter]
+    fn harmonics(&self) -> &'static str {
+        match self.inner.harmonics() {
+            Harmonics::Cartesian => "cartesian",
+            _ => "spherical",
+        }
     }
 
     #[getter]
@@ -691,13 +709,26 @@ impl PyHartreeFock {
     }
 }
 
-/// Restricted (default) or unrestricted Hartree–Fock of `molecule` in
-/// `basis`, with DIIS; `integrals` reuses integrals computed before.
+fn parse_harmonics(name: &str) -> PyResult<Harmonics> {
+    match name {
+        "spherical" => Ok(Harmonics::Spherical),
+        "cartesian" => Ok(Harmonics::Cartesian),
+        other => Err(invalid(format!(
+            "unknown harmonics '{other}' (expected spherical or cartesian)"
+        ))),
+    }
+}
+
+/// Restricted (default), unrestricted or restricted open-shell
+/// (`restricted_open=True`) Hartree–Fock of `molecule` in `basis`, with
+/// DIIS; `integrals` reuses integrals computed before.
 #[pyfunction]
 #[pyo3(signature = (
     molecule,
     basis = "sto-3g",
     unrestricted = false,
+    restricted_open = false,
+    harmonics = "spherical",
     max_iterations = 200,
     energy_tolerance = 1e-10,
     gradient_tolerance = 1e-8,
@@ -713,6 +744,8 @@ fn hartree_fock(
     molecule: &PyMolecule,
     basis: &str,
     unrestricted: bool,
+    restricted_open: bool,
+    harmonics: &str,
     max_iterations: usize,
     energy_tolerance: f64,
     gradient_tolerance: f64,
@@ -723,6 +756,10 @@ fn hartree_fock(
     integrals: Option<Py<PyAoIntegrals>>,
 ) -> PyResult<PyHartreeFock> {
     let basis = Basis::from_name(basis).raise()?;
+    let harmonics = parse_harmonics(harmonics)?;
+    if unrestricted && restricted_open {
+        return Err(invalid("choose unrestricted or restricted_open, not both"));
+    }
     let guess = match guess {
         "atoms" => Guess::Atoms,
         "core" => Guess::Core,
@@ -742,9 +779,11 @@ fn hartree_fock(
         level_shift,
     };
     if let Some(given) = &integrals
-        && given.get().inner.basis() != basis
+        && (given.get().inner.basis() != basis || given.get().inner.harmonics() != harmonics)
     {
-        return Err(invalid("the integrals were computed in another basis"));
+        return Err(invalid(
+            "the integrals were computed in another basis or with other harmonics",
+        ));
     }
     let mol = &molecule.inner;
     let (inner, computed) = py
@@ -752,7 +791,7 @@ fn hartree_fock(
             || -> metatron_qso::Result<(ScfResult, Option<AoIntegrals>)> {
                 let computed = match &integrals {
                     Some(_) => None,
-                    None => Some(AoIntegrals::compute(mol, basis)?),
+                    None => Some(AoIntegrals::compute_with(mol, basis, harmonics)?),
                 };
                 let ints = match (&integrals, &computed) {
                     (Some(p), _) => &p.get().inner,
@@ -761,6 +800,8 @@ fn hartree_fock(
                 };
                 let inner = if unrestricted {
                     uhf(mol, ints, &options)?
+                } else if restricted_open {
+                    rohf(mol, ints, &options)?
                 } else {
                     rhf(mol, ints, &options)?
                 };

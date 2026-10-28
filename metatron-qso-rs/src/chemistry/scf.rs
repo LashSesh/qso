@@ -185,7 +185,7 @@ impl ScfResult {
         if !self.is_restricted() {
             return Err(QsoError::invalid(
                 "scf",
-                "molecular integrals need restricted (closed-shell) orbitals; open shells are not supported",
+                "molecular integrals need one set of orbitals (RHF or ROHF), not UHF",
             ));
         }
         if !(ints.basis() == self.source.basis

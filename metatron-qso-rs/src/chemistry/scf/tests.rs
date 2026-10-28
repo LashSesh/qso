@@ -275,3 +275,126 @@ fn oscillating_open_shells_converge_with_a_level_shift() {
     };
     assert!(uhf(&mol, &ints, &bad).is_err());
 }
+
+#[test]
+fn d_functions_and_open_shells_match_pyscf() {
+    // PySCF 2.14 (conv_tol 1e-12, geometries in bohr): RHF, UHF and ROHF
+    // with d functions, spherical and Cartesian, through the third row.
+    const NH3: &str = "N 0 0 0.1; H 0.94 0 -0.27; H -0.47 0.814 -0.27; H -0.47 -0.814 -0.27";
+    const HCL: &str = "H 0 0 0; Cl 0 0 1.2746";
+    const H2S: &str = "S 0 0 0.1030; H 0 0.9616 -0.8239; H 0 -0.9616 -0.8239";
+    const O2: &str = "O 0 0 0; O 0 0 1.2075";
+    const NH2: &str = "N 0 0 0; H 0 0.8 0.6; H 0 -0.8 0.6";
+    use crate::chemistry::integrals::Harmonics::{Cartesian, Spherical};
+    type Method = fn(&Molecule, &AoIntegrals, &ScfOptions) -> Result<ScfResult>;
+    let cases: [(&str, Basis, _, u32, Method, f64, usize); 8] = [
+        (
+            H2O,
+            Basis::CcPvdz,
+            Spherical,
+            1,
+            rhf,
+            -76.02677205339262,
+            24,
+        ),
+        (
+            H2O,
+            Basis::SixThirtyOneGStar,
+            Cartesian,
+            1,
+            rhf,
+            -76.01050498825595,
+            19,
+        ),
+        (
+            NH3,
+            Basis::SixThirtyOneGStar,
+            Spherical,
+            1,
+            rhf,
+            -56.18354910977892,
+            20,
+        ),
+        (
+            HCL,
+            Basis::CcPvdz,
+            Spherical,
+            1,
+            rhf,
+            -460.08944519174247,
+            23,
+        ),
+        (
+            H2S,
+            Basis::CcPvdz,
+            Spherical,
+            1,
+            rhf,
+            -398.6945373958902,
+            28,
+        ),
+        (
+            O2,
+            Basis::CcPvdz,
+            Spherical,
+            3,
+            rohf,
+            -149.60808446615613,
+            28,
+        ),
+        (
+            O2,
+            Basis::CcPvdz,
+            Spherical,
+            3,
+            uhf,
+            -149.62775750368843,
+            28,
+        ),
+        (
+            NH2,
+            Basis::SixThirtyOneGStar,
+            Spherical,
+            2,
+            rohf,
+            -55.552417572360966,
+            18,
+        ),
+    ];
+    for (atoms, basis, harmonics, multiplicity, method, expected, n) in cases {
+        let mol = Molecule::from_atoms(atoms, 0, multiplicity).unwrap();
+        let ints = AoIntegrals::compute_with(&mol, basis, harmonics).unwrap();
+        assert_eq!(ints.n_functions(), n);
+        let r = method(&mol, &ints, &ScfOptions::default()).unwrap();
+        assert!(
+            (r.energy - expected).abs() < 1e-9,
+            "{atoms} {basis:?}: {} vs {expected}",
+            r.energy
+        );
+    }
+}
+
+#[test]
+fn casci_in_open_shell_orbitals_matches_pyscf() {
+    // `mcscf.CASCI(rohf, ncas, (nα, nβ))` of PySCF 2.14: the active-space
+    // Hamiltonian of ROHF orbitals, lowest state of that Sz.
+    const O2: &str = "O 0 0 0; O 0 0 1.2075";
+    const NH2: &str = "N 0 0 0; H 0 0.8 0.6; H 0 -0.8 0.6";
+    for (atoms, basis, multiplicity, frozen, active, expected) in [
+        (O2, Basis::CcPvdz, 3, 2, 8, -149.68777965956423),
+        (NH2, Basis::SixThirtyOneGStar, 2, 2, 6, -55.561662593115784),
+        (H2O, Basis::CcPvdz, 1, 1, 6, -76.03283446073618),
+    ] {
+        let mol = Molecule::from_atoms(atoms, 0, multiplicity).unwrap();
+        let ints = AoIntegrals::compute(&mol, basis).unwrap();
+        let r = rohf(&mol, &ints, &ScfOptions::default()).unwrap();
+        assert!(r.is_restricted());
+        let sz = (multiplicity - 1) as f64 / 2.0;
+        assert!((r.s_squared() - sz * (sz + 1.0)).abs() < 1e-12);
+        let mo = r.molecular_integrals(&ints, frozen, Some(active)).unwrap();
+        // The determinant of the orbitals has the SCF energy.
+        assert!((mo.hartree_fock_energy() - r.energy).abs() < 1e-9);
+        let e = mo.fci_energies(1).unwrap()[0];
+        assert!((e - expected).abs() < 1e-9, "{atoms}: {e} vs {expected}");
+    }
+}

@@ -77,3 +77,29 @@ def test_guesses_and_level_shift():
         q.hartree_fock(n2, integrals=q.AoIntegrals(n2, "6-31g"))
     with pytest.raises(ValueError):
         q.hartree_fock(q.Molecule("H 0 0 0; H 0 0 0.7"), integrals=q.AoIntegrals(n2))
+
+
+def test_d_functions_and_open_shells() -> None:
+    # PySCF 2.14 references, given the geometries in bohr as QSO converts
+    # them (see the Rust tests).
+    h2o = q.Molecule(H2O)
+    assert abs(q.hartree_fock(h2o, "cc-pvdz").energy - -76.02677205339262) < 1e-8
+    cart = q.hartree_fock(h2o, "6-31g*", harmonics="cartesian")
+    assert abs(cart.energy - -76.01050498825595) < 1e-8
+    assert q.AoIntegrals(h2o, "6-31g*").n_functions == 18
+    assert q.AoIntegrals(h2o, "6-31g*", "cartesian").n_functions == 19
+    o2 = q.Molecule("O 0 0 0; O 0 0 1.2075", multiplicity=3)
+    rohf = q.hartree_fock(o2, "cc-pvdz", restricted_open=True)
+    assert abs(rohf.energy - -149.60808446615613) < 1e-8
+    casci = rohf.molecular_integrals(frozen=2, active=8).fci_energies(1)[0]
+    assert abs(casci - -149.68777965956423) < 1e-8
+    uhf = q.hartree_fock(o2, "cc-pvdz", unrestricted=True)
+    assert uhf.energy < rohf.energy
+    hcl = q.hartree_fock(q.Molecule("H 0 0 0; Cl 0 0 1.2746"), "cc-pvdz")
+    assert abs(hcl.energy - -460.08944519174247) < 1e-8
+    with pytest.raises(ValueError):
+        q.hartree_fock(o2, unrestricted=True, restricted_open=True)
+    with pytest.raises(ValueError):
+        q.AoIntegrals(h2o, "6-31g*", "pure")  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        q.hartree_fock(h2o, "6-31g*", integrals=q.AoIntegrals(h2o, "6-31g*", "cartesian"))

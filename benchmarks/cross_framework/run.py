@@ -763,26 +763,41 @@ def chemistry_vs_pyscf() -> dict:
     import metatron_qso as q
     from pyscf import gto, mcscf, scf
 
-    def pyscf_molecule(m, basis):
-        symbols = ["H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne"]
+    symbols = ["H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne",
+               "Na", "Mg", "Al", "Si", "P", "S", "Cl", "Ar"]
+
+    def pyscf_molecule(m, basis, cart=False):
         atoms = [(symbols[z - 1], tuple(r)) for z, r in zip(m.charges, m.positions)]
-        return gto.M(atom=atoms, basis=basis, unit="Bohr", cart=True, charge=m.charge, spin=m.multiplicity - 1, verbose=0)
+        return gto.M(atom=atoms, basis=basis, unit="Bohr", cart=cart, charge=m.charge, spin=m.multiplicity - 1, verbose=0)
 
     water = "O 0 0 0.1173; H 0 0.7572 -0.4692; H 0 -0.7572 -0.4692"
     ammonia = "N 0.1 -0.05 0.12; H 0.9377 -0.3816 0.0; H -0.4689 -0.1 0.8121; H -0.4689 0.7 -0.8121"
     integral_err = 0.0
-    for atoms in (water, ammonia, "C 0 0 0; O 0 0 1.128", "F 0 0 0; F 0.3 0.2 1.41"):
-        for basis in ("sto-3g", "6-31g"):
-            m = q.Molecule(atoms)
-            mol = pyscf_molecule(m, basis)
-            ours = q.AoIntegrals(m, basis)
-            for name, theirs in (
-                ("overlap", mol.intor("int1e_ovlp")),
-                ("kinetic", mol.intor("int1e_kin")),
-                ("nuclear", mol.intor("int1e_nuc")),
-                ("eri", mol.intor("int2e")),
-            ):
-                integral_err = max(integral_err, float(np.max(np.abs(getattr(ours, name) - theirs))))
+    cases = [(a, b, "spherical") for a in (water, ammonia, "C 0 0 0; O 0 0 1.128", "F 0 0 0; F 0.3 0.2 1.41")
+             for b in ("sto-3g", "6-31g", "6-31g*", "cc-pvdz")]
+    cases += [
+        (water, "6-31g*", "cartesian"),
+        (ammonia, "cc-pvdz", "cartesian"),
+        ("H 0 0 0; Cl 0 0 1.2746", "cc-pvdz", "spherical"),
+        ("S 0 0 0.1030; H 0 0.9616 -0.8239; H 0 -0.9616 -0.8239", "6-31g*", "spherical"),
+        ("Si 0 0 0; H 0.86 0.86 0.86; H -0.86 -0.86 0.86; H -0.86 0.86 -0.86; H 0.86 -0.86 -0.86", "sto-3g", "spherical"),
+        ("Na 0 0 0; F 0 0 1.93", "6-31g", "spherical"),
+    ]
+    for atoms, basis, harmonics in cases:
+        m = q.Molecule(atoms)
+        mol = pyscf_molecule(m, basis, cart=harmonics == "cartesian")
+        ours = q.AoIntegrals(m, basis, harmonics)
+        # PySCF's Cartesian d (and higher) components are not normalised to
+        # one; QSO's are.
+        scale = 1 / np.sqrt(np.diag(mol.intor("int1e_ovlp")))
+        two = np.outer(scale, scale)
+        for name, theirs in (
+            ("overlap", mol.intor("int1e_ovlp") * two),
+            ("kinetic", mol.intor("int1e_kin") * two),
+            ("nuclear", mol.intor("int1e_nuc") * two),
+            ("eri", mol.intor("int2e") * np.einsum("i,j,k,l->ijkl", scale, scale, scale, scale)),
+        ):
+            integral_err = max(integral_err, float(np.max(np.abs(getattr(ours, name) - theirs))))
     energy_err = 0.0
     for atoms, charge, mult, basis in (
         (water, 0, 1, "6-31g"),
@@ -791,6 +806,11 @@ def chemistry_vs_pyscf() -> dict:
         ("O 0 0 0; H 0 0 0.97", 0, 2, "6-31g"),
         ("C 0 0 0.1; H 0 0.99 -0.5; H 0 -0.99 -0.5", 0, 3, "6-31g"),
         ("N 0 0 0; O 0 0 1.151", 0, 2, "sto-3g"),
+        (water, 0, 1, "cc-pvdz"),
+        (ammonia, 0, 1, "6-31g*"),
+        ("H 0 0 0; Cl 0 0 1.2746", 0, 1, "cc-pvdz"),
+        ("S 0 0 0.1030; H 0 0.9616 -0.8239; H 0 -0.9616 -0.8239", 0, 1, "cc-pvdz"),
+        ("O 0 0 0; O 0 0 1.2075", 0, 3, "cc-pvdz"),
     ):
         m = q.Molecule(atoms, charge, mult)
         mol = pyscf_molecule(m, basis)
@@ -799,12 +819,34 @@ def chemistry_vs_pyscf() -> dict:
         theirs = mf.kernel()
         ours = q.hartree_fock(m, basis, unrestricted=mult > 1)
         energy_err = max(energy_err, abs(ours.energy - theirs))
-        if mult == 1:
+        # CASCI with one frozen orbital and 6 active (n − 2 electrons fit
+        # up to 14 electrons).
+        if mult == 1 and mol.nelectron <= 14:
             cas = mcscf.CASCI(mf, 6, mol.nelectron - 2)
             cas.fcisolver.conv_tol = 1e-12
             theirs_cas = cas.kernel()[0]
             ours_cas = ours.molecular_integrals(frozen=1, active=6).fci_energies()[0]
             energy_err = max(energy_err, abs(ours_cas - theirs_cas))
+    # Restricted open shells and CASCI in their orbitals.
+    for atoms, mult, basis, frozen, active in (
+        ("O 0 0 0; O 0 0 1.2075", 3, "cc-pvdz", 2, 8),
+        ("N 0 0 0; H 0 0.8 0.6; H 0 -0.8 0.6", 2, "6-31g*", 2, 6),
+        ("O 0 0 0; H 0 0 0.97", 2, "cc-pvdz", 1, 6),
+    ):
+        m = q.Molecule(atoms, 0, mult)
+        mol = pyscf_molecule(m, basis)
+        mf = scf.ROHF(mol)
+        mf.conv_tol = 1e-12
+        theirs = mf.kernel()
+        ours = q.hartree_fock(m, basis, restricted_open=True)
+        energy_err = max(energy_err, abs(ours.energy - theirs))
+        n_active = mol.nelectron - 2 * frozen
+        na = (n_active + mult - 1) // 2
+        cas = mcscf.CASCI(mf, active, (na, n_active - na))
+        cas.fcisolver.conv_tol = 1e-12
+        theirs_cas = cas.kernel()[0]
+        ours_cas = ours.molecular_integrals(frozen=frozen, active=active).fci_energies()[0]
+        energy_err = max(energy_err, abs(ours_cas - theirs_cas))
     return {
         "integral_max_difference": integral_err,
         "energy_max_difference": energy_err,
