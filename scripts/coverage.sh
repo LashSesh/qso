@@ -10,7 +10,8 @@
 #   scripts/coverage.sh OUT_DIR [--html]
 #
 # writes OUT_DIR/summary.json (cargo llvm-cov --json --summary-only),
-# OUT_DIR/coverage.txt and, with --html, the HTML report in OUT_DIR.
+# OUT_DIR/coverage.txt and, with --html, the HTML report in OUT_DIR/html
+# and OUT_DIR/index.html, which leads to it.
 set -euo pipefail
 
 out=${1:?usage: scripts/coverage.sh OUT_DIR [--html]}
@@ -60,5 +61,10 @@ cargo llvm-cov report --release --branch --ignore-filename-regex "$ignore" \
 if [ "$html" = "--html" ]; then
   cargo llvm-cov report --release --branch --ignore-filename-regex "$ignore" \
     --html --output-dir "$out"
+  cat > "$out/index.html" <<'HTML'
+<!doctype html><meta charset="utf-8"><title>QSO coverage</title>
+<meta http-equiv="refresh" content="0; url=html/index.html">
+<a href="html/index.html">QSO coverage report</a>
+HTML
 fi
 exit $status

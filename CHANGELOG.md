@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Documentation site: the guide of 1.7.0 at `/1.7.0/` was missing. Its
+  Rust tutorials are rendered from the tag's examples, which the build of
+  a release did not do, so mdBook failed and the version was left out.
+  The coverage report at `/coverage/` now has an index page (the report
+  itself is at `/coverage/html/`). The documentation build a release
+  starts no longer cancels the one of its merge on `main` but waits for
+  it; the cancelled build had left the site without a deployment.
+
 ## [1.7.0] — 2026-10-28
 
 Milestones 1.14 to 1.28 of the [roadmap](docs/ROADMAP.md), its third to
