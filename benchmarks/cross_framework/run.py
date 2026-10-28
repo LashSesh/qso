@@ -219,6 +219,7 @@ def correctness(quick: bool) -> dict:
         },
         "qec_vs_stim": qec_vs_stim(quick),
         "bposd_vs_ldpc": bposd_vs_ldpc(quick),
+        "correlated_and_distance_vs_stim": correlated_and_distance_vs_stim(quick),
         "chemistry_vs_pyscf": chemistry_vs_pyscf(),
     }
 
@@ -545,6 +546,127 @@ def bposd_vs_ldpc(quick: bool) -> dict:
     return out
 
 
+def stim_parts(dem) -> dict:
+    """A Stim detector error model's errors as {sorted parts: probability},
+    each part (detectors, observable mask)."""
+    out: dict = {}
+    for inst in dem.flattened():
+        if inst.type != "error":
+            continue
+        p = inst.args_copy()[0]
+        parts = [[[], 0]]
+        for t in inst.targets_copy():
+            if t.is_separator():
+                parts.append([[], 0])
+            elif t.is_relative_detector_id():
+                parts[-1][0].append(t.val)
+            elif t.is_logical_observable_id():
+                parts[-1][1] |= 1 << t.val
+        key = tuple(sorted((tuple(sorted(d)), o) for d, o in parts if d or o))
+        e = out.get(key, 0.0)
+        out[key] = e * (1 - p) + p * (1 - e)
+    return out
+
+
+def correlated_and_distance_vs_stim(quick: bool) -> dict:
+    """QSO's decomposition of Stim's generated circuits against Stim's
+    decomposed models, error by error with their parts; two-pass matching
+    against PyMatching with `enable_correlations=True`, shot by shot on the
+    same model (Stim's) and syndromes; circuit distances against Stim's
+    `shortest_graphlike_error` (graph-like, exact on both sides) and
+    `search_for_undetectable_logical_errors` (a heuristic search)."""
+    import pymatching
+    import stim
+
+    import metatron_qso as q
+
+    shots = 50_000 if quick else 500_000
+    noise = dict(
+        after_clifford_depolarization=0.006,
+        before_round_data_depolarization=0.006,
+        before_measure_flip_probability=0.006,
+        after_reset_flip_probability=0.006,
+    )
+    cases = {
+        "stim rotated_memory_z d=5": stim.Circuit.generated("surface_code:rotated_memory_z", distance=5, rounds=5, **noise),
+        "stim rotated_memory_x d=5": stim.Circuit.generated("surface_code:rotated_memory_x", distance=5, rounds=5, **noise),
+        "stim unrotated_memory_z d=3": stim.Circuit.generated("surface_code:unrotated_memory_z", distance=3, rounds=3, **noise),
+        "stim repetition_code:memory d=7": stim.Circuit.generated("repetition_code:memory", distance=7, rounds=7, **noise),
+    }
+    out = {}
+    for name, sc in cases.items():
+        qc = q.DetectorCircuit.from_stim(str(sc))
+        dem = sc.detector_error_model(decompose_errors=True)
+        theirs = stim_parts(dem)
+        ours: dict = {}
+        for p, parts in qc.correlated_error_model().errors:
+            key = tuple(sorted((tuple(d), o) for d, o in parts))
+            e = ours.get(key, 0.0)
+            ours[key] = e * (1 - p) + p * (1 - e)
+        keys = set(theirs) | set(ours)
+        both = [k for k in keys if k in theirs and k in ours]
+        # The same syndromes through both two-pass decoders, on Stim's model.
+        errors = [(p, [(list(d), o) for d, o in key]) for key, p in theirs.items()]
+        model = q.CorrelatedErrorModel(dem.num_detectors, errors, dem.num_observables)
+        det, obs = sc.compile_detector_sampler(seed=5).sample(shots, separate_observables=True)
+        truth = np.zeros(shots, dtype=np.uint64)
+        for k in range(obs.shape[1]):
+            truth |= obs[:, k].astype(np.uint64) << np.uint64(k)
+        def masks(bits: np.ndarray) -> np.ndarray:
+            m = np.zeros(shots, dtype=np.uint64)
+            for k in range(bits.shape[1]):
+                m |= bits[:, k].astype(np.uint64) << np.uint64(k)
+            return m
+        correlated = pymatching.Matching.from_detector_error_model(dem, enable_correlations=True)
+        plain = pymatching.Matching.from_detector_error_model(dem)
+        reference = masks(correlated.decode_batch(det, enable_correlations=True))
+        reference_plain = masks(plain.decode_batch(det))
+        mine = q.CorrelatedMatchingDecoder(model).decode_batch(det)
+        own = q.CorrelatedMatchingDecoder(qc.correlated_error_model()).decode_batch(det)
+        # Distances.
+        graphlike = len(sc.shortest_graphlike_error())
+        searched = len(
+            sc.search_for_undetectable_logical_errors(
+                dont_explore_detection_event_sets_with_size_above=4,
+                dont_explore_edges_with_degree_above=4,
+                dont_explore_edges_increasing_symptom_degree=False,
+            )
+        )
+        exact = q.circuit_distance(qc.detector_error_model())
+        out[name] = {
+            "error_mechanisms": len(theirs),
+            "decomposed_errors_only_one_side": len(keys) - len(both),
+            "decomposed_max_relative_probability_difference": max(
+                (abs(theirs[k] - ours[k]) / theirs[k] for k in both), default=0.0
+            ),
+            "shots": shots,
+            "logical_error_rate_pymatching": float(np.mean(reference_plain != truth)),
+            "logical_error_rate_pymatching_correlated": float(np.mean(reference != truth)),
+            "logical_error_rate_qso_correlated": float(np.mean(mine != truth)),
+            "logical_error_rate_qso_correlated_own_model": float(np.mean(own != truth)),
+            "correlated_disagreement_with_pymatching": float(np.mean(mine != reference)),
+            "graphlike_distance_stim": graphlike,
+            "graphlike_distance_qso": q.graphlike_distance(qc.detector_error_model(decompose=True)).distance,
+            "searched_distance_stim": searched,
+            "circuit_distance_qso": [exact.lower_bound, exact.upper_bound],
+        }
+    # QSO's colour code (errors flip three detectors) through Stim.
+    colour = q.css_code_memory(q.CssCode.color_code(5), 2, 0.001)
+    sc = stim.Circuit(colour.to_stim())
+    exact = q.circuit_distance(colour.detector_error_model())
+    out["qso colour d=5"] = {
+        "searched_distance_stim": len(
+            sc.search_for_undetectable_logical_errors(
+                dont_explore_detection_event_sets_with_size_above=6,
+                dont_explore_edges_with_degree_above=6,
+                dont_explore_edges_increasing_symptom_degree=False,
+            )
+        ),
+        "circuit_distance_qso": [exact.lower_bound, exact.upper_bound],
+    }
+    return out
+
+
 def gaussian_vs_thewalrus(rng) -> dict:
     """Hafnians, torontonians and Gaussian boson sampling against The Walrus."""
     import metatron_qso as q
@@ -711,6 +833,9 @@ TOLERANCES = {
     "bposd_min_sum_disagreement": 1e-3,
     "bposd_product_sum_disagreement": 1e-2,
     "bposd_circuit_disagreement": 1e-2,
+    # Two-pass matching: the first pass's shortest paths may break ties
+    # differently from PyMatching's, so a few shots reweight other edges.
+    "correlated_disagreement": 1e-3,
     # Same geometries in bohr: integrals to rounding, energies to the
     # convergence of both SCF codes.
     "integral": 1e-12,
@@ -774,6 +899,18 @@ def check(c: dict) -> list[str]:
             failures.append(f"detector error model of {name} differs from Stim's: {r}")
         if not r["prediction_disagreement"] <= TOLERANCES["bposd_circuit_disagreement"]:
             failures.append(f"BP+OSD predictions on {name} differ from ldpc's: {r}")
+    for name, r in c["correlated_and_distance_vs_stim"].items():
+        lower, upper = r["circuit_distance_qso"]
+        if lower != upper or upper > r["searched_distance_stim"]:
+            failures.append(f"circuit distance of {name} is not exact or exceeds Stim's search: {r}")
+        if "graphlike_distance_stim" not in r:
+            continue
+        if r["graphlike_distance_qso"] != r["graphlike_distance_stim"]:
+            failures.append(f"graph-like distance of {name} differs from Stim's: {r}")
+        if r["decomposed_errors_only_one_side"] or not r["decomposed_max_relative_probability_difference"] <= TOLERANCES["error_model"]:
+            failures.append(f"decomposed error model of {name} differs from Stim's: {r}")
+        if not r["correlated_disagreement_with_pymatching"] <= TOLERANCES["correlated_disagreement"]:
+            failures.append(f"two-pass matching on {name} differs from PyMatching's: {r}")
     chem = c["chemistry_vs_pyscf"]
     if not chem["integral_max_difference"] <= TOLERANCES["integral"]:
         failures.append(f"integrals differ from PySCF by {chem['integral_max_difference']:.3g}")
