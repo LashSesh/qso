@@ -192,7 +192,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # Under Miri the parallel thresholds are lowered (src/parallel.rs), so
       # the multi-threaded kernel paths run on 7-qubit registers.
-      - run: "cargo miri test -p metatron-qso-rs --lib -- quantum::kernels:: quantum::plan:: quantum::single::tests::vector_primitives parallel:: pool:: algorithms::gradients::tests::the_blocked"
+      - run: "cargo miri test -p metatron-qso-rs --lib -- quantum::kernels:: quantum::plan:: quantum::single::tests::vector_primitives parallel:: pool:: algorithms::gradients::tests::the_blocked algorithms::qaoa::tests::fast_path_matches_explicit_circuit_above_the_block"
       # The WebAssembly module's exports pass buffers as raw pointers.
       - run: cargo miri test -p metatron_qso_wasm --lib -- buffers_round_trip
 

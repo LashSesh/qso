@@ -407,6 +407,258 @@ where
     crate::parallel::for_each_block(amps, block, |k, chunk| f(k * block, chunk));
 }
 
+/// `Im Σ_i ⟨λ|Y|φ⟩` over pairs of runs (lower runs `l0`, `p0`, upper
+/// runs `l1`, `p1`): per pair `Re(conj(λ₁)·φ₀ − conj(λ₀)·φ₁)`, in double
+/// precision with four partial sums, combined in a fixed order.
+#[inline]
+pub(crate) fn y_overlap_im<A: Amplitude>(l0: &[A], l1: &[A], p0: &[A], p1: &[A]) -> f64 {
+    let term = |i: usize| {
+        let (a0, a1, b0, b1) = (
+            l0[i].to_c64(),
+            l1[i].to_c64(),
+            p0[i].to_c64(),
+            p1[i].to_c64(),
+        );
+        (a1.re * b0.re + a1.im * b0.im) - (a0.re * b1.re + a0.im * b1.im)
+    };
+    let n = l0.len();
+    let mut acc = [0.0f64; 4];
+    let full = n - n % 4;
+    for i in (0..full).step_by(4) {
+        for (k, a) in acc.iter_mut().enumerate() {
+            *a += term(i + k);
+        }
+    }
+    let rest: f64 = (full..n).map(term).sum();
+    (acc[0] + acc[1]) + (acc[2] + acc[3]) + rest
+}
+
+/// log₂ of the contiguous runs of a [`Tiles`] tile, and the most qubits of
+/// a group. Measured for QAOA's mixer at 24 qubits (ten qubits above the
+/// block), per layer: runs of 2⁷ amplitudes in groups of 7 took 0.117 s,
+/// one qubit per pass 0.046 s, runs of 2¹⁰ in groups of 4 0.040 s, runs
+/// of 2¹² in groups of 5 0.029 s: long runs keep the prefetchers and the
+/// TLB busy with few streams.
+#[cfg(not(miri))]
+const TILE_RUN_QUBITS: usize = 12;
+#[cfg(not(miri))]
+const TILE_GROUP: usize = 5;
+#[cfg(miri)]
+const TILE_RUN_QUBITS: usize = 1;
+#[cfg(miri)]
+const TILE_GROUP: usize = 2;
+
+/// Tiles for gates on a group of qubits above the run qubits: a tile
+/// holds the 2^g runs of 2^r contiguous amplitudes that differ only in the
+/// group's bits, `2^(g + r)` amplitudes in all, so every gate on the group
+/// pairs runs inside one tile. Applying the group's gates tile by tile
+/// takes one pass over memory instead of one per qubit.
+pub(crate) struct Tiles {
+    /// The group's qubits, ascending.
+    group: Vec<usize>,
+    /// Offsets of the runs of a tile (bit j of the run index → group[j]).
+    offsets: Vec<usize>,
+    /// Bits of the tile index, deposited at these qubits.
+    others: Vec<usize>,
+    run: usize,
+}
+
+impl Tiles {
+    /// The tiles for `group` (distinct qubits, all at or above
+    /// `TILE_RUN_QUBITS`) on `n` qubits.
+    pub(crate) fn new(n: usize, group: &[usize]) -> Self {
+        let mut group = group.to_vec();
+        group.sort_unstable();
+        debug_assert!(group.iter().all(|&q| q >= TILE_RUN_QUBITS && q < n));
+        let offsets = (0..1usize << group.len())
+            .map(|j| {
+                group
+                    .iter()
+                    .enumerate()
+                    .filter(|(b, _)| j >> b & 1 == 1)
+                    .map(|(_, q)| 1usize << q)
+                    .sum()
+            })
+            .collect();
+        let others = (TILE_RUN_QUBITS..n)
+            .filter(|q| !group.contains(q))
+            .collect();
+        Self {
+            group,
+            offsets,
+            others,
+            run: 1 << TILE_RUN_QUBITS,
+        }
+    }
+
+    /// The qubits `low..n` in groups of up to `TILE_GROUP`.
+    pub(crate) fn groups(n: usize, low: usize) -> Vec<Tiles> {
+        let qubits: Vec<usize> = (low.max(TILE_RUN_QUBITS)..n).collect();
+        qubits
+            .chunks(TILE_GROUP)
+            .map(|g| Tiles::new(n, g))
+            .collect()
+    }
+
+    /// The group's qubits, ascending.
+    pub(crate) fn qubits(&self) -> &[usize] {
+        &self.group
+    }
+
+    fn count(&self) -> usize {
+        1 << self.others.len()
+    }
+
+    /// First amplitude of tile `t`.
+    fn base(&self, t: usize) -> usize {
+        self.others
+            .iter()
+            .enumerate()
+            .filter(|(b, _)| t >> b & 1 == 1)
+            .map(|(_, q)| 1usize << q)
+            .sum()
+    }
+
+    /// Bit of the run index for qubit `q` of the group.
+    fn bit(&self, q: usize) -> usize {
+        1 << self
+            .group
+            .iter()
+            .position(|&g| g == q)
+            .expect("qubit of the group")
+    }
+
+    /// The gates with the run-index bit of their qubit, and the real parts
+    /// of real matrices (applied by the real kernels, as [`apply_1q`]
+    /// does).
+    fn prepare<A: Amplitude>(&self, gates: &[(usize, [A; 4])]) -> Vec<TileGate<A>> {
+        gates
+            .iter()
+            .map(|(q, m)| TileGate {
+                bit: self.bit(*q),
+                matrix: *m,
+                real: m.iter().all(|&z| z == z.conj()).then(|| m.map(A::re)),
+            })
+            .collect()
+    }
+
+    /// Apply `gates` to the tile at `base` of the vector at `ptr`.
+    ///
+    /// # Safety
+    /// `ptr` points to a vector of the tiles' register, and no other
+    /// thread touches this tile.
+    unsafe fn apply_tile<A: Amplitude>(&self, ptr: *mut A, base: usize, gates: &[TileGate<A>]) {
+        for g in gates {
+            for (j, &lo) in self.offsets.iter().enumerate() {
+                if j & g.bit != 0 {
+                    continue;
+                }
+                let hi = self.offsets[j | g.bit];
+                // SAFETY: `lo` and `hi` are distinct runs of `run`
+                // amplitudes of this tile (by the caller, inside the
+                // vector and not shared).
+                let (a, b) = unsafe {
+                    (
+                        std::slice::from_raw_parts_mut(ptr.add(base + lo), self.run),
+                        std::slice::from_raw_parts_mut(ptr.add(base + hi), self.run),
+                    )
+                };
+                match &g.real {
+                    Some(r) => A::mat2_runs_real(a, b, r),
+                    None => A::mat2_runs(a, b, &g.matrix),
+                }
+            }
+        }
+    }
+
+    /// `Im Σ_{q in group} ⟨λ|Y_q|φ⟩` over the tile at `base`.
+    ///
+    /// # Safety
+    /// Both pointers point to vectors of the tiles' register, and no
+    /// other thread writes this tile.
+    unsafe fn tile_y_overlap<A: Amplitude>(
+        &self,
+        lambda: *const A,
+        phi: *const A,
+        base: usize,
+    ) -> f64 {
+        let run = |p: *const A, at: usize| {
+            // SAFETY: a run of this tile, inside the vector (by the
+            // caller), not written meanwhile.
+            unsafe { std::slice::from_raw_parts(p.add(at), self.run) }
+        };
+        let mut acc = 0.0;
+        for b in 0..self.group.len() {
+            let bit = 1 << b;
+            for (j, &lo) in self.offsets.iter().enumerate() {
+                if j & bit != 0 {
+                    continue;
+                }
+                let (lo, hi) = (base + lo, base + self.offsets[j | bit]);
+                acc += y_overlap_im(run(lambda, lo), run(lambda, hi), run(phi, lo), run(phi, hi));
+            }
+        }
+        acc
+    }
+
+    /// Apply the single-qubit `gates` (qubit, matrix), all on the group's
+    /// qubits, in order: per amplitude the same arithmetic as gate after
+    /// gate.
+    pub(crate) fn apply_1q<A: Amplitude>(&self, amps: &mut [A], gates: &[(usize, [A; 4])]) {
+        let gates = self.prepare(gates);
+        let ptr = crate::parallel::SyncPtr::new(amps);
+        crate::parallel::for_each_item(self.count(), amps.len(), 1, |t| {
+            // SAFETY: distinct tiles are disjoint.
+            unsafe { self.apply_tile(ptr.get(), self.base(t), &gates) }
+        });
+    }
+
+    /// `Im Σ_{q in group} ⟨λ|Y_q|φ⟩`, summed tile by tile in tile order (so
+    /// independent of the thread count).
+    #[cfg(test)]
+    pub(crate) fn y_overlap<A: Amplitude>(&self, lambda: &[A], phi: &[A]) -> f64 {
+        crate::parallel::sum_chunks_f64(self.count(), phi.len(), |t| {
+            // SAFETY: reads only, inside both vectors.
+            unsafe { self.tile_y_overlap(lambda.as_ptr(), phi.as_ptr(), self.base(t)) }
+        })
+    }
+
+    /// `Im Σ_{q in group} ⟨λ|Y_q|φ⟩`, then `gates` applied to both,
+    /// tile by tile in one pass over the two vectors. (A gate commuting
+    /// with `Σ Y` leaves the overlap unchanged: QAOA's mixer.)
+    pub(crate) fn y_overlap_then_apply<A: Amplitude>(
+        &self,
+        lambda: &mut [A],
+        phi: &mut [A],
+        gates: &[(usize, [A; 4])],
+    ) -> f64 {
+        let gates = self.prepare(gates);
+        let work = phi.len();
+        let (l, p) = (
+            crate::parallel::SyncPtr::new(lambda),
+            crate::parallel::SyncPtr::new(phi),
+        );
+        crate::parallel::sum_chunks_f64(self.count(), work, |t| {
+            let base = self.base(t);
+            // SAFETY: distinct tiles are disjoint; each tile is read and
+            // then written by this task only.
+            unsafe {
+                let overlap = self.tile_y_overlap(l.get(), p.get(), base);
+                self.apply_tile(l.get(), base, &gates);
+                self.apply_tile(p.get(), base, &gates);
+                overlap
+            }
+        })
+    }
+}
+
+/// A gate of a [`Tiles`] pass.
+struct TileGate<A: Amplitude> {
+    bit: usize,
+    matrix: [A; 4],
+    real: Option<[A::Real; 4]>,
+}
+
 /// Apply `circuit` with parameters `theta` (already validated) to `amps`.
 pub(crate) fn run<A: Amplitude>(amps: &mut [A], circuit: &Circuit, theta: &[f64]) {
     run_with_block(amps, circuit, theta, BLOCK_QUBITS);
@@ -501,6 +753,96 @@ mod tests {
         for (a, b) in planned.iter().zip(&reference) {
             assert!((a - b).norm() < 1e-12, "n={n} block={block}");
         }
+    }
+
+    /// Tiles apply a group's gates as gate after gate does, bit for bit,
+    /// and sum the Y overlaps of the group; for groups of every size, also
+    /// with qubits left out between them.
+    #[test]
+    fn tiles_match_gate_after_gate() {
+        use num_complex::Complex32 as C32;
+        let mut rng = Rng::seed_from_u64(1280);
+        let n = TILE_RUN_QUBITS + 5;
+        let random = |rng: &mut Rng| -> Vec<C64> {
+            (0..1usize << n)
+                .map(|_| C64::new(rng.normal(), rng.normal()))
+                .collect()
+        };
+        let groups: Vec<Vec<usize>> = vec![
+            vec![TILE_RUN_QUBITS],
+            vec![n - 1],
+            (TILE_RUN_QUBITS..n).collect(),
+            vec![TILE_RUN_QUBITS + 1, n - 2, n - 1],
+            vec![TILE_RUN_QUBITS, TILE_RUN_QUBITS + 2, n - 1],
+        ];
+        for group in groups {
+            let tiles = Tiles::new(n, &group);
+            let gates: Vec<(usize, [C64; 4])> = group
+                .iter()
+                .rev()
+                .map(|&q| {
+                    // Real matrices (the real kernels) on odd qubits.
+                    let im = if q % 2 == 1 { 0.0 } else { 1.0 };
+                    let m = [0, 1, 2, 3].map(|_| C64::new(rng.normal(), im * rng.normal()));
+                    (q, m)
+                })
+                .collect();
+            let start = random(&mut rng);
+            let mut tiled = start.clone();
+            tiles.apply_1q(&mut tiled, &gates);
+            let mut plain = start.clone();
+            for (q, m) in &gates {
+                apply_1q(&mut plain, *q, 0, m);
+            }
+            assert_eq!(tiled, plain, "{group:?}");
+            // The same in single precision.
+            let start32: Vec<C32> = start.iter().map(|z| C32::from_c64(*z)).collect();
+            let gates32: Vec<(usize, [C32; 4])> = gates
+                .iter()
+                .map(|(q, m)| (*q, m.map(C32::from_c64)))
+                .collect();
+            let mut tiled32 = start32.clone();
+            tiles.apply_1q(&mut tiled32, &gates32);
+            let mut plain32 = start32;
+            for (q, m) in &gates32 {
+                apply_1q(&mut plain32, *q, 0, m);
+            }
+            assert_eq!(tiled32, plain32, "{group:?}");
+            // Im Σ_q ⟨λ|Y_q|φ⟩ directly: (Yφ)_b = ±i·φ_{b⊕q}, + where bit q is 1.
+            let lambda = random(&mut rng);
+            let direct: C64 = group
+                .iter()
+                .map(|&q| {
+                    (0..start.len())
+                        .map(|b| {
+                            let sign = if b >> q & 1 == 1 { 1.0 } else { -1.0 };
+                            lambda[b].conj() * C64::new(0.0, sign) * start[b ^ (1 << q)]
+                        })
+                        .sum::<C64>()
+                })
+                .sum();
+            let got = tiles.y_overlap(&lambda, &start);
+            assert!(
+                (got - direct.im).abs() < 1e-9 * direct.norm().max(1.0),
+                "{got} {direct}"
+            );
+            // In one pass with the gates applied to both vectors.
+            let (mut l2, mut p2) = (lambda.clone(), start.clone());
+            let fused = tiles.y_overlap_then_apply(&mut l2, &mut p2, &gates);
+            assert_eq!(fused, got);
+            assert_eq!(p2, plain);
+            let mut l3 = lambda.clone();
+            tiles.apply_1q(&mut l3, &gates);
+            assert_eq!(l2, l3);
+        }
+        // Groups cover the qubits above the block, a block's worth each.
+        let groups = Tiles::groups(BLOCK_QUBITS + 9, BLOCK_QUBITS);
+        let covered: Vec<usize> = groups.iter().flat_map(|t| t.qubits().to_vec()).collect();
+        assert_eq!(
+            covered,
+            (BLOCK_QUBITS..BLOCK_QUBITS + 9).collect::<Vec<_>>()
+        );
+        assert!(groups.iter().all(|t| t.qubits().len() <= TILE_GROUP));
     }
 
     #[test]

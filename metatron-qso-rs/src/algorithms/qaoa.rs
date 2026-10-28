@@ -24,9 +24,11 @@ use serde::{Deserialize, Serialize};
 use crate::error::{QsoError, Result};
 use crate::graph::Graph;
 use crate::optimize::{Method, Objective, Options, minimize_at};
-use crate::parallel::{CHUNK, for_each_mut, map_collect, map_tasks, sum_c64, sum_f64};
+use crate::parallel::{
+    CHUNK, SyncPtr, for_each_item, for_each_mut, map_collect, map_tasks, sum_c64, sum_f64,
+};
 use crate::quantum::kernels;
-use crate::quantum::plan::{BLOCK_QUBITS, for_each_block};
+use crate::quantum::plan::{BLOCK_QUBITS, Tiles, for_each_block, y_overlap_im};
 use crate::quantum::scalar::Amplitude;
 use crate::quantum::{MAX_QUBITS, Precision, StateVector};
 use crate::rng::Rng;
@@ -220,19 +222,20 @@ impl Phases<'_> {
     }
 }
 
-/// Apply `e^{−iγC}` (if `cost` is given) and then `e^{−iβ Σ X}` (or its
-/// inverse for negative β). The phases and the rotations of the qubits
+/// Apply `e^{−iγC}` (if `cost` is given) and then the mixer, in the frame
+/// `S^{⊗n}` where it is `e^{−iβ Σ Y}` (or its inverse for negative β).
+///
+/// `e^{−iβX} = S†·e^{−iβY}·S` with `S = diag(1, i)`, and `S^{⊗n}` is
+/// diagonal, so it commutes with the cost layers: between two layers the
+/// `S` and `S†` cancel, and the whole state is `S†^{⊗n}` applied to the
+/// state evolved with Y rotations from `S^{⊗n}|+⟩`. The Y rotation is a
+/// real matrix, which the kernels apply with a quarter of the products of
+/// the complex X rotation; ⟨C⟩ and the probabilities do not see `S†^{⊗n}`. The phases and the rotations of the qubits
 /// below the block size are applied block by block in one pass over
-/// memory; the higher qubits follow one pass each.
+/// memory; the higher qubits follow in tiles, one pass per group of up to
+/// seven ([`Tiles`]).
 fn layer<A: Amplitude>(amps: &mut [A], n: usize, cost: Option<&Phases<'_>>, beta: f64) {
-    let (c, s) = (beta.cos(), beta.sin());
-    let m = [
-        C64::new(c, 0.0),
-        C64::new(0.0, -s),
-        C64::new(0.0, -s),
-        C64::new(c, 0.0),
-    ]
-    .map(A::from_c64);
+    let m = mixer_matrix::<A>(beta);
     let low = BLOCK_QUBITS.min(n);
     for_each_block(amps, low, |base, block| {
         if let Some(phases) = cost {
@@ -244,43 +247,36 @@ fn layer<A: Amplitude>(amps: &mut [A], n: usize, cost: Option<&Phases<'_>>, beta
             kernels::apply_1q(block, q, 0, &m);
         }
     });
-    for q in low..n {
-        kernels::apply_1q(amps, q, 0, &m);
+    for tiles in Tiles::groups(n, low) {
+        let gates: Vec<(usize, [A; 4])> = tiles.qubits().iter().map(|&q| (q, m)).collect();
+        tiles.apply_1q(amps, &gates);
     }
 }
 
-fn mixer<A: Amplitude>(amps: &mut [A], n: usize, beta: f64) {
-    layer(amps, n, None, beta);
+/// `Im ⟨λ|Y_q|φ⟩` on a block, `stride = 2^q`, over the contiguous halves
+/// of each pair of runs.
+fn y_overlap_1q<A: Amplitude>(lambda: &[A], phi: &[A], stride: usize) -> f64 {
+    lambda
+        .chunks_exact(2 * stride)
+        .zip(phi.chunks_exact(2 * stride))
+        .map(|(l, p)| {
+            let (l0, l1) = l.split_at(stride);
+            let (p0, p1) = p.split_at(stride);
+            y_overlap_im(l0, l1, p0, p1)
+        })
+        .sum()
 }
 
-/// `⟨λ|Σ_q X_q|φ⟩`: the qubits below the block size block by block, the
-/// others in one streaming pass each. The sum is ordered, so the result
-/// does not depend on the number of threads.
-fn mixer_overlap<A: Amplitude>(lambda: &[A], phi: &[A], n: usize) -> C64 {
-    let low = BLOCK_QUBITS.min(n);
-    let block = 1usize << low;
-    let per_block = map_tasks(phi.len() / block, |k| {
-        let (l, p) = (
-            &lambda[k * block..(k + 1) * block],
-            &phi[k * block..(k + 1) * block],
-        );
-        let mut acc = C64::new(0.0, 0.0);
-        for q in 0..low {
-            let bit = 1usize << q;
-            for i in 0..block {
-                acc += l[i].to_c64().conj() * p[i ^ bit].to_c64();
-            }
-        }
-        acc
-    });
-    let mut total: C64 = per_block.into_iter().sum();
-    for q in low..n {
-        let bit = 1usize << q;
-        total += sum_c64(phi.len(), |b| {
-            lambda[b].to_c64().conj() * phi[b ^ bit].to_c64()
-        });
-    }
-    total
+/// `e^{−iβY}`, the mixer of one qubit in the frame of [`layer`].
+fn mixer_matrix<A: Amplitude>(beta: f64) -> [A; 4] {
+    let (c, s) = (beta.cos(), beta.sin());
+    [
+        C64::new(c, 0.0),
+        C64::new(-s, 0.0),
+        C64::new(s, 0.0),
+        C64::new(c, 0.0),
+    ]
+    .map(A::from_c64)
 }
 
 impl MaxCutQaoa {
@@ -393,10 +389,20 @@ impl MaxCutQaoa {
         Ok(())
     }
 
+    /// The state in the frame of [`layer`]: evolved from
+    /// `S^{⊗n}|+⟩`, amplitude `i^{|b|}/√2ⁿ`.
     fn evolve<A: Amplitude>(&self, params: &[f64]) -> Vec<A> {
         let (gammas, betas) = params.split_at(self.p);
         let dim = self.cuts.len();
-        let mut amps = vec![A::from_c64(C64::new(1.0 / (dim as f64).sqrt(), 0.0)); dim];
+        let r = 1.0 / (dim as f64).sqrt();
+        let powers = [
+            C64::new(r, 0.0),
+            C64::new(0.0, r),
+            C64::new(-r, 0.0),
+            C64::new(0.0, -r),
+        ]
+        .map(A::from_c64);
+        let mut amps = map_collect(dim, |b| powers[(b.count_ones() % 4) as usize]);
         for l in 0..self.p {
             layer(&mut amps, self.n, Some(&self.phases(-gammas[l])), betas[l]);
         }
@@ -407,13 +413,23 @@ impl MaxCutQaoa {
     /// (In single precision, the amplitudes widened to double precision.)
     pub fn state(&self, params: &[f64]) -> Result<StateVector> {
         self.check(params)?;
-        match self.precision {
-            Precision::Double => StateVector::from_amplitudes(self.evolve(params)),
+        let mut amps: Vec<C64> = match self.precision {
+            Precision::Double => self.evolve(params),
             _ => {
                 let amps: Vec<C32> = self.evolve(params);
-                StateVector::from_amplitudes(amps.iter().map(|a| a.to_c64()).collect())
+                map_collect(amps.len(), |b| amps[b].to_c64())
             }
-        }
+        };
+        // Out of the frame: S†^{⊗n}, the phase (−i)^{|b|} (exact).
+        for_each_mut(&mut amps, |b, a| {
+            *a = match b.count_ones() % 4 {
+                0 => *a,
+                1 => C64::new(a.im, -a.re),
+                2 => -*a,
+                _ => C64::new(-a.im, a.re),
+            }
+        });
+        StateVector::from_amplitudes(amps)
     }
 
     /// Probabilities of the bit strings (in single precision divided by
@@ -473,20 +489,67 @@ impl MaxCutQaoa {
         let value = sum_c64(phi.len(), |b| phi[b].to_c64().conj() * lambda[b].to_c64()).re;
         let mut grad = vec![0.0; 2 * self.p];
         let n = self.n;
+        let low = BLOCK_QUBITS.min(n);
+        let block = 1usize << low;
+        let blocks = phi.len() / block;
+        let mut parts = vec![(0.0, 0.0); blocks];
         for l in (0..self.p).rev() {
-            // Mixer: ∂/∂β = 2·Im⟨λ|B|φ⟩ with B = Σ_q X_q.
-            let b_phi = mixer_overlap(&lambda, &phi, n);
-            grad[self.p + l] = 2.0 * b_phi.im;
-            mixer(&mut phi, n, -betas[l]);
-            mixer(&mut lambda, n, -betas[l]);
-            // Cost: ∂/∂γ = 2·Im⟨λ|C|φ⟩.
-            let c_phi = sum_c64(phi.len(), |b| {
-                lambda[b].to_c64().conj() * phi[b].to_c64() * cuts.at(b)
-            });
-            grad[l] = 2.0 * c_phi.im;
+            // Per layer two kinds of pass over φ and λ together. ∂/∂β =
+            // 2·Im⟨λ|B|φ⟩ with B = Σ_q Y_q (the mixer's generator in the
+            // frame of `layer`), which commutes with every rotation of the
+            // mixer: each part of the overlap is taken in the pass that
+            // undoes those rotations. The qubits above the block first,
+            // tile by tile:
+            let m = mixer_matrix::<A>(-betas[l]);
+            let mut b_phi = 0.0;
+            for tiles in Tiles::groups(n, low) {
+                let gates: Vec<(usize, [A; 4])> = tiles.qubits().iter().map(|&q| (q, m)).collect();
+                b_phi += tiles.y_overlap_then_apply(&mut lambda, &mut phi, &gates);
+            }
+            // Then block by block: the rest of the overlap, the low
+            // rotations undone, ∂/∂γ = 2·Im⟨λ|C|φ⟩ and the cost phases
+            // undone.
             let phases = self.phases(gammas[l]);
-            for_each_mut(&mut phi, |b, a| *a *= A::from_c64(phases.at(b)));
-            for_each_mut(&mut lambda, |b, a| *a *= A::from_c64(phases.at(b)));
+            let (pl, pp, pr) = (
+                SyncPtr::new(&mut lambda),
+                SyncPtr::new(&mut phi),
+                SyncPtr::new(&mut parts),
+            );
+            for_each_item(blocks, phi.len(), 1, |k| {
+                let base = k * block;
+                // SAFETY: block k of both vectors and slot k of `parts`
+                // belong to this task alone.
+                let (lam, ph, slot) = unsafe {
+                    (
+                        std::slice::from_raw_parts_mut(pl.get().add(base), block),
+                        std::slice::from_raw_parts_mut(pp.get().add(base), block),
+                        &mut *pr.get().add(k),
+                    )
+                };
+                let mut overlap = 0.0;
+                for q in 0..low {
+                    overlap += y_overlap_1q(lam, ph, 1 << q);
+                }
+                for q in 0..low {
+                    kernels::apply_1q(lam, q, 0, &m);
+                    kernels::apply_1q(ph, q, 0, &m);
+                }
+                // Im(conj(λ)·φ)·C: only the imaginary part is needed.
+                let mut cost = 0.0;
+                for i in 0..block {
+                    let (a, b) = (lam[i].to_c64(), ph[i].to_c64());
+                    cost += (a.re * b.im - a.im * b.re) * cuts.at(base + i);
+                    let z = A::from_c64(phases.at(base + i));
+                    lam[i] *= z;
+                    ph[i] *= z;
+                }
+                *slot = (overlap, cost);
+            });
+            let (overlap, c_phi) = parts
+                .iter()
+                .fold((b_phi, 0.0), |(a, b), (x, y)| (a + x, b + y));
+            grad[self.p + l] = 2.0 * overlap;
+            grad[l] = 2.0 * c_phi;
         }
         if !normalise {
             return (value, grad);
@@ -741,6 +804,48 @@ mod tests {
             double.evaluations
         );
         assert!((single.expectation - double.expectation).abs() < 1e-6 * double.max_cut);
+    }
+
+    /// Above the block size (qubits in tiles, the mixer in the Y frame,
+    /// the fused backward pass): the state equals the explicit circuit's
+    /// and the gradient central differences, in both precisions.
+    #[test]
+    fn fast_path_matches_explicit_circuit_above_the_block() {
+        // Even, for a 3-regular graph (6 qubits under Miri).
+        let n = (BLOCK_QUBITS + 4) & !1;
+        let g = generators::random_regular(n, 3, &mut Rng::seed_from_u64(28)).unwrap();
+        let qaoa = MaxCutQaoa::new(&g, 2).unwrap();
+        let params = [0.4, 0.9, 0.3, 0.7];
+        let circuit = ansatz::qaoa_maxcut_circuit(&g, 2).unwrap();
+        let explicit = StateVector::from_circuit(&circuit, &params).unwrap();
+        let fast = qaoa.state(&params).unwrap();
+        // Equal up to the global phase of the circuit's RZZ gates.
+        assert!(1.0 - fast.fidelity(&explicit).unwrap() < 1e-12);
+        let (value, grad) = qaoa.expectation_and_gradient(&params).unwrap();
+        let cost = models::maxcut_cost(&g).unwrap();
+        assert!((value - cost.expectation(&explicit).unwrap()).abs() < 1e-9);
+        let h = 1e-5;
+        for k in 0..4 {
+            let mut x = params;
+            x[k] += h;
+            let up = qaoa.expectation(&x).unwrap();
+            x[k] -= 2.0 * h;
+            let down = qaoa.expectation(&x).unwrap();
+            let fd = (up - down) / (2.0 * h);
+            assert!(
+                (grad[k] - fd).abs() < 1e-6 * value,
+                "{k}: {} vs {fd}",
+                grad[k]
+            );
+        }
+        let single = qaoa.clone().with_precision(Precision::Single);
+        let (v32, g32) = single.expectation_and_gradient(&params).unwrap();
+        assert!((v32 - value).abs() < 1e-5 * value);
+        for (a, b) in grad.iter().zip(&g32) {
+            assert!((a - b).abs() < 1e-4 * value, "{a} vs {b}");
+        }
+        let f = single.state(&params).unwrap().fidelity(&explicit).unwrap();
+        assert!(1.0 - f < 1e-9, "{f}");
     }
 
     #[test]
