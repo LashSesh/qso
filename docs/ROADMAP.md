@@ -975,7 +975,8 @@ above.
 ### Research track (later)
 
 A GPU backend through `wgpu`: it starts only with a clear use case and
-after the CPU core is close to memory bandwidth.
+after the CPU core is close to memory bandwidth. The sixth stage names the
+use case and serves it on the CPU first (section 4f).
 
 ## 4e. Fifth stage (1.22 to 1.25)
 
@@ -1341,6 +1342,89 @@ pretty good state transfer on graphs outside the cyclotomic families
 remain gaps; they have fewer users than the four above or no exact
 reference yet.
 
+## 4f. Sixth stage (1.26 to 1.28)
+
+Planned October 2026. The GPU research track asked for a use case; this
+is it, and the stage serves it on the CPU first.
+
+**Use case: variational training at 26 to 28 qubits on one machine.**
+QAOA for MaxCut with p = 10 (or a VQE ansatz of similar depth) on 26–28
+qubits, optimised with exact gradients for a few hundred steps, on a
+workstation or cloud VM. Measured before the stage on the 4-core test VM
+(random 3-regular graphs, 20 parameters, double precision, one call each):
+
+| qubits | gates | energy | energy and adjoint gradient | peak memory |
+|---:|---:|---:|---:|---:|
+| 20 | 520 | 0.16 s | 1.7 s | 54 MB |
+| 22 | 572 | 0.68 s | 10.0 s | 0.20 GB |
+| 24 | 624 | 4.4 s | 47.7 s | 0.79 GB |
+| 26 | 676 | 18.4 s | 221 s | 3.15 GB |
+
+A step at 26 qubits takes almost four minutes, and 28 qubits need about
+12.6 GB in double precision, more than such a machine has to spare. A GPU
+would help, but none is available to test on (not on this machine, not
+in headless Chromium's WebGPU, not on GitHub's standard runners), and the
+rule "no claim without a test" holds for a backend too. The measurements
+show where the CPU loses instead:
+
+- **The gradient costs 11–13 energies.** The backward pass copies the
+  whole state for every parametrised gate outside a cache block, applies
+  the derivative to the copy and takes an inner product: about five
+  passes over memory per gate instead of one. Almost every QAOA gate is
+  parametrised. For a gate `exp(−iθG/2)` with a Pauli generator `G` the
+  term is a matrix element of `G` between the two states, one reading
+  pass without a copy.
+- **The energy costs twice its gates.** The MaxCut cost is a sum of `ZZ`
+  terms, which can be evaluated in one pass over the state.
+- **Memory.** Three state vectors in double precision; single precision
+  halves them, and 1.20 left gradients in double precision.
+
+The rules stay: no new dependency, an independent reference for every
+deliverable, results bit for bit independent of the number of threads.
+
+### 1.26 — Gradients at the cost of a few simulations (M)
+
+| Deliverable | Detail |
+|---|---|
+| Matrix elements | the backward pass computes the gradient terms of Pauli-rotation gates (controlled too) and phase gates as matrix elements of their generators between the two states, without copying a state; gates on high qubits undone and differentiated in one pass where the kernels allow |
+| Diagonal observables | sums of `Z` strings (MaxCut, Ising, QUBO costs) evaluated and applied in one pass over the state, for expectation values and for the backward pass |
+| Shared parameters | runs of commuting diagonal gates with the same parameter (a QAOA cost layer) undone and differentiated together |
+
+Validation: gradients equal to parameter-shift gradients to 10⁻¹⁰ and to
+the old adjoint pass to 10⁻¹² on random circuits over the whole gate set
+(controls, shared and scaled parameters, every observable kind); results
+independent of the thread count; the table above measured again, with the
+gradient at no more than about four energies.
+
+### 1.27 — Variational training in single precision (M)
+
+| Deliverable | Detail |
+|---|---|
+| Single-precision gradients | energies and adjoint gradients on `StateVector32`, with sums accumulated in double precision; `precision="single"` for expectation values, gradients and the VQE and QAOA optimisers in Rust, Python and the CLI |
+| Accuracy | the error of single-precision energies and gradients measured against double precision and stated in the documentation |
+
+Validation: single against double precision on random circuits and on
+the use case at 20–24 qubits (energy and gradient errors, optimisation
+trajectories that reach the same optimum); memory measured at 26 and 28
+qubits.
+
+### 1.28 — 28 qubits end to end (S–M)
+
+| Deliverable | Detail |
+|---|---|
+| The use case | a QAOA optimisation (p = 10, a few hundred gradient steps) on 28 qubits on the 4-core test VM, timed and with its peak memory, as an example and in `benchmark_report` |
+| Comparison | energy and gradient against Qulacs and Qiskit Aer at 22–26 qubits in the cross-validation (their gradient methods as they come) |
+| GPU decision | with the CPU numbers in hand, the GPU track restated: what a GPU would add for this use case, and what it needs (a test runner with a GPU, a dependency) |
+
+Validation: the 28-qubit optimum against the 20–24-qubit trend and the
+energy of the best cut; the comparison on the same machine.
+
+### Not in this stage
+
+A GPU backend: it needs hardware to test on and a dependency (`wgpu`),
+neither available now (see 1.28). Multi-node simulation, which the use
+case does not need below 30 qubits.
+
 ## 5. Order and reasoning
 
 1. **1.2 first:** small, made every later release safer, and documentation
@@ -1390,6 +1474,12 @@ reference yet.
     chemistry gap with PySCF as reference. Short simulations (1.24) address
     the last speed gap of the table, the cold start after a pause, and
     documentation and reach (1.25) end the stage, as tests ended the last.
+14. **Sixth stage: one use case, measured.** Variational training at 26–28
+    qubits stands in for the GPU track's missing use case. The CPU loses
+    a factor of four to five in the gradient and two in the energy before
+    memory or a GPU matter, so cheaper gradients come first (1.26), then
+    single precision for the memory (1.27), then the use case end to end,
+    which also decides what a GPU would still add (1.28).
 
 ## 6. Measures of success
 
@@ -1438,8 +1528,11 @@ Taken (October 2026):
 * Fifth stage (October 2026): error-correction circuits that keep their
   distance, with circuit-distance search and correlated decoding (1.22),
   larger basis sets and open shells (1.23), short simulations at full
-  speed (1.24), documentation and reach (1.25). The GPU research track
-  still waits for a use case.
+  speed (1.24), documentation and reach (1.25).
+* Sixth stage (October 2026): the GPU track's use case is variational
+  training at 26–28 qubits; it is served on the CPU first (1.26–1.28),
+  because no GPU is available to test on and the measurements show
+  larger losses elsewhere.
 * The browser playground stays, because it costs little to maintain: it
   is plain HTML and JavaScript without dependencies or a build step, it
   uses only the npm package's JSON interface, which the package's tests
