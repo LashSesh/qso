@@ -12,8 +12,9 @@ purification) of the [roadmap](docs/ROADMAP.md), its third stage, and
 milestones 1.18 (pretty good state transfer), 1.19 (decoding beyond
 matching), 1.20 (single precision) and 1.21 (coverage and differential
 testing) of the fourth, which completes it; and milestones 1.22
-(error-correction circuits that keep their distance) and 1.23 (larger
-basis sets and open shells) of the fifth.
+(error-correction circuits that keep their distance), 1.23 (larger
+basis sets and open shells) and 1.24 (short simulations at full speed) of
+the fifth.
 
 ### Added
 
@@ -201,6 +202,17 @@ basis sets and open shells) of the fifth.
 
 ### Changed
 
+- **State-vector kernels on their own worker pool.** Rayon's workers
+  sleep as soon as they are idle, and on virtual machines the first
+  simulation after a pause paid for waking them. The gate kernels, cache
+  blocks and sums now run on a pool whose threads spin for 200 µs after
+  each job before parking (`QSO_POOL_SPIN_US`; threads from
+  `QSO_NUM_THREADS` or `RAYON_NUM_THREADS`); rayon stays for everything
+  else. Results are bit for bit unchanged. On the 4-core development VM a
+  16-qubit layer after a 20 ms pause takes 0.62–0.68 ms instead of
+  1.2 ms, warm 0.42–0.48 ms instead of 0.77 ms; from 20 qubits on the
+  times are unchanged. `benchmark_report` and the cross-validation time
+  these cold starts.
 - `detector_error_model(circuit, decompose=true)` now splits errors as
   Stim does within each noise channel: decomposed models of Stim's
   generated circuits equal Stim's error by error. Before, every error

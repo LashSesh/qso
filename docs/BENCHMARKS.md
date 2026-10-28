@@ -218,15 +218,30 @@ From 20 qubits on QSO is the fastest of these simulators. At 16 qubits
 Qulacs is faster in the median; QSO's 16-qubit times vary more (fastest run
 0.44 ms against Qulacs' 0.60 ms).
 
-**Warm-up matters on virtual machines.** QSO's worker threads (rayon) sleep
-as soon as they are idle, and on this VM waking them is slow, so the first
-tens of milliseconds of a burst of work run at close to single-thread
-speed: with three warm-up runs (5 ms) instead of 0.25 s, the 16-qubit layer
-took 1.57 ms against Qulacs' 0.75 ms. Qulacs' OpenMP workers spin instead;
-with `OMP_WAIT_POLICY=passive` its 16-qubit layer takes 3–4 ms on the same
-machine. Larger registers and repeated evaluations (optimisation loops) are
-not affected. The technical note (Section 3.8) has the comparison for QSO
-1.1.
+**Warm-up mattered on virtual machines.** Up to 1.23 QSO's worker threads
+(rayon) slept as soon as they were idle, and on this VM waking them is
+slow, so the first tens of milliseconds of a burst of work ran at close to
+single-thread speed: with three warm-up runs (5 ms) instead of 0.25 s, the
+16-qubit layer took 1.57 ms against Qulacs' 0.75 ms. Qulacs' OpenMP
+workers spin instead; with `OMP_WAIT_POLICY=passive` its 16-qubit layer
+takes 3–4 ms on the same machine. The technical note (Section 3.8) has the
+comparison for QSO 1.1.
+
+Since 1.24 the state-vector kernels run on their own worker pool, whose
+threads spin for 200 µs after each job before parking. One layer after a
+pause (`benchmark_report`, 4 cores, median of 21):
+
+| qubits | warm | after 0.5 ms | after 20 ms |
+|---:|---:|---:|---:|
+| 12 | 52.5 µs | 57.6 µs | 74.1 µs |
+| 14 | 234 µs | 253 µs | 260 µs |
+| 16 | 418 µs | 522 µs | 624 µs |
+| 18 | 1.65 ms | 1.93 ms | 1.97 ms |
+
+With rayon a 16-qubit layer after 20 ms took 1.16–1.22 ms, and in Python
+QSO is now ahead of Qulacs cold and warm from 10 to 18 qubits (the
+[roadmap](ROADMAP.md), 1.24, has both comparisons). The cross-validation
+times these cold starts (`1@500`, `1@20000`) beside the warmed-up runs.
 
 ## Reading the numbers
 

@@ -39,6 +39,13 @@ Without `parallel`, everything runs on one thread. The results are
 bit-for-bit identical either way: parallel sums use a fixed chunking that
 does not depend on the number of threads.
 
+The state-vector kernels run on a worker pool of their own whose threads
+spin for 200 µs after each job before they sleep, so a simulation that
+follows a short pause (an optimiser step, Python code) finds them awake;
+everything else uses rayon. The pool runs on `QSO_NUM_THREADS` threads,
+else on `RAYON_NUM_THREADS` (which rayon reads too), else on all cores;
+`QSO_POOL_SPIN_US` sets the spin time in microseconds (0 parks at once).
+
 ## Command-line tool
 
 ```bash

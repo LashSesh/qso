@@ -79,10 +79,14 @@ in [BENCHMARKS.md](BENCHMARKS.md#comparison-with-other-simulators-130)):
   PennyLane Lightning 3.7–9 times; on 16 qubits Qulacs is still 1.3×
   faster in the median.
 * **Thread wake-up:** rayon workers sleep as soon as they are idle; on the
-  test VM waking them is slow, and a burst of short simulations needs tens
-  of milliseconds to reach full speed (a cold 16-qubit layer takes 1.5 ms,
-  a warm one 0.55 ms). Qulacs' OpenMP workers spin. The comparison warms
-  every framework up for 0.25 s since 1.3.0.
+  test VM waking them is slow, and a burst of short simulations needed tens
+  of milliseconds to reach full speed (a cold 16-qubit layer took 1.5 ms,
+  a warm one 0.55 ms). Qulacs' OpenMP workers spin. Since 1.24 the
+  state-vector kernels run on their own pool, whose workers spin briefly
+  before parking: a 16-qubit layer after a 20 ms pause takes about
+  0.7 ms in Rust, and QSO is ahead of Qulacs cold and warm from 10 to 18
+  qubits. The comparison still warms every framework up for 0.25 s and
+  times cold starts separately.
 * **Gradients:** the adjoint gradient of a 100-parameter, 10-qubit ansatz
   takes about 0.5 ms, against 2–5 ms with Qulacs' `backprop` and about
   20 ms with PennyLane Lightning's adjoint method.
@@ -202,7 +206,7 @@ graphs; Shrikhande vs 4×4 rook's graph separated.
 | Batched evaluation | `expectation_batch` and `expectation_and_gradient_batch`, parallel over parameter vectors below 16 qubits, in Rust and Python | — |
 | SIMD kernels | — | deferred: the autovectorised kernels are memory-bound from 20 qubits; explicit SIMD needs per-architecture code and testing on hardware CI does not provide |
 | Single precision | — | deferred: halving the memory conflicts with the 1e-12 validation targets; would need its own tolerance policy |
-| Thread wake-up | — | found while measuring 1.3.0: rayon workers sleep as soon as they are idle, and on virtual machines short isolated simulations (around 1 ms) run at close to single-thread speed until the workers stay awake; keeping them spinning briefly needs a custom thread pool, open |
+| Thread wake-up | — | found while measuring 1.3.0: rayon workers sleep as soon as they are idle, and on virtual machines short isolated simulations (around 1 ms) run at close to single-thread speed until the workers stay awake; keeping them spinning briefly needs a custom thread pool; delivered in 1.24 |
 
 Validation: planned (fused and blocked) simulation equals gate-by-gate
 simulation to 1e-12 on random circuits over the whole gate set with
@@ -1149,7 +1153,7 @@ Cost (`benchmark_report`, development machine, 4 cores):
   (28) about 0.1 s, and the 64-function limit with three chlorines in
   cc-pVDZ about 3 s and 0.35 GB.
 
-### 1.24 — Short simulations at full speed (S–M)
+### 1.24 — Short simulations at full speed (S–M, delivered)
 
 Use case: VQE, QAOA and sampling loops that run many short simulations,
 each after a pause (an optimiser step, Python code). After a warm-up QSO
@@ -1167,6 +1171,49 @@ Validation: cross-framework timings at 10 to 18 qubits, cold and warm,
 against Qulacs and Qiskit Aer on the same machine; no slowdown at 20 to 26
 qubits; results bit for bit unchanged (differential tests); the pool under
 Miri for data races.
+
+| Deliverable | Delivered | Not done, and why |
+|---|---|---|
+| Worker pool | `pool` (crate-private): standard-library threads that spin for 200 µs after a job before parking (`QSO_POOL_SPIN_US`), one job at a time with the caller working too; calls from inside a job or while another job runs run serially; thread count from `QSO_NUM_THREADS` or `RAYON_NUM_THREADS`. Every state-vector helper of `parallel` (gate kernels, cache blocks, sums) runs on it; the parallel threshold stays at 2¹⁶ amplitudes after measuring 2¹⁴ and 2¹⁵ again | rayon stays for batches, trajectories, maps and the rest of the crate, as planned; inside rayon tasks the helpers keep using rayon |
+| Cold timings | `benchmark_report` times one layer at 12–18 qubits warm and after pauses of 0.5 and 20 ms; the cross-validation has the same configurations (`1@500`, `1@20000`) for QSO, Qulacs and Aer at 10–18 qubits | — |
+
+Validation as planned, on the development machine (4 cores, a VM):
+
+- **Bit for bit.** Final states of random 16–22-qubit circuits hash the
+  same with the old rayon build, with the pool, and with the pool on one
+  thread; the differential and library tests pass unchanged.
+- **Miri.** The pool's tests (many jobs, nesting, concurrent callers,
+  panics) and the plan tests run under Miri with two workers.
+- **Parameters.** Lower thresholds were slower (14 qubits in parallel:
+  380–400 µs a layer, serial 230–280 µs). Without spinning a layer took
+  1.3–1.7 times as long at 16 and 17 qubits, warm too (the workers
+  parked between gates);
+  1 ms of spinning was not measurably better than 200 µs.
+- **Against the old build** (Rust, one layer, medians of two runs):
+
+  | qubits | warm, old | warm, pool | after 20 ms, old | after 20 ms, pool |
+  |---:|---:|---:|---:|---:|
+  | 15 | 0.41–0.44 ms | 0.43–0.45 ms | 0.78–0.85 ms | 0.50–0.51 ms |
+  | 16 | 0.77 ms | 0.45–0.48 ms | 1.16–1.22 ms | 0.66–0.68 ms |
+  | 17 | 1.23–1.30 ms | 0.97–1.05 ms | 1.90–1.92 ms | 1.09–1.22 ms |
+  | 18 | 2.4–2.9 ms | 1.7–1.8 ms | 2.95–2.98 ms | 2.10–2.19 ms |
+
+  From 20 to 26 qubits both builds take the same time within the noise
+  (22 qubits: 34–40 ms, 26 qubits: 0.89–0.93 s a layer).
+- **Against Qulacs and Aer** (Python, a fresh process per measurement,
+  three interleaved rounds of 21 runs, medians):
+
+  | qubits | QSO warm | after 0.5 ms | after 20 ms | Qulacs warm | after 0.5 ms | after 20 ms | Aer after 20 ms |
+  |---:|---:|---:|---:|---:|---:|---:|---:|
+  | 10 | 10 µs | 15 µs | 81 µs | 56 µs | 62 µs | 136 µs | 1.8 ms |
+  | 12 | 53 µs | 58 µs | 126 µs | 152 µs | 169 µs | 409 µs | 2.8 ms |
+  | 14 | 0.32 ms | 0.31 ms | 0.37 ms | 0.32 ms | 0.34 ms | 0.62 ms | 4.4 ms |
+  | 16 | 0.55 ms | 0.61 ms | 0.88 ms | 0.82 ms | 0.86 ms | 1.35 ms | 7.8 ms |
+  | 18 | 2.17 ms | 2.56 ms | 2.56 ms | 3.08 ms | 3.31 ms | 4.55 ms | 15.9 ms |
+
+  The times after 20 ms include Python waking up from the pause for every
+  framework; QSO is ahead of Qulacs cold and warm at every size, and at
+  14 qubits (one thread) equal warm.
 
 ### 1.25 — Documentation and reach (S–M)
 
