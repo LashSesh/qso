@@ -131,7 +131,7 @@ or by the benchmark report you can run yourself.
 | Hartree–Fock of H₂O from its geometry (6-31G), and full CI with a frozen core in 8 orbitals | −75.98397447 / −76.02472563 Ha | PySCF RHF and CASCI, to 10⁻¹⁰ / 10⁻⁹ Ha |
 | Unrestricted Hartree–Fock of OH (6-31G) | −75.36316825 Ha, ⟨S²⟩ = 0.75377 | PySCF UHF, to 10⁻¹⁰ Ha |
 | Hartree–Fock with d functions: H₂O / HCl / H₂S (cc-pVDZ); ROHF of triplet O₂ (cc-pVDZ) and CASCI in its orbitals (12 electrons, 8 orbitals) | −76.02677205 / −460.08944519 / −398.69453740; −149.60808447, −149.68777966 Ha | PySCF RHF, ROHF and CASCI, to 10⁻⁹ Ha |
-| Gaussian integrals with d, f and g shells (6-31G*, cc-pVDZ, spherical and Cartesian; H to Ar) | largest difference 2.6·10⁻¹³ | PySCF 2.14 |
+| Gaussian integrals with d shells (6-31G*, cc-pVDZ, spherical and Cartesian) of H₂O, NH₃, CO, F₂, HCl, H₂S, SiH₄ and NaF; f and g shells in a custom basis | every integral to 2.6·10⁻¹³; f and g: PySCF's fingerprints to 10⁻¹⁰ | PySCF 2.14 |
 | LiH on 10 qubits: UCCSD (92 parameters) / ADAPT-VQE (30 operators), error vs. full CI | 1.1·10⁻⁵ / 1.1·10⁻⁵ Ha | chemical accuracy 1.6·10⁻³ Ha |
 | VQD, all four levels of H₂ (Sz = 0) | equal to full CI to 10⁻⁶ Ha | PySCF full CI |
 | Trotter–Suzuki on a 4-qubit Heisenberg chain: error ratio when the steps double, orders 1 / 2 / 4 | 2.01 / 4.00 / 16.06, always below the error bound | 2, 4, 16 |
@@ -156,7 +156,7 @@ or by the benchmark report you can run yourself.
 | Circuit distance: random models; Stim's surface and repetition circuits | equal to enumeration; equal to `shortest_graphlike_error` and no larger than `search_for_undetectable_logical_errors` | enumeration; Stim 1.16 |
 | [[72, 12, 6]] memory, depth-8 cycle of Bravyi et al. vs. greedy CNOT layers, 3 rounds | circuit distance 6 vs. 4 (both exact) | Bravyi et al. 2024: ≤ 6 |
 
-The test-suite (548 Rust tests and 293 Python tests, run in CI on Linux
+The test-suite (553 Rust tests and 293 Python tests, run in CI on Linux
 (x86_64 and arm64), macOS and Windows; 90.5 % of the crate's lines and
 79.4 % of its branches covered) also checks:
 

@@ -1268,6 +1268,8 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                     "electrons": [na, nb],
                     "restricted": !unrestricted,
                     "method": method,
+                    "basis": ints.basis().name(),
+                    "harmonics": if *cartesian { "cartesian" } else { "spherical" },
                     "energy": hf.energy,
                     "nuclear_repulsion": hf.nuclear_repulsion,
                     "iterations": hf.iterations,

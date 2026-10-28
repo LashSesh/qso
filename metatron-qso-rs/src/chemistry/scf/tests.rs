@@ -398,3 +398,66 @@ fn casci_in_open_shell_orbitals_matches_pyscf() {
         assert!((e - expected).abs() < 1e-9, "{atoms}: {e} vs {expected}");
     }
 }
+
+#[test]
+fn restricted_open_shells_through_the_third_row() {
+    // PySCF 2.14 ROHF (conv_tol 1e-12, geometries in bohr), with Cartesian
+    // and spherical d shells.
+    use crate::chemistry::integrals::Harmonics::{Cartesian, Spherical};
+    for (atoms, basis, harmonics, multiplicity, expected) in [
+        (
+            "Cl 0 0 0; O 0 0 1.57",
+            Basis::CcPvdz,
+            Spherical,
+            2,
+            -534.2497028709555,
+        ),
+        (
+            "P 0 0 0; H 0 0 1.42; H 1.4 0 -0.1",
+            Basis::SixThirtyOneGStar,
+            Cartesian,
+            2,
+            -341.84532451058533,
+        ),
+        (
+            "S 0 0 0; O 0 0 1.48",
+            Basis::CcPvdz,
+            Cartesian,
+            3,
+            -472.33450345370113,
+        ),
+    ] {
+        let mol = Molecule::from_atoms(atoms, 0, multiplicity).unwrap();
+        let ints = AoIntegrals::compute_with(&mol, basis, harmonics).unwrap();
+        let r = rohf(&mol, &ints, &ScfOptions::default()).unwrap();
+        assert!(
+            (r.energy - expected).abs() < 1e-9,
+            "{atoms}: {} vs {expected}",
+            r.energy
+        );
+        // A level shift damps the iterations without moving the solution.
+        let shifted = ScfOptions {
+            level_shift: 0.5,
+            ..ScfOptions::default()
+        };
+        let s = rohf(&mol, &ints, &shifted).unwrap();
+        assert!(
+            (s.energy - expected).abs() < 1e-8,
+            "{atoms} shifted: {}",
+            s.energy
+        );
+    }
+}
+
+#[test]
+fn restricted_open_shell_of_a_closed_shell_is_rhf() {
+    for (atoms, basis) in [(H2O, Basis::CcPvdz), (N2, Basis::SixThirtyOneGStar)] {
+        let (mol, ints) = setup(atoms, basis, 0, 1);
+        let a = rhf(&mol, &ints, &ScfOptions::default()).unwrap();
+        let b = rohf(&mol, &ints, &ScfOptions::default()).unwrap();
+        assert!((a.energy - b.energy).abs() < 1e-10);
+        for (x, y) in a.orbital_energies[0].iter().zip(&b.orbital_energies[0]) {
+            assert!((x - y).abs() < 1e-7, "{x} vs {y}");
+        }
+    }
+}

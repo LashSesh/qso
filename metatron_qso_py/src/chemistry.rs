@@ -548,7 +548,7 @@ impl PyAoIntegrals {
     fn harmonics(&self) -> &'static str {
         match self.inner.harmonics() {
             Harmonics::Cartesian => "cartesian",
-            _ => "spherical",
+            Harmonics::Spherical => "spherical",
         }
     }
 
@@ -631,7 +631,8 @@ impl PyHartreeFock {
         self.inner.nuclear_repulsion
     }
 
-    /// Orbital energies: one array for RHF, `[alpha, beta]` for UHF.
+    /// Orbital energies: one array for RHF and ROHF (eigenvalues of the
+    /// effective Fock matrix), `[alpha, beta]` for UHF.
     #[getter]
     fn orbital_energies<'py>(&self, py: Python<'py>) -> Vec<Bound<'py, PyArray1<f64>>> {
         self.inner
@@ -641,8 +642,8 @@ impl PyHartreeFock {
             .collect()
     }
 
-    /// Orbital coefficients (columns): one matrix for RHF, `[alpha, beta]`
-    /// for UHF.
+    /// Orbital coefficients (columns): one matrix for RHF and ROHF,
+    /// `[alpha, beta]` for UHF.
     #[getter]
     fn coefficients<'py>(&self, py: Python<'py>) -> Vec<Bound<'py, PyArray2<f64>>> {
         self.inner
@@ -710,7 +711,7 @@ impl PyHartreeFock {
 }
 
 fn parse_harmonics(name: &str) -> PyResult<Harmonics> {
-    match name {
+    match name.to_ascii_lowercase().as_str() {
         "spherical" => Ok(Harmonics::Spherical),
         "cartesian" => Ok(Harmonics::Cartesian),
         other => Err(invalid(format!(

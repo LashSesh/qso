@@ -1,4 +1,5 @@
-//! Molecules and their integrals over contracted Cartesian Gaussians.
+//! Molecules and their integrals over contracted Gaussians (spherical or
+//! Cartesian shells up to g).
 //!
 //! A [`Molecule`] lists nuclei (charge and position in bohr), the total
 //! charge and the spin multiplicity. [`AoIntegrals::compute`] evaluates the
@@ -32,9 +33,10 @@ pub const BOHR_PER_ANGSTROM: f64 = 1.0 / 0.529_177_210_903;
 pub const MAX_BASIS_FUNCTIONS: usize = 64;
 /// Most Cartesian components behind spherical basis functions (a d shell
 /// has six for its five functions); their integrals are computed first.
-pub const MAX_CARTESIAN_FUNCTIONS: usize = 80;
-/// Largest angular momentum of a shell (g functions).
-pub const MAX_SHELL_L: u32 = 4;
+pub(crate) const MAX_CARTESIAN_FUNCTIONS: usize = 80;
+/// Largest angular momentum of a shell the integrals take (g functions;
+/// the bundled bases stop at d).
+pub(crate) const MAX_SHELL_L: u32 = 4;
 
 const SYMBOLS: [&str; 18] = [
     "H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne", "Na", "Mg", "Al", "Si", "P", "S", "Cl",
@@ -467,9 +469,10 @@ fn boys(f: &mut [f64], t: f64) {
         }
         return;
     }
-    if t > 60.0 {
+    if t > 60.0 + 4.0 * nmax as f64 {
         // Asymptotic: F_n = (2n−1)!! / 2^{n+1} √(π / T^{2n+1}); the
-        // neglected terms are below e^{−60}.
+        // neglected terms are below e^{−T} T^{n} relative to it, under
+        // 10⁻²⁰ from this threshold on (n ≤ 16).
         let mut v = 0.5 * (std::f64::consts::PI / t).sqrt();
         for (n, fv) in f.iter_mut().enumerate() {
             *fv = v;
@@ -638,12 +641,96 @@ fn nuclear_pair(pair: &Pair, c: [f64; 3]) -> f64 {
     v
 }
 
-/// `(ij|kl)` over contracted functions, from the pairs `ij` and `kl`.
-#[allow(clippy::needless_range_loop)]
-fn eri_pairs(ab: &Pair, cd: &Pair, r: &mut Vec<f64>, work: &mut Vec<f64>) -> f64 {
-    let l = ab.total_l() + cd.total_l();
+/// The primitive products of two shells (first component and angular
+/// momentum each), with the Hermite expansion `E^{ij}_t` of every pair of
+/// exponents `i ≤ l_a`, `j ≤ l_b` per direction.
+struct ShellPair {
+    /// First function, angular momentum and number of functions of each
+    /// group of shells.
+    a: (usize, usize, usize),
+    b: (usize, usize, usize),
+    prims: Vec<ShellPrim>,
+}
+
+struct ShellPrim {
+    p: f64,
+    center: [f64; 3],
+    /// Primitive indices in the two shells.
+    pa: usize,
+    pb: usize,
+    /// `e[((k·(l_a+1) + i)·(l_b+1) + j)·(l_a+l_b+1) + t]`.
+    e: Vec<f64>,
+}
+
+impl ShellPair {
+    fn new(functions: &[Function], a: (usize, usize, usize), b: (usize, usize, usize)) -> Self {
+        let (fa, fb) = (&functions[a.0], &functions[b.0]);
+        let (la, lb) = (a.1, b.1);
+        let mut prims = Vec::with_capacity(fa.exponents.len() * fb.exponents.len());
+        for (pa, &x) in fa.exponents.iter().enumerate() {
+            for (pb, &y) in fb.exponents.iter().enumerate() {
+                let p = x + y;
+                let center = [0, 1, 2].map(|k| (x * fa.center[k] + y * fb.center[k]) / p);
+                let mut e = vec![0.0; 3 * (la + 1) * (lb + 1) * (la + lb + 1)];
+                for k in 0..3 {
+                    for i in 0..=la {
+                        for j in 0..=lb {
+                            for t in 0..=i + j {
+                                e[((k * (la + 1) + i) * (lb + 1) + j) * (la + lb + 1) + t] =
+                                    hermite_e(
+                                        i as i32,
+                                        j as i32,
+                                        t as i32,
+                                        fa.center[k] - fb.center[k],
+                                        x,
+                                        y,
+                                    );
+                            }
+                        }
+                    }
+                }
+                prims.push(ShellPrim {
+                    p,
+                    center,
+                    pa,
+                    pb,
+                    e,
+                });
+            }
+        }
+        ShellPair { a, b, prims }
+    }
+
+    fn components(&self) -> (usize, usize) {
+        (self.a.2, self.b.2)
+    }
+}
+
+/// `(ab|cd)` for every component of four shells, at
+/// `((a·n_b + b)·n_c + c)·n_d + d`: per pair of primitive products one
+/// table `R_{tuv}`, contracted first with the right pair's expansion for
+/// each of its components, then with the left one's.
+fn eri_shells(
+    functions: &[Function],
+    ab: &ShellPair,
+    cd: &ShellPair,
+    r: &mut Vec<f64>,
+    work: &mut Vec<f64>,
+    w: &mut Vec<f64>,
+) -> Vec<f64> {
+    let (na, nb) = ab.components();
+    let (nc, nd) = cd.components();
+    let ncd = nc * nd;
+    let (la, lb, lc, ld) = (ab.a.1, ab.b.1, cd.a.1, cd.b.1);
+    let (lab, lcd) = (la + lb, lc + ld);
+    let l = lab + lcd;
     let d = l + 1;
-    let mut v = 0.0;
+    let dw = lab + 1;
+    let block = dw * dw * dw;
+    let mut out = vec![0.0; na * nb * ncd];
+    let at = |pair_l: (usize, usize), e: &[f64], k: usize, i: usize, j: usize, t: usize| {
+        e[((k * (pair_l.0 + 1) + i) * (pair_l.1 + 1) + j) * (pair_l.0 + pair_l.1 + 1) + t]
+    };
     for x in &ab.prims {
         for y in &cd.prims {
             let (p, q) = (x.p, y.p);
@@ -659,43 +746,176 @@ fn eri_pairs(ab: &Pair, cd: &Pair, r: &mut Vec<f64>, work: &mut Vec<f64>) -> f64
                 r,
                 work,
             );
-            let mut s = 0.0;
-            for t in 0..=ab.l[0] {
-                for u in 0..=ab.l[1] {
-                    for w in 0..=ab.l[2] {
-                        let left = x.e[0][t] * x.e[1][u] * x.e[2][w];
-                        if left == 0.0 {
-                            continue;
-                        }
-                        let mut inner = 0.0;
-                        for tau in 0..=cd.l[0] {
-                            for nu in 0..=cd.l[1] {
-                                for phi in 0..=cd.l[2] {
-                                    let sign = if (tau + nu + phi) % 2 == 1 { -1.0 } else { 1.0 };
-                                    inner += sign
-                                        * y.e[0][tau]
-                                        * y.e[1][nu]
-                                        * y.e[2][phi]
-                                        * r[((t + tau) * d + u + nu) * d + w + phi];
+            let pref = 2.0 * std::f64::consts::PI.powf(2.5) / (p * q * (p + q).sqrt());
+            // W[cd][t][u][v] = c_cd Σ (−1)^{τ+ν+φ} E_τ E_ν E_φ R_{t+τ, u+ν, v+φ}.
+            w.clear();
+            w.resize(ncd * block, 0.0);
+            let mut any = false;
+            for kc in 0..nc {
+                let fc = &functions[cd.a.0 + kc];
+                for kd in 0..nd {
+                    let fd = &functions[cd.b.0 + kd];
+                    let coef = fc.coefficients[y.pa] * fd.coefficients[y.pb];
+                    if coef == 0.0 {
+                        continue;
+                    }
+                    any = true;
+                    let (c, dd) = (fc.powers, fd.powers);
+                    let m = [0, 1, 2].map(|k| (c[k] + dd[k]) as usize);
+                    let wb = &mut w[(kc * nd + kd) * block..(kc * nd + kd + 1) * block];
+                    for t in 0..=lab {
+                        for u in 0..=lab - t {
+                            for v in 0..=lab - t - u {
+                                let mut sum = 0.0;
+                                for tau in 0..=m[0] {
+                                    let ex =
+                                        at((lc, ld), &y.e, 0, c[0] as usize, dd[0] as usize, tau);
+                                    if ex == 0.0 {
+                                        continue;
+                                    }
+                                    for nu in 0..=m[1] {
+                                        let ey = ex
+                                            * at(
+                                                (lc, ld),
+                                                &y.e,
+                                                1,
+                                                c[1] as usize,
+                                                dd[1] as usize,
+                                                nu,
+                                            );
+                                        for phi in 0..=m[2] {
+                                            let ez = ey
+                                                * at(
+                                                    (lc, ld),
+                                                    &y.e,
+                                                    2,
+                                                    c[2] as usize,
+                                                    dd[2] as usize,
+                                                    phi,
+                                                );
+                                            let sign =
+                                                if (tau + nu + phi) % 2 == 1 { -1.0 } else { 1.0 };
+                                            sum += sign
+                                                * ez
+                                                * r[((t + tau) * d + u + nu) * d + v + phi];
+                                        }
+                                    }
                                 }
+                                wb[(t * dw + u) * dw + v] = coef * sum;
                             }
                         }
-                        s += left * inner;
                     }
                 }
             }
-            v += x.coef * y.coef * 2.0 * std::f64::consts::PI.powf(2.5) / (p * q * (p + q).sqrt())
-                * s;
+            if !any {
+                continue;
+            }
+            for ka in 0..na {
+                let fa = &functions[ab.a.0 + ka];
+                for kb in 0..nb {
+                    let fb = &functions[ab.b.0 + kb];
+                    let coef = pref * fa.coefficients[x.pa] * fb.coefficients[x.pb];
+                    if coef == 0.0 {
+                        continue;
+                    }
+                    let (a, b) = (fa.powers, fb.powers);
+                    let m = [0, 1, 2].map(|k| (a[k] + b[k]) as usize);
+                    let row = &mut out[(ka * nb + kb) * ncd..(ka * nb + kb + 1) * ncd];
+                    for t in 0..=m[0] {
+                        let ex = at((la, lb), &x.e, 0, a[0] as usize, b[0] as usize, t);
+                        if ex == 0.0 {
+                            continue;
+                        }
+                        for u in 0..=m[1] {
+                            let ey = ex * at((la, lb), &x.e, 1, a[1] as usize, b[1] as usize, u);
+                            for v in 0..=m[2] {
+                                let ez = coef
+                                    * ey
+                                    * at((la, lb), &x.e, 2, a[2] as usize, b[2] as usize, v);
+                                if ez == 0.0 {
+                                    continue;
+                                }
+                                let k = (t * dw + u) * dw + v;
+                                for (cdk, o) in row.iter_mut().enumerate() {
+                                    *o += ez * w[cdk * block + k];
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
-    v
+    out
+}
+
+/// All `(ij|kl)` over the Cartesian functions, from the unique quartets of
+/// groups of shells (`shells`: first function, angular momentum and number
+/// of functions; the columns of a general contraction share their
+/// primitives and form one group), in parallel.
+fn repulsion(functions: &[Function], shells: &[(usize, usize, usize)]) -> Vec<f64> {
+    let n = functions.len();
+    let pairs: Vec<ShellPair> = (0..shells.len())
+        .flat_map(|i| (0..=i).map(move |j| (i, j)))
+        .map(|(i, j)| ShellPair::new(functions, shells[i], shells[j]))
+        .collect();
+    let quartets: Vec<(usize, usize)> = (0..pairs.len())
+        .flat_map(|x| (0..=x).map(move |y| (x, y)))
+        .collect();
+    let chunk = 16;
+    let blocks: Vec<Vec<f64>> = parallel::map_tasks(quartets.len().div_ceil(chunk), |c| {
+        let (mut r, mut work, mut w) = (Vec::new(), Vec::new(), Vec::new());
+        (c * chunk..((c + 1) * chunk).min(quartets.len()))
+            .map(|k| {
+                let (x, y) = quartets[k];
+                eri_shells(functions, &pairs[x], &pairs[y], &mut r, &mut work, &mut w)
+            })
+            .collect::<Vec<_>>()
+    })
+    .into_iter()
+    .flatten()
+    .collect();
+    let mut eri = vec![0.0; n * n * n * n];
+    for (&(x, y), block) in quartets.iter().zip(&blocks) {
+        let (ab, cd) = (&pairs[x], &pairs[y]);
+        let (na, nb) = ab.components();
+        let (nc, nd) = cd.components();
+        let mut it = block.iter();
+        for ka in 0..na {
+            for kb in 0..nb {
+                for kc in 0..nc {
+                    for kd in 0..nd {
+                        let v = *it.next().expect("a full block");
+                        let (i, j, k, l) = (ab.a.0 + ka, ab.b.0 + kb, cd.a.0 + kc, cd.b.0 + kd);
+                        for (p, q, r, s) in [
+                            (i, j, k, l),
+                            (j, i, k, l),
+                            (i, j, l, k),
+                            (j, i, l, k),
+                            (k, l, i, j),
+                            (l, k, i, j),
+                            (k, l, j, i),
+                            (l, k, j, i),
+                        ] {
+                            eri[((p * n + q) * n + r) * n + s] = v;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    eri
 }
 
 /// Overlap, kinetic, nuclear-attraction and electron-repulsion integrals
 /// over Cartesian functions (`n × n` and `n⁴`, row-major).
 type Integrals = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
 
-fn cartesian_integrals(molecule: &Molecule, functions: &[Function]) -> Integrals {
+fn cartesian_integrals(
+    molecule: &Molecule,
+    functions: &[Function],
+    shells: &[(usize, usize, usize)],
+) -> Integrals {
     let n = functions.len();
     // Primitive products of every pair i ≥ j, in the order of the
     // quartets below.
@@ -730,43 +950,7 @@ fn cartesian_integrals(molecule: &Molecule, functions: &[Function]) -> Integrals
             m[j * n + i] = v;
         }
     }
-    // Unique quartets i ≥ j, k ≥ l, ij ≥ kl, in parallel.
-    let quartets: Vec<(usize, usize)> = (0..pairs.len())
-        .flat_map(|x| (0..=x).map(move |y| (x, y)))
-        .collect();
-    let chunk = 64;
-    let values: Vec<f64> = parallel::map_tasks(quartets.len().div_ceil(chunk), |c| {
-        let (mut r, mut work) = (Vec::new(), Vec::new());
-        (c * chunk..((c + 1) * chunk).min(quartets.len()))
-            .map(|k| {
-                eri_pairs(
-                    &pair_data[quartets[k].0],
-                    &pair_data[quartets[k].1],
-                    &mut r,
-                    &mut work,
-                )
-            })
-            .collect::<Vec<f64>>()
-    })
-    .into_iter()
-    .flatten()
-    .collect();
-    let mut eri = vec![0.0; n * n * n * n];
-    for (&(x, y), &v) in quartets.iter().zip(&values) {
-        let ((i, j), (k, l)) = (pairs[x], pairs[y]);
-        for (p, q, r, s) in [
-            (i, j, k, l),
-            (j, i, k, l),
-            (i, j, l, k),
-            (j, i, l, k),
-            (k, l, i, j),
-            (l, k, i, j),
-            (k, l, j, i),
-            (l, k, j, i),
-        ] {
-            eri[((p * n + q) * n + r) * n + s] = v;
-        }
-    }
+    let eri = repulsion(functions, shells);
     (overlap, kinetic, nuclear, eri)
 }
 
@@ -835,7 +1019,7 @@ impl AoIntegrals {
         for (atom, (&z, &pos)) in molecule.charges.iter().zip(&molecule.positions).enumerate() {
             for (l, prims) in shells_of(z) {
                 let l = l as u32;
-                debug_assert!(l <= MAX_SHELL_L);
+                assert!(l <= MAX_SHELL_L, "shells up to g");
                 shells.push((functions.len(), l, atom));
                 for p in cartesian_powers(l) {
                     functions.push(Function::new(pos, p, prims));
@@ -866,7 +1050,26 @@ impl AoIntegrals {
                 format!("{nc} Cartesian components exceed the maximum {MAX_CARTESIAN_FUNCTIONS}"),
             ));
         }
-        let (overlap, kinetic, nuclear, eri) = cartesian_integrals(molecule, &functions);
+        // Groups of shells for the repulsion integrals: consecutive shells
+        // of one atom with the same angular momentum and exponents (the
+        // columns of a general contraction).
+        let mut shell_list: Vec<(usize, usize, usize)> = Vec::new();
+        let mut previous: Option<(usize, u32, usize)> = None;
+        for &(first, l, atom) in &shells {
+            let size = ((l + 1) * (l + 2) / 2) as usize;
+            let same = previous.is_some_and(|(pfirst, pl, patom)| {
+                pl == l
+                    && patom == atom
+                    && functions[pfirst].exponents == functions[first].exponents
+            });
+            match shell_list.last_mut() {
+                Some(group) if same => group.2 += size,
+                _ => shell_list.push((first, l as usize, size)),
+            }
+            previous = Some((first, l, atom));
+        }
+        let (overlap, kinetic, nuclear, eri) =
+            cartesian_integrals(molecule, &functions, &shell_list);
         // Every final function as a combination of Cartesian components.
         let mut columns: Vec<Vec<(usize, f64)>> = Vec::with_capacity(n);
         let mut atoms = Vec::with_capacity(n);
@@ -939,9 +1142,11 @@ impl AoIntegrals {
         let eri = if identity {
             eri
         } else {
-            let a = quarter_transform(&eri, [nc, nc, nc, nc], &columns);
-            let a = quarter_transform(&a, [n, nc, nc, nc], &columns);
-            let a = quarter_transform(&a, [n, n, nc, nc], &columns);
+            // At most two tensors alive at a time.
+            let mut a = quarter_transform(&eri, [nc, nc, nc, nc], &columns);
+            drop(eri);
+            a = quarter_transform(&a, [n, nc, nc, nc], &columns);
+            a = quarter_transform(&a, [n, n, nc, nc], &columns);
             quarter_transform(&a, [n, n, n, nc], &columns)
         };
         Ok(Self {

@@ -100,15 +100,19 @@ Gaussians by the McMurchie–Davidson scheme, for shells up to g:
   cc-pVDZ (p functions on H and He, d on Li to Ar), for hydrogen to argon.
   The data come from PySCF's copy of the Basis Set Exchange
   (`scripts/generate_basis_data.py`).
-- **Limits.** At most 64 basis functions (and 80 Cartesian components
-  behind them).
+- **Limits.** At most 64 basis functions. The repulsion integrals are
+  computed per quartet of shells, the columns of a general contraction
+  together; 64 functions with three chlorines in cc-pVDZ take about 3 s
+  on four cores and 0.35 GB (`benchmark_report`).
 - **Order.** Functions come in PySCF's order.
 - **Harmonics.** d and higher shells are spherical by default: real
   solid harmonics, `m = −l, …, l`, with PySCF's signs. With
   `harmonics="cartesian"` they are the monomials `xx, xy, xz, yy, yz, zz`,
   each normalised to one; PySCF leaves its Cartesian d components with
-  norms 4π/5 and 4π/15, so its integrals differ from QSO's by these
-  factors.
+  squared norms 4π/5 (xx) and 4π/15 (xy), so its integrals differ from
+  QSO's by the square roots of these factors, one per index. 6-31G* is
+  defined, and run by Gaussian by default, with Cartesian d shells: use
+  `harmonics="cartesian"` to compare with such results.
 
 `hartree_fock` solves the restricted (closed-shell), unrestricted
 (`unrestricted=True`) or restricted open-shell (`restricted_open=True`)
@@ -167,9 +171,14 @@ The tests compare with PySCF 2.14:
   and ROHF of triplet O₂ (cc-pVDZ), and ROHF of NH₂ (6-31G*) agree to
   10⁻⁹ Ha. CASCI in the ROHF orbitals of O₂ (12 electrons in 8 orbitals)
   and NH₂ agrees to 10⁻⁹ Ha.
-- Integrals of f and g shells agree with PySCF (sums over every
-  integral to 10⁻¹¹ relative, single integrals to 10⁻¹³), spherical and
-  Cartesian.
+- Integrals of f and g shells (a custom basis on OH⁻) agree with PySCF:
+  its fingerprints of the overlap, core Hamiltonian and repulsion
+  integrals (Σ_k a_k cos k, so signs and order count) to 10⁻¹⁰, sums of
+  absolute values to 10⁻¹¹ relative, single integrals to 10⁻¹³, spherical
+  and Cartesian.
+- ROHF of ClO, PH₂ and triplet SO (Cartesian d shells for the last two)
+  agrees to 10⁻⁹ Ha, also with a level shift; ROHF of a closed shell is
+  RHF.
 - The cross-validation compares every integral of H₂O, NH₃, CO and F₂ in
   all four bases, of HCl, H₂S, SiH₄ and NaF, and of two molecules with
   Cartesian shells: the largest difference is 2.6·10⁻¹³. RHF, UHF, ROHF

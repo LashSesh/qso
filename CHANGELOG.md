@@ -30,8 +30,12 @@ basis sets and open shells) of the fifth.
     Exchange.
   - Restricted open-shell Hartree–Fock with PySCF's effective Fock
     matrix; its orbitals give active-space Hamiltonians of open shells.
-  - Checked against PySCF 2.14: integrals to 2.6·10⁻¹³ (f and g shells
-    included), RHF, UHF, ROHF and CASCI energies to 10⁻⁹ Ha.
+  - Repulsion integrals per quartet of shells, the columns of a general
+    contraction together (64 functions, three chlorines in cc-pVDZ: 3 s).
+  - Checked against PySCF 2.14: every integral of the cross-validation
+    molecules (d shells, H to Ar) to 2.6·10⁻¹³; f and g shells in a custom
+    basis by PySCF's fingerprints and single integrals; RHF, UHF, ROHF and
+    CASCI energies to 10⁻⁹ Ha.
 
 - **Circuit distance, syndrome schedules and correlated matching**
   (`qec::distance`, `qec::correlated`, `css_code_memory_with`; Python

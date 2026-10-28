@@ -1,7 +1,9 @@
 //! Hartree–Fock self-consistent field.
 //!
-//! [`rhf`] and [`uhf`] solve the restricted (closed-shell) and unrestricted
-//! Roothaan–Hall equations `F C = S C ε` on [`AoIntegrals`]. The basis is
+//! [`rhf`], [`uhf`] and [`rohf`] solve the restricted (closed-shell),
+//! unrestricted and restricted open-shell Roothaan–Hall equations
+//! `F C = S C ε` on [`AoIntegrals`] (ROHF with Roothaan's effective Fock
+//! matrix, see [`rohf`]). The basis is
 //! orthogonalised canonically (`X = U s^{−1/2}`, dropping overlap
 //! eigenvalues below [`ScfOptions::linear_dependence`]). The iterations
 //! start from a superposition of atomic densities ([`Guess::Atoms`]: each
@@ -44,7 +46,7 @@ use super::molecule::MolecularIntegrals;
 use crate::error::{QsoError, Result};
 use crate::linalg::{RMatrix, eigh_real};
 
-/// Settings of [`rhf`] and [`uhf`].
+/// Settings of [`rhf`], [`uhf`] and [`rohf`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ScfOptions {
     /// Largest number of iterations.
@@ -68,7 +70,7 @@ pub struct ScfOptions {
     pub level_shift: f64,
 }
 
-/// Starting density of [`rhf`] and [`uhf`].
+/// Starting density of [`rhf`], [`uhf`] and [`rohf`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Guess {
@@ -125,10 +127,11 @@ pub struct ScfResult {
     pub energy: f64,
     /// Nuclear repulsion energy.
     pub nuclear_repulsion: f64,
-    /// Orbital energies, ascending: one set for RHF, `[α, β]` for UHF.
+    /// Orbital energies, ascending: one set for RHF and ROHF (for ROHF the
+    /// eigenvalues of the effective Fock matrix), `[α, β]` for UHF.
     pub orbital_energies: Vec<Vec<f64>>,
     /// Orbital coefficients (columns, in the atomic-orbital basis): one
-    /// matrix for RHF, `[α, β]` for UHF.
+    /// matrix for RHF and ROHF, `[α, β]` for UHF.
     pub coefficients: Vec<RMatrix>,
     pub n_alpha: usize,
     pub n_beta: usize,
@@ -155,7 +158,7 @@ impl ScfResult {
         self.coefficients.len() == 1
     }
 
-    /// `⟨S²⟩` of the determinant: `S(S+1)` for RHF; for UHF
+    /// `⟨S²⟩` of the determinant: `S(S+1)` for RHF and ROHF; for UHF
     /// `S_z(S_z+1) + n_β − Σ_ij |⟨α_i|β_j⟩|²` (spin contamination makes it
     /// larger than `S(S+1)`).
     pub fn s_squared(&self) -> f64 {
@@ -478,7 +481,7 @@ pub fn rhf(molecule: &Molecule, ints: &AoIntegrals, options: &ScfOptions) -> Res
     if na != nb {
         return Err(QsoError::invalid(
             "multiplicity",
-            "restricted Hartree–Fock needs a closed shell; use unrestricted Hartree–Fock",
+            "restricted Hartree–Fock needs a closed shell; use restricted open-shell or unrestricted Hartree–Fock",
         ));
     }
     with_fallback(molecule, ints, options, Kind::Restricted)

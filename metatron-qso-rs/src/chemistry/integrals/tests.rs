@@ -290,6 +290,19 @@ fn f_and_g_shells_match_pyscf() {
         assert!((sum(n, &|i, j| ints.core(i, j)) - h_sum).abs() < 1e-11 * h_sum);
         let e: f64 = ints.eri_tensor().iter().map(|v| v.abs()).sum();
         assert!((e - eri_sum).abs() < 1e-11 * eri_sum, "{e} vs {eri_sum}");
+        // PySCF's fingerprints Σ_k a_k cos k: signs and order of every
+        // integral count.
+        let (fs, fh, fe) = if harmonics == Harmonics::Spherical {
+            (3.0666309723339316, -30.808780128282717, 5.738451944070976)
+        } else {
+            (-4.907880841550632, 17.81832273230602, 0.45477260165231903)
+        };
+        let fp_s = fingerprint((0..n * n).map(|k| ints.overlap(k / n, k % n)));
+        let fp_h = fingerprint((0..n * n).map(|k| ints.core(k / n, k % n)));
+        let fp_e = fingerprint(ints.eri_tensor().iter().copied());
+        assert!((fp_s - fs).abs() < 1e-11, "{fp_s} vs {fs}");
+        assert!((fp_h - fh).abs() < 1e-10, "{fp_h} vs {fh}");
+        assert!((fp_e - fe).abs() < 1e-10, "{fp_e} vs {fe}");
         if harmonics == Harmonics::Spherical {
             for ((i, j, k, l), v) in [
                 ((0, 5, 9, 30), 0.0010527254138130967),
