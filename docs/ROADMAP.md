@@ -1050,6 +1050,32 @@ Also in this milestone:
   `cargo-semver-checks` reported the first.
 - The non-exhaustive `DecoderChoice` takes all decoders.
 
+An independent review fuzzed the distance search against enumeration on
+12 000 random models and checked the decomposition against Stim's source,
+the two-pass decoder against PyMatching's and the bicycle cycle against
+the paper's table. It found:
+
+- **A false "none".** A search that stopped at `max_weight` without a
+  witness reported that no logical error exists (true distance 6 on the
+  [[72, 12, 6]] cycle with `max_weight = 5`). Existence is now decided
+  exactly by GF(2) linear algebra.
+- **A regression.** `Y_ERROR`s that flip more than two detectors no
+  longer decomposed. A Y error is now split over its X and Z parts, and
+  stays whole when graph-like, as in Stim.
+- **No bound on BP+OSD searches.** `bposd_trials` is now at most 2¹⁶.
+- **Unchecked parts.** Parts are now checked to add up to the error.
+- **Smaller points, all fixed:**
+  - `CssCode` equality compared the new structure;
+  - `--schedule` was silently ignored with `--circuit`;
+  - Python `lower_bound` was 2⁶⁴ − 1 for "none" (now `math.inf`);
+  - the colour-code claims were stated for d = 7 and "three rounds";
+  - missing tests: a stopped search, Y errors, and the gain of
+    correlations in Python.
+
+The review confirmed the rest: the search's pruning and bookkeeping, the
+shortest-cycle search, the channel decomposition line by line, the
+reweighting rule, the depth-8 cycle and the semver check against 1.6.0.
+
 ### 1.23 — Larger basis sets and open shells (M–L)
 
 Use case: chemistry beyond the smallest basis sets and the first two rows.

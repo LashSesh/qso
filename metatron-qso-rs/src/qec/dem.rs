@@ -174,7 +174,8 @@ fn combination(basis: &[Signature], k: usize) -> Signature {
 /// pairs whose remainder single-detector combinations flip, and finished
 /// with single-detector combinations. A combination that cannot be written
 /// so (Stim decomposes it later against the whole model's graph-like
-/// errors) is split into its basis errors.
+/// errors), or whose parts do not add up to it, is split into its basis
+/// errors.
 fn decomposed(basis: &[Signature], probabilities: &[f64]) -> Result<Vec<(Vec<Signature>, f64)>> {
     let s = basis.len();
     let combos: Vec<Signature> = (0..1usize << s).map(|k| combination(basis, k)).collect();
@@ -251,14 +252,23 @@ fn decomposed(basis: &[Signature], probabilities: &[f64]) -> Result<Vec<(Vec<Sig
         }
         Some(parts)
     };
+    // A channel of one error (a Y error) is no family of combinations: as
+    // in Stim, it stays whole when it is graph-like.
+    let single = probabilities.iter().filter(|&&p| p > 0.0).count() == 1;
     let mut out = Vec::new();
     for (k, &p) in probabilities.iter().enumerate().skip(1) {
         if p == 0.0 || is_empty(&combos[k]) {
             continue;
         }
-        let parts = if count(k) == 0 || (!wide && solved[k]) {
+        // Stim's rules can leave parts whose effects do not add up to the
+        // error's (an observable lost, a detector added); those errors are
+        // split into their basis errors instead.
+        let adds_up = |parts: &Vec<Signature>| {
+            parts.iter().fold((Vec::new(), 0u64), |acc, s| xor(&acc, s)) == combos[k]
+        };
+        let parts = if count(k) == 0 || (!wide && solved[k]) || (single && count(k) <= 2) {
             vec![combos[k].clone()]
-        } else if let Some(parts) = (!wide).then(|| split(k)).flatten() {
+        } else if let Some(parts) = (!wide).then(|| split(k)).flatten().filter(adds_up) {
             parts
         } else if count(k) <= 2 {
             vec![combos[k].clone()]
@@ -338,10 +348,11 @@ impl CorrelatedErrorModel {
 /// its qubits and their combinations): combinations that flip one
 /// detector, or two of which one no such combination flips, are parts; the
 /// other combinations are written with at most two such pairs and
-/// single-detector combinations. A combination it cannot write so (Stim
-/// then decomposes against the graph-like errors of the whole model) is
-/// split into its single-qubit X and Z parts. Errors with the same parts
-/// are merged.
+/// single-detector combinations (a Y error is such a combination). A
+/// combination it cannot write so (Stim then decomposes against the
+/// graph-like errors of the whole model), or whose parts would not add up
+/// to it, is split into its single-qubit X and Z parts. Errors with the
+/// same parts are merged.
 pub fn correlated_error_model(circuit: &DetectorCircuit) -> Result<CorrelatedErrorModel> {
     let mut merged: BTreeMap<Vec<Signature>, f64> = BTreeMap::new();
     each_channel(circuit, |basis, probabilities| {
@@ -363,8 +374,8 @@ pub fn correlated_error_model(circuit: &DetectorCircuit) -> Result<CorrelatedErr
 
 /// Calls `f(basis, probabilities)` for every noise channel of the circuit:
 /// the effects of its basis errors in Stim's order (for a depolarizing
-/// channel Z then X on each qubit; a measurement flip, a single-qubit X, Y
-/// or Z error is one basis error) and the probability of each combination
+/// channel Z then X on each qubit, as for a Y error; a measurement flip or
+/// a single-qubit X or Z error is one basis error) and the probability of each combination
 /// of them (index: bit `i` for basis error `i`), as independent errors.
 fn each_channel(
     circuit: &DetectorCircuit,
@@ -427,9 +438,11 @@ fn each_channel(
                 match *noise {
                     Noise::XError(p) => qubits.iter().try_for_each(|&q| f(&[x(q)], &[0.0, p]))?,
                     Noise::ZError(p) => qubits.iter().try_for_each(|&q| f(&[z(q)], &[0.0, p]))?,
+                    // As one error over the basis Z, X (so that it splits
+                    // into its X and Z parts like a depolarizing channel's).
                     Noise::YError(p) => qubits
                         .iter()
-                        .try_for_each(|&q| f(&[xor(&x(q), &z(q))], &[0.0, p]))?,
+                        .try_for_each(|&q| f(&[z(q), x(q)], &[0.0, 0.0, 0.0, p]))?,
                     Noise::Depolarize1(p) => {
                         let r = independent(p, 1);
                         for &q in qubits {

@@ -1911,7 +1911,7 @@ class CorrelatedMatchingDecoder:
 @final
 class CircuitDistance:
     @property
-    def lower_bound(self) -> int: ...
+    def lower_bound(self) -> Union[int, float]: ...
     @property
     def upper_bound(self) -> Optional[int]: ...
     @property
@@ -2011,7 +2011,7 @@ def css_code_memory(
     rounds: int,
     noise: Union[CircuitNoise, float, None] = None,
     basis: Literal["z", "x", "Z", "X"] = "z",
-    schedule: Union[Literal["greedy", "bicycle"], Sequence[int], None] = None,
+    schedule: Union[str, Sequence[int], None] = None,
 ) -> DetectorCircuit: ...
 def logical_error_rate(
     circuit: DetectorCircuit,

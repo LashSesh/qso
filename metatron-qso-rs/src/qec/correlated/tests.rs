@@ -161,3 +161,21 @@ fn invalid_models_are_errors() {
     let graph = MatchingGraph::from_dem(&model(0.1, vec![0, 1]).to_dem()).unwrap();
     assert!(DecoderChoice::CorrelatedMatching.build(graph).is_err());
 }
+
+#[test]
+fn y_errors_split_into_their_parts() {
+    // A Y error on data qubits in the middle of Stim's circuit flips X- and
+    // Z-type detectors (three or four): decomposed into the X and Z parts,
+    // as Stim does (and as QSO did before 1.22).
+    let text = include_str!("../../../tests/data/stim/surface_d5_memory_z.stim").replacen(
+        "REPEAT 4 {\n",
+        "REPEAT 4 {\n    Y_ERROR(0.001) 1 3 5 12 25\n",
+        1,
+    );
+    let c = DetectorCircuit::from_stim(&text).unwrap();
+    let dem = detector_error_model(&c, true).unwrap();
+    assert!(dem.errors.iter().all(|e| e.detectors.len() <= 2));
+    let model = correlated_error_model(&c).unwrap();
+    assert!(model.errors.iter().any(|e| e.parts.len() == 2));
+    assert!(CorrelatedMatchingDecoder::new(&model).is_ok());
+}

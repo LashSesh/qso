@@ -423,7 +423,7 @@ enum Command {
         circuit: Option<std::path::PathBuf>,
         /// Order of the CNOTs of the colour and bicycle codes: greedy,
         /// bicycle (the depth-8 cycle of Bravyi et al.), or six directions
-        /// for the colour code, e.g. 0,1,2,3,4,5.
+        /// for the colour code, e.g. 0,1,2,3,4,5 (not with --circuit).
         #[arg(long, default_value = "greedy")]
         schedule: String,
         /// Also bound the circuit distance: the fewest faults that flip a
@@ -1415,8 +1415,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 }
             };
             if css_schedule != qec::CssSchedule::Greedy
-                && from_file.is_none()
-                && !matches!(code, CodeArg::Color | CodeArg::Bb)
+                && (from_file.is_some() || !matches!(code, CodeArg::Color | CodeArg::Bb))
             {
                 return Err(QsoError::invalid(
                     "schedule",

@@ -847,7 +847,7 @@ impl PyCorrelatedMatchingDecoder {
 }
 
 /// Bounds on the circuit distance: `lower_bound` (no undetectable logical
-/// error is lighter; a huge number if none exists), the lightest found
+/// error is lighter; `math.inf` if none exists), the lightest found
 /// `witness` (indices into the model's errors, or None), the observables
 /// it flips, and `distance` when the bounds meet.
 #[pyclass(name = "CircuitDistance", module = "metatron_qso", frozen)]
@@ -857,9 +857,18 @@ pub struct PyCircuitDistance {
 
 #[pymethods]
 impl PyCircuitDistance {
+    /// `math.inf` when no undetectable logical error exists.
     #[getter]
-    fn lower_bound(&self) -> usize {
-        self.inner.lower_bound
+    fn lower_bound(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        Ok(if self.inner.lower_bound == usize::MAX {
+            f64::INFINITY.into_pyobject(py)?.into_any().unbind()
+        } else {
+            self.inner
+                .lower_bound
+                .into_pyobject(py)?
+                .into_any()
+                .unbind()
+        })
     }
 
     #[getter]
@@ -1194,7 +1203,7 @@ enum ScheduleArg {
 /// CNOT layers), `"bicycle"` (the depth-8 cycle of Bravyi et al. for a
 /// bivariate bicycle code with three monomials per polynomial), or, for a
 /// colour code, the order in which every face visits its six directions
-/// (a permutation of 0..6).
+/// (a permutation of 0..6, as a list or as "0,1,2,3,4,5").
 #[pyfunction]
 #[pyo3(signature = (code, rounds, noise = None, basis = "z", schedule = None))]
 fn css_code_memory(
@@ -1212,9 +1221,17 @@ fn css_code_memory(
             "greedy" => CssSchedule::Greedy,
             "bicycle" => CssSchedule::Bicycle,
             other => {
-                return Err(invalid(format!(
-                    "unknown schedule {other:?}; use \"greedy\", \"bicycle\" or six directions"
-                )));
+                // Six directions as the command line writes them: "0,1,2,3,4,5".
+                let order: Option<Vec<u8>> =
+                    other.split(',').map(|x| x.trim().parse().ok()).collect();
+                match order.map(<[u8; 6]>::try_from) {
+                    Some(Ok(order)) => CssSchedule::Directions(order),
+                    _ => {
+                        return Err(invalid(format!(
+                            "unknown schedule {other:?}; use \"greedy\", \"bicycle\" or six directions"
+                        )));
+                    }
+                }
             }
         },
         Some(ScheduleArg::Directions(order)) => {

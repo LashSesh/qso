@@ -96,6 +96,11 @@ impl Basis {
         self.combos.clear();
     }
 
+    /// The pivot (lowest bit) of member `k`.
+    pub(crate) fn pivot(&self, k: usize) -> usize {
+        self.pivots[k]
+    }
+
     pub(crate) fn rank(&self) -> usize {
         self.pivots.len()
     }

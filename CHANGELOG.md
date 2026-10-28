@@ -25,11 +25,13 @@ testing) of the fourth, which completes it; and milestone 1.22
     errors that flip at most two detectors, exactly (as Stim's
     `shortest_graphlike_error`). `circuit_distance`: exact for graph-like
     models; otherwise a proven lower bound from an exhaustive search and an
-    upper bound with a witness from BP+OSD.
+    upper bound with a witness from BP+OSD (whether any logical error
+    exists at all is decided by GF(2) linear algebra).
   - `CssSchedule::Bicycle`: the depth-8 syndrome cycle of Bravyi et al.
     (2024) for bivariate bicycle codes; [[72, 12, 6]] keeps circuit
     distance 6 (greedy layers: 4). `CssSchedule::Directions` for colour
-    codes: every order gives (d + 1)/2, as with greedy layers.
+    codes: every order gives (d + 1)/2 for d = 3 and 5, as greedy layers
+    do.
   - `CorrelatedMatchingDecoder` and `correlated_error_model`: two-pass
     matching with PyMatching 2.4's reweighting rule; on Stim's surface
     codes it agrees with PyMatching on all but 0.01–0.04% of shots.
@@ -183,6 +185,7 @@ testing) of the fourth, which completes it; and milestone 1.22
   generated circuits equal Stim's error by error. Before, every error
   with more than two detectors was split into all of its single-qubit
   parts, which made correlated matching less effective.
+- `CssCode` equality compares the checks and logical operators only.
 - `DecoderKind` is back to its 1.6.0 form (union-find and matching;
   `build` cannot fail): adding `BpOsd` to it (1.19) broke the 1.x
   compatibility promise. BP+OSD and correlated matching are variants of

@@ -20,8 +20,9 @@ pub const MAX_CSS_QUBITS: usize = 1 << 13;
 /// A CSS code: X-type and Z-type checks on `n` qubits, every X check
 /// overlapping every Z check evenly, and a basis of logical operators,
 /// paired so that X logical `i` and Z logical `j` overlap oddly exactly
-/// when `i = j`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// when `i = j`. Codes are equal when their checks and logical operators
+/// are (the structure a schedule may use is not compared).
+#[derive(Clone, Debug)]
 pub struct CssCode {
     n: usize,
     x_checks: Vec<Vec<usize>>,
@@ -35,6 +36,26 @@ pub struct CssCode {
     /// `f`) in each of the six directions around its centre.
     faces: Option<Vec<[Option<usize>; 6]>>,
 }
+
+impl PartialEq for CssCode {
+    fn eq(&self, other: &Self) -> bool {
+        (
+            self.n,
+            &self.x_checks,
+            &self.z_checks,
+            &self.x_logicals,
+            &self.z_logicals,
+        ) == (
+            other.n,
+            &other.x_checks,
+            &other.z_checks,
+            &other.x_logicals,
+            &other.z_logicals,
+        )
+    }
+}
+
+impl Eq for CssCode {}
 
 /// The torus `l × m` and the monomials (reduced exponents, in the given
 /// order) of a bivariate bicycle code.

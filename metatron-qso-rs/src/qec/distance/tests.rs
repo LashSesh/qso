@@ -245,3 +245,63 @@ fn trivial_and_invalid_models() {
         assert!(graphlike_distance(&bad).is_err());
     }
 }
+
+#[test]
+fn bounds_below_the_distance_are_not_taken_for_none() {
+    // A hyperedge with an observable and three single-detector errors:
+    // distance 4, no graph-like logical error; with the search stopped at
+    // weight 3 and no BP+OSD the bound is 4, not "none".
+    let dem = model(
+        3,
+        vec![
+            error(&[0, 1, 2], 1),
+            error(&[0], 0),
+            error(&[1], 0),
+            error(&[2], 0),
+        ],
+    );
+    let stopped = DistanceOptions {
+        max_weight: 3,
+        bposd_trials: 0,
+        ..DistanceOptions::default()
+    };
+    let d = circuit_distance(&dem, &stopped).unwrap();
+    assert_eq!((d.lower_bound, d.witness.clone()), (4, None));
+    let full = DistanceOptions {
+        bposd_trials: 0,
+        ..DistanceOptions::default()
+    };
+    assert_eq!(circuit_distance(&dem, &full).unwrap().distance(), Some(4));
+    // On random models with hyperedges: a stopped search never claims
+    // that nothing exists when something does, and its bound holds.
+    let mut rng = Rng::seed_from_u64(3);
+    for case in 0..400 {
+        let dem = random_model(&mut rng, 7, 4 + case % 12, 4);
+        let expected = brute_force(&dem);
+        for max_weight in [1, 2, 3] {
+            let d = circuit_distance(
+                &dem,
+                &DistanceOptions {
+                    max_weight,
+                    bposd_trials: 0,
+                    ..DistanceOptions::default()
+                },
+            )
+            .unwrap();
+            check_witness(&dem, &d);
+            match expected {
+                None => assert_eq!(d.lower_bound, usize::MAX, "case {case}"),
+                Some(e) => {
+                    assert!(d.lower_bound <= e, "case {case}: {d:?} vs {e}");
+                    assert!(d.upper_bound().is_none_or(|u| u >= e));
+                }
+            }
+        }
+    }
+    // Too many BP+OSD searches are refused.
+    let many = DistanceOptions {
+        bposd_trials: MAX_BPOSD_TRIALS + 1,
+        ..DistanceOptions::default()
+    };
+    assert!(circuit_distance(&dem, &many).is_err());
+}

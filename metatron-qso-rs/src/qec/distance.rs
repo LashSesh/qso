@@ -27,6 +27,9 @@ use super::dem::{DetectorErrorModel, ErrorMechanism};
 use crate::error::{QsoError, Result};
 use crate::rng::Rng;
 
+/// Most BP+OSD searches per observable.
+pub const MAX_BPOSD_TRIALS: usize = 1 << 16;
+
 /// Options of [`circuit_distance`].
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -37,9 +40,10 @@ pub struct DistanceOptions {
     /// Most sets of errors the exhaustive search visits (about 10⁷ a
     /// second).
     pub max_work: u64,
-    /// BP+OSD searches per observable: first each observable alone with
-    /// equal priors, then random sets of observables with randomly
-    /// perturbed priors.
+    /// BP+OSD searches per observable (at most [`MAX_BPOSD_TRIALS`]):
+    /// first each observable alone with equal priors, then random sets of
+    /// observables with randomly perturbed priors. Skipped for models with
+    /// more than `MAX_BPOSD_DETECTORS − 1` detectors.
     pub bposd_trials: usize,
     /// Seed of the perturbations.
     pub seed: u64,
@@ -59,6 +63,7 @@ impl Default for DistanceOptions {
 
 /// Bounds on the circuit distance of a model.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CircuitDistance {
     /// No undetectable logical error has fewer errors (`usize::MAX`: no
     /// undetectable logical error exists).
@@ -312,7 +317,13 @@ pub fn circuit_distance(
         .map(|b| 1u64 << b)
         .collect();
     let mut rng = Rng::seed_from_u64(options.seed);
-    let trials = options.bposd_trials.saturating_mul(singles.len());
+    if options.bposd_trials > MAX_BPOSD_TRIALS {
+        return Err(QsoError::invalid(
+            "bposd_trials",
+            format!("at most {MAX_BPOSD_TRIALS} BP+OSD searches per observable"),
+        ));
+    }
+    let trials = options.bposd_trials * singles.len();
     for trial in 0..trials {
         // First every observable alone with equal priors, then random sets
         // of observables (a light logical error often flips several) with
@@ -336,7 +347,6 @@ pub fn circuit_distance(
         .as_ref()
         .map_or(options.max_weight, |b| options.max_weight.min(b.len() - 1));
     let mut lower = 2;
-    let mut proven_none = false;
     for w in 2..=ceiling {
         match search.run(w) {
             Outcome::Found(set) => {
@@ -347,10 +357,9 @@ pub fn circuit_distance(
             Outcome::NotFound => lower = w + 1,
             Outcome::OutOfWork => break,
         }
-        if w == ceiling && best.is_none() && search.exhausted_all() {
-            proven_none = true;
-        }
     }
+    // Nothing found: decide by linear algebra whether anything exists.
+    let proven_none = best.is_none() && logical_exists(n, &errors) == Some(false);
     Ok(match best {
         Some(set) => {
             let (w, obs) = witness(&errors, &set);
@@ -367,6 +376,38 @@ pub fn circuit_distance(
             observables: 0,
         },
     })
+}
+
+/// Most detectors for which [`circuit_distance`] decides by linear algebra
+/// that no undetectable logical error exists.
+pub const MAX_EXISTENCE_DETECTORS: usize = 1 << 12;
+
+/// Whether some set of errors flips an observable and no detector
+/// (`None` for more than [`MAX_EXISTENCE_DETECTORS`] detectors). The error
+/// columns, detectors as the low bits and observables above, go into a
+/// reduced GF(2) basis whose pivots are lowest bits: a combination without
+/// detector bits is a combination of the members whose pivot is an
+/// observable bit.
+fn logical_exists(n: usize, errors: &[Error]) -> Option<bool> {
+    if n > MAX_EXISTENCE_DETECTORS {
+        return None;
+    }
+    let len = n + 64;
+    let mut basis = super::gf2::Basis::new(len, false, 0);
+    for e in errors {
+        let mut ones = e.detectors.clone();
+        ones.extend(
+            (0..64)
+                .filter(|b| e.observables >> b & 1 == 1)
+                .map(|b| n + b),
+        );
+        if let Some(k) = basis.insert(&super::gf2::from_ones(len, &ones)) {
+            if basis.pivot(k) >= n {
+                return Some(true);
+            }
+        }
+    }
+    Some(false)
 }
 
 /// A light undetectable error flipping an odd number of the observables in
@@ -456,8 +497,6 @@ struct Search<'a> {
     chosen: Vec<usize>,
     work: u64,
     max_work: u64,
-    /// Whether a run ran without cutting the work short.
-    complete: bool,
 }
 
 impl<'a> Search<'a> {
@@ -478,16 +517,10 @@ impl<'a> Search<'a> {
             chosen: Vec::new(),
             work: 0,
             max_work,
-            complete: true,
         }
     }
 
-    fn exhausted_all(&self) -> bool {
-        self.complete
-    }
-
     fn run(&mut self, weight: usize) -> Outcome {
-        self.complete = true;
         for first in 0..self.errors.len() {
             let e = &self.errors[first];
             self.chosen.clear();
@@ -496,7 +529,6 @@ impl<'a> Search<'a> {
                 Some(true) => return Outcome::Found(self.chosen.clone()),
                 Some(false) => {}
                 None => {
-                    self.complete = false;
                     return Outcome::OutOfWork;
                 }
             }

@@ -1,6 +1,7 @@
 """Circuit distance, CNOT schedules and correlated (two-pass) matching."""
 
-from typing import Literal, Optional
+import math
+from typing import Optional
 
 import numpy as np
 import pytest
@@ -31,7 +32,7 @@ def test_circuit_distance_of_memory_experiments() -> None:
 def test_schedules_of_css_codes() -> None:
     code, _ = q.CssCode.bivariate_bicycle_code(72)
     distances: dict[Optional[str], Optional[int]] = {}
-    schedules: list[Optional[Literal["bicycle", "greedy"]]] = ["bicycle", "greedy", None]
+    schedules: list[Optional[str]] = ["bicycle", "greedy", None]
     for schedule in schedules:
         c = q.css_code_memory(code, 3, 0.001, schedule=schedule)
         distances[schedule] = q.circuit_distance(c.detector_error_model()).distance
@@ -39,6 +40,8 @@ def test_schedules_of_css_codes() -> None:
     colour = q.CssCode.color_code(5)
     c = q.css_code_memory(colour, 2, 0.001, schedule=[5, 4, 3, 2, 1, 0])
     assert q.circuit_distance(c.detector_error_model()).distance == 3
+    same = q.css_code_memory(colour, 2, 0.001, schedule="5,4,3,2,1,0")
+    assert same.to_stim() == c.to_stim()
     with pytest.raises(ValueError):
         q.css_code_memory(colour, 2, 0.001, schedule="bicycle")
     with pytest.raises(ValueError):
@@ -48,7 +51,7 @@ def test_schedules_of_css_codes() -> None:
     with pytest.raises(ValueError):
         q.css_code_memory(colour, 2, 0.001, schedule=[0, 0, 1, 2, 3, 4])
     with pytest.raises(ValueError):
-        q.css_code_memory(colour, 2, 0.001, schedule="fastest")  # type: ignore[arg-type]
+        q.css_code_memory(colour, 2, 0.001, schedule="fastest")
 
 
 def test_limits_and_bounds() -> None:
@@ -59,7 +62,14 @@ def test_limits_and_bounds() -> None:
     assert loose.distance is None or loose.distance == 2
     none = q.circuit_distance(q.DetectorErrorModel(2, [(0.1, [0, 1], 0)]))
     assert (none.witness, none.upper_bound, none.distance) == (None, None, None)
-    assert "inf" in repr(none)
+    assert none.lower_bound == math.inf and "inf" in repr(none)
+    # A search stopped below the distance is a bound, not "none".
+    hyper = q.DetectorErrorModel(3, [(0.01, [0, 1, 2], 1), (0.01, [0], 0), (0.01, [1], 0), (0.01, [2], 0)])
+    stopped = q.circuit_distance(hyper, max_weight=3, bposd_trials=0)
+    assert (stopped.lower_bound, stopped.witness) == (4, None)
+    assert q.circuit_distance(hyper, bposd_trials=0).distance == 4
+    with pytest.raises(ValueError):
+        q.circuit_distance(hyper, bposd_trials=1 << 20)
 
 
 def test_correlated_error_model() -> None:
@@ -102,3 +112,16 @@ def test_correlated_matching_decoder() -> None:
         q.CorrelatedMatchingDecoder(q.CorrelatedErrorModel(2, [(0.7, [([0, 1], 0)])]))
     with pytest.raises(ValueError):
         q.logical_error_rate(c, 10, decoder="two_pass")  # type: ignore[arg-type]
+
+
+def test_correlations_help_with_both_kinds_of_detectors() -> None:
+    # Stim's rotated surface code (d = 5, p = 0.006, X- and Z-type
+    # detectors), from the Rust test data: on the same shots, two-pass
+    # matching fails clearly less often than matching.
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[2] / "metatron-qso-rs/tests/data/stim/surface_d5_memory_z.stim"
+    c = q.DetectorCircuit.from_stim(path.read_text())
+    plain = q.logical_error_rate(c, 20000, seed=9, decoder="matching")
+    correlated = q.logical_error_rate(c, 20000, seed=9, decoder="correlated_matching")
+    assert correlated.errors < 0.9 * plain.errors

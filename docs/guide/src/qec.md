@@ -98,10 +98,14 @@ combinations):
 - Every other combination is written as at most two irreducible pairs,
   whose remainder single-detector combinations flip, and finished with
   single-detector combinations.
-- A combination that this rule cannot write is split into its
-  single-qubit X and Z parts; each must then flip at most two detectors
-  (Stim instead decomposes it against the graph-like errors of the whole
-  model).
+- A combination that this rule cannot write, or whose parts would not
+  add up to it, is split into its single-qubit X and Z parts; each must
+  then flip at most two detectors. Stim instead decomposes such an error
+  against the graph-like errors of the whole model, which can give other
+  (equally valid) parts.
+- A Y error (`Y_ERROR`) is one error, not a family: it stays whole when
+  it flips at most two detectors, and otherwise is split by the rule
+  above over its X and Z parts.
 
 Each part keeps the error's full probability, so correlated errors are
 counted slightly too often; matching decoders do the same.
@@ -540,7 +544,11 @@ qubits ("hook errors").
     at `max_weight` or after `max_work` sets.
 
   When the bounds meet, `distance` is set. The witness lists the errors,
-  as indices into the model.
+  as indices into the model. When nothing is found, linear algebra over
+  GF(2) decides (up to 4096 detectors) whether any undetectable logical
+  error exists at all; only then is the lower bound "none" (`usize::MAX`
+  in Rust, `math.inf` in Python). BP+OSD needs fewer than 16 384
+  detectors and is skipped beyond.
 
 ```python
 import metatron_qso as q
@@ -564,7 +572,8 @@ for schedule, d in [("bicycle", 6), ("greedy", 4)]:
   this order of the directions around its centre, one direction per
   layer.
 
-The results, all with three rounds of uniform circuit noise:
+The results, with uniform circuit noise (three rounds for the bicycle
+codes, two for the colour codes):
 
 | Code | Schedule | Circuit distance | Bravyi et al. |
 |---|---|---|---|
@@ -573,7 +582,8 @@ The results, all with three rounds of uniform circuit noise:
 | [[90, 8, 10]] | depth-8 cycle | 7 to 8 | ≤ 8 |
 | [[108, 8, 10]] | depth-8 cycle | 7 to 9 | ≤ 8 |
 | [[144, 12, 12]] | depth-8 cycle | 7 to 11 | ≤ 10 |
-| Colour code, d = 3, 5, 7 | greedy, or any order of directions | (d + 1)/2 (exact) | |
+| Colour code, d = 3, 5 | greedy, or any of the 720 orders of directions | (d + 1)/2 (exact) | |
+| Colour code, d = 7 | greedy, or the order 0, 1, 2, 3, 4, 5 | 4 (exact) | |
 
 - **Bicycle codes.** The upper bounds of the three larger codes come from
   256 BP+OSD searches per observable. The paper's bounds hold under its
@@ -650,7 +660,7 @@ qso qec --circuit surface.stim --decoder correlated-matching
 
 For `--code bb`, `--distance` names the code by its qubits.
 `--schedule` takes `greedy`, `bicycle` or six directions (`0,1,2,3,4,5`,
-colour codes only). `--circuit-distance` adds the bounds on the circuit
+colour codes only); it is refused with `--circuit`. `--circuit-distance` adds the bounds on the circuit
 distance to each line and to the JSON output.
 
 ## Limits and costs

@@ -19,6 +19,10 @@
 //!    (never raises it), and the second pass matches again on the
 //!    reweighted graph; its prediction is the result.
 //!
+//! Parallel edges (two errors between the same detectors with different
+//! observables), which PyMatching merges into one, stay separate here, and
+//! a rule lowers all of them alike.
+//!
 //! The weights are the integers of [`SparseMatchingDecoder`]. Shortest
 //! paths with equal weight are chosen by the order of a Dijkstra search,
 //! which can differ from PyMatching's choice, so a few shots may reweight

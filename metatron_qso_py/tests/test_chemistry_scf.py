@@ -50,11 +50,11 @@ def test_hartree_fock_and_full_ci():
 
 def test_invalid_input():
     with pytest.raises(ValueError):
-        q.Molecule("Na 0 0 0")
+        q.Molecule("K 0 0 0")
     with pytest.raises(ValueError):
         q.Molecule("O 0 0 0; H 0 0 0.97")  # odd electrons, singlet
     with pytest.raises(ValueError):
-        q.AoIntegrals(q.Molecule("H 0 0 0; H 0 0 0.7"), "cc-pvdz")
+        q.AoIntegrals(q.Molecule("H 0 0 0; H 0 0 0.7"), "cc-pvtz")
     oh = q.Molecule("O 0 0 0; H 0 0 0.97", multiplicity=2)
     with pytest.raises(ValueError):
         q.hartree_fock(oh)
