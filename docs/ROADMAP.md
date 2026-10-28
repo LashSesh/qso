@@ -1640,9 +1640,12 @@ At 28 qubits ⟨C⟩ = 36.72 of the maximum cut 38 (found by enumeration of
 the 2²⁸ cuts, 12 s), and the most likely string is an optimal cut with
 probability 0.61; the ratio lies within the spread of the smaller graphs
 (0.969–0.980), whose ratios depend on the graph more than on its size.
-None of the runs converged in 30 iterations. On 20 nodes, optimising layer by layer on the graph itself (two
-starts per depth, 440 s) reached only 0.97495: the carried-over angles
-started in a better basin. The whole 28-qubit run took 37 minutes and
+None of the runs converged in 30 iterations. Optimising layer by layer on
+the graph itself (two starts per depth) reached 0.97495 on 20 nodes
+(440 s), below the carried-over and refined 0.98046, and 0.98086 on 22
+nodes (1229 s), above its 0.97498: carried-over angles are a good start,
+not the optimum, and both ways end in local optima.
+The whole 28-qubit run took 37 minutes and
 4.5 GiB; in double precision it would take 8.9 GiB and about 30 % longer.
 
 **Comparison** (`run.py --qaoa`, same machine, one call each in a fresh
