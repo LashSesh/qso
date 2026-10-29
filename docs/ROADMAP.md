@@ -13,7 +13,8 @@ state-vector core at memory bandwidth), 1.12 (noise learning) and 1.13
 finished milestones are released together, not one by one. The third
 (1.14 to 1.17), fourth (1.18 to 1.21), fifth (1.22 to 1.25) and sixth
 (1.26 to 1.28) stages ship together as release 1.7.0. The seventh stage
-(1.29 to 1.33) is planned in section 4g. Up to 1.3
+(1.29 to 1.33) is planned in section 4g, the eighth (1.34 to 1.37),
+magnetic resonance for medical research, in section 4h. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -2134,6 +2135,118 @@ Leakage out of the qubit space, which needs qutrits throughout the
 simulators. Exact circuit distances of hypergraph error models. Pretty
 good state transfer outside the cyclotomic families.
 
+## 4h. Eighth stage (1.34 to 1.37): magnetic resonance for medical research
+
+Planned October 2026, on request, after 1.33. QSO's strength in medicine
+is the exact simulation of small quantum systems: nuclear spins in
+hyperpolarised agents and the spins of quantum sensors. This stage takes
+1.33 from textbook experiments to the questions of groups that develop
+hyperpolarised MRI agents and quantum sensors for biology: how long
+polarisation lives, how much of it reaches the molecule, which sequence
+moves it best, and what a sensor near a cell detects. The rules of the
+seventh stage stay. Every number has an independent reference, with
+closed forms and published results first and QuTiP (including its
+Bloch–Redfield solver) in the cross-validation only. The crate takes no
+new dependency.
+
+Not in this stage, as in 1.33: image simulation, the kinetics of
+metabolism (pyruvate to lactate) and other classical models, quantum
+algorithms for CT, which have no demonstrable advantage at the size of a
+real image (loading and reading out 10⁶ to 10⁹ values undoes it), and
+any clinical claim. QSO stays a tool for physicists and chemists who
+design these experiments, not medical software.
+
+### 1.34 — Relaxation from first principles (M)
+
+Use case: predicting relaxation times instead of taking them as input.
+For example, whether deuteration lengthens the T₁ of a ¹³C agent, or how
+long a singlet state survives. 1.33 takes T₁ and T₂ as phenomenological
+inputs.
+
+| Deliverable | Detail |
+|---|---|
+| Interactions | dipolar couplings from the nuclear positions, chemical-shift anisotropy tensors, isotropic rotational diffusion with a correlation time (spectral densities `J(ω) = (2/5) τ_c/(1 + ω²τ_c²)`) |
+| Redfield theory | the Bloch–Wangsness–Redfield relaxation superoperator (Redfield, IBM J. Res. Dev. 1, 19 (1957)), with cross-correlations between mechanisms, relaxing to thermal equilibrium at the given field and temperature |
+| Use | relaxation of any state in `SpinSystem.evolve`, together with or instead of the phenomenological T₁ and T₂; relaxation rates of chosen observables (T₁, T₂, singlet order) as numbers |
+
+Validation: two dipolar-coupled spins follow Solomon's equations (Phys.
+Rev. 99, 559 (1955)). The steady-state nuclear Overhauser enhancement
+of ¹³C under ¹H saturation is `1 + γ_H/(2γ_C) ≈ 2.99` in the extreme
+narrowing limit. CSA relaxation grows with B². Singlet order of two
+spins is immune to their mutual dipolar relaxation (Carravetta and Levitt,
+J. Am. Chem. Soc. 126, 6228 (2004)). For three to five spins every rate
+matches QuTiP's Bloch–Redfield solver (`brmesolve`) in the
+cross-validation.
+
+### 1.35 — Hyperpolarisation in realistic models (M–L)
+
+Use case: the chemistry and storage of hyperpolarisation. In SABRE,
+substrate and parahydrogen bind and leave the catalyst all the time;
+1.33 replaces this exchange by a time average. Parahydrogen-induced
+polarisation by side-arm hydrogenation (PHIP-SAH, Reineri, Boi and Aime,
+Nat. Commun. 6, 5858 (2015)) polarises [1-¹³C]pyruvate, the agent used
+in patients. Long-lived states keep polarisation beyond T₁ on its way to
+the patient.
+
+| Deliverable | Detail |
+|---|---|
+| Chemical exchange | several chemical sites (free substrate, catalyst complex, free hydrogen) with rate constants, in Liouville space (Bloch–McConnell equations, McConnell, J. Chem. Phys. 28, 430 (1958)); SABRE polarisation as it builds up over time and with the field, temperature-dependent rates as input |
+| Spin-order transfer | ¹H → ¹³C transfer for PHIP and PHIP-SAH by field cycling (Jóhannesson, Axelsson and Karlsson, C. R. Physique 5, 315 (2004)) and by pulse sequences (PH-INEPT and its relatives) |
+| Long-lived states | singlet order of near-equivalent spins, M2S and S2M conversion (Pileio, Carravetta and Levitt, PNAS 107, 17135 (2010)), spin locking and field cycling for storage, lifetimes from 1.34 |
+
+Validation: two-site exchange gives the Bloch–McConnell lineshapes, with
+coalescence at `k = πΔν/√2`. The SABRE build-up of the smallest models
+matches the published simulations of Lindale et al. (Nat. Commun. 10,
+395 (2019)) and Pravdivtsev et al. (ChemPhysChem 14, 3327 (2013)) at
+their fields. The field-cycling transfer of a three-spin PHIP system
+matches its closed form. M2S and S2M reach the conversion efficiencies
+of Pileio et al. The singlet lifetime of a near-equivalent pair exceeds
+T₁ by the factor Redfield theory predicts.
+
+### 1.36 — Optimal control of spin experiments (M)
+
+Use case: designing the sequence, not only simulating it. Shaped pulses
+and field profiles that move the most polarisation to ¹³C in the
+shortest time, robust to errors in the radiofrequency field and the
+offsets. 1.33 has shaped pulses, and QSO has exact gradients and
+optimisers (1.26).
+
+| Deliverable | Detail |
+|---|---|
+| GRAPE | gradient ascent in pulse engineering (Khaneja et al., J. Magn. Reson. 172, 296 (2005)): exact gradients of a transfer or of a target state with respect to piecewise-constant amplitudes and phases, with relaxation (Liouville space) and with ensembles of field and offset errors for robustness |
+| Field profiles | the same for the field of SABRE and field-cycling experiments |
+| Constraints | amplitude and power limits, a fixed duration, smooth shapes |
+
+Validation: the gradients agree with finite differences. For two coupled
+spins the optimised transfer reaches the unitary bound on polarisation
+transfer (Glaser et al., Science 280, 421 (1998)) and needs no less than
+the time-optimal `1/(2J)` (Khaneja, Brockett and Glaser, Phys. Rev. A 63,
+032308 (2001)). Pulses optimised for a range of field errors keep their
+transfer over that range, where INEPT does not.
+
+### 1.37 — Quantum sensing with spins in diamond (M)
+
+Use case: nitrogen-vacancy (NV) centres in diamond measure magnetic
+fields at the nanoscale, inside and next to living cells (Le Sage et al.,
+Nature 496, 486 (2013); Schirhagl et al., Annu. Rev. Phys. Chem. 65, 83
+(2014)), and detect single nuclear spins. An NV centre is an electron
+spin 1 coupled to its nitrogen nucleus and to nearby ¹³C nuclei. Its
+coherence against noise decides what it can sense. This combines the
+spins of 1.33 with the slow noise and echoes of 1.30.
+
+| Deliverable | Detail |
+|---|---|
+| NV centres | electron spin 1 with zero-field splitting `D = 2.87 GHz`, Zeeman term, ¹⁴N or ¹⁵N with hyperfine and quadrupole couplings, ¹³C nuclei with hyperfine tensors, in the secular approximation |
+| Sequences | optically detected magnetic resonance (ODMR) spectra, Ramsey, Hahn echo, CPMG and XY-8 dynamical decoupling with finite pulses |
+| Noise | classical field noise of a given spectrum (telegraph, Ornstein–Uhlenbeck, 1/f), the filter-function description of decoupling (Cywiński et al., Phys. Rev. B 77, 174509 (2008)) against exact trajectories |
+
+Validation: the ODMR lines lie at `D ± γ_e B` and split by the hyperfine
+coupling. The CPMG signal of one weakly coupled ¹³C follows the closed
+form of Taminiau et al. (Phys. Rev. Lett. 109, 137602 (2012)), with its
+dips at the predicted pulse spacings. The coherence under Gaussian
+Ornstein–Uhlenbeck noise follows the filter-function integral, and under
+telegraph noise the exact Kubo–Anderson results of 1.30.
+
 ## 5. Order and reasoning
 
 1. **1.2 first:** small, made every later release safer, and documentation
@@ -2197,6 +2310,14 @@ good state transfer outside the cyclotomic families.
     Screening and tighter bounds (1.32) close two small, long-standing
     gaps. Spin dynamics (1.33) comes last, because it builds on the echoes
     and slow noise of 1.30.
+16. **Eighth stage: magnetic resonance for medical research.** Relaxation
+    from first principles (1.34) comes first, because exchange models and
+    long-lived states (1.35) need relaxation times that follow from the
+    molecule rather than from input. Optimal control (1.36) comes after
+    them, so that it optimises sequences on realistic models. Quantum
+    sensing (1.37) comes last: it adds a new kind of spin (the electron
+    of an NV centre) and builds on the noise of 1.30 and the decoupling
+    sequences that optimal control can improve.
 
 ## 6. Measures of success
 
@@ -2265,6 +2386,13 @@ Taken (October 2026):
   the density-matrix, relaxation and Magnus tools QSO already has. Image
   simulation, quantum algorithms for CT and clinical claims stay out of
   scope; QuTiP joins the cross-validation as a reference only.
+* Eighth stage (1.34 to 1.37, added October 2026 on request): magnetic
+  resonance for medical research. It covers relaxation from first
+  principles, realistic hyperpolarisation (chemical exchange, PHIP-SAH,
+  long-lived states), optimal control of spin experiments, and quantum
+  sensing with NV centres. Quantum algorithms for CT were considered and
+  left out: at the size of a real image, loading the data and reading
+  out the result undo any speed-up, so a demonstration would mislead.
 * The browser playground stays, because it costs little to maintain: it
   is plain HTML and JavaScript without dependencies or a build step, it
   uses only the npm package's JSON interface, which the package's tests
