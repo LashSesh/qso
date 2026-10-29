@@ -3,8 +3,8 @@
 use metatron_qso::C64;
 use metatron_qso::linalg::CMatrix;
 use metatron_qso::spin::{
-    Event, Frame, Isotope, Segment, Spectrum, SpinSystem, Target, axial_csa, inept, inept_cycle,
-    inversion_recovery, spin_echo,
+    Channel, Event, Exchange, Frame, Fresh, Isotope, Segment, Spectrum, SpinSystem, Target,
+    axial_csa, inept, inept_cycle, inversion_recovery, m2s, s2m, spin_echo, spin_lock,
 };
 use numpy::{IntoPyArray, PyArray1, PyArray2};
 use pyo3::prelude::*;
@@ -142,6 +142,29 @@ fn py_inept_cycle(source: &str, target: &str, j: f64) -> PyResult<Vec<(Vec<PyEve
         .into_iter()
         .map(|(e, r)| (wrap(e), r))
         .collect())
+}
+
+/// Magnetisation-to-singlet conversion (M2S) of a near-equivalent pair:
+/// coupling `j` and shift difference `delta_nu` (Hz).
+#[pyfunction(name = "m2s")]
+fn py_m2s(isotope_name: &str, j: f64, delta_nu: f64) -> PyResult<Vec<PyEvent>> {
+    Ok(wrap(m2s(isotope(isotope_name)?, j, delta_nu).raise()?))
+}
+
+/// Singlet-to-magnetisation conversion (S2M): M2S reversed.
+#[pyfunction(name = "s2m")]
+fn py_s2m(isotope_name: &str, j: f64, delta_nu: f64) -> PyResult<Vec<PyEvent>> {
+    Ok(wrap(s2m(isotope(isotope_name)?, j, delta_nu).raise()?))
+}
+
+/// Continuous irradiation of an isotope at `nu1` Hz for `duration` s (a
+/// spin lock).
+#[pyfunction(name = "spin_lock")]
+#[pyo3(signature = (isotope_name, nu1, duration, phase = 0.0))]
+fn py_spin_lock(isotope_name: &str, nu1: f64, duration: f64, phase: f64) -> PyResult<PyEvent> {
+    Ok(PyEvent {
+        inner: spin_lock(isotope(isotope_name)?, nu1, duration, phase),
+    })
 }
 
 /// A spin echo `90x – τ – 180y – τ` on an isotope.
@@ -657,5 +680,207 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(spectrum, m)?)?;
     m.add_function(wrap_pyfunction!(gyromagnetic_ratio, m)?)?;
     m.add_function(wrap_pyfunction!(py_axial_csa, m)?)?;
+    m.add_function(wrap_pyfunction!(py_m2s, m)?)?;
+    m.add_function(wrap_pyfunction!(py_s2m, m)?)?;
+    m.add_function(wrap_pyfunction!(py_spin_lock, m)?)?;
+    m.add_class::<PyExchange>()?;
     Ok(())
+}
+
+/// Chemical exchange between spin systems (Bloch–McConnell in Liouville
+/// space): sites with concentrations and first-order channels that carry
+/// some spins over and bring others in fresh (thermal or parahydrogen).
+/// States are lists of density matrices, one per site, trace 1 each.
+#[pyclass(name = "Exchange", module = "metatron_qso")]
+#[derive(Clone)]
+pub struct PyExchange {
+    inner: Exchange,
+}
+
+impl PyExchange {
+    fn states(&self, states: &[ComplexMatrixArg<'_>]) -> PyResult<Vec<CMatrix>> {
+        if states.len() != self.inner.sites().len() {
+            return Err(invalid(format!(
+                "{} states for {} sites",
+                states.len(),
+                self.inner.sites().len()
+            )));
+        }
+        states
+            .iter()
+            .zip(self.inner.sites())
+            .map(|(m, site)| {
+                let (d, data) = square_complex("states", m)?;
+                if d != site.system.dimension() {
+                    return Err(invalid(format!(
+                        "a state of this site is {0}×{0}, got {d}×{d}",
+                        site.system.dimension()
+                    )));
+                }
+                Ok(CMatrix::from_row_slice(d, d, &data))
+            })
+            .collect()
+    }
+}
+
+fn matrices<'py>(py: Python<'py>, ms: &[CMatrix]) -> Vec<Bound<'py, PyArray2<C64>>> {
+    ms.iter().map(|m| cmatrix(py, m)).collect()
+}
+
+#[pymethods]
+impl PyExchange {
+    #[new]
+    fn new() -> Self {
+        Self {
+            inner: Exchange::new(),
+        }
+    }
+
+    /// Add a site (a spin system and its concentration); returns its index.
+    fn add_site(&mut self, system: PyRef<'_, PySpinSystem>, concentration: f64) -> PyResult<usize> {
+        self.inner
+            .add_site(system.inner.clone(), concentration)
+            .raise()
+    }
+
+    /// Add a channel from site `source` to site `target` at `rate` (s⁻¹,
+    /// the fraction of the source converted per second), carrying the
+    /// spin pairs `carried` `[(spin of source, spin of target)]`; the
+    /// target's other spins arrive thermal, or two of them
+    /// (`parahydrogen=(i, j)`) in the singlet with probability `fraction`.
+    #[pyo3(signature = (source, target, rate, carried = Vec::new(), parahydrogen = None, fraction = 1.0))]
+    fn add_channel(
+        &mut self,
+        source: usize,
+        target: usize,
+        rate: f64,
+        carried: Vec<(usize, usize)>,
+        parahydrogen: Option<(usize, usize)>,
+        fraction: f64,
+    ) -> PyResult<()> {
+        let fresh = match parahydrogen {
+            None => Fresh::Thermal,
+            Some((i, j)) => Fresh::Parahydrogen {
+                spins: [i, j],
+                fraction,
+            },
+        };
+        self.inner
+            .add_channel(Channel {
+                from: source,
+                to: target,
+                rate,
+                carried,
+                fresh,
+            })
+            .raise()?;
+        Ok(())
+    }
+
+    /// Check the sites, channels and the chemical steady state.
+    fn validate(&self) -> PyResult<()> {
+        self.inner.validate().raise()
+    }
+
+    /// `[(SpinSystem, concentration)]`.
+    #[getter]
+    fn sites(&self) -> Vec<(PySpinSystem, f64)> {
+        self.inner
+            .sites()
+            .iter()
+            .map(|s| {
+                (
+                    PySpinSystem {
+                        inner: s.system.clone(),
+                    },
+                    s.concentration,
+                )
+            })
+            .collect()
+    }
+
+    #[getter]
+    fn field(&self) -> f64 {
+        self.inner.field()
+    }
+
+    /// The same exchange at another field (T).
+    fn with_field(&self, field: f64) -> PyResult<Self> {
+        Ok(Self {
+            inner: self.inner.clone().with_field(field).raise()?,
+        })
+    }
+
+    /// Thermal equilibrium of every site.
+    fn thermal_state<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyArray2<C64>>>> {
+        Ok(matrices(py, &self.inner.thermal_state().raise()?))
+    }
+
+    /// Apply pulses on isotopes, delays, fields and sweeps to the states.
+    fn evolve<'py>(
+        &self,
+        py: Python<'py>,
+        states: Vec<ComplexMatrixArg<'py>>,
+        events: Vec<PyRef<'py, PyEvent>>,
+    ) -> PyResult<Vec<Bound<'py, PyArray2<C64>>>> {
+        let states = self.states(&states)?;
+        let ev = self::events(&events);
+        let x = &self.inner;
+        Ok(matrices(py, &py.detach(|| x.evolve(&states, &ev)).raise()?))
+    }
+
+    /// The steady state of exchange and relaxation at the field.
+    fn steady_state<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyArray2<C64>>>> {
+        let x = &self.inner;
+        Ok(matrices(py, &py.detach(|| x.steady_state()).raise()?))
+    }
+
+    /// The free induction decay summed over the sites weighted by
+    /// concentration.
+    fn fid<'py>(
+        &self,
+        py: Python<'py>,
+        states: Vec<ComplexMatrixArg<'py>>,
+        isotope: &str,
+        dwell: f64,
+        points: usize,
+    ) -> PyResult<Bound<'py, PyArray1<C64>>> {
+        let states = self.states(&states)?;
+        let iso = self::isotope(isotope)?;
+        let x = &self.inner;
+        Ok(py
+            .detach(|| x.fid(&states, iso, dwell, points))
+            .raise()?
+            .into_pyarray(py))
+    }
+
+    /// Polarisation `⟨I_z⟩/I` of a spin of a site.
+    fn polarization(
+        &self,
+        states: Vec<ComplexMatrixArg<'_>>,
+        site: usize,
+        spin: usize,
+    ) -> PyResult<f64> {
+        let states = self.states(&states)?;
+        self.inner.polarization(&states, site, spin).raise()
+    }
+
+    fn to_json(&self) -> String {
+        self.inner.to_json()
+    }
+
+    #[staticmethod]
+    fn from_json(text: &str) -> PyResult<Self> {
+        Ok(Self {
+            inner: Exchange::from_json(text).raise()?,
+        })
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Exchange({} sites, {} channels)",
+            self.inner.sites().len(),
+            self.inner.channels().len()
+        )
+    }
 }

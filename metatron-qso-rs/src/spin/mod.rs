@@ -96,6 +96,8 @@ mod exchange;
 mod redfield;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod transfer_tests;
 
 pub use exchange::{Channel, Exchange, Fresh, Site};
 pub use redfield::{MU0_OVER_4PI, axial_csa};
@@ -1447,4 +1449,67 @@ pub fn inversion_recovery(isotope: Isotope, t: f64) -> Vec<Event> {
         Event::Delay(t),
         Event::pulse(Target::Isotope(isotope), 90.0, 0.0),
     ]
+}
+
+/// Magnetisation-to-singlet conversion (M2S) of a near-equivalent pair of
+/// an isotope with coupling `j_hz` and shift difference `delta_nu` (Hz)
+/// (Pileio, Carravetta and Levitt, PNAS 107, 17135 (2010)):
+/// `90°(−y) − [τ − 180°x − τ]^{n₁} − 90°x − τ − [τ − 180°x − τ]^{n₂}` with
+/// `τ = 1/(4J)`, `n₁ = round(π/(2 arctan(Δν/J)))` and `n₂ = n₁/2` rounded
+/// down. It turns `I_z` into singlet order; [`s2m`] turns it back. Needs
+/// `0 < Δν < J`.
+pub fn m2s(isotope: Isotope, j_hz: f64, delta_nu: f64) -> Result<Vec<Event>> {
+    let (j, dnu) = (j_hz.abs(), delta_nu.abs());
+    if !(j.is_finite() && dnu.is_finite() && dnu > 0.0 && dnu < j) {
+        return Err(QsoError::invalid(
+            "m2s",
+            "M2S needs a coupling larger than a non-zero shift difference",
+        ));
+    }
+    let tau = 1.0 / (4.0 * j);
+    let n1 = (std::f64::consts::PI / (2.0 * (dnu / j).atan())).round() as usize;
+    if n1 > MAX_SEGMENTS {
+        return Err(QsoError::invalid(
+            "m2s",
+            "the shift difference is too small",
+        ));
+    }
+    let n2 = n1 / 2;
+    let target = Target::Isotope(isotope);
+    let echo = |out: &mut Vec<Event>, n: usize| {
+        for _ in 0..n {
+            out.push(Event::Delay(tau));
+            out.push(Event::pulse(target, 180.0, 0.0));
+            out.push(Event::Delay(tau));
+        }
+    };
+    let mut out = vec![Event::pulse(target, 90.0, 270.0)];
+    echo(&mut out, n1);
+    out.push(Event::pulse(target, 90.0, 0.0));
+    out.push(Event::Delay(tau));
+    echo(&mut out, n2);
+    Ok(out)
+}
+
+/// Singlet-to-magnetisation conversion (S2M): [`m2s`] in reverse
+/// chronological order.
+pub fn s2m(isotope: Isotope, j_hz: f64, delta_nu: f64) -> Result<Vec<Event>> {
+    let mut out = m2s(isotope, j_hz, delta_nu)?;
+    out.reverse();
+    Ok(out)
+}
+
+/// Continuous irradiation of an isotope at nutation frequency `nu1` (Hz)
+/// and `phase` (degrees) for `duration` s: a spin lock, which suppresses
+/// shift differences much smaller than `nu1` and so keeps a
+/// near-equivalent pair's singlet an eigenstate (rotating frame).
+pub fn spin_lock(isotope: Isotope, nu1: f64, duration: f64, phase: f64) -> Event {
+    Event::Shaped {
+        target: Target::Isotope(isotope),
+        segments: vec![Segment {
+            duration,
+            amplitude: nu1,
+            phase,
+        }],
+    }
 }

@@ -19,6 +19,7 @@ sequences are lists of events::
 """
 
 from ._core import (
+    Exchange,
     SpinEvent,
     SpinSystem,
     axial_csa,
@@ -26,7 +27,10 @@ from ._core import (
     inept,
     inept_cycle,
     inversion_recovery,
+    m2s,
+    s2m,
     spin_echo,
+    spin_lock,
 )
 from ._core import fid_spectrum as spectrum
 from ._core import spin_delay as delay
@@ -36,6 +40,7 @@ from ._core import spin_shaped as shaped
 from ._core import spin_sweep as sweep
 
 __all__ = [
+    "Exchange",
     "SpinEvent",
     "SpinSystem",
     "axial_csa",
@@ -44,10 +49,13 @@ __all__ = [
     "inept",
     "inept_cycle",
     "inversion_recovery",
+    "m2s",
     "pulse",
+    "s2m",
     "set_field",
     "shaped",
     "spectrum",
     "spin_echo",
+    "spin_lock",
     "sweep",
 ]

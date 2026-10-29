@@ -317,3 +317,127 @@ def test_redfield_bindings():
     assert back.correlation_time == 2e-11 and back.position(1) == [1.1, 0.0, 0.0]
     with pytest.raises(ValueError):
         sys.with_correlation_time(-1.0)
+
+
+def test_exchange_matches_a_monte_carlo_of_exchange_events():
+    # A SABRE complex (two hydrides and a bound 15N, laboratory frame near
+    # the anti-crossing): hydrogen exchange renews the hydrides from
+    # parahydrogen at kh, ligand exchange renews the 15N thermal at kd.
+    # Each molecule evolves coherently between exponentially distributed
+    # events (as in the simulations of Lindale et al. 2019), written here
+    # with NumPy alone; the average over molecules is what Exchange
+    # computes.
+    rng = np.random.default_rng(7)
+    field, kh, kd = 1.4e-7, 3.0, 2.0
+    gamma = [q.spin.gyromagnetic_ratio(x) for x in ("1H", "1H", "15N")]
+    shifts = (-22.0, -22.0, 250.0)
+    sx = np.array([[0, 0.5], [0.5, 0]])
+    sy = np.array([[0, -0.5j], [0.5j, 0]])
+    sz = np.diag([0.5, -0.5])
+
+    def op(i, s):
+        mats = [np.eye(2)] * 3
+        mats[i] = s
+        return np.kron(np.kron(mats[0], mats[1]), mats[2])
+
+    h = sum(-g * field * (1 + d * 1e-6) * op(i, sz) for i, (g, d) in enumerate(zip(gamma, shifts)))
+    for i, j, jh in ((0, 1, -7.0), (0, 2, -2.0)):
+        h = h + 2 * np.pi * jh * sum(op(i, s) @ op(j, s) for s in (sx, sy, sz))
+    energies, vectors = np.linalg.eigh(h)
+
+    def propagate(rho, t):
+        u = vectors @ np.diag(np.exp(-1j * energies * t)) @ vectors.conj().T
+        return u @ rho @ u.conj().T
+
+    singlet = np.array([0, 1, -1, 0]) / np.sqrt(2)
+    para = np.outer(singlet, singlet)
+    n_thermal = np.eye(2) / 2  # 10⁻¹² polarisation at 0.14 μT
+
+    def hydrides(rho):  # Tr_N
+        return rho.reshape(4, 2, 4, 2).trace(axis1=1, axis2=3)
+
+    def nitrogen(rho):  # Tr_H
+        return rho.reshape(4, 2, 4, 2).trace(axis1=0, axis2=2)
+
+    start = np.kron(para, n_thermal)
+    times = (0.2, 0.6, 1.5)
+    nz = op(2, sz)
+    samples = np.zeros((4000, len(times)))
+    for k in range(samples.shape[0]):
+        rho, now = start, 0.0
+        for m, t in enumerate(times):
+            while True:
+                wait = rng.exponential(1 / (kh + kd))
+                if now + wait > t:
+                    rho = propagate(rho, t - now)
+                    now = t
+                    break
+                rho = propagate(rho, wait)
+                now += wait
+                if rng.random() < kh / (kh + kd):
+                    rho = np.kron(para, nitrogen(rho))
+                else:
+                    rho = np.kron(hydrides(rho), n_thermal)
+            samples[k, m] = np.trace(rho @ nz).real
+    complex_ = q.SpinSystem(field, frame="laboratory")
+    for d, x in zip(shifts, ("1H", "1H", "15N")):
+        complex_.add_spin(x, d)
+    complex_.couple(0, 1, -7.0)
+    complex_.couple(0, 2, -2.0)
+    x = spin.Exchange()
+    x.add_site(complex_, 1.0)
+    x.add_channel(0, 0, kh, carried=[(2, 2)], parahydrogen=(0, 1))
+    x.add_channel(0, 0, kd, carried=[(0, 0), (1, 1)])
+    states = [complex_.parahydrogen_state(0, 1)]
+    mean, error = samples.mean(axis=0), samples.std(axis=0) / np.sqrt(samples.shape[0])
+    for m, t in enumerate(times):
+        got = x.evolve(states, [spin.delay(t)])[0]
+        value = np.trace(got @ complex_.spin_operator(2, "z")).real
+        assert abs(value - mean[m]) < 4 * error[m] + 1e-4, (t, value, mean[m], error[m])
+    assert abs(mean[-1]) > 20 * error[-1]  # the polarisation is resolved
+
+
+def test_exchange_and_singlet_bindings():
+    a = q.SpinSystem(9.4)
+    a.add_spin("1H", 1.0, t1=2.0)
+    b = q.SpinSystem(9.4)
+    b.add_spin("1H", 1.0, t1=3.0)
+    x = spin.Exchange()
+    x.add_site(a, 0.5)
+    x.add_site(b, 0.5)
+    x.add_channel(0, 1, 40.0, carried=[(0, 0)])
+    x.add_channel(1, 0, 40.0, carried=[(0, 0)])
+    eq = x.thermal_state()
+    start = x.evolve(eq, [spin.pulse("1H", 90)])
+    fid = x.fid(start, "1H", 1e-4, 64)
+    assert fid.shape == (64,) and abs(fid[0]) > 0
+    steady = x.steady_state()
+    assert np.abs(steady[0] - eq[0]).max() < 1e-12
+    assert x.polarization(eq, 1, 0) == pytest.approx(a.polarization(a.thermal_state(), 0), rel=1e-12)
+    # Without relaxation the populations of the two sites have no unique
+    # steady state.
+    still = spin.Exchange()
+    for system in (q.SpinSystem(9.4), q.SpinSystem(9.4)):
+        system.add_spin("1H", 1.0)
+        still.add_site(system, 1.0)
+    still.add_channel(0, 1, 5.0, carried=[(0, 0)])
+    still.add_channel(1, 0, 5.0, carried=[(0, 0)])
+    with pytest.raises(ValueError, match="unique"):
+        still.steady_state()
+    assert spin.Exchange.from_json(x.to_json()).sites[1][1] == 0.5
+    with pytest.raises(ValueError, match="steady state"):
+        y = spin.Exchange()
+        y.add_site(a, 1.0)
+        y.add_site(b, 1.0)
+        y.add_channel(0, 1, 1.0, carried=[(0, 0)])
+        y.validate()
+    with pytest.raises(ValueError):
+        x.evolve(eq[:1], [])
+    pair = q.SpinSystem(1.0)
+    pair.add_spin("1H", 0.0)
+    pair.add_spin("1H", 0.02)
+    pair.couple(0, 1, 8.0)
+    events = spin.m2s("1H", 8.0, 0.85)
+    assert len(spin.s2m("1H", 8.0, 0.85)) == len(events)
+    lock = spin.spin_lock("1H", 1000.0, 0.01)
+    assert "Shaped" in repr(lock)
