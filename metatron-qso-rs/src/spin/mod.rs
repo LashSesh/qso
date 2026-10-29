@@ -47,8 +47,17 @@
 //! with `γ_φ = 1/T₂ − 1/(2T₁)`, so `T₂ ≤ 2T₁`. For spin ½ this gives
 //! exactly the decay times `T₁` and `T₂` of `⟨I_z⟩` and `⟨I₊⟩`; for spin 1
 //! the same operators give them in the high-temperature limit, and the
-//! equilibrium is thermal for both. Quadrupolar and cross-relaxation and
-//! Redfield theory are not modelled.
+//! equilibrium is thermal for both.
+//!
+//! Relaxation from first principles: with positions (Å) and shielding
+//! tensors (ppm) of the spins and a rotational correlation time
+//! ([`SpinSystem::with_correlation_time`]), the dipolar couplings and
+//! shielding anisotropies relax the system by Bloch–Wangsness–Redfield
+//! theory for isotropic tumbling, cross-correlations included, towards
+//! thermal equilibrium (see the `redfield` source for the formulas).
+//! [`SpinSystem::relaxation_rates`] gives auto- and cross-relaxation rates
+//! of observables. Quadrupolar relaxation and internal motion are not
+//! modelled.
 //!
 //! The signal is `s(t) = Tr(ρ(t) F₊)`, `F₊ = Σ_{i ∈ X} I₊ᵢ`: a spin with
 //! offset Ω gives `e^{iΩt}`. [`SpinSystem::lines`] gives the exact stick

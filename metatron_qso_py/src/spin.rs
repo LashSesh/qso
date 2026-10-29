@@ -3,7 +3,7 @@
 use metatron_qso::C64;
 use metatron_qso::linalg::CMatrix;
 use metatron_qso::spin::{
-    Event, Frame, Isotope, Segment, Spectrum, SpinSystem, Target, inept, inept_cycle,
+    Event, Frame, Isotope, Segment, Spectrum, SpinSystem, Target, axial_csa, inept, inept_cycle,
     inversion_recovery, spin_echo,
 };
 use numpy::{IntoPyArray, PyArray1, PyArray2};
@@ -173,6 +173,21 @@ fn spectrum<'py>(
     Ok((s.frequencies.into_pyarray(py), s.values.into_pyarray(py)))
 }
 
+/// The shielding tensor (ppm) of an axially symmetric anisotropy
+/// `Δσ = σ_∥ − σ_⊥` along `axis`.
+#[pyfunction(name = "axial_csa")]
+fn py_axial_csa<'py>(
+    py: Python<'py>,
+    anisotropy: f64,
+    axis: [f64; 3],
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let t = axial_csa(anisotropy, axis).raise()?;
+    Ok(PyArray2::from_vec2(
+        py,
+        &t.iter().map(|r| r.to_vec()).collect::<Vec<_>>(),
+    )?)
+}
+
 /// Gyromagnetic ratio (rad s⁻¹ T⁻¹) of an isotope.
 #[pyfunction]
 fn gyromagnetic_ratio(isotope_name: &str) -> PyResult<f64> {
@@ -204,6 +219,15 @@ impl PySpinSystem {
 
     fn state(&self, rho: &ComplexMatrixArg<'_>) -> PyResult<CMatrix> {
         self.matrix("a state", rho)
+    }
+
+    fn spin(&self, i: usize) -> PyResult<&metatron_qso::spin::Spin> {
+        self.inner.spins().get(i).ok_or_else(|| {
+            invalid(format!(
+                "spin {i} out of range ({} spins)",
+                self.inner.spins().len()
+            ))
+        })
     }
 }
 
@@ -259,6 +283,76 @@ impl PySpinSystem {
         Ok(Self {
             inner: self.inner.clone().with_field(field).raise()?,
         })
+    }
+
+    /// Set the position (Å) of spin `i`, for dipolar relaxation.
+    fn set_position(&mut self, i: usize, position: [f64; 3]) -> PyResult<()> {
+        self.inner.set_position(i, position).raise()?;
+        Ok(())
+    }
+
+    /// The position (Å) of spin `i`, if set.
+    fn position(&self, i: usize) -> PyResult<Option<[f64; 3]>> {
+        Ok(self.spin(i)?.position)
+    }
+
+    /// Set the shielding tensor (ppm, 3×3, molecular frame) of spin `i`,
+    /// or remove it with `None`; its traceless symmetric part relaxes.
+    #[pyo3(signature = (i, tensor))]
+    fn set_csa(&mut self, i: usize, tensor: Option<[[f64; 3]; 3]>) -> PyResult<()> {
+        self.inner.set_csa(i, tensor).raise()?;
+        Ok(())
+    }
+
+    /// The shielding tensor (ppm) of spin `i`, if set.
+    fn csa<'py>(&self, py: Python<'py>, i: usize) -> PyResult<Option<Bound<'py, PyArray2<f64>>>> {
+        match self.spin(i)?.csa {
+            Some(t) => Ok(Some(PyArray2::from_vec2(
+                py,
+                &t.iter().map(|r| r.to_vec()).collect::<Vec<_>>(),
+            )?)),
+            None => Ok(None),
+        }
+    }
+
+    /// The same system tumbling isotropically with correlation time
+    /// `tau_c` (s), which turns on Redfield relaxation; `None` turns it
+    /// off.
+    fn with_correlation_time(&self, tau_c: Option<f64>) -> PyResult<Self> {
+        Ok(Self {
+            inner: self.inner.clone().with_correlation_time(tau_c).raise()?,
+        })
+    }
+
+    #[getter]
+    fn correlation_time(&self) -> Option<f64> {
+        self.inner.correlation_time()
+    }
+
+    /// The dipolar coupling constant `(μ₀/4π) γ_i γ_j ħ / r³` (rad/s).
+    fn dipolar_coupling(&self, i: usize, j: usize) -> PyResult<f64> {
+        self.inner.dipolar_coupling(i, j).raise()
+    }
+
+    /// Relaxation rates (1/s) among observables: `Γ_ij = −Re Tr(O_i†
+    /// D(O_j)) / Tr(O_i† O_i)`, `D` the relaxation without `H`. The
+    /// diagonal holds auto-relaxation rates (`1/T₁` of `I_z`, `1/T₂` of
+    /// `I₊`), the rest cross-relaxation.
+    fn relaxation_rates<'py>(
+        &self,
+        py: Python<'py>,
+        ops: Vec<ComplexMatrixArg<'py>>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let ops = ops
+            .iter()
+            .map(|o| self.matrix("an operator", o))
+            .collect::<PyResult<Vec<CMatrix>>>()?;
+        let sys = &self.inner;
+        let g = py.detach(|| sys.relaxation_rates(&ops)).raise()?;
+        let rows: Vec<Vec<f64>> = (0..g.nrows())
+            .map(|r| (0..g.ncols()).map(|c| g[(r, c)]).collect())
+            .collect();
+        Ok(PyArray2::from_vec2(py, &rows)?)
     }
 
     /// The same system at another temperature (K).
@@ -562,5 +656,6 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_inversion_recovery, m)?)?;
     m.add_function(wrap_pyfunction!(spectrum, m)?)?;
     m.add_function(wrap_pyfunction!(gyromagnetic_ratio, m)?)?;
+    m.add_function(wrap_pyfunction!(py_axial_csa, m)?)?;
     Ok(())
 }

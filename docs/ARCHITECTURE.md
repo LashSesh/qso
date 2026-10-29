@@ -411,6 +411,19 @@ cheaper one runs, and more than `MAX_RELAXATION_WORK` is refused before
 anything is computed. Shaped pulses mix the orders and use one block.
 Sweeps are piecewise constant, with the field at the middle of each piece.
 
+Redfield relaxation (`spin/redfield.rs`) works on the same blocks. The
+spatial tensors of the interactions (dipolar `b(1 − 3nnᵀ)`, anisotropic
+shielding `γBσ`) are expanded in an orthonormal basis `E_μ` of traceless
+symmetric tensors; the isotropic average of their correlations makes the
+superoperator a sum of 30 independent terms `[𝒬, [Y(𝒬), ·]]`, with
+`𝒬 = Σ_k (A^k : E_μ) Q^k,S_ab` and `Y` the multiplication by `J(ω_mn)` in
+the eigenbasis of the laboratory-frame `H` (its blocks by total `M`).
+`R` is assembled entry by entry for each coherence-order block of the
+frame's labels, which in the rotating frame is the secular projection,
+and added to the Lindblad blocks. `R(ρ_eq)` joins `L(1/d)` in the drift
+of the deviation's equation. Dormand–Prince steps apply `R` block by block
+as matrix-vector products.
+
 ## Hamiltonian simulation and chemistry (`algorithms/time_evolution.rs`, `chemistry/`)
 
 Every exponential of a Pauli string becomes `Circuit::pauli_rotation`: a

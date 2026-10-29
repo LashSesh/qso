@@ -21,6 +21,7 @@ sequences are lists of events::
 from ._core import (
     SpinEvent,
     SpinSystem,
+    axial_csa,
     gyromagnetic_ratio,
     inept,
     inept_cycle,
@@ -37,6 +38,7 @@ from ._core import spin_sweep as sweep
 __all__ = [
     "SpinEvent",
     "SpinSystem",
+    "axial_csa",
     "delay",
     "gyromagnetic_ratio",
     "inept",

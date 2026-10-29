@@ -206,3 +206,114 @@ def test_bindings_reject_bools_and_name_operators():
     with pytest.raises(ValueError):
         sys.set_relaxation(0, 1.0, 3.0)
     assert sys.spins[0][2:] == (2.0, 1.0)
+
+
+def _rotations(n=8):
+    """Rotations and weights that average polynomials of degree < n in the
+    entries of a rotation matrix exactly: Euler angles with Gauss–Legendre
+    nodes in cos β."""
+    nodes, weights = np.polynomial.legendre.leggauss(n)
+    out = []
+    for a in np.arange(n) * 2 * np.pi / n:
+        for cb, wb in zip(nodes, weights):
+            for g in np.arange(n) * 2 * np.pi / n:
+                b = math.acos(cb)
+                rz = lambda x: np.array([[math.cos(x), -math.sin(x), 0], [math.sin(x), math.cos(x), 0], [0, 0, 1]])
+                ry = np.array([[math.cos(b), 0, math.sin(b)], [0, 1, 0], [-math.sin(b), 0, math.cos(b)]])
+                out.append((rz(a) @ ry @ rz(g), wb / (2 * n * n)))
+    return out
+
+
+def test_redfield_matches_qutip_bloch_redfield():
+    qt = pytest.importorskip("qutip")
+    scipy_linalg = pytest.importorskip("scipy.linalg")
+    # ¹³C with a shielding tensor and two protons, laboratory frame at 1 T,
+    # τ_c = 1 ns (ωτ_c ≈ 0.3 for ¹H). The bath operators come from an
+    # exact numerical average over orientations (not from the closed form
+    # QSO uses), the Redfield tensor from QuTiP's bloch_redfield_tensor.
+    field, tau = 1.0, 1e-9
+    spins = [("13C", 60.0, (0.0, 0.0, 0.0)), ("1H", 2.0, (1.09, 0.0, 0.0)), ("1H", 3.5, (-0.36, 1.03, 0.0))]
+    csa = np.array([[-40.0, 12.0, 0.0], [12.0, 15.0, -8.0], [0.0, -8.0, 25.0]])
+    couplings = [(0, 1, 140.0), (0, 2, 135.0), (1, 2, -12.0)]
+    sys = q.SpinSystem(field, temperature=1e9, frame="laboratory")
+    for k, (iso, shift, pos) in enumerate(spins):
+        sys.add_spin(iso, shift)
+        sys.set_position(k, pos)
+    sys.set_csa(0, csa)
+    for i, j, jh in couplings:
+        sys.couple(i, j, jh)
+    sys = sys.with_correlation_time(tau)
+
+    def op(i, which):
+        return qt.tensor([qt.jmat(0.5, which) if k == i else qt.qeye(2) for k in range(3)])
+
+    gamma = {iso: q.spin.gyromagnetic_ratio(iso) for iso, *_ in spins}
+    h = sum(-gamma[iso] * field * (1 + shift * 1e-6) * op(i, "z") for i, (iso, shift, _) in enumerate(spins))
+    for i, j, jh in couplings:
+        h += 2 * math.pi * jh * sum(op(i, w) * op(j, w) for w in "xyz")
+    # Interactions Σ_ab A_ab Q_ab: dipolar pairs and the anisotropic shielding.
+    interactions = []
+    for i in range(3):
+        for j in range(i + 1, 3):
+            r = np.subtract(spins[j][2], spins[i][2]) * 1e-10
+            dist = np.linalg.norm(r)
+            b = 1.00000000055e-7 * gamma[spins[i][0]] * gamma[spins[j][0]] * 1.054571817e-34 / dist**3
+            n = r / dist
+            interactions.append((b * (np.eye(3) - 3 * np.outer(n, n)), lambda a, c, i=i, j=j: op(i, "xyz"[a]) * op(j, "xyz"[c])))
+    aniso = (csa + csa.T) / 2 - np.trace(csa) / 3 * np.eye(3)
+    interactions.append((gamma["13C"] * field * 1e-6 * aniso, lambda a, c: op(0, "xyz"[a]) if c == 2 else 0 * op(0, "z")))
+    keys = [(k, a, c) for k in range(len(interactions)) for a in range(3) for c in range(3)]
+    cov = np.zeros((len(keys), len(keys)))
+    for rot, w in _rotations():
+        v = np.array([(rot @ interactions[k][0] @ rot.T)[a, c] for k, a, c in keys])
+        cov += w * np.outer(v, v)
+    values, vectors = np.linalg.eigh(cov)
+    spectrum = lambda w: 2 * tau / (1 + (w * tau) ** 2)
+    a_ops = []
+    for lam, vec in zip(values, vectors.T):
+        if lam > 1e-12 * values.max():
+            a = sum(x * interactions[k][1](a, c) for x, (k, a, c) in zip(vec, keys) if abs(x) > 1e-14)
+            a_ops.append((math.sqrt(lam) * a, spectrum))
+    tensor = qt.bloch_redfield_tensor(h, a_ops, sec_cutoff=-1, fock_basis=True)
+    full = tensor.full()
+    dissipation = full - qt.liouvillian(h).full()
+    # Rates among observables.
+    ops = [op(0, "z"), op(1, "z"), op(2, "z"), op(0, "+"), op(1, "+"), 2 * op(0, "z") * op(1, "z")]
+    rates = sys.relaxation_rates([o.full() for o in ops])
+    vec = lambda m: np.asarray(m).reshape(-1, order="F")
+    want = np.array([[-(vec(oi.full()).conj() @ dissipation @ vec(oj.full())).real / (oi.dag() * oi).tr().real for oj in ops] for oi in ops])
+    assert np.abs(rates - want).max() < 1e-9 * np.abs(want).max()
+    assert want[0, 1] != 0 and want[0, 5] != 0  # cross-relaxation and cross-correlation
+    # Dynamics: the exponential of QuTiP's tensor against evolve.
+    rho0 = np.eye(8) / 8 + (0.1 * op(0, "z") + 0.05 * op(1, "x") + 0.03 * 2 * op(1, "z") * op(0, "z")).full()
+    for t in (0.02, 0.2):
+        ref = (scipy_linalg.expm(full * t) @ vec(rho0)).reshape(8, 8, order="F")
+        got = sys.evolve(rho0, [spin.delay(t)])
+        for o in ops[:3] + [op(1, "x")]:
+            a, b = np.trace(got @ o.full()).real, np.trace(ref @ o.full()).real
+            assert abs(a - b) < 1e-7 * 0.1, (t, a, b)
+
+
+def test_redfield_bindings():
+    sys = q.SpinSystem(9.4)
+    c = sys.add_spin("13C", 170.0)
+    h = sys.add_spin("1H", 8.0)
+    sys.set_position(c, (0.0, 0.0, 0.0))
+    sys.set_position(h, (1.1, 0.0, 0.0))
+    sys.set_csa(c, spin.axial_csa(150.0, (0.0, 0.0, 1.0)))
+    assert sys.position(h) == [1.1, 0.0, 0.0] and sys.position(c) == [0.0, 0.0, 0.0]
+    assert sys.csa(c)[2, 2] == pytest.approx(100.0) and sys.csa(h) is None
+    assert sys.correlation_time is None
+    with pytest.raises(ValueError):
+        sys.set_position(h, (0.0, 0.0, 0.0))
+    assert sys.position(h) == [1.1, 0.0, 0.0]
+    moving = sys.with_correlation_time(2e-11)
+    assert moving.correlation_time == 2e-11
+    assert moving.dipolar_coupling(0, 1) == pytest.approx(1.00000000055e-7 * 6.728284e7 * 26.7522128e7 * 1.054571817e-34 / 1.1e-10**3)
+    g = moving.relaxation_rates([moving.spin_operator(0, "z"), moving.spin_operator(1, "z")])
+    assert g.shape == (2, 2) and g[0, 0] > 0 and g[0, 1] > 0
+    assert sys.relaxation_rates([sys.spin_operator(0, "z")])[0, 0] == 0.0
+    back = q.SpinSystem.from_json(moving.to_json())
+    assert back.correlation_time == 2e-11 and back.position(1) == [1.1, 0.0, 0.0]
+    with pytest.raises(ValueError):
+        sys.with_correlation_time(-1.0)

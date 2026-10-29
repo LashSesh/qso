@@ -228,6 +228,7 @@ def correctness(quick: bool) -> dict:
         "correlated_and_distance_vs_stim": correlated_and_distance_vs_stim(quick),
         "chemistry_vs_pyscf": chemistry_vs_pyscf(),
         "spins_vs_qutip": spins_vs_qutip(),
+        "redfield_vs_qutip": redfield_vs_qutip(),
     }
 
 
@@ -902,6 +903,8 @@ TOLERANCES = {
     "spin_expectation": 1e-9,
     "spin_mesolve": 1e-3,
     "spin_hamiltonian": 1e-13,
+    "redfield_rate": 1e-12,
+    "redfield_expectation": 1e-7,
     "qaoa_single": 1e-5,
 }
 
@@ -1088,6 +1091,128 @@ def spins_vs_qutip() -> dict:
     return out
 
 
+def redfield_vs_qutip() -> dict:
+    """Redfield relaxation against QuTiP's Bloch–Redfield tensor.
+
+    The bath operators of isotropic tumbling are built here from an exact
+    numerical average over orientations (Gauss–Legendre in cos β, uniform
+    in the other Euler angles) of the dipolar and shielding tensors, not
+    from the closed form QSO uses; QuTiP's ``bloch_redfield_tensor``
+    (non-secular) turns them into the relaxation superoperator. Compared,
+    in the laboratory frame: the relaxation rates among I_z, I_+ and
+    two-spin orders, and expectations after exact propagation by the
+    exponential of QuTiP's tensor. The temperature is 10^9 K, as QuTiP's
+    symmetric spectra relax to the identity.
+    """
+    import metatron_qso as q
+    import qutip as qt
+    import scipy.linalg
+    from metatron_qso import spin
+
+    def rotations(n=8):
+        nodes, weights = np.polynomial.legendre.leggauss(n)
+        rz = lambda x: np.array([[math.cos(x), -math.sin(x), 0], [math.sin(x), math.cos(x), 0], [0, 0, 1]])
+        out = []
+        for a in np.arange(n) * 2 * np.pi / n:
+            for cb, wb in zip(nodes, weights):
+                b = math.acos(cb)
+                ry = np.array([[math.cos(b), 0, math.sin(b)], [0, 1, 0], [-math.sin(b), 0, math.cos(b)]])
+                for g in np.arange(n) * 2 * np.pi / n:
+                    out.append((rz(a) @ ry @ rz(g), wb / (2 * n * n)))
+        return out
+
+    grid = rotations()
+    gamma = {iso: q.spin.gyromagnetic_ratio(iso) for iso in ("1H", "13C", "15N")}
+
+    def run(field, tau, spins, csa, couplings, times):
+        n = len(spins)
+        sys = q.SpinSystem(field, temperature=1e9, frame="laboratory")
+        for k, (iso, shift, pos) in enumerate(spins):
+            sys.add_spin(iso, shift)
+            sys.set_position(k, pos)
+        for k, tensor in csa.items():
+            sys.set_csa(k, np.asarray(tensor))
+        for i, j, jh in couplings:
+            sys.couple(i, j, jh)
+        sys = sys.with_correlation_time(tau)
+
+        def op(i, which):
+            return qt.tensor([qt.jmat(0.5, which) if k == i else qt.qeye(2) for k in range(n)])
+
+        h = sum(-gamma[iso] * field * (1 + shift * 1e-6) * op(i, "z") for i, (iso, shift, _) in enumerate(spins))
+        for i, j, jh in couplings:
+            h += 2 * math.pi * jh * sum(op(i, w) * op(j, w) for w in "xyz")
+        interactions = []
+        for i in range(n):
+            for j in range(i + 1, n):
+                r = np.subtract(spins[j][2], spins[i][2]) * 1e-10
+                dist = np.linalg.norm(r)
+                b = 1.00000000055e-7 * gamma[spins[i][0]] * gamma[spins[j][0]] * 1.054571817e-34 / dist**3
+                u = r / dist
+                interactions.append((b * (np.eye(3) - 3 * np.outer(u, u)), lambda a, c, i=i, j=j: op(i, "xyz"[a]) * op(j, "xyz"[c])))
+        for k, tensor in csa.items():
+            t = np.asarray(tensor)
+            aniso = (t + t.T) / 2 - np.trace(t) / 3 * np.eye(3)
+            w = gamma[spins[k][0]] * field * 1e-6
+            interactions.append((w * aniso, lambda a, c, k=k: op(k, "xyz"[a]) if c == 2 else 0 * op(k, "z")))
+        keys = [(k, a, c) for k in range(len(interactions)) for a in range(3) for c in range(3)]
+        cov = np.zeros((len(keys), len(keys)))
+        for rot, w in grid:
+            v = np.array([(rot @ interactions[k][0] @ rot.T)[a, c] for k, a, c in keys])
+            cov += w * np.outer(v, v)
+        values, vectors = np.linalg.eigh(cov)
+        spectrum = lambda w: 2 * tau / (1 + (w * tau) ** 2)
+        a_ops = []
+        for lam, vec in zip(values, vectors.T):
+            if lam > 1e-12 * values.max():
+                a = sum(x * interactions[k][1](a, c) for x, (k, a, c) in zip(vec, keys) if abs(x) > 1e-14)
+                a_ops.append((math.sqrt(lam) * a, spectrum))
+        full = qt.bloch_redfield_tensor(h, a_ops, sec_cutoff=-1, fock_basis=True).full()
+        dissipation = full - qt.liouvillian(h).full()
+        vec = lambda m: np.asarray(m).reshape(-1, order="F")
+        ops = [op(i, "z") for i in range(n)] + [op(i, "+") for i in range(n)]
+        ops += [2 * op(0, "z") * op(i, "z") for i in range(1, n)]
+        rates = sys.relaxation_rates([o.full() for o in ops])
+        want = np.array([[-(vec(oi.full()).conj() @ dissipation @ vec(oj.full())).real / (oi.dag() * oi).tr().real for oj in ops] for oi in ops])
+        rate_diff = float(np.abs(rates - want).max() / np.abs(want).max())
+        d = 2**n
+        rho0 = np.eye(d) / d + (0.1 * op(0, "z") + 0.05 * op(1, "x") + 0.03 * 2 * op(1, "z") * op(0, "z")).full()
+        observed = [op(i, "z") for i in range(n)] + [op(1, "x"), op(0, "y")]
+        diff = 0.0
+        for t in times:
+            ref = (scipy.linalg.expm(full * t) @ vec(rho0)).reshape(d, d, order="F")
+            got = sys.evolve(rho0, [spin.delay(float(t))])
+            for o in observed:
+                diff = max(diff, abs(np.trace(got @ o.full()).real - np.trace(ref @ o.full()).real))
+        return {"spins": n, "max_relative_rate_difference": rate_diff, "max_expectation_difference": diff / 0.1}
+
+    tetrahedral = [(0.0, 0.0, 0.0)] + [
+        (1.09 * x, 1.09 * y, 1.09 * z)
+        for x, y, z in [(0.943, 0.0, -0.333), (-0.471, 0.816, -0.333), (-0.471, -0.816, -0.333)]
+    ]
+    cases = {
+        "13C-1H-1H with CSA, 1 T, 1 ns": (
+            1.0, 1e-9, [("13C", 60.0, (0.0, 0.0, 0.0)), ("1H", 2.0, (1.09, 0.0, 0.0)), ("1H", 3.5, (-0.36, 1.03, 0.0))],
+            {0: [[-40.0, 12.0, 0.0], [12.0, 15.0, -8.0], [0.0, -8.0, 25.0]]}, [(0, 1, 140.0), (0, 2, 135.0), (1, 2, -12.0)],
+            [0.01, 0.1, 0.3],
+        ),
+        "13CH3 with CSA, 1 T, 0.3 ns": (
+            1.0, 3e-10, [("13C", 25.0, tetrahedral[0])] + [("1H", 1.0 + 0.2 * k, p) for k, p in enumerate(tetrahedral[1:])],
+            {0: [[-20.0, 0.0, 0.0], [0.0, -20.0, 0.0], [0.0, 0.0, 40.0]]}, [(0, k, 125.0) for k in (1, 2, 3)],
+            [0.05, 0.5],
+        ),
+        "15N-1H amide with CSA (TROSY cross-correlation), 0.5 T, 10 ns": (
+            0.5, 1e-8, [("15N", 120.0, (0.0, 0.0, 0.0)), ("1H", 8.3, (1.02, 0.0, 0.0))],
+            {0: [[110.0, 0.0, 0.0], [0.0, -55.0, 0.0], [0.0, 0.0, -55.0]]}, [(0, 1, -92.0)],
+            [0.01, 0.1],
+        ),
+    }
+    out = {name: run(*case) for name, case in cases.items()}
+    out["max_relative_rate_difference"] = max(r["max_relative_rate_difference"] for r in out.values())
+    out["max_expectation_difference"] = max(r["max_expectation_difference"] for r in out.values() if isinstance(r, dict))
+    return out
+
+
 def check(c: dict) -> list[str]:
     """Deviations in the correctness section that exceed TOLERANCES."""
     failures = []
@@ -1170,6 +1295,11 @@ def check(c: dict) -> list[str]:
         failures.append(f"spin dynamics differ from QuTiP by {sp['max_relative_expectation_difference']:.3g} (relative)")
     if not sp["max_relative_expectation_difference_mesolve"] <= TOLERANCES["spin_mesolve"]:
         failures.append(f"spin dynamics differ from QuTiP's mesolve by {sp['max_relative_expectation_difference_mesolve']:.3g}")
+    rf = c["redfield_vs_qutip"]
+    if not rf["max_relative_rate_difference"] <= TOLERANCES["redfield_rate"]:
+        failures.append(f"Redfield rates differ from QuTiP's Bloch–Redfield tensor by {rf['max_relative_rate_difference']:.3g}")
+    if not rf["max_expectation_difference"] <= TOLERANCES["redfield_expectation"]:
+        failures.append(f"Redfield dynamics differ from QuTiP's by {rf['max_expectation_difference']:.3g}")
     if not sp["max_hamiltonian_relative_difference"] <= TOLERANCES["spin_hamiltonian"]:
         failures.append(f"spin Hamiltonians differ from QuTiP's by {sp['max_hamiltonian_relative_difference']:.3g}")
     chem = c["chemistry_vs_pyscf"]

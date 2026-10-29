@@ -433,6 +433,10 @@ enum Command {
         /// pasadena:I,J (the singlet averaged over free evolution).
         #[arg(long, default_value = "thermal")]
         initial: String,
+        /// Also print the relaxation times T1 and T2 of every spin (from
+        /// T1/T2 inputs and Redfield relaxation).
+        #[arg(long)]
+        rates: bool,
     },
     /// Trotter–Suzuki circuit for exp(−iHt) with its error bound.
     Trotter {
@@ -1760,6 +1764,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             sequence,
             pulse,
             initial,
+            rates,
         } => {
             let sys = SpinSystem::from_json(&read_text(system)?)?;
             let isotope = Isotope::from_name(observe)?;
@@ -1823,6 +1828,19 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             }
             let shown: Vec<String> = polarizations.iter().map(|p| format!("{p:+.4e}")).collect();
             text.push_str(&format!("\npolarisations: {}", shown.join(" ")));
+            let mut times = Vec::new();
+            if *rates {
+                text.push_str("\nrelaxation times (s):");
+                for i in 0..sys.spins().len() {
+                    let g = sys.relaxation_rates(&[sys.iz(i)?, sys.iplus(i)?])?;
+                    let (t1, t2) = (1.0 / g[(0, 0)], 1.0 / g[(1, 1)]);
+                    text.push_str(&format!(
+                        "\n  spin {i} ({}): T1 {t1:.4e}  T2 {t2:.4e}",
+                        sys.spins()[i].isotope.name()
+                    ));
+                    times.push(json!({"spin": i, "t1": t1, "t2": t2}));
+                }
+            }
             let rows: Vec<serde_json::Value> = lines
                 .iter()
                 .map(|l| {
@@ -1832,7 +1850,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 .collect();
             Ok((
                 json!({"lines": rows, "polarizations": polarizations, "events": events.len(),
-                       "field": end.field()}),
+                       "field": end.field(), "relaxation_times": times}),
                 text,
             ))
         }

@@ -68,6 +68,24 @@ All notable changes to this project are documented here. The format follows
     `pea_layered`, and `max_bond` (for `simulator="mps"` only).
   - Learned rates on 7 to 10 qubits (more than 64 generators) now come
     from the new fit; they agree with 1.30 to rounding (about 10⁻¹⁷).
+- **Relaxation from first principles** (milestone 1.34).
+  - Spins take positions (Å) and shielding tensors (ppm), a system a
+    rotational correlation time: `set_position`, `set_csa`,
+    `axial_csa`, `with_correlation_time`, `dipolar_coupling`; in JSON
+    as `position`, `csa` and `correlation_time`.
+  - Bloch–Wangsness–Redfield relaxation by the dipolar couplings and
+    shielding anisotropies of a molecule tumbling isotropically, with
+    cross-correlations between all of them, towards thermal equilibrium
+    (`−R(ρ − ρ_eq)`); secular with respect to the carriers in the rotating
+    frame, in full in the laboratory frame. It adds to the T₁ and T₂ of
+    1.33 in every propagation (block exponentials, Dormand–Prince steps,
+    FIDs).
+  - `relaxation_rates(ops)`: auto- and cross-relaxation rates among
+    observables. `qso spins --rates` prints T₁ and T₂ of every spin.
+  - Validated against Solomon's equations, BPP, the ¹³C Overhauser
+    enhancement (2.988), CSA rates (∝ B²), singlet immunity, the
+    deuteration factor 15.9, and QuTiP's `bloch_redfield_tensor` with bath
+    operators from an exact average over orientations (rates to 5·10⁻¹⁵).
 - **Spin dynamics and magnetic resonance** (milestone 1.33), module
   `spin`.
   - `SpinSystem`: nuclei by isotope (¹H, ²H as spin 1, ¹³C, ¹⁵N, ¹⁹F,

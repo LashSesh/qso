@@ -81,7 +81,7 @@ temperature, with `k↑ + k↓ = 1/T₁` and
 gives exactly the decay times `T₁` of `⟨I_z⟩` and `T₂` of `⟨I₊⟩`. For ²H
 the same operators give them in the high-temperature limit, and the
 equilibrium is thermal; quadrupolar relaxation is not modelled.
-Cross-relaxation and Redfield theory are not included.
+Cross-relaxation follows from Redfield theory (next section).
 
 The master equation conserves the coherence orders of `H`'s blocks. Each
 block of its superoperator, up to 2048 elements (six protons have blocks
@@ -94,6 +94,43 @@ that deviation when they are cheaper. A propagation estimated at more
 than 1.5·10¹² operations, about a minute, is refused with an error. One
 second of five relaxing protons at 9.4 T takes 0.2 s, in either frame,
 and of six about ten seconds.
+
+## Relaxation from first principles
+
+Relaxation times can also follow from the molecule. Give spins positions
+(Å) and shielding tensors (ppm, in the same molecular frame), and the
+system a rotational correlation time `τ_c` (s) of isotropic tumbling:
+
+```python
+sys = q.SpinSystem(9.4)
+c = sys.add_spin("13C", 171.0)
+h = sys.add_spin("1H", 8.4)
+sys.set_position(c, (0.0, 0.0, 0.0))
+sys.set_position(h, (1.10, 0.0, 0.0))
+sys.set_csa(c, spin.axial_csa(-140.0, (0.0, 1.0, 0.0)))
+sys = sys.with_correlation_time(2e-11)
+g = sys.relaxation_rates([sys.spin_operator(c, "z"), sys.spin_operator(h, "z")])
+print(1 / g[0, 0], g[0, 1])        # 2.34 s, 0.202 /s: ¹³C T₁ and the ¹³C–¹H cross-relaxation
+```
+
+The dipolar couplings `b_ij = (μ₀/4π) γ_i γ_j ħ / r³` of every pair with
+positions and the anisotropic part of every shielding tensor relax the
+spins by Bloch–Wangsness–Redfield theory, cross-correlations between them
+included: `dρ/dt = −i[H, ρ] − R(ρ − ρ_eq)` with spectral densities
+`J(ω) = τ_c/(1 + ω²τ_c²)` at the transition frequencies of the
+laboratory-frame Hamiltonian. The thermal state `ρ_eq` makes relaxation end
+in equilibrium at any temperature. In the rotating frame only the part of
+`R` that keeps every isotope's coherence order is kept (secular with
+respect to the carriers); in the laboratory frame `R` is used in full.
+Dynamic frequency shifts, anisotropic tumbling, internal motion and
+quadrupolar relaxation are not included. Redfield relaxation adds to
+`T₁` and `T₂` given per spin, and runs through the same block
+exponentials.
+
+`relaxation_rates(ops)` returns the matrix `Γ_ij = −Re Tr(O_i† D(O_j)) /
+Tr(O_i† O_i)` of the relaxation `D` (without `H`): its diagonal holds the
+auto-relaxation rates (`1/T₁` of `I_z`, `1/T₂` of `I₊`), the rest the
+cross-relaxation. `qso spins --rates` prints `T₁` and `T₂` of every spin.
 
 ## Spectra
 
@@ -170,6 +207,23 @@ for b in (2e-3, 5.7e-3, 9e-3):
   frame and 2·10⁻¹⁰ in the laboratory frame at 9.4 T (rounding grows with
   the Larmor phase), and with `mesolve` to 4·10⁻⁶ and 2.5·10⁻⁴, the error
   of its adaptive steps.
+
+- **Redfield relaxation.** Two dipolar spins follow Solomon's equations
+  (auto-, cross- and transverse rates, ¹H–¹H and ¹³C–¹H, three
+  correlation times, both frames) to 10⁻⁹, and two like spins the total
+  rate of Bloembergen, Purcell and Pound. Carbon's Overhauser enhancement
+  under proton saturation is `1 + γ_H/(2γ_C)` = 2.988 in extreme
+  narrowing, and the transient after inverting the protons follows
+  Solomon's equations to 10⁻⁷. Shielding anisotropy gives
+  `R₁ = (ω₀²/5)(σ:σ) J(ω)` and `R₂ = (ω₀²/30)(σ:σ)(4J(0) + 3J(ω))` to
+  10⁻⁹, four times faster per doubling of the field. The singlet order of
+  two equivalent protons does not relax by their dipolar coupling
+  (rate below 10⁻¹² of the magnetisation's), and deuteration slows the
+  dipolar relaxation of carbon 15.9 times. Against QuTiP's
+  `bloch_redfield_tensor`, with bath operators from an exact average over
+  orientations rather than QSO's closed form, the rates of a ¹³C–¹H₂, a
+  ¹³CH₃ and an amide ¹⁵N–¹H (with shielding cross-correlation) agree to
+  5·10⁻¹⁵ and the expectations after exact propagation to 3·10⁻⁹.
 
 On the command line, `qso spins system.json --observe 13C --sequence
 events.json` prints the lines and polarisations after a sequence

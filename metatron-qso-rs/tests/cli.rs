@@ -419,6 +419,23 @@ fn spin_dynamics() {
     let nu = -6.728_284e7 * 4.7 * 60e-6 / (2.0 * std::f64::consts::PI);
     assert!(((freq[0] + freq[1]) / 2.0 - nu).abs() < 1e-6, "{freq:?}");
     assert!((freq[1] - freq[0] - 140.0).abs() < 1e-6, "{freq:?}");
+    // Redfield relaxation of formate: T1 of ¹³C from its dipolar coupling
+    // to the proton (Solomon) and its shielding anisotropy.
+    let formate = format!("{root}/examples/spins/formate.json");
+    let r = qso(&["spins", &formate, "--observe", "13C", "--rates"]);
+    let t1 = f(&r["relaxation_times"][0]["t1"]);
+    let (gc, gh, tau, field) = (6.728_284e7, 26.752_212_8e7, 2e-11, 9.4);
+    let j = |w: f64| tau / (1.0 + w * w * tau * tau);
+    let b = 1.000_000_000_55e-7 * gc * gh * 1.054_571_817e-34 / 1.10e-10f64.powi(3);
+    let (wc, wh) = (gc * field * (1.0 + 171e-6), gh * field * (1.0 + 8.4e-6));
+    let dipolar = b * b / 10.0 * (j(wh - wc) + 3.0 * j(wc) + 6.0 * j(wh + wc));
+    let w0 = gc * field;
+    let csa = w0 * w0 / 5.0 * 9950e-12 * j(wc);
+    assert!(
+        (t1 * (dipolar + csa) - 1.0).abs() < 1e-8,
+        "{t1} vs {}",
+        1.0 / (dipolar + csa)
+    );
 }
 
 #[test]
