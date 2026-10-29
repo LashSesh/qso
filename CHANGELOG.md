@@ -68,6 +68,22 @@ All notable changes to this project are documented here. The format follows
     `pea_layered`, and `max_bond` (for `simulator="mps"` only).
   - Learned rates on 7 to 10 qubits (more than 64 generators) now come
     from the new fit; they agree with 1.30 to rounding (about 10⁻¹⁷).
+- **Hyperpolarisation in realistic models** (milestone 1.35).
+  - `Exchange` (`spin.Exchange` in Python): chemical sites (spin systems
+    with concentrations) and first-order channels that carry some spins'
+    states, trace out the rest and bring the others in thermal or as
+    parahydrogen; the Bloch–McConnell equations in Liouville space,
+    propagated exactly block by block of coherence order over all sites,
+    with relaxation per site; `evolve`, `steady_state`, `fid`,
+    `polarization`, JSON.
+  - `m2s`, `s2m` (Pileio, Carravetta and Levitt) and `spin_lock` for
+    long-lived singlet order.
+  - Validated against the two-site Bloch–McConnell FID (10⁻¹⁰) and
+    coalescence, a Monte Carlo of exchange events, SABRE anti-crossings,
+    the 2/3 bound of M2S/S2M (97–99.9 %), the sudden-adiabatic theory of
+    field cycling (¹³C polarisation to 10⁻⁴) and the Redfield lifetime of
+    singlet order under a spin lock (4·10⁻⁴).
+  - Tutorial `09_hyperpolarisation`: SABRE with exchange, field cycling.
 - **Relaxation from first principles** (milestone 1.34).
   - Spins take positions (Å) and shielding tensors (ppm), a system a
     rotational correlation time: `set_position`, `set_csa`,

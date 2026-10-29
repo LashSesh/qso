@@ -424,6 +424,19 @@ and added to the Lindblad blocks. `R(ρ_eq)` joins `L(1/d)` in the drift
 of the deviation's equation. Dormand–Prince steps apply `R` block by block
 as matrix-vector products.
 
+Chemical exchange (`spin/exchange.rs`) joins the coherence-order blocks
+of all sites: labels are written over the isotopes of all sites, each
+site's Liouville block of order `q` is placed at an offset in the joint
+block `q`, and `generator_entries` (shared with the single system) fills
+each site's evolution and relaxation. A channel adds `−k` on the source's
+diagonal and, for every element `(a, a')` of the source whose traced spins
+agree, `k · ρ_fresh(f, f')` at the target element composed of the carried
+levels and the fresh ones `(f, f')`; the fresh state has order 0, so this
+stays within the block. The deviation from `c_s/d_s` is propagated, with
+the relaxation drift and the exchange of `c_s/d_s` in the augmented
+column. Steady states solve the population block with one extra equation
+per site, `Tr Δ_s = 0`, by SVD, and refuse a rank-deficient system.
+
 ## Hamiltonian simulation and chemistry (`algorithms/time_evolution.rs`, `chemistry/`)
 
 Every exponential of a Pauli string becomes `Circuit::pauli_rotation`: a

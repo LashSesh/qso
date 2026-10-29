@@ -158,6 +158,65 @@ spin), the rest the cross-relaxation; with cross-relaxation, recovery has
 several rates. `qso spins --rates` prints the auto-relaxation times
 `1/Γ_ii` of `I_z` and `I₊` of every spin.
 
+## Chemical exchange
+
+Molecules change their environment: a substrate binds to a catalyst and
+leaves again, hydrogen is replaced. `spin.Exchange` holds chemical sites,
+each a `SpinSystem` with a concentration, and first-order channels between
+them (the Bloch–McConnell equations in Liouville space, McConnell 1958).
+A channel converts a fraction `rate` of its source per second; the spins
+it carries keep their state, the source's other spins are traced out, and
+the target's other spins arrive thermal or, for hydrogen, in the singlet
+of parahydrogen. SABRE with a ¹⁵N substrate:
+
+```python
+complex_ = q.SpinSystem(1.4e-7, frame="laboratory")  # two hydrides, bound ¹⁵N
+for shift, iso in ((-22.0, "1H"), (-22.0, "1H"), (250.0, "15N")):
+    complex_.add_spin(iso, shift)
+complex_.couple(0, 1, -7.0)
+complex_.couple(0, 2, -2.0)
+free = q.SpinSystem(1.4e-7, frame="laboratory")
+free.add_spin("15N", 310.0, t1=30.0)
+x = spin.Exchange()
+x.add_site(complex_, 1.0)                  # concentrations
+x.add_site(free, 10.0)
+x.add_channel(0, 1, 2.0, carried=[(2, 0)])                         # substrate leaves
+x.add_channel(1, 0, 0.2, carried=[(0, 2)], parahydrogen=(0, 1))    # and binds with fresh H₂
+x.add_channel(0, 0, 0.5, carried=[(2, 2)], parahydrogen=(0, 1))    # hydrogen exchange
+steady = x.steady_state()
+print(x.polarization(steady, 1, 0))       # 0.74: the free ¹⁵N at the anti-crossing
+```
+
+Concentrations and rates must form a chemical steady state (each site
+gains as many molecules per second as it loses), so bimolecular steps
+enter with pseudo-first-order rates. The equations are linear, keep every
+isotope's coherence order, and are propagated exactly over all sites;
+`evolve` takes pulses on isotopes, delays, field jumps and sweeps,
+`steady_state` solves for the stationary state (an error when it is not
+unique, as without relaxation), and `fid` sums the sites weighted by
+concentration. Each site relaxes by its own `T₁`, `T₂` and Redfield
+relaxation. This is the average over molecules that change site at random,
+exponentially distributed times, which is what Monte Carlo simulations of
+SABRE (Lindale et al., Nat. Commun. 10, 395 (2019)) sample.
+
+## Long-lived states and transfer
+
+- **Singlet order.** `spin.m2s(isotope, J, Δν)` and `spin.s2m` (Pileio,
+  Carravetta and Levitt, PNAS 107, 17135 (2010)) convert magnetisation of a
+  near-equivalent pair (`0 < Δν < J`) into singlet order and back:
+  `90°(−y) − [τ − 180° − τ]^{n₁} − 90°x − τ − [τ − 180° − τ]^{n₂}` with
+  `τ = 1/(4J)`, `n₁ = round(π/(2 arctan(Δν/J)))`, `n₂ = ⌊n₁/2⌋`, and S2M in
+  reverse order. Stored as singlet order, at most 2/3 of the magnetisation
+  comes back (at high temperature).
+- **Spin locks.** `spin.spin_lock(isotope, ν₁, duration)` irradiates
+  continuously; with `ν₁ ≫ Δν` the singlet stays an eigenstate, and its
+  order lives for the Redfield lifetime `T_S` of `I₁·I₂` instead of mixing
+  with the triplets.
+- **Field cycling.** Parahydrogen order moves to a heteronucleus when the
+  field is raised adiabatically from near zero (`spin.set_field` and
+  `spin.sweep`): through the ultra-low fields where the levels come within
+  a few hertz slowly, then faster.
+
 ## Spectra
 
 `lines(rho, isotope)` gives the exact stick spectrum of a state. Each
@@ -250,6 +309,26 @@ for b in (2e-3, 5.7e-3, 9e-3):
   orientations rather than QSO's closed form, the rates of a ¹³C–¹H₂, a
   ¹³CH₃ and an amide ¹⁵N–¹H (with shielding cross-correlation) agree to
   5·10⁻¹⁵ and the expectations after exact propagation to 3·10⁻⁹.
+
+- **Exchange.** The free induction decay of one proton exchanging
+  between two sites follows the closed-form Bloch–McConnell equations to
+  10⁻¹⁰ (equal and unequal populations, with and without `T₂`), and the
+  lines coalesce at `k = πΔν/√2` (two maxima at 0.85 times that rate, one
+  at 1.15). Exchange keeps thermal states thermal; renewal at rate `k`
+  relaxes like `e^{−kt}`; slow renewal with parahydrogen tends to the time
+  average of 1.33. A SABRE complex agrees with a Monte Carlo of random
+  exchange events (written with NumPy alone, 4000 molecules) within its
+  statistical error, and the free ¹⁵N substrate is polarised most within
+  3 % of the level anti-crossing.
+- **Transfer and storage.** M2S followed by S2M through stored singlet
+  order returns 97–99.9 % of the 2/3 bound for three pairs, among them
+  Pileio's ¹⁵N₂O. Parahydrogen order carried adiabatically from zero
+  field puts −0.8127 polarisation on ¹³C in an AA'X system, against
+  −0.8128 from sudden-adiabatic theory (the zero-field eigenstates'
+  populations go to the eigenstates of the same rank and total M); a
+  sudden jump transfers none. Under a 1 kHz spin lock the singlet order of
+  a near-equivalent pair decays at its Redfield rate to 4·10⁻⁴, 17.5
+  times slower than its magnetisation; without the lock, 15 % faster.
 
 On the command line, `qso spins system.json --observe 13C --sequence
 events.json` prints the lines and polarisations after a sequence
