@@ -46,6 +46,26 @@ All notable changes to this project are documented here. The format follows
     back as `id`; the stabilizer simulator accepts it.
   - A `NoiseModel` channel on more qubits than a gate has is an error at
     that gate instead of being ignored.
+- **Noise learning beyond ten qubits** (milestone 1.31).
+  - `learn_layer` runs the learning circuits on Pauli frames above ten
+    qubits, up to 64 (`learn_layer_with` and `LearningSimulator` choose).
+    Every channel of the device enters through its Pauli twirl, which
+    covers the correlated errors and crosstalk of 1.30. Slow noise is
+    refused.
+  - The rate fit handles hundreds of generators: coordinate descent on
+    the normal equations, then an active-set polish (681 rates of a
+    53-qubit heavy-hex layer in about a second).
+  - `pec_layered` and `pea_layered` sample circuits on density matrices
+    (up to 10 qubits), trajectories (up to 24) or matrix-product states
+    (up to 64; `pec_layered_with`, `pea_layered_with`,
+    `LayeredSimulator`). Matrix-product samples need channels that are
+    mixtures of unitaries; `Auto` refuses to truncate.
+  - Validated on a 53-qubit heavy-hex layer with depolarising,
+    coherent and crosstalk errors: all 681 rates within 4 standard
+    errors of the exact twirled rates. Error cancellation on 30 qubits
+    with matrix-product states recovers the exact value.
+  - Python: `simulator` arguments of `learn_layer`, `pec_layered` and
+    `pea_layered`, and `max_bond`.
 - **Graphs:** `generators::seidel_switching` (within the size limits of
   the generators, keeping node positions) and the three Chang graphs
   (`generators::chang`, spec `chang:K`), in Python as

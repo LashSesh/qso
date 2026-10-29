@@ -364,6 +364,22 @@ Each mitigation method returns its estimate with a propagated error:
   program, and evaluates each sample with a density matrix or one
   trajectory.
 
+Noise learning (`noise/learning.rs`) runs its circuits on density
+matrices up to ten qubits and on Pauli frames above. A learning circuit
+is Clifford, and without noise it returns a fixed outcome, because the
+basis changes and the self-inverse layers cancel. So a shot only needs
+its frame: Pauli gates and sampled errors flip X and Z bits, other
+Clifford gates conjugate them. The frames run through the compiled
+program, with every channel replaced by its Pauli twirl and errors
+placed by geometric gaps over the shots. The rate fit is non-negative
+least squares. Up to 64 generators it is Lawson–Hanson with an SVD per
+subproblem. Above, it starts from coordinate descent on the normal
+equations and finishes with the same active-set iteration on the
+support found, with Cholesky factors of the Gram matrix. The samples of
+layered PEC and PEA are density matrices, trajectories, or
+matrix-product states on which every channel, a mixture of unitaries,
+is one of its unitaries.
+
 ## Hamiltonian simulation and chemistry (`algorithms/time_evolution.rs`, `chemistry/`)
 
 Every exponential of a Pauli string becomes `Circuit::pauli_rotation`: a
