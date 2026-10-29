@@ -433,8 +433,8 @@ enum Command {
         /// pasadena:I,J (the singlet averaged over free evolution).
         #[arg(long, default_value = "thermal")]
         initial: String,
-        /// Also print the relaxation times T1 and T2 of every spin (from
-        /// T1/T2 inputs and Redfield relaxation).
+        /// Also print the auto-relaxation times T1 and T2 (1/Γ of I_z and
+        /// I₊) of every spin, from T1/T2 inputs and Redfield relaxation.
         #[arg(long)]
         rates: bool,
     },
@@ -1830,13 +1830,25 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             text.push_str(&format!("\npolarisations: {}", shown.join(" ")));
             let mut times = Vec::new();
             if *rates {
-                text.push_str("\nrelaxation times (s):");
-                for i in 0..sys.spins().len() {
-                    let g = sys.relaxation_rates(&[sys.iz(i)?, sys.iplus(i)?])?;
-                    let (t1, t2) = (1.0 / g[(0, 0)], 1.0 / g[(1, 1)]);
+                // Auto-relaxation times 1/Γ_ii of I_z and I₊ (with
+                // cross-relaxation the recovery has several rates).
+                let n = sys.spins().len();
+                let mut ops = Vec::with_capacity(2 * n);
+                for i in 0..n {
+                    ops.push(sys.iz(i)?);
+                    ops.push(sys.iplus(i)?);
+                }
+                let g = sys.relaxation_rates(&ops)?;
+                let time = |rate: f64| (rate > 0.0).then(|| 1.0 / rate);
+                let show = |t: Option<f64>| t.map_or("none".to_string(), |t| format!("{t:.4e}"));
+                text.push_str("\nauto-relaxation times (s):");
+                for i in 0..n {
+                    let (t1, t2) = (time(g[(2 * i, 2 * i)]), time(g[(2 * i + 1, 2 * i + 1)]));
                     text.push_str(&format!(
-                        "\n  spin {i} ({}): T1 {t1:.4e}  T2 {t2:.4e}",
-                        sys.spins()[i].isotope.name()
+                        "\n  spin {i} ({}): T1 {}  T2 {}",
+                        sys.spins()[i].isotope.name(),
+                        show(t1),
+                        show(t2)
                     ));
                     times.push(json!({"spin": i, "t1": t1, "t2": t2}));
                 }

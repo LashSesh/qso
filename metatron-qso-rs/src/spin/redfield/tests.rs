@@ -1,6 +1,8 @@
 use super::*;
 use crate::spin::{Event, Frame, Isotope, Target};
 
+const TWO_PI: f64 = 2.0 * std::f64::consts::PI;
+
 /// `J(ω) = τ/(1 + ω²τ²)`.
 fn j(w: f64, tau: f64) -> f64 {
     tau / (1.0 + w * w * tau * tau)
@@ -68,16 +70,26 @@ fn dipolar_pairs_follow_solomon() {
             }
         }
     }
-    // Like spins: the total magnetisation relaxes at (3/10) b² (J(ω) +
-    // 4J(2ω)) (Bloembergen, Purcell and Pound), 3b²τ/2 when ωτ ≪ 1.
-    let sys = pair(Isotope::H1, Isotope::H1, 1.78, 9.4, 1e-12, Frame::Rotating);
-    let b = sys.dipolar_coupling(0, 1).unwrap();
-    let total = sys.fz(Isotope::H1).unwrap();
-    let rate = sys.relaxation_rates(&[total]).unwrap()[(0, 0)];
-    let w = Isotope::H1.gamma() * 9.4;
-    let bpp = 0.3 * b * b * (j(w, 1e-12) + 4.0 * j(2.0 * w, 1e-12));
-    assert!((rate / bpp - 1.0).abs() < 1e-5, "{rate} vs {bpp}");
-    assert!((rate / (1.5 * b * b * 1e-12) - 1.0).abs() < 1e-4);
+    // Two equivalent protons: the total magnetisation relaxes at
+    // (3/10) b² (J(ω) + 4J(2ω)) (Bloembergen, Purcell and Pound),
+    // 3b²τ/2 when ωτ ≪ 1.
+    for tau in [1e-12, 1e-9] {
+        let mut sys = SpinSystem::new(9.4);
+        for k in 0..2 {
+            sys.add_spin(Isotope::H1, 1.0).unwrap();
+            sys.set_position(k, [1.78 * k as f64, 0.0, 0.0]).unwrap();
+        }
+        let sys = sys.with_correlation_time(Some(tau)).unwrap();
+        let b = sys.dipolar_coupling(0, 1).unwrap();
+        let total = sys.fz(Isotope::H1).unwrap();
+        let rate = sys.relaxation_rates(&[total]).unwrap()[(0, 0)];
+        let w = Isotope::H1.gamma() * 9.4 * (1.0 + 1e-6);
+        let bpp = 0.3 * b * b * (j(w, tau) + 4.0 * j(2.0 * w, tau));
+        assert!((rate / bpp - 1.0).abs() < 1e-9, "{rate} vs {bpp}");
+        if tau == 1e-12 {
+            assert!((rate / (1.5 * b * b * tau) - 1.0).abs() < 1e-4);
+        }
+    }
 }
 
 #[test]
@@ -317,4 +329,241 @@ fn both_frames_relax_alike_and_input_is_checked() {
     let big = big.with_correlation_time(Some(1e-10)).unwrap();
     let err = big.relaxation_rates(&[big.iz(0).unwrap()]).unwrap_err();
     assert!(format!("{err}").contains("Redfield"), "{err}");
+}
+
+#[test]
+fn long_delays_stay_finite() {
+    // A C–H pair relaxes towards equilibrium for twenty minutes, and a
+    // singlet of three protons is stored for twice its lifetime: the
+    // block shifts may not trade an overflow for an underflow.
+    let sys = pair(Isotope::C13, Isotope::H1, 1.09, 9.4, 3e-10, Frame::Rotating);
+    let eq = sys.thermal_state().unwrap();
+    let inverted = sys
+        .evolve(
+            &eq,
+            &[Event::pulse(Target::Isotope(Isotope::H1), 180.0, 0.0)],
+        )
+        .unwrap();
+    for frame in [Frame::Rotating, Frame::Laboratory] {
+        let s = sys.clone().with_frame(frame);
+        let late = s.evolve(&inverted, &[Event::Delay(1200.0)]).unwrap();
+        assert!(
+            late.iter().all(|z| z.re.is_finite() && z.im.is_finite()),
+            "{frame:?}"
+        );
+        let scale = (&eq - s.identity_state()).norm();
+        assert!((&late - &eq).norm() < 2e-6 * scale, "{frame:?}");
+    }
+    let mut three = SpinSystem::new(9.4);
+    for (k, p) in [[0.0, 0.0, 0.0], [1.8, 0.0, 0.0], [0.9, 3.5, 0.0]]
+        .into_iter()
+        .enumerate()
+    {
+        three.add_spin(Isotope::H1, 4.0).unwrap();
+        three.set_position(k, p).unwrap();
+    }
+    three.couple(0, 1, 7.0).unwrap();
+    let three = three.with_correlation_time(Some(2e-11)).unwrap();
+    let singlet = three.dot(0, 1).unwrap();
+    let rate = three
+        .relaxation_rates(std::slice::from_ref(&singlet))
+        .unwrap()[(0, 0)];
+    let rho = three.parahydrogen_state(0, 1, 1.0).unwrap();
+    let late = three.evolve(&rho, &[Event::Delay(2.0 / rate)]).unwrap();
+    assert!(late.iter().all(|z| z.re.is_finite() && z.im.is_finite()));
+    let kept = three.expectation(&late, &singlet).unwrap().re
+        / three.expectation(&rho, &singlet).unwrap().re;
+    assert!(kept > 0.0 && kept < 0.5, "{kept}");
+}
+
+#[test]
+fn shielding_and_dipolar_coupling_interfere_with_the_documented_sign() {
+    // ¹⁵N–¹H with an axial shielding tensor along the bond: the
+    // cross-correlated rate between N_x and 2N_xH_z (TROSY) is
+    // (A_CSA : A_DD)/30 · (4J(0) + 3J(ω_N)) with A_CSA = γ_N B σ and
+    // A_DD = b(1 − 3nnᵀ), so it changes sign with σ.
+    let (b0, tau) = (18.8, 1e-8);
+    for anisotropy in [-160.0, 160.0] {
+        let mut sys = SpinSystem::new(b0);
+        let n = sys.add_spin(Isotope::N15, 120.0).unwrap();
+        let h = sys.add_spin(Isotope::H1, 8.3).unwrap();
+        sys.set_position(n, [0.0, 0.0, 0.0]).unwrap();
+        sys.set_position(h, [1.02, 0.0, 0.0]).unwrap();
+        let sigma = axial_csa(anisotropy, [1.0, 0.0, 0.0]).unwrap();
+        sys.set_csa(n, Some(sigma)).unwrap();
+        let sys = sys.with_correlation_time(Some(tau)).unwrap();
+        let b = sys.dipolar_coupling(n, h).unwrap();
+        let w = Isotope::N15.gamma() * b0;
+        let mut contraction = 0.0;
+        for (x, row) in sigma.iter().enumerate() {
+            for (y, s) in row.iter().enumerate() {
+                let delta = if x == y { 1.0 } else { 0.0 };
+                let along = if x == 0 && y == 0 { 1.0 } else { 0.0 };
+                contraction += w * 1e-6 * s * b * (delta - 3.0 * along);
+            }
+        }
+        let wn = w * (1.0 + 120e-6);
+        let want = contraction / 30.0 * (4.0 * j(0.0, tau) + 3.0 * j(wn, tau));
+        let nx = sys.ix(n).unwrap();
+        let anti = &nx * &sys.iz(h).unwrap() * C64::new(2.0, 0.0);
+        let g = sys.relaxation_rates(&[nx, anti]).unwrap();
+        assert!(
+            (g[(0, 1)] / want - 1.0).abs() < 1e-9,
+            "{anisotropy}: {} vs {want}",
+            g[(0, 1)]
+        );
+        // σ:(1 − 3nnᵀ) = −2Δσ along the bond, and b·γ_N B ∝ γ_N² γ_H > 0.
+        assert!(want.abs() > 1.0 && want.signum() == -anisotropy.signum());
+    }
+}
+
+#[test]
+fn redfield_runs_through_every_path() {
+    // ¹³C–¹H–¹H with CSA and T₁/T₂ on top: an FID equals propagation to
+    // each point, a shaped pulse and short delays (Dormand–Prince) equal
+    // the exponential of the full superoperator, field jumps change the
+    // relaxation with the field, and the rotating frame keeps exactly the
+    // laboratory-frame entries that conserve every isotope's order.
+    let mut sys = SpinSystem::new(9.4);
+    let shifts = [(Isotope::C13, 30.0), (Isotope::H1, 2.0), (Isotope::H1, 2.5)];
+    let places = [[0.0, 0.0, 0.0], [1.09, 0.0, 0.0], [-0.36, 1.03, 0.0]];
+    for (k, ((x, shift), p)) in shifts.into_iter().zip(places).enumerate() {
+        sys.add_spin(x, shift).unwrap();
+        sys.set_position(k, p).unwrap();
+    }
+    sys.set_csa(0, Some(axial_csa(60.0, [0.0, 0.0, 1.0]).unwrap()))
+        .unwrap();
+    sys.set_relaxation(1, Some(3.0), Some(1.0)).unwrap();
+    sys.couple(0, 1, 140.0).unwrap();
+    sys.couple(1, 2, -12.0).unwrap();
+    let sys = sys.with_correlation_time(Some(1e-9)).unwrap();
+    let rho = sys
+        .evolve(
+            &sys.thermal_state().unwrap(),
+            &[Event::pulse(Target::Isotope(Isotope::H1), 90.0, 0.0)],
+        )
+        .unwrap();
+    let fp = sys.fplus(Isotope::H1).unwrap();
+    let fid = sys.fid(&rho, Isotope::H1, 2e-3, 4).unwrap();
+    for (k, s) in fid.iter().enumerate() {
+        let at = sys.evolve(&rho, &[Event::Delay(k as f64 * 2e-3)]).unwrap();
+        let want = sys.expectation(&at, &fp).unwrap();
+        assert!(
+            (s - want).norm() < 1e-11 * want.norm(),
+            "{k}: {s} vs {want}"
+        );
+    }
+    // The full superoperator of the master equation from the blocks.
+    let d = 8;
+    let relaxation = sys.relaxation(9.4).unwrap();
+    let full = |h: &CMatrix| -> CMatrix {
+        let mut l = CMatrix::zeros(d * d, d * d);
+        for c in 0..d * d {
+            let mut x = CMatrix::zeros(d, d);
+            x[(c % d, c / d)] = C64::new(1.0, 0.0);
+            let y = (h * &x - &x * h) * C64::new(0.0, -1.0) + relaxation.dissipate(&x);
+            for r in 0..d * d {
+                l[(r, c)] = y[(r % d, r / d)];
+            }
+        }
+        l
+    };
+    let reference = |h: &CMatrix, t: f64| -> CMatrix {
+        let l = full(h);
+        let n = d * d;
+        let mut aug = CMatrix::zeros(n + 1, n + 1);
+        aug.view_mut((0, 0), (n, n))
+            .copy_from(&(&l * C64::new(t, 0.0)));
+        let drift = CMatrix::from_column_slice(n, 1, relaxation.drift.as_slice());
+        aug.view_mut((0, n), (n, 1))
+            .copy_from(&(drift * C64::new(t, 0.0)));
+        let p = aug.exp();
+        let dev = &rho - sys.identity_state();
+        let mut v = p.view((0, n), (n, 1)).clone_owned();
+        v += p.view((0, 0), (n, n)) * CMatrix::from_column_slice(n, 1, dev.as_slice());
+        CMatrix::from_column_slice(d, d, v.as_slice())
+    };
+    let h = sys.hamiltonian().unwrap();
+    let dev = |m: &CMatrix| m - sys.identity_state();
+    for (hh, t, conserving) in [
+        (h.clone(), 0.05, true),
+        (h.clone(), 2e-6, true),
+        (
+            &h + sys.fx(Isotope::H1).unwrap() * C64::new(TWO_PI * 5e3, 0.0),
+            3e-5,
+            false,
+        ),
+    ] {
+        let want = reference(&hh, t);
+        let got = dev(&sys
+            .relax_with(&rho, &hh, t, conserving, &relaxation)
+            .unwrap());
+        let scale = want.iter().fold(0.0f64, |m, z| m.max(z.norm()));
+        let err = (&got - &want).iter().fold(0.0f64, |m, z| m.max(z.norm())) / scale;
+        assert!(err < 1e-9, "t = {t}: {err}");
+    }
+    // A field jump: relaxation at the new field, as for a system there.
+    let low = sys.clone().with_field(1.0).unwrap();
+    let jumped = sys
+        .evolve(&rho, &[Event::Field(1.0), Event::Delay(0.3)])
+        .unwrap();
+    let direct = low.evolve(&rho, &[Event::Delay(0.3)]).unwrap();
+    assert!(
+        (&jumped - &direct).norm() < 1e-14,
+        "{}",
+        (&jumped - &direct).norm()
+    );
+    // The rotating-frame projection.
+    let lab = sys.clone().with_frame(Frame::Laboratory);
+    let (rot_r, lab_r) = (
+        sys.redfield(9.4).unwrap().unwrap(),
+        lab.redfield(9.4).unwrap().unwrap(),
+    );
+    let entries = |r: &RedfieldBlocks| {
+        let mut m = std::collections::BTreeMap::new();
+        for (elements, block) in &r.blocks {
+            for (j, &x) in elements.iter().enumerate() {
+                for (i, &y) in elements.iter().enumerate() {
+                    m.insert((y, x), block[(i, j)]);
+                }
+            }
+        }
+        m
+    };
+    let (rot_e, lab_e) = (entries(&rot_r), entries(&lab_r));
+    let mut dropped = 0.0f64;
+    for (key, v) in &lab_e {
+        match rot_e.get(key) {
+            Some(w) => assert!((v - w).norm() < 1e-12 * v.norm().max(1.0), "{key:?}"),
+            None => dropped = dropped.max(v.norm()),
+        }
+    }
+    assert!(rot_e.keys().all(|k| lab_e.contains_key(k)));
+    assert!(dropped > 1e-3, "{dropped}");
+}
+
+#[test]
+fn redfield_refuses_slow_motion_and_impossible_input() {
+    // |H₁|·τ_c ≫ 1 is outside Redfield theory: a C–H pair at 1 ms, or two
+    // spins 10⁻⁶⁰ Å apart.
+    let slow = pair(Isotope::C13, Isotope::H1, 1.09, 9.4, 1e-3, Frame::Rotating);
+    let err = slow.relaxation_rates(&[slow.iz(0).unwrap()]).unwrap_err();
+    assert!(format!("{err}").contains("Redfield theory"), "{err}");
+    assert!(
+        slow.evolve(&slow.thermal_state().unwrap(), &[Event::Delay(1.0)])
+            .is_err()
+    );
+    let close = pair(Isotope::H1, Isotope::H1, 1e-60, 9.4, 1e-11, Frame::Rotating);
+    assert!(close.relaxation_rates(&[close.iz(0).unwrap()]).is_err());
+    // A large protein (τ_c = 50 ns) is still within it.
+    let protein = pair(Isotope::N15, Isotope::H1, 1.02, 18.8, 5e-8, Frame::Rotating);
+    assert!(protein.relaxation_rates(&[protein.iz(0).unwrap()]).is_ok());
+    // Nothing relaxes: the rates are +0, not −0.
+    let still = SpinSystem::new(9.4)
+        .with_correlation_time(Some(1e-11))
+        .unwrap();
+    let mut still = still;
+    still.add_spin(Isotope::H1, 0.0).unwrap();
+    let g = still.relaxation_rates(&[still.iz(0).unwrap()]).unwrap();
+    assert!(g[(0, 0)] == 0.0 && g[(0, 0)].is_sign_positive());
 }

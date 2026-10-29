@@ -236,6 +236,11 @@ pub(super) struct Liouville {
     block: Vec<u32>,
 }
 
+/// `Σ n²` over the coherence-order blocks.
+pub(super) fn coherence_entries(labels: &[Vec<i32>]) -> usize {
+    coherence_sizes(labels).values().map(|&n| n * n).sum()
+}
+
 /// Elements of the largest coherence-order block.
 pub(super) fn largest_coherence_block(labels: &[Vec<i32>]) -> usize {
     coherence_sizes(labels).values().copied().max().unwrap_or(0)
@@ -692,10 +697,15 @@ impl SpinSystem {
             .zip(matrices)
             .map(|((_, elements), (mut m, augmented))| {
                 let n = elements.len();
+                // The mean precession of a coherence block, which can be
+                // large in the laboratory frame; not its mean decay, whose
+                // factor e^{−rt} would underflow while exp of the rest
+                // overflows.
                 let shift = if augmented {
                     ZERO
                 } else {
-                    (0..n).map(|i| m[(i, i)]).sum::<C64>() / n as f64
+                    let mean = (0..n).map(|i| m[(i, i)]).sum::<C64>() / n as f64;
+                    C64::new(0.0, mean.im)
                 };
                 for i in 0..n {
                     m[(i, i)] -= shift;
@@ -741,9 +751,10 @@ impl SpinSystem {
     }
 
     /// `ρ(t)` under the master equation with Hamiltonian `h` and the
-    /// relaxation at field `b`: block exponentials when `h` conserves the
+    /// relaxation at field `b` (tests): block exponentials when `h` conserves the
     /// labels (`conserving`) and they are cheaper, else Dormand–Prince
     /// steps.
+    #[cfg(test)]
     pub(super) fn relax(
         &self,
         rho: &CMatrix,
@@ -752,8 +763,19 @@ impl SpinSystem {
         b: f64,
         conserving: bool,
     ) -> Result<CMatrix> {
+        self.relax_with(rho, h, t, conserving, &self.relaxation(b)?)
+    }
+
+    /// [`SpinSystem::relax`] with the relaxation at the field given.
+    pub(super) fn relax_with(
+        &self,
+        rho: &CMatrix,
+        h: &CMatrix,
+        t: f64,
+        conserving: bool,
+        relaxation: &Relaxation,
+    ) -> Result<CMatrix> {
         let d = self.dimension();
-        let relaxation = self.relaxation(b)?;
         let trace = rho.trace();
         let level = trace / d as f64;
         let mut delta = rho.clone();
@@ -767,7 +789,7 @@ impl SpinSystem {
             vec![Vec::new(); d]
         };
         let sizes = coherence_sizes(&labels);
-        let dp_work = self.dp_work(&sparse, &relaxation, t);
+        let dp_work = self.dp_work(&sparse, relaxation, t);
         // Six products without squarings: no exponential costs less.
         let least: f64 = sizes.values().map(|&n| 36.0 * (n as f64).powi(3)).sum();
         let largest = sizes.values().copied().max().unwrap_or(0);
@@ -775,7 +797,7 @@ impl SpinSystem {
         let mut exp_work = f64::INFINITY;
         if largest <= super::MAX_LIOUVILLE_BLOCK && least < dp_work {
             let liouville = Liouville::new(&labels, None);
-            let built = self.liouville_blocks(&liouville, &sparse, &relaxation, trace, t);
+            let built = self.liouville_blocks(&liouville, &sparse, relaxation, trace, t);
             exp_work = built.iter().map(LiouvilleBlock::work).sum();
             blocks = Some(built);
         }
@@ -802,7 +824,7 @@ impl SpinSystem {
             }
             _ => {
                 let c = &relaxation.drift * trace;
-                self.dormand_prince(&delta, &sparse, &relaxation, &c, t)?
+                self.dormand_prince(&delta, &sparse, relaxation, &c, t)?
             }
         };
         for i in 0..d {

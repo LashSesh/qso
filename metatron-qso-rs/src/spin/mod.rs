@@ -228,8 +228,10 @@ pub struct Spin {
     /// Position in the molecule (Å), for dipolar relaxation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<[f64; 3]>,
-    /// Chemical-shielding tensor (ppm) in the molecule's frame, for
-    /// relaxation by its anisotropy (the isotropic part is the shift).
+    /// Chemical-shielding tensor σ (ppm) in the molecule's frame, for
+    /// relaxation by its anisotropy: only the traceless symmetric part
+    /// counts, the isotropic part is ignored (the shift sets the
+    /// frequency). A chemical-shift tensor is `−σ`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub csa: Option<[[f64; 3]; 3]>,
 }
@@ -994,8 +996,10 @@ impl SpinSystem {
         self.check_state(rho)?;
         let mut b = self.field;
         let mut rho = rho.clone();
-        // The blocks of H at the last field of a delay.
+        // The blocks of H at the last field of a delay, and the relaxation
+        // at the last field.
         let mut cache: Option<(f64, Vec<blocks::Eigenblock>)> = None;
+        let mut relaxation: Option<(f64, blocks::Relaxation)> = None;
         for e in events {
             match e {
                 Event::Pulse {
@@ -1039,12 +1043,19 @@ impl SpinSystem {
                                 + self.local(i, 4) * C64::new(w * s, 0.0);
                             h += self.embed(i, &op)?;
                         }
-                        rho = self.propagate(&rho, &h, seg.duration, b, None)?;
+                        rho = self.propagate(&rho, &h, seg.duration, b, None, &mut relaxation)?;
                     }
                 }
                 Event::Delay(t) => {
                     check_time("delay", *t)?;
-                    rho = self.propagate(&rho, &self.hamiltonian_at(b), *t, b, Some(&mut cache))?;
+                    rho = self.propagate(
+                        &rho,
+                        &self.hamiltonian_at(b),
+                        *t,
+                        b,
+                        Some(&mut cache),
+                        &mut relaxation,
+                    )?;
                 }
                 Event::Field(to) => {
                     check_field(*to)?;
@@ -1074,6 +1085,7 @@ impl SpinSystem {
                             dt,
                             bk,
                             Some(&mut None),
+                            &mut relaxation,
                         )?;
                     }
                     b = *to;
@@ -1157,7 +1169,7 @@ impl SpinSystem {
     /// Free evolution under `h` for `t` at field `b` (for the thermal
     /// target of relaxation). `blocks` is a cache of the blocks of `h` when
     /// it is the free Hamiltonian, which conserves the labels; `None` for
-    /// a shaped pulse.
+    /// a shaped pulse. `relaxation` caches the relaxation at a field.
     fn propagate(
         &self,
         rho: &CMatrix,
@@ -1165,12 +1177,17 @@ impl SpinSystem {
         t: f64,
         b: f64,
         blocks: Option<&mut Option<(f64, Vec<blocks::Eigenblock>)>>,
+        relaxation: &mut Option<(f64, blocks::Relaxation)>,
     ) -> Result<CMatrix> {
         if t == 0.0 {
             return Ok(rho.clone());
         }
         if self.relaxes() {
-            return self.relax(rho, h, t, b, blocks.is_some());
+            if !matches!(relaxation, Some((field, _)) if *field == b) {
+                *relaxation = Some((b, self.relaxation(b)?));
+            }
+            let (_, r) = relaxation.as_ref().expect("filled");
+            return self.relax_with(rho, h, t, blocks.is_some(), r);
         }
         match blocks {
             Some(cache) => {

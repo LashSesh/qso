@@ -81,7 +81,15 @@ All notable changes to this project are documented here. The format follows
     1.33 in every propagation (block exponentials, Dormand–Prince steps,
     FIDs).
   - `relaxation_rates(ops)`: auto- and cross-relaxation rates among
-    observables. `qso spins --rates` prints T₁ and T₂ of every spin.
+    observables. `qso spins --rates` prints the auto-relaxation times
+    (1/Γ of I_z and I₊) of every spin, "none" where nothing relaxes.
+  - Redfield theory is refused outside fast motion (`|A|·τ_c > 1`), and
+    its superoperator counts towards the work limit; `evolve` reuses it
+    while the field stays.
+  - `Spin` is `#[non_exhaustive]` and has the fields `position` and `csa`.
+  - Long delays no longer turn into NaN: coherence blocks are shifted only
+    by their mean precession, not their mean decay (this affected the
+    laboratory frame of 1.33 after about 10⁴ s).
   - Validated against Solomon's equations, BPP, the ¹³C Overhauser
     enhancement (2.988), CSA rates (∝ B²), singlet immunity, the
     deuteration factor 15.9, and QuTiP's `bloch_redfield_tensor` with bath

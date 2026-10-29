@@ -424,6 +424,9 @@ fn spin_dynamics() {
     let formate = format!("{root}/examples/spins/formate.json");
     let r = qso(&["spins", &formate, "--observe", "13C", "--rates"]);
     let t1 = f(&r["relaxation_times"][0]["t1"]);
+    // Without relaxation there is no time.
+    let none = qso(&["spins", &ch, "--observe", "13C", "--rates"]);
+    assert!(none["relaxation_times"][0]["t1"].is_null());
     let (gc, gh, tau, field) = (6.728_284e7, 26.752_212_8e7, 2e-11, 9.4);
     let j = |w: f64| tau / (1.0 + w * w * tau * tau);
     let b = 1.000_000_000_55e-7 * gc * gh * 1.054_571_817e-34 / 1.10e-10f64.powi(3);

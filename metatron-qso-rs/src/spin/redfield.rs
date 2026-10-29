@@ -22,11 +22,16 @@
 //! J(ω_mn)` in the eigenbasis of the laboratory-frame `H₀`,
 //! `J(ω) = τ_c/(1 + ω²τ_c²)`: the full (non-secular) Redfield tensor
 //! with real spectral densities (dynamic frequency shifts are left out).
-//! `ρ_eq` is the thermal state, so relaxation ends there at any
-//! temperature. In the rotating frame only the part of `R` that keeps the
-//! coherence order of every isotope is kept (the secular approximation
-//! with respect to the carriers); in the laboratory frame `R` keeps the
-//! total coherence order exactly.
+//! `ρ_eq` is the thermal state, a fixed point at any temperature; away
+//! from it this semiclassical correction is first order in `ħω/k_BT`
+//! (no detailed balance), so at polarisations near 1 (millikelvin) states
+//! far from equilibrium can leave the physical ones. In the laboratory
+//! frame the flip-flop terms between isotopes shift the steady state by
+//! about `J/Δν`. Redfield theory needs fast motion, `|H₁|·τ_c ≪ 1`;
+//! interactions with `|A|·τ_c > 1` are refused. In the rotating frame
+//! only the part of `R` that keeps the coherence order of every isotope
+//! is kept (the secular approximation with respect to the carriers); in
+//! the laboratory frame `R` keeps the total coherence order exactly.
 
 use num_complex::Complex64 as C64;
 
@@ -38,6 +43,13 @@ use crate::linalg::{CMatrix, RMatrix};
 
 /// `μ₀/4π` (T² m³ J⁻¹, CODATA 2018).
 pub const MU0_OVER_4PI: f64 = 1.000_000_000_55e-7;
+/// Largest `|H₁|·τ_c` (Frobenius norm of an interaction's spatial tensor
+/// in rad/s times the correlation time) accepted; Redfield theory needs it
+/// far below 1.
+const MAX_NARROWING: f64 = 1.0;
+/// Operations per element pair of the coherence blocks to build the
+/// superoperator (30 terms, scalar loops; measured).
+const BUILD_COST: f64 = 7680.0;
 
 /// The shielding tensor (ppm) of an axially symmetric anisotropy
 /// `Δσ = σ_∥ − σ_⊥` along `axis`: `(Δσ/3)(3nnᵀ − 1)`, traceless.
@@ -311,8 +323,35 @@ impl SpinSystem {
         if interactions.is_empty() {
             return Ok(None);
         }
+        // Redfield theory needs fast motion: |H₁| τ_c ≪ 1.
+        let strength = interactions
+            .iter()
+            .map(|(a, _)| a.iter().flatten().map(|x| x * x).sum::<f64>().sqrt())
+            .fold(0.0, f64::max);
+        let narrowing = strength * tau;
+        if narrowing.is_nan() || narrowing > MAX_NARROWING {
+            return Err(QsoError::invalid(
+                "redfield",
+                format!(
+                    "an interaction of {strength:.3e} rad/s with τ_c = {tau:e} s is outside \
+                     Redfield theory, which needs |H₁|·τ_c ≪ 1 (here {narrowing:.3e})"
+                ),
+            ));
+        }
         let labels = self.labels();
         let largest = super::blocks::largest_coherence_block(&labels);
+        let work = BUILD_COST * super::blocks::coherence_entries(&labels) as f64;
+        if work > super::MAX_RELAXATION_WORK {
+            return Err(QsoError::invalid(
+                "redfield",
+                format!(
+                    "the Redfield superoperator at dimension {} needs about {work:.1e} \
+                     operations to build (limit {:.0e})",
+                    self.dimension(),
+                    super::MAX_RELAXATION_WORK
+                ),
+            ));
+        }
         if largest > super::MAX_LIOUVILLE_BLOCK {
             return Err(QsoError::invalid(
                 "redfield",
@@ -430,6 +469,12 @@ impl SpinSystem {
                     r[(i, j)] = v;
                 }
             }
+            if r.iter().any(|z| !(z.re.is_finite() && z.im.is_finite())) {
+                return Err(QsoError::invalid(
+                    "redfield",
+                    "the Redfield superoperator is not finite",
+                ));
+            }
             blocks.push((elements.clone(), r));
         }
         Ok(Some(RedfieldBlocks { blocks }))
@@ -462,7 +507,8 @@ impl SpinSystem {
             }
             for (j, image) in images.iter().enumerate() {
                 let t: C64 = oi.iter().zip(image.iter()).map(|(a, b)| a.conj() * b).sum();
-                out[(i, j)] = -t.re / norm;
+                // + 0.0: no rate is −0.
+                out[(i, j)] = -t.re / norm + 0.0;
             }
         }
         Ok(out)

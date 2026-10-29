@@ -118,19 +118,45 @@ positions and the anisotropic part of every shielding tensor relax the
 spins by Bloch–Wangsness–Redfield theory, cross-correlations between them
 included: `dρ/dt = −i[H, ρ] − R(ρ − ρ_eq)` with spectral densities
 `J(ω) = τ_c/(1 + ω²τ_c²)` at the transition frequencies of the
-laboratory-frame Hamiltonian. The thermal state `ρ_eq` makes relaxation end
-in equilibrium at any temperature. In the rotating frame only the part of
+laboratory-frame Hamiltonian. In the rotating frame only the part of
 `R` that keeps every isotope's coherence order is kept (secular with
 respect to the carriers); in the laboratory frame `R` is used in full.
-Dynamic frequency shifts, anisotropic tumbling, internal motion and
-quadrupolar relaxation are not included. Redfield relaxation adds to
-`T₁` and `T₂` given per spin, and runs through the same block
-exponentials.
+Redfield relaxation adds to `T₁` and `T₂` given per spin, and runs through
+the same block exponentials.
+
+- **Conventions.** Tensors are shielding tensors σ in ppm, in the frame of
+  the positions; a chemical-shift tensor is `−σ`, which flips the sign of
+  the interference between shielding and dipolar couplings. Only the
+  traceless symmetric part relaxes.
+- **Equilibrium.** The thermal state is a fixed point at any temperature,
+  but the correction `−R(ρ − ρ_eq)` is semiclassical: away from
+  equilibrium it is first order in `ħω/k_BT`, so near full polarisation
+  (millikelvin) states far from equilibrium can turn unphysical. In the
+  laboratory frame the flip-flop terms between isotopes shift the steady
+  state by about `J/Δν` (5·10⁻⁷ for ¹³C–¹H at 9.4 T).
+- **Validity.** Redfield theory needs motion much faster than the
+  interactions, `|H₁|·τ_c ≪ 1`; QSO refuses `|A|·τ_c > 1` (the Frobenius
+  norm of an interaction's spatial tensor in rad/s), so a C–H pair at
+  τ_c = 1 ms fails while a protein at 50 ns does not.
+- **Not modelled.** Dynamic frequency shifts, anisotropic tumbling,
+  internal motion, quadrupolar relaxation, scalar relaxation (of the first
+  and second kind, which matters for ²H at low field), spin-rotation,
+  antisymmetric shielding, intermolecular, solvent, oxygen and
+  paramagnetic relaxation, and chemical exchange.
+- **Size.** The superoperator is built block by block of coherence order,
+  each block at most 2048 elements: up to six relaxing protons of one
+  isotope, or six spins in the laboratory frame; more is an error (`T₁`
+  and `T₂` alone fall back to Dormand–Prince steps). Its build is counted
+  in the work limit; one build takes about 0.04 s for five spins and
+  0.5 s for six. `evolve` reuses it while the field stays, so shaped
+  pulses cost little more, but every step of a sweep builds it anew.
 
 `relaxation_rates(ops)` returns the matrix `Γ_ij = −Re Tr(O_i† D(O_j)) /
 Tr(O_i† O_i)` of the relaxation `D` (without `H`): its diagonal holds the
-auto-relaxation rates (`1/T₁` of `I_z`, `1/T₂` of `I₊`), the rest the
-cross-relaxation. `qso spins --rates` prints `T₁` and `T₂` of every spin.
+auto-relaxation rates (`1/T₁` of `I_z`, `1/T₂` of `I₊` for an isolated
+spin), the rest the cross-relaxation; with cross-relaxation, recovery has
+several rates. `qso spins --rates` prints the auto-relaxation times
+`1/Γ_ii` of `I_z` and `I₊` of every spin.
 
 ## Spectra
 
