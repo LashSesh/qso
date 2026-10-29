@@ -297,11 +297,13 @@ A panic aborts the module; the wrapper then replaces the instance.
 ## Device models and trajectories (`noise/`)
 
 A `DeviceModel` is compiled per circuit into a program of ideal gate
-segments and channels on one or two qubits (`noise/device.rs`). The
+segments and channels on one to four qubits (`noise/device.rs`). The
 compiler does four things:
 
-* it schedules gates as soon as their qubits are free, inserting
-  relaxation for waiting qubits and for each gate's duration;
+* it schedules gates as soon as their qubits (and the spectators of
+  their rule) are free, inserting relaxation for waiting qubits and for
+  each gate's duration, and, for qubits with slow noise, a phase step
+  for the same time (consecutive ones of a qubit joined);
 * it applies the first matching gate rule;
 * it splits thermal relaxation into amplitude damping and a phase flip
   (the same channel);
@@ -310,7 +312,18 @@ compiler does four things:
   minimal Kraus set from the Choi matrix.
 
 Density matrices apply the program with the state-vector kernels on the
-vectorised ρ and multiply consecutive superoperators first.
+vectorised ρ and multiply consecutive superoperators first. A k-qubit
+channel is a `4ᵏ × 4ᵏ` superoperator on the k row and k column bits; four
+qubits need eight targets, which `apply_kq` handles with a larger buffer
+than gates use. Programs with slow noise do not run on density matrices.
+
+Slow noise is part of a trajectory's random choices, drawn before it
+runs: the over-rotation spread of every rule, the detuning of every
+qubit, and a telegraph process per qubit, integrated exactly (exponential
+waiting times) over the phase steps in time order. A phase step becomes
+an `RZ` of that angle and a spread gate its rotation with scaled angles,
+inside the fused blocks. Markovian programs draw nothing extra, so their
+trajectories are unchanged.
 
 Trajectories (`noise/trajectories.rs`) use the waiting-time form of the
 Monte-Carlo wave-function method.

@@ -24,6 +24,21 @@ All notable changes to this project are documented here. The format follows
     Hamiltonian entries are refused instead of exhausting memory.
   - Python: `InteractingWalk`, `interacting_certificate_distance`. CLI:
     `qso particles`. Tutorial: `08_interacting_walks`.
+- **Correlated and non-Markovian noise** (milestone 1.30).
+  - Channels (Kraus, Pauli, unitary, rotations) act on up to four qubits,
+    on density matrices and in trajectories. In device rules, a k-qubit
+    channel acts on every k consecutive qubits of the gate.
+  - `GateRule::with_spectator`: channels on fixed qubits after a gate,
+    for crosstalk on qubits outside it, which wait for the gate.
+  - `Circuit::id` and rules for the gate `"id"` make explicit waits.
+  - Quasi-static detunings (`QubitProperties::with_detuning`, Gaussian or
+    uniform), random telegraph noise (`with_telegraph`) and quasi-static
+    over-rotations (`GateRule::with_over_rotation_spread`) are drawn per
+    trajectory and simulated exactly by `TrajectorySimulator`. Density
+    matrices and PEC refuse them (`DeviceModel::is_markovian`).
+  - Validated against `exp(−σ²t²/2)`, the exact echo of a static
+    detuning, and the Kubo–Anderson decay of telegraph noise and its echo.
+  - The same in Python, with JSON round trips.
 - **Graphs:** `generators::seidel_switching` (within the size limits of
   the generators, keeping node positions) and the three Chang graphs
   (`generators::chang`, spec `chang:K`), in Python as

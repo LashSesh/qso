@@ -689,6 +689,19 @@ impl Circuit {
         Ok(self)
     }
 
+    /// Append an identity on qubit `q`: it changes nothing, but a device
+    /// rule for the gate `"id"` gives it a duration, so that the qubit
+    /// waits (relaxes and dephases) for that time.
+    ///
+    /// # Panics
+    /// If `q` is out of range, like the other builder methods.
+    pub fn id(&mut self, q: usize) -> &mut Self {
+        let one = C64::new(1.0, 0.0);
+        let zero = C64::new(0.0, 0.0);
+        self.unitary(vec![one, zero, zero, one], &[q], &[])
+            .expect("identity on a qubit of the circuit")
+    }
+
     /// Append an arbitrary unitary (row-major, dimension `2^targets.len()`)
     /// with optional controls. `targets[0]` is the most significant local bit.
     pub fn unitary(

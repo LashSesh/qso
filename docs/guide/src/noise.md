@@ -194,3 +194,83 @@ counts = sim.sample(ghz, shots=1000)        # with the device's readout errors
 
 Trajectory samples pass a χ² test against density matrices on up to 10
 qubits, including circuits with several jumps per trajectory.
+
+## Correlated and slow noise
+
+Real devices have noise that the channels above cannot express: errors
+that act on several qubits at once, crosstalk on qubits a gate does not
+touch, and noise whose correlations last longer than a gate. QSO models
+these three as follows.
+
+**Channels on up to four qubits.** `from_kraus`, `pauli`, `unitary` and
+`rotation` accept operators and Pauli strings on one to four qubits, such
+as `Channel.pauli({"ZZZ": 0.01})` or `Channel.rotation("ZZZZ", 0.02)`.
+Density matrices and trajectories apply them like the others. In a gate
+rule, a k-qubit channel acts on every k consecutive qubits of the gate.
+
+**Crosstalk on spectators.** `with_rule(..., spectators=[(qubits,
+channel)])` applies a channel on fixed qubits after every matching gate.
+These qubits may lie outside the gate. They wait for the gate and relax
+during it, like its own qubits.
+
+**Waits.** `Circuit.id(q)` is an identity. A rule for the gate `"id"`
+gives it a duration, so the qubit waits for that time, the way Ramsey and
+echo experiments do.
+
+**Noise correlated in time** is drawn once per trajectory:
+
+| Noise | Description | Effect |
+|---|---|---|
+| quasi-static detuning | `detuning=("gaussian", σ)` or `("uniform", a)` per qubit | a frequency offset δ, constant during a trajectory: the qubit turns by `RZ(δ·t)` over every time `t` it spends in gates or waiting |
+| telegraph noise | `telegraph=(ν, γ)` per qubit | a frequency shift that jumps between +ν and −ν at the times of a Poisson process with γ jumps per unit time; the qubit turns by `RZ(∫ν(t) dt)` |
+| over-rotation spread | `over_rotation_spread=("gaussian", σ)` per rule | an error η added to the rule's relative over-rotation: θ ↦ θ(1 + ε + η) |
+
+Density matrices describe a single step of noise at a time, so they
+refuse these three kinds; `DeviceModel.is_markovian` tells whether a
+device has none of them. Trajectories simulate them exactly: each
+trajectory draws its detunings and spreads, and follows its telegraph
+process through every gate and wait. A turn during a gate is applied
+after the gate, like the relaxation.
+
+A Ramsey experiment with a Gaussian detuning decays as `exp(−σ²t²/2)`. A
+Hahn echo (an X halfway) refocuses a static detuning in every trajectory:
+
+```python
+import math
+import metatron_qso as q
+
+def device(wait, sigma=0.8):
+    return (q.DeviceModel("quasi-static")
+            .with_default_qubit(detuning=("gaussian", sigma))
+            .with_rule(gate="id", duration=wait))
+
+def z(device, circuit):
+    sim = q.TrajectorySimulator(device, 4000, seed=1)
+    return sim.expectation(circuit, q.PauliSum("Z0"))
+
+t = 2.0
+ramsey = q.Circuit(1).h(0).id(0).h(0)
+echo = q.Circuit(1).h(0).id(0).x(0).id(0).h(0)
+e = z(device(t), ramsey)
+print(round(e.value, 3), round(e.std_error, 3), round(math.exp(-(0.8 * t) ** 2 / 2), 3))
+# 0.264 0.01 0.278
+print(z(device(t / 2), echo).value)
+# 1.0
+```
+
+Telegraph noise gives the Kubo–Anderson decay
+`e^{−γt} (cosh μt + (γ/μ) sinh μt)` with `μ = √(γ² − ν²)` (Paladino,
+Galperin, Falci and Altshuler, Rev. Mod. Phys. 86, 361 (2014)). Slow
+switching (γ < ν) makes the coherence oscillate, and at times short
+compared with 1/γ the echo removes most of the decay (⟨Z⟩ = 0.92 instead
+of 0.23 at t = 1.5 for ν = 1, γ = 0.2). Fast switching (γ ≫ ν) narrows the
+decay to a rate of about ν²/(2γ) (motional narrowing).
+
+The validation suite checks Ramsey and echo against these closed forms:
+a Gaussian detuning, and telegraph noise with slow (ν = 1, γ = 0.2) and
+fast (ν = 1, γ = 5) switching. It uses times from 0.5 to 6 and 8000
+trajectories each. The echo of telegraph noise comes from the same
+two-state equations, solved in closed form for each half. All 20
+estimates lie within four standard errors (the largest deviation is 1.5),
+and the echo of a static detuning is exact.
+

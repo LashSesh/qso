@@ -49,7 +49,7 @@ which withdraws the results of version 1.
 |---|---|---|
 | Statevector speed | specialised kernels (1.1); gate fusion and cache blocking (1.3.0): 16-qubit layers 4.7× and 18–24-qubit layers 1.6–2.6× faster than in 1.2; batched evaluation; AVX and NEON kernels close to memory bandwidth and a blocked adjoint pass (1.11); single precision, one more qubit and about twice the speed on large registers (1.20); a worker pool that stays awake between short simulations (1.24) | spinning workers cost CPU time between simulations (`QSO_POOL_SPIN_US=0` turns it off) |
 | Boson sampling | exact probabilities and exact sampling (1.1); partial distinguishability, loss and Gaussian boson sampling with hafnians and torontonians (1.14) | mixed Gaussian states with many photons spread over many modes are impractical (10¹² operations at 20 photons in 10 modes) |
-| Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | noise learning for layers of two-qubit Clifford gates only, on density matrices (1.12); no leakage or non-Markovian noise, channels on at most two qubits; virtual distillation (1.17) mitigates only its measured copies' preparation |
+| Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | noise learning for layers of two-qubit Clifford gates only, on density matrices (1.12); no leakage; channels on at most four qubits, slow noise as quasi-static and telegraph processes only, and on trajectories only (1.30); virtual distillation (1.17) mitigates only its measured copies' preparation |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18) | time-dependent Hamiltonians and decoherent coined walks without symmetry reduction; pretty good transfer on other graphs |
 | Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5) | Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23) | no integral screening (every integral is computed, seconds at the 64-function limit), no tight commutator bound for product formulas of order 4 and higher |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
@@ -1817,7 +1817,7 @@ the physics, the ranking or the documented numbers. It found:
   fermions and negative weights, and there is a Krylov test with
   interaction for fermions and distinguishable particles.
 
-### 1.30 — Correlated and non-Markovian noise (M)
+### 1.30 — Correlated and non-Markovian noise (M, delivered)
 
 Use case: noise on devices that the channels of 1.4 cannot express.
 That is crosstalk and correlated errors on more than two qubits, and
@@ -1837,6 +1837,30 @@ and a Hahn echo removes it exactly. Telegraph noise matches the closed
 forms of the decay of coherence for free evolution and the echo (Paladino,
 Galperin, Falci and Altshuler, Rev. Mod. Phys. 86, 361 (2014)), in both
 the fast- and the slow-switching regime.
+
+Delivered as planned, with one addition: `Circuit::id`, which a rule for
+the gate `"id"` turns into a wait of given duration. Spectator qubits
+wait for the gate whose crosstalk they receive. Turns by slow noise
+during a gate are applied after it, like relaxation. Density matrices
+and PEC refuse slow noise instead of ignoring it. Measured:
+
+- **Channels on three and four qubits.** On density matrices they equal
+  `Σ K ρ K†` with explicitly embedded operators to 10⁻¹³, also for
+  non-product, non-unitary channels. Trajectories (20 000) average to the
+  density matrix within `4/√N` for general three- and four-qubit
+  crosstalk channels.
+- **Slow noise.** A Gaussian detuning follows `exp(−σ²t²/2)` and a uniform
+  one `sin(at)/(at)`. The echo of a static detuning is exact in every
+  trajectory. Telegraph noise follows the Kubo–Anderson decay and its
+  echo for slow (γ = 0.2ν) and fast (γ = 5ν) switching. A quasi-static
+  over-rotation gives `cos(θ(1+ε)) e^{−θ²σ²/2}`. All of these are within
+  four standard errors at 8000 trajectories; the largest deviation of the
+  20 validation estimates is 1.5. The closed form of the telegraph echo
+  was checked independently against a NumPy Monte-Carlo simulation of
+  the process and SciPy's matrix exponential.
+- **Unchanged Markovian trajectories.** Devices without slow noise draw
+  no extra random numbers, so existing trajectories and their tests are
+  unchanged.
 
 ### 1.31 — Noise learning beyond ten qubits (M)
 

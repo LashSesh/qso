@@ -22,7 +22,9 @@ pub mod device;
 pub mod learning;
 pub mod trajectories;
 
-pub use device::{ChannelSpec, DeviceModel, GateRule, QubitProperties};
+pub use device::{
+    ChannelSpec, DeviceModel, GateRule, QubitProperties, SpectatorChannel, Spread, Telegraph,
+};
 pub use trajectories::TrajectorySimulator;
 
 use num_complex::Complex64 as C64;
@@ -38,6 +40,9 @@ use crate::rng::{Rng, sample_cumulative};
 /// Largest register a [`DensityMatrix`] may hold (4¹⁴ entries = 4 GiB).
 pub const MAX_DENSITY_QUBITS: usize = 14;
 
+/// Largest number of qubits a [`Channel`] acts on.
+pub const MAX_CHANNEL_QUBITS: usize = 4;
+
 const ZERO: C64 = C64::new(0.0, 0.0);
 
 fn c(re: f64) -> C64 {
@@ -45,7 +50,7 @@ fn c(re: f64) -> C64 {
 }
 
 /// A completely positive, trace-preserving map given by Kraus operators on
-/// one or two qubits.
+/// one to four qubits ([`MAX_CHANNEL_QUBITS`]).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Channel {
     name: String,
@@ -79,10 +84,12 @@ impl Channel {
         let n_qubits = match d {
             2 => 1,
             4 => 2,
+            8 => 3,
+            16 => 4,
             _ => {
                 return Err(QsoError::invalid(
                     "kraus",
-                    "only 1- and 2-qubit channels are supported",
+                    "channels act on 1 to 4 qubits (2×2 to 16×16 operators)",
                 ));
             }
         };
@@ -290,10 +297,10 @@ impl Channel {
             .first()
             .map(|(label, _)| label.len())
             .ok_or_else(|| QsoError::invalid("probabilities", "no Pauli strings given"))?;
-        if !(1..=2).contains(&k) {
+        if !(1..=MAX_CHANNEL_QUBITS).contains(&k) {
             return Err(QsoError::invalid(
                 "probabilities",
-                "Pauli labels must have one or two letters",
+                "Pauli labels must have one to four letters",
             ));
         }
         let mut p = vec![0.0; 1 << (2 * k)];
@@ -333,7 +340,7 @@ impl Channel {
     /// Pauli channel from all `4^k` probabilities (index digits in base 4,
     /// `I, X, Y, Z`, first qubit most significant).
     fn from_pauli_probabilities(name: String, p: &[f64]) -> Result<Self> {
-        let k = if p.len() == 4 { 1 } else { 2 };
+        let k = p.len().trailing_zeros() as usize / 2;
         let kraus = p
             .iter()
             .enumerate()
@@ -348,8 +355,8 @@ impl Channel {
         Self::from_kraus(name, kraus)
     }
 
-    /// Unitary channel `ρ ↦ UρU†` for a 2×2 or 4×4 unitary (row-major), for
-    /// coherent errors.
+    /// Unitary channel `ρ ↦ UρU†` for a unitary on one to four qubits
+    /// (row-major), for coherent errors.
     pub fn unitary(name: impl Into<String>, matrix: Vec<C64>) -> Result<Self> {
         if !crate::quantum::gates::is_unitary(&matrix, 1e-9) {
             return Err(QsoError::invalid("matrix", "not unitary"));
@@ -357,18 +364,18 @@ impl Channel {
         Self::from_kraus(name, vec![matrix])
     }
 
-    /// Coherent rotation `exp(−iθP/2)` about a Pauli string such as `"X"`,
-    /// `"Z"` or `"ZZ"` (a systematic over-rotation or a ZZ crosstalk
-    /// term).
+    /// Coherent rotation `exp(−iθP/2)` about a Pauli string of one to four
+    /// letters such as `"X"`, `"ZZ"` or `"ZZZ"` (a systematic over-rotation,
+    /// a ZZ crosstalk term, a correlated phase on several qubits).
     pub fn rotation(label: &str, angle: f64) -> Result<Self> {
         if !angle.is_finite() {
             return Err(QsoError::invalid("angle", "must be finite"));
         }
         let k = label.len();
-        if !(1..=2).contains(&k) {
+        if !(1..=MAX_CHANNEL_QUBITS).contains(&k) {
             return Err(QsoError::invalid(
                 "label",
-                "rotations act on one or two qubits",
+                "rotations act on one to four qubits",
             ));
         }
         let index = pauli_index(label, k)?;
@@ -868,19 +875,10 @@ impl DensityMatrix {
                     &model.multi_qubit
                 };
                 for ch in channels {
-                    match ch.n_qubits {
-                        1 => {
-                            for &q in &qubits {
-                                self.apply_channel(ch, &[q])?;
-                            }
-                        }
-                        _ => {
-                            // Two-qubit channels act on consecutive pairs of
-                            // the gate's qubits.
-                            for pair in qubits.windows(2) {
-                                self.apply_channel(ch, pair)?;
-                            }
-                        }
+                    // One-qubit channels act on every qubit of the gate,
+                    // k-qubit channels on every k consecutive ones.
+                    for window in qubits.windows(ch.n_qubits) {
+                        self.apply_channel(ch, window)?;
                     }
                 }
             }
@@ -929,6 +927,13 @@ impl DensityMatrix {
             });
         }
         device.validate()?;
+        if !device.is_markovian() {
+            return Err(QsoError::invalid(
+                "device",
+                "quasi-static and telegraph noise are correlated in time; \
+                 simulate them with trajectories",
+            ));
+        }
         let program = device::Program::compile(circuit, theta, device)?;
         self.run_program(&program);
         Ok(())
@@ -939,8 +944,9 @@ impl DensityMatrix {
         self.run_ops(&program.ops, &program.channels);
     }
 
-    /// Apply compiled operations (sizes already checked). Consecutive
-    /// channels on the same qubits are combined into one superoperator.
+    /// Apply compiled operations (sizes already checked, programs of
+    /// Markovian devices only). Consecutive channels on the same qubits are
+    /// combined into one superoperator.
     pub(crate) fn run_ops(&mut self, ops: &[device::Op], channels: &[device::CompiledChannel]) {
         let n = self.n_qubits;
         let mut pending: Option<(Vec<C64>, &[usize])> = None;
@@ -969,6 +975,9 @@ impl DensityMatrix {
                         None => Some((s.clone(), qubits.as_slice())),
                     };
                 }
+                device::Op::Phase { .. } | device::Op::SpreadGate { .. } => {
+                    unreachable!("density matrices only run programs of Markovian devices")
+                }
             }
         }
         if let Some((s, q)) = pending {
@@ -976,7 +985,8 @@ impl DensityMatrix {
         }
     }
 
-    /// Apply a 1- or 2-qubit superoperator (qubits already checked).
+    /// Apply the superoperator of a channel on 1 to 4 qubits (qubits
+    /// already checked): the row bits, then the column bits.
     fn apply_superoperator(&mut self, s: &[C64], qubits: &[usize]) {
         let n = self.n_qubits;
         match qubits {
@@ -985,13 +995,17 @@ impl DensityMatrix {
                 kernels::apply_2q(&mut self.data, *q, *q + n, 0, &m);
             }
             _ => {
-                let targets = [qubits[0], qubits[1], qubits[0] + n, qubits[1] + n];
+                let targets: Vec<usize> = qubits
+                    .iter()
+                    .copied()
+                    .chain(qubits.iter().map(|q| q + n))
+                    .collect();
                 kernels::apply_kq(&mut self.data, &targets, 0, s);
             }
         }
     }
 
-    /// Apply a channel to `qubits` (one or two, matching the channel).
+    /// Apply a channel to `qubits` (as many as the channel acts on).
     pub fn apply_channel(&mut self, channel: &Channel, qubits: &[usize]) -> Result<()> {
         if qubits.len() != channel.n_qubits {
             return Err(QsoError::DimensionMismatch {
@@ -1007,10 +1021,14 @@ impl DensityMatrix {
                 });
             }
         }
-        if qubits.len() == 2 && qubits[0] == qubits[1] {
+        if let Some(&q) = qubits
+            .iter()
+            .enumerate()
+            .find_map(|(k, q)| qubits[..k].contains(q).then_some(q))
+        {
             return Err(QsoError::DuplicateQubit {
                 gate: "channel",
-                qubit: qubits[0],
+                qubit: q,
             });
         }
         self.apply_superoperator(&channel.superoperator(), qubits);
@@ -1131,6 +1149,9 @@ impl DensityMatrix {
         counts
     }
 }
+
+#[cfg(test)]
+mod correlated_tests;
 
 #[cfg(test)]
 mod tests {

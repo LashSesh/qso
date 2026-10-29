@@ -301,17 +301,24 @@ pub(crate) fn apply_swap<A: Amplitude>(amps: &mut [A], a: usize, b: usize, contr
     });
 }
 
-/// Largest number of targets supported by [`apply_kq`].
+/// Largest number of targets of a gate (custom unitaries).
 pub(crate) const MAX_DENSE_TARGETS: usize = 6;
+
+/// Largest number of targets supported by [`apply_kq`]: eight, for the
+/// superoperators of four-qubit channels on density matrices.
+pub(crate) const MAX_KERNEL_TARGETS: usize = 8;
 
 /// Apply a dense `2^k × 2^k` matrix to `targets` (`targets[0]` is the most
 /// significant local bit) restricted to `controls`.
 pub(crate) fn apply_kq<A: Amplitude>(amps: &mut [A], targets: &[usize], controls: usize, m: &[A]) {
     let k = targets.len();
     assert!(
-        k <= MAX_DENSE_TARGETS,
-        "at most {MAX_DENSE_TARGETS} targets"
+        k <= MAX_KERNEL_TARGETS,
+        "at most {MAX_KERNEL_TARGETS} targets"
     );
+    if k > MAX_DENSE_TARGETS {
+        return apply_kq_wide(amps, targets, controls, m);
+    }
     let d = 1usize << k;
     debug_assert_eq!(m.len(), d * d);
     let positions = sorted_positions(targets, controls, amps.len());
@@ -331,6 +338,46 @@ pub(crate) fn apply_kq<A: Amplitude>(amps: &mut [A], targets: &[usize], controls
     for_each_index(count, move |kk| {
         let base = insert_zeros(kk, &positions) | controls;
         let mut v = [A::ZERO; 1 << MAX_DENSE_TARGETS];
+        // SAFETY: distinct `kk` map to disjoint index sets.
+        unsafe {
+            let p = ptr.get();
+            for (l, off) in offsets.iter().enumerate() {
+                v[l] = *p.add(base | off);
+            }
+            for (r, off) in offsets.iter().enumerate() {
+                let row = &m[r * d..(r + 1) * d];
+                let mut acc = A::ZERO;
+                for c in 0..d {
+                    acc += row[c] * v[c];
+                }
+                *p.add(base | off) = acc;
+            }
+        }
+    });
+}
+
+/// [`apply_kq`] for 7 or 8 targets (a larger buffer per group).
+fn apply_kq_wide<A: Amplitude>(amps: &mut [A], targets: &[usize], controls: usize, m: &[A]) {
+    let k = targets.len();
+    let d = 1usize << k;
+    debug_assert_eq!(m.len(), d * d);
+    let positions = sorted_positions(targets, controls, amps.len());
+    let count = amps.len() >> positions.len();
+    let offsets: Vec<usize> = (0..d)
+        .map(|l| {
+            (0..k).fold(0usize, |acc, j| {
+                if (l >> (k - 1 - j)) & 1 == 1 {
+                    acc | (1 << targets[j])
+                } else {
+                    acc
+                }
+            })
+        })
+        .collect();
+    let ptr = SyncPtr::new(amps);
+    for_each_index(count, move |kk| {
+        let base = insert_zeros(kk, &positions) | controls;
+        let mut v = [A::ZERO; 1 << MAX_KERNEL_TARGETS];
         // SAFETY: distinct `kk` map to disjoint index sets.
         unsafe {
             let p = ptr.get();
@@ -926,6 +973,21 @@ mod tests {
     /// 7 qubits (parallel under Miri, whose thresholds are lowered so that
     /// 2⁷ amplitudes span several work chunks).
     #[test]
+    fn wide_kernel_on_eight_targets() {
+        let mut rng = crate::Rng::seed_from_u64(88);
+        let state = random_state(8, 3);
+        let targets = [5, 0, 7, 2, 1, 6, 3, 4];
+        let m = random_matrix(8, &mut rng);
+        let mut a = state.clone();
+        apply_kq(&mut a, &targets, 0, &m);
+        assert_close(
+            &a,
+            &reference(&state, &targets, 0, &m),
+            "apply_kq (8 targets)",
+        );
+    }
+
+    #[test]
     fn unsafe_kernels_match_the_reference() {
         on_threads(|| {
             let mut rng = crate::Rng::seed_from_u64(2024);
@@ -989,15 +1051,17 @@ mod tests {
                         }
                     }
                 }
-                for _ in 0..6 {
+                for round in 0..6 {
                     let mut targets: Vec<usize> = Vec::new();
-                    while targets.len() < 3 {
+                    // Three targets, and once the wide path with seven.
+                    let k = if round == 5 && n >= 7 { 7 } else { 3 };
+                    while targets.len() < k {
                         let q = rng.below(n as u64) as usize;
                         if !targets.contains(&q) {
                             targets.push(q);
                         }
                     }
-                    let m = random_matrix(3, &mut rng);
+                    let m = random_matrix(k, &mut rng);
                     for c in control_masks(&targets, &mut rng) {
                         let mut a = state.clone();
                         apply_kq(&mut a, &targets, c, &m);

@@ -23,6 +23,13 @@
 //! Every trajectory has its own random stream derived from the seed, so
 //! results do not depend on the number of threads.
 //!
+//! Noise correlated in time (quasi-static detunings and over-rotations,
+//! telegraph noise; see [`DeviceModel`]) is drawn per trajectory before it
+//! runs: telegraph processes have exponential waiting times between jumps
+//! and are integrated exactly over every gate and wait of their qubit.
+//! Averages over trajectories are then exact in expectation, as for
+//! channels; density matrices cannot represent such noise.
+//!
 //! ```
 //! use metatron_qso::noise::{DeviceModel, GateRule, TrajectorySimulator};
 //! use metatron_qso::quantum::{Circuit, PauliSum};
@@ -38,7 +45,9 @@
 
 use num_complex::Complex64 as C64;
 
-use super::device::{CompiledChannel, DeviceModel, Op, Program, Unraveling};
+use super::device::{
+    CompiledChannel, DeviceModel, Op, Program, SlowNoise, Spread, Telegraph, Unraveling,
+};
 use super::{DensityMatrix, MAX_DENSITY_QUBITS};
 use crate::error::{QsoError, Result};
 use crate::estimation::Estimate;
@@ -46,7 +55,7 @@ use crate::parallel::{map_tasks, sum_ranges};
 use std::sync::Arc;
 
 use crate::quantum::kernels::{apply_instruction, insert_zeros};
-use crate::quantum::{Circuit, Counts, GateKind, Instruction, PauliSum, StateVector, plan};
+use crate::quantum::{Circuit, Counts, GateKind, Instruction, Param, PauliSum, StateVector, plan};
 use crate::rng::{Rng, sample_cumulative};
 
 const ZERO: C64 = C64::new(0.0, 0.0);
@@ -66,12 +75,15 @@ pub struct TrajectorySimulator {
     seed: u64,
 }
 
-/// Sum of reduced-density-matrix contributions (up to 4×4).
-struct Reduced([C64; 16]);
+/// Sum of reduced-density-matrix contributions (up to 16×16).
+struct Reduced(Vec<C64>);
 
 impl std::iter::Sum for Reduced {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.fold(Reduced([ZERO; 16]), |mut a, b| {
+        iter.fold(Reduced(Vec::new()), |mut a, b| {
+            if a.0.is_empty() {
+                return b;
+            }
             for (x, y) in a.0.iter_mut().zip(b.0) {
                 *x += y;
             }
@@ -80,8 +92,8 @@ impl std::iter::Sum for Reduced {
     }
 }
 
-/// `ρ[a][b] = Σ ψ_a ψ_b*` over the other qubits, for one qubit or an
-/// ordered pair (first = more significant local bit). Row-major `d × d`.
+/// `ρ[a][b] = Σ ψ_a ψ_b*` over the other qubits, for one to four ordered
+/// qubits (first = most significant local bit). Row-major `d × d`.
 fn reduced_matrix(amps: &[C64], qubits: &[usize]) -> Reduced {
     if let [q] = *qubits {
         let stride = 1usize << q;
@@ -94,12 +106,7 @@ fn reduced_matrix(amps: &[C64], qubits: &[usize]) -> Reduced {
                 p1 += b.norm_sqr();
                 coh += a * b.conj();
             }
-            let mut m = [ZERO; 16];
-            m[0] = C64::new(p0, 0.0);
-            m[1] = coh;
-            m[2] = coh.conj();
-            m[3] = C64::new(p1, 0.0);
-            Reduced(m)
+            Reduced(vec![C64::new(p0, 0.0), coh, coh.conj(), C64::new(p1, 0.0)])
         });
     }
     let k = qubits.len();
@@ -120,10 +127,10 @@ fn reduced_matrix(amps: &[C64], qubits: &[usize]) -> Reduced {
         .collect();
     let count = (amps.len() >> k) as u64;
     sum_ranges(count, |start, end| {
-        let mut acc = [ZERO; 16];
+        let mut acc = vec![ZERO; d * d];
         for kk in start..end {
             let base = insert_zeros(kk as usize, &sorted);
-            let mut v = [ZERO; 4];
+            let mut v = [ZERO; 16];
             for (l, off) in offsets.iter().enumerate() {
                 v[l] = amps[base | off];
             }
@@ -184,6 +191,84 @@ enum Step {
         channel: usize,
         qubits: Vec<usize>,
     },
+    /// The turn of `qubit` by its slow noise; `slot` indexes the phases
+    /// sampled for the trajectory.
+    Phase {
+        qubit: usize,
+        from: f64,
+        to: f64,
+        slot: usize,
+    },
+    /// A rotation whose angles a trajectory scales by `base + η[rule]`.
+    SpreadGate {
+        inst: Instruction,
+        base: f64,
+        rule: usize,
+    },
+}
+
+/// The random choices of one trajectory made before it runs.
+struct Sample {
+    /// Component of every unitary mixture.
+    choices: Vec<usize>,
+    /// Turn of every phase step.
+    phases: Vec<f64>,
+    /// Over-rotation spread of every rule.
+    etas: Vec<f64>,
+}
+
+/// A telegraph process along one trajectory, evaluated in time order.
+struct TelegraphProcess {
+    amplitude: f64,
+    rate: f64,
+    sign: f64,
+    /// Time up to which the process is known, and of the next jump.
+    time: f64,
+    next: f64,
+}
+
+impl TelegraphProcess {
+    fn new(t: &Telegraph, rng: &mut Rng) -> Self {
+        let sign = if rng.uniform() < 0.5 { 1.0 } else { -1.0 };
+        let mut p = Self {
+            amplitude: t.amplitude,
+            rate: t.rate,
+            sign,
+            time: 0.0,
+            next: 0.0,
+        };
+        p.next = p.waiting_time(rng);
+        p
+    }
+
+    /// Exponential waiting time with mean `1/rate` (infinite at rate 0).
+    fn waiting_time(&self, rng: &mut Rng) -> f64 {
+        if self.rate > 0.0 {
+            -(1.0 - rng.uniform()).ln() / self.rate
+        } else {
+            f64::INFINITY
+        }
+    }
+
+    /// `∫ν(t) dt` from `from` to `to` (`from ≥` the times asked before).
+    fn integral(&mut self, from: f64, to: f64, rng: &mut Rng) -> f64 {
+        // Jumps before `from` only change the sign.
+        while self.next <= from {
+            self.sign = -self.sign;
+            self.next += self.waiting_time(rng);
+        }
+        self.time = from;
+        let mut acc = 0.0;
+        while self.next < to {
+            acc += self.sign * (self.next - self.time);
+            self.time = self.next;
+            self.sign = -self.sign;
+            self.next += self.waiting_time(rng);
+        }
+        acc += self.sign * (to - self.time);
+        self.time = to;
+        self.amplitude * acc
+    }
 }
 
 /// A compiled program prepared for trajectories (shared by all of them).
@@ -203,6 +288,11 @@ pub(crate) struct Skeleton<'p> {
     /// `jumps[i]`: number of jump steps before step `i`.
     jumps: Vec<usize>,
     channels: &'p [CompiledChannel],
+    /// Slow noise of every qubit and over-rotation spread of every rule
+    /// (empty for Markovian programs).
+    slow: Vec<SlowNoise>,
+    spreads: Vec<Option<Spread>>,
+    phase_slots: usize,
 }
 
 /// Steps simulated one at a time when locating a jump.
@@ -214,9 +304,18 @@ const STEPWISE: usize = 8;
 const FIRST_BLOCK: usize = 256;
 
 impl<'p> Skeleton<'p> {
+    /// The skeleton of a compiled program, with its slow noise.
+    pub(crate) fn for_program(program: &'p Program) -> Self {
+        let mut s = Self::new(program.n_qubits, &program.ops, &program.channels);
+        s.slow = program.slow.clone();
+        s.spreads = program.spreads.clone();
+        s
+    }
+
     pub(crate) fn new(n_qubits: usize, ops: &[Op], channels: &'p [CompiledChannel]) -> Self {
         let mut steps = Vec::new();
         let mut slot = 0;
+        let mut phase_slots = 0;
         for op in ops {
             match op {
                 Op::Gates(c) => steps.extend(c.instructions().iter().cloned().map(Step::Gate)),
@@ -241,6 +340,20 @@ impl<'p> Skeleton<'p> {
                         qubits: qubits.clone(),
                     }),
                 },
+                Op::Phase { qubit, from, to } => {
+                    steps.push(Step::Phase {
+                        qubit: *qubit,
+                        from: *from,
+                        to: *to,
+                        slot: phase_slots,
+                    });
+                    phase_slots += 1;
+                }
+                Op::SpreadGate { inst, base, rule } => steps.push(Step::SpreadGate {
+                    inst: inst.clone(),
+                    base: *base,
+                    rule: *rule,
+                }),
             }
         }
         let mut jumps = Vec::with_capacity(steps.len() + 1);
@@ -255,7 +368,59 @@ impl<'p> Skeleton<'p> {
             steps,
             jumps,
             channels,
+            slow: Vec::new(),
+            spreads: Vec::new(),
+            phase_slots,
         }
+    }
+
+    /// Draw the slow noise of one trajectory: the over-rotation spread of
+    /// every rule, the detuning of every qubit, and the telegraph processes,
+    /// integrated over the phase steps in time order. Nothing is drawn for
+    /// Markovian programs.
+    fn slow_sample(&self, rng: &mut Rng) -> (Vec<f64>, Vec<f64>) {
+        let spread = self
+            .steps
+            .iter()
+            .any(|s| matches!(s, Step::SpreadGate { .. }));
+        let etas = if spread {
+            self.spreads
+                .iter()
+                .map(|s| s.as_ref().map_or(0.0, |s| s.sample(rng)))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if self.phase_slots == 0 {
+            return (Vec::new(), etas);
+        }
+        let detunings: Vec<f64> = self
+            .slow
+            .iter()
+            .map(|s| s.detuning.as_ref().map_or(0.0, |d| d.sample(rng)))
+            .collect();
+        let mut telegraph: Vec<Option<TelegraphProcess>> = self
+            .slow
+            .iter()
+            .map(|s| s.telegraph.as_ref().map(|t| TelegraphProcess::new(t, rng)))
+            .collect();
+        let mut phases = vec![0.0; self.phase_slots];
+        for step in &self.steps {
+            if let Step::Phase {
+                qubit,
+                from,
+                to,
+                slot,
+            } = step
+            {
+                let mut phi = detunings[*qubit] * (to - from);
+                if let Some(p) = &mut telegraph[*qubit] {
+                    phi += p.integral(*from, *to, rng);
+                }
+                phases[*slot] = phi;
+            }
+        }
+        (phases, etas)
     }
 
     /// Whether steps `a..b` contain a jump step.
@@ -264,17 +429,39 @@ impl<'p> Skeleton<'p> {
     }
 
     /// Apply steps `a..b` without jumps as one blocked circuit.
-    fn apply_block(&self, amps: &mut [C64], a: usize, b: usize, choices: &[usize]) {
+    fn apply_block(&self, amps: &mut [C64], a: usize, b: usize, sample: &Sample) {
         let mut c = Circuit::new(self.n_qubits);
         for step in &self.steps[a..b] {
             match step {
                 Step::Gate(inst) => c.push_trusted(inst.clone()),
                 Step::Mixture { options, slot, .. } => {
-                    if let Some(inst) = &options[choices[*slot]] {
+                    if let Some(inst) = &options[sample.choices[*slot]] {
                         c.push_trusted(inst.clone());
                     }
                 }
                 Step::Jump { no_jump, .. } => c.push_trusted(no_jump.clone()),
+                Step::Phase { qubit, slot, .. } => {
+                    let phi = sample.phases[*slot];
+                    if phi != 0.0 {
+                        c.push_trusted(Instruction {
+                            kind: GateKind::RZ,
+                            targets: vec![*qubit],
+                            controls: Vec::new(),
+                            params: vec![Param::Value(phi)],
+                            matrix: None,
+                        });
+                    }
+                }
+                Step::SpreadGate { inst, base, rule } => {
+                    let factor = base + sample.etas[*rule];
+                    let mut scaled = inst.clone();
+                    for p in &mut scaled.params {
+                        if let Param::Value(v) = p {
+                            *v *= factor;
+                        }
+                    }
+                    c.push_trusted(scaled);
+                }
             }
         }
         if !c.is_empty() {
@@ -304,12 +491,12 @@ impl<'p> Skeleton<'p> {
         mut a: usize,
         mut b: usize,
         threshold: f64,
-        choices: &[usize],
+        sample: &Sample,
     ) -> std::result::Result<usize, usize> {
         while b - a > STEPWISE {
             let mid = a + (b - a) / 2;
             let checkpoint = state.clone();
-            self.apply_block(state.amplitudes_mut(), a, mid, choices);
+            self.apply_block(state.amplitudes_mut(), a, mid, sample);
             if state.norm().powi(2) >= threshold {
                 a = mid;
             } else {
@@ -331,7 +518,7 @@ impl<'p> Skeleton<'p> {
                 }
                 apply_instruction(state.amplitudes_mut(), no_jump, &[], false, 0);
             } else {
-                self.apply_block(state.amplitudes_mut(), j, j + 1, choices);
+                self.apply_block(state.amplitudes_mut(), j, j + 1, sample);
             }
         }
         Err(b)
@@ -385,33 +572,39 @@ impl<'p> Skeleton<'p> {
                 _ => None,
             })
             .collect();
+        let (phases, etas) = self.slow_sample(&mut rng);
+        let sample = Sample {
+            choices,
+            phases,
+            etas,
+        };
         // Threshold in (0, 1] for the squared norm.
         let threshold = 1.0 - rng.uniform();
-        let state = self.run_from(&choices, threshold, &mut rng);
+        let state = self.run_from(&sample, threshold, &mut rng);
         (state, rng)
     }
 
-    /// The trajectory for given mixture choices and first threshold.
-    fn run_from(&self, choices: &[usize], mut threshold: f64, rng: &mut Rng) -> StateVector {
+    /// The trajectory for given choices and first threshold.
+    fn run_from(&self, sample: &Sample, mut threshold: f64, rng: &mut Rng) -> StateVector {
         let mut state = StateVector::zero(self.n_qubits);
         let end = self.steps.len();
         let mut start = 0;
         let mut size = FIRST_BLOCK;
         while start < end {
             if !self.has_jump(start, end) {
-                self.apply_block(state.amplitudes_mut(), start, end, choices);
+                self.apply_block(state.amplitudes_mut(), start, end, sample);
                 break;
             }
             let stop = (start + size).min(end);
             let checkpoint = state.clone();
-            self.apply_block(state.amplitudes_mut(), start, stop, choices);
+            self.apply_block(state.amplitudes_mut(), start, stop, sample);
             if state.norm().powi(2) >= threshold {
                 start = stop;
                 size *= 2;
                 continue;
             }
             state = checkpoint;
-            match self.locate(&mut state, start, stop, threshold, choices) {
+            match self.locate(&mut state, start, stop, threshold, sample) {
                 Ok(j) => {
                     self.jump(&mut state, j, rng);
                     threshold = 1.0 - rng.uniform();
@@ -503,7 +696,7 @@ impl TrajectorySimulator {
         f: impl Fn(usize, StateVector, Rng) -> T + Sync + Send,
     ) -> Vec<T> {
         let base = Rng::seed_from_u64(self.seed);
-        let skeleton = Skeleton::new(program.n_qubits, &program.ops, &program.channels);
+        let skeleton = Skeleton::for_program(program);
         let one = |k: usize| {
             let (state, rng) = skeleton.run(base.fork(k as u64));
             f(k, state, rng)
@@ -598,7 +791,7 @@ impl TrajectorySimulator {
         let dim = 1usize << n;
         let mut data = vec![ZERO; dim * dim];
         let base = Rng::seed_from_u64(self.seed);
-        let skeleton = Skeleton::new(n, &program.ops, &program.channels);
+        let skeleton = Skeleton::for_program(&program);
         for start in (0..self.trajectories).step_by(BATCH) {
             let count = BATCH.min(self.trajectories - start);
             let states = map_tasks(count, |j| skeleton.run(base.fork((start + j) as u64)).0);
@@ -634,7 +827,7 @@ impl TrajectorySimulator {
         }
         let program = self.program(circuit, theta)?;
         let base = Rng::seed_from_u64(self.seed);
-        let skeleton = Skeleton::new(program.n_qubits, &program.ops, &program.channels);
+        let skeleton = Skeleton::for_program(&program);
         Ok(skeleton.run(base.fork(k as u64)).0)
     }
 }
@@ -774,7 +967,12 @@ mod tests {
             .with_rule(GateRule::for_gate("s").with_channel(ChannelSpec::AmplitudeDamping(1e-3)));
         let program = Program::compile(&c, &[], &dev).unwrap();
         let skeleton = Skeleton::new(3, &program.ops, &program.channels);
-        let state = skeleton.run_from(&[], 1.0 - 5e-10, &mut Rng::seed_from_u64(0));
+        let sample = Sample {
+            choices: Vec::new(),
+            phases: Vec::new(),
+            etas: Vec::new(),
+        };
+        let state = skeleton.run_from(&sample, 1.0 - 5e-10, &mut Rng::seed_from_u64(0));
         let psi = StateVector::from_circuit(&c, &[]).unwrap();
         assert!((state.fidelity(&psi).unwrap() - 1.0).abs() < 1e-9);
     }

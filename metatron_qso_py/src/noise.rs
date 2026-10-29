@@ -4,7 +4,7 @@ use metatron_qso::Rng;
 use metatron_qso::backend::estimate_expectation as estimate;
 use metatron_qso::noise::{
     Channel, ChannelSpec, DensityMatrix, DeviceModel, GateRule, NoiseModel, QubitProperties,
-    TrajectorySimulator,
+    Spread, Telegraph, TrajectorySimulator,
 };
 use metatron_qso::quantum::MAX_QUBITS;
 use numpy::{PyArray1, PyArray2};
@@ -19,7 +19,7 @@ use crate::{
     square_array, square_complex,
 };
 
-/// Completely positive trace-preserving map on one or two qubits, given by
+/// Completely positive trace-preserving map on one to four qubits, given by
 /// Kraus operators.
 #[pyclass(name = "Channel", module = "metatron_qso", frozen)]
 #[derive(Clone)]
@@ -75,8 +75,8 @@ impl PyChannel {
         channel(Channel::thermal_relaxation(t1, t2, time))
     }
 
-    /// Channel from explicit 2×2 or 4×4 Kraus operators (checked for
-    /// `Σ K†K = I`).
+    /// Channel from explicit Kraus operators on one to four qubits (2×2 to
+    /// 16×16, checked for `Σ K†K = I`).
     #[staticmethod]
     #[pyo3(signature = (kraus, name = "custom"))]
     fn from_kraus(kraus: Vec<ComplexMatrixArg<'_>>, name: &str) -> PyResult<Self> {
@@ -87,8 +87,9 @@ impl PyChannel {
         channel(Channel::from_kraus(name, ops))
     }
 
-    /// Pauli channel from probabilities of non-identity Pauli strings, e.g.
-    /// `{"ZZ": 0.02, "XI": 0.001}` (first letter on the first qubit).
+    /// Pauli channel from probabilities of non-identity Pauli strings of one
+    /// to four letters, e.g. `{"ZZ": 0.02, "XI": 0.001}` (first letter on
+    /// the first qubit).
     #[staticmethod]
     fn pauli(probabilities: std::collections::BTreeMap<String, f64>) -> PyResult<Self> {
         let list: Vec<(&str, f64)> = probabilities
@@ -98,8 +99,8 @@ impl PyChannel {
         channel(Channel::pauli(&list))
     }
 
-    /// Unitary channel `ρ ↦ UρU†` (coherent error) from a 2×2 or 4×4
-    /// unitary.
+    /// Unitary channel `ρ ↦ UρU†` (coherent error) from a unitary on one to
+    /// four qubits.
     #[staticmethod]
     #[pyo3(signature = (matrix, name = "unitary"))]
     fn unitary(matrix: ComplexMatrixArg<'_>, name: &str) -> PyResult<Self> {
@@ -107,7 +108,8 @@ impl PyChannel {
         channel(Channel::unitary(name, data))
     }
 
-    /// Coherent rotation `exp(−iθP/2)` about a Pauli string ("X", "ZZ", …).
+    /// Coherent rotation `exp(−iθP/2)` about a Pauli string of one to four
+    /// letters ("X", "ZZ", "ZZZ", …).
     #[staticmethod]
     fn rotation(pauli: &str, angle: f64) -> PyResult<Self> {
         channel(Channel::rotation(pauli, angle))
@@ -255,16 +257,31 @@ fn device(inner: DeviceModel) -> PyResult<PyDeviceModel> {
     Ok(PyDeviceModel { inner })
 }
 
+fn spread(arg: Option<(String, f64)>) -> PyResult<Option<Spread>> {
+    arg.map(|(kind, width)| match kind.to_ascii_lowercase().as_str() {
+        "gaussian" => Ok(Spread::Gaussian { sigma: width }),
+        "uniform" => Ok(Spread::Uniform { half_width: width }),
+        _ => Err(invalid(format!(
+            "unknown spread '{kind}' (expected gaussian or uniform)"
+        ))),
+    })
+    .transpose()
+}
+
 fn qubit_properties(
     t1: Option<f64>,
     t2: Option<f64>,
     readout: Option<(f64, f64)>,
-) -> QubitProperties {
+    detuning: Option<(String, f64)>,
+    telegraph: Option<(f64, f64)>,
+) -> PyResult<QubitProperties> {
     let mut q = QubitProperties::new();
     q.t1 = t1;
     q.t2 = t2;
     q.readout = readout;
-    q
+    q.detuning = spread(detuning)?;
+    q.telegraph = telegraph.map(|(amplitude, rate)| Telegraph::new(amplitude, rate));
+    Ok(q)
 }
 
 #[pymethods]
@@ -299,14 +316,21 @@ impl PyDeviceModel {
     }
 
     /// Set T1, T2 (≤ 2·T1) and readout errors `(P(1|0), P(0|1))` of qubit
-    /// `q`; values left out follow the default qubit.
-    #[pyo3(signature = (q, t1 = None, t2 = None, readout = None))]
+    /// `q`, a quasi-static frequency offset `detuning=("gaussian", sigma)`
+    /// or `("uniform", half_width)` and telegraph noise
+    /// `telegraph=(amplitude, rate)`; values left out follow the default
+    /// qubit. Detunings and telegraph noise are correlated in time: only
+    /// trajectories simulate them.
+    #[pyo3(signature = (q, t1 = None, t2 = None, readout = None, detuning = None, telegraph = None))]
+    #[allow(clippy::too_many_arguments)]
     fn with_qubit(
         &self,
         q: usize,
         t1: Option<f64>,
         t2: Option<f64>,
         readout: Option<(f64, f64)>,
+        detuning: Option<(String, f64)>,
+        telegraph: Option<(f64, f64)>,
     ) -> PyResult<Self> {
         let limit = self.inner.num_qubits.unwrap_or(MAX_QUBITS);
         if q >= limit {
@@ -314,35 +338,36 @@ impl PyDeviceModel {
                 "qubit {q} outside a device of {limit} qubits"
             )));
         }
-        device(
-            self.inner
-                .clone()
-                .with_qubit(q, qubit_properties(t1, t2, readout)),
-        )
+        let properties = qubit_properties(t1, t2, readout, detuning, telegraph)?;
+        device(self.inner.clone().with_qubit(q, properties))
     }
 
-    /// Set the properties of every qubit not set with `with_qubit`.
-    #[pyo3(signature = (t1 = None, t2 = None, readout = None))]
+    /// Set the properties of every qubit not set with `with_qubit` (the
+    /// same arguments).
+    #[pyo3(signature = (t1 = None, t2 = None, readout = None, detuning = None, telegraph = None))]
     fn with_default_qubit(
         &self,
         t1: Option<f64>,
         t2: Option<f64>,
         readout: Option<(f64, f64)>,
+        detuning: Option<(String, f64)>,
+        telegraph: Option<(f64, f64)>,
     ) -> PyResult<Self> {
-        device(
-            self.inner
-                .clone()
-                .with_default_qubit(qubit_properties(t1, t2, readout)),
-        )
+        let properties = qubit_properties(t1, t2, readout, detuning, telegraph)?;
+        device(self.inner.clone().with_default_qubit(properties))
     }
 
-    /// Append a gate rule. `gate` ("cx", "rz", …), `qubits` (controls
-    /// first) and `num_qubits` select gates (`None`: any); `channels` act
-    /// after the gate (one-qubit channels on each qubit, two-qubit channels
-    /// on consecutive pairs).
+    /// Append a gate rule. `gate` ("cx", "rz", "id" for `Circuit.id`, …),
+    /// `qubits` (controls first) and `num_qubits` select gates (`None`:
+    /// any); `channels` act after the gate (a k-qubit channel on every k
+    /// consecutive qubits of the gate); `spectators` are `(qubits, channel)`
+    /// pairs on fixed qubits, which may lie outside the gate (crosstalk);
+    /// `over_rotation_spread=("gaussian", sigma)` adds a quasi-static error
+    /// drawn once per trajectory to `over_rotation`.
     #[pyo3(signature = (
         gate = None, qubits = None, num_qubits = None, duration = 0.0, depolarizing = None,
-        over_rotation = 0.0, channels = Vec::new()
+        over_rotation = 0.0, channels = Vec::new(), spectators = Vec::new(),
+        over_rotation_spread = None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn with_rule(
@@ -354,6 +379,8 @@ impl PyDeviceModel {
         depolarizing: Option<f64>,
         over_rotation: f64,
         channels: Vec<PyRef<'_, PyChannel>>,
+        spectators: Vec<(Vec<usize>, PyRef<'_, PyChannel>)>,
+        over_rotation_spread: Option<(String, f64)>,
     ) -> PyResult<Self> {
         let mut rule = match gate {
             Some(g) => GateRule::for_gate(g),
@@ -368,7 +395,19 @@ impl PyDeviceModel {
             .iter()
             .map(|c| ChannelSpec::from(&c.inner))
             .collect();
+        rule.over_rotation_spread = spread(over_rotation_spread)?;
+        for (qs, c) in &spectators {
+            rule = rule.with_spectator(qs, ChannelSpec::from(&c.inner));
+        }
         device(self.inner.clone().with_rule(rule))
+    }
+
+    /// Whether all noise is channels at points of the circuit (no
+    /// detunings, telegraph noise or over-rotation spreads, which only
+    /// `TrajectorySimulator` simulates).
+    #[getter]
+    fn is_markovian(&self) -> bool {
+        self.inner.is_markovian()
     }
 
     #[getter]

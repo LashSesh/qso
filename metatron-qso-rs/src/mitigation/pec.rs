@@ -113,6 +113,12 @@ struct Plan {
 impl Plan {
     fn new(circuit: &Circuit, theta: &[f64], device: &DeviceModel) -> Result<Self> {
         device.validate()?;
+        if !device.is_markovian() {
+            return Err(QsoError::invalid(
+                "device",
+                "PEC cannot cancel noise correlated in time (quasi-static or telegraph noise)",
+            ));
+        }
         // Over-rotations change the gates themselves, not a channel after
         // them, so PEC cannot see them.
         if circuit.instructions().iter().any(|inst| {

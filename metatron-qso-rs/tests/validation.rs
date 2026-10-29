@@ -282,6 +282,90 @@ fn interacting_bosons_tell_cospectral_strongly_regular_graphs_apart() {
     }
 }
 
+#[test]
+fn slow_noise_follows_ramsey_and_echo_closed_forms() {
+    use metatron_qso::noise::{
+        DeviceModel, GateRule, QubitProperties, Spread, Telegraph, TrajectorySimulator,
+    };
+    // One qubit: H, wait (an `id` gate with a duration), H; with an echo,
+    // X halfway. ⟨Z⟩ over 8000 trajectories against the closed forms.
+    let z: PauliSum = "Z0".parse().unwrap();
+    let run = |qubit: QubitProperties, t: f64, echo: bool| {
+        let wait = if echo { t / 2.0 } else { t };
+        let device = DeviceModel::new("slow")
+            .with_default_qubit(qubit)
+            .with_rule(GateRule::for_gate("id").with_duration(wait));
+        let mut c = Circuit::new(1);
+        c.h(0).id(0);
+        if echo {
+            c.x(0).id(0);
+        }
+        c.h(0);
+        TrajectorySimulator::new(device, 8000, 41)
+            .unwrap()
+            .expectation(&c, &[], &z)
+            .unwrap()
+    };
+    let mut worst = 0.0f64;
+    let mut check = |e: metatron_qso::estimation::Estimate, exact: f64| {
+        worst = worst.max((e.value - exact).abs() / e.std_error.max(1e-15));
+    };
+    // Gaussian quasi-static detuning: exp(−σ²t²/2), and a perfect echo.
+    let sigma = 0.8;
+    let gauss = QubitProperties::new().with_detuning(Spread::Gaussian { sigma });
+    for t in [0.5, 1.0, 2.0, 3.0] {
+        check(
+            run(gauss.clone(), t, false),
+            (-(sigma * t).powi(2) / 2.0).exp(),
+        );
+        let e = run(gauss.clone(), t, true);
+        assert!((e.value - 1.0).abs() < 1e-12);
+    }
+    // Telegraph noise (amplitude ν, flip rate γ): Kubo–Anderson decay
+    // e^{−γt}(cosh μt + (γ/μ) sinh μt), μ = √(γ² − ν²), and the echo from
+    // the same two-state equations, for slow and fast switching.
+    let free = |nu: f64, g: f64, t: f64| {
+        let m2 = g * g - nu * nu;
+        let (c, s) = if m2 > 0.0 {
+            let m = m2.sqrt();
+            ((m * t).cosh(), g * (m * t).sinh() / m)
+        } else {
+            let w = (-m2).sqrt();
+            ((w * t).cos(), g * (w * t).sin() / w)
+        };
+        (-g * t).exp() * (c + s)
+    };
+    let echo = |nu: f64, g: f64, t: f64| {
+        // f' = A f, A = [[±iν − γ, γ], [γ, ∓iν − γ]], f(0) = (½, ½); the
+        // sign of ν flips at t/2. exp(Bτ) = cosh(μτ) + B sinh(μτ)/μ.
+        use num_complex::Complex64 as Z;
+        let half = t / 2.0;
+        let mu = Z::new(g * g - nu * nu, 0.0).sqrt();
+        let step = |f: [Z; 2], sign: f64| {
+            let k = (mu * half).sinh() / mu;
+            let i = Z::new(0.0, nu * sign);
+            let gg = Z::new(g, 0.0);
+            let ch = (mu * half).cosh();
+            let decay = (-g * half).exp();
+            [
+                (ch * f[0] + k * (i * f[0] + gg * f[1])) * decay,
+                (ch * f[1] + k * (gg * f[0] - i * f[1])) * decay,
+            ]
+        };
+        let f = step(step([Z::new(0.5, 0.0); 2], 1.0), -1.0);
+        (f[0] + f[1]).re
+    };
+    for (nu, g) in [(1.0, 0.2), (1.0, 5.0)] {
+        let q = QubitProperties::new().with_telegraph(Telegraph::new(nu, g));
+        for t in [0.5, 1.5, 3.0, 6.0] {
+            check(run(q.clone(), t, false), free(nu, g, t));
+            check(run(q.clone(), t, true), echo(nu, g, t));
+        }
+    }
+    // Every estimate within four standard errors (README).
+    assert!(worst < 4.0, "worst deviation {worst} standard errors");
+}
+
 /// The toy device of `examples/devices/toy_device.json`.
 fn toy_device() -> metatron_qso::noise::DeviceModel {
     metatron_qso::noise::DeviceModel::from_json(include_str!("../examples/devices/toy_device.json"))
