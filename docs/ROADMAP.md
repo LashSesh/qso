@@ -13,7 +13,7 @@ state-vector core at memory bandwidth), 1.12 (noise learning) and 1.13
 finished milestones are released together, not one by one. The third
 (1.14 to 1.17), fourth (1.18 to 1.21), fifth (1.22 to 1.25) and sixth
 (1.26 to 1.28) stages ship together as release 1.7.0. The seventh stage
-(1.29 to 1.33) is planned in section 4g, the eighth (1.34 to 1.37),
+(1.29 to 1.33) is delivered (section 4g); the eighth (1.34 to 1.37),
 magnetic resonance for medical research, in section 4h. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
@@ -52,7 +52,7 @@ which withdraws the results of version 1.
 | Boson sampling | exact probabilities and exact sampling (1.1); partial distinguishability, loss and Gaussian boson sampling with hafnians and torontonians (1.14) | mixed Gaussian states with many photons spread over many modes are impractical (10¹² operations at 20 photons in 10 modes) |
 | Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | noise learning for layers of two-qubit Clifford gates only, on density matrices up to 10 qubits and Pauli frames up to 64 (1.12, 1.31), with non-Pauli channels twirled one at a time; mitigation with the learned model above 24 qubits only on matrix-product states, for channels that are mixtures of unitaries (1.31); no leakage; channels on at most four qubits, slow noise as quasi-static and telegraph processes only, and on trajectories only (1.30); virtual distillation (1.17) mitigates only its measured copies' preparation |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18) | time-dependent Hamiltonians and decoherent coined walks without symmetry reduction; pretty good transfer on other graphs |
-| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5) | Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the nested-commutator bound of product formulas (1.32) is tight for small Hamiltonians only, its tail ignoring which terms commute |
+| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the nested-commutator bound of product formulas (1.32) is tight for small Hamiltonians only, its tail ignoring which terms commute; spin relaxation is phenomenological (T₁ and T₂ per spin) and exact up to about six relaxing spins of one isotope; larger relaxing systems run for short times only, and propagations estimated above a minute are refused |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
 | Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22) | circuit distances of hypergraph models are bounds, not always exact |
 | Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9), in the browser build too (1.25) | — |
@@ -2077,7 +2077,7 @@ Left as is: rounding in the vanishing coefficients sets a floor of about
 10⁻¹⁵ per step, below which the Taylor bound takes over; a tail aware of
 commutation would tighten the bound for larger Hamiltonians.
 
-### 1.33 — Spin dynamics and magnetic resonance (M–L)
+### 1.33 — Spin dynamics and magnetic resonance (M–L, delivered)
 
 Use case: designing and understanding magnetic resonance experiments on
 small molecules, above all hyperpolarisation. Hyperpolarised
@@ -2128,6 +2128,88 @@ Not part of the milestone: MRI image simulation (classical Bloch equations
 per voxel, served by MRI simulators), quantum algorithms for CT, and any
 clinical claim. QSO is a tool for physicists who design these
 experiments, not medical software.
+
+Delivered as planned, as the module `spin` (`SpinSystem`), with the
+Python module `metatron_qso.spin`, `qso spins`, a guide page and the
+tutorial `09_hyperpolarisation`. The Magnus integrator and the Pauli
+algebra were not needed: `H` conserves `M` of every isotope in the
+rotating frame and the total `M` in the laboratory frame, and the
+Lindblad equation conserves the matching coherence orders, so free
+evolution, spectra and time averages diagonalise each block of `H`, and
+relaxation exponentiates each block of the superoperator exactly.
+Measured:
+
+- **Closed forms.** The FID of one spin `−(iP/2)e^{iΩt − t/T₂}` holds to
+  10⁻¹⁴, the spin echo refocuses every offset and is modulated as
+  `cos(2πJτ)` for coupled protons, inversion recovery follows
+  `P(1 − 2e^{−t/T₁})`, and every state relaxes to the thermal one. The
+  phase-cycled INEPT gain is `P_H/P_C` = 3.976 at 9.4 T to 10⁻⁸.
+  PASADENA lines agree to 0.3 % and ALTADENA lines (a 20 s sweep to 1 T)
+  to 0.2 %, the rest being strong coupling. SABRE transfer to a proton
+  and to ¹⁵N (SABRE-SHEATH, laboratory frame) peaks within 2 % of the
+  anti-crossing fields.
+- **QuTiP.** Five systems built independently with QuTiP's spin
+  operators, four of them at 9.4 T and 298 K, where polarisations are
+  10⁻⁵: QSO agrees with the exact exponential of QuTiP's Liouvillian to
+  7·10⁻¹² of the largest expectation in the rotating frame and 2·10⁻¹⁰ in
+  the laboratory frame, and with `mesolve` to 4·10⁻⁶ and 2.5·10⁻⁴, the
+  error of its adaptive steps.
+- **Cost.** One second of five relaxing protons takes 0.2 s in either
+  frame, of six about ten seconds; a free induction decay needs only the
+  coherences of order −1. Eleven spins without relaxation take 1.8 s for
+  a time average, 2.6 s for a spectrum and 2.7 s for a delay.
+
+An independent review confirmed the gyromagnetic ratios, the operators
+and Hamiltonians (against an independent construction), both frames,
+the thermal state, pulses, shaped pulses and sweeps, the signal and
+Fourier conventions, the parahydrogen state, the fixed points and the
+exact T₁ and T₂ of the Lindblad operators for spin ½, and the closed
+forms of INEPT, PASADENA, ALTADENA and the anti-crossings. It found:
+
+- **Relaxation at real polarisations.** The first version integrated ρ
+  by Dormand–Prince steps with an absolute error of 10⁻¹², while thermal
+  states deviate from `1/d` by 10⁻⁶: four protons at 9.4 T after one
+  second were 0.94 % off, and took 32 s. The laboratory frame and large
+  systems were out of reach without a warning. Now the deviation is
+  propagated, by block exponentials (10⁻¹¹ of it, against an independent
+  full superoperator; 11 ms), or by Dormand–Prince steps with an error
+  relative to it when those are cheaper; propagations estimated above
+  1.5·10¹² operations are refused at once (test).
+- **Time averages.** They kept coherences between different `M` of an
+  isotope in the rotating frame, which precess at its Larmor frequency,
+  so the result depended on the frame; and their tolerance, 10⁻⁹ of the
+  largest energy, was 10 rad/s in the laboratory frame. Energies are now
+  compared as in the laboratory frame, block by block, to the rounding
+  of the eigendecomposition (tests in both frames).
+- **Spectra.** Lines were merged within 10⁻⁶ Hz, finer than the
+  precision of laboratory-frame energies, against the first line of a
+  group, which split chains; and rounding produced lines of 10⁻¹⁷. Lines
+  are now clustered by single linkage within the rounding of the
+  energies, and those below 10⁻¹³ of the state's largest entry dropped.
+- **Input.** `set_relaxation` stored invalid times before checking them,
+  which made later assertions of a test vacuous; INEPT accepted J = 0,
+  NaN and one isotope; events accepted unknown JSON fields; the thermal
+  state overflowed at extreme fields and temperatures; Python took a bool
+  for a spin index; `qso spins` showed lines at the starting field after
+  a field change. All fixed, with tests; `field_after`,
+  `with_temperature` and `carrier` were added to Python.
+- **QuTiP.** The comparison used QSO's own Hamiltonian and operators,
+  low temperatures and absolute differences. It now builds everything in
+  QuTiP, runs at room temperature, and compares relative differences
+  against both the exact Liouvillian exponential and `mesolve`.
+- **Smaller.** `parahydrogen_state` multiplied dense matrices and every
+  call diagonalised the whole `H` (2048 × 2048 at eleven spins); the FFT
+  accumulated its twiddle factors; the Python bindings held the GIL. The
+  docs now state the spin-1 relaxation correctly (T₁ and T₂ exact at high
+  temperature, test), that `T₂ ≤ 2T₁` for every spin, the `(1 + δ)` of
+  the Boltzmann factor, NaN shifts at zero field, the rotating-wave
+  approximation of shaped pulses, and that laboratory-frame pulse phases
+  refer to the laboratory axes.
+
+Left as is: one evaluation of the Lindblad equation costs about 30 μs at
+four spins, and Dormand–Prince needs 10⁵ steps of six per second at
+9.4 T, so long shaped pulses with relaxation are slow; the laboratory frame at high field loses `ε·ωt` (2·10⁻¹⁰ after
+a millisecond at 9.4 T), which is the conditioning of the problem.
 
 ### Not in this stage
 
