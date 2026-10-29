@@ -8,7 +8,7 @@ use metatron_qso::spin::{
 };
 use numpy::{IntoPyArray, PyArray1, PyArray2};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyBool, PyDict};
 
 use crate::graph::PyGraph;
 use crate::{
@@ -29,8 +29,14 @@ fn frame(name: &str) -> PyResult<Frame> {
     }
 }
 
-/// A pulse target: an isotope name (`"1H"`) or a spin index.
+/// A pulse target: an isotope name (`"1H"`) or a spin index (not a
+/// bool, which Python would take for 0 or 1).
 fn target(t: &Bound<'_, PyAny>) -> PyResult<Target> {
+    if t.is_instance_of::<PyBool>() {
+        return Err(invalid(
+            "a pulse target is an isotope name or a spin index, not a bool",
+        ));
+    }
     if let Ok(i) = t.extract::<usize>() {
         return Ok(Target::Spin(i));
     }
@@ -125,13 +131,14 @@ fn sweep(to: f64, duration: f64, steps: usize) -> PyEvent {
 /// INEPT from `source` to `target` for coupling `j` (Hz).
 #[pyfunction(name = "inept")]
 fn py_inept(source: &str, target: &str, j: f64) -> PyResult<Vec<PyEvent>> {
-    Ok(wrap(inept(isotope(source)?, isotope(target)?, j)))
+    Ok(wrap(inept(isotope(source)?, isotope(target)?, j).raise()?))
 }
 
 /// INEPT with its two-step phase cycle: `[(events, receiver phase)]`.
 #[pyfunction(name = "inept_cycle")]
 fn py_inept_cycle(source: &str, target: &str, j: f64) -> PyResult<Vec<(Vec<PyEvent>, f64)>> {
     Ok(inept_cycle(isotope(source)?, isotope(target)?, j)
+        .raise()?
         .into_iter()
         .map(|(e, r)| (wrap(e), r))
         .collect())
@@ -182,15 +189,21 @@ pub struct PySpinSystem {
 }
 
 impl PySpinSystem {
-    fn state(&self, rho: &ComplexMatrixArg<'_>) -> PyResult<CMatrix> {
-        let (d, data) = square_complex("rho", rho)?;
+    /// A `d × d` matrix of this system: `what` is "a state" or "an
+    /// operator".
+    fn matrix(&self, what: &str, m: &ComplexMatrixArg<'_>) -> PyResult<CMatrix> {
+        let (d, data) = square_complex("rho", m)?;
         if d != self.inner.dimension() {
             return Err(invalid(format!(
-                "a state of this system is {0}×{0}, got {d}×{d}",
+                "{what} of this system is {0}×{0}, got {d}×{d}",
                 self.inner.dimension()
             )));
         }
         Ok(CMatrix::from_row_slice(d, d, &data))
+    }
+
+    fn state(&self, rho: &ComplexMatrixArg<'_>) -> PyResult<CMatrix> {
+        self.matrix("a state", rho)
     }
 }
 
@@ -233,7 +246,8 @@ impl PySpinSystem {
         Ok(())
     }
 
-    /// Set `T₁` and `T₂` (s) of spin `i` (`None`: none, `T₂` then `2T₁`).
+    /// Set `T₁` and `T₂` (s) of spin `i` (`None`: none, `T₂` then `2T₁`;
+    /// `T₂ ≤ 2T₁`). On an error the spin keeps its times.
     #[pyo3(signature = (i, t1 = None, t2 = None))]
     fn set_relaxation(&mut self, i: usize, t1: Option<f64>, t2: Option<f64>) -> PyResult<()> {
         self.inner.set_relaxation(i, t1, t2).raise()?;
@@ -244,6 +258,13 @@ impl PySpinSystem {
     fn with_field(&self, field: f64) -> PyResult<Self> {
         Ok(Self {
             inner: self.inner.clone().with_field(field).raise()?,
+        })
+    }
+
+    /// The same system at another temperature (K).
+    fn with_temperature(&self, temperature: f64) -> PyResult<Self> {
+        Ok(Self {
+            inner: self.inner.clone().with_temperature(temperature).raise()?,
         })
     }
 
@@ -281,6 +302,18 @@ impl PySpinSystem {
             Frame::Rotating => "rotating",
             Frame::Laboratory => "laboratory",
         }
+    }
+
+    /// The carrier of an isotope (ppm, rotating frame; 0 unless set).
+    fn carrier(&self, isotope: &str) -> PyResult<f64> {
+        Ok(self.inner.carrier(self::isotope(isotope)?))
+    }
+
+    /// The field (T) at the end of a sequence: `evolve` leaves the system's
+    /// own field unchanged, so a state left at another field is observed
+    /// with `with_field(field_after(events))`.
+    fn field_after(&self, events: Vec<PyRef<'_, PyEvent>>) -> f64 {
+        self.inner.field_after(&self::events(&events))
     }
 
     #[getter]
@@ -349,7 +382,8 @@ impl PySpinSystem {
         rho: ComplexMatrixArg<'_>,
     ) -> PyResult<Bound<'py, PyArray2<C64>>> {
         let rho = self.state(&rho)?;
-        Ok(cmatrix(py, &self.inner.time_average(&rho).raise()?))
+        let sys = &self.inner;
+        Ok(cmatrix(py, &py.detach(|| sys.time_average(&rho)).raise()?))
     }
 
     /// Apply a sequence of events.
@@ -414,7 +448,7 @@ impl PySpinSystem {
     /// `Tr(ρ O)`.
     fn expectation(&self, rho: ComplexMatrixArg<'_>, op: ComplexMatrixArg<'_>) -> PyResult<C64> {
         let rho = self.state(&rho)?;
-        let op = self.state(&op)?;
+        let op = self.matrix("an operator", &op)?;
         self.inner.expectation(&rho, &op).raise()
     }
 
@@ -433,8 +467,9 @@ impl PySpinSystem {
         isotope: &str,
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
         let rho = self.state(&rho)?;
-        self.inner
-            .lines(&rho, self::isotope(isotope)?)
+        let x = self::isotope(isotope)?;
+        let sys = &self.inner;
+        py.detach(|| sys.lines(&rho, x))
             .raise()?
             .into_iter()
             .map(|l| {

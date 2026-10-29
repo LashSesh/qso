@@ -40,6 +40,79 @@ pub fn expm_hermitian(h: &CMatrix, t: f64) -> CMatrix {
     from_spectrum(&values, &vectors, |e| C64::from_polar(1.0, -e * t))
 }
 
+/// Complex matrix product through three real products (Gauss), which
+/// run on nalgebra's optimised real kernels: several times faster than
+/// its generic complex product.
+pub(crate) fn cmul(a: &CMatrix, b: &CMatrix) -> CMatrix {
+    let (ar, ai) = (a.map(|z| z.re), a.map(|z| z.im));
+    let (br, bi) = (b.map(|z| z.re), b.map(|z| z.im));
+    let p1 = &ar * &br;
+    let p2 = &ai * &bi;
+    let p3 = (ar + ai) * (br + bi);
+    CMatrix::from_fn(p1.nrows(), p1.ncols(), |i, j| {
+        C64::new(
+            p1[(i, j)] - p2[(i, j)],
+            p3[(i, j)] - p1[(i, j)] - p2[(i, j)],
+        )
+    })
+}
+
+/// Largest norm `‖A/2^s‖₁` at which [`expm`] evaluates its polynomial.
+const EXPM_THETA: f64 = 0.8;
+
+/// Squarings [`expm`] takes for a matrix of 1-norm `norm`.
+pub(crate) fn expm_squarings(norm: f64) -> u32 {
+    if norm > EXPM_THETA {
+        (norm / EXPM_THETA).log2().ceil() as u32
+    } else {
+        0
+    }
+}
+
+/// Largest column sum of absolute values.
+pub(crate) fn one_norm(a: &CMatrix) -> f64 {
+    a.column_iter()
+        .map(|c| c.iter().map(|z| z.norm()).sum::<f64>())
+        .fold(0.0, f64::max)
+}
+
+/// `exp(A)` of a general complex matrix: the Taylor polynomial of degree
+/// 16 of `B = A/2^s`, `‖B‖₁ ≤ 0.8`, in six products (Paterson–Stockmeyer),
+/// squared `s` times. The polynomial's truncation error is at most
+/// `Σ_{k>16} 0.8^k/k! < 7·10⁻¹⁷`, against `‖exp(B)‖ ≥ e^{−0.8}`; the
+/// squarings multiply rounding errors by about `2^s ≈ ‖A‖₁`. Products run
+/// on [`cmul`].
+pub(crate) fn expm(a: &CMatrix) -> CMatrix {
+    let n = a.nrows();
+    let s = expm_squarings(one_norm(a));
+    let b = a * C64::new(0.5f64.powi(s as i32), 0.0);
+    let b2 = cmul(&b, &b);
+    let b3 = cmul(&b2, &b);
+    let b4 = cmul(&b2, &b2);
+    let mut inv = [1.0f64; 17];
+    for k in 1..17 {
+        inv[k] = inv[k - 1] / k as f64;
+    }
+    // Σ_{i<4} B^i/(4j + i)!.
+    let chunk = |j: usize| -> CMatrix {
+        let mut c = &b * C64::new(inv[4 * j + 1], 0.0)
+            + &b2 * C64::new(inv[4 * j + 2], 0.0)
+            + &b3 * C64::new(inv[4 * j + 3], 0.0);
+        for i in 0..n {
+            c[(i, i)] += inv[4 * j];
+        }
+        c
+    };
+    let mut t = chunk(3) + &b4 * C64::new(inv[16], 0.0);
+    for j in (0..3).rev() {
+        t = chunk(j) + cmul(&b4, &t);
+    }
+    for _ in 0..s {
+        t = cmul(&t, &t);
+    }
+    t
+}
+
 /// `V · diag(f(λ)) · V†`.
 pub(crate) fn from_spectrum(values: &[f64], vectors: &CMatrix, f: impl Fn(f64) -> C64) -> CMatrix {
     let n = vectors.nrows();
@@ -72,6 +145,31 @@ mod tests {
         assert!((rebuilt - &h).norm() < 1e-10);
         let gram = vectors.adjoint() * &vectors;
         assert!((gram - CMatrix::identity(9, 9)).norm() < 1e-10);
+    }
+
+    #[test]
+    fn general_exponential_matches_the_spectral_one() {
+        // A Hermitian generator −iHt, at norms that need no squaring and
+        // many, against the eigendecomposition.
+        let h = random_hermitian(12, 3);
+        for t in [0.05, 1.0, 40.0] {
+            let a = &h * C64::new(0.0, -t);
+            let want = expm_hermitian(&h, t);
+            assert!((expm(&a) - &want).norm() < 1e-12 * (1.0 + t), "{t}");
+        }
+        // A non-normal one: exp of a nilpotent Jordan block is exact.
+        let mut j = CMatrix::zeros(4, 4);
+        for i in 0..3 {
+            j[(i, i + 1)] = C64::new(2.0, 0.0);
+        }
+        let e = expm(&j);
+        // (2^k / k!) on the k-th superdiagonal.
+        for (k, want) in [1.0, 2.0, 2.0, 4.0 / 3.0].into_iter().enumerate() {
+            assert!((e[(0, k)].re - want).abs() < 1e-15, "{k}");
+        }
+        let a = random_hermitian(7, 4);
+        let b = random_hermitian(7, 5);
+        assert!((cmul(&a, &b) - &a * &b).norm() < 1e-12);
     }
 
     #[test]

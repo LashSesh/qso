@@ -387,13 +387,29 @@ its spins (local dimension 2 or 3). Hamiltonians are built entry by entry
 from the basis states (Zeeman and `I_z I_z` terms on the diagonal,
 flip-flop terms off it), so building one costs `O(d · couplings)`. Pulses
 act spin by spin: a local `k × k` rotation is applied to the rows and
-columns of ρ without forming the `d × d` operator. Free evolution without
-relaxation diagonalises `H` once per event (and once per FID or stick
-spectrum). With relaxation the Lindblad equation is propagated by the
-exponential of its `d² × d²` superoperator up to `d = 8` (16 for FIDs, one
-exponential for all points), and above by Dormand–Prince 5(4) steps whose
-jump terms act locally. Sweeps are piecewise constant, with the field at
-the middle of each piece.
+columns of ρ without forming the `d × d` operator.
+
+Everything else uses the block structure (`spin/blocks.rs`). Every basis
+state carries a label, `2M` of each isotope in the rotating frame or the
+total `2M` in the laboratory frame, which `H` conserves. Each block of `H`
+is shifted by its mean diagonal and diagonalised on its own; spectra take
+the pairs of blocks that `F₊` connects, time averages compare energies
+with the carriers added back, and free evolution conjugates block by
+block (complex products as three real GEMMs). With relaxation, every jump
+acts on one spin and keeps the coherence order `label(a) − label(b)` of
+`|a⟩⟨b|`, so the Lindblad superoperator splits into blocks by order. They
+are built entry by entry from the sparse `H` and the local jumps and
+exponentiated (Taylor degree 16 by Paterson–Stockmeyer, scaling and
+squaring, in `linalg::dense::expm`). The state is propagated as its
+deviation from `1/d`, with `L(1/d)` as an augmented column of the
+population block; coherence blocks are shifted by their mean diagonal
+first. FIDs need only the block of order `−1`, one exponential for the
+dwell time and a matrix-vector product per point. The work of the block
+exponentials is compared with an estimate for Dormand–Prince 5(4) steps
+(sparse `H`, jumps applied in place, error relative to the deviation), the
+cheaper one runs, and more than `MAX_RELAXATION_WORK` is refused before
+anything is computed. Shaped pulses mix the orders and use one block.
+Sweeps are piecewise constant, with the field at the middle of each piece.
 
 ## Hamiltonian simulation and chemistry (`algorithms/time_evolution.rs`, `chemistry/`)
 

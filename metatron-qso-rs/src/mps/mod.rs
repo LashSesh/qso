@@ -29,6 +29,7 @@ use nalgebra::DMatrix;
 use num_complex::Complex64 as C64;
 
 use crate::error::{QsoError, Result};
+use crate::linalg::dense::cmul;
 use crate::quantum::gates::{matrix_1q, matrix_2q};
 use crate::quantum::{Circuit, GateKind, Instruction, Pauli, PauliSum, StateVector};
 use crate::rng::Rng;
@@ -132,23 +133,6 @@ pub struct Mps {
     truncations: usize,
     /// A measurement after a truncation voids the fidelity bound.
     bound_void: bool,
-}
-
-/// Complex matrix product through three real products (Gauss), which
-/// run on nalgebra's optimised real kernels: several times faster than
-/// its generic complex product.
-fn cmul(a: &DMatrix<C64>, b: &DMatrix<C64>) -> DMatrix<C64> {
-    let (ar, ai) = (a.map(|z| z.re), a.map(|z| z.im));
-    let (br, bi) = (b.map(|z| z.re), b.map(|z| z.im));
-    let p1 = &ar * &br;
-    let p2 = &ai * &bi;
-    let p3 = (ar + ai) * (br + bi);
-    DMatrix::from_fn(p1.nrows(), p1.ncols(), |i, j| {
-        C64::new(
-            p1[(i, j)] - p2[(i, j)],
-            p3[(i, j)] - p1[(i, j)] - p2[(i, j)],
-        )
-    })
 }
 
 /// Row-major `m × k` times `k × n`.

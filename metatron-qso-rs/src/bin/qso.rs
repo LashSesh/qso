@@ -1800,14 +1800,16 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 None => vec![SpinEvent::pulse(SpinTarget::Isotope(isotope), *pulse, 0.0)],
             };
             let after = sys.evolve(&rho, &events)?;
-            let lines = sys.lines(&after, isotope)?;
+            // Observed at the field the sequence ends at.
+            let end = sys.clone().with_field(sys.field_after(&events))?;
+            let lines = end.lines(&after, isotope)?;
             let polarizations = (0..sys.spins().len())
                 .map(|i| sys.polarization(&after, i))
                 .collect::<Result<Vec<f64>>>()?;
             let mut text = format!(
                 "{} spins at {} T ({:?} frame), {} events; {} lines of {}:",
                 sys.spins().len(),
-                sys.field(),
+                end.field(),
                 sys.frame(),
                 events.len(),
                 lines.len(),
@@ -1829,7 +1831,8 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 })
                 .collect();
             Ok((
-                json!({"lines": rows, "polarizations": polarizations, "events": events.len()}),
+                json!({"lines": rows, "polarizations": polarizations, "events": events.len(),
+                       "field": end.field()}),
                 text,
             ))
         }

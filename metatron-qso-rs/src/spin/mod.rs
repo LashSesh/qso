@@ -24,20 +24,31 @@
 //! significant factor and, within a spin, `m = I, I − 1, …, −I` (for spin
 //! ½: `|α⟩ = |0⟩`, `|β⟩ = |1⟩`). Sequences of [`Event`]s act on it:
 //! ideal pulses `exp(−iθ(cos φ F_x + sin φ F_y))` on an isotope or a spin,
-//! shaped pulses of piecewise-constant amplitude and phase, delays, and
-//! changes and sweeps of the field. Free evolution is exact (from the
-//! eigendecomposition of `H`); with relaxation it is the Lindblad
-//! equation, exact through the exponential of its superoperator up to
-//! [`MAX_SUPEROPERATOR_DIMENSION`] and by adaptive Dormand–Prince steps
-//! (local error 10⁻¹²) above.
+//! shaped pulses of piecewise-constant amplitude and phase (rotating
+//! frame, rotating-wave approximation), delays, and changes and sweeps of
+//! the field.
+//!
+//! `H` conserves `2M` of every isotope in the rotating frame and of all
+//! spins in the laboratory frame, so free evolution, spectra and time
+//! averages use the eigendecomposition of each block of `H` (exact). With
+//! relaxation the Lindblad equation conserves the matching coherence
+//! orders; each block of its superoperator, up to [`MAX_LIOUVILLE_BLOCK`]
+//! elements, is exponentiated exactly for the deviation `ρ − 1/d`, so that
+//! thermal polarisations of parts in 10⁵ keep their relative precision.
+//! Short intervals and shaped pulses use adaptive Dormand–Prince steps
+//! instead, with a local error of 10⁻¹¹ of that deviation, when they are
+//! cheaper. A propagation that would take more than
+//! [`MAX_RELAXATION_WORK`] operations is refused.
 //!
 //! Relaxation is phenomenological, per spin: `T₁` towards thermal
 //! equilibrium at the current field and temperature (jump operators
 //! `√k↓ I₋` and `√k↑ I₊` with `k↑ + k↓ = 1/T₁` and
-//! `k↑/k↓ = exp(ħγB/k_BT)`), and pure dephasing `√(2γ_φ) I_z` with
-//! `γ_φ = 1/T₂ − 1/(2T₁)`. For spin ½ this gives exactly the decay
-//! times `T₁` and `T₂`; for spin 1 the same operators, so `T₂` is only
-//! approximate. Cross-relaxation and Redfield theory are not modelled.
+//! `k↑/k↓ = exp(ħγB(1 + δ·10⁻⁶)/k_BT)`), and pure dephasing `√(2γ_φ) I_z`
+//! with `γ_φ = 1/T₂ − 1/(2T₁)`, so `T₂ ≤ 2T₁`. For spin ½ this gives
+//! exactly the decay times `T₁` and `T₂` of `⟨I_z⟩` and `⟨I₊⟩`; for spin 1
+//! the same operators give them in the high-temperature limit, and the
+//! equilibrium is thermal for both. Quadrupolar and cross-relaxation and
+//! Redfield theory are not modelled.
 //!
 //! The signal is `s(t) = Tr(ρ(t) F₊)`, `F₊ = Σ_{i ∈ X} I₊ᵢ`: a spin with
 //! offset Ω gives `e^{iΩt}`. [`SpinSystem::lines`] gives the exact stick
@@ -54,7 +65,7 @@
 //! sys.couple(h, c, 140.0).unwrap();
 //! let rho = sys.thermal_state().unwrap();
 //! let direct = sys.evolve(&rho, &[Event::pulse(Target::Isotope(Isotope::C13), 90.0, 0.0)]).unwrap();
-//! let inept = metatron_qso::spin::inept(Isotope::H1, Isotope::C13, 140.0);
+//! let inept = metatron_qso::spin::inept(Isotope::H1, Isotope::C13, 140.0).unwrap();
 //! let moved = sys.evolve(&rho, &inept).unwrap();
 //! let peak = |r| {
 //!     sys.lines(r, Isotope::C13).unwrap().iter().map(|l| l.amplitude.norm()).fold(0.0, f64::max)
@@ -69,8 +80,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{QsoError, Result};
 use crate::graph::Graph;
-use crate::linalg::{CMatrix, eigh, expm_hermitian};
+use crate::linalg::{CMatrix, expm_hermitian};
 
+mod blocks;
 #[cfg(test)]
 mod tests;
 
@@ -80,13 +92,14 @@ pub const HBAR: f64 = 1.054_571_817e-34;
 pub const BOLTZMANN: f64 = 1.380_649e-23;
 /// Largest dimension of a spin system's Hilbert space (11 spins ½).
 pub const MAX_SPIN_DIMENSION: usize = 2048;
-/// Largest dimension whose relaxation during a delay is propagated by the
-/// exact superoperator exponential (`d² × d²`, three spins ½); above,
-/// adaptive Dormand–Prince steps are faster.
-pub const MAX_SUPEROPERATOR_DIMENSION: usize = 8;
-/// Largest dimension whose free induction decay with relaxation steps by
-/// one superoperator exponential for all its points (four spins ½).
-pub const MAX_FID_SUPEROPERATOR_DIMENSION: usize = 16;
+/// Largest block of the Lindblad superoperator (elements of one coherence
+/// order) that is exponentiated; larger ones use Dormand–Prince steps.
+/// Six spins ½ of one isotope have blocks of up to 924 elements.
+pub const MAX_LIOUVILLE_BLOCK: usize = 2048;
+/// Most floating-point operations (estimated) of one propagation with
+/// relaxation, about a minute on one core; more is refused. (One second
+/// of six relaxing protons at 9.4 T takes about 3·10¹¹, ten seconds.)
+pub const MAX_RELAXATION_WORK: f64 = 1.5e12;
 /// Most points of a free induction decay.
 pub const MAX_FID_POINTS: usize = 1 << 20;
 /// Most segments of a shaped pulse or a field sweep.
@@ -223,6 +236,7 @@ pub enum Target {
 /// A segment of a shaped pulse: duration (s), amplitude as nutation
 /// frequency `ν₁` (Hz) and phase (degrees).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Segment {
     pub duration: f64,
     pub amplitude: f64,
@@ -231,7 +245,7 @@ pub struct Segment {
 
 /// A step of a pulse sequence.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "lowercase", deny_unknown_fields)]
 #[non_exhaustive]
 pub enum Event {
     /// An ideal (instantaneous) pulse of `angle` degrees about the axis
@@ -242,7 +256,8 @@ pub enum Event {
         phase: f64,
     },
     /// A shaped pulse: free evolution plus `2πν₁(cos φ F_x + sin φ F_y)`
-    /// on the target during each segment (rotating frame only).
+    /// on the target during each segment (rotating frame only, in the
+    /// rotating-wave approximation: the field acts on its isotope alone).
     Shaped {
         target: Target,
         segments: Vec<Segment>,
@@ -331,6 +346,27 @@ fn check_field(b: f64) -> Result<()> {
     Ok(())
 }
 
+/// Relaxation times are finite and positive, and `T₂ ≤ 2T₁`.
+fn check_relaxation(t1: Option<f64>, t2: Option<f64>) -> Result<()> {
+    for t in [t1, t2].into_iter().flatten() {
+        if !(t.is_finite() && t > 0.0) {
+            return Err(QsoError::invalid(
+                "relaxation",
+                format!("relaxation times must be finite and positive, not {t}"),
+            ));
+        }
+    }
+    if let (Some(t1), Some(t2)) = (t1, t2)
+        && t2 > 2.0 * t1 * (1.0 + 1e-12)
+    {
+        return Err(QsoError::invalid(
+            "relaxation",
+            format!("T2 = {t2} exceeds 2·T1 = {}", 2.0 * t1),
+        ));
+    }
+    Ok(())
+}
+
 /// Single-spin operators of spin `s` (`levels` = 2s + 1), basis
 /// `m = s, …, −s`: `(I_z, I₊, I₋, I_x, I_y)`.
 fn spin_ops(levels: usize) -> [CMatrix; 5] {
@@ -410,7 +446,8 @@ impl SpinSystem {
     }
 
     /// Set `T₁` and `T₂` (s) of spin `i`; `None` for none (`T₂` then
-    /// `2T₁`). For spin ½, `T₂ ≤ 2T₁`.
+    /// `2T₁`). `T₂ ≤ 2T₁`, as the dephasing rate cannot be negative. On an
+    /// error the spin keeps its times.
     pub fn set_relaxation(
         &mut self,
         i: usize,
@@ -418,31 +455,10 @@ impl SpinSystem {
         t2: Option<f64>,
     ) -> Result<&mut Self> {
         self.check_spin(i)?;
+        check_relaxation(t1, t2)?;
         self.spins[i].t1 = t1;
         self.spins[i].t2 = t2;
-        self.check_relaxation(i)?;
         Ok(self)
-    }
-
-    fn check_relaxation(&self, i: usize) -> Result<()> {
-        let s = &self.spins[i];
-        for t in [s.t1, s.t2].into_iter().flatten() {
-            if !(t.is_finite() && t > 0.0) {
-                return Err(QsoError::invalid(
-                    "relaxation",
-                    format!("relaxation times must be finite and positive, not {t}"),
-                ));
-            }
-        }
-        if let (Some(t1), Some(t2)) = (s.t1, s.t2)
-            && t2 > 2.0 * t1 * (1.0 + 1e-12)
-        {
-            return Err(QsoError::invalid(
-                "relaxation",
-                format!("T2 = {t2} exceeds 2·T1 = {}", 2.0 * t1),
-            ));
-        }
-        Ok(())
     }
 
     /// The same system at another field (T).
@@ -516,11 +532,11 @@ impl SpinSystem {
                 requested: d,
             });
         }
-        for (i, s) in self.spins.iter().enumerate() {
+        for s in &self.spins {
             if !s.shift.is_finite() {
                 return Err(QsoError::invalid("shift", "shifts must be finite"));
             }
-            self.check_relaxation(i)?;
+            check_relaxation(s.t1, s.t2)?;
         }
         let mut seen = std::collections::BTreeSet::new();
         for &(i, j, jh) in &self.couplings {
@@ -727,45 +743,50 @@ impl SpinSystem {
 
     fn hamiltonian_at(&self, b: f64) -> CMatrix {
         let d = self.dimension();
-        let n = self.spins.len();
         let mut h = CMatrix::zeros(d, d);
-        let omegas: Vec<f64> = (0..n).map(|i| self.zeeman(i, b)).collect();
-        let strides: Vec<usize> = (0..n).map(|i| self.stride(i)).collect();
-        let spin = |i: usize| self.spins[i].isotope.spin();
-        let levels = |i: usize| self.spins[i].isotope.levels();
-        let two_pi = 2.0 * std::f64::consts::PI;
-        for s in 0..d {
-            let mut diag = 0.0;
-            for (i, &w) in omegas.iter().enumerate() {
-                diag += w * self.m(i, s);
-            }
-            for &(i, j, jh) in &self.couplings {
-                diag += two_pi * jh * self.m(i, s) * self.m(j, s);
-            }
-            h[(s, s)] = C64::new(diag, 0.0);
-            for &(i, j, jh) in &self.couplings {
-                let full = self.frame == Frame::Laboratory
-                    || self.spins[i].isotope == self.spins[j].isotope;
-                if !full {
-                    continue;
-                }
-                // ½(I₊ᵢI₋ⱼ + I₋ᵢI₊ⱼ): |…m_i…m_j…⟩ → |…m_i+1…m_j−1…⟩ and back.
-                let (mi, mj) = (self.m(i, s), self.m(j, s));
-                let (si, sj) = (spin(i), spin(j));
-                let ki = (s / strides[i]) % levels(i);
-                let kj = (s / strides[j]) % levels(j);
-                if ki > 0 && kj + 1 < levels(j) {
-                    // m_i + 1 (index ki − 1), m_j − 1 (index kj + 1).
-                    let a = (si * (si + 1.0) - mi * (mi + 1.0)).sqrt();
-                    let c = (sj * (sj + 1.0) - mj * (mj - 1.0)).sqrt();
-                    let t = s - strides[i] + strides[j];
-                    let v = C64::new(two_pi * jh * 0.5 * a * c, 0.0);
-                    h[(t, s)] += v;
-                    h[(s, t)] += v;
-                }
+        for i in 0..self.spins.len() {
+            let w = self.zeeman(i, b);
+            for s in 0..d {
+                h[(s, s)].re += w * self.m(i, s);
             }
         }
+        let two_pi = 2.0 * std::f64::consts::PI;
+        for &(i, j, jh) in &self.couplings {
+            let full =
+                self.frame == Frame::Laboratory || self.spins[i].isotope == self.spins[j].isotope;
+            self.add_dot(&mut h, i, j, two_pi * jh, full);
+        }
         h
+    }
+
+    /// Add `c·I_i·I_j` to `h`, or only `c·I_zi I_zj` (`full` false), built
+    /// entry by entry.
+    fn add_dot(&self, h: &mut CMatrix, i: usize, j: usize, c: f64, full: bool) {
+        let (si, sj) = (self.spins[i].isotope.spin(), self.spins[j].isotope.spin());
+        let (li, lj) = (
+            self.spins[i].isotope.levels(),
+            self.spins[j].isotope.levels(),
+        );
+        let (stride_i, stride_j) = (self.stride(i), self.stride(j));
+        for s in 0..h.nrows() {
+            let (mi, mj) = (self.m(i, s), self.m(j, s));
+            h[(s, s)].re += c * mi * mj;
+            if !full {
+                continue;
+            }
+            // ½(I₊ᵢI₋ⱼ + I₋ᵢI₊ⱼ): |…m_i…m_j…⟩ → |…m_i+1…m_j−1…⟩ and back.
+            let ki = (s / stride_i) % li;
+            let kj = (s / stride_j) % lj;
+            if ki > 0 && kj + 1 < lj {
+                // m_i + 1 (index ki − 1), m_j − 1 (index kj + 1).
+                let a = (si * (si + 1.0) - mi * (mi + 1.0)).sqrt();
+                let b = (sj * (sj + 1.0) - mj * (mj - 1.0)).sqrt();
+                let t = s - stride_i + stride_j;
+                let v = C64::new(c * 0.5 * a * b, 0.0);
+                h[(t, s)] += v;
+                h[(s, t)] += v;
+            }
+        }
     }
 
     /// Thermal equilibrium at the system's field and temperature: every
@@ -784,21 +805,31 @@ impl SpinSystem {
     fn thermal_at(&self, b: f64) -> CMatrix {
         let d = self.dimension();
         let n = self.spins.len();
-        let x: Vec<f64> = (0..n).map(|i| self.boltzmann(i, b)).collect();
-        // Normalise per spin: Σ_m e^{x m}.
-        let z: Vec<f64> = (0..n)
+        // Per spin, the populations e^{x m}/Σ e^{x m}, with the largest
+        // exponent x·I subtracted so that no field or temperature
+        // overflows.
+        let populations: Vec<Vec<f64>> = (0..n)
             .map(|i| {
+                let x = self.boltzmann(i, b);
                 let s = self.spins[i].isotope.spin();
-                (0..self.spins[i].isotope.levels())
-                    .map(|k| (x[i] * (s - k as f64)).exp())
-                    .sum()
+                let top = x.abs() * s;
+                let w: Vec<f64> = (0..self.spins[i].isotope.levels())
+                    .map(|k| (x * (s - k as f64) - top).exp())
+                    .collect();
+                let z: f64 = w.iter().sum();
+                w.into_iter().map(|v| v / z).collect()
             })
             .collect();
         CMatrix::from_fn(d, d, |r, c| {
             if r != c {
                 return ZERO;
             }
-            let p: f64 = (0..n).map(|i| (x[i] * self.m(i, r)).exp() / z[i]).product();
+            let p: f64 = (0..n)
+                .map(|i| {
+                    let k = (r / self.stride(i)) % self.spins[i].isotope.levels();
+                    populations[i][k]
+                })
+                .product();
             C64::new(p, 0.0)
         })
     }
@@ -835,9 +866,9 @@ impl SpinSystem {
 
     /// `I_i·I_j`.
     fn dot(&self, i: usize, j: usize) -> Result<CMatrix> {
-        let mut out = self.iz(i)? * self.iz(j)?;
-        out += self.ix(i)? * self.ix(j)?;
-        out += self.iy(i)? * self.iy(j)?;
+        let d = self.dimension();
+        let mut out = CMatrix::zeros(d, d);
+        self.add_dot(&mut out, i, j, 1.0, true);
         Ok(out)
     }
 
@@ -879,25 +910,16 @@ impl SpinSystem {
 
     /// The state averaged over a long, random time of free evolution:
     /// coherences between eigenstates of `H` with different energies
-    /// removed (|ΔE| above 10⁻⁹ of the largest |E|, at least 10⁻⁹ rad/s).
-    /// Models a state formed incoherently over a long time, such as
-    /// parahydrogen added at high field (PASADENA).
+    /// removed. Energies are compared in the laboratory frame, so in the
+    /// rotating frame coherences between different `M` of an isotope go
+    /// too (they oscillate at its Larmor frequency); equal means equal to
+    /// the rounding of the eigendecomposition (about 2·10⁻¹³ of the
+    /// energies' spread). Models a state formed incoherently over a long
+    /// time, such as parahydrogen added at high field (PASADENA).
     pub fn time_average(&self, rho: &CMatrix) -> Result<CMatrix> {
         self.validate()?;
         self.check_state(rho)?;
-        let (e, v) = eigh(&self.hamiltonian_at(self.field));
-        let scale = e.iter().fold(0.0f64, |m, x| m.max(x.abs()));
-        let tol = (1e-9 * scale).max(1e-9);
-        let mut t = v.adjoint() * rho * &v;
-        let d = e.len();
-        for a in 0..d {
-            for b in 0..d {
-                if (e[a] - e[b]).abs() > tol {
-                    t[(a, b)] = ZERO;
-                }
-            }
-        }
-        Ok(&v * t * v.adjoint())
+        Ok(self.average(rho))
     }
 
     /// Whether any spin relaxes.
@@ -935,13 +957,17 @@ impl SpinSystem {
         out
     }
 
-    /// Apply a sequence of events to `rho` (the field starts at the
-    /// system's and may change).
+    /// Apply a sequence of events to `rho`. The field starts at the
+    /// system's and may change; the system keeps its own, so a state left
+    /// at another field is observed with
+    /// `with_field(sys.field_after(events))`.
     pub fn evolve(&self, rho: &CMatrix, events: &[Event]) -> Result<CMatrix> {
         self.validate()?;
         self.check_state(rho)?;
         let mut b = self.field;
         let mut rho = rho.clone();
+        // The blocks of H at the last field of a delay.
+        let mut cache: Option<(f64, Vec<blocks::Eigenblock>)> = None;
         for e in events {
             match e {
                 Event::Pulse {
@@ -985,12 +1011,12 @@ impl SpinSystem {
                                 + self.local(i, 4) * C64::new(w * s, 0.0);
                             h += self.embed(i, &op)?;
                         }
-                        rho = self.propagate(&rho, &h, seg.duration, b)?;
+                        rho = self.propagate(&rho, &h, seg.duration, b, None)?;
                     }
                 }
                 Event::Delay(t) => {
                     check_time("delay", *t)?;
-                    rho = self.propagate(&rho, &self.hamiltonian_at(b), *t, b)?;
+                    rho = self.propagate(&rho, &self.hamiltonian_at(b), *t, b, Some(&mut cache))?;
                 }
                 Event::Field(to) => {
                     check_field(*to)?;
@@ -1014,13 +1040,27 @@ impl SpinSystem {
                     for k in 0..*steps {
                         // The field at the middle of each piece.
                         let bk = from + (to - from) * (k as f64 + 0.5) / *steps as f64;
-                        rho = self.propagate(&rho, &self.hamiltonian_at(bk), dt, bk)?;
+                        rho = self.propagate(
+                            &rho,
+                            &self.hamiltonian_at(bk),
+                            dt,
+                            bk,
+                            Some(&mut None),
+                        )?;
                     }
                     b = *to;
                 }
             }
         }
         Ok(rho)
+    }
+
+    /// The field at the end of a sequence of events (T).
+    pub fn field_after(&self, events: &[Event]) -> f64 {
+        events.iter().fold(self.field, |b, e| match e {
+            Event::Field(to) | Event::Sweep { to, .. } => *to,
+            _ => b,
+        })
     }
 
     /// `exp(−iθ(cos φ I_x + sin φ I_y))` of spin `i` (local matrix).
@@ -1087,214 +1127,61 @@ impl SpinSystem {
     }
 
     /// Free evolution under `h` for `t` at field `b` (for the thermal
-    /// target of relaxation).
-    fn propagate(&self, rho: &CMatrix, h: &CMatrix, t: f64, b: f64) -> Result<CMatrix> {
-        if t == 0.0 {
-            return Ok(rho.clone());
-        }
-        if !self.relaxes() {
-            let u = expm_hermitian(h, t);
-            return Ok(&u * rho * u.adjoint());
-        }
-        let jumps = self.jumps(b);
-        if self.dimension() <= MAX_SUPEROPERATOR_DIMENSION {
-            let p = self.superoperator(h, &jumps)? * C64::new(t, 0.0);
-            let p = p.exp();
-            let v = &p * CMatrix::from_column_slice(rho.len(), 1, rho.as_slice());
-            return Ok(CMatrix::from_column_slice(
-                rho.nrows(),
-                rho.ncols(),
-                v.as_slice(),
-            ));
-        }
-        self.dormand_prince(rho, h, &jumps, t)
-    }
-
-    /// The Lindblad superoperator on column-stacked `vec(ρ)`:
-    /// `vec(AρB) = (Bᵀ ⊗ A) vec(ρ)`.
-    fn superoperator(&self, h: &CMatrix, jumps: &[(usize, CMatrix)]) -> Result<CMatrix> {
-        let d = self.dimension();
-        let id = CMatrix::identity(d, d);
-        let mut l = (id.kronecker(h) - h.transpose().kronecker(&id)) * C64::new(0.0, -1.0);
-        for (i, op) in jumps {
-            let a = self.embed(*i, op)?;
-            let ada = a.adjoint() * &a;
-            l += a.conjugate().kronecker(&a);
-            l -= id.kronecker(&ada) * C64::new(0.5, 0.0);
-            l -= ada.transpose().kronecker(&id) * C64::new(0.5, 0.0);
-        }
-        Ok(l)
-    }
-
-    /// `dρ/dt = −i[H, ρ] + Σ (LρL† − ½{L†L, ρ})` with local jumps.
-    fn lindblad(&self, rho: &CMatrix, h: &CMatrix, jumps: &[(usize, CMatrix)]) -> CMatrix {
-        let mut out = (h * rho - rho * h) * C64::new(0.0, -1.0);
-        for (i, op) in jumps {
-            let ada = op.adjoint() * op;
-            let lr = self.left_local(rho, *i, op);
-            out += self.right_local(&lr, *i, &op.adjoint());
-            let a = self.left_local(rho, *i, &ada);
-            let c = self.right_local(rho, *i, &ada);
-            out -= (a + c) * C64::new(0.5, 0.0);
-        }
-        out
-    }
-
-    /// Adaptive Dormand–Prince 5(4) steps of the Lindblad equation, local
-    /// error per step below 10⁻¹² (largest entry).
-    fn dormand_prince(
+    /// target of relaxation). `blocks` is a cache of the blocks of `h` when
+    /// it is the free Hamiltonian, which conserves the labels; `None` for
+    /// a shaped pulse.
+    fn propagate(
         &self,
         rho: &CMatrix,
         h: &CMatrix,
-        jumps: &[(usize, CMatrix)],
         t: f64,
+        b: f64,
+        blocks: Option<&mut Option<(f64, Vec<blocks::Eigenblock>)>>,
     ) -> Result<CMatrix> {
-        const TOL: f64 = 1e-12;
-        const A: [[f64; 6]; 6] = [
-            [1.0 / 5.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            [3.0 / 40.0, 9.0 / 40.0, 0.0, 0.0, 0.0, 0.0],
-            [44.0 / 45.0, -56.0 / 15.0, 32.0 / 9.0, 0.0, 0.0, 0.0],
-            [
-                19372.0 / 6561.0,
-                -25360.0 / 2187.0,
-                64448.0 / 6561.0,
-                -212.0 / 729.0,
-                0.0,
-                0.0,
-            ],
-            [
-                9017.0 / 3168.0,
-                -355.0 / 33.0,
-                46732.0 / 5247.0,
-                49.0 / 176.0,
-                -5103.0 / 18656.0,
-                0.0,
-            ],
-            [
-                35.0 / 384.0,
-                0.0,
-                500.0 / 1113.0,
-                125.0 / 192.0,
-                -2187.0 / 6784.0,
-                11.0 / 84.0,
-            ],
-        ];
-        // Fifth-order weights are the last row of A; the embedded fourth
-        // order differs by E.
-        const E: [f64; 7] = [
-            71.0 / 57600.0,
-            0.0,
-            -71.0 / 16695.0,
-            71.0 / 1920.0,
-            -17253.0 / 339200.0,
-            22.0 / 525.0,
-            -1.0 / 40.0,
-        ];
-        let norm = h.iter().map(|z| z.norm()).fold(0.0, f64::max) * h.nrows() as f64
-            + jumps
-                .iter()
-                .map(|(_, op)| op.iter().map(|z| z.norm_sqr()).sum::<f64>())
-                .sum::<f64>();
-        let mut dt = (0.5 / norm.max(1e-300)).min(t);
-        let mut now = 0.0;
-        let mut rho = rho.clone();
-        let mut k1 = self.lindblad(&rho, h, jumps);
-        let mut steps = 0usize;
-        while now < t {
-            steps += 1;
-            if steps > 100_000_000 {
-                return Err(QsoError::NoConvergence {
-                    method: "Dormand–Prince",
-                    iterations: steps,
-                    residual: t - now,
-                });
-            }
-            let step = dt.min(t - now);
-            let mut k = vec![k1.clone()];
-            for row in A.iter().take(6) {
-                let mut y = rho.clone();
-                for (j, kj) in k.iter().enumerate() {
-                    if row[j] != 0.0 {
-                        y += kj * C64::new(step * row[j], 0.0);
-                    }
+        if t == 0.0 {
+            return Ok(rho.clone());
+        }
+        if self.relaxes() {
+            return self.relax(rho, h, t, b, blocks.is_some());
+        }
+        match blocks {
+            Some(cache) => {
+                if !matches!(cache, Some((field, _)) if *field == b) {
+                    *cache = Some((b, self.eigenblocks(h)));
                 }
-                k.push(self.lindblad(&y, h, jumps));
+                let (_, eigen) = cache.as_ref().expect("filled");
+                Ok(self.unitary(rho, eigen, t))
             }
-            // k[6] is the derivative at the fifth-order solution (FSAL).
-            let mut next = rho.clone();
-            for (j, kj) in k.iter().take(6).enumerate() {
-                if A[5][j] != 0.0 {
-                    next += kj * C64::new(step * A[5][j], 0.0);
-                }
-            }
-            let mut err = CMatrix::zeros(rho.nrows(), rho.ncols());
-            for (j, kj) in k.iter().enumerate() {
-                if E[j] != 0.0 {
-                    err += kj * C64::new(step * E[j], 0.0);
-                }
-            }
-            let e = err.iter().map(|z| z.norm()).fold(0.0, f64::max);
-            if e <= TOL || step <= 1e-14 * t.max(1.0) {
-                rho = next;
-                now += step;
-                k1 = k.pop().expect("seven stages");
-                let grow = if e > 0.0 {
-                    0.9 * (TOL / e).powf(0.2)
-                } else {
-                    5.0
-                };
-                dt = step * grow.clamp(0.2, 5.0);
-            } else {
-                dt = step * (0.9 * (TOL / e).powf(0.2)).clamp(0.1, 0.9);
+            None => {
+                let u = expm_hermitian(h, t);
+                Ok(&u * rho * u.adjoint())
             }
         }
-        Ok(rho)
     }
 
     /// Exact stick spectrum of `rho` on an isotope under free evolution
     /// (no relaxation): in the eigenbasis of `H`, every pair of levels
     /// gives `ρ_ab (F₊)_ba e^{i(E_b − E_a)t}`. Lines at one frequency (to
-    /// 10⁻⁶ Hz) are merged and those below 10⁻¹⁴ of the largest dropped;
-    /// sorted by frequency.
+    /// the rounding of the energies, at least 10⁻⁶ Hz) are merged; lines
+    /// below 10⁻¹³ of the largest entry of `rho` (rounding) or 10⁻¹⁴ of
+    /// the strongest are dropped; sorted by frequency.
     pub fn lines(&self, rho: &CMatrix, isotope: Isotope) -> Result<Vec<Line>> {
         self.validate()?;
         self.check_state(rho)?;
-        let fp = self.fplus(isotope)?;
-        let (e, v) = eigh(&self.hamiltonian_at(self.field));
-        let rt = v.adjoint() * rho * &v;
-        let ft = v.adjoint() * fp * &v;
         let two_pi = 2.0 * std::f64::consts::PI;
-        let mut raw: Vec<(f64, C64)> = Vec::new();
-        let d = e.len();
-        for a in 0..d {
-            for b in 0..d {
-                let amp = rt[(a, b)] * ft[(b, a)];
-                if amp != ZERO {
-                    raw.push(((e[b] - e[a]) / two_pi, amp));
-                }
-            }
-        }
-        raw.sort_by(|x, y| x.0.total_cmp(&y.0));
-        let mut merged: Vec<(f64, C64)> = Vec::new();
-        for (f, a) in raw {
-            match merged.last_mut() {
-                Some((g, b)) if (f - *g).abs() <= 1e-6 => *b += a,
-                _ => merged.push((f, a)),
-            }
-        }
-        let largest = merged.iter().map(|(_, a)| a.norm()).fold(0.0, f64::max);
-        Ok(merged
+        Ok(self
+            .transitions(rho, isotope)?
             .into_iter()
-            .filter(|(_, a)| a.norm() > 1e-14 * largest)
-            .map(|(f, a)| Line {
-                frequency: f,
-                ppm: self.ppm(isotope, f),
+            .map(|(w, a)| Line {
+                frequency: w / two_pi,
+                ppm: self.ppm(isotope, w / two_pi),
                 amplitude: a,
             })
             .collect())
     }
 
-    /// Chemical shift (ppm) of a frequency (Hz) in the system's frame.
+    /// Chemical shift (ppm) of a frequency (Hz) in the system's frame (NaN
+    /// at zero field, where shifts have no frequency).
     pub fn ppm(&self, isotope: Isotope, frequency: f64) -> f64 {
         let nu = isotope.larmor(self.field);
         if nu == 0.0 {
@@ -1309,7 +1196,8 @@ impl SpinSystem {
     }
 
     /// Free induction decay on an isotope: `Tr(ρ(k·dwell) F₊)` for
-    /// `points` points, with relaxation if any spin relaxes.
+    /// `points` points, with relaxation if any spin relaxes (else from the
+    /// transitions of [`SpinSystem::lines`]).
     pub fn fid(
         &self,
         rho: &CMatrix,
@@ -1325,53 +1213,22 @@ impl SpinSystem {
                 format!("a positive dwell time and 1..={MAX_FID_POINTS} points"),
             ));
         }
-        let fp = self.fplus(isotope)?;
-        let h = self.hamiltonian_at(self.field);
-        if !self.relaxes() {
-            let (e, v) = eigh(&h);
-            let rt = v.adjoint() * rho * &v;
-            let ft = v.adjoint() * fp * &v;
-            let d = e.len();
-            let mut terms: Vec<(f64, C64)> = Vec::new();
-            for a in 0..d {
-                for b in 0..d {
-                    let amp = rt[(a, b)] * ft[(b, a)];
-                    if amp.norm() > 0.0 {
-                        terms.push((e[b] - e[a], amp));
-                    }
-                }
-            }
-            let largest = terms.iter().map(|t| t.1.norm()).fold(0.0, f64::max);
-            terms.retain(|t| t.1.norm() > 1e-15 * largest);
-            return Ok((0..points)
-                .map(|k| {
-                    let t = k as f64 * dwell;
-                    terms
-                        .iter()
-                        .map(|&(w, a)| a * C64::from_polar(1.0, w * t))
-                        .sum()
-                })
-                .collect());
+        if self.relaxes() {
+            return self.relaxing_fid(rho, isotope, dwell, points);
         }
-        let mut out = Vec::with_capacity(points);
-        let mut r = rho.clone();
-        let jumps = self.jumps(self.field);
-        let step = if self.dimension() <= MAX_FID_SUPEROPERATOR_DIMENSION {
-            Some((self.superoperator(&h, &jumps)? * C64::new(dwell, 0.0)).exp())
-        } else {
-            None
-        };
-        for k in 0..points {
-            if k > 0 {
-                r = match &step {
-                    Some(p) => {
-                        let v = p * CMatrix::from_column_slice(r.len(), 1, r.as_slice());
-                        CMatrix::from_column_slice(r.nrows(), r.ncols(), v.as_slice())
-                    }
-                    None => self.dormand_prince(&r, &h, &jumps, dwell)?,
-                };
+        let terms = self.transitions(rho, isotope)?;
+        let mut out = vec![ZERO; points];
+        for (w, a) in terms {
+            // e^{iωk·dwell} by multiplication, set exactly every 64 points.
+            let step = C64::from_polar(1.0, w * dwell);
+            let mut z = ONE;
+            for (k, o) in out.iter_mut().enumerate() {
+                if k % 64 == 0 {
+                    z = C64::from_polar(1.0, w * dwell * k as f64);
+                }
+                *o += a * z;
+                z *= step;
             }
-            out.push(self.expectation(&r, &fp)?);
         }
         Ok(out)
     }
@@ -1461,17 +1318,19 @@ fn fft(data: &mut [C64]) {
             data.swap(i, j);
         }
     }
+    // e^{−2πik/N}, each computed directly.
+    let twiddles: Vec<C64> = (0..n / 2)
+        .map(|k| C64::from_polar(1.0, -2.0 * std::f64::consts::PI * k as f64 / n as f64))
+        .collect();
     let mut len = 2;
     while len <= n {
-        let w = C64::from_polar(1.0, -2.0 * std::f64::consts::PI / len as f64);
+        let stride = n / len;
         for start in (0..n).step_by(len) {
-            let mut wk = ONE;
             for k in 0..len / 2 {
                 let a = data[start + k];
-                let b = data[start + k + len / 2] * wk;
+                let b = data[start + k + len / 2] * twiddles[k * stride];
                 data[start + k] = a + b;
                 data[start + k + len / 2] = a - b;
-                wk *= w;
             }
         }
         len <<= 1;
@@ -1479,31 +1338,49 @@ fn fft(data: &mut [C64]) {
 }
 
 /// INEPT from `source` to `target` for coupling `j_hz`:
-/// `90°x(S) – τ – 180°x(S, T) – τ – 90°y(S) 90°x(T)`, `τ = 1/(4J)`. From
+/// `90°x(S) – τ – 180°x(S, T) – τ – 90°y(S) 90°x(T)`, `τ = 1/(4|J|)`. From
 /// thermal equilibrium the target's lines become antiphase with
 /// `γ_S/γ_T` times the amplitude of direct excitation, plus the target's
-/// own (direct) contribution.
-pub fn inept(source: Isotope, target: Isotope, j_hz: f64) -> Vec<Event> {
+/// own (direct) contribution. The isotopes differ and `J` is finite and
+/// not zero.
+pub fn inept(source: Isotope, target: Isotope, j_hz: f64) -> Result<Vec<Event>> {
+    inept_with(source, target, j_hz, 90.0)
+}
+
+/// INEPT with the last source pulse at `phase`.
+fn inept_with(source: Isotope, target: Isotope, j_hz: f64, phase: f64) -> Result<Vec<Event>> {
+    if source == target {
+        return Err(QsoError::invalid(
+            "inept",
+            "INEPT moves polarisation between two isotopes",
+        ));
+    }
+    if !(j_hz.is_finite() && j_hz != 0.0) {
+        return Err(QsoError::invalid(
+            "inept",
+            format!("the coupling must be finite and not zero, not {j_hz}"),
+        ));
+    }
     let tau = 1.0 / (4.0 * j_hz.abs());
-    vec![
+    Ok(vec![
         Event::pulse(Target::Isotope(source), 90.0, 0.0),
         Event::Delay(tau),
         Event::pulse(Target::Isotope(source), 180.0, 0.0),
         Event::pulse(Target::Isotope(target), 180.0, 0.0),
         Event::Delay(tau),
-        Event::pulse(Target::Isotope(source), 90.0, 90.0),
+        Event::pulse(Target::Isotope(source), 90.0, phase),
         Event::pulse(Target::Isotope(target), 90.0, 0.0),
-    ]
+    ])
 }
 
 /// INEPT with the two-step phase cycle that removes the target's own
 /// magnetisation: the last source pulse at ±y, the receiver at 0° and
 /// 180°.
-pub fn inept_cycle(source: Isotope, target: Isotope, j_hz: f64) -> Vec<(Vec<Event>, f64)> {
-    let plus = inept(source, target, j_hz);
-    let mut minus = plus.clone();
-    minus[5] = Event::pulse(Target::Isotope(source), 90.0, 270.0);
-    vec![(plus, 0.0), (minus, 180.0)]
+pub fn inept_cycle(source: Isotope, target: Isotope, j_hz: f64) -> Result<Vec<(Vec<Event>, f64)>> {
+    Ok(vec![
+        (inept_with(source, target, j_hz, 90.0)?, 0.0),
+        (inept_with(source, target, j_hz, 270.0)?, 180.0),
+    ])
 }
 
 /// A spin echo on an isotope: `90°x – τ – 180°y – τ`.

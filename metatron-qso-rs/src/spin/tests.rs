@@ -15,6 +15,52 @@ fn commutator(a: &CMatrix, b: &CMatrix) -> CMatrix {
     a * b - b * a
 }
 
+/// `ρ − Tr(ρ)/d`.
+fn deviation(rho: &CMatrix) -> CMatrix {
+    let d = rho.nrows();
+    rho - CMatrix::identity(d, d) * (rho.trace() / d as f64)
+}
+
+fn largest(m: &CMatrix) -> f64 {
+    m.iter().fold(0.0, |x, z| x.max(z.norm()))
+}
+
+/// The Lindblad superoperator on column-stacked `vec(ρ)`, from Kronecker
+/// products (`vec(AρB) = (Bᵀ ⊗ A) vec(ρ)`): independent of the blocks.
+fn full_superoperator(sys: &SpinSystem, h: &CMatrix, jumps: &[(usize, CMatrix)]) -> CMatrix {
+    let d = sys.dimension();
+    let id = CMatrix::identity(d, d);
+    let mut l = (id.kronecker(h) - h.transpose().kronecker(&id)) * C64::new(0.0, -1.0);
+    for (i, op) in jumps {
+        let a = sys.embed(*i, op).unwrap();
+        let ada = a.adjoint() * &a;
+        l += a.conjugate().kronecker(&a);
+        l -= id.kronecker(&ada) * C64::new(0.5, 0.0);
+        l -= ada.transpose().kronecker(&id) * C64::new(0.5, 0.0);
+    }
+    l
+}
+
+/// `Δ(t)` from the full superoperator for `h`, augmented by `L(1/d)`,
+/// with nalgebra's exponential.
+fn reference_deviation(sys: &SpinSystem, h: &CMatrix, rho: &CMatrix, t: f64, b: f64) -> CMatrix {
+    let d = sys.dimension();
+    let l = full_superoperator(sys, h, &sys.jumps(b));
+    let mixed = CMatrix::identity(d, d) * C64::new(1.0 / d as f64, 0.0);
+    let drift = &l * CMatrix::from_column_slice(d * d, 1, mixed.as_slice());
+    let n = d * d;
+    let mut aug = CMatrix::zeros(n + 1, n + 1);
+    aug.view_mut((0, 0), (n, n))
+        .copy_from(&(&l * C64::new(t, 0.0)));
+    aug.view_mut((0, n), (n, 1))
+        .copy_from(&(drift * (rho.trace() * t)));
+    let p = aug.exp();
+    let dev = deviation(rho);
+    let mut v = p.view((0, n), (n, 1)).clone_owned();
+    v += p.view((0, 0), (n, n)) * CMatrix::from_column_slice(n, 1, dev.as_slice());
+    CMatrix::from_column_slice(d, d, v.as_slice())
+}
+
 #[test]
 fn spin_operators_obey_the_angular_momentum_algebra() {
     let mut sys = SpinSystem::new(1.0);
@@ -194,10 +240,12 @@ fn relaxation_recovers_and_reaches_equilibrium() {
 }
 
 #[test]
-fn superoperator_and_dormand_prince_agree() {
-    // Four spins (d = 16): the superoperator and Dormand–Prince steps on
-    // the same relaxing system.
-    let mut sys = SpinSystem::new(1.0);
+fn relaxation_propagators_agree_at_thermal_polarisation() {
+    // Four protons at 9.4 T and room temperature (P ≈ 3·10⁻⁵, so the
+    // state is 1/16 plus a deviation of 10⁻⁶): the block exponentials,
+    // Dormand–Prince steps and nalgebra's exponential of the full
+    // superoperator agree relative to the deviation.
+    let mut sys = SpinSystem::new(9.4);
     for (k, shift) in [0.0, 1.0, 2.5, 4.0].into_iter().enumerate() {
         let i = sys.add_spin(Isotope::H1, shift).unwrap();
         sys.set_relaxation(i, Some(0.5 + 0.1 * k as f64), Some(0.2))
@@ -212,22 +260,113 @@ fn superoperator_and_dormand_prince_agree() {
             &[Event::pulse(Target::Isotope(Isotope::H1), 70.0, 30.0)],
         )
         .unwrap();
+    assert!(largest(&deviation(&rho)) < 1e-5);
     let h = sys.hamiltonian().unwrap();
-    let jumps = sys.jumps(1.0);
-    let t = 0.03;
-    let exact = {
-        let p = (sys.superoperator(&h, &jumps).unwrap() * C64::new(t, 0.0)).exp();
-        let v = &p * CMatrix::from_column_slice(rho.len(), 1, rho.as_slice());
-        CMatrix::from_column_slice(16, 16, v.as_slice())
-    };
-    let steps = sys.dormand_prince(&rho, &h, &jumps, t).unwrap();
-    // Local errors of 10⁻¹² per step add up over the steps.
-    assert!(
-        (&exact - &steps).norm() < 1e-10,
-        "{}",
-        (&exact - &steps).norm()
+    let t = 0.05;
+    let reference = reference_deviation(&sys, &h, &rho, t, 9.4);
+    let scale = largest(&reference);
+    let blocks = deviation(&sys.relax(&rho, &h, t, 9.4, true).unwrap());
+    let err = largest(&(&blocks - &reference)) / scale;
+    assert!(err < 1e-11, "blocks: {err}");
+    let jumps = sys.jumps(9.4);
+    let mut c = CMatrix::zeros(16, 16);
+    for (i, x) in sys.drift(&jumps).into_iter().enumerate() {
+        c[(i, i)] = C64::new(x, 0.0);
+    }
+    let steps = sys
+        .dormand_prince(&deviation(&rho), &blocks::Sparse::new(&h), &jumps, &c, t)
+        .unwrap();
+    let err = largest(&(&steps - &reference)) / scale;
+    assert!(err < 1e-7, "Dormand–Prince: {err}");
+    // The trace stays 1 and the state Hermitian.
+    let full = sys.relax(&rho, &h, t, 9.4, true).unwrap();
+    assert!((full.trace() - ONE).norm() < 1e-14);
+    assert!(largest(&(&full - full.adjoint())) < 1e-10 * scale);
+    // During a shaped pulse the field mixes the coherence orders: one
+    // block, here by Dormand–Prince steps.
+    let rf = &h + sys.fx(Isotope::H1).unwrap() * C64::new(TWO_PI * 5e3, 0.0);
+    let t = 2e-5;
+    let reference = reference_deviation(&sys, &rf, &rho, t, 9.4);
+    let pulsed = deviation(&sys.relax(&rho, &rf, t, 9.4, false).unwrap());
+    let err = largest(&(&pulsed - &reference)) / largest(&reference);
+    assert!(err < 1e-9, "shaped: {err}");
+    // The free induction decay steps the −1 coherences by one block
+    // exponential: as the full propagation to each point.
+    let fp = sys.fplus(Isotope::H1).unwrap();
+    let fid = sys.fid(&rho, Isotope::H1, 1e-3, 4).unwrap();
+    for (k, s) in fid.iter().enumerate() {
+        let at = deviation(&reference_deviation(&sys, &h, &rho, k as f64 * 1e-3, 9.4));
+        let want = sys.expectation(&at, &fp).unwrap();
+        assert!(
+            (s - want).norm() < 1e-10 * want.norm(),
+            "{k}: {s} vs {want}"
+        );
+    }
+}
+
+#[test]
+fn the_laboratory_frame_propagates_as_the_rotating_one() {
+    // One isotope: the rotating frame is exact, so polarisations and the
+    // magnitudes of the lines agree with the laboratory frame, where the
+    // Zeeman frequencies are 10⁵ times the offsets. (Pulse phases refer to
+    // the laboratory axes there, so a later pulse's phase differs between
+    // the frames: one pulse, then relaxation.)
+    let mut sys = SpinSystem::new(9.4);
+    let a = sys.add_spin(Isotope::H1, 1.0).unwrap();
+    let b = sys.add_spin(Isotope::H1, 3.0).unwrap();
+    sys.couple(a, b, 7.0).unwrap();
+    sys.set_relaxation(a, Some(1.0), Some(0.3)).unwrap();
+    sys.set_relaxation(b, Some(2.0), Some(0.5)).unwrap();
+    let lab = sys.clone().with_frame(Frame::Laboratory);
+    let events = [
+        Event::pulse(Target::Spin(b), 120.0, 45.0),
+        Event::Delay(0.03),
+    ];
+    let rot = sys.evolve(&sys.thermal_state().unwrap(), &events).unwrap();
+    let lr = lab.evolve(&lab.thermal_state().unwrap(), &events).unwrap();
+    for i in [a, b] {
+        let (p, q) = (
+            sys.polarization(&rot, i).unwrap(),
+            lab.polarization(&lr, i).unwrap(),
+        );
+        assert!((p - q).abs() < 1e-7 * p.abs(), "{i}: {p} vs {q}");
+    }
+    // A free induction decay: equal magnitudes, the laboratory one at the
+    // Larmor frequency.
+    let (lines, lab_lines) = (
+        sys.lines(&rot, Isotope::H1).unwrap(),
+        lab.lines(&lr, Isotope::H1).unwrap(),
     );
-    assert!((exact.trace().re - 1.0).abs() < 1e-12);
+    assert_eq!((lines.len(), lab_lines.len()), (4, 4));
+    let larmor = -Isotope::H1.larmor(9.4);
+    for (x, y) in lines.iter().zip(&lab_lines) {
+        assert!(
+            (y.frequency - larmor - x.frequency).abs() < 1e-4,
+            "{} {}",
+            x.frequency,
+            y.frequency
+        );
+        assert!((x.ppm - y.ppm).abs() < 1e-6);
+        let (u, v) = (x.amplitude.norm(), y.amplitude.norm());
+        assert!((u - v).abs() < 1e-7 * u, "{u} vs {v}");
+    }
+}
+
+#[test]
+fn hopeless_relaxation_is_refused_early() {
+    // Seven spins in the laboratory frame at 9.4 T: blocks of 3432
+    // elements and Zeeman frequencies of 10⁹ rad/s.
+    let mut sys = SpinSystem::new(9.4).with_frame(Frame::Laboratory);
+    for k in 0..7 {
+        let i = sys.add_spin(Isotope::H1, k as f64).unwrap();
+        sys.set_relaxation(i, Some(1.0), None).unwrap();
+    }
+    let start = std::time::Instant::now();
+    let err = sys
+        .evolve(&sys.thermal_state().unwrap(), &[Event::Delay(1.0)])
+        .unwrap_err();
+    assert!(format!("{err}").contains("operations"), "{err}");
+    assert!(start.elapsed().as_secs_f64() < 5.0);
 }
 
 #[test]
@@ -250,7 +389,7 @@ fn inept_gains_the_ratio_of_gyromagnetic_ratios() {
         .unwrap();
     // Phase-cycled INEPT: the two steps' lines, weighted by the receiver.
     let mut cycled: Vec<(f64, C64)> = Vec::new();
-    for (events, receiver) in inept_cycle(Isotope::H1, Isotope::C13, j) {
+    for (events, receiver) in inept_cycle(Isotope::H1, Isotope::C13, j).unwrap() {
         let w = C64::from_polar(0.5, -f64::to_radians(receiver));
         for l in sys
             .lines(&sys.evolve(&eq, &events).unwrap(), Isotope::C13)
@@ -279,7 +418,7 @@ fn inept_gains_the_ratio_of_gyromagnetic_ratios() {
     let fid = sys
         .phase_cycle(
             &eq,
-            &inept_cycle(Isotope::H1, Isotope::C13, j),
+            &inept_cycle(Isotope::H1, Isotope::C13, j).unwrap(),
             Isotope::C13,
             1e-4,
             8,
@@ -569,18 +708,62 @@ fn coupling_graphs_and_invalid_input() {
     assert_eq!(g.num_edges(), 2);
     assert!(sys.couple(0, 0, 1.0).is_err());
     assert!(sys.couple(0, 9, 1.0).is_err());
+    // Invalid times leave the spin as it was, and the system valid.
+    sys.set_relaxation(0, Some(2.0), Some(1.0)).unwrap();
     assert!(sys.set_relaxation(0, Some(1.0), Some(3.0)).is_err());
     assert!(sys.set_relaxation(0, Some(-1.0), None).is_err());
+    assert_eq!(
+        (sys.spins()[0].t1, sys.spins()[0].t2),
+        (Some(2.0), Some(1.0))
+    );
+    sys.validate().unwrap();
     assert!(sys.clone().with_field(-1.0).is_err());
     assert!(sys.clone().with_temperature(0.0).is_err());
-    assert!(
-        sys.evolve(&sys.identity_state(), &[Event::Delay(-1.0)])
-            .is_err()
-    );
-    assert!(
-        sys.fid(&sys.identity_state(), Isotope::H1, 0.0, 10)
-            .is_err()
-    );
+    let name = |e: QsoError| match e {
+        QsoError::InvalidArgument { name, .. } => name,
+        other => panic!("{other}"),
+    };
+    let err = sys
+        .evolve(&sys.identity_state(), &[Event::Delay(-1.0)])
+        .unwrap_err();
+    assert_eq!(name(err), "delay");
+    let err = sys
+        .fid(&sys.identity_state(), Isotope::H1, 0.0, 10)
+        .unwrap_err();
+    assert_eq!(name(err), "fid");
+    // INEPT needs two isotopes and a coupling.
+    for (x, j) in [
+        (Isotope::H1, 140.0),
+        (Isotope::C13, 0.0),
+        (Isotope::C13, f64::NAN),
+    ] {
+        assert_eq!(name(inept(Isotope::H1, x, j).unwrap_err()), "inept");
+        assert!(inept_cycle(Isotope::H1, x, j).is_err());
+    }
+    // Events and segments reject unknown fields.
+    let ok = r#"[{"pulse": {"target": {"isotope": "1H"}, "angle": 90.0, "phase": 0.0}},
+                 {"shaped": {"target": {"spin": 0}, "segments": [{"duration": 1e-6, "amplitude": 1e3, "phase": 0.0}]}}]"#;
+    assert_eq!(serde_json::from_str::<Vec<Event>>(ok).unwrap().len(), 2);
+    for bad in [
+        r#"[{"pulse": {"target": {"isotope": "1H"}, "angle": 90.0, "phase": 0.0, "power": 1.0}}]"#,
+        r#"[{"shaped": {"target": {"spin": 0}, "segments": [{"duration": 1e-6, "amplitude": 1e3, "phase": 0.0, "x": 1}]}}]"#,
+        r#"[{"sweep": {"to": 1.0, "duration": 1.0, "steps": 10, "shape": "linear"}}]"#,
+    ] {
+        assert!(serde_json::from_str::<Vec<Event>>(bad).is_err(), "{bad}");
+    }
+    // The field after a sequence.
+    let seq = [
+        Event::Delay(1.0),
+        Event::Field(2.0),
+        Event::Sweep {
+            to: 0.5,
+            duration: 1.0,
+            steps: 3,
+        },
+    ];
+    assert_eq!(sys.field_after(&seq), 0.5);
+    assert_eq!(sys.field_after(&seq[..2]), 2.0);
+    assert_eq!(sys.field_after(&[]), 1.0);
     assert!(Isotope::from_name("17O").is_err());
     assert_eq!(Isotope::from_name("c13").unwrap(), Isotope::C13);
     let mut big = SpinSystem::new(1.0);
@@ -595,4 +778,161 @@ fn coupling_graphs_and_invalid_input() {
     let bad = text.replace("\"field\":1.0", "\"field\":-1.0");
     let bad: SpinSystem = serde_json::from_str(&bad).unwrap();
     assert!(bad.validate().is_err());
+}
+
+#[test]
+fn time_averages_do_not_depend_on_the_frame() {
+    // ¹H and ¹³C on their carriers: in the rotating frame |αα⟩ and |ββ⟩
+    // have the same energy, but their coherence oscillates at the sum of
+    // the Larmor frequencies, so the average removes it in both frames.
+    let mut sys = SpinSystem::new(9.4);
+    let h = sys.add_spin(Isotope::H1, 0.0).unwrap();
+    let c = sys.add_spin(Isotope::C13, 0.0).unwrap();
+    sys.couple(h, c, 140.0).unwrap();
+    let lab = sys.clone().with_frame(Frame::Laboratory);
+    // Populations, a double-quantum coherence |αα⟩⟨ββ⟩ and a zero-quantum
+    // one |αβ⟩⟨βα⟩ between the isotopes.
+    let mut rho = sys.identity_state();
+    for (k, p) in [3e-3, 1e-3, -1e-3, -3e-3].into_iter().enumerate() {
+        rho[(k, k)] += C64::new(p, 0.0);
+    }
+    for (r, c, v) in [(0, 3, C64::new(1e-3, 2e-4)), (1, 2, C64::new(-5e-4, 1e-3))] {
+        rho[(r, c)] = v;
+        rho[(c, r)] = v.conj();
+    }
+    let a = sys.time_average(&rho).unwrap();
+    let b = lab.time_average(&rho).unwrap();
+    // The laboratory frame's flip-flop terms mix |αβ⟩ and |βα⟩ by
+    // J/(ν_H − ν_C) ≈ 5·10⁻⁷.
+    let scale = largest(&deviation(&rho));
+    assert!(
+        largest(&(&a - &b)) < 1e-5 * scale,
+        "{}",
+        largest(&(&a - &b)) / scale
+    );
+    assert!(a[(0, 3)].norm() < 1e-20 && a[(1, 2)].norm() < 1e-20);
+    for k in 0..4 {
+        assert!((a[(k, k)] - rho[(k, k)]).norm() < 1e-18);
+    }
+    // Two equivalent uncoupled protons on resonance (H = 0 in the
+    // rotating frame): the zero-quantum coherence between the degenerate
+    // |αβ⟩ and |βα⟩ stays, the single-quantum one precesses at the Larmor
+    // frequency and goes.
+    let mut pair = SpinSystem::new(9.4);
+    pair.add_spin(Isotope::H1, 0.0).unwrap();
+    pair.add_spin(Isotope::H1, 0.0).unwrap();
+    let mut rho = pair.identity_state();
+    let (zq, sq) = (C64::new(2e-3, 1e-3), C64::new(1e-3, 0.0));
+    rho[(1, 2)] = zq;
+    rho[(2, 1)] = zq.conj();
+    rho[(0, 1)] = sq;
+    rho[(1, 0)] = sq;
+    let avg = pair.time_average(&rho).unwrap();
+    let mut want = pair.identity_state();
+    want[(1, 2)] = zq;
+    want[(2, 1)] = zq.conj();
+    assert!((&avg - &want).norm() < 1e-18, "{}", (&avg - &want).norm());
+}
+
+#[test]
+fn lines_ignore_rounding() {
+    let mut sys = SpinSystem::new(14.1);
+    let a = sys.add_spin(Isotope::H1, 1.0).unwrap();
+    let b = sys.add_spin(Isotope::H1, 2.2).unwrap();
+    let c = sys.add_spin(Isotope::C13, 40.0).unwrap();
+    sys.couple(a, b, 7.0).unwrap();
+    sys.couple(a, c, 130.0).unwrap();
+    // No coherence, no line.
+    assert!(
+        sys.lines(&sys.identity_state(), Isotope::H1)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        sys.lines(&sys.thermal_state().unwrap(), Isotope::H1)
+            .unwrap()
+            .is_empty()
+    );
+    // Four 90° pulses leave rounding of 10⁻¹⁷ in the coherences.
+    let full = vec![Event::pulse(Target::Isotope(Isotope::H1), 90.0, 0.0); 4];
+    let back = sys.evolve(&sys.thermal_state().unwrap(), &full).unwrap();
+    assert!(sys.lines(&back, Isotope::H1).unwrap().is_empty());
+    // The laboratory frame gives the same lines as the rotating one, at
+    // the Larmor frequency.
+    let one = [Event::pulse(Target::Isotope(Isotope::H1), 90.0, 0.0)];
+    let rot = sys
+        .lines(
+            &sys.evolve(&sys.thermal_state().unwrap(), &one).unwrap(),
+            Isotope::H1,
+        )
+        .unwrap();
+    let lab = sys.clone().with_frame(Frame::Laboratory);
+    let lines = lab
+        .lines(
+            &lab.evolve(&lab.thermal_state().unwrap(), &one).unwrap(),
+            Isotope::H1,
+        )
+        .unwrap();
+    assert_eq!((rot.len(), lines.len()), (8, 8));
+    for (x, y) in rot.iter().zip(&lines) {
+        // Strong coupling between ¹H and ¹³C is 10⁻⁷ of the lines.
+        assert!((x.ppm - y.ppm).abs() < 1e-5, "{} {}", x.ppm, y.ppm);
+        assert!((x.amplitude - y.amplitude).norm() < 1e-5 * x.amplitude.norm());
+    }
+}
+
+#[test]
+fn thermal_states_survive_extreme_fields_and_temperatures() {
+    let mut sys = SpinSystem::new(20.0).with_temperature(1e-6).unwrap();
+    let h = sys.add_spin(Isotope::H1, 0.0).unwrap();
+    let n = sys.add_spin(Isotope::N15, 0.0).unwrap();
+    let d = sys.add_spin(Isotope::H2, 0.0).unwrap();
+    let rho = sys.thermal_state().unwrap();
+    assert!(rho.iter().all(|z| z.re.is_finite() && z.im.is_finite()));
+    assert!((rho.trace().re - 1.0).abs() < 1e-14);
+    assert!((sys.polarization(&rho, h).unwrap() - 1.0).abs() < 1e-14);
+    assert!((sys.polarization(&rho, n).unwrap() + 1.0).abs() < 1e-14);
+    assert!((sys.polarization(&rho, d).unwrap() - 1.0).abs() < 1e-14);
+}
+
+#[test]
+fn the_fourier_transform_is_accurate_at_many_points() {
+    // A tone off the grid, 2¹⁵ points: the transform against direct sums.
+    let n = 1 << 15;
+    let fid: Vec<C64> = (0..n)
+        .map(|k| C64::from_polar(1.0, 0.123_456 * k as f64))
+        .collect();
+    let spec = Spectrum::from_fid(&fid, 1.0, 0.0).unwrap();
+    let m = spec.values.len();
+    for j in [0usize, 777, m / 2 + 1234, m - 1] {
+        let f = spec.frequencies[j];
+        let want: C64 = fid
+            .iter()
+            .enumerate()
+            .map(|(k, s)| {
+                s * C64::from_polar(if k == 0 { 0.5 } else { 1.0 }, -TWO_PI * f * k as f64)
+            })
+            .sum();
+        assert!((spec.values[j] - want).norm() < 1e-9 * (n as f64), "{j}");
+    }
+}
+
+#[test]
+fn spin_one_relaxes_with_t1_and_t2_at_high_temperature() {
+    // ²H on resonance at 10¹⁵ K (k↑ = k↓ to 3·10⁻¹⁹): ⟨I_x⟩ decays
+    // exactly with T₂ and ⟨I_z⟩ with T₁, as for spin ½.
+    let mut sys = SpinSystem::new(1.0).with_temperature(1e15).unwrap();
+    let d = sys.add_spin(Isotope::H2, 0.0).unwrap();
+    sys.set_relaxation(d, Some(0.3), Some(0.2)).unwrap();
+    for (op, time) in [(sys.ix(d).unwrap(), 0.2), (sys.iz(d).unwrap(), 0.3)] {
+        let rho = sys.identity_state() + &op * C64::new(0.01, 0.0);
+        for t in [0.05, 0.4, 1.0] {
+            let late = sys.evolve(&rho, &[Event::Delay(t)]).unwrap();
+            // Tr(I_x²) = Tr(I_z²) = 2 for spin 1.
+            let want = 0.02 * (-t / time).exp();
+            let got = sys.expectation(&late, &op).unwrap().re;
+            // Rounding relative to the initial 0.02.
+            assert!((got - want).abs() < 1e-11 * 0.02, "{t}: {got} vs {want}");
+        }
+    }
 }

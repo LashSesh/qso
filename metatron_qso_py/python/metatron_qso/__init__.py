@@ -28,7 +28,6 @@ R_P(theta) = exp(-i theta P / 2). Invalid input raises ``ValueError``.
 from ._core import (
     AmplitudeProblem,
     AoIntegrals,
-    SpinSystem,
     BosonSampler,
     BpOsdDecoder,
     BpOsdOutcome,
@@ -84,6 +83,7 @@ from ._core import (
     CircuitDistance,
     SparsePauliLindblad,
     SpatialSearch,
+    SpinSystem,
     StabilizerState,
     StateTransfer,
     StateVector,
@@ -174,7 +174,6 @@ from ._core import (
 __all__ = [
     "AmplitudeProblem",
     "AoIntegrals",
-    "SpinSystem",
     "BosonSampler",
     "BpOsdDecoder",
     "BpOsdOutcome",
@@ -230,6 +229,7 @@ __all__ = [
     "CircuitDistance",
     "SparsePauliLindblad",
     "SpatialSearch",
+    "SpinSystem",
     "StabilizerState",
     "StateTransfer",
     "StateVector",

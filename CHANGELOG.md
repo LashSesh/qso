@@ -78,16 +78,32 @@ All notable changes to this project are documented here. The format follows
     delays, field jumps and linear sweeps; INEPT (with its phase cycle),
     spin echo, inversion recovery; phase cycling of FIDs.
   - Relaxation: T₁ towards thermal equilibrium at the current field and
-    temperature and T₂, as Lindblad operators; exact by the superoperator
-    exponential up to dimension 8, adaptive Dormand–Prince above.
+    temperature and T₂, as Lindblad operators. `H` conserves `M` of each
+    isotope (rotating frame) or in total (laboratory frame), and the
+    master equation the matching coherence orders: each block of its
+    superoperator (up to 2048 elements; six protons) is exponentiated
+    exactly for the deviation of the state from `1/d`, so thermal
+    polarisations keep their relative precision. Short intervals and
+    shaped pulses use adaptive Dormand–Prince steps when cheaper;
+    propagations estimated above 1.5·10¹² operations are refused. One
+    second of five relaxing protons takes 0.2 s in either frame.
   - Exact stick spectra (`lines`), free induction decays and their
     Fourier transform; thermal and parahydrogen states and time averages
-    for PASADENA, ALTADENA and SABRE.
+    (energies compared as in the laboratory frame) for PASADENA,
+    ALTADENA and SABRE. Spectra and time averages diagonalise each block
+    of `H` on its own, shifted by its mean energy.
   - Validated against closed forms (FID, echoes, inversion recovery,
     INEPT gain, PASADENA and ALTADENA lines, SABRE anti-crossing fields)
-    and against QuTiP's `mesolve` in the cross-validation (to 8·10⁻⁹).
-  - Python: `SpinSystem` and `metatron_qso.spin`; CLI: `qso spins`;
-    guide page and tutorial `09_hyperpolarisation`.
+    and, at 9.4 T and 298 K, against the exact exponential of QuTiP's
+    Liouvillian (7·10⁻¹² relative in the rotating frame, 2·10⁻¹⁰ in the
+    laboratory frame) and its `mesolve` (4·10⁻⁶ and 2.5·10⁻⁴, the error of
+    its steps), with every operator built independently.
+  - Python: `SpinSystem` and `metatron_qso.spin`; CLI: `qso spins`
+    (lines at the field the sequence ends at); guide page and tutorial
+    `09_hyperpolarisation`.
+  - `linalg`: the complex product by three real GEMMs and a general
+    matrix exponential (Taylor degree 16, scaling and squaring) are shared
+    with the matrix-product states.
 - **Faster integrals and tighter bounds** (milestone 1.32).
   - Schwarz screening of the repulsion integrals by quartets of shells:
     `AoIntegrals::compute` skips quartets whose integrals are all below

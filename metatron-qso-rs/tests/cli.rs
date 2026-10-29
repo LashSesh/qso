@@ -394,9 +394,31 @@ fn spin_dynamics() {
     assert!((im(&lines[1]).abs() / d - 2.976).abs() < 0.01);
     let para = format!("{root}/examples/spins/parahydrogen.json");
     let p = qso(&["spins", &para, "--initial", "pasadena:0,1", "--pulse", "45"]);
-    for l in p["lines"].as_array().unwrap() {
+    let lines = p["lines"].as_array().unwrap();
+    assert_eq!(lines.len(), 4);
+    for l in lines {
         close(im(l).abs(), 0.125, 4e-4);
     }
+    // A sequence that ends at another field is observed there.
+    let jump = Scratch::new("jump.json");
+    std::fs::write(
+        jump.path(),
+        r#"[{"field": 4.7}, {"pulse": {"target": {"isotope": "13C"}, "angle": 90.0, "phase": 0.0}}]"#,
+    )
+    .unwrap();
+    let at = qso(&["spins", &ch, "--observe", "13C", "--sequence", jump.path()]);
+    assert_eq!(f(&at["field"]), 4.7);
+    let freq: Vec<f64> = at["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| f(&l["frequency"]))
+        .collect();
+    assert_eq!(freq.len(), 2);
+    // ¹³C at 60 ppm and 4.7 T: −γB·60·10⁻⁶/2π, split by J = 140 Hz.
+    let nu = -6.728_284e7 * 4.7 * 60e-6 / (2.0 * std::f64::consts::PI);
+    assert!(((freq[0] + freq[1]) / 2.0 - nu).abs() < 1e-6, "{freq:?}");
+    assert!((freq[1] - freq[0] - 140.0).abs() < 1e-6, "{freq:?}");
 }
 
 #[test]

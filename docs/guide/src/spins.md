@@ -38,7 +38,14 @@ sys.couple(h, c, 140.0)                    # J in Hz
   field and temperature. `parahydrogen_state(i, j, fraction)` puts two
   spins in the singlet. `time_average(rho)` removes the coherences between
   eigenstates of different energy, which models a state formed at random
-  times.
+  times. Energies are compared as in the laboratory frame, so in the
+  rotating frame coherences between different `M` of an isotope go too:
+  they precess at its Larmor frequency.
+- **Blocks.** `H` conserves `M` of every isotope in the rotating frame and
+  the total `M` in the laboratory frame. Spectra, time averages and free
+  evolution use the eigendecomposition of each block, shifted by its mean
+  energy, so the large Zeeman energies of the laboratory frame cost no
+  precision.
 - **Limits.** Up to 2048 Hilbert-space dimensions (eleven spins ½).
   `coupling_graph()` returns the coupling network as a QSO graph.
 
@@ -49,11 +56,16 @@ sys.couple(h, c, 140.0)                    # J in Hz
 - `spin.pulse(target, angle, phase)`, an ideal pulse
   `exp(−iθ(cos φ F_x + sin φ F_y))` in degrees. The target is an isotope
   (`"1H"`) or one spin (its index).
+  In the laboratory frame the phase refers to the laboratory axes, not to
+  a carrier, so pulses after a delay differ in phase between the frames.
 - `spin.shaped(target, [(duration, ν₁, phase), …])`, a shaped pulse of
-  piecewise constant amplitude (Hz) and phase, in the rotating frame.
+  piecewise constant amplitude (Hz) and phase, in the rotating frame and
+  the rotating-wave approximation (the field acts on its isotope only).
 - `spin.delay(t)`, free evolution with relaxation.
 - `spin.set_field(B)` and `spin.sweep(to, duration, steps)`, field jumps
-  and linear sweeps.
+  and linear sweeps. They change the field for the rest of the sequence;
+  the system keeps its own, so a state left at another field is observed
+  with `sys.with_field(sys.field_after(events))`.
 
 `spin.inept`, `spin.inept_cycle`, `spin.spin_echo` and
 `spin.inversion_recovery` build the standard sequences. `phase_cycle`
@@ -63,19 +75,34 @@ sums the FIDs of a cycle with their receiver phases.
 
 `T₁` and `T₂` per spin are phenomenological. Lindblad operators `√k↓ I₋`
 and `√k↑ I₊` relax towards thermal equilibrium at the current field and
-temperature, with `k↑ + k↓ = 1/T₁` and `k↑/k↓ = exp(ħγB/k_BT)`.
-`√(2γ_φ) I_z` dephases, with `γ_φ = 1/T₂ − 1/(2T₁)`. For spin ½ this gives
-exactly the times `T₁` and `T₂`. For ²H the same operators are used, and
-`T₂` is only approximate. Up to dimension 8 the master equation is
-integrated by the exponential of its superoperator, above by adaptive
-Dormand–Prince steps with a local error of 10⁻¹². Cross-relaxation and
-Redfield theory are not included.
+temperature, with `k↑ + k↓ = 1/T₁` and
+`k↑/k↓ = exp(ħγB(1 + δ·10⁻⁶)/k_BT)`. `√(2γ_φ) I_z` dephases, with
+`γ_φ = 1/T₂ − 1/(2T₁)`, so `T₂ ≤ 2T₁` for every spin. For spin ½ this
+gives exactly the decay times `T₁` of `⟨I_z⟩` and `T₂` of `⟨I₊⟩`. For ²H
+the same operators give them in the high-temperature limit, and the
+equilibrium is thermal; quadrupolar relaxation is not modelled.
+Cross-relaxation and Redfield theory are not included.
+
+The master equation conserves the coherence orders of `H`'s blocks. Each
+block of its superoperator, up to 2048 elements (six protons have blocks
+of 924), is exponentiated exactly, for the deviation of the state from
+`1/d`: thermal polarisations are parts in 10⁵ of `1/d`, and they keep
+their relative precision. A free induction decay needs only the
+coherences of order −1. Short intervals and shaped pulses, which mix the
+orders, use adaptive Dormand–Prince steps with a local error of 10⁻¹¹ of
+that deviation when they are cheaper. A propagation estimated at more
+than 1.5·10¹² operations, about a minute, is refused with an error. One
+second of five relaxing protons at 9.4 T takes 0.2 s, in either frame,
+and of six about ten seconds.
 
 ## Spectra
 
 `lines(rho, isotope)` gives the exact stick spectrum of a state. Each
 line has a frequency in the frame (Hz), a chemical shift (ppm) and the
-complex amplitude of `e^{2πift}` in `Tr(ρ(t) F₊)`. `fid(rho, isotope,
+complex amplitude of `e^{2πift}` in `Tr(ρ(t) F₊)`. Lines at one frequency,
+to the rounding of the energies, are merged, and lines below 10⁻¹³ of
+the largest entry of the state, which is rounding, are dropped. At zero
+field the shift of a frequency is undefined (NaN). `fid(rho, isotope,
 dwell, points)` gives the free induction decay with relaxation, and
 `spin.spectrum(fid, dwell, broadening)` its Fourier transform.
 
@@ -129,12 +156,20 @@ for b in (2e-3, 5.7e-3, 9e-3):
 - **SABRE.** The polarisation transferred to a substrate proton (rotating
   frame) and to ¹⁵N (laboratory frame, about 0.14 μT) peaks within 2 % of
   the level anti-crossing `ν_S − ν_H = ±(J_AB − J_AS/4)`.
-- **Propagators.** The superoperator and Dormand–Prince propagators agree
-  to 2·10⁻¹¹.
-- **QuTiP.** The cross-validation compares four systems with QuTiP's
-  `mesolve`, with the same Lindblad operators built from the formulas
-  above: three and five protons, ¹H–¹H–¹³C–¹⁵N after INEPT, and SABRE-SHEATH
-  in the laboratory frame. Every expectation agrees to 8·10⁻⁹.
+- **Propagators.** For four protons at 9.4 T and 298 K, whose state
+  deviates from `1/16` by 10⁻⁶, the block exponentials agree with
+  nalgebra's exponential of the full superoperator to 10⁻¹¹ of that
+  deviation and Dormand–Prince steps to 10⁻⁷. The laboratory frame gives
+  the polarisations and line magnitudes of the rotating frame to 10⁻⁷.
+- **QuTiP.** The cross-validation builds five systems independently with
+  QuTiP's spin operators (Hamiltonian, thermal state, pulses, Lindblad
+  operators): three protons at 0.05 K; at 9.4 T and 298 K ¹H–¹H–¹³C–¹⁵N
+  after INEPT, five protons, and two protons in the laboratory frame; and
+  SABRE-SHEATH. Relative to the largest expectation, QSO agrees with the
+  exact exponential of QuTiP's `liouvillian` to 7·10⁻¹² in the rotating
+  frame and 2·10⁻¹⁰ in the laboratory frame at 9.4 T (rounding grows with
+  the Larmor phase), and with `mesolve` to 4·10⁻⁶ and 2.5·10⁻⁴, the error
+  of its adaptive steps.
 
 On the command line, `qso spins system.json --observe 13C --sequence
 events.json` prints the lines and polarisations after a sequence

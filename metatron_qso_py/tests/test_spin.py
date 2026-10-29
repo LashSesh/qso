@@ -115,44 +115,94 @@ def test_sweeps_shaped_pulses_json_and_errors():
 
 def test_relaxation_matches_qutip():
     qt = pytest.importorskip("qutip")
-    # Three coupled protons with T1 and T2, from thermal equilibrium after
-    # a 70° pulse: ⟨F_x⟩, ⟨F_y⟩ and ⟨I_z⟩ of each against mesolve.
-    sys = q.SpinSystem(1.0, temperature=0.05)
-    for k, shift in enumerate((0.0, 2.0, 5.0)):
-        sys.add_spin("1H", shift, t1=0.4 + 0.2 * k, t2=0.1 + 0.05 * k)
-    sys.couple(0, 1, 6.0)
-    sys.couple(1, 2, -3.0)
-    rho0 = sys.evolve(sys.thermal_state(), [spin.pulse("1H", 70, 20)])
-    h = sys.hamiltonian()
-    gamma = q.spin.gyromagnetic_ratio("1H")
-    c_ops = []
-    for i, (_, shift, t1, t2) in enumerate(sys.spins):
-        x = 1.054571817e-34 * gamma * 1.0 * (1 + shift * 1e-6) / (1.380649e-23 * 0.05)
-        up, down = (
-            1 / t1 / (1 + math.exp(-x)),
-            1 / t1 * math.exp(-x) / (1 + math.exp(-x)),
-        )
-        iz = sys.spin_operator(i, "z")
-        ip = sys.spin_operator(i, "+")
+    # 1H-1H-13C-15N at 9.4 T and room temperature (polarisations of 10⁻⁵),
+    # built independently with QuTiP's spin operators: the Hamiltonian of
+    # the rotating frame, the thermal state, the pulses and the Lindblad
+    # operators; against SpinSystem.evolve, relative to the largest
+    # expectation.
+    spins = [("1H", 1.0, 0.5, 0.2), ("1H", 3.0, 0.7, 0.3), ("13C", 40.0, 1.5, 0.5), ("15N", 120.0, 2.0, 0.6)]
+    couplings = [(0, 1, 7.0), (0, 2, 140.0), (1, 2, 5.0), (2, 3, -12.0)]
+    field, temperature = 9.4, 298.15
+    sys = q.SpinSystem(field, temperature)
+    for iso, shift, t1, t2 in spins:
+        sys.add_spin(iso, shift, t1=t1, t2=t2)
+    for i, j, jh in couplings:
+        sys.couple(i, j, jh)
+
+    def op(i, which):
+        return qt.tensor([qt.jmat(0.5, which) if k == i else qt.qeye(2) for k in range(4)])
+
+    gamma = {iso: q.spin.gyromagnetic_ratio(iso) for iso, *_ in spins}
+    h = sum(-gamma[iso] * field * shift * 1e-6 * op(i, "z") for i, (iso, shift, _, _) in enumerate(spins))
+    for i, j, jh in couplings:
+        if spins[i][0] == spins[j][0]:
+            h += 2 * math.pi * jh * sum(op(i, w) * op(j, w) for w in "xyz")
+        else:
+            h += 2 * math.pi * jh * op(i, "z") * op(j, "z")
+    assert np.abs(sys.hamiltonian() - h.full()).max() < 1e-13 * np.abs(h.full()).max()
+    factors, c_ops = [], []
+    for i, (iso, shift, t1, t2) in enumerate(spins):
+        x = 1.054571817e-34 * gamma[iso] * field * (1 + shift * 1e-6) / (1.380649e-23 * temperature)
+        w = np.array([math.exp(x / 2), math.exp(-x / 2)])
+        factors.append(qt.Qobj(np.diag(w / w.sum())))
+        up = 1 / t1 / (1 + math.exp(-x))
         c_ops += [
-            math.sqrt(down) * ip.conj().T,
-            math.sqrt(up) * ip,
-            math.sqrt(2 * (1 / t2 - 1 / (2 * t1))) * iz,
+            math.sqrt(1 / t1 - up) * op(i, "-"),
+            math.sqrt(up) * op(i, "+"),
+            math.sqrt(2 * (1 / t2 - 1 / (2 * t1))) * op(i, "z"),
         ]
-    dims = [[2, 2, 2], [2, 2, 2]]
-    times = np.linspace(0, 0.2, 21)
-    ops = [sys.total_operator("1H", "x"), sys.total_operator("1H", "y")] + [
-        sys.spin_operator(i, "z") for i in range(3)
-    ]
-    result = qt.mesolve(
-        qt.Qobj(h, dims=dims),
-        qt.Qobj(rho0, dims=dims),
-        times,
-        [qt.Qobj(c, dims=dims) for c in c_ops],
-        e_ops=[qt.Qobj(o, dims=dims) for o in ops],
-        options={"atol": 1e-12, "rtol": 1e-10},
-    )
+    rho = qt.tensor(factors)
+    for iso, angle, phase in (("1H", 70.0, 20.0), ("13C", 90.0, 0.0)):
+        a, p = math.radians(angle), math.radians(phase)
+        g = sum(math.cos(p) * op(i, "x") + math.sin(p) * op(i, "y") for i, s in enumerate(spins) if s[0] == iso)
+        u = (-1j * a * g).expm()
+        rho = u * rho * u.dag()
+    ops = [op(i, "z") for i in range(4)] + [sum(op(i, w) for i in (0, 1)) for w in "xy"]
+    times = np.linspace(0, 0.3, 7)
+    rho0 = sys.evolve(sys.thermal_state(), [spin.pulse("1H", 70, 20), spin.pulse("13C", 90)])
+    assert np.abs(rho0 - rho.full()).max() < 1e-15
+    # Exactly: the exponential of QuTiP's Liouvillian on the deviation from
+    # 1/16, with L(1/16) as an augmented column.
+    scipy_linalg = pytest.importorskip("scipy.linalg")
+    lv = qt.liouvillian(h, c_ops).full()
+    mixed = (np.eye(16) / 16).reshape(-1, order="F")
+    dev = (rho.full() - np.eye(16) / 16).reshape(-1, order="F")
+    exact = []
+    for t in times:
+        aug = np.zeros((257, 257), dtype=complex)
+        aug[:256, :256] = lv * t
+        aug[:256, 256] = lv @ mixed * t
+        p = scipy_linalg.expm(aug)
+        exact.append((p[:256, :256] @ dev + p[:256, 256] + mixed).reshape(16, 16, order="F"))
+    # And by mesolve, whose adaptive steps lose about 10⁻⁶ of the deviation.
+    options = {"atol": 1e-15, "rtol": 1e-12, "nsteps": 10**7}
+    integrated = qt.mesolve(h, rho, times, c_ops, e_ops=ops, options=options).expect
+    scale = max(np.abs(e).max() for e in integrated)
+    assert 1e-6 < scale < 1e-4
     for k, t in enumerate(times):
-        rho = sys.evolve(rho0, [spin.delay(t)])
-        for op, ref in zip(ops, result.expect):
-            assert sys.expectation(rho, op).real == pytest.approx(ref[k], abs=1e-7)
+        state = sys.evolve(rho0, [spin.delay(t)])
+        for o, ref in zip(ops, integrated):
+            value = sys.expectation(state, o.full()).real
+            assert abs(value - np.trace(exact[k] @ o.full()).real) < 1e-9 * scale
+            assert abs(value - ref[k]) < 1e-4 * scale
+
+
+def test_bindings_reject_bools_and_name_operators():
+    sys = two_protons()
+    with pytest.raises(ValueError, match="bool"):
+        spin.pulse(True, 90)
+    with pytest.raises(ValueError, match="an operator"):
+        sys.expectation(sys.identity_state(), np.eye(2))
+    with pytest.raises(ValueError, match="inept"):
+        spin.inept("1H", "1H", 140.0)
+    with pytest.raises(ValueError):
+        spin.inept_cycle("1H", "13C", 0.0)
+    warm = sys.with_temperature(77.0)
+    assert warm.temperature == 77.0 and sys.temperature == 298.15
+    assert sys.with_carrier("1H", 4.7).carrier("1H") == 4.7 and sys.carrier("1H") == 0.0
+    events = [spin.delay(1e-3), spin.set_field(2.0), spin.sweep(0.5, 1.0, 4)]
+    assert sys.field_after(events) == 0.5
+    sys.set_relaxation(0, 2.0, 1.0)
+    with pytest.raises(ValueError):
+        sys.set_relaxation(0, 1.0, 3.0)
+    assert sys.spins[0][2:] == (2.0, 1.0)

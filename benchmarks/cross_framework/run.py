@@ -899,7 +899,9 @@ TOLERANCES = {
     # single precision against double (measured up to 1.1·10⁻⁸ for the
     # energy and 1.3·10⁻⁶ for the gradient).
     "qaoa_double": 1e-10,
-    "spin_expectation": 1e-7,
+    "spin_expectation": 1e-9,
+    "spin_mesolve": 1e-3,
+    "spin_hamiltonian": 1e-13,
     "qaoa_single": 1e-5,
 }
 
@@ -907,82 +909,182 @@ TOLERANCES = {
 def spins_vs_qutip() -> dict:
     """Spin dynamics with relaxation against QuTiP's master-equation solver.
 
-    The Lindblad operators are built here from the documented formulas
-    (T1 towards thermal equilibrium, pure dephasing from T2) and QSO's spin
-    operators; QuTiP integrates the same equation. Expectations of every
-    spin's I_z and of each isotope's F_x, F_y are compared over time.
+    Everything on the QuTiP side is built here from the documented
+    formulas with QuTiP's own spin operators (``jmat``, ``tensor``): the
+    Hamiltonian of the frame, the thermal state, parahydrogen, the ideal
+    pulses and the Lindblad operators (T1 towards thermal equilibrium, pure
+    dephasing from T2). QSO runs each sequence; on the QuTiP side its
+    delays and the observation are propagated twice: exactly, by the
+    exponential (SciPy) of QuTiP's ``liouvillian`` applied to the deviation
+    from 1/d with L(1/d) as an augmented column, and by ``mesolve``.
+    Compared are the Hamiltonians and, over time, every spin's I_z and each
+    isotope's F_x, F_y, relative to the largest of them (at room
+    temperature they are parts in 10^5). ``mesolve`` is held to a looser
+    tolerance: its adaptive steps lose about 10^-6 of the deviation over
+    10^4 rad of precession, and 10^-4 in the laboratory frame at 9.4 T.
     """
+    import scipy.linalg
     import metatron_qso as q
     import qutip as qt
     from metatron_qso import spin
 
     hbar, kb = 1.054571817e-34, 1.380649e-23
+    gamma = {iso: q.spin.gyromagnetic_ratio(iso) for iso in ("1H", "13C", "15N")}
+    two_pi = 2 * math.pi
+    options = {"atol": 1e-15, "rtol": 1e-12, "nsteps": 10**8}
 
-    def collapse(sys):
+    def op(spins, i, which):
+        return qt.tensor([qt.jmat(0.5, which) if k == i else qt.qeye(2) for k in range(len(spins))])
+
+    def hamiltonian(field, spins, couplings, frame):
+        h = 0
+        for i, (iso, shift, _, _) in enumerate(spins):
+            factor = (1 + shift * 1e-6) if frame == "laboratory" else shift * 1e-6
+            h += -gamma[iso] * field * factor * op(spins, i, "z")
+        for i, j, jh in couplings:
+            if frame == "laboratory" or spins[i][0] == spins[j][0]:
+                h += two_pi * jh * sum(op(spins, i, w) * op(spins, j, w) for w in "xyz")
+            else:
+                h += two_pi * jh * op(spins, i, "z") * op(spins, j, "z")
+        return h
+
+    def boltzmann(field, temperature, iso, shift):
+        return hbar * gamma[iso] * field * (1 + shift * 1e-6) / (kb * temperature)
+
+    def collapse(field, temperature, spins):
         ops = []
-        for i, (iso, shift, t1, t2) in enumerate(sys.spins):
-            iz, ip = sys.spin_operator(i, "z"), sys.spin_operator(i, "+")
+        for i, (iso, shift, t1, t2) in enumerate(spins):
             r1 = 0.0 if t1 is None else 1 / t1
             if r1 > 0:
-                x = hbar * q.spin.gyromagnetic_ratio(iso) * sys.field * (1 + shift * 1e-6) / (kb * sys.temperature)
-                up = r1 / (1 + math.exp(-x))
-                ops += [math.sqrt(r1 - up) * ip.conj().T, math.sqrt(up) * ip]
+                up = r1 / (1 + math.exp(-boltzmann(field, temperature, iso, shift)))
+                ops += [math.sqrt(r1 - up) * op(spins, i, "-"), math.sqrt(up) * op(spins, i, "+")]
             if t2 is not None and 1 / t2 - r1 / 2 > 0:
-                ops.append(math.sqrt(2 * (1 / t2 - r1 / 2)) * iz)
+                ops.append(math.sqrt(2 * (1 / t2 - r1 / 2)) * op(spins, i, "z"))
         return ops
 
-    def build(field, spins, couplings, temperature=298.15, frame="rotating"):
+    def initial(field, temperature, spins, kind):
+        if kind == "thermal":
+            factors = []
+            for iso, shift, _, _ in spins:
+                x = boltzmann(field, temperature, iso, shift)
+                w = np.array([math.exp(x / 2), math.exp(-x / 2)])
+                factors.append(qt.Qobj(np.diag(w / w.sum())))
+            return qt.tensor(factors)
+        d = 2 ** len(spins)
+        dot = sum(op(spins, 0, w) * op(spins, 1, w) for w in "xyz")
+        return qt.tensor([qt.qeye(2)] * len(spins)) / d - 4 / d * dot
+
+    def exact(liouvillian, rho, t):
+        """exp(Lt) on the deviation from 1/d, with L(1/d) as an augmented column."""
+        d = rho.shape[0]
+        n = d * d
+        trace = rho.tr()
+        mixed = (np.eye(d) / d).reshape(-1, order="F")
+        aug = np.zeros((n + 1, n + 1), dtype=complex)
+        aug[:n, :n] = liouvillian * t
+        aug[:n, n] = liouvillian @ mixed * t * trace
+        p = scipy.linalg.expm(aug)
+        dev = rho.full().reshape(-1, order="F") - mixed * trace
+        out = p[:n, :n] @ dev + p[:n, n] + mixed * trace
+        return qt.Qobj(out.reshape(d, d, order="F"), dims=rho.dims)
+
+    def run_qutip(case, integrate):
+        field, temperature, spins, couplings, frame, kind, sequence, duration = case
+        h = hamiltonian(field, spins, couplings, frame)
+        c_ops = collapse(field, temperature, spins)
+        liouvillian = qt.liouvillian(h, c_ops).full()
+        rho = initial(field, temperature, spins, kind)
+        for step in sequence:
+            if step[0] == "pulse":
+                _, iso, angle, phase = step
+                g = sum(
+                    math.cos(math.radians(phase)) * op(spins, i, "x") + math.sin(math.radians(phase)) * op(spins, i, "y")
+                    for i, s in enumerate(spins)
+                    if s[0] == iso
+                )
+                u = (-1j * math.radians(angle) * g).expm()
+                rho = u * rho * u.dag()
+            elif integrate:
+                rho = qt.mesolve(h, rho, [0.0, step[1]], c_ops, options=options).states[-1]
+            else:
+                rho = exact(liouvillian, rho, step[1])
+        ops = [op(spins, i, "z") for i in range(len(spins))]
+        for iso in sorted({s[0] for s in spins}):
+            ops += [sum(op(spins, i, w) for i, s in enumerate(spins) if s[0] == iso) for w in "xy"]
+        times = np.linspace(0.0, duration, 11)
+        if integrate:
+            return h, times, qt.mesolve(h, rho, times, c_ops, e_ops=ops, options=options).expect
+        states = [exact(liouvillian, rho, t) for t in times]
+        return h, times, [[qt.expect(o, r) for r in states] for o in ops]
+
+    def run_qso(case, times):
+        field, temperature, spins, couplings, frame, kind, sequence, _ = case
         sys = q.SpinSystem(field, temperature=temperature, frame=frame)
         for iso, shift, t1, t2 in spins:
             sys.add_spin(iso, shift, t1=t1, t2=t2)
         for i, j, jh in couplings:
             sys.couple(i, j, jh)
-        return sys
+        rho = sys.thermal_state() if kind == "thermal" else sys.parahydrogen_state(0, 1)
+        events = [spin.pulse(s[1], s[2], s[3]) if s[0] == "pulse" else spin.delay(s[1]) for s in sequence]
+        rho = sys.evolve(rho, events)
+        ops = [sys.spin_operator(i, "z") for i in range(len(spins))]
+        for iso in sorted({s[0] for s in spins}):
+            ops += [sys.total_operator(iso, "x"), sys.total_operator(iso, "y")]
+        values = [[sys.expectation(sys.evolve(rho, [spin.delay(float(t))]), o).real for t in times] for o in ops]
+        return sys.hamiltonian(), values
 
+    tau = 1 / (4 * 140.0)
+    inept = [
+        ("pulse", "1H", 90.0, 0.0), ("delay", tau), ("pulse", "1H", 180.0, 0.0), ("pulse", "13C", 180.0, 0.0),
+        ("delay", tau), ("pulse", "1H", 90.0, 90.0), ("pulse", "13C", 90.0, 0.0),
+    ]
     cases = {
         "three protons, T1/T2, 1 T, 0.05 K": (
-            build(1.0, [("1H", 0.0, 0.4, 0.1), ("1H", 2.0, 0.6, 0.15), ("1H", 5.0, 0.8, 0.2)], [(0, 1, 6.0), (1, 2, -3.0)], 0.05),
-            "thermal", [spin.pulse("1H", 70, 20)], 0.2,
+            1.0, 0.05, [("1H", 0.0, 0.4, 0.1), ("1H", 2.0, 0.6, 0.15), ("1H", 5.0, 0.8, 0.2)],
+            [(0, 1, 6.0), (1, 2, -3.0)], "rotating", "thermal", [("pulse", "1H", 70.0, 20.0)], 0.2,
         ),
-        "1H-1H-13C-15N, T1/T2, 9.4 T": (
-            build(9.4, [("1H", 1.0, 0.5, 0.2), ("1H", 3.0, 0.7, 0.3), ("13C", 40.0, 1.5, 0.5), ("15N", 120.0, 2.0, 0.6)],
-                  [(0, 1, 7.0), (0, 2, 140.0), (1, 2, 5.0), (2, 3, -12.0)], 2.0),
-            "thermal", spin.inept("1H", "13C", 140.0), 0.1,
+        "1H-1H-13C-15N after INEPT, T1/T2, 9.4 T, 298 K, 1 s": (
+            9.4, 298.15, [("1H", 1.0, 0.5, 0.2), ("1H", 3.0, 0.7, 0.3), ("13C", 40.0, 1.5, 0.5), ("15N", 120.0, 2.0, 0.6)],
+            [(0, 1, 7.0), (0, 2, 140.0), (1, 2, 5.0), (2, 3, -12.0)], "rotating", "thermal", inept, 1.0,
         ),
-        "five protons, T1/T2, 1 T": (
-            build(1.0, [("1H", float(k), 0.5 + 0.1 * k, 0.2) for k in range(5)], [(k, k + 1, 3.0 + k) for k in range(4)], 0.1),
-            "thermal", [spin.pulse("1H", 60, 0)], 0.05,
+        "five protons, T1/T2, 9.4 T, 298 K": (
+            9.4, 298.15, [("1H", float(k), 0.5 + 0.1 * k, 0.2) for k in range(5)],
+            [(k, k + 1, 3.0 + k) for k in range(4)], "rotating", "thermal", [("pulse", "1H", 60.0, 0.0)], 0.2,
+        ),
+        "two protons, laboratory frame, 9.4 T, 298 K": (
+            9.4, 298.15, [("1H", 1.0, 0.8, 0.3), ("1H", 3.0, 1.2, 0.4)],
+            [(0, 1, 7.0)], "laboratory", "thermal", [("pulse", "1H", 90.0, 0.0)], 1e-3,
         ),
         "SABRE-SHEATH, 1H-1H-15N, 0.14 uT, laboratory frame": (
-            build(1.4e-7, [("1H", -22.0, None, None), ("1H", -22.0, None, None), ("15N", 250.0, None, None)],
-                  [(0, 1, -7.0), (0, 2, -2.0)], frame="laboratory"),
-            "parahydrogen", [], 2.0,
+            1.4e-7, 298.15, [("1H", -22.0, None, None), ("1H", -22.0, None, None), ("15N", 250.0, None, None)],
+            [(0, 1, -7.0), (0, 2, -2.0)], "laboratory", "parahydrogen", [], 2.0,
         ),
     }
+    def relative(values, expect):
+        scale = max(np.abs(np.asarray(e, dtype=float)).max() for e in expect)
+        diff = max(float(np.abs(np.asarray(v) - np.asarray(e, dtype=float)).max()) for v, e in zip(values, expect))
+        return diff / scale, float(scale)
+
     out = {}
-    worst = 0.0
-    for name, (sys, initial, sequence, duration) in cases.items():
-        rho0 = sys.thermal_state() if initial == "thermal" else sys.parahydrogen_state(0, 1)
-        rho0 = sys.evolve(rho0, sequence)
-        dims = [[2] * len(sys.spins)] * 2
-        ops = [sys.spin_operator(i, "z") for i in range(len(sys.spins))]
-        for iso in sorted({s[0] for s in sys.spins}):
-            ops += [sys.total_operator(iso, "x"), sys.total_operator(iso, "y")]
-        times = np.linspace(0.0, duration, 11)
-        result = qt.mesolve(
-            qt.Qobj(sys.hamiltonian(), dims=dims), qt.Qobj(rho0, dims=dims), times,
-            [qt.Qobj(c, dims=dims) for c in collapse(sys)],
-            e_ops=[qt.Qobj(o, dims=dims) for o in ops],
-            options={"atol": 1e-13, "rtol": 1e-11, "nsteps": 10**7},
-        )
-        diff = 0.0
-        for k, t in enumerate(times):
-            rho = sys.evolve(rho0, [spin.delay(float(t))])
-            for op, ref in zip(ops, result.expect):
-                diff = max(diff, abs(sys.expectation(rho, op).real - ref[k]))
-        worst = max(worst, diff)
-        out[name] = {"spins": len(sys.spins), "max_expectation_difference": diff}
-    out["max_expectation_difference"] = worst
+    worst, worst_mesolve, worst_h = 0.0, 0.0, 0.0
+    for name, case in cases.items():
+        h_ref, times, expect = run_qutip(case, integrate=False)
+        _, _, integrated = run_qutip(case, integrate=True)
+        h, values = run_qso(case, times)
+        h_diff = float(np.abs(h - h_ref.full()).max() / np.abs(h_ref.full()).max())
+        diff, scale = relative(values, expect)
+        diff_mesolve, _ = relative(values, integrated)
+        worst, worst_mesolve, worst_h = max(worst, diff), max(worst_mesolve, diff_mesolve), max(worst_h, h_diff)
+        out[name] = {
+            "spins": len(case[2]),
+            "largest_expectation": scale,
+            "max_relative_expectation_difference": diff,
+            "max_relative_expectation_difference_mesolve": diff_mesolve,
+            "hamiltonian_relative_difference": h_diff,
+        }
+    out["max_relative_expectation_difference"] = worst
+    out["max_relative_expectation_difference_mesolve"] = worst_mesolve
+    out["max_hamiltonian_relative_difference"] = worst_h
     return out
 
 
@@ -1063,9 +1165,13 @@ def check(c: dict) -> list[str]:
             diff = max(r["value_rel_diff"], r.get("gradient_rel_diff", 0.0))
             if not diff <= tol:
                 failures.append(f"QAOA energy or gradient of {lib} at {n} qubits differs from QSO's by {diff:.3g}")
-    sp = c["spins_vs_qutip"]["max_expectation_difference"]
-    if not sp <= TOLERANCES["spin_expectation"]:
-        failures.append(f"spin dynamics differ from QuTiP by {sp:.3g}")
+    sp = c["spins_vs_qutip"]
+    if not sp["max_relative_expectation_difference"] <= TOLERANCES["spin_expectation"]:
+        failures.append(f"spin dynamics differ from QuTiP by {sp['max_relative_expectation_difference']:.3g} (relative)")
+    if not sp["max_relative_expectation_difference_mesolve"] <= TOLERANCES["spin_mesolve"]:
+        failures.append(f"spin dynamics differ from QuTiP's mesolve by {sp['max_relative_expectation_difference_mesolve']:.3g}")
+    if not sp["max_hamiltonian_relative_difference"] <= TOLERANCES["spin_hamiltonian"]:
+        failures.append(f"spin Hamiltonians differ from QuTiP's by {sp['max_hamiltonian_relative_difference']:.3g}")
     chem = c["chemistry_vs_pyscf"]
     if not chem["integral_max_difference"] <= TOLERANCES["integral"]:
         failures.append(f"integrals differ from PySCF by {chem['integral_max_difference']:.3g}")
