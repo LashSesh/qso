@@ -3,9 +3,10 @@
 
 use std::collections::BTreeMap;
 
+use metatron_qso::mps::MpsOptions;
 use metatron_qso::noise::learning::{
-    LearningOptions, SparsePauliLindblad, learn_layer as learn_core, pea_layered as pea_core,
-    pec_layered as pec_core,
+    LayeredSimulator, LearningOptions, LearningSimulator, SparsePauliLindblad,
+    learn_layer_with as learn_core, pea_layered_with as pea_core, pec_layered_with as pec_core,
 };
 use metatron_qso::quantum::{Circuit, PauliString, PauliSum};
 use pyo3::prelude::*;
@@ -17,6 +18,36 @@ use crate::mitigation::extrapolation;
 use crate::noise::PyDeviceModel;
 use crate::state::PyPauliSum;
 use crate::{Raise, check_finite, invalid, pydict};
+
+/// The simulator of `learn_layer`: `"auto"`, `"density_matrix"` or
+/// `"frames"`.
+fn learning_simulator(name: &str) -> PyResult<LearningSimulator> {
+    match name {
+        "auto" => Ok(LearningSimulator::Auto),
+        "density_matrix" => Ok(LearningSimulator::DensityMatrix),
+        "frames" => Ok(LearningSimulator::Frames),
+        other => Err(invalid(format!(
+            "unknown simulator '{other}' (use auto, density_matrix or frames)"
+        ))),
+    }
+}
+
+/// The simulator of the layered mitigation: `"auto"`, `"density_matrix"`,
+/// `"trajectories"` or `"mps"` (bond dimension up to `max_bond`).
+fn layered_simulator(name: &str, max_bond: usize) -> PyResult<LayeredSimulator> {
+    match name {
+        "auto" => Ok(LayeredSimulator::Auto),
+        "density_matrix" => Ok(LayeredSimulator::DensityMatrix),
+        "trajectories" => Ok(LayeredSimulator::Trajectories),
+        "mps" => Ok(LayeredSimulator::Mps(MpsOptions {
+            max_bond,
+            ..MpsOptions::default()
+        })),
+        other => Err(invalid(format!(
+            "unknown simulator '{other}' (use auto, density_matrix, trajectories or mps)"
+        ))),
+    }
+}
 
 /// A single Pauli string such as `"X0 Z1"`.
 fn parse_string(text: &str) -> PyResult<PauliString> {
@@ -116,11 +147,13 @@ fn blocks_of(blocks: &[PyRef<'_, PyCircuit>]) -> Vec<Circuit> {
 /// disjoint qubits) on `device` (`depths` default to 2, 4, 8, 16, 32). Returns a dict with `model`,
 /// `std_errors`, `products` (`(string, fitted f_b·f_UbU, standard error)`)
 /// and `symmetrised` (strings whose fidelity was taken equal to that of
-/// their image under the layer).
+/// their image under the layer). `simulator` is `"density_matrix"` (up to
+/// 10 qubits), `"frames"` (Pauli frames, up to 64 qubits, every channel
+/// twirled) or `"auto"` (density matrices up to 10 qubits, frames above).
 #[pyfunction]
 #[pyo3(signature = (
     layer, device, depths = None, twirls = 16, shots = 256, edges = None,
-    seed = 0
+    seed = 0, simulator = "auto"
 ))]
 #[allow(clippy::too_many_arguments)]
 fn learn_layer<'py>(
@@ -132,7 +165,9 @@ fn learn_layer<'py>(
     shots: usize,
     edges: Option<Vec<(usize, usize)>>,
     seed: u64,
+    simulator: &str,
 ) -> PyResult<Bound<'py, PyDict>> {
+    let simulator = learning_simulator(simulator)?;
     let options = LearningOptions {
         depths: depths.unwrap_or_else(|| LearningOptions::default().depths),
         twirls,
@@ -141,7 +176,9 @@ fn learn_layer<'py>(
         seed,
     };
     let (l, d) = (&layer.inner, &device.inner);
-    let r = py.detach(|| learn_core(l, d, &options)).raise()?;
+    let r = py
+        .detach(|| learn_core(l, d, &options, simulator))
+        .raise()?;
     Ok(pydict!(py, {
         "model" => PySparsePauliLindblad { inner: r.model },
         "std_errors" => r.std_errors,
@@ -157,9 +194,17 @@ fn learn_layer<'py>(
 /// Error-cancelled `⟨observable⟩` of `B₀ L B₁ L … L B_m` (`blocks`, `L`
 /// the twirled `layer`) on `device`, cancelling the layer noise with
 /// `model`. Returns a dict with `estimate`, `overhead` and
-/// `noisy_operations` (the number of layers).
+/// `noisy_operations` (the number of layers). Every sample is a density
+/// matrix (`simulator="density_matrix"`, up to 10 qubits), one trajectory
+/// (`"trajectories"`, up to 24) or one matrix-product state (`"mps"`, up
+/// to 64, bond dimension up to `max_bond`, for devices whose channels are
+/// mixtures of unitaries); `"auto"` picks them in that order and refuses
+/// to truncate.
 #[pyfunction]
-#[pyo3(signature = (blocks, layer, model, device, observable, samples, seed = 0))]
+#[pyo3(signature = (
+    blocks, layer, model, device, observable, samples, seed = 0, simulator = "auto",
+    max_bond = 256
+))]
 #[allow(clippy::too_many_arguments)]
 fn pec_layered<'py>(
     py: Python<'py>,
@@ -170,11 +215,14 @@ fn pec_layered<'py>(
     observable: &PyPauliSum,
     samples: usize,
     seed: u64,
+    simulator: &str,
+    max_bond: usize,
 ) -> PyResult<Bound<'py, PyDict>> {
+    let simulator = layered_simulator(simulator, max_bond)?;
     let blocks = blocks_of(&blocks);
     let (l, m, d, h) = (&layer.inner, &model.inner, &device.inner, &observable.inner);
     let r = py
-        .detach(|| pec_core(&blocks, l, m, d, h, samples, seed))
+        .detach(|| pec_core(&blocks, l, m, d, h, samples, seed, simulator))
         .raise()?;
     Ok(pydict!(py, {
         "estimate" => wrap_estimate(r.estimate),
@@ -187,10 +235,11 @@ fn pec_layered<'py>(
 /// rate of `model` is multiplied by each of `scales` (≥ 1) by inserting
 /// Paulis after the layers, and the values are extrapolated to zero
 /// noise. Returns a dict with `estimate`, `scales` and `values`.
+/// `simulator` and `max_bond` as in `pec_layered`.
 #[pyfunction]
 #[pyo3(signature = (
     blocks, layer, model, device, observable, scales, samples, method = "richardson",
-    degree = None, asymptote = 0.0, seed = 0
+    degree = None, asymptote = 0.0, seed = 0, simulator = "auto", max_bond = 256
 ))]
 #[allow(clippy::too_many_arguments)]
 fn pea_layered<'py>(
@@ -206,13 +255,20 @@ fn pea_layered<'py>(
     degree: Option<usize>,
     asymptote: f64,
     seed: u64,
+    simulator: &str,
+    max_bond: usize,
 ) -> PyResult<Bound<'py, PyDict>> {
     check_finite("scales", &scales)?;
     let method = extrapolation(method, degree, asymptote)?;
+    let simulator = layered_simulator(simulator, max_bond)?;
     let blocks = blocks_of(&blocks);
     let (l, m, d, h) = (&layer.inner, &model.inner, &device.inner, &observable.inner);
     let r = py
-        .detach(|| pea_core(&blocks, l, m, d, h, &scales, samples, method, seed))
+        .detach(|| {
+            pea_core(
+                &blocks, l, m, d, h, &scales, samples, method, seed, simulator,
+            )
+        })
         .raise()?;
     Ok(pydict!(py, {
         "estimate" => wrap_estimate(r.estimate),

@@ -27,23 +27,44 @@
 //! extrapolation. Inserted Paulis are single-qubit gates; they are
 //! noiseless when the device has no one-qubit gate noise, as when they are
 //! merged into neighbouring gates on hardware.
+//!
+//! Scale. The learning circuits are Clifford circuits whose noiseless
+//! outcome is fixed, so above [`MAX_LEARNING_QUBITS`] qubits they run on
+//! Pauli frames (up to 64 qubits, [`LearningSimulator`]): every shot
+//! carries the Pauli error the twirled channels put in, through the
+//! compiled circuit. Hundreds of generators (681 on a 53-qubit heavy-hex
+//! layer) are fitted by coordinate descent and an active-set polish on the
+//! normal equations. The mitigated circuits are not Clifford: their samples
+//! run on density matrices, trajectories or matrix-product states
+//! ([`LayeredSimulator`]).
 
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{DensityMatrix, DeviceModel};
+use super::device::{Op, Program, Unraveling};
+use super::{DensityMatrix, DeviceModel, TrajectorySimulator};
 use crate::error::{QsoError, Result};
 use crate::estimation::Estimate;
 use crate::mitigation::pec::PecResult;
 use crate::mitigation::zne::{Extrapolation, ZneResult, extrapolate};
+use crate::mps::{Mps, MpsOptions};
 use crate::parallel::map_tasks;
 use crate::quantum::{Circuit, GateKind, Pauli, PauliString, PauliSum};
 use crate::rng::Rng;
 
-/// Largest register a layer may act on: every learning and mitigation
-/// circuit is simulated with density matrices.
+/// Largest register learning simulates with density matrices (and the
+/// largest on which [`LearningSimulator::Auto`] chooses them).
 pub const MAX_LEARNING_QUBITS: usize = 10;
+/// Largest register learning simulates with Pauli frames.
+pub const MAX_FRAME_LEARNING_QUBITS: usize = 64;
+/// Largest register of [`pec_layered`] and [`pea_layered`] (on
+/// matrix-product states).
+pub const MAX_LAYERED_QUBITS: usize = 64;
+/// Largest register on which layered mitigation simulates samples as
+/// quantum trajectories (and the largest on which
+/// [`LayeredSimulator::Auto`] chooses them).
+pub const MAX_TRAJECTORY_LAYERED_QUBITS: usize = 24;
 /// Most circuits one call simulates.
 pub const MAX_LEARNING_CIRCUITS: usize = 1 << 20;
 /// Most shots per circuit.
@@ -222,14 +243,14 @@ enum Gate {
     Swap(usize, usize),
 }
 
-/// The gates of a layer: `cx`, `cy`, `cz` and `swap` on disjoint qubits
-/// (so the layer is its own inverse).
-fn layer_gates(layer: &Circuit) -> Result<Vec<Gate>> {
+/// The gates of a layer of at most `max` qubits: `cx`, `cy`, `cz` and
+/// `swap` on disjoint qubits (so the layer is its own inverse).
+fn layer_gates(layer: &Circuit, max: usize) -> Result<Vec<Gate>> {
     let n = layer.n_qubits();
-    if n == 0 || n > MAX_LEARNING_QUBITS {
+    if n == 0 || n > max {
         return Err(QsoError::TooManyQubits {
             what: "noise learning (1 or more)",
-            max: MAX_LEARNING_QUBITS,
+            max,
             requested: n,
         });
     }
@@ -447,28 +468,42 @@ fn median(v: &mut [f64]) -> f64 {
     }
 }
 
+/// Above this many unknowns [`nnls`] starts from coordinate descent and
+/// solves on the normal equations.
+const DENSE_NNLS: usize = 64;
+
 /// Non-negative least squares `argmin_{x ≥ 0} ‖A x − b‖` (Lawson and
-/// Hanson); `a` holds the rows.
+/// Hanson); `a` holds the rows. Up to [`DENSE_NNLS`] unknowns every
+/// subproblem is solved by an SVD of the passive columns; above, by a
+/// Cholesky factorisation of the Gram matrix `AᵀA`, from the support that
+/// coordinate descent finds, so that only the few variables it gets wrong
+/// pass through the active set.
 pub(crate) fn nnls(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
+    if a.first().map_or(0, Vec::len) <= DENSE_NNLS {
+        nnls_dense(a, b)
+    } else {
+        nnls_gram(a, b)
+    }
+}
+
+fn nnls_dense(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
     let m = a.len();
     let k = a.first().map_or(0, Vec::len);
     let mat = nalgebra::DMatrix::from_fn(m, k, |i, j| a[i][j]);
     let rhs = nalgebra::DVector::from_column_slice(b);
-    let mut x = vec![0.0; k];
-    let mut passive = vec![false; k];
     // Thresholds relative to the scale of the gradient Aᵀb and of the
     // solution, so that rescaling rows leaves the result unchanged.
     let tol = 1e-12 * (mat.transpose() * &rhs).amax();
-    let gradient = |x: &[f64]| {
+    let gradient = |x: &[f64]| -> Vec<f64> {
         let r = &rhs - &mat * nalgebra::DVector::from_column_slice(x);
-        mat.transpose() * r
+        (mat.transpose() * r).iter().copied().collect()
     };
     // Least squares on the passive columns (others zero).
-    let solve = |passive: &[bool]| -> Vec<f64> {
+    let solve = |passive: &[bool]| -> Option<Vec<f64>> {
         let cols: Vec<usize> = (0..k).filter(|&j| passive[j]).collect();
         let mut s = vec![0.0; k];
         if cols.is_empty() {
-            return s;
+            return Some(s);
         }
         let sub = nalgebra::DMatrix::from_fn(m, cols.len(), |i, c| mat[(i, cols[c])]);
         let svd = sub.svd(true, true);
@@ -477,33 +512,112 @@ pub(crate) fn nnls(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
         for (c, &j) in cols.iter().enumerate() {
             s[j] = sol[c];
         }
-        s
+        Some(s)
     };
+    active_set(k, tol, &gradient, &solve, vec![0.0; k])
+        .expect("an SVD solves every subproblem")
+}
+
+/// [`nnls`] on the normal equations, warm-started by coordinate descent.
+fn nnls_gram(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
+    let m = a.len();
+    let k = a.first().map_or(0, Vec::len);
+    let mat = nalgebra::DMatrix::from_fn(m, k, |i, j| a[i][j]);
+    let rhs = nalgebra::DVector::from_column_slice(b);
+    let gram = mat.transpose() * &mat;
+    let c = mat.transpose() * &rhs;
+    let tol = 1e-12 * c.amax();
+    // Coordinate descent on ½xᵀGx − cᵀx over x ≥ 0, keeping the gradient
+    // g = Gx − c up to date; it stops when a sweep moves no variable by
+    // more than 1e-10 of the largest.
+    let mut x = vec![0.0; k];
+    let mut g: Vec<f64> = c.iter().map(|v| -v).collect();
+    for _ in 0..2000 {
+        let mut moved = 0.0f64;
+        for j in 0..k {
+            let d = gram[(j, j)];
+            if d <= 0.0 {
+                continue;
+            }
+            let new = (x[j] - g[j] / d).max(0.0);
+            let delta = new - x[j];
+            if delta != 0.0 {
+                x[j] = new;
+                for (i, gi) in g.iter_mut().enumerate() {
+                    *gi += delta * gram[(i, j)];
+                }
+                moved = moved.max(delta.abs());
+            }
+        }
+        let largest = x.iter().copied().fold(0.0, f64::max);
+        if moved <= 1e-10 * largest {
+            break;
+        }
+    }
+    let gradient = |x: &[f64]| -> Vec<f64> {
+        let gx = &gram * nalgebra::DVector::from_column_slice(x);
+        (&c - gx).iter().copied().collect()
+    };
+    let solve = |passive: &[bool]| -> Option<Vec<f64>> {
+        let cols: Vec<usize> = (0..k).filter(|&j| passive[j]).collect();
+        let mut s = vec![0.0; k];
+        if cols.is_empty() {
+            return Some(s);
+        }
+        let sub = nalgebra::DMatrix::from_fn(cols.len(), cols.len(), |p, q| {
+            gram[(cols[p], cols[q])]
+        });
+        let rhs = nalgebra::DVector::from_iterator(cols.len(), cols.iter().map(|&j| c[j]));
+        let sol = sub.cholesky()?.solve(&rhs);
+        for (p, &j) in cols.iter().enumerate() {
+            s[j] = sol[p];
+        }
+        Some(s)
+    };
+    // A rank-deficient Gram matrix (collinear columns) has no Cholesky
+    // factor: the dense path handles it.
+    active_set(k, tol, &gradient, &solve, x).unwrap_or_else(|| nnls_dense(a, b))
+}
+
+/// The active-set iteration of Lawson and Hanson from a feasible `x`
+/// (passive set: its positive entries). `gradient(x)` is `Aᵀ(b − Ax)` and
+/// `solve(passive)` the least-squares solution on the passive variables;
+/// `None` when a subproblem cannot be solved.
+fn active_set(
+    k: usize,
+    tol: f64,
+    gradient: &dyn Fn(&[f64]) -> Vec<f64>,
+    solve: &dyn Fn(&[bool]) -> Option<Vec<f64>>,
+    mut x: Vec<f64>,
+) -> Option<Vec<f64>> {
+    let mut passive: Vec<bool> = x.iter().map(|&v| v > 0.0).collect();
     // Variables that came out non-positive right after entering; skipped
     // until the solution changes (prevents cycling on round-off).
     let mut skip = vec![false; k];
-    for _ in 0..3 * k + 10 {
-        let w = gradient(&x);
-        let Some(j) = (0..k)
-            .filter(|&j| !passive[j] && !skip[j] && w[j] > tol)
-            .max_by(|&p, &q| w[p].total_cmp(&w[q]))
-        else {
-            break;
-        };
-        passive[j] = true;
+    // Moves x towards the solution on the passive set until that solution
+    // is positive, dropping the variables that reach zero; false when the
+    // variable that just entered (`entered`) came out non-positive at once.
+    let settle = |x: &mut Vec<f64>,
+                  passive: &mut Vec<bool>,
+                  skip: &mut Vec<bool>,
+                  entered: Option<usize>|
+     -> Option<bool> {
         let mut first = true;
         loop {
-            let s = solve(&passive);
+            let s = solve(passive)?;
             let bad: Vec<usize> = (0..k).filter(|&i| passive[i] && s[i] <= 0.0).collect();
             if bad.is_empty() {
-                x = s;
+                *x = s;
                 skip.iter_mut().for_each(|f| *f = false);
-                break;
+                return Some(true);
             }
-            if first && s[j] <= 0.0 {
+            if let Some(j) = entered
+                && first
+                && s[j] <= 0.0
+            {
                 passive[j] = false;
                 skip[j] = true;
-                break;
+                return Some(false);
             }
             first = false;
             let (blocking, alpha) = bad.iter().map(|&i| (i, x[i] / (x[i] - s[i]))).fold(
@@ -522,23 +636,85 @@ pub(crate) fn nnls(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
                 }
             }
         }
+    };
+    if passive.iter().any(|&p| p) {
+        settle(&mut x, &mut passive, &mut skip, None)?;
     }
-    x
+    for _ in 0..3 * k + 10 {
+        let w = gradient(&x);
+        let Some(j) = (0..k)
+            .filter(|&j| !passive[j] && !skip[j] && w[j] > tol)
+            .max_by(|&p, &q| w[p].total_cmp(&w[q]))
+        else {
+            break;
+        };
+        passive[j] = true;
+        settle(&mut x, &mut passive, &mut skip, Some(j))?;
+    }
+    Some(x)
+}
+
+/// How [`learn_layer_with`] simulates the learning experiments.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum LearningSimulator {
+    /// Density matrices up to [`MAX_LEARNING_QUBITS`] qubits, Pauli frames
+    /// above.
+    Auto,
+    /// Exact density matrices with the device's channels as they are
+    /// (up to [`MAX_LEARNING_QUBITS`] qubits).
+    DensityMatrix,
+    /// Pauli frames (up to [`MAX_FRAME_LEARNING_QUBITS`] qubits). Every
+    /// learning circuit is a Clifford circuit whose noiseless outcome is
+    /// fixed, so each shot propagates a Pauli frame through the compiled
+    /// circuit, with every channel replaced by its Pauli twirl. Exact for
+    /// Pauli noise (depolarising, Pauli channels, phase flips, readout
+    /// errors); for other channels (coherent errors, damping) it twirls
+    /// each compiled channel on its own, which equals the twirled
+    /// experiment when a layer has one such channel per group of qubits.
+    Frames,
 }
 
 /// Learn the noise of the twirled `layer` (two-qubit Clifford gates on
 /// disjoint qubits) on `device` as a sparse Pauli–Lindblad model, from
 /// simulated experiments with finite shots and the device's readout
 /// errors (twirled: random bit flips before measurement, undone in the
-/// data).
+/// data). Up to [`MAX_LEARNING_QUBITS`] qubits the experiments run on
+/// density matrices, above on Pauli frames ([`learn_layer_with`]).
 pub fn learn_layer(
     layer: &Circuit,
     device: &DeviceModel,
     options: &LearningOptions,
 ) -> Result<LearnedNoise> {
-    let gates = layer_gates(layer)?;
+    learn_layer_with(layer, device, options, LearningSimulator::Auto)
+}
+
+/// [`learn_layer`] with a chosen simulator.
+pub fn learn_layer_with(
+    layer: &Circuit,
+    device: &DeviceModel,
+    options: &LearningOptions,
+    simulator: LearningSimulator,
+) -> Result<LearnedNoise> {
+    let frames = match simulator {
+        LearningSimulator::Auto => layer.n_qubits() > MAX_LEARNING_QUBITS,
+        LearningSimulator::DensityMatrix => false,
+        LearningSimulator::Frames => true,
+    };
+    let max = if frames {
+        MAX_FRAME_LEARNING_QUBITS
+    } else {
+        MAX_LEARNING_QUBITS
+    };
+    let gates = layer_gates(layer, max)?;
     let n = layer.n_qubits();
     device.validate()?;
+    if frames && !device.is_markovian() {
+        return Err(QsoError::invalid(
+            "device",
+            "learning needs noise that is a channel at points of the circuit (no slow noise)",
+        ));
+    }
     let mut distinct = options.depths.clone();
     distinct.sort_unstable();
     distinct.dedup();
@@ -643,13 +819,22 @@ pub fn learn_layer(
         }
         // Readout twirl: flipping random qubits before measurement and
         // their bits after it makes readout errors a factor per qubit.
-        let flip = rng.next_u64() & ((1u64 << n) - 1);
+        let mask = if n == 64 { u64::MAX } else { (1u64 << n) - 1 };
+        let flip = rng.next_u64() & mask;
         for q in (0..n).filter(|q| (flip >> q) & 1 == 1) {
             c.x(q);
         }
-        let mut rho = DensityMatrix::zero(n)?;
-        rho.apply_device(&c, &[], device)?;
-        let counts = rho.sample_with_readout(options.shots, &readout, &mut rng);
+        let counts: Vec<(u64, usize)> = if frames {
+            let program = Program::compile(&c, &[], device)?;
+            frame_counts(&program, options.shots, &readout, &mut rng)?
+        } else {
+            let mut rho = DensityMatrix::zero(n)?;
+            rho.apply_device(&c, &[], device)?;
+            rho.sample_with_readout(options.shots, &readout, &mut rng)
+                .into_iter()
+                .map(|(bits, m)| (bits as u64, m))
+                .collect()
+        };
         Ok(gens
             .iter()
             .enumerate()
@@ -658,8 +843,8 @@ pub fn learn_layer(
                 let support = g.x_mask() | g.z_mask();
                 let total: i64 = counts
                     .iter()
-                    .map(|(&bits, &m)| {
-                        let parity = ((bits as u64 ^ flip) & support).count_ones() % 2;
+                    .map(|&(bits, m)| {
+                        let parity = ((bits ^ flip) & support).count_ones() % 2;
                         if parity == 0 { m as i64 } else { -(m as i64) }
                     })
                     .sum();
@@ -838,6 +1023,185 @@ pub fn learn_layer(
     })
 }
 
+/// Outcomes of a compiled Clifford circuit whose noiseless outcome on
+/// `|0…0⟩` is fixed (as for every learning circuit): every shot carries a
+/// Pauli frame through the circuit (Pauli gates and errors multiply it,
+/// other Clifford gates conjugate it), and its X part is the measured
+/// bitstring, before readout errors. Channels act through their Pauli
+/// twirl. Returns `(bits, count)` pairs.
+fn frame_counts(
+    program: &Program,
+    shots: usize,
+    readout: &[(f64, f64)],
+    rng: &mut Rng,
+) -> Result<Vec<(u64, usize)>> {
+    // The twirl of every channel: probability of an error, and the
+    // cumulative distribution of the non-identity Paulis given one.
+    let twirls: Vec<(f64, Vec<f64>)> = program
+        .channels
+        .iter()
+        .map(|ch| {
+            let p = ch.channel.twirled().pauli_probabilities().expect("a Pauli channel");
+            let error = (1.0 - p[0]).clamp(0.0, 1.0);
+            let mut acc = 0.0;
+            let cumulative = p[1..]
+                .iter()
+                .map(|q| {
+                    acc += q;
+                    acc
+                })
+                .collect();
+            (error, cumulative)
+        })
+        .collect();
+    let mut x = vec![0u64; shots];
+    let mut z = vec![0u64; shots];
+    let bit = |q: usize| 1u64 << q;
+    for op in &program.ops {
+        match op {
+            Op::Gates(c) => {
+                for inst in c.instructions() {
+                    frame_gate(inst, &mut x, &mut z)?;
+                }
+            }
+            Op::Channel { channel, qubits } => {
+                let (error, cumulative) = &twirls[*channel];
+                if *error <= 0.0 {
+                    continue;
+                }
+                let k = qubits.len();
+                // The shots with an error, by geometric gaps.
+                let log_stay = (1.0 - error).ln();
+                let mut shot = 0usize;
+                loop {
+                    if *error < 1.0 {
+                        let u = 1.0 - rng.uniform();
+                        let gap = (u.ln() / log_stay).floor();
+                        // NaN when the error probability rounds away.
+                        if gap.is_nan() || gap >= (shots - shot) as f64 {
+                            break;
+                        }
+                        shot += gap as usize;
+                    }
+                    if shot >= shots {
+                        break;
+                    }
+                    let total = cumulative.last().copied().unwrap_or(0.0);
+                    let u = rng.uniform() * total;
+                    let index = 1 + cumulative.partition_point(|&c| c <= u).min(cumulative.len() - 1);
+                    for (pos, &q) in qubits.iter().enumerate() {
+                        match (index >> (2 * (k - 1 - pos))) & 3 {
+                            1 => x[shot] ^= bit(q),
+                            2 => {
+                                x[shot] ^= bit(q);
+                                z[shot] ^= bit(q);
+                            }
+                            3 => z[shot] ^= bit(q),
+                            _ => {}
+                        }
+                    }
+                    shot += 1;
+                }
+            }
+            Op::Phase { .. } | Op::SpreadGate { .. } => {
+                return Err(QsoError::invalid(
+                    "device",
+                    "Pauli frames need noise that is a channel at points of the circuit",
+                ));
+            }
+        }
+    }
+    let mut counts: HashMap<u64, usize> = HashMap::new();
+    for &bits in &x {
+        let mut b = bits;
+        for (q, &(p01, p10)) in readout.iter().enumerate() {
+            if p01 == 0.0 && p10 == 0.0 {
+                continue;
+            }
+            let p = if (b >> q) & 1 == 0 { p01 } else { p10 };
+            if rng.uniform() < p {
+                b ^= bit(q);
+            }
+        }
+        *counts.entry(b).or_insert(0) += 1;
+    }
+    let mut out: Vec<(u64, usize)> = counts.into_iter().collect();
+    out.sort_unstable();
+    Ok(out)
+}
+
+/// Conjugate the frames `(x, z)` of all shots by a Clifford gate, or
+/// multiply them by a Pauli gate.
+fn frame_gate(inst: &crate::quantum::Instruction, x: &mut [u64], z: &mut [u64]) -> Result<()> {
+    use GateKind::*;
+    let t = &inst.targets;
+    let both = |x: &mut [u64], z: &mut [u64], f: &dyn Fn(u64, u64) -> (u64, u64)| {
+        for (a, b) in x.iter_mut().zip(z.iter_mut()) {
+            (*a, *b) = f(*a, *b);
+        }
+    };
+    let get = |m: u64, q: usize| (m >> q) & 1;
+    let set = |m: u64, q: usize, v: u64| (m & !(1 << q)) | (v << q);
+    if inst.is_identity() {
+        return Ok(());
+    }
+    match (inst.kind, inst.controls.as_slice()) {
+        (X, []) => x.iter_mut().for_each(|a| *a ^= 1 << t[0]),
+        (Z, []) => z.iter_mut().for_each(|b| *b ^= 1 << t[0]),
+        (Y, []) => {
+            x.iter_mut().for_each(|a| *a ^= 1 << t[0]);
+            z.iter_mut().for_each(|b| *b ^= 1 << t[0]);
+        }
+        (H, []) => {
+            let q = t[0];
+            both(x, z, &|a, b| (set(a, q, get(b, q)), set(b, q, get(a, q))));
+        }
+        (S | Sdg, []) => {
+            let q = t[0];
+            both(x, z, &|a, b| (a, b ^ (get(a, q) << q)));
+        }
+        (SX | SXdg, []) => {
+            let q = t[0];
+            both(x, z, &|a, b| (a ^ (get(b, q) << q), b));
+        }
+        (X, [c]) => {
+            let (c, q) = (*c, t[0]);
+            both(x, z, &|a, b| (a ^ (get(a, c) << q), b ^ (get(b, q) << c)));
+        }
+        (Z, [c]) => {
+            let (c, q) = (*c, t[0]);
+            both(x, z, &|a, b| (a, b ^ (get(a, q) << c) ^ (get(a, c) << q)));
+        }
+        (Y, [c]) => {
+            // CY = S_t · CX · S_t† on frames: z_t ⊕= x_t, CX, z_t ⊕= x_t.
+            let (c, q) = (*c, t[0]);
+            both(x, z, &|a, b| {
+                let b = b ^ (get(a, q) << q);
+                let (a, b) = (a ^ (get(a, c) << q), b ^ (get(b, q) << c));
+                (a, b ^ (get(a, q) << q))
+            });
+        }
+        (Swap, []) => {
+            let (p, q) = (t[0], t[1]);
+            both(x, z, &|a, b| {
+                let a = set(set(a, p, get(a, q)), q, get(a, p));
+                let b = set(set(b, p, get(b, q)), q, get(b, p));
+                (a, b)
+            });
+        }
+        _ => {
+            return Err(QsoError::invalid(
+                "circuit",
+                format!(
+                    "Pauli frames need Clifford gates, not {}",
+                    inst.name()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Checks shared by [`pec_layered`] and [`pea_layered`].
 fn check_layered(
     blocks: &[Circuit],
@@ -845,10 +1209,24 @@ fn check_layered(
     model: &SparsePauliLindblad,
     observable: &PauliSum,
     samples: usize,
-) -> Result<Vec<Gate>> {
-    let gates = layer_gates(layer)?;
-    model.validate()?;
+    simulator: LayeredSimulator,
+) -> Result<(Vec<Gate>, Sampler)> {
     let n = layer.n_qubits();
+    let sampler = match simulator {
+        LayeredSimulator::Auto if n <= MAX_LEARNING_QUBITS => Sampler::DensityMatrix,
+        LayeredSimulator::Auto if n <= MAX_TRAJECTORY_LAYERED_QUBITS => Sampler::Trajectory,
+        LayeredSimulator::Auto => Sampler::Mps(MpsOptions::default(), true),
+        LayeredSimulator::DensityMatrix => Sampler::DensityMatrix,
+        LayeredSimulator::Trajectories => Sampler::Trajectory,
+        LayeredSimulator::Mps(options) => Sampler::Mps(options, false),
+    };
+    let max = match sampler {
+        Sampler::DensityMatrix => MAX_LEARNING_QUBITS,
+        Sampler::Trajectory => MAX_TRAJECTORY_LAYERED_QUBITS,
+        Sampler::Mps(..) => MAX_LAYERED_QUBITS,
+    };
+    let gates = layer_gates(layer, max)?;
+    model.validate()?;
     if blocks.is_empty() || blocks.iter().any(|b| b.n_qubits() != n) || model.n_qubits != n {
         return Err(QsoError::invalid(
             "blocks",
@@ -873,17 +1251,52 @@ fn check_layered(
             format!("samples × blocks must lie in 1..={MAX_LEARNING_CIRCUITS}"),
         ));
     }
-    Ok(gates)
+    Ok((gates, sampler))
+}
+
+/// How [`pec_layered_with`] and [`pea_layered_with`] simulate every
+/// sampled circuit on the device. All three are unbiased: a density matrix
+/// gives the exact noisy value of the circuit, a trajectory or a sampled
+/// matrix-product state a value whose mean it is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum LayeredSimulator {
+    /// Density matrices up to [`MAX_LEARNING_QUBITS`] qubits, trajectories
+    /// up to [`MAX_TRAJECTORY_LAYERED_QUBITS`], matrix-product states above
+    /// with [`MpsOptions::default`], refusing a circuit they would truncate.
+    Auto,
+    /// The exact noisy density matrix of every sample.
+    DensityMatrix,
+    /// One quantum trajectory per sample.
+    Trajectories,
+    /// One matrix-product state per sample, with every channel of the
+    /// device replaced by one of its terms, drawn at random: the device's
+    /// channels must be mixtures of unitaries (depolarising, dephasing,
+    /// Pauli errors, crosstalk, coherent errors), not damping. Truncation as set
+    /// by the options is accepted; it biases the value of a sample by at
+    /// most `2‖O‖√(1 − F)` with `F` the state's fidelity bound.
+    Mps(MpsOptions),
+}
+
+/// The simulator [`check_layered`] resolved; `Mps(options, strict)`
+/// refuses truncation when `strict`.
+#[derive(Clone, Copy, Debug)]
+enum Sampler {
+    DensityMatrix,
+    Trajectory,
+    Mps(MpsOptions, bool),
 }
 
 /// `⟨O⟩` of one sampled circuit `B₀ L B₁ L … B_m`: every layer twirled and
 /// followed by the Paulis `insert(rng)` returns.
+#[allow(clippy::too_many_arguments)]
 fn run_sample(
     blocks: &[Circuit],
     layer: &Circuit,
     gates: &[Gate],
     device: &DeviceModel,
     observable: &PauliSum,
+    sampler: Sampler,
     rng: &mut Rng,
     mut insert: impl FnMut(&mut Rng) -> PauliString,
 ) -> Result<f64> {
@@ -899,9 +1312,91 @@ fn run_sample(
             c.try_push(inst.clone()).expect("block gates fit");
         }
     }
-    let mut rho = DensityMatrix::zero(n)?;
-    rho.apply_device(&c, &[], device)?;
-    rho.expectation(observable)
+    match sampler {
+        Sampler::DensityMatrix => {
+            let mut rho = DensityMatrix::zero(n)?;
+            rho.apply_device(&c, &[], device)?;
+            rho.expectation(observable)
+        }
+        Sampler::Trajectory => {
+            // The sample's own random stream drives its trajectory.
+            let sim = TrajectorySimulator::new(device.clone(), 1, rng.next_u64())?;
+            Ok(sim.expectation(&c, &[], observable)?.value)
+        }
+        Sampler::Mps(options, strict) => mps_sample(&c, device, observable, options, strict, rng),
+    }
+}
+
+/// `⟨O⟩` of `c` on a matrix-product state on which every channel of the
+/// compiled circuit, a mixture `Σ w_i U_i ρ U_i†`, is one `U_i` drawn with
+/// probability `w_i`.
+fn mps_sample(
+    c: &Circuit,
+    device: &DeviceModel,
+    observable: &PauliSum,
+    options: MpsOptions,
+    strict: bool,
+    rng: &mut Rng,
+) -> Result<f64> {
+    let program = Program::compile(c, &[], device)?;
+    if let Some(ch) = program
+        .channels
+        .iter()
+        .find(|ch| !matches!(ch.unraveling, Unraveling::Mixture { .. }))
+    {
+        return Err(QsoError::invalid(
+            "device",
+            format!(
+                "matrix-product samples need mixtures of unitaries (Pauli or coherent errors), \
+                 not {}",
+                ch.channel.name()
+            ),
+        ));
+    }
+    let mut mps = Mps::zero(c.n_qubits(), options)?;
+    for op in &program.ops {
+        match op {
+            Op::Gates(g) => {
+                for inst in g.instructions() {
+                    mps.apply_instruction(inst, &[])?;
+                }
+            }
+            Op::Channel { channel, qubits } => {
+                let Unraveling::Mixture {
+                    cumulative,
+                    unitaries,
+                } = &program.channels[*channel].unraveling
+                else {
+                    unreachable!("checked above");
+                };
+                let total = cumulative.last().copied().unwrap_or(1.0);
+                let u = rng.uniform() * total;
+                let pick = cumulative
+                    .partition_point(|&c| c <= u)
+                    .min(unitaries.len() - 1);
+                if let Some(m) = &unitaries[pick] {
+                    mps.apply_matrix(m, qubits)?;
+                }
+            }
+            Op::Phase { .. } | Op::SpreadGate { .. } => {
+                return Err(QsoError::invalid(
+                    "device",
+                    "matrix-product samples need noise that is a channel at points of the circuit",
+                ));
+            }
+        }
+    }
+    if strict && mps.discarded_weight() > 1e-10 {
+        return Err(QsoError::invalid(
+            "simulator",
+            format!(
+                "a sampled circuit needs more than bond dimension {}; pass \
+                 LayeredSimulator::Mps with options to accept truncation",
+                options.max_bond
+            ),
+        ));
+    }
+    mps.expectation_sum(observable)
 }
 
 /// Error-cancelled `⟨O⟩` of `B₀ L B₁ L … L B_m` (`blocks = [B₀, …, B_m]`,
@@ -909,7 +1404,8 @@ fn run_sample(
 /// layer with the learned `model`. Each sample draws, after every layer
 /// and for every generator, `P_k` with probability `(1 − e^{−2λ_k})/2`
 /// (flipping the sign); the result is unbiased when the model is the
-/// layer's noise. Blocks keep the device's noise.
+/// layer's noise. Blocks keep the device's noise. Samples are simulated
+/// as [`LayeredSimulator::Auto`] chooses ([`pec_layered_with`]).
 pub fn pec_layered(
     blocks: &[Circuit],
     layer: &Circuit,
@@ -919,7 +1415,31 @@ pub fn pec_layered(
     samples: usize,
     seed: u64,
 ) -> Result<PecResult> {
-    let gates = check_layered(blocks, layer, model, observable, samples)?;
+    pec_layered_with(
+        blocks,
+        layer,
+        model,
+        device,
+        observable,
+        samples,
+        seed,
+        LayeredSimulator::Auto,
+    )
+}
+
+/// [`pec_layered`] with a chosen simulator.
+#[allow(clippy::too_many_arguments)]
+pub fn pec_layered_with(
+    blocks: &[Circuit],
+    layer: &Circuit,
+    model: &SparsePauliLindblad,
+    device: &DeviceModel,
+    observable: &PauliSum,
+    samples: usize,
+    seed: u64,
+    simulator: LayeredSimulator,
+) -> Result<PecResult> {
+    let (gates, sampler) = check_layered(blocks, layer, model, observable, samples, simulator)?;
     device.validate()?;
     let layers = blocks.len() - 1;
     let gamma = model.overhead().powi(layers as i32);
@@ -938,7 +1458,7 @@ pub fn pec_layered(
     let values: Vec<Result<f64>> = map_tasks(samples, |s| {
         let mut rng = base.fork(s as u64);
         let mut sign = 1.0;
-        let v = run_sample(blocks, layer, &gates, device, observable, &mut rng, |rng| {
+        let v = run_sample(blocks, layer, &gates, device, observable, sampler, &mut rng, |rng| {
             let mut p = PauliString::identity();
             for (g, &f) in model.generators.iter().zip(&flips) {
                 if rng.uniform() < f {
@@ -962,7 +1482,9 @@ pub fn pec_layered(
 /// probabilistic error amplification: at scale `G ≥ 1`, after every
 /// twirled layer, `P_k` is inserted with probability
 /// `(1 − e^{−2(G−1)λ_k})/2`, which multiplies every rate of the model by
-/// `G`. The values at the scales are extrapolated to zero noise.
+/// `G`. The values at the scales are extrapolated to zero noise. Samples
+/// are simulated as [`LayeredSimulator::Auto`] chooses
+/// ([`pea_layered_with`]).
 #[allow(clippy::too_many_arguments)]
 pub fn pea_layered(
     blocks: &[Circuit],
@@ -975,7 +1497,35 @@ pub fn pea_layered(
     method: Extrapolation,
     seed: u64,
 ) -> Result<ZneResult> {
-    let gates = check_layered(blocks, layer, model, observable, samples)?;
+    pea_layered_with(
+        blocks,
+        layer,
+        model,
+        device,
+        observable,
+        scales,
+        samples,
+        method,
+        seed,
+        LayeredSimulator::Auto,
+    )
+}
+
+/// [`pea_layered`] with a chosen simulator.
+#[allow(clippy::too_many_arguments)]
+pub fn pea_layered_with(
+    blocks: &[Circuit],
+    layer: &Circuit,
+    model: &SparsePauliLindblad,
+    device: &DeviceModel,
+    observable: &PauliSum,
+    scales: &[f64],
+    samples: usize,
+    method: Extrapolation,
+    seed: u64,
+    simulator: LayeredSimulator,
+) -> Result<ZneResult> {
+    let (gates, sampler) = check_layered(blocks, layer, model, observable, samples, simulator)?;
     device.validate()?;
     if scales.len() < 2 || scales.iter().any(|g| !(g.is_finite() && *g >= 1.0)) {
         return Err(QsoError::invalid(
@@ -993,7 +1543,7 @@ pub fn pea_layered(
         let base = Rng::seed_from_u64(seed).fork(i as u64);
         let v: Vec<Result<f64>> = map_tasks(samples, |s| {
             let mut rng = base.fork(s as u64);
-            run_sample(blocks, layer, &gates, device, observable, &mut rng, |rng| {
+            run_sample(blocks, layer, &gates, device, observable, sampler, &mut rng, |rng| {
                 let mut p = PauliString::identity();
                 for (g, &f) in model.generators.iter().zip(&flips) {
                     if rng.uniform() < f {

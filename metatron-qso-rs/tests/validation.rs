@@ -1590,3 +1590,197 @@ fn single_precision_states_follow_double_precision() {
     let h: PauliSum = "Z0 Z1 + 0.5 X3 X4 - 0.2 Y7".parse().unwrap();
     assert!((single.expectation(&h).unwrap() - h.expectation(&exact).unwrap()).abs() < 1e-6);
 }
+
+/// A heavy-hex patch of 53 qubits: three rows of 15 (qubit `15r + c`) and
+/// eight bridge qubits (45..53), between rows 0 and 1 at columns 0, 4, 8
+/// and 12 and between rows 1 and 2 at columns 2, 6, 10 and 14. Returns
+/// the edges and, per bridge, the bridge and its two row qubits.
+#[allow(clippy::type_complexity)]
+fn heavy_hex() -> (Vec<(usize, usize)>, Vec<(usize, usize, usize)>) {
+    let mut edges = Vec::new();
+    for r in 0..3 {
+        for c in 0..14 {
+            edges.push((15 * r + c, 15 * r + c + 1));
+        }
+    }
+    let mut bridges = Vec::new();
+    for (i, (row, col)) in [(0, 0), (0, 4), (0, 8), (0, 12), (1, 2), (1, 6), (1, 10), (1, 14)]
+        .into_iter()
+        .enumerate()
+    {
+        let (b, top, bottom) = (45 + i, 15 * row + col, 15 * (row + 1) + col);
+        edges.push((top, b));
+        edges.push((b, bottom));
+        bridges.push((b, top, bottom));
+    }
+    (edges, bridges)
+}
+
+#[test]
+fn learning_on_a_heavy_hex_layer_recovers_the_twirled_rates() {
+    use std::collections::BTreeMap;
+
+    use metatron_qso::noise::learning::{LearningOptions, learn_layer};
+    use metatron_qso::noise::{ChannelSpec, DeviceModel, GateRule, QubitProperties};
+    // Layer: cx(c, c + 1) for even c < 14 in every row (21 gates); bridges
+    // and the last column idle. Every cx: two-qubit depolarising
+    // (p = 0.012), a coherent Z rotation of the control (θ = 0.1), and a
+    // ZZ crosstalk error (q = 0.01) between the control and a bridge
+    // qubit next to it. Twirled, the exact rates are
+    // λ = −ln(1 − 16p/15)/16 on the 15 Paulis of each gate pair,
+    // −ln(cos θ)/2 more on Z of the control, −ln(1 − 2q)/2 on each
+    // crosstalk ZZ, and 0 elsewhere.
+    let (p, theta, q) = (0.012, 0.1, 0.01);
+    let (edges, bridges) = heavy_hex();
+    assert_eq!(edges.len(), 58);
+    let mut layer = Circuit::new(53);
+    let mut device = DeviceModel::new("heavy-hex")
+        .with_default_qubit(QubitProperties::new().with_readout(0.02, 0.04))
+        .with_idle_noise(false);
+    let mut gates = Vec::new();
+    let mut crosstalk = Vec::new();
+    for r in 0..3 {
+        for c in (0..14).step_by(2) {
+            let (a, b) = (15 * r + c, 15 * r + c + 1);
+            layer.cx(a, b);
+            gates.push((a, b));
+            let mut rule = GateRule::for_gate("cx")
+                .on_qubits(&[a, b])
+                .with_depolarizing(p)
+                .with_channel(ChannelSpec::Rotation {
+                    pauli: "ZI".into(),
+                    angle: theta,
+                });
+            for &(bridge, top, bottom) in &bridges {
+                if top == a || bottom == a {
+                    let zz: BTreeMap<String, f64> = [("ZZ".to_string(), q)].into();
+                    rule = rule.with_spectator(&[a, bridge], ChannelSpec::Pauli(zz));
+                    crosstalk.push((a, bridge));
+                }
+            }
+            device = device.with_rule(rule);
+        }
+    }
+    assert_eq!((gates.len(), crosstalk.len()), (21, 14));
+    let options = LearningOptions {
+        edges: Some(edges),
+        ..LearningOptions::default()
+    };
+    let learned = learn_layer(&layer, &device, &options).unwrap();
+    let model = &learned.model;
+    assert_eq!(model.generators.len(), 53 * 3 + 58 * 9);
+    let depolarising = -(1.0 - 16.0 * p / 15.0).ln() / 16.0;
+    let phase = -theta.cos().ln() / 2.0;
+    let zz = -(1.0 - 2.0 * q).ln() / 2.0;
+    let (mut worst, mut sum_sq, mut nonzero) = (0.0f64, 0.0, 0);
+    for ((g, rate), se) in model
+        .generators
+        .iter()
+        .zip(&model.rates)
+        .zip(&learned.std_errors)
+    {
+        let support = g.x_mask() | g.z_mask();
+        let mask = |a: usize, b: usize| (1u64 << a) | (1u64 << b);
+        let mut expected = 0.0;
+        for &(a, b) in &gates {
+            if support & !mask(a, b) == 0 {
+                expected += depolarising;
+                if g.x_mask() == 0 && support == 1 << a {
+                    expected += phase;
+                }
+            }
+        }
+        if g.x_mask() == 0 && crosstalk.iter().any(|&(a, b)| support == mask(a, b)) {
+            expected += zz;
+        }
+        let z = (rate - expected) / se;
+        worst = worst.max(z.abs());
+        assert!(z.abs() < 4.0, "{g}: {rate} ± {se}, expected {expected}");
+        if expected > 0.0 {
+            sum_sq += z * z;
+            nonzero += 1;
+        }
+    }
+    // The standard errors are honest: over the 329 nonzero rates the
+    // deviations have unit spread. (Most zero rates sit at the constraint
+    // λ ≥ 0, closer to the truth than their errors say.)
+    assert_eq!(nonzero, 21 * 15 + 14);
+    let rms = (sum_sq / nonzero as f64).sqrt();
+    assert!((0.8..1.2).contains(&rms), "rms {rms}, worst {worst}");
+}
+
+#[test]
+fn layered_mitigation_beyond_trajectories_runs_on_matrix_product_states() {
+    use metatron_qso::mitigation::zne::Extrapolation;
+    use metatron_qso::mps::{Mps, MpsOptions};
+    use metatron_qso::noise::learning::{LearningOptions, learn_layer, pea_layered, pec_layered};
+    use metatron_qso::noise::{ChannelSpec, DeviceModel, GateRule, QubitProperties};
+    // 30 qubits: learned on Pauli frames, mitigated on one sampled
+    // matrix-product state per sample (more than trajectories handle).
+    let n = 30;
+    let device = DeviceModel::new("chain")
+        .with_rule(GateRule::for_gate("cx").with_depolarizing(0.03).with_channel(
+            ChannelSpec::Rotation {
+                pauli: "ZI".into(),
+                angle: 0.2,
+            },
+        ))
+        .with_default_qubit(QubitProperties::new().with_readout(0.02, 0.04))
+        .with_idle_noise(false);
+    let mut layer = Circuit::new(n);
+    layer.cx(0, 1).cx(2, 3);
+    let learned = learn_layer(&layer, &device, &LearningOptions::default()).unwrap();
+    assert_eq!(learned.model.generators.len(), 3 * n + 9 * (n - 1));
+    let mut rng = Rng::seed_from_u64(23);
+    let blocks: Vec<Circuit> = (0..4)
+        .map(|_| {
+            let mut b = Circuit::new(n);
+            for q in 0..n {
+                b.ry(q, rng.uniform_range(-3.0, 3.0))
+                    .rz(q, rng.uniform_range(-3.0, 3.0));
+            }
+            b
+        })
+        .collect();
+    let mut joined = Circuit::new(n);
+    for (i, b) in blocks.iter().enumerate() {
+        if i > 0 {
+            joined.append(&layer).unwrap();
+        }
+        joined.append(b).unwrap();
+    }
+    let h: PauliSum = "Z0 Z1 + 0.5 X0 + Z2 Z3 + 0.5 X2 + 0.3 Z29".parse().unwrap();
+    let exact = Mps::from_circuit(&joined, &[], MpsOptions::exact())
+        .unwrap()
+        .expectation_sum(&h)
+        .unwrap();
+    let pec = pec_layered(&blocks, &layer, &learned.model, &device, &h, 8000, 3).unwrap();
+    let zne = pea_layered(
+        &blocks,
+        &layer,
+        &learned.model,
+        &device,
+        &h,
+        &[1.0, 2.0],
+        8000,
+        Extrapolation::Linear,
+        4,
+    )
+    .unwrap();
+    let noisy = &zne.values[0];
+    // The noisy value is far off; error cancellation is unbiased, and
+    // amplification moves the extrapolation towards the exact value.
+    let off = (noisy.value - exact).abs();
+    assert!(off > 8.0 * noisy.std_error, "noisy {noisy:?}, exact {exact}");
+    assert!(
+        (pec.estimate.value - exact).abs() < 4.0 * pec.estimate.std_error,
+        "PEC {:?}, exact {exact}",
+        pec.estimate
+    );
+    assert!((zne.values[1].value - exact).abs() > off);
+    assert!(
+        (zne.estimate.value - exact).abs() < off,
+        "PEA {:?}, exact {exact}",
+        zne.estimate
+    );
+}

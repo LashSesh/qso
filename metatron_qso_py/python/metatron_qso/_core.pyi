@@ -1262,6 +1262,7 @@ def learn_layer(
     shots: int = 256,
     edges: Optional[Sequence[Tuple[int, int]]] = None,
     seed: int = 0,
+    simulator: str = "auto",
 ) -> LearnedNoise: ...
 def pec_layered(
     blocks: Sequence[Circuit],
@@ -1271,6 +1272,8 @@ def pec_layered(
     observable: PauliSum,
     samples: int,
     seed: int = 0,
+    simulator: str = "auto",
+    max_bond: int = 256,
 ) -> PecResult: ...
 def pea_layered(
     blocks: Sequence[Circuit],
@@ -1284,6 +1287,8 @@ def pea_layered(
     degree: Optional[int] = None,
     asymptote: float = 0.0,
     seed: int = 0,
+    simulator: str = "auto",
+    max_bond: int = 256,
 ) -> ZneResult: ...
 
 # ---------------------------------------------------------------------------
