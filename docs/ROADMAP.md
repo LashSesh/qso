@@ -12,7 +12,8 @@ state-vector core at memory bandwidth), 1.12 (noise learning) and 1.13
 (walks beyond static Hamiltonians) — ship together as release 1.6.0;
 finished milestones are released together, not one by one. The third
 (1.14 to 1.17), fourth (1.18 to 1.21), fifth (1.22 to 1.25) and sixth
-(1.26 to 1.28) stages ship together as release 1.7.0. Up to 1.3
+(1.26 to 1.28) stages ship together as release 1.7.0. The seventh stage
+(1.29 to 1.32) is planned in section 4g. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -1713,6 +1714,112 @@ A GPU backend: it needs hardware to test on and a dependency (`wgpu`),
 neither available now (1.28 restates the decision with the CPU numbers).
 Multi-node simulation, which the use case does not need below 30 qubits.
 
+## 4g. Seventh stage (1.29 to 1.32)
+
+Planned October 2026, after release 1.7.0, from the gaps that remain in
+the table of section 1. The stage starts with QSO's identity, walks on
+graphs, and then closes three gaps of the noise and physics rows. The
+rules stay: no new dependency of the crate, an independent reference for
+every deliverable, reference tools in the cross-validation only.
+
+### 1.29 — Interacting walkers (M)
+
+Use case: walks of several particles on a graph, the many-body side of
+graph-structured quantum computing. This covers Bose– and Fermi–Hubbard
+dynamics on lattices and graphs, two-particle interference (the
+Hong–Ou–Mandel effect on a graph), and telling graphs apart where one
+walker cannot. One walker's dynamics depend only on the spectrum and
+eigenvectors of the graph, so cospectral graphs (strongly regular graphs
+with the same parameters, above all) look alike to it. Gamble,
+Friesen, Zhou, Joynt and Coppersmith (Phys. Rev. A 81, 052313 (2010))
+found that two non-interacting particles still fail on strongly regular
+graphs, while two interacting bosons distinguished every pair they
+tested.
+
+| Deliverable | Detail |
+|---|---|
+| Multi-particle walks | N bosons, fermions or distinguishable particles on a graph: hopping along the edges (adjacency or Laplacian generator, edge weights), on-site interaction U (Bose–Hubbard) and interaction V between neighbours; exact evolution in the occupation basis (dense below the dense limit, Krylov above), site densities, pair correlations `⟨n_i n_j⟩` and configuration probabilities |
+| Graph certificates | the sorted two-particle transition probabilities at given times, as a graph invariant, with a comparison that tells graphs apart up to a stated tolerance |
+| Graphs | Seidel switching, and the three Chang graphs (switchings of the triangular graph T(8)), so that four strongly regular graphs with the same parameters (28, 12, 6, 4) are at hand next to the Shrikhande and 4×4 rook graphs |
+| Bindings | Python, CLI, guide page and tutorial |
+
+Validation:
+
+- **Non-interacting particles.** Amplitudes equal the permanents (bosons)
+  and determinants (fermions) of submatrices of the single-walker
+  propagator, using QSO's permanent code from boson sampling.
+  Distinguishable particles equal the tensor product of single walkers.
+- **Interacting particles.** The two-site Hubbard model against its
+  closed-form spectrum. Small graphs against the full tensor-product
+  space, with the interaction applied there and the result restricted to
+  the symmetric or antisymmetric subspace.
+- **Certificates.** Equal for isomorphic graphs under random
+  relabellings. Without interaction they are equal for the Shrikhande
+  and rook graphs and for T(8) and the Chang graphs (Gamble et al.).
+  With interaction they tell all of them apart; the canonical labelling
+  confirms that the graphs are not isomorphic.
+
+### 1.30 — Correlated and non-Markovian noise (M)
+
+Use case: noise on devices that the channels of 1.4 cannot express.
+That is crosstalk and correlated errors on more than two qubits, and
+slow noise whose correlations last longer than a gate, such as 1/f flux
+noise and charge noise switching between two values.
+
+| Deliverable | Detail |
+|---|---|
+| Channels on more qubits | Kraus and Pauli channels on up to four qubits, in density matrices and trajectories, and in device models (correlated errors after a gate, crosstalk on spectator qubits) |
+| Quasi-static noise | over-rotations and detunings drawn once per trajectory from a given distribution (Gaussian or uniform), constant during it |
+| Telegraph noise | a frequency shift that switches between ±ν at a given rate, simulated exactly per trajectory (switching times drawn from the exponential distribution) |
+
+Validation: channels on three and four qubits match the explicit
+superoperator on density matrices and the average over trajectories.
+Ramsey decay under Gaussian quasi-static noise equals `exp(−σ²t²/2)`,
+and a Hahn echo removes it exactly. Telegraph noise matches the closed
+forms of the decay of coherence for free evolution and the echo (Paladino,
+Galperin, Falci and Altshuler, Rev. Mod. Phys. 86, 361 (2014)), in both
+the fast- and the slow-switching regime.
+
+### 1.31 — Noise learning beyond ten qubits (M)
+
+Use case: learning the sparse Pauli–Lindblad model of a layer on a
+device with 20 to 100 qubits, as on hardware. 1.12 learns on density
+matrices, which stop at ten qubits. Twirled noise on a Clifford layer is
+a Pauli channel, and the learning circuits are Clifford circuits, so the
+Pauli-frame sampler of 1.8 simulates them exactly at any width.
+
+| Deliverable | Detail |
+|---|---|
+| Learning at scale | `learn_layer` on the frame sampler, for layers of `cx`, `cy`, `cz` and `swap` on any coupling graph, including the correlated two-qubit errors and crosstalk of 1.30 once twirled |
+| Mitigation at scale | PEC and PEA with the learned model on circuits simulated by trajectories or MPS |
+
+Validation: on a 4-qubit device the learned rates on the frame sampler
+agree with those on density matrices within their standard errors. On a
+heavy-hex layer of about 50 qubits all rates lie within three standard
+errors of the exact rates of the twirled noise.
+
+### 1.32 — Faster integrals and tighter bounds (S–M)
+
+Use case: molecules at the size limit of 1.23, and step counts for
+product formulas of order four and higher.
+
+| Deliverable | Detail |
+|---|---|
+| Integral screening | Schwarz screening of the electron-repulsion integrals by shell quartets, with a stated threshold |
+| Bounds of commutator type | the bound of Childs, Su, Tran, Wiebe and Zhu (Phys. Rev. X 11, 011020 (2021)) for orders 2k ≥ 4, from the nested commutators of order 2k + 1 computed in the Pauli algebra, alongside the bounds of 1.5 |
+
+Validation: screened energies equal unscreened ones to the threshold and
+PySCF's as in 1.23, with the time saved measured. The new bound exceeds
+the exact error of small Heisenberg, Ising and random Hamiltonians at
+every step count tested, falls as `r^{−2k}`, and is stated against the
+old one.
+
+### Not in this stage
+
+Leakage out of the qubit space, which needs qutrits throughout the
+simulators. Exact circuit distances of hypergraph error models. Pretty
+good state transfer outside the cyclotomic families.
+
 ## 5. Order and reasoning
 
 1. **1.2 first:** small, made every later release safer, and documentation
@@ -1768,6 +1875,13 @@ Multi-node simulation, which the use case does not need below 30 qubits.
     memory or a GPU matter, so cheaper gradients come first (1.26), then
     single precision for the memory (1.27), then the use case end to end,
     which also decides what a GPU would still add (1.28).
+15. **Seventh stage: walks first again.** Interacting walkers (1.29)
+    extend QSO's walks to many particles and to graphs that one walker
+    cannot tell apart, with permanents and determinants as references.
+    Correlated and slow noise (1.30) comes before learning at scale
+    (1.31), because the larger learning experiments should include it.
+    Screening and tighter bounds (1.32) close two small, long-standing
+    gaps.
 
 ## 6. Measures of success
 
@@ -1826,6 +1940,11 @@ Taken (October 2026):
   until a machine with a GPU is available to test on, and would then be a
   single-precision `wgpu` backend for the QAOA layer, with the CPU's single
   precision as reference (1.28).
+* Seventh stage (October 2026): interacting walkers (1.29), correlated
+  and non-Markovian noise (1.30), noise learning beyond ten qubits on the
+  Pauli-frame sampler (1.31), integral screening and commutator bounds
+  for higher orders (1.32). Leakage stays out: it needs qutrits in every
+  simulator.
 * The browser playground stays, because it costs little to maintain: it
   is plain HTML and JavaScript without dependencies or a build step, it
   uses only the npm package's JSON interface, which the package's tests
