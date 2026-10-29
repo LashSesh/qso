@@ -380,6 +380,21 @@ layered PEC and PEA are density matrices, trajectories, or
 matrix-product states on which every channel, a mixture of unitaries,
 is one of its unitaries.
 
+## Spin dynamics (`spin/`)
+
+A `SpinSystem` works on dense density matrices over the product basis of
+its spins (local dimension 2 or 3). Hamiltonians are built entry by entry
+from the basis states (Zeeman and `I_z I_z` terms on the diagonal,
+flip-flop terms off it), so building one costs `O(d · couplings)`. Pulses
+act spin by spin: a local `k × k` rotation is applied to the rows and
+columns of ρ without forming the `d × d` operator. Free evolution without
+relaxation diagonalises `H` once per event (and once per FID or stick
+spectrum). With relaxation the Lindblad equation is propagated by the
+exponential of its `d² × d²` superoperator up to `d = 8` (16 for FIDs, one
+exponential for all points), and above by Dormand–Prince 5(4) steps whose
+jump terms act locally. Sweeps are piecewise constant, with the field at
+the middle of each piece.
+
 ## Hamiltonian simulation and chemistry (`algorithms/time_evolution.rs`, `chemistry/`)
 
 Every exponential of a Pauli string becomes `Circuit::pauli_rotation`: a

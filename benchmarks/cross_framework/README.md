@@ -14,6 +14,7 @@ same workloads. The results enter the technical note
 | Stim 1.16 | detector error models, detection-event rates |
 | PyMatching 2.4 | logical error rates (minimum-weight matching, for reference) |
 | PySCF 2.14 | Gaussian integrals, Hartree–Fock and CASCI energies |
+| QuTiP 5.3 | nuclear spin dynamics with relaxation (`mesolve`) |
 
 ProjectQ, which the 2025 note listed, is not included: its last release
 (0.8.0, 2022) does not build on current CPython.
@@ -31,6 +32,10 @@ ProjectQ, which the 2025 note listed, is not included: its last release
 - overlap, kinetic, nuclear-attraction and electron-repulsion integrals
   of H₂O and NH₃ in STO-3G and 6-31G, and restricted, unrestricted and
   frozen-core CASCI energies of H₂O, BeH₂, OH and triplet CH₂;
+- nuclear spin dynamics with T₁/T₂ relaxation of four spin systems (three
+  and five protons; ¹H–¹H–¹³C–¹⁵N after INEPT; SABRE-SHEATH in the
+  laboratory frame) against QuTiP's `mesolve` with the same Lindblad
+  operators: ⟨I_z⟩ of every spin and ⟨F_x⟩, ⟨F_y⟩ of every isotope;
 - detector error models of repetition and surface-code memory experiments
   (exported with `DetectorCircuit.to_stim()`), term by term against Stim's,
   and their detection-event rates against Stim's sampler; QSO's union-find

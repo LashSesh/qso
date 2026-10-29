@@ -68,6 +68,26 @@ All notable changes to this project are documented here. The format follows
     `pea_layered`, and `max_bond` (for `simulator="mps"` only).
   - Learned rates on 7 to 10 qubits (more than 64 generators) now come
     from the new fit; they agree with 1.30 to rounding (about 10⁻¹⁷).
+- **Spin dynamics and magnetic resonance** (milestone 1.33), module
+  `spin`.
+  - `SpinSystem`: nuclei by isotope (¹H, ²H as spin 1, ¹³C, ¹⁵N, ¹⁹F,
+    ³¹P; IUPAC gyromagnetic ratios), chemical shifts, J couplings, field,
+    temperature, laboratory or rotating frame (with carriers), JSON, and
+    the coupling network as a graph; up to 2048 dimensions.
+  - Pulse sequences: ideal pulses on an isotope or a spin, shaped pulses,
+    delays, field jumps and linear sweeps; INEPT (with its phase cycle),
+    spin echo, inversion recovery; phase cycling of FIDs.
+  - Relaxation: T₁ towards thermal equilibrium at the current field and
+    temperature and T₂, as Lindblad operators; exact by the superoperator
+    exponential up to dimension 8, adaptive Dormand–Prince above.
+  - Exact stick spectra (`lines`), free induction decays and their
+    Fourier transform; thermal and parahydrogen states and time averages
+    for PASADENA, ALTADENA and SABRE.
+  - Validated against closed forms (FID, echoes, inversion recovery,
+    INEPT gain, PASADENA and ALTADENA lines, SABRE anti-crossing fields)
+    and against QuTiP's `mesolve` in the cross-validation (to 8·10⁻⁹).
+  - Python: `SpinSystem` and `metatron_qso.spin`; CLI: `qso spins`;
+    guide page and tutorial `09_hyperpolarisation`.
 - **Faster integrals and tighter bounds** (milestone 1.32).
   - Schwarz screening of the repulsion integrals by quartets of shells:
     `AoIntegrals::compute` skips quartets whose integrals are all below
