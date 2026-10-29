@@ -2316,7 +2316,8 @@ It found:
 - **Validity and limits.** Any correlation time was accepted, so τ_c = 1 ms
   gave meaningless rates and extreme inputs NaN; the superoperator was
   rebuilt for every delay and shaped-pulse segment, outside the work
-  limit (a 200-segment pulse took 13 s instead of 0.6 s). Now
+  limit (a 200-segment pulse on five spins took 13 s, against 0.6 s
+  without Redfield relaxation). Now
   `|A|·τ_c > 1` and non-finite superoperators are refused, the build is
   counted, and `evolve` reuses it while the field stays (2.2 s).
 - **Output.** Spins without relaxation printed `T1 -inf`; the rates are
