@@ -92,10 +92,12 @@ use crate::graph::Graph;
 use crate::linalg::{CMatrix, expm_hermitian};
 
 mod blocks;
+mod exchange;
 mod redfield;
 #[cfg(test)]
 mod tests;
 
+pub use exchange::{Channel, Exchange, Fresh, Site};
 pub use redfield::{MU0_OVER_4PI, axial_csa};
 
 /// Reduced Planck constant (J s, CODATA 2018, exact).
@@ -832,24 +834,24 @@ impl SpinSystem {
         HBAR * s.isotope.gamma() * b * (1.0 + s.shift * 1e-6) / (BOLTZMANN * self.temperature)
     }
 
+    /// Boltzmann populations of spin `i`'s levels at field `b`,
+    /// `e^{x m}/Σ e^{x m}` with the largest exponent `x·I` subtracted so
+    /// that no field or temperature overflows.
+    fn populations(&self, i: usize, b: f64) -> Vec<f64> {
+        let x = self.boltzmann(i, b);
+        let s = self.spins[i].isotope.spin();
+        let top = x.abs() * s;
+        let w: Vec<f64> = (0..self.spins[i].isotope.levels())
+            .map(|k| (x * (s - k as f64) - top).exp())
+            .collect();
+        let z: f64 = w.iter().sum();
+        w.into_iter().map(|v| v / z).collect()
+    }
+
     fn thermal_at(&self, b: f64) -> CMatrix {
         let d = self.dimension();
         let n = self.spins.len();
-        // Per spin, the populations e^{x m}/Σ e^{x m}, with the largest
-        // exponent x·I subtracted so that no field or temperature
-        // overflows.
-        let populations: Vec<Vec<f64>> = (0..n)
-            .map(|i| {
-                let x = self.boltzmann(i, b);
-                let s = self.spins[i].isotope.spin();
-                let top = x.abs() * s;
-                let w: Vec<f64> = (0..self.spins[i].isotope.levels())
-                    .map(|k| (x * (s - k as f64) - top).exp())
-                    .collect();
-                let z: f64 = w.iter().sum();
-                w.into_iter().map(|v| v / z).collect()
-            })
-            .collect();
+        let populations: Vec<Vec<f64>> = (0..n).map(|i| self.populations(i, b)).collect();
         CMatrix::from_fn(d, d, |r, c| {
             if r != c {
                 return ZERO;

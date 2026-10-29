@@ -234,6 +234,7 @@ pub(super) struct Liouville {
     position: Vec<u32>,
     /// The block of `(a, b)`, at `a·d + b`.
     block: Vec<u32>,
+    d: usize,
 }
 
 /// `Σ n²` over the coherence-order blocks.
@@ -282,6 +283,17 @@ fn coherence_sizes(labels: &[Vec<i32>]) -> BTreeMap<Vec<i32>, usize> {
 }
 
 impl Liouville {
+    /// The block of `(a, b)`, if kept.
+    pub fn block_of(&self, a: usize, b: usize) -> Option<usize> {
+        let k = self.block[a * self.d + b];
+        (k != u32::MAX).then_some(k as usize)
+    }
+
+    /// The index of `(a, b)` in its block.
+    pub fn position_of(&self, a: usize, b: usize) -> usize {
+        self.position[a * self.d + b] as usize
+    }
+
     /// Every block, or only the one of order `only`.
     pub fn new(labels: &[Vec<i32>], only: Option<&[i32]>) -> Self {
         let d = labels.len();
@@ -320,24 +332,77 @@ impl Liouville {
             blocks,
             position,
             block,
+            d,
         }
     }
 }
 
 /// A block of the Lindblad superoperator, ready to exponentiate.
-struct LiouvilleBlock {
-    elements: Vec<(usize, usize)>,
+pub(super) struct LiouvilleBlock {
+    pub elements: Vec<(usize, usize)>,
+    /// Elements of the block (without the drift column).
+    size: usize,
     /// The generator times `t`, shifted by its mean diagonal `shift` for
     /// coherences; for populations augmented by the column of the
     /// inhomogeneous term.
-    generator: CMatrix,
-    shift: C64,
+    pub generator: CMatrix,
+    pub shift: C64,
     augmented: bool,
 }
 
 impl LiouvilleBlock {
+    /// A block from its generator `m` (augmented by a drift column for
+    /// populations), scaled by `t` and, for coherences, shifted by the mean
+    /// precession: a large one in the laboratory frame would cost
+    /// precision, while shifting the mean decay would let `e^{−rt}`
+    /// underflow as the exponential of the rest overflows.
+    pub(super) fn new(elements: Vec<(usize, usize)>, m: CMatrix, augmented: bool, t: f64) -> Self {
+        let n = elements.len();
+        let mut block = Self::sized(n, m, augmented, t);
+        block.elements = elements;
+        block
+    }
+
+    /// A block of `n` elements without their labels.
+    pub(super) fn sized(n: usize, mut m: CMatrix, augmented: bool, t: f64) -> Self {
+        let shift = if augmented {
+            ZERO
+        } else {
+            let mean = (0..n).map(|i| m[(i, i)]).sum::<C64>() / n as f64;
+            C64::new(0.0, mean.im)
+        };
+        for i in 0..n {
+            m[(i, i)] -= shift;
+        }
+        LiouvilleBlock {
+            elements: Vec::new(),
+            size: n,
+            generator: m * C64::new(t, 0.0),
+            shift: shift * t,
+            augmented,
+        }
+    }
+
+    /// `x(t)` from `x(0)` given by `value(element)`: `P x` (plus the drift
+    /// column for populations), times the shift's phase.
+    pub(super) fn apply(&self, value: impl Fn(usize) -> C64) -> Vec<C64> {
+        let p = expm(&self.generator);
+        let n = self.size;
+        let w = self.shift.exp();
+        let x: Vec<C64> = (0..n).map(&value).collect();
+        (0..n)
+            .map(|i| {
+                let mut v = if self.augmented { p[(i, n)] } else { ZERO };
+                for (j, xj) in x.iter().enumerate() {
+                    v += p[(i, j)] * xj;
+                }
+                v * w
+            })
+            .collect()
+    }
+
     /// Floating-point operations of its exponential.
-    fn work(&self) -> f64 {
+    pub(super) fn work(&self) -> f64 {
         let n = self.generator.nrows() as f64;
         (6.0 + f64::from(expm_squarings(one_norm(&self.generator)))) * 6.0 * n * n * n
     }
@@ -345,7 +410,7 @@ impl LiouvilleBlock {
 
 impl SpinSystem {
     /// The distinct isotopes, in the order of [`Isotope::ALL`].
-    fn isotope_list(&self) -> Vec<Isotope> {
+    pub(super) fn isotope_list(&self) -> Vec<Isotope> {
         Isotope::ALL
             .into_iter()
             .filter(|x| self.spins.iter().any(|s| s.isotope == *x))
@@ -607,6 +672,82 @@ impl SpinSystem {
         })
     }
 
+    /// The entries of the generator of the master equation, `−i[H, ·]`,
+    /// the Lindblad dissipators and `−R`, on the elements of `liouville`:
+    /// `add(block, row, column, value)` with rows and columns indexed
+    /// within the block.
+    pub(super) fn generator_entries(
+        &self,
+        liouville: &Liouville,
+        h: &Sparse,
+        relaxation: &Relaxation,
+        mut add: impl FnMut(usize, usize, usize, C64),
+    ) {
+        let d = self.dimension();
+        let local: Vec<(usize, usize, &CMatrix, CMatrix)> = relaxation
+            .jumps
+            .iter()
+            .map(|(i, a)| (self.stride(*i), a.nrows(), a, a.adjoint() * a))
+            .collect();
+        let mi = C64::new(0.0, -1.0);
+        let at = |a: usize, b: usize| liouville.position[a * d + b] as usize;
+        for (k, (_, elements)) in liouville.blocks.iter().enumerate() {
+            for (j, &(a, b)) in elements.iter().enumerate() {
+                // −i(H|a⟩⟨b| − |a⟩⟨b|H).
+                for &(c, v) in &h.cols[a] {
+                    add(k, at(c, b), j, mi * v);
+                }
+                for &(c, v) in &h.rows[b] {
+                    add(k, at(a, c), j, -mi * v);
+                }
+                // A|a⟩⟨b|A† − ½A†A|a⟩⟨b| − ½|a⟩⟨b|A†A on one spin.
+                for &(stride, n, op, ref ada) in &local {
+                    let (ka, kb) = ((a / stride) % n, (b / stride) % n);
+                    for r in 0..n {
+                        let x = op[(r, ka)];
+                        if x == ZERO {
+                            continue;
+                        }
+                        for s in 0..n {
+                            let y = op[(s, kb)].conj();
+                            if y != ZERO {
+                                let (c, e) =
+                                    (a + r * stride - ka * stride, b + s * stride - kb * stride);
+                                add(k, at(c, e), j, x * y);
+                            }
+                        }
+                    }
+                    for r in 0..n {
+                        let x = ada[(r, ka)];
+                        if x != ZERO {
+                            add(k, at(a + r * stride - ka * stride, b), j, -x * 0.5);
+                        }
+                        let y = ada[(kb, r)];
+                        if y != ZERO {
+                            add(k, at(a, b + r * stride - kb * stride), j, -y * 0.5);
+                        }
+                    }
+                }
+            }
+        }
+        // −R, whose blocks lie inside these.
+        if let Some(redfield) = &relaxation.redfield {
+            for (elements, r) in &redfield.blocks {
+                let (a, b) = elements[0];
+                let k = liouville.block[a * d + b];
+                if k == u32::MAX {
+                    continue;
+                }
+                let index: Vec<usize> = elements.iter().map(|&(c, e)| at(c, e)).collect();
+                for (j, &cj) in index.iter().enumerate() {
+                    for (i, &ri) in index.iter().enumerate() {
+                        add(k as usize, ri, cj, -r[(i, j)]);
+                    }
+                }
+            }
+        }
+    }
+
     /// The blocks of the Lindblad superoperator (times `t`) on the elements
     /// of `liouville`, for `H` and the relaxation; the population block is
     /// augmented by the drift times `trace`.
@@ -618,76 +759,23 @@ impl SpinSystem {
         trace: C64,
         t: f64,
     ) -> Vec<LiouvilleBlock> {
-        let d = self.dimension();
-        let local: Vec<(usize, usize, &CMatrix, CMatrix)> = relaxation
-            .jumps
+        let mut matrices: Vec<(CMatrix, bool)> = liouville
+            .blocks
             .iter()
-            .map(|(i, a)| (self.stride(*i), a.nrows(), a, a.adjoint() * a))
+            .map(|(order, elements)| {
+                let augmented = order.iter().all(|&q| q == 0);
+                let size = elements.len() + usize::from(augmented);
+                (CMatrix::zeros(size, size), augmented)
+            })
             .collect();
-        let mi = C64::new(0.0, -1.0);
-        let at = |a: usize, b: usize| liouville.position[a * d + b] as usize;
-        let mut matrices = Vec::with_capacity(liouville.blocks.len());
-        for (order, elements) in &liouville.blocks {
-            let n = elements.len();
-            let augmented = order.iter().all(|&q| q == 0);
-            let size = n + usize::from(augmented);
-            let mut m = CMatrix::zeros(size, size);
-            for (j, &(a, b)) in elements.iter().enumerate() {
-                // −i(H|a⟩⟨b| − |a⟩⟨b|H).
-                for &(c, v) in &h.cols[a] {
-                    m[(at(c, b), j)] += mi * v;
-                }
-                for &(c, v) in &h.rows[b] {
-                    m[(at(a, c), j)] -= mi * v;
-                }
-                // A|a⟩⟨b|A† − ½A†A|a⟩⟨b| − ½|a⟩⟨b|A†A on one spin.
-                for &(stride, k, op, ref ada) in &local {
-                    let (ka, kb) = ((a / stride) % k, (b / stride) % k);
-                    for r in 0..k {
-                        let x = op[(r, ka)];
-                        if x == ZERO {
-                            continue;
-                        }
-                        for s in 0..k {
-                            let y = op[(s, kb)].conj();
-                            if y != ZERO {
-                                let (c, e) =
-                                    (a + r * stride - ka * stride, b + s * stride - kb * stride);
-                                m[(at(c, e), j)] += x * y;
-                            }
-                        }
-                    }
-                    for r in 0..k {
-                        let x = ada[(r, ka)];
-                        if x != ZERO {
-                            m[(at(a + r * stride - ka * stride, b), j)] -= x * 0.5;
-                        }
-                        let y = ada[(kb, r)];
-                        if y != ZERO {
-                            m[(at(a, b + r * stride - kb * stride), j)] -= y * 0.5;
-                        }
-                    }
-                }
-                if augmented {
+        self.generator_entries(liouville, h, relaxation, |k, r, c, v| {
+            matrices[k].0[(r, c)] += v;
+        });
+        for ((_, elements), (m, augmented)) in liouville.blocks.iter().zip(matrices.iter_mut()) {
+            if *augmented {
+                let n = elements.len();
+                for (j, &(a, b)) in elements.iter().enumerate() {
                     m[(j, n)] = relaxation.drift[(a, b)] * trace;
-                }
-            }
-            matrices.push((m, augmented));
-        }
-        // −R, whose blocks lie inside these.
-        if let Some(redfield) = &relaxation.redfield {
-            for (elements, r) in &redfield.blocks {
-                let (a, b) = elements[0];
-                let k = liouville.block[a * d + b];
-                if k == u32::MAX {
-                    continue;
-                }
-                let m = &mut matrices[k as usize].0;
-                let index: Vec<usize> = elements.iter().map(|&(c, e)| at(c, e)).collect();
-                for (j, &cj) in index.iter().enumerate() {
-                    for (i, &ri) in index.iter().enumerate() {
-                        m[(ri, cj)] -= r[(i, j)];
-                    }
                 }
             }
         }
@@ -695,27 +783,8 @@ impl SpinSystem {
             .blocks
             .iter()
             .zip(matrices)
-            .map(|((_, elements), (mut m, augmented))| {
-                let n = elements.len();
-                // The mean precession of a coherence block, which can be
-                // large in the laboratory frame; not its mean decay, whose
-                // factor e^{−rt} would underflow while exp of the rest
-                // overflows.
-                let shift = if augmented {
-                    ZERO
-                } else {
-                    let mean = (0..n).map(|i| m[(i, i)]).sum::<C64>() / n as f64;
-                    C64::new(0.0, mean.im)
-                };
-                for i in 0..n {
-                    m[(i, i)] -= shift;
-                }
-                LiouvilleBlock {
-                    elements: elements.clone(),
-                    generator: m * C64::new(t, 0.0),
-                    shift: shift * t,
-                    augmented,
-                }
+            .map(|((_, elements), (m, augmented))| {
+                LiouvilleBlock::new(elements.clone(), m, augmented, t)
             })
             .collect()
     }
@@ -809,15 +878,12 @@ impl SpinSystem {
             Some(blocks) if exp_work <= dp_work => {
                 let mut next = CMatrix::zeros(d, d);
                 for block in &blocks {
-                    let p = expm(&block.generator);
-                    let n = block.elements.len();
-                    let w = block.shift.exp();
-                    for (i, &(a, b)) in block.elements.iter().enumerate() {
-                        let mut v = if block.augmented { p[(i, n)] } else { ZERO };
-                        for (j, &(c, e)) in block.elements.iter().enumerate() {
-                            v += p[(i, j)] * delta[(c, e)];
-                        }
-                        next[(a, b)] = v * w;
+                    let moved = block.apply(|j| {
+                        let (c, e) = block.elements[j];
+                        delta[(c, e)]
+                    });
+                    for (&(a, b), v) in block.elements.iter().zip(moved) {
+                        next[(a, b)] = v;
                     }
                 }
                 next
