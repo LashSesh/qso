@@ -1841,7 +1841,7 @@ the fast- and the slow-switching regime.
 Delivered as planned, with one addition: `Circuit::id`, which a rule for
 the gate `"id"` turns into a wait of given duration. Spectator qubits
 wait for the gate whose crosstalk they receive. Turns by slow noise
-during a gate are applied after it, like relaxation. Density matrices
+during a gate are split, half before and half after it. Density matrices
 and PEC refuse slow noise instead of ignoring it. Measured:
 
 - **Channels on three and four qubits.** On density matrices they equal
@@ -1855,12 +1855,60 @@ and PEC refuse slow noise instead of ignoring it. Measured:
   echo for slow (γ = 0.2ν) and fast (γ = 5ν) switching. A quasi-static
   over-rotation gives `cos(θ(1+ε)) e^{−θ²σ²/2}`. All of these are within
   four standard errors at 8000 trajectories; the largest deviation of the
-  20 validation estimates is 1.5. The closed form of the telegraph echo
-  was checked independently against a NumPy Monte-Carlo simulation of
-  the process and SciPy's matrix exponential.
+  20 validation estimates is 1.5.
 - **Unchanged Markovian trajectories.** Devices without slow noise draw
   no extra random numbers, so existing trajectories and their tests are
   unchanged.
+
+An independent review built its own hybrid master-equation model:
+classical telegraph states times a density matrix, with T₁/T₂ Lindblad
+terms, Gaussian detunings by Gauss–Hermite quadrature, and its own
+scheduler. Against it, QSO's trajectories on two- and three-qubit
+circuits (gate durations, waits, spectators, `idle_noise` on and off)
+gave z-scores with mean about 0 and standard deviation about 1. The
+same model reproduced QSO's Markovian density matrices to 5·10⁻¹⁶. The
+review also compared every trajectory output of Markovian devices with
+the previous build and found them identical bit for bit. It confirmed the
+closed forms of the tests (also against the textbook form of the
+telegraph echo) and found no error in the physics. It found:
+
+- **A NoiseModel dropped channels silently.** A three-qubit channel after
+  a two-qubit gate was ignored, and such a model could not be converted
+  to a device. Both now report an error, and conversion works for
+  circuits whose gates are large enough.
+- **PEC refused three- and four-qubit Pauli noise.** It now inverts Pauli
+  channels on up to four qubits; a test cancels ZZZ and XIX crosstalk.
+- **`id` did not survive OpenQASM**, and the stabilizer simulator
+  rejected it. `id q;` now reads and writes `Circuit::id`,
+  `gate_counts` names it `"id"`, and the stabilizer simulator treats it as
+  a Clifford no-op.
+- **Composing four-qubit channels took 20 s** (all products of up to
+  256 × 256 Kraus operators). On three and four qubits the composition
+  now multiplies the superoperators and diagonalises the Choi matrix.
+- **A pulse in the middle of an echo broke the echo.** The turn during a
+  gate of finite duration was applied entirely after it, giving 0.948
+  where the exact pulse gives 0.994. The turn is now split around the
+  gate, and the echo refocuses exactly (test).
+- **Smaller faults.** Rules without a known gate size refused large
+  channels with a misleading message; they are now checked when a circuit
+  is compiled. `DeviceBackend::density_matrix` accepted slow noise and
+  failed only when run; it now fails when it is created. There were stale
+  comments and a misplaced doc comment. The wide kernel duplicated the
+  narrow one and is now one function with a buffer size as a constant
+  parameter.
+- **Docs.** Spectators also delay the gate; `is_markovian` looks at the
+  whole device; telegraph noise costs time in proportion to its number
+  of jumps. A claim in this section about an external check had no
+  artifact in the repository and was removed.
+- **Weak tests.** A test that only checked determinism now checks that
+  Markovian programs draw no extra random numbers. The eight-target
+  kernel test now covers several groups and a control. The four-qubit
+  trajectory test now uses different damping per qubit. The Python test
+  of channels on three and four qubits compares with explicit matrices.
+
+Left as is: a four-qubit channel on a density matrix costs 16 times a
+two-qubit one (applying few-Kraus channels as `K ρ K†` would be cheaper),
+and slow-noise sampling scans the steps once per trajectory.
 
 ### 1.31 — Noise learning beyond ten qubits (M)
 

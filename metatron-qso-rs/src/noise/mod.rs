@@ -417,7 +417,21 @@ impl Channel {
             return Self::from_pauli_probabilities(name, &r);
         }
         let d = 1usize << self.n_qubits;
-        let mut products = Vec::with_capacity(self.kraus.len() * then.kraus.len());
+        let mixtures = self.is_unitary_mixture() && then.is_unitary_mixture();
+        let terms = self.kraus.len() * then.kraus.len();
+        // On three or four qubits all products of Kraus operators would be
+        // too many (up to 256 × 256 of 16 × 16); the product of the two
+        // superoperators gives the Choi matrix directly.
+        if self.n_qubits >= 3 && !(mixtures && terms <= MAX_MIXTURE_TERMS) {
+            let dd = d * d;
+            let product = mat_product(&then.superoperator(), &self.superoperator());
+            let choi = CMatrix::from_fn(dd, dd, |i, j| {
+                let (r, r2, c, c2) = (i / d, i % d, j / d, j % d);
+                product[(r * d + c) * dd + r2 * d + c2]
+            });
+            return Self::from_kraus(name, kraus_from_choi(&choi, d));
+        }
+        let mut products = Vec::with_capacity(terms);
         for b in &then.kraus {
             for a in &self.kraus {
                 let mut m = vec![ZERO; d * d];
@@ -434,10 +448,7 @@ impl Channel {
         // Mixtures of unitaries stay mixtures of unitaries (trajectories
         // sample them without looking at the state); other channels get a
         // minimal Kraus set.
-        let kraus = if self.is_unitary_mixture()
-            && then.is_unitary_mixture()
-            && products.len() <= MAX_MIXTURE_TERMS
-        {
+        let kraus = if mixtures && products.len() <= MAX_MIXTURE_TERMS {
             products
         } else {
             minimal_kraus(&products, d)
@@ -583,7 +594,14 @@ fn minimal_kraus(kraus: &[Vec<C64>], d: usize) -> Vec<Vec<C64>> {
             }
         }
     }
-    let (values, vectors) = crate::linalg::eigh(&choi);
+    kraus_from_choi(&choi, d)
+}
+
+/// Kraus operators (row-major `d × d`) from the Choi matrix
+/// `Σ vec(K) vec(K)†`: its eigenvectors with non-negligible eigenvalues.
+fn kraus_from_choi(choi: &CMatrix, d: usize) -> Vec<Vec<C64>> {
+    let m = d * d;
+    let (values, vectors) = crate::linalg::eigh(choi);
     let top = values.iter().copied().fold(0.0, f64::max);
     values
         .iter()
@@ -682,8 +700,9 @@ pub(crate) fn pauli_matrix(k: usize, index: usize) -> Vec<C64> {
 pub struct NoiseModel {
     /// Applied to the qubit of every single-qubit gate.
     pub single_qubit: Vec<Channel>,
-    /// Applied to every qubit (1-qubit channels) or the pair (2-qubit
-    /// channels) of every multi-qubit gate.
+    /// Applied after every multi-qubit gate: a k-qubit channel on every k
+    /// consecutive qubits of the gate (per qubit for 1-qubit channels); a
+    /// channel on more qubits than a gate has is an error at that gate.
     pub multi_qubit: Vec<Channel>,
     /// Classical readout flips `(P(read 1 | 0), P(read 0 | 1))`.
     pub readout: Option<(f64, f64)>,
@@ -877,6 +896,17 @@ impl DensityMatrix {
                 for ch in channels {
                     // One-qubit channels act on every qubit of the gate,
                     // k-qubit channels on every k consecutive ones.
+                    if ch.n_qubits > qubits.len() {
+                        return Err(QsoError::invalid(
+                            "noise",
+                            format!(
+                                "{}-qubit channel {} after a {}-qubit gate",
+                                ch.n_qubits,
+                                ch.name,
+                                qubits.len()
+                            ),
+                        ));
+                    }
                     for window in qubits.windows(ch.n_qubits) {
                         self.apply_channel(ch, window)?;
                     }

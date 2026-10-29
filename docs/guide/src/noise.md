@@ -205,17 +205,24 @@ these three as follows.
 **Channels on up to four qubits.** `from_kraus`, `pauli`, `unitary` and
 `rotation` accept operators and Pauli strings on one to four qubits, such
 as `Channel.pauli({"ZZZ": 0.01})` or `Channel.rotation("ZZZZ", 0.02)`.
-Density matrices and trajectories apply them like the others. In a gate
-rule, a k-qubit channel acts on every k consecutive qubits of the gate.
+Density matrices, trajectories and probabilistic error cancellation (for
+Pauli channels) apply them like the others. In a gate rule or a
+`NoiseModel`, a k-qubit channel acts on every k consecutive qubits of the
+gate; after a gate with fewer qubits it is an error, not ignored. A
+four-qubit channel costs 256 multiplications per entry of a density
+matrix, 16 times a two-qubit channel.
 
 **Crosstalk on spectators.** `with_rule(..., spectators=[(qubits,
 channel)])` applies a channel on fixed qubits after every matching gate.
-These qubits may lie outside the gate. They wait for the gate and relax
-during it, like its own qubits.
+These qubits may lie outside the gate. They take part in the schedule
+like the gate's own qubits: the gate waits until they are free, and they
+wait for the gate and relax during it. Spectators outside the circuit's
+register are an error when a circuit is compiled.
 
-**Waits.** `Circuit.id(q)` is an identity. A rule for the gate `"id"`
-gives it a duration, so the qubit waits for that time, the way Ramsey and
-echo experiments do.
+**Waits.** `Circuit.id(q)` is an identity, named `"id"` (in
+`gate_counts`, device rules, and OpenQASM, where `id q;` reads and writes
+it). A rule for the gate `"id"` gives it a duration, so the qubit waits for
+that time, the way Ramsey and echo experiments do.
 
 **Noise correlated in time** is drawn once per trajectory:
 
@@ -227,10 +234,14 @@ echo experiments do.
 
 Density matrices describe a single step of noise at a time, so they
 refuse these three kinds; `DeviceModel.is_markovian` tells whether a
-device has none of them. Trajectories simulate them exactly: each
+device has none of them (anywhere in the device, even on qubits or rules
+a circuit does not use). Trajectories simulate them exactly: each
 trajectory draws its detunings and spreads, and follows its telegraph
-process through every gate and wait. A turn during a gate is applied
-after the gate, like the relaxation.
+process through every gate and wait (at a cost proportional to the
+number of jumps, γ times the duration of the circuit). The turn during
+a gate is split, half before the gate and half after it: exact for gates
+that commute with Z, and a gate in the middle of an echo still
+refocuses a static detuning.
 
 A Ramsey experiment with a Gaussian detuning decays as `exp(−σ²t²/2)`. A
 Hahn echo (an X halfway) refocuses a static detuning in every trajectory:

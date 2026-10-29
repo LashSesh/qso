@@ -113,7 +113,8 @@ fn reduced_matrix(amps: &[C64], qubits: &[usize]) -> Reduced {
     let d = 1usize << k;
     let mut sorted = qubits.to_vec();
     sorted.sort_unstable();
-    // Offsets of the local basis states, local index 2·x_first + x_second.
+    // Offsets of the local basis states; the first qubit is the most
+    // significant bit of the local index.
     let offsets: Vec<usize> = (0..d)
         .map(|l| {
             (0..k).fold(0, |acc, j| {
@@ -378,7 +379,7 @@ impl<'p> Skeleton<'p> {
     /// every rule, the detuning of every qubit, and the telegraph processes,
     /// integrated over the phase steps in time order. Nothing is drawn for
     /// Markovian programs.
-    fn slow_sample(&self, rng: &mut Rng) -> (Vec<f64>, Vec<f64>) {
+    pub(crate) fn slow_sample(&self, rng: &mut Rng) -> (Vec<f64>, Vec<f64>) {
         let spread = self
             .steps
             .iter()

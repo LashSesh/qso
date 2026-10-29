@@ -8,13 +8,37 @@ import pytest
 import metatron_qso as q
 
 
+def embed(kraus, qubits, n):
+    # Full matrix of a local operator on `qubits` (first = most significant).
+    dim = 1 << n
+    k = len(qubits)
+    out = np.zeros((dim, dim), complex)
+    for r in range(dim):
+        for c in range(dim):
+            if all((r >> q) & 1 == (c >> q) & 1 for q in range(n) if q not in qubits):
+                lr = sum(((r >> q) & 1) << (k - 1 - j) for j, q in enumerate(qubits))
+                lc = sum(((c >> q) & 1) << (k - 1 - j) for j, q in enumerate(qubits))
+                out[r, c] = kraus[lr, lc]
+    return out
+
+
 def test_three_and_four_qubit_channels():
+    ad = q.Channel.amplitude_damping(0.3)
     ch = q.Channel.pauli({"ZZZ": 0.1, "XIX": 0.05}).compose(q.Channel.rotation("XYZ", 0.3))
     assert ch.n_qubits == 3
-    rho = q.DensityMatrix.zero(4)
-    rho.apply_channel(q.Channel.rotation("ZZZZ", 0.2), [0, 1, 2, 3])
+    circuit = q.Circuit(4)
+    circuit.h(0).ry(1, 0.7).cx(0, 2).rx(3, 1.1)
+    rho = q.DensityMatrix.simulate(circuit)
+    rho.apply_channel(ad, [1])
+    before = rho.to_matrix()
     rho.apply_channel(ch, [3, 0, 1])
-    assert abs(rho.trace() - 1) < 1e-12
+    four = q.Channel.rotation("ZXZY", 0.4)
+    rho.apply_channel(four, [2, 0, 3, 1])
+    expected = sum(embed(k, [3, 0, 1], 4) @ before @ embed(k, [3, 0, 1], 4).conj().T
+                   for k in ch.kraus_operators())
+    u = embed(four.kraus_operators()[0], [2, 0, 3, 1], 4)
+    expected = u @ expected @ u.conj().T
+    assert np.abs(rho.to_matrix() - expected).max() < 1e-12
     with pytest.raises(ValueError):
         q.Channel.pauli({"ZZZZZ": 0.1})
 

@@ -316,50 +316,24 @@ pub(crate) fn apply_kq<A: Amplitude>(amps: &mut [A], targets: &[usize], controls
         k <= MAX_KERNEL_TARGETS,
         "at most {MAX_KERNEL_TARGETS} targets"
     );
-    if k > MAX_DENSE_TARGETS {
-        return apply_kq_wide(amps, targets, controls, m);
+    // A buffer on the stack per group of amplitudes: small for gates, large
+    // only for the superoperators of three- and four-qubit channels.
+    if k <= MAX_DENSE_TARGETS {
+        apply_kq_buffered::<A, { 1 << MAX_DENSE_TARGETS }>(amps, targets, controls, m);
+    } else {
+        apply_kq_buffered::<A, { 1 << MAX_KERNEL_TARGETS }>(amps, targets, controls, m);
     }
-    let d = 1usize << k;
-    debug_assert_eq!(m.len(), d * d);
-    let positions = sorted_positions(targets, controls, amps.len());
-    let count = amps.len() >> positions.len();
-    let offsets: Vec<usize> = (0..d)
-        .map(|l| {
-            (0..k).fold(0usize, |acc, j| {
-                if (l >> (k - 1 - j)) & 1 == 1 {
-                    acc | (1 << targets[j])
-                } else {
-                    acc
-                }
-            })
-        })
-        .collect();
-    let ptr = SyncPtr::new(amps);
-    for_each_index(count, move |kk| {
-        let base = insert_zeros(kk, &positions) | controls;
-        let mut v = [A::ZERO; 1 << MAX_DENSE_TARGETS];
-        // SAFETY: distinct `kk` map to disjoint index sets.
-        unsafe {
-            let p = ptr.get();
-            for (l, off) in offsets.iter().enumerate() {
-                v[l] = *p.add(base | off);
-            }
-            for (r, off) in offsets.iter().enumerate() {
-                let row = &m[r * d..(r + 1) * d];
-                let mut acc = A::ZERO;
-                for c in 0..d {
-                    acc += row[c] * v[c];
-                }
-                *p.add(base | off) = acc;
-            }
-        }
-    });
 }
 
-/// [`apply_kq`] for 7 or 8 targets (a larger buffer per group).
-fn apply_kq_wide<A: Amplitude>(amps: &mut [A], targets: &[usize], controls: usize, m: &[A]) {
+fn apply_kq_buffered<A: Amplitude, const B: usize>(
+    amps: &mut [A],
+    targets: &[usize],
+    controls: usize,
+    m: &[A],
+) {
     let k = targets.len();
     let d = 1usize << k;
+    debug_assert!(d <= B);
     debug_assert_eq!(m.len(), d * d);
     let positions = sorted_positions(targets, controls, amps.len());
     let count = amps.len() >> positions.len();
@@ -377,7 +351,7 @@ fn apply_kq_wide<A: Amplitude>(amps: &mut [A], targets: &[usize], controls: usiz
     let ptr = SyncPtr::new(amps);
     for_each_index(count, move |kk| {
         let base = insert_zeros(kk, &positions) | controls;
-        let mut v = [A::ZERO; 1 << MAX_KERNEL_TARGETS];
+        let mut v = [A::ZERO; B];
         // SAFETY: distinct `kk` map to disjoint index sets.
         unsafe {
             let p = ptr.get();
@@ -969,24 +943,25 @@ mod tests {
         f();
     }
 
-    /// Every `unsafe` kernel against [`reference`] on 3 qubits (serial) and
-    /// 7 qubits (parallel under Miri, whose thresholds are lowered so that
-    /// 2⁷ amplitudes span several work chunks).
+    /// The large buffer of [`apply_kq`] on eight targets out of nine, over
+    /// two groups of amplitudes, and with a control.
     #[test]
     fn wide_kernel_on_eight_targets() {
         let mut rng = crate::Rng::seed_from_u64(88);
-        let state = random_state(8, 3);
-        let targets = [5, 0, 7, 2, 1, 6, 3, 4];
+        let state = random_state(9, 3);
+        let targets = [5, 0, 8, 2, 1, 6, 3, 4];
         let m = random_matrix(8, &mut rng);
-        let mut a = state.clone();
-        apply_kq(&mut a, &targets, 0, &m);
-        assert_close(
-            &a,
-            &reference(&state, &targets, 0, &m),
-            "apply_kq (8 targets)",
-        );
+        for controls in [0, 1 << 7] {
+            let mut a = state.clone();
+            apply_kq(&mut a, &targets, controls, &m);
+            let expected = reference(&state, &targets, controls, &m);
+            assert_close(&a, &expected, "apply_kq (8 targets)");
+        }
     }
 
+    /// Every `unsafe` kernel against [`reference`] on 3 qubits (serial) and
+    /// 7 qubits (parallel under Miri, whose thresholds are lowered so that
+    /// 2⁷ amplitudes span several work chunks).
     #[test]
     fn unsafe_kernels_match_the_reference() {
         on_threads(|| {

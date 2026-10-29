@@ -38,7 +38,14 @@ All notable changes to this project are documented here. The format follows
     matrices and PEC refuse them (`DeviceModel::is_markovian`).
   - Validated against `exp(−σ²t²/2)`, the exact echo of a static
     detuning, and the Kubo–Anderson decay of telegraph noise and its echo.
+  - PEC inverts Pauli channels on up to four qubits.
   - The same in Python, with JSON round trips.
+  - A one-qubit identity unitary (`Circuit::id`) is named `"id"` in
+    `gate_counts` and device rules (it was `"unitary"`); OpenQASM `id q;`
+    now reads as `Circuit::id` instead of being dropped, and is written
+    back as `id`; the stabilizer simulator accepts it.
+  - A `NoiseModel` channel on more qubits than a gate has is an error at
+    that gate instead of being ignored.
 - **Graphs:** `generators::seidel_switching` (within the size limits of
   the generators, keeping node positions) and the three Chang graphs
   (`generators::chang`, spec `chang:K`), in Python as

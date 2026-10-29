@@ -130,12 +130,17 @@ fn trajectories_follow_three_qubit_channels() {
 
     // A general four-qubit channel: damping on every qubit with a
     // correlated rotation, as crosstalk after a two-qubit gate.
-    let ad = Channel::amplitude_damping(0.3).unwrap();
+    // Different damping on every qubit, so that the order of the qubits
+    // matters.
+    let ad: Vec<Channel> = [0.1, 0.25, 0.4, 0.55]
+        .iter()
+        .map(|&g| Channel::amplitude_damping(g).unwrap())
+        .collect();
     let mut kraus = Vec::new();
-    for a in ad.kraus_operators() {
-        for b in ad.kraus_operators() {
-            for c in ad.kraus_operators() {
-                for d in ad.kraus_operators() {
+    for a in ad[0].kraus_operators() {
+        for b in ad[1].kraus_operators() {
+            for c in ad[2].kraus_operators() {
+                for d in ad[3].kraus_operators() {
                     kraus.push(kron(&kron(&kron(a, b), c), d));
                 }
             }
@@ -184,6 +189,17 @@ fn noise_models_spread_three_qubit_channels() {
             .with_channel(ChannelSpec::from(&ch)),
     );
     assert!(device.validate().is_err());
+    // The same noise model as a device gives the same state, and both
+    // refuse the channel after a two-qubit gate instead of dropping it.
+    let converted = DeviceModel::from(&model);
+    let mut via_device = DensityMatrix::zero(4).unwrap();
+    via_device.apply_device(&c, &[], &converted).unwrap();
+    assert!(max_diff(&via_device.to_matrix(), &rho.to_matrix()) < 1e-13);
+    let mut two = Circuit::new(4);
+    two.cx(0, 1);
+    let mut rho = DensityMatrix::zero(4).unwrap();
+    assert!(rho.apply_circuit(&two, &[], Some(&model)).is_err());
+    assert!(rho.apply_device(&two, &[], &converted).is_err());
 }
 
 #[test]
@@ -448,16 +464,118 @@ fn slow_noise_round_trips_through_json_and_is_validated() {
 }
 
 #[test]
-fn markovian_trajectories_are_unchanged() {
-    // Devices without slow noise draw nothing extra: trajectory states
-    // are the same as with a plain channel description.
+fn markovian_programs_draw_no_slow_noise() {
+    // Without slow noise a trajectory draws nothing extra, so its random
+    // stream (and with it every result) is the same as before 1.30; the
+    // review compared all trajectory outputs with the previous build bit
+    // for bit.
     let device = DeviceModel::new("plain")
         .with_default_qubit(QubitProperties::new().with_t1_t2(30.0, 20.0))
         .with_rule(GateRule::any().with_duration(1.0).with_depolarizing(0.05));
     let mut c = Circuit::new(2);
-    c.h(0).cx(0, 1).ry(1, 0.3);
-    let sim = TrajectorySimulator::new(device, 4, 9).unwrap();
-    let a = sim.trajectory_state(&c, &[], 3).unwrap();
-    let b = sim.trajectory_state(&c, &[], 3).unwrap();
-    assert_eq!(a.amplitudes(), b.amplitudes());
+    c.h(0).cx(0, 1).ry(1, 0.3).id(0);
+    let program = super::device::Program::compile(&c, &[], &device).unwrap();
+    let skeleton = super::trajectories::Skeleton::for_program(&program);
+    let mut rng = Rng::seed_from_u64(9);
+    let mut untouched = rng.clone();
+    let (phases, etas) = skeleton.slow_sample(&mut rng);
+    assert!(phases.is_empty() && etas.is_empty());
+    assert_eq!(rng.next_u64(), untouched.next_u64());
+}
+
+#[test]
+fn a_pulse_in_the_middle_of_an_echo_still_refocuses() {
+    // Turns during a gate are split around it: an X of finite duration in
+    // the middle of a Hahn echo refocuses a static detuning exactly.
+    let device = DeviceModel::new("pulse")
+        .with_default_qubit(QubitProperties::new().with_detuning(Spread::Gaussian { sigma: 0.8 }))
+        .with_rule(GateRule::for_gate("id").with_duration(1.0))
+        .with_rule(GateRule::for_gate("x").with_duration(0.4));
+    let mut c = Circuit::new(1);
+    c.h(0).id(0).x(0).id(0).h(0);
+    let z: crate::quantum::PauliSum = "Z0".parse().unwrap();
+    let e = TrajectorySimulator::new(device, 200, 1)
+        .unwrap()
+        .expectation(&c, &[], &z)
+        .unwrap();
+    assert!((e.value - 1.0).abs() < 1e-12, "{}", e.value);
+}
+
+#[test]
+fn pec_cancels_three_qubit_pauli_crosstalk() {
+    let device = DeviceModel::new("pec").with_rule(GateRule::for_gate("cx").with_spectator(
+        &[0, 1, 2],
+        ChannelSpec::Pauli([("ZZZ".into(), 0.05), ("XIX".into(), 0.03)].into()),
+    ));
+    let mut c = Circuit::new(3);
+    c.h(0).h(2).cx(0, 1);
+    let x: crate::quantum::PauliSum = "X0 X1 X2".parse().unwrap();
+    let exact = x
+        .expectation(&crate::quantum::StateVector::from_circuit(&c, &[]).unwrap())
+        .unwrap();
+    let r = crate::mitigation::pec::pec_expectation(&c, &[], &device, &x, 20_000, 4).unwrap();
+    assert_eq!(r.noisy_operations, 1);
+    assert!(
+        (r.estimate.value - exact).abs() < 4.0 * r.estimate.std_error
+            && r.estimate.std_error < 0.05,
+        "{} ± {} vs {exact}",
+        r.estimate.value,
+        r.estimate.std_error
+    );
+}
+
+#[test]
+fn identities_survive_qasm_and_the_stabilizer_simulator() {
+    let mut c = Circuit::new(2);
+    c.h(0).id(1).cx(0, 1);
+    assert_eq!(c.gate_counts().get("id"), Some(&1));
+    let two = crate::quantum::to_qasm2(&c, &[], false).unwrap();
+    assert!(two.contains("id q[1];"), "{two}");
+    let back = crate::quantum::from_qasm2(&two).unwrap();
+    assert!(back.instructions()[1].is_identity());
+    let three = crate::quantum::to_qasm3(&c, &[], false).unwrap();
+    let back3 = crate::quantum::Program::from_qasm(&three)
+        .unwrap()
+        .gates_skipping_measurements()
+        .unwrap();
+    assert!(back3.instructions().iter().any(|i| i.is_identity()));
+    let mut s = crate::stabilizer::StabilizerState::zero(2).unwrap();
+    for inst in c.instructions() {
+        s.apply_instruction(inst, &[]).unwrap();
+    }
+    assert!((s.expectation_str("Z0 Z1").unwrap() - 1.0).abs() < 1e-12);
+}
+
+#[test]
+fn four_qubit_channels_compose_through_superoperators() {
+    // Two general four-qubit channels: the composition acts like applying
+    // one after the other, and takes seconds at most.
+    let ad = Channel::amplitude_damping(0.2).unwrap();
+    let mut kraus = Vec::new();
+    for a in ad.kraus_operators() {
+        for b in ad.kraus_operators() {
+            for c in ad.kraus_operators() {
+                for d in ad.kraus_operators() {
+                    kraus.push(kron(&kron(&kron(a, b), c), d));
+                }
+            }
+        }
+    }
+    let first = Channel::from_kraus("ad4", kraus).unwrap();
+    let then = Channel::rotation("XZZY", 0.7)
+        .unwrap()
+        .compose(&Channel::pauli(&[("ZZZZ", 0.1), ("XIIX", 0.2)]).unwrap())
+        .unwrap()
+        .compose(&first)
+        .unwrap();
+    let start = std::time::Instant::now();
+    let both = first.compose(&then).unwrap();
+    assert!(start.elapsed().as_secs_f64() < 10.0);
+    let mut a = random_state_matrix(5, 3);
+    let mut b = a.clone();
+    a.apply_channel(&both, &[4, 1, 0, 2]).unwrap();
+    b.apply_channel(&first, &[4, 1, 0, 2]).unwrap();
+    b.apply_channel(&then, &[4, 1, 0, 2]).unwrap();
+    assert!(max_diff(&a.to_matrix(), &b.to_matrix()) < 1e-12);
+    assert!(both.kraus_operators().len() <= 256);
 }

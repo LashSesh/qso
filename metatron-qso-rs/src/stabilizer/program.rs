@@ -19,6 +19,9 @@ pub fn is_clifford_instruction(inst: &Instruction, theta: &[f64]) -> bool {
     if !bound || theta.iter().any(|t| !t.is_finite()) {
         return false;
     }
+    if inst.is_identity() {
+        return true;
+    }
     let a = inst.angles(theta);
     let quarter = |x: f64| quarter_turns(x, "").ok();
     match (inst.kind, inst.controls.len()) {

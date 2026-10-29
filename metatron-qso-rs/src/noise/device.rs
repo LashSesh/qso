@@ -35,7 +35,8 @@
 //! ([`GateRule::over_rotation_spread`]). Each trajectory of a
 //! [`TrajectorySimulator`](super::TrajectorySimulator) draws them once and
 //! turns a qubit by `RZ` of its accumulated phase for every time it spends
-//! in gates or waiting (during a gate, after the gate). Density matrices
+//! in gates or waiting (during a gate, half before and half after it).
+//! Density matrices
 //! cannot represent this and refuse such devices
 //! ([`DeviceModel::is_markovian`]).
 
@@ -423,14 +424,16 @@ impl GateRule {
         }
         for spec in &self.channels {
             let ch = spec.to_channel()?;
+            // Gates of unknown size are checked when a circuit is compiled.
             let smallest = self
                 .qubits
                 .as_ref()
                 .map(Vec::len)
                 .or(self.num_qubits)
-                .or_else(|| self.gate.as_deref().and_then(name_arity))
-                .unwrap_or(2);
-            if ch.n_qubits() > smallest {
+                .or_else(|| self.gate.as_deref().and_then(name_arity));
+            if let Some(smallest) = smallest
+                && ch.n_qubits() > smallest
+            {
                 return Err(QsoError::invalid(
                     "channels",
                     format!(
@@ -481,27 +484,10 @@ fn name_arity(name: &str) -> Option<usize> {
     Some(controls + targets)
 }
 
-/// Name of an instruction as in [`Circuit::gate_counts`]; a one-qubit
-/// identity ([`Circuit::id`]) is `"id"`, so that a rule can give it a
-/// duration: a wait.
+/// Name of an instruction as in [`Circuit::gate_counts`] (`"id"` for a
+/// one-qubit identity, [`Circuit::id`], which a rule can give a duration).
 pub(crate) fn gate_name(inst: &Instruction) -> String {
-    if is_identity(inst) {
-        return "id".to_string();
-    }
-    format!("{}{}", "c".repeat(inst.controls.len()), inst.kind.name())
-}
-
-fn is_identity(inst: &Instruction) -> bool {
-    inst.kind == GateKind::Unitary
-        && inst.controls.is_empty()
-        && inst.targets.len() == 1
-        && inst.matrix.as_deref().is_some_and(|m| {
-            m.len() == 4
-                && (m[0] - C64::new(1.0, 0.0)).norm() < 1e-12
-                && (m[3] - C64::new(1.0, 0.0)).norm() < 1e-12
-                && m[1].norm() < 1e-12
-                && m[2].norm() < 1e-12
-        })
+    inst.name()
 }
 
 /// A device: qubit properties and gate rules (see the module documentation).
@@ -905,6 +891,12 @@ impl Compiler<'_> {
     /// relaxation, and the turn by its slow noise.
     fn pass(&mut self, q: usize, from: f64, to: f64) -> Result<()> {
         self.relax(q, to - from)?;
+        self.turn(q, from, to);
+        Ok(())
+    }
+
+    /// The turn of qubit `q` by its slow noise from `from` to `to`.
+    fn turn(&mut self, q: usize, from: f64, to: f64) {
         let slow = self.program.slow[q];
         if to > from && (slow.detuning.is_some() || slow.telegraph.is_some()) {
             // Consecutive times of one qubit join into one turn.
@@ -919,7 +911,6 @@ impl Compiler<'_> {
                 self.program.ops.push(Op::Phase { qubit: q, from, to });
             }
         }
-        Ok(())
     }
 
     /// Relaxation of qubit `q` for `time`.
@@ -1055,6 +1046,13 @@ impl Program {
                     }
                 }
             }
+            // Slow noise turns the qubits during the gate: half of the
+            // turn before it and half after (symmetric splitting, so that a
+            // gate in the middle of an echo still refocuses).
+            let mid = start + duration / 2.0;
+            for &q in &busy {
+                cc.turn(q, start, mid);
+            }
             let mut angles = inst.angles(theta);
             let spread = rule.filter(|&r| {
                 device.gates[r].over_rotation_spread.is_some() && rotation_kind(inst.kind)
@@ -1106,7 +1104,8 @@ impl Program {
                     cc.push_channel(i, spectator.qubits.clone())?;
                 }
                 for &q in &busy {
-                    cc.pass(q, start, start + duration)?;
+                    cc.relax(q, duration)?;
+                    cc.turn(q, mid, start + duration);
                 }
             }
             for &q in &busy {

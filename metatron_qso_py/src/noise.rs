@@ -162,9 +162,9 @@ impl PyChannel {
 }
 
 /// Noise inserted after every gate: `single_qubit` channels after one-qubit
-/// gates, `multi_qubit` channels after multi-qubit gates (one-qubit channels
-/// on each qubit, two-qubit channels on consecutive pairs), plus classical
-/// readout flips `(P(1|0), P(0|1))`.
+/// gates, `multi_qubit` channels after multi-qubit gates (a k-qubit channel
+/// on every k consecutive qubits of the gate; an error after a gate with
+/// fewer qubits), plus classical readout flips `(P(1|0), P(0|1))`.
 #[pyclass(name = "NoiseModel", module = "metatron_qso", frozen)]
 #[derive(Clone)]
 pub struct PyNoiseModel {
