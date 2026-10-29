@@ -268,13 +268,15 @@ fn relaxation_propagators_agree_at_thermal_polarisation() {
     let blocks = deviation(&sys.relax(&rho, &h, t, 9.4, true).unwrap());
     let err = largest(&(&blocks - &reference)) / scale;
     assert!(err < 1e-11, "blocks: {err}");
-    let jumps = sys.jumps(9.4);
-    let mut c = CMatrix::zeros(16, 16);
-    for (i, x) in sys.drift(&jumps).into_iter().enumerate() {
-        c[(i, i)] = C64::new(x, 0.0);
-    }
+    let relaxation = sys.relaxation(9.4).unwrap();
     let steps = sys
-        .dormand_prince(&deviation(&rho), &blocks::Sparse::new(&h), &jumps, &c, t)
+        .dormand_prince(
+            &deviation(&rho),
+            &blocks::Sparse::new(&h),
+            &relaxation,
+            &relaxation.drift,
+            t,
+        )
         .unwrap();
     let err = largest(&(&steps - &reference)) / scale;
     assert!(err < 1e-7, "Dormand–Prince: {err}");

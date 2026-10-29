@@ -83,8 +83,11 @@ use crate::graph::Graph;
 use crate::linalg::{CMatrix, expm_hermitian};
 
 mod blocks;
+mod redfield;
 #[cfg(test)]
 mod tests;
+
+pub use redfield::{MU0_OVER_4PI, axial_csa};
 
 /// Reduced Planck constant (J s, CODATA 2018, exact).
 pub const HBAR: f64 = 1.054_571_817e-34;
@@ -201,6 +204,7 @@ impl Isotope {
 /// One nucleus of a spin system.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct Spin {
     pub isotope: Isotope,
     /// Chemical shift δ in ppm.
@@ -212,6 +216,13 @@ pub struct Spin {
     /// dephasing).
     #[serde(default)]
     pub t2: Option<f64>,
+    /// Position in the molecule (Å), for dipolar relaxation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<[f64; 3]>,
+    /// Chemical-shielding tensor (ppm) in the molecule's frame, for
+    /// relaxation by its anisotropy (the isotropic part is the shift).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub csa: Option<[[f64; 3]; 3]>,
 }
 
 /// Laboratory or rotating frame (see the module docs).
@@ -320,6 +331,11 @@ pub struct SpinSystem {
     /// Carrier of each isotope in ppm (rotating frame).
     #[serde(default)]
     carriers: BTreeMap<Isotope, f64>,
+    /// Rotational correlation time τ_c (s) of isotropic tumbling, which
+    /// turns on Redfield relaxation by the dipolar couplings and shielding
+    /// anisotropies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    correlation_time: Option<f64>,
 }
 
 fn room_temperature() -> f64 {
@@ -400,6 +416,7 @@ impl SpinSystem {
             temperature: room_temperature(),
             frame: Frame::Rotating,
             carriers: BTreeMap::new(),
+            correlation_time: None,
         }
     }
 
@@ -421,6 +438,8 @@ impl SpinSystem {
             shift,
             t1: None,
             t2: None,
+            position: None,
+            csa: None,
         });
         Ok(self.spins.len() - 1)
     }
@@ -550,7 +569,7 @@ impl SpinSystem {
         if self.carriers.values().any(|c| !c.is_finite()) {
             return Err(QsoError::invalid("carriers", "carriers must be finite"));
         }
-        Ok(())
+        self.validate_motion()
     }
 
     fn check_spin(&self, i: usize) -> Result<()> {
@@ -924,7 +943,7 @@ impl SpinSystem {
 
     /// Whether any spin relaxes.
     fn relaxes(&self) -> bool {
-        self.spins.iter().any(|s| s.t1.is_some() || s.t2.is_some())
+        self.spins.iter().any(|s| s.t1.is_some() || s.t2.is_some()) || self.redfield_active()
     }
 
     /// Jump operators of spin `i` at field `b`: local `(spin, matrix)`.
