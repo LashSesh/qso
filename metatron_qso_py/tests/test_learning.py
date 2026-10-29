@@ -123,5 +123,11 @@ def test_learning_and_mitigation_beyond_ten_qubits():
         assert len(zne["values"]) == 2
     with pytest.raises(ValueError, match="simulator"):
         q.pec_layered(blocks, wide, r["model"], dev, obs, 10, simulator="tableau")
+    with pytest.raises(ValueError, match="max_bond"):
+        q.pec_layered(blocks, wide, r["model"], dev, obs, 10, max_bond=8)
+    with pytest.raises(ValueError, match="max_bond"):
+        q.pec_layered(blocks, wide, r["model"], dev, obs, 10, simulator="mps", max_bond=-1)
+    small = q.pec_layered(blocks, wide, r["model"], dev, obs, 10, simulator="mps", max_bond=2)
+    assert small["noisy_operations"] == 1
     with pytest.raises(ValueError):
         q.pec_layered(blocks, wide, r["model"], dev, obs, 10, simulator="density_matrix")

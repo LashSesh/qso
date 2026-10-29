@@ -1273,7 +1273,7 @@ def pec_layered(
     samples: int,
     seed: int = 0,
     simulator: str = "auto",
-    max_bond: int = 256,
+    max_bond: Optional[int] = None,
 ) -> PecResult: ...
 def pea_layered(
     blocks: Sequence[Circuit],
@@ -1288,7 +1288,7 @@ def pea_layered(
     asymptote: float = 0.0,
     seed: int = 0,
     simulator: str = "auto",
-    max_bond: int = 256,
+    max_bond: Optional[int] = None,
 ) -> ZneResult: ...
 
 # ---------------------------------------------------------------------------

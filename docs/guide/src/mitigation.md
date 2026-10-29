@@ -213,9 +213,10 @@ circuit, and its X part flips the measured bits. Above ten qubits
 (`simulator="frames"` forces them, `"density_matrix"` the exact
 simulation). Each channel of the device enters through its Pauli twirl.
 That is exact for Pauli noise (depolarising, dephasing, Pauli channels,
-crosstalk) and readout errors. For a coherent or damping error it equals
-the twirled experiment when each group of qubits has one such channel
-per layer. Slow noise (quasi-static detunings, telegraph noise) is
+crosstalk) and readout errors. Coherent and damping errors are twirled
+one channel at a time, while the experiment twirls whole layers. The two
+agree unless non-Pauli channels on overlapping qubits fall between the
+same two twirls (two over-rotations of one qubit, whose angles add). Slow noise (quasi-static detunings, telegraph noise) is
 refused. Hundreds of rates are fitted by coordinate descent on the
 normal equations, then polished by an active-set method on the support
 it found.
@@ -224,11 +225,13 @@ The circuits PEC and PEA run are not Clifford. Their samples run on
 density matrices up to 10 qubits, on one quantum trajectory each up to
 24, and above on one matrix-product state each, up to 64 qubits
 (`simulator="auto"`; or `"density_matrix"`, `"trajectories"`, `"mps"`
-with `max_bond`). A matrix-product sample replaces every channel by one
+with `max_bond`, 256 by default). Samples of 20 qubits or more on
+trajectories run one after another, so that one large state vector is
+alive at a time; the first failing sample stops the others. A matrix-product sample replaces every channel by one
 of its unitaries, drawn with its weight. That needs channels that are
 mixtures of unitaries, so damping and T₁ are refused. In `"auto"` a
 sample that would need truncation is an error. With `"mps"` truncation
-at `max_bond` is accepted and biases the value.
+at `max_bond` is accepted, not reported, and biases the value.
 
 ```python
 n = 30
@@ -248,9 +251,10 @@ each control and a ZZ crosstalk error between 14 controls and their
 bridge qubits, plus readout errors. All 681 rates lie within 4 standard
 errors of the exact rates of the twirled noise (largest 2.9), and over
 the 329 nonzero rates the deviations have a spread of 0.94 standard
-errors. Most zero rates sit exactly at the constraint λ ≥ 0. On 30 qubits
-PEC with a model learned on frames gives 0.456 ± 0.009 on
-matrix-product states, for an exact value of 0.454 (raw 0.403). On four
+errors. Most zero rates sit exactly at the constraint λ ≥ 0. On 30 qubits,
+with a layer gate between qubits 2 and 9 and blocks that entangle,
+PEC with a model learned on frames gives 0.200 ± 0.004 on
+matrix-product states, for an exact value of 0.197 (raw 0.179). On four
 qubits, frames and density matrices learn the same rates within their
 standard errors.
 

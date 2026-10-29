@@ -39,6 +39,8 @@
 //! ([`LayeredSimulator`]).
 
 use std::collections::HashMap;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -243,13 +245,14 @@ enum Gate {
     Swap(usize, usize),
 }
 
-/// The gates of a layer of at most `max` qubits: `cx`, `cy`, `cz` and
-/// `swap` on disjoint qubits (so the layer is its own inverse).
-fn layer_gates(layer: &Circuit, max: usize) -> Result<Vec<Gate>> {
+/// The gates of a layer of at most `max` qubits (`what` names the limit):
+/// `cx`, `cy`, `cz` and `swap` on disjoint qubits (so the layer is its own
+/// inverse).
+fn layer_gates(layer: &Circuit, max: usize, what: &'static str) -> Result<Vec<Gate>> {
     let n = layer.n_qubits();
     if n == 0 || n > max {
         return Err(QsoError::TooManyQubits {
-            what: "noise learning (1 or more)",
+            what,
             max,
             requested: n,
         });
@@ -514,8 +517,7 @@ fn nnls_dense(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
         }
         Some(s)
     };
-    active_set(k, tol, &gradient, &solve, vec![0.0; k])
-        .expect("an SVD solves every subproblem")
+    active_set(k, tol, &gradient, &solve, vec![0.0; k]).expect("an SVD solves every subproblem")
 }
 
 /// [`nnls`] on the normal equations, warm-started by coordinate descent.
@@ -564,9 +566,8 @@ fn nnls_gram(a: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
         if cols.is_empty() {
             return Some(s);
         }
-        let sub = nalgebra::DMatrix::from_fn(cols.len(), cols.len(), |p, q| {
-            gram[(cols[p], cols[q])]
-        });
+        let sub =
+            nalgebra::DMatrix::from_fn(cols.len(), cols.len(), |p, q| gram[(cols[p], cols[q])]);
         let rhs = nalgebra::DVector::from_iterator(cols.len(), cols.iter().map(|&j| c[j]));
         let sol = sub.cholesky()?.solve(&rhs);
         for (p, &j) in cols.iter().enumerate() {
@@ -664,14 +665,16 @@ pub enum LearningSimulator {
     /// Exact density matrices with the device's channels as they are
     /// (up to [`MAX_LEARNING_QUBITS`] qubits).
     DensityMatrix,
-    /// Pauli frames (up to [`MAX_FRAME_LEARNING_QUBITS`] qubits). Every
-    /// learning circuit is a Clifford circuit whose noiseless outcome is
-    /// fixed, so each shot propagates a Pauli frame through the compiled
-    /// circuit, with every channel replaced by its Pauli twirl. Exact for
-    /// Pauli noise (depolarising, Pauli channels, phase flips, readout
-    /// errors); for other channels (coherent errors, damping) it twirls
-    /// each compiled channel on its own, which equals the twirled
-    /// experiment when a layer has one such channel per group of qubits.
+    /// Pauli frames (up to [`MAX_FRAME_LEARNING_QUBITS`] qubits). In every
+    /// learning circuit the gates other than Paulis multiply to the
+    /// identity (basis changes and self-inverse layers cancel), so each
+    /// shot propagates a Pauli frame through the compiled circuit, with
+    /// every channel replaced by its Pauli twirl. Exact for Pauli noise
+    /// (depolarising, Pauli channels, phase flips, readout errors). Other
+    /// channels (coherent errors, damping) are twirled one by one, while
+    /// the experiment twirls whole layers: the two agree unless non-Pauli
+    /// channels on overlapping qubits fall between the same two twirls
+    /// (two over-rotations of one qubit, say, whose angles add).
     Frames,
 }
 
@@ -701,12 +704,19 @@ pub fn learn_layer_with(
         LearningSimulator::DensityMatrix => false,
         LearningSimulator::Frames => true,
     };
-    let max = if frames {
-        MAX_FRAME_LEARNING_QUBITS
+    let gates = if frames {
+        layer_gates(
+            layer,
+            MAX_FRAME_LEARNING_QUBITS,
+            "noise learning on Pauli frames (1 or more)",
+        )?
     } else {
-        MAX_LEARNING_QUBITS
+        layer_gates(
+            layer,
+            MAX_LEARNING_QUBITS,
+            "noise learning on density matrices (1 or more)",
+        )?
     };
-    let gates = layer_gates(layer, max)?;
     let n = layer.n_qubits();
     device.validate()?;
     if frames && !device.is_markovian() {
@@ -783,7 +793,7 @@ pub fn learn_layer_with(
     let base = Rng::seed_from_u64(options.seed);
     // One task per (basis, depth, twirl): the estimate of every
     // measurable generator.
-    let results: Vec<Result<Vec<(usize, f64)>>> = map_tasks(work, |t| {
+    let results: Vec<Vec<(usize, f64)>> = try_map_tasks(work, false, |t| {
         let (bi, rest) = (
             t / (options.depths.len() * options.twirls),
             t % (options.depths.len() * options.twirls),
@@ -824,35 +834,38 @@ pub fn learn_layer_with(
         for q in (0..n).filter(|q| (flip >> q) & 1 == 1) {
             c.x(q);
         }
-        let counts: Vec<(u64, usize)> = if frames {
-            let program = Program::compile(&c, &[], device)?;
-            frame_counts(&program, options.shots, &readout, &mut rng)?
-        } else {
-            let mut rho = DensityMatrix::zero(n)?;
-            rho.apply_device(&c, &[], device)?;
-            rho.sample_with_readout(options.shots, &readout, &mut rng)
-                .into_iter()
-                .map(|(bits, m)| (bits as u64, m))
-                .collect()
-        };
-        Ok(gens
+        // The measurable generators and their supports.
+        let measured: Vec<(usize, u64)> = gens
             .iter()
             .enumerate()
             .filter(|(_, g)| measurable(g, basis))
-            .map(|(k, g)| {
-                let support = g.x_mask() | g.z_mask();
-                let total: i64 = counts
-                    .iter()
-                    .map(|&(bits, m)| {
-                        let parity = ((bits ^ flip) & support).count_ones() % 2;
-                        if parity == 0 { m as i64 } else { -(m as i64) }
-                    })
-                    .sum();
-                (k, total as f64 / options.shots as f64)
-            })
+            .map(|(k, g)| (k, g.x_mask() | g.z_mask()))
+            .collect();
+        let mut totals = vec![0i64; measured.len()];
+        let mut add = |bits: u64, m: i64| {
+            for (t, &(_, support)) in totals.iter_mut().zip(&measured) {
+                let parity = ((bits ^ flip) & support).count_ones() % 2;
+                *t += if parity == 0 { m } else { -m };
+            }
+        };
+        if frames {
+            let program = Program::compile(&c, &[], device)?;
+            frame_shots(&program, options.shots, &readout, &mut rng, |bits| {
+                bits.iter().for_each(|&b| add(b, 1));
+            })?;
+        } else {
+            let mut rho = DensityMatrix::zero(n)?;
+            rho.apply_device(&c, &[], device)?;
+            for (bits, m) in rho.sample_with_readout(options.shots, &readout, &mut rng) {
+                add(bits as u64, m as i64);
+            }
+        }
+        Ok(measured
+            .iter()
+            .zip(&totals)
+            .map(|(&(k, _), &t)| (k, t as f64 / options.shots as f64))
             .collect())
-    });
-    let results = results.into_iter().collect::<Result<Vec<_>>>()?;
+    })?;
     let n_depths = options.depths.len();
     // Mean of every generator at every depth over the twirls `pick(cell)`
     // of each (basis, depth) cell.
@@ -1023,25 +1036,32 @@ pub fn learn_layer_with(
     })
 }
 
-/// Outcomes of a compiled Clifford circuit whose noiseless outcome on
-/// `|0…0⟩` is fixed (as for every learning circuit): every shot carries a
-/// Pauli frame through the circuit (Pauli gates and errors multiply it,
-/// other Clifford gates conjugate it), and its X part is the measured
-/// bitstring, before readout errors. Channels act through their Pauli
-/// twirl. Returns `(bits, count)` pairs.
-fn frame_counts(
+/// Shots simulated by Pauli frames at a time (bounds the memory of a task).
+const FRAME_CHUNK: usize = 4096;
+
+/// Outcomes of a compiled Clifford circuit whose gates other than Paulis
+/// multiply to the identity on `|0…0⟩` (as in every learning circuit: the
+/// basis changes and the self-inverse layers cancel). Every shot carries a
+/// Pauli frame through the circuit: Pauli gates and errors multiply it,
+/// other Clifford gates conjugate it, and its X part is the measured
+/// bitstring, to which readout errors are then applied. Channels act
+/// through their Pauli twirl. `sink` receives the bitstrings of up to
+/// [`FRAME_CHUNK`] shots at a time.
+fn frame_shots(
     program: &Program,
     shots: usize,
     readout: &[(f64, f64)],
     rng: &mut Rng,
-) -> Result<Vec<(u64, usize)>> {
-    // The twirl of every channel: probability of an error, and the
-    // cumulative distribution of the non-identity Paulis given one.
-    let twirls: Vec<(f64, Vec<f64>)> = program
-        .channels
-        .iter()
-        .map(|ch| {
-            let p = ch.channel.twirled().pauli_probabilities().expect("a Pauli channel");
+    mut sink: impl FnMut(&[u64]),
+) -> Result<()> {
+    // The twirl of every channel the program uses: probability of an
+    // error, and the cumulative distribution of the non-identity Paulis.
+    let mut twirls: Vec<Option<(f64, Vec<f64>)>> = vec![None; program.channels.len()];
+    for op in &program.ops {
+        if let Op::Channel { channel, .. } = op
+            && twirls[*channel].is_none()
+        {
+            let p = program.channels[*channel].channel.twirl_probabilities();
             let error = (1.0 - p[0]).clamp(0.0, 1.0);
             let mut acc = 0.0;
             let cumulative = p[1..]
@@ -1051,83 +1071,125 @@ fn frame_counts(
                     acc
                 })
                 .collect();
-            (error, cumulative)
-        })
-        .collect();
-    let mut x = vec![0u64; shots];
-    let mut z = vec![0u64; shots];
+            twirls[*channel] = Some((error, cumulative));
+        }
+    }
     let bit = |q: usize| 1u64 << q;
-    for op in &program.ops {
-        match op {
-            Op::Gates(c) => {
-                for inst in c.instructions() {
-                    frame_gate(inst, &mut x, &mut z)?;
+    let mut done = 0;
+    while done < shots {
+        let m = (shots - done).min(FRAME_CHUNK);
+        done += m;
+        let mut x = vec![0u64; m];
+        let mut z = vec![0u64; m];
+        for op in &program.ops {
+            match op {
+                Op::Gates(c) => {
+                    for inst in c.instructions() {
+                        frame_gate(inst, &mut x, &mut z)?;
+                    }
                 }
-            }
-            Op::Channel { channel, qubits } => {
-                let (error, cumulative) = &twirls[*channel];
-                if *error <= 0.0 {
-                    continue;
-                }
-                let k = qubits.len();
-                // The shots with an error, by geometric gaps.
-                let log_stay = (1.0 - error).ln();
-                let mut shot = 0usize;
-                loop {
-                    if *error < 1.0 {
-                        let u = 1.0 - rng.uniform();
-                        let gap = (u.ln() / log_stay).floor();
-                        // NaN when the error probability rounds away.
-                        if gap.is_nan() || gap >= (shots - shot) as f64 {
+                Op::Channel { channel, qubits } => {
+                    let (error, cumulative) = twirls[*channel].as_ref().expect("computed above");
+                    let total = cumulative.last().copied().unwrap_or(0.0);
+                    if *error <= 0.0 || total <= 0.0 {
+                        continue;
+                    }
+                    let k = qubits.len();
+                    // The shots with an error, by geometric gaps:
+                    // P(gap ≥ g) = (1 − error)^g.
+                    let log_stay = (-error).ln_1p();
+                    let mut shot = 0usize;
+                    loop {
+                        if *error < 1.0 {
+                            let u = 1.0 - rng.uniform();
+                            let gap = (u.ln() / log_stay).floor();
+                            if !gap.is_finite() || gap >= (m - shot) as f64 {
+                                break;
+                            }
+                            shot += gap as usize;
+                        }
+                        if shot >= m {
                             break;
                         }
-                        shot += gap as usize;
-                    }
-                    if shot >= shots {
-                        break;
-                    }
-                    let total = cumulative.last().copied().unwrap_or(0.0);
-                    let u = rng.uniform() * total;
-                    let index = 1 + cumulative.partition_point(|&c| c <= u).min(cumulative.len() - 1);
-                    for (pos, &q) in qubits.iter().enumerate() {
-                        match (index >> (2 * (k - 1 - pos))) & 3 {
-                            1 => x[shot] ^= bit(q),
-                            2 => {
-                                x[shot] ^= bit(q);
-                                z[shot] ^= bit(q);
+                        let u = rng.uniform() * total;
+                        let index = 1 + cumulative
+                            .partition_point(|&c| c <= u)
+                            .min(cumulative.len() - 1);
+                        for (pos, &q) in qubits.iter().enumerate() {
+                            match (index >> (2 * (k - 1 - pos))) & 3 {
+                                1 => x[shot] ^= bit(q),
+                                2 => {
+                                    x[shot] ^= bit(q);
+                                    z[shot] ^= bit(q);
+                                }
+                                3 => z[shot] ^= bit(q),
+                                _ => {}
                             }
-                            3 => z[shot] ^= bit(q),
-                            _ => {}
                         }
+                        shot += 1;
                     }
-                    shot += 1;
+                }
+                Op::Phase { .. } | Op::SpreadGate { .. } => {
+                    return Err(QsoError::invalid(
+                        "device",
+                        "Pauli frames need noise that is a channel at points of the circuit",
+                    ));
                 }
             }
-            Op::Phase { .. } | Op::SpreadGate { .. } => {
-                return Err(QsoError::invalid(
-                    "device",
-                    "Pauli frames need noise that is a channel at points of the circuit",
-                ));
+        }
+        for b in x.iter_mut() {
+            for (q, &(p01, p10)) in readout.iter().enumerate() {
+                if p01 == 0.0 && p10 == 0.0 {
+                    continue;
+                }
+                let p = if (*b >> q) & 1 == 0 { p01 } else { p10 };
+                if rng.uniform() < p {
+                    *b ^= bit(q);
+                }
             }
         }
+        sink(&x);
     }
-    let mut counts: HashMap<u64, usize> = HashMap::new();
-    for &bits in &x {
-        let mut b = bits;
-        for (q, &(p01, p10)) in readout.iter().enumerate() {
-            if p01 == 0.0 && p10 == 0.0 {
-                continue;
-            }
-            let p = if (b >> q) & 1 == 0 { p01 } else { p10 };
-            if rng.uniform() < p {
-                b ^= bit(q);
+    Ok(())
+}
+
+/// [`map_tasks`] for fallible tasks: once one fails the others are
+/// skipped, and the error of the lowest failed task that ran is returned.
+/// `sequential` runs them one after another (for tasks that hold large
+/// state vectors).
+fn try_map_tasks<T, F>(n: usize, sequential: bool, f: F) -> Result<Vec<T>>
+where
+    T: Send,
+    F: Fn(usize) -> Result<T> + Sync + Send,
+{
+    if sequential {
+        return (0..n).map(f).collect();
+    }
+    let failed = AtomicBool::new(false);
+    let first: Mutex<Option<(usize, QsoError)>> = Mutex::new(None);
+    let out: Vec<Option<T>> = map_tasks(n, |i| {
+        if failed.load(Ordering::Relaxed) {
+            return None;
+        }
+        match f(i) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                failed.store(true, Ordering::Relaxed);
+                let mut slot = first.lock().unwrap_or_else(|p| p.into_inner());
+                if slot.as_ref().is_none_or(|(j, _)| i < *j) {
+                    *slot = Some((i, e));
+                }
+                None
             }
         }
-        *counts.entry(b).or_insert(0) += 1;
+    });
+    if let Some((_, e)) = first.into_inner().unwrap_or_else(|p| p.into_inner()) {
+        return Err(e);
     }
-    let mut out: Vec<(u64, usize)> = counts.into_iter().collect();
-    out.sort_unstable();
-    Ok(out)
+    Ok(out
+        .into_iter()
+        .map(|v| v.expect("no task failed"))
+        .collect())
 }
 
 /// Conjugate the frames `(x, z)` of all shots by a Clifford gate, or
@@ -1192,10 +1254,7 @@ fn frame_gate(inst: &crate::quantum::Instruction, x: &mut [u64], z: &mut [u64]) 
         _ => {
             return Err(QsoError::invalid(
                 "circuit",
-                format!(
-                    "Pauli frames need Clifford gates, not {}",
-                    inst.name()
-                ),
+                format!("Pauli frames need Clifford gates, not {}", inst.name()),
             ));
         }
     }
@@ -1220,12 +1279,21 @@ fn check_layered(
         LayeredSimulator::Trajectories => Sampler::Trajectory,
         LayeredSimulator::Mps(options) => Sampler::Mps(options, false),
     };
-    let max = match sampler {
-        Sampler::DensityMatrix => MAX_LEARNING_QUBITS,
-        Sampler::Trajectory => MAX_TRAJECTORY_LAYERED_QUBITS,
-        Sampler::Mps(..) => MAX_LAYERED_QUBITS,
+    let (max, what) = match sampler {
+        Sampler::DensityMatrix => (
+            MAX_LEARNING_QUBITS,
+            "layered mitigation on density matrices (1 or more)",
+        ),
+        Sampler::Trajectory => (
+            MAX_TRAJECTORY_LAYERED_QUBITS,
+            "layered mitigation on trajectories (1 or more)",
+        ),
+        Sampler::Mps(..) => (
+            MAX_LAYERED_QUBITS,
+            "layered mitigation on matrix-product states (1 or more)",
+        ),
     };
-    let gates = layer_gates(layer, max)?;
+    let gates = layer_gates(layer, max, what)?;
     model.validate()?;
     if blocks.is_empty() || blocks.iter().any(|b| b.n_qubits() != n) || model.n_qubits != n {
         return Err(QsoError::invalid(
@@ -1272,9 +1340,11 @@ pub enum LayeredSimulator {
     /// One matrix-product state per sample, with every channel of the
     /// device replaced by one of its terms, drawn at random: the device's
     /// channels must be mixtures of unitaries (depolarising, dephasing,
-    /// Pauli errors, crosstalk, coherent errors), not damping. Truncation as set
-    /// by the options is accepted; it biases the value of a sample by at
-    /// most `2‖O‖√(1 − F)` with `F` the state's fidelity bound.
+    /// Pauli errors, crosstalk, coherent errors), not damping.
+    /// Truncation as set by the options is accepted and not reported: it
+    /// biases the value of a sample by up to `2‖O‖√(1 − F)` (`F` the
+    /// state's fidelity bound, `‖O‖` the operator norm), before PEC
+    /// multiplies the sample by its sign and overhead.
     Mps(MpsOptions),
 }
 
@@ -1285,6 +1355,14 @@ enum Sampler {
     DensityMatrix,
     Trajectory,
     Mps(MpsOptions, bool),
+}
+
+impl Sampler {
+    /// Trajectories of 20 qubits or more run one after another, as in
+    /// [`TrajectorySimulator`], so that only one large state is alive.
+    fn sequential(self, n: usize) -> bool {
+        matches!(self, Sampler::Trajectory) && n >= 20
+    }
 }
 
 /// `⟨O⟩` of one sampled circuit `B₀ L B₁ L … B_m`: every layer twirled and
@@ -1359,6 +1437,9 @@ fn mps_sample(
             Op::Gates(g) => {
                 for inst in g.instructions() {
                     mps.apply_instruction(inst, &[])?;
+                    if strict && mps.discarded_weight() > 1e-10 {
+                        break;
+                    }
                 }
             }
             Op::Channel { channel, qubits } => {
@@ -1375,7 +1456,7 @@ fn mps_sample(
                     .partition_point(|&c| c <= u)
                     .min(unitaries.len() - 1);
                 if let Some(m) = &unitaries[pick] {
-                    mps.apply_matrix(m, qubits)?;
+                    mps.apply_trusted_unitary(m, qubits)?;
                 }
             }
             Op::Phase { .. } | Op::SpreadGate { .. } => {
@@ -1385,13 +1466,17 @@ fn mps_sample(
                 ));
             }
         }
+        if strict && mps.discarded_weight() > 1e-10 {
+            break;
+        }
     }
     if strict && mps.discarded_weight() > 1e-10 {
         return Err(QsoError::invalid(
             "simulator",
             format!(
-                "a sampled circuit needs more than bond dimension {}; pass \
-                 LayeredSimulator::Mps with options to accept truncation",
+                "a sampled circuit needs more than bond dimension {}; choose \
+                 matrix-product states explicitly (LayeredSimulator::Mps, simulator=\"mps\") \
+                 to accept truncation",
                 options.max_bond
             ),
         ));
@@ -1455,22 +1540,33 @@ pub fn pec_layered_with(
         .map(|r| (1.0 - (-2.0 * r).exp()) / 2.0)
         .collect();
     let base = Rng::seed_from_u64(seed);
-    let values: Vec<Result<f64>> = map_tasks(samples, |s| {
+    let values = try_map_tasks(samples, sampler.sequential(layer.n_qubits()), |s| {
         let mut rng = base.fork(s as u64);
         let mut sign = 1.0;
-        let v = run_sample(blocks, layer, &gates, device, observable, sampler, &mut rng, |rng| {
-            let mut p = PauliString::identity();
-            for (g, &f) in model.generators.iter().zip(&flips) {
-                if rng.uniform() < f {
-                    sign = -sign;
-                    p = PauliString::from_masks(p.x_mask() ^ g.x_mask(), p.z_mask() ^ g.z_mask());
+        let v = run_sample(
+            blocks,
+            layer,
+            &gates,
+            device,
+            observable,
+            sampler,
+            &mut rng,
+            |rng| {
+                let mut p = PauliString::identity();
+                for (g, &f) in model.generators.iter().zip(&flips) {
+                    if rng.uniform() < f {
+                        sign = -sign;
+                        p = PauliString::from_masks(
+                            p.x_mask() ^ g.x_mask(),
+                            p.z_mask() ^ g.z_mask(),
+                        );
+                    }
                 }
-            }
-            p
-        })?;
+                p
+            },
+        )?;
         Ok(sign * gamma * v)
-    });
-    let values = values.into_iter().collect::<Result<Vec<f64>>>()?;
+    })?;
     Ok(PecResult {
         estimate: Estimate::from_samples(&values),
         overhead: gamma,
@@ -1541,22 +1637,30 @@ pub fn pea_layered_with(
             .map(|r| (1.0 - (-2.0 * (g - 1.0) * r).exp()) / 2.0)
             .collect();
         let base = Rng::seed_from_u64(seed).fork(i as u64);
-        let v: Vec<Result<f64>> = map_tasks(samples, |s| {
+        let v = try_map_tasks(samples, sampler.sequential(layer.n_qubits()), |s| {
             let mut rng = base.fork(s as u64);
-            run_sample(blocks, layer, &gates, device, observable, sampler, &mut rng, |rng| {
-                let mut p = PauliString::identity();
-                for (g, &f) in model.generators.iter().zip(&flips) {
-                    if rng.uniform() < f {
-                        p = PauliString::from_masks(
-                            p.x_mask() ^ g.x_mask(),
-                            p.z_mask() ^ g.z_mask(),
-                        );
+            run_sample(
+                blocks,
+                layer,
+                &gates,
+                device,
+                observable,
+                sampler,
+                &mut rng,
+                |rng| {
+                    let mut p = PauliString::identity();
+                    for (g, &f) in model.generators.iter().zip(&flips) {
+                        if rng.uniform() < f {
+                            p = PauliString::from_masks(
+                                p.x_mask() ^ g.x_mask(),
+                                p.z_mask() ^ g.z_mask(),
+                            );
+                        }
                     }
-                }
-                p
-            })
-        });
-        let v = v.into_iter().collect::<Result<Vec<f64>>>()?;
+                    p
+                },
+            )
+        })?;
         values.push(Estimate::from_samples(&v));
     }
     Ok(ZneResult {

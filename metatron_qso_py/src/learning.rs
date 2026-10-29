@@ -33,16 +33,27 @@ fn learning_simulator(name: &str) -> PyResult<LearningSimulator> {
 }
 
 /// The simulator of the layered mitigation: `"auto"`, `"density_matrix"`,
-/// `"trajectories"` or `"mps"` (bond dimension up to `max_bond`).
-fn layered_simulator(name: &str, max_bond: usize) -> PyResult<LayeredSimulator> {
+/// `"trajectories"` or `"mps"` (bond dimension up to `max_bond`, 256 by
+/// default; only `"mps"` takes one).
+fn layered_simulator(name: &str, max_bond: Option<i64>) -> PyResult<LayeredSimulator> {
+    if max_bond.is_some() && name != "mps" {
+        return Err(invalid("max_bond applies to simulator=\"mps\" only"));
+    }
     match name {
         "auto" => Ok(LayeredSimulator::Auto),
         "density_matrix" => Ok(LayeredSimulator::DensityMatrix),
         "trajectories" => Ok(LayeredSimulator::Trajectories),
-        "mps" => Ok(LayeredSimulator::Mps(MpsOptions {
-            max_bond,
-            ..MpsOptions::default()
-        })),
+        "mps" => {
+            let max_bond = match max_bond {
+                None => MpsOptions::default().max_bond,
+                Some(b) if b >= 1 => usize::try_from(b).unwrap_or(usize::MAX),
+                Some(b) => return Err(invalid(format!("max_bond must be at least 1, not {b}"))),
+            };
+            Ok(LayeredSimulator::Mps(MpsOptions {
+                max_bond,
+                ..MpsOptions::default()
+            }))
+        }
         other => Err(invalid(format!(
             "unknown simulator '{other}' (use auto, density_matrix, trajectories or mps)"
         ))),
@@ -197,13 +208,14 @@ fn learn_layer<'py>(
 /// `noisy_operations` (the number of layers). Every sample is a density
 /// matrix (`simulator="density_matrix"`, up to 10 qubits), one trajectory
 /// (`"trajectories"`, up to 24) or one matrix-product state (`"mps"`, up
-/// to 64, bond dimension up to `max_bond`, for devices whose channels are
-/// mixtures of unitaries); `"auto"` picks them in that order and refuses
-/// to truncate.
+/// to 64, for devices whose channels are mixtures of unitaries). `"auto"`
+/// picks them in that order and refuses to truncate a matrix-product
+/// state; `"mps"` truncates at bond dimension `max_bond` (default 256)
+/// without reporting it.
 #[pyfunction]
 #[pyo3(signature = (
     blocks, layer, model, device, observable, samples, seed = 0, simulator = "auto",
-    max_bond = 256
+    max_bond = None
 ))]
 #[allow(clippy::too_many_arguments)]
 fn pec_layered<'py>(
@@ -216,7 +228,7 @@ fn pec_layered<'py>(
     samples: usize,
     seed: u64,
     simulator: &str,
-    max_bond: usize,
+    max_bond: Option<i64>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let simulator = layered_simulator(simulator, max_bond)?;
     let blocks = blocks_of(&blocks);
@@ -239,7 +251,7 @@ fn pec_layered<'py>(
 #[pyfunction]
 #[pyo3(signature = (
     blocks, layer, model, device, observable, scales, samples, method = "richardson",
-    degree = None, asymptote = 0.0, seed = 0, simulator = "auto", max_bond = 256
+    degree = None, asymptote = 0.0, seed = 0, simulator = "auto", max_bond = None
 ))]
 #[allow(clippy::too_many_arguments)]
 fn pea_layered<'py>(
@@ -256,7 +268,7 @@ fn pea_layered<'py>(
     asymptote: f64,
     seed: u64,
     simulator: &str,
-    max_bond: usize,
+    max_bond: Option<i64>,
 ) -> PyResult<Bound<'py, PyDict>> {
     check_finite("scales", &scales)?;
     let method = extrapolation(method, degree, asymptote)?;

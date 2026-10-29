@@ -618,6 +618,23 @@ impl Mps {
     /// Apply a unitary (row-major, dimension `2^qubits.len()`, `qubits[0]`
     /// most significant) to distinct qubits.
     pub fn apply_matrix(&mut self, matrix: &[C64], qubits: &[usize]) -> Result<()> {
+        self.check_matrix(matrix, qubits)?;
+        if !is_unitary(matrix, 1usize << qubits.len(), 1e-9) {
+            return Err(QsoError::invalid("matrix", "the matrix is not unitary"));
+        }
+        self.apply_unitary(matrix, qubits)
+    }
+
+    /// [`Mps::apply_matrix`] without the unitarity check, for matrices
+    /// unitary by construction (the terms of compiled unitary mixtures,
+    /// classified by their own test).
+    pub(crate) fn apply_trusted_unitary(&mut self, matrix: &[C64], qubits: &[usize]) -> Result<()> {
+        self.check_matrix(matrix, qubits)?;
+        self.apply_unitary(matrix, qubits)
+    }
+
+    /// Distinct valid qubits, a matrix of their dimension, finite entries.
+    fn check_matrix(&self, matrix: &[C64], qubits: &[usize]) -> Result<()> {
         let k = qubits.len();
         if k == 0 || k > MAX_GATE_QUBITS {
             return Err(QsoError::invalid(
@@ -644,11 +661,10 @@ impl Mps {
         if matrix
             .iter()
             .any(|z| !z.re.is_finite() || !z.im.is_finite())
-            || !is_unitary(matrix, d, 1e-9)
         {
             return Err(QsoError::invalid("matrix", "the matrix is not unitary"));
         }
-        self.apply_unitary(matrix, qubits)
+        Ok(())
     }
 
     fn apply_unitary(&mut self, matrix: &[C64], qubits: &[usize]) -> Result<()> {

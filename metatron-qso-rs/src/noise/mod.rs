@@ -527,11 +527,19 @@ impl Channel {
     /// `χ[P][P]`, which is what the channel becomes on average when random
     /// Paulis are applied before it and undone after it.
     pub fn twirled(&self) -> Channel {
+        Self::from_pauli_probabilities(
+            format!("twirled({})", self.name),
+            &self.twirl_probabilities(),
+        )
+        .expect("the diagonal of χ is a probability distribution")
+    }
+
+    /// The Pauli probabilities of [`Channel::twirled`] (the diagonal of
+    /// χ; indices in base 4, `I, X, Y, Z`, first qubit most significant).
+    pub(crate) fn twirl_probabilities(&self) -> Vec<f64> {
         let chi = self.chi_matrix();
         let m = 1usize << (2 * self.n_qubits);
-        let p: Vec<f64> = (0..m).map(|p| chi[p * m + p].re.max(0.0)).collect();
-        Self::from_pauli_probabilities(format!("twirled({})", self.name), &p)
-            .expect("the diagonal of χ is a probability distribution")
+        (0..m).map(|p| chi[p * m + p].re.max(0.0)).collect()
     }
 
     /// Superoperator `Σ K ⊗ K*` in the local order of the density-matrix

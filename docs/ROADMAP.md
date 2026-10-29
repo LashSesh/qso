@@ -49,7 +49,7 @@ which withdraws the results of version 1.
 |---|---|---|
 | Statevector speed | specialised kernels (1.1); gate fusion and cache blocking (1.3.0): 16-qubit layers 4.7× and 18–24-qubit layers 1.6–2.6× faster than in 1.2; batched evaluation; AVX and NEON kernels close to memory bandwidth and a blocked adjoint pass (1.11); single precision, one more qubit and about twice the speed on large registers (1.20); a worker pool that stays awake between short simulations (1.24) | spinning workers cost CPU time between simulations (`QSO_POOL_SPIN_US=0` turns it off) |
 | Boson sampling | exact probabilities and exact sampling (1.1); partial distinguishability, loss and Gaussian boson sampling with hafnians and torontonians (1.14) | mixed Gaussian states with many photons spread over many modes are impractical (10¹² operations at 20 photons in 10 modes) |
-| Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | noise learning for layers of two-qubit Clifford gates only, on density matrices (1.12); no leakage; channels on at most four qubits, slow noise as quasi-static and telegraph processes only, and on trajectories only (1.30); virtual distillation (1.17) mitigates only its measured copies' preparation |
+| Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | noise learning for layers of two-qubit Clifford gates only, on density matrices up to 10 qubits and Pauli frames up to 64 (1.12, 1.31), with non-Pauli channels twirled one at a time; mitigation with the learned model above 24 qubits only on matrix-product states, for channels that are mixtures of unitaries (1.31); no leakage; channels on at most four qubits, slow noise as quasi-static and telegraph processes only, and on trajectories only (1.30); virtual distillation (1.17) mitigates only its measured copies' preparation |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18) | time-dependent Hamiltonians and decoherent coined walks without symmetry reduction; pretty good transfer on other graphs |
 | Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5) | Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23) | no integral screening (every integral is computed, seconds at the 64-function limit), no tight commutator bound for product formulas of order 4 and higher |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
@@ -1910,7 +1910,7 @@ Left as is: a four-qubit channel on a density matrix costs 16 times a
 two-qubit one (applying few-Kraus channels as `K ρ K†` would be cheaper),
 and slow-noise sampling scans the steps once per trajectory.
 
-### 1.31 — Noise learning beyond ten qubits (M)
+### 1.31 — Noise learning beyond ten qubits (M, delivered)
 
 Use case: learning the sparse Pauli–Lindblad model of a layer on a
 device with 20 to 100 qubits, as on hardware. 1.12 learns on density
@@ -1927,6 +1927,83 @@ Validation: on a 4-qubit device the learned rates on the frame sampler
 agree with those on density matrices within their standard errors. On a
 heavy-hex layer of about 50 qubits all rates lie within three standard
 errors of the exact rates of the twirled noise.
+
+Delivered with two changes to the plan. First, the frames do not run on
+the detector-circuit sampler of 1.8 but directly through the compiled
+device program, so device rules, spectators and readout errors apply as
+on density matrices. Second, the bound is four standard errors, not
+three: with 681 rates, about two would lie beyond three by chance alone.
+Measured:
+
+- **Frames.** On four qubits, the outcome distribution of a learning
+  circuit with depolarising, Pauli and crosstalk noise matches the
+  density matrix within 1.5 standard errors per outcome (400 000 shots).
+  Rates learned on frames and on density matrices differ by at most 2.0
+  combined standard errors.
+- **Heavy hex, 53 qubits.** 21 `cx` gates with two-qubit depolarising
+  noise, a coherent phase error on the control and a ZZ crosstalk error
+  with 14 bridge qubits, plus readout errors: all 681 rates lie within 4
+  standard errors of the exact rates of the twirled noise. The largest
+  deviation is 2.9; over six seeds the largest is 3.5. Over the 329
+  nonzero rates the deviations have a spread of 0.94 standard errors, so
+  the errors are honest. Most zero rates are fitted exactly as 0. Learning
+  takes about 2 s.
+- **Large fits.** Above 64 generators the non-negative least squares
+  starts from coordinate descent on the normal equations and finishes
+  with the active-set iteration on Cholesky factors. For the 681 rates
+  it needs one factorisation; a collinear system falls back to the SVD
+  path.
+- **Mitigation at scale.** Samples run on density matrices (up to 10
+  qubits), trajectories (up to 24) or matrix-product states (up to 64),
+  each channel replaced by one of its unitaries. On 30 qubits, with a
+  layer gate between qubits 2 and 9 and entangling blocks, PEC gives
+  0.200 ± 0.004 for an exact value of 0.197 (raw 0.179), and PEA moves
+  towards it. On 12 qubits PEC on trajectories gives the exact value
+  within 4 standard errors; the raw value is 25 standard errors off.
+
+An independent review checked the frame rules of every gate by hand,
+the Pauli index conventions, the geometric sampling of errors and the
+termination of the warm-started active set. It confirmed that results on
+density matrices are unchanged bit for bit up to ten qubits, and that
+learning matrices are well conditioned. It found:
+
+- **Memory.** Frames of all shots of a task were held at once, up to
+  0.8 GB per task at the shot limit; they now run in blocks of 4096 shots
+  that update the parities directly. Trajectory samples of 20 to 24
+  qubits ran on all threads at once (17 GB at 24 qubits on 64 threads);
+  they now run one after another, as in the trajectory simulator.
+- **Failures surfaced late.** A device that matrix-product samples cannot
+  use, or a sample that `Auto` must refuse, failed only after every
+  sample had run. The first failure now stops the others, and a strict
+  matrix-product sample stops at the first truncation.
+- **A test that missed its target.** The test of the fallback for
+  collinear columns never reached it; it now uses a column the solution
+  needs.
+- **Edge cases of the error sampling.** The guard on the geometric gaps
+  relied on a NaN that cannot occur; the gap now uses `ln(1 − p)` via
+  `ln_1p` and stops on any non-finite gap, and a channel whose Pauli
+  probabilities round to zero is skipped.
+- **Docs and messages.** The condition for frames (the gates other than
+  Paulis multiply to the identity) and for exact per-channel twirling
+  (no overlapping non-Pauli channels between two twirls) are stated
+  precisely; the truncation bias is stated per sample, before PEC's
+  factor. Size errors of the mitigation named noise learning instead of
+  the simulator, and the strict refusal advised a Rust-only option.
+- **Python.** `max_bond` was silently ignored unless `simulator="mps"`,
+  and a negative value raised `OverflowError`; both are now `ValueError`.
+- **Tests.** New: every frame gate against its conjugation, PEC agreeing
+  on density matrices, trajectories and matrix-product states, learning
+  on 64 qubits, the choice of strict matrix-product samples above 24
+  qubits, and entangling blocks with a distant layer gate at 30 qubits.
+- **Smaller.** Matrix-product samples no longer re-check the unitarity
+  of mixture terms that are unitary by construction, which could reject
+  a term trajectories accept. The twirl is computed once per used
+  channel.
+
+Left as is: learned rates on 7 to 10 qubits now come from the new fit
+and differ from 1.30 by about 10⁻¹⁷. A trajectory sample builds its
+simulator for each sample. `LayeredSimulator` has no serde form, because
+`MpsOptions` has none.
 
 ### 1.32 — Faster integrals and tighter bounds (S–M)
 

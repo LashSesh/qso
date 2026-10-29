@@ -1604,9 +1604,18 @@ fn heavy_hex() -> (Vec<(usize, usize)>, Vec<(usize, usize, usize)>) {
         }
     }
     let mut bridges = Vec::new();
-    for (i, (row, col)) in [(0, 0), (0, 4), (0, 8), (0, 12), (1, 2), (1, 6), (1, 10), (1, 14)]
-        .into_iter()
-        .enumerate()
+    for (i, (row, col)) in [
+        (0, 0),
+        (0, 4),
+        (0, 8),
+        (0, 12),
+        (1, 2),
+        (1, 6),
+        (1, 10),
+        (1, 14),
+    ]
+    .into_iter()
+    .enumerate()
     {
         let (b, top, bottom) = (45 + i, 15 * row + col, 15 * (row + 1) + col);
         edges.push((top, b));
@@ -1717,27 +1726,34 @@ fn layered_mitigation_beyond_trajectories_runs_on_matrix_product_states() {
     use metatron_qso::noise::{ChannelSpec, DeviceModel, GateRule, QubitProperties};
     // 30 qubits: learned on Pauli frames, mitigated on one sampled
     // matrix-product state per sample (more than trajectories handle).
+    // The layer has a gate between distant qubits, and the blocks entangle
+    // neighbours among the first six with cz (noiseless on this device).
     let n = 30;
     let device = DeviceModel::new("chain")
-        .with_rule(GateRule::for_gate("cx").with_depolarizing(0.03).with_channel(
-            ChannelSpec::Rotation {
-                pauli: "ZI".into(),
-                angle: 0.2,
-            },
-        ))
+        .with_rule(
+            GateRule::for_gate("cx")
+                .with_depolarizing(0.03)
+                .with_channel(ChannelSpec::Rotation {
+                    pauli: "ZI".into(),
+                    angle: 0.2,
+                }),
+        )
         .with_default_qubit(QubitProperties::new().with_readout(0.02, 0.04))
         .with_idle_noise(false);
     let mut layer = Circuit::new(n);
-    layer.cx(0, 1).cx(2, 3);
+    layer.cx(0, 1).cx(2, 9);
     let learned = learn_layer(&layer, &device, &LearningOptions::default()).unwrap();
-    assert_eq!(learned.model.generators.len(), 3 * n + 9 * (n - 1));
+    assert_eq!(learned.model.generators.len(), 3 * n + 9 * n);
     let mut rng = Rng::seed_from_u64(23);
     let blocks: Vec<Circuit> = (0..4)
-        .map(|_| {
+        .map(|i| {
             let mut b = Circuit::new(n);
             for q in 0..n {
                 b.ry(q, rng.uniform_range(-3.0, 3.0))
                     .rz(q, rng.uniform_range(-3.0, 3.0));
+            }
+            for q in (i % 2..5).step_by(2) {
+                b.cz(q, q + 1);
             }
             b
         })
@@ -1749,12 +1765,12 @@ fn layered_mitigation_beyond_trajectories_runs_on_matrix_product_states() {
         }
         joined.append(b).unwrap();
     }
-    let h: PauliSum = "Z0 Z1 + 0.5 X0 + Z2 Z3 + 0.5 X2 + 0.3 Z29".parse().unwrap();
+    let h: PauliSum = "Z0 Z1 + 0.5 X0 + Z2 Z9 + 0.5 X2 + 0.3 Z29".parse().unwrap();
     let exact = Mps::from_circuit(&joined, &[], MpsOptions::exact())
         .unwrap()
         .expectation_sum(&h)
         .unwrap();
-    let pec = pec_layered(&blocks, &layer, &learned.model, &device, &h, 8000, 3).unwrap();
+    let pec = pec_layered(&blocks, &layer, &learned.model, &device, &h, 6000, 3).unwrap();
     let zne = pea_layered(
         &blocks,
         &layer,
@@ -1762,7 +1778,7 @@ fn layered_mitigation_beyond_trajectories_runs_on_matrix_product_states() {
         &device,
         &h,
         &[1.0, 2.0],
-        8000,
+        6000,
         Extrapolation::Linear,
         4,
     )
@@ -1771,7 +1787,10 @@ fn layered_mitigation_beyond_trajectories_runs_on_matrix_product_states() {
     // The noisy value is far off; error cancellation is unbiased, and
     // amplification moves the extrapolation towards the exact value.
     let off = (noisy.value - exact).abs();
-    assert!(off > 8.0 * noisy.std_error, "noisy {noisy:?}, exact {exact}");
+    assert!(
+        off > 8.0 * noisy.std_error,
+        "noisy {noisy:?}, exact {exact}"
+    );
     assert!(
         (pec.estimate.value - exact).abs() < 4.0 * pec.estimate.std_error,
         "PEC {:?}, exact {exact}",

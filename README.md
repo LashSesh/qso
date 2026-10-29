@@ -127,7 +127,7 @@ or by the benchmark report you can run yourself.
 | Same with Pauli noise: probabilistic error cancellation (overhead 1.08) | 4.00 ± 0.01 | 4 |
 | Noise learning, 4 qubits (depolarising + coherent phase error + readout errors): 39 learned rates / PEC with them on 3 layers (raw 0.492) | all within 3 standard errors / 0.534 ± 0.005 | exact rates / 0.533 |
 | Noise learning on Pauli frames, 53-qubit heavy-hex layer (depolarising, coherent phase and ZZ crosstalk errors, readout errors): 681 rates; spread of the 329 nonzero ones | all within 4 standard errors (largest 2.9); 0.94 standard errors | exact rates of the twirled noise |
-| PEC with a model learned on frames, 30 qubits, samples on matrix-product states (raw 0.403) | 0.456 ± 0.009 | 0.454 (exact MPS) |
+| PEC with a model learned on frames, 30 qubits (a layer gate between qubits 2 and 9, entangling blocks), samples on matrix-product states (raw 0.179) | 0.200 ± 0.004 | 0.197 (exact MPS) |
 | Virtual distillation of a depolarised GHZ-like state (no noise floor: its rotation comes last), error of ⟨Z0 Z1 + X0 X1 X2⟩ with 1 / 2 / 3 copies; circuits on copies vs. exact | 0.19 / 3.6·10⁻³ / 6.9·10⁻⁵; equal to 10⁻¹¹ | noiseless value; Tr(ρᵏO)/Tr(ρᵏ) |
 | Zero-noise extrapolation (Richardson, scales 1, 3, 5), depolarised 3-qubit circuit | error ÷ 380 | — |
 | Classical shadows, single-snapshot variance of a weight-k Pauli string | 3ᵏ − ⟨P⟩² | Huang, Kueng & Preskill 2020 |

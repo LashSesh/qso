@@ -65,7 +65,9 @@ All notable changes to this project are documented here. The format follows
     errors of the exact twirled rates. Error cancellation on 30 qubits
     with matrix-product states recovers the exact value.
   - Python: `simulator` arguments of `learn_layer`, `pec_layered` and
-    `pea_layered`, and `max_bond`.
+    `pea_layered`, and `max_bond` (for `simulator="mps"` only).
+  - Learned rates on 7 to 10 qubits (more than 64 generators) now come
+    from the new fit; they agree with 1.30 to rounding (about 10⁻¹⁷).
 - **Graphs:** `generators::seidel_switching` (within the size limits of
   the generators, keeping node positions) and the three Chang graphs
   (`generators::chang`, spec `chang:K`), in Python as
