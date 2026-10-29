@@ -82,9 +82,10 @@ All notable changes to this project are documented here. The format follows
     with a rigorous tail), `stages` (the commutator bounds of 1.5) and
     `taylor`. `trotter_error_bound` returns the smallest. At order 4 and
     6 the bound now falls as `r^{−p}` and lies 7–24 times above the
-    actual error at 8–32 steps, where the old one was 800–10⁹ times
-    above. Python: `trotter_error_bounds`; `qso trotter` lists the bounds
-    in its JSON.
+    actual error at 8–32 steps for 4-qubit Hamiltonians, where the old
+    one was 780–10⁹ times above; for larger ones it is looser. Its series
+    is independent of the units of H and cached across calls. Python:
+    `trotter_error_bounds`; `qso trotter` lists the bounds in its JSON.
   - Bounds of orders 1 and 2 can be slightly smaller than in 1.31, as the
     smallest of the three is returned.
 - **Graphs:** `generators::seidel_switching` (within the size limits of

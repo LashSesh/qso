@@ -51,7 +51,7 @@ which withdraws the results of version 1.
 | Boson sampling | exact probabilities and exact sampling (1.1); partial distinguishability, loss and Gaussian boson sampling with hafnians and torontonians (1.14) | mixed Gaussian states with many photons spread over many modes are impractical (10¹² operations at 20 photons in 10 modes) |
 | Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | noise learning for layers of two-qubit Clifford gates only, on density matrices up to 10 qubits and Pauli frames up to 64 (1.12, 1.31), with non-Pauli channels twirled one at a time; mitigation with the learned model above 24 qubits only on matrix-product states, for channels that are mixtures of unitaries (1.31); no leakage; channels on at most four qubits, slow noise as quasi-static and telegraph processes only, and on trajectories only (1.30); virtual distillation (1.17) mitigates only its measured copies' preparation |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18) | time-dependent Hamiltonians and decoherent coined walks without symmetry reduction; pretty good transfer on other graphs |
-| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5) | Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23) | no integral screening (every integral is computed, seconds at the 64-function limit), no tight commutator bound for product formulas of order 4 and higher |
+| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5) | Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the nested-commutator bound of product formulas (1.32) is tight for small Hamiltonians only, its tail ignoring which terms commute |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
 | Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22) | circuit distances of hypergraph models are bounds, not always exact |
 | Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9), in the browser build too (1.25) | — |
@@ -246,7 +246,7 @@ the release.
 
 | Deliverable | Delivered | Not done, and why |
 |---|---|---|
-| Hamiltonian simulation | `Circuit::pauli_rotation`; product formulas of order 1, 2, 4, 6, …; `trotter_error_bound` with the commutator bounds of Childs et al. (2021) for orders 1 and 2 and the smaller of a stage-wise and a Taylor-remainder bound above; qDRIFT with Campbell's bound | a tight commutator bound for order ≥ 4 (the paper's Appendix J is heuristic in its constants); the bound QSO gives there is rigorous but loose |
+| Hamiltonian simulation | `Circuit::pauli_rotation`; product formulas of order 1, 2, 4, 6, …; `trotter_error_bound` with the commutator bounds of Childs et al. (2021) for orders 1 and 2 and the smaller of a stage-wise and a Taylor-remainder bound above; qDRIFT with Campbell's bound | a tight commutator bound for order ≥ 4 (the paper's Appendix J is heuristic in its constants); the bound QSO gives there is rigorous but loose (1.32 adds a bound from the exact nested commutators, tight for small Hamiltonians) |
 | Fermions | `FermionOperator` with normal ordering; Jordan–Wigner, parity and Bravyi–Kitaev mappings as binary transforms; two-qubit reduction; `MolecularIntegrals` from FCIDUMP files with Hartree–Fock states and energies and full CI; UCCSD, k-UpCCGSD, ADAPT-VQE; FCIDUMP files of H₂, LiH and BeH₂ with PySCF reference energies | computing integrals (that needs a quantum-chemistry code; FCIDUMP is the exchange format, as OpenQASM is for circuits); unrestricted orbitals |
 | Excited states and geometry | VQD, weighted SSVQE; exact state derivatives, quantum Fisher information, quantum natural gradient; McLachlan imaginary-time evolution (RK4) | — |
 | Optimisation problems | `Qubo`/`Ising` with exact enumeration; QAOA for any diagonal cost with X, ring and complete XY mixers from Dicke states, and the warm-start mixer | a built-in continuous relaxation for warm starts: the user supplies `c ∈ [0, 1]ⁿ` |
@@ -2005,7 +2005,7 @@ and differ from 1.30 by about 10⁻¹⁷. A trajectory sample builds its
 simulator for each sample. `LayeredSimulator` has no serde form, because
 `MpsOptions` has none.
 
-### 1.32 — Faster integrals and tighter bounds (S–M)
+### 1.32 — Faster integrals and tighter bounds (S–M, delivered)
 
 Use case: molecules at the size limit of 1.23, and step counts for
 product formulas of order four and higher.
@@ -2020,6 +2020,61 @@ PySCF's as in 1.23, with the time saved measured. The new bound exceeds
 the exact error of small Heisenberg, Ising and random Hamiltonians at
 every step count tested, falls as `r^{−2k}`, and is stated against the
 old one.
+
+Delivered with one change to the plan: instead of the explicit constant
+of Childs et al., the bound uses their error representation,
+`‖S(τ) − e^{−iHτ}‖ ≤ ∫₀^τ ‖T‖`, and computes the Taylor coefficients of
+the error generator `T` exactly as Pauli operators: the nested
+commutators of order p + 1 and higher, up to a degree that grows until a
+rigorous multinomial tail is below 1 % of the rest. This is tighter than
+a sum of commutator norms, and it applies to every order. Measured:
+
+- **Screening.** Quartets of shells are skipped when their Schwarz bound
+  is below 10⁻¹² Ha (by default). A chain of 32 hydrogens in 6-31G (64
+  functions) skips 86 % of the quartets and takes 0.2 s instead of 1.5 s;
+  its RHF energy moves by 5·10⁻¹³ Ha and agrees with PySCF to
+  2·10⁻¹¹ Ha. Butane gains 5 %. Every skipped Cartesian integral lies
+  below the threshold (test), spherical d functions within 0.98 of it
+  (review), and all the PySCF comparisons of 1.15 and 1.23 pass with
+  screening on.
+- **Bounds.** On 4-qubit Heisenberg, Ising and random Hamiltonians, the
+  new bound is never below the exact error, and from 8 to 32 steps it is
+  7 to 11 times the error at order 4 and 8 to 24 times at order 6. It
+  falls as `r^{−p}` (16 and 64 per doubling, within 25 %). The old
+  stage-by-stage bound, which falls as `r⁻²`, is 780 to 10⁹ times the
+  error there. `trotter_error_bound` returns the smallest bound, so no
+  result got worse.
+
+An independent review rederived the bound step by step (the error
+representation, the Horner recursion, the factor 2 of the commutators,
+the integration of the tail) and checked about 36 000 random cases
+(2 to 5 qubits, coefficients up to 30, positive and negative times,
+orders 1 to 8, up to 400 steps). None fell below the exact error beyond
+the simulator's own rounding. It confirmed the Schwarz argument for
+grouped contractions, the diagonal entries used, exact zeros and
+bit-identical computed integrals. It found:
+
+- **Units.** The series was built in the units of H and overflowed for
+  coefficients beyond about 10⁷ to 10¹², losing the bound. It is now
+  built for `H/λ` and evaluated at `λτ`; a test checks scales from 10⁻⁶
+  to 10⁴⁰.
+- **Cost.** When the series is out of budget, every call still spent
+  most of the budget (0.15 to 0.35 s, a hundred times the old bound). The
+  series does not depend on the steps or the time and is now cached per
+  Hamiltonian and order (a second call takes no time, test).
+- **Docs.** The agreement with the old bound at orders 1 and 2 holds
+  only from about 16 steps; the factors (780, not 800), the cost, and the
+  cases in which the nested bound is infinite are now stated as
+  measured. The bound is tight for small Hamiltonians only: for 8 to 16
+  spins its tail, which ignores which terms commute, dominates.
+- **Smaller.** A test comment claimed that errors near rounding are left
+  out; the error named `threshold` instead of Python's `screening`; a
+  test asserted that a large series fails, which only held because of
+  the current speed; reformatting of unrelated Python tests was undone.
+
+Left as is: rounding in the vanishing coefficients sets a floor of about
+10⁻¹⁵ per step, below which the Taylor bound takes over; a tail aware of
+commutation would tighten the bound for larger Hamiltonians.
 
 ### 1.33 — Spin dynamics and magnetic resonance (M–L)
 

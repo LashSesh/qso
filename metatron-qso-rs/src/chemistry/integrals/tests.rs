@@ -352,7 +352,8 @@ fn solid_harmonics_have_pyscfs_signs() {
 
 #[test]
 fn screening_bounds_every_skipped_integral() {
-    // A chain of twelve hydrogens (Cartesian 6-31G): skipped quartets hold
+    // A chain of twelve hydrogens (6-31G, s and p shells only, so the
+    // integrals are those of Cartesian components): skipped quartets hold
     // integrals below the threshold, and the rest are unchanged.
     let chain: Vec<String> = (0..12)
         .map(|i| format!("H 0 0 {}", 1.1 * i as f64))

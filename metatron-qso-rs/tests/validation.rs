@@ -1872,7 +1872,7 @@ fn nested_commutator_bounds_of_higher_orders_hold_and_fall_as_the_error() {
             for steps in [1usize, 2, 4, 8, 16, 32] {
                 let e = error(steps, order);
                 let b = trotter_error_bounds(h, 1.0, steps, order).unwrap();
-                // Every bound holds; errors near rounding are left out.
+                // Every bound holds (all these errors are far above rounding).
                 for v in [b.bound, b.nested, b.stages, b.taylor] {
                     assert!(v >= e, "{name} order {order}, {steps} steps: {v} < {e}");
                 }

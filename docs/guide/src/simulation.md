@@ -32,9 +32,14 @@ computed exactly in the Pauli algebra.
   nested commutators of order p + 1 and higher, computed as Pauli
   operators up to a degree that grows until the bound on the rest is
   below 1 % of the computed part. The rest is bounded by the multinomial
-  theorem. Large Hamiltonians and few steps can put this bound out of
-  reach (it is then infinite); a fixed budget keeps its cost below about
-  a quarter of a second.
+  theorem, which ignores which terms commute. Few steps can put this
+  bound out of reach (it is then infinite), and for larger Hamiltonians
+  (8 to 16 spins) a fixed budget of work stops the degree early, so the
+  bound, still valid, is much looser there. The budget keeps a call
+  below about a third of a second; the series does not depend on the
+  steps or the time and is cached, so a loop over step counts pays once.
+  It is computed for `H/λ` (`λ = Σ|h_γ|`), so the units of `H` do not
+  matter.
 - **`stages`**: order 1, `τ²/2 · Σ_γ ‖[Σ_{γ'>γ} H_γ', H_γ]‖` (Proposition
   15 there); order 2, the nested-commutator bound of their Proposition 16;
   order 4 and higher, the order-2 bound summed over the second-order
@@ -71,11 +76,11 @@ for order in (1, 2, 4):
 
 The identity term of `H` only adds a global phase, so circuits leave it
 out. In the tests (Heisenberg, Ising and random four-qubit Hamiltonians),
-the first- and second-order bounds are 3 to 13 times the actual error.
+the first- and second-order bounds are 2 to 13 times the actual error.
 From 8 to 32 steps the nested bound is 7 to 11 times the actual error at
 order 4 and 8 to 24 times at order 6, and it falls as `r^{−p}` like the
 error. The stage-by-stage bound of these orders falls only as `r⁻²` and
-is 800 to 10⁹ times the error. Doubling the steps divides the actual
+is 780 to 10⁹ times the error. Doubling the steps divides the actual
 error by `2^order`, and the tests check this.
 
 ## qDRIFT

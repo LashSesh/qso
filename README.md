@@ -139,7 +139,7 @@ or by the benchmark report you can run yourself.
 | LiH on 10 qubits: UCCSD (92 parameters) / ADAPT-VQE (30 operators), error vs. full CI | 1.1·10⁻⁵ / 1.1·10⁻⁵ Ha | chemical accuracy 1.6·10⁻³ Ha |
 | VQD, all four levels of H₂ (Sz = 0) | equal to full CI to 10⁻⁶ Ha | PySCF full CI |
 | Trotter–Suzuki on a 4-qubit Heisenberg chain: error ratio when the steps double, orders 1 / 2 / 4 | 2.01 / 4.00 / 16.06, always below the error bound | 2, 4, 16 |
-| Error bounds of orders 4 / 6 from nested commutators, 4-qubit Heisenberg, Ising and random Hamiltonians, 8–32 steps: bound ÷ actual error; same for the stage-by-stage bound | 7–11 / 8–24; 800–10⁹ | the exact error (spectral norm) |
+| Error bounds of orders 4 / 6 from nested commutators, 4-qubit Heisenberg, Ising and random Hamiltonians, 8–32 steps: bound ÷ actual error; same for the stage-by-stage bound | 7–11 / 8–24; 780–10⁹ | the exact error (spectral norm) |
 | Schwarz screening at 10⁻¹², chain of 32 H in 6-31G (64 functions): quartets skipped, RHF energy | 86 %; −17.121863274386 Ha (unscreened to 5·10⁻¹³) | PySCF RHF −17.121863274403, to 2·10⁻¹¹ Ha |
 | Maximum-likelihood amplitude estimation: slope of log RMSE against log oracle calls | −0.99 (sampling: −0.49) | −1 (Heisenberg limit), −1/2 |
 | GHZ state on 10 000 qubits (stabilizer simulator): ⟨Z₀Z₉₉₉₉⟩ / ⟨Z₄₃₂₁⟩ / ⟨X^⊗n⟩ | 1 / 0 / 1 | 1 / 0 / 1 |
@@ -484,7 +484,7 @@ Know its boundaries:
 | OpenQASM | version 2.0 and an OpenQASM 3 subset | OpenQASM 3's classical variables and arithmetic, loops, subroutines, calibrations and timing are rejected with an error naming the feature. Exact distributions follow up to 4096 measurement branches; beyond that, sampling simulates shot by shot |
 | WebAssembly | 26 qubits; graphs and walks up to 2048 nodes | 4 GiB address space; single-threaded |
 | Full CI | 2¹⁸ determinants, 32 roots (dense up to 1024) | Davidson on `H c` without the matrix above 1024 determinants; molecules up to 32 spatial orbitals can be mapped to qubits |
-| Product-formula bound, order ≥ 4 | rigorous, 7–24 times the error at 8–32 steps (small Hamiltonians) | The nested-commutator bound has a work budget: for large Hamiltonians or few steps it is out of reach, and the looser stage-by-stage bound (falling only as `r⁻²`) applies |
+| Product-formula bound, order ≥ 4 | rigorous, 7–24 times the error at 8–32 steps (4-qubit Hamiltonians) | The nested-commutator bound has a work budget and a tail that ignores which terms commute: for larger Hamiltonians (8–16 spins) it is valid but thousands of times the error, and at few steps it is out of reach and the stage-by-stage bound (falling only as `r⁻²`) applies |
 
 Not included: GPU acceleration, tensor-network simulation, simulation of noisy Clifford circuits at scale (planned for 1.8),
 molecular integrals in larger basis sets (triple zeta and beyond) or beyond argon (QSO reads such

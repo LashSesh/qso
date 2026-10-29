@@ -26,7 +26,9 @@
 //!   coefficients). Beyond D, `‖C_m‖ ≤ Σ_j ‖B_j‖ (2β_j)^m/m!` with `β_j`
 //!   the norm of the exponentials after `E_j`. D grows from p + 1 until
 //!   that tail is below 1 % of the rest, within a fixed budget of work;
-//!   a bound out of reach is infinite.
+//!   a bound out of reach is infinite. The series is built for `H/λ`
+//!   (`λ = Σ|h_γ|`) and evaluated at `λτ`, so the units of H do not
+//!   matter, and it is cached for repeated calls on one Hamiltonian.
 //! * **Stage by stage** ([`TrotterBounds::stages`]). Order 1:
 //!   `τ²/2 · Σ_γ ‖[Σ_{γ'>γ} H_γ', H_γ]‖` (Proposition 15 there); order 2:
 //!   `τ³/12 · Σ_γ ‖[B_γ, [B_γ, H_γ]]‖ + τ³/24 · Σ_γ ‖[H_γ, [H_γ, B_γ]]‖`
@@ -42,9 +44,14 @@
 //! nested bound exceeds the actual error by factors of 7–11 at order 4 and
 //! 8–24 at order 6, and falls as `r^{−p}` like the error. The
 //! stage-by-stage bound of these orders falls only as `r⁻²` and exceeds
-//! the error 800 to 10⁹ times. At orders 1 and 2 the two are within a few
-//! percent; at few steps, where `2βτ` is large, the nested bound is out
-//! of reach and the others apply.
+//! the error 780 to 10⁹ times. At orders 1 and 2 the nested bound equals
+//! the stage-by-stage one to a few percent from about 16 steps and is up
+//! to eight times larger at fewer. At few steps, where `2βτ` is large, it
+//! is out of reach and the others apply. Its tail ignores which terms
+//! commute: for larger Hamiltonians (8 to 16 Heisenberg spins, say) the
+//! budget stops the degree early, the tail dominates and the bound, still
+//! valid, lies thousands of times above the error. Rounding in the
+//! vanishing coefficients sets a floor of about 10⁻¹⁵ per step.
 //!
 //! [`qdrift_circuit`] samples `N` terms with probabilities `|h_γ|/λ`,
 //! `λ = Σ|h_γ|`, each applied for time `λt/N` (Campbell, Phys. Rev. Lett.
@@ -73,6 +80,7 @@
 
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
@@ -373,10 +381,12 @@ fn error_series(
 pub struct TrotterBounds {
     /// The smallest of the others, at most 2.
     pub bound: f64,
-    /// From the nested commutators of order p + 1 and p + 2 of the error
-    /// generator, computed as Pauli operators, and a Taylor tail (see the
-    /// module docs). Infinite when the series is larger than
-    /// [`MAX_SERIES_TERMS`].
+    /// From the Taylor coefficients of the step's error generator, nested
+    /// commutators of order p + 1 and higher computed as Pauli operators
+    /// up to an adaptive degree, and a tail (see the module docs). Infinite
+    /// when it cannot beat the other bounds even with the largest degree,
+    /// or when its first series has more than [`MAX_SERIES_TERMS`] strings
+    /// per coefficient or exceeds the work budget. Not capped at 2.
     pub nested: f64,
     /// The commutator bound of order 1 or 2 (Childs et al.,
     /// Propositions 15 and 16), applied stage by stage for higher orders.
@@ -448,7 +458,7 @@ pub fn trotter_error_bounds(
 /// Highest power of τ the nested bound computes exactly.
 const MAX_SERIES_DEGREE: usize = 40;
 /// Most operations on strings one nested bound spends on its series
-/// (about half a second).
+/// (about a quarter of a second; series are cached across calls).
 const MAX_SERIES_WORK: f64 = 4e6;
 
 /// `‖S(τ) − exp(−iHτ)‖` for one step of the formula of `order` p, from
@@ -463,8 +473,16 @@ const MAX_SERIES_WORK: f64 = 4e6;
 /// raised, once even the tail beyond [`MAX_SERIES_DEGREE`] is at least
 /// `other`, the best other bound of the step.
 fn nested_step_bound(terms: &[(f64, PauliString)], tau: f64, order: usize, other: f64) -> f64 {
+    // The series is computed for H/λ and evaluated at λτ (C_m(H) =
+    // λ^{m+1} C_m(H/λ)), so that the units of H do not overflow it.
+    let lambda: f64 = terms.iter().map(|(c, _)| c.abs()).sum();
+    if lambda == 0.0 {
+        return 0.0;
+    }
+    let scaled: Vec<(f64, PauliString)> = terms.iter().map(|&(c, s)| (c / lambda, s)).collect();
+    let tau = lambda * tau;
     // Unit step: rotation exp(−iθP/2) is exp(τ B) with B = −i(θ/2)P.
-    let rotations: Vec<(PauliString, f64)> = step_rotations(terms, 1.0, order)
+    let rotations: Vec<(PauliString, f64)> = step_rotations(&scaled, 1.0, order)
         .into_iter()
         .map(|(p, theta)| (p, theta / 2.0))
         .collect();
@@ -483,44 +501,124 @@ fn nested_step_bound(terms: &[(f64, PauliString)], tau: f64, order: usize, other
             .map(|&(w, x)| w * taylor_tail(x, degree + 1) / 2.0)
             .sum()
     };
-    if tail(MAX_SERIES_DEGREE) >= other {
+    // (NaN gives up too.)
+    let reach = tail(MAX_SERIES_DEGREE);
+    if reach.is_nan() || reach >= other {
         return f64::INFINITY;
     }
+    let key = SeriesKey {
+        order,
+        terms: scaled
+            .iter()
+            .map(|(c, s)| (c.to_bits(), s.x_mask(), s.z_mask()))
+            .collect(),
+    };
     let mut degree = order + 1;
     let mut best = f64::INFINITY;
     let mut spent = 0.0;
     loop {
-        let Some((norms, work)) = error_series(&rotations, terms, degree, MAX_SERIES_WORK - spent)
-        else {
+        let Some(norms) = cached_series(&key, &rotations, &scaled, degree, &mut spent) else {
             return best;
         };
-        spent += work;
         // Coefficients below order p vanish exactly; they are kept for the
-        // rounding they hold.
+        // rounding they hold (a floor of about 10⁻¹⁵ per unit of λt).
         let lead: f64 = (0..=degree)
             .map(|m| norms[m] * tau.powi(m as i32 + 1) / (m + 1) as f64)
             .sum();
         let rest = tail(degree);
-        best = best.min(lead + rest);
+        let value = lead + rest;
+        if !value.is_nan() {
+            best = best.min(value);
+        }
         if rest <= 0.01 * lead || degree >= MAX_SERIES_DEGREE {
             return best;
         }
-        // The smallest degree whose tail is small enough, unless its pass
-        // (about (D + 1)(D + 2)/2 operations per string) would exceed the
-        // budget.
+        // The smallest degree whose tail is small enough, unless it cannot
+        // beat the other bounds.
         let mut next = degree + 1;
         while next < MAX_SERIES_DEGREE && tail(next) > 0.01 * lead {
             next += 1;
         }
-        if tail(next) + lead >= other.min(best) {
-            return best;
-        }
-        let growth = ((next + 1) * (next + 2)) as f64 / ((degree + 1) * (degree + 2)) as f64;
-        if spent + work * growth > MAX_SERIES_WORK {
+        let hope = tail(next) + lead;
+        if hope.is_nan() || hope >= other.min(best) {
             return best;
         }
         degree = next;
     }
+}
+
+/// An error series of earlier calls: the order and the terms of `H/λ`
+/// (coefficient bits and masks), compared in full.
+#[derive(Clone, PartialEq)]
+struct SeriesKey {
+    order: usize,
+    terms: Vec<(u64, u64, u64)>,
+}
+
+/// A computed series of some degree, or a degree that was out of reach
+/// with the budget left then.
+#[derive(Clone)]
+enum CachedSeries {
+    Done(usize, Vec<f64>),
+    OutOfReach { degree: usize, budget: f64 },
+}
+
+/// Series of the last calls: loops over step counts or times on one
+/// Hamiltonian compute each series once.
+static SERIES_CACHE: Mutex<Vec<(SeriesKey, Vec<CachedSeries>)>> = Mutex::new(Vec::new());
+/// Hamiltonians kept in [`SERIES_CACHE`].
+const SERIES_CACHE_SIZE: usize = 16;
+
+/// The norms of the error series up to `degree`, from the cache or
+/// computed within what is left of [`MAX_SERIES_WORK`] (`spent` counts
+/// the work of this bound).
+fn cached_series(
+    key: &SeriesKey,
+    rotations: &[(PauliString, f64)],
+    terms: &[(f64, PauliString)],
+    degree: usize,
+    spent: &mut f64,
+) -> Option<Vec<f64>> {
+    let budget = MAX_SERIES_WORK - *spent;
+    {
+        let cache = SERIES_CACHE.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((_, entries)) = cache.iter().find(|(k, _)| k == key) {
+            for e in entries {
+                match e {
+                    // A series of a higher degree holds this one.
+                    CachedSeries::Done(d, norms) if *d >= degree => {
+                        return Some(norms[..=degree].to_vec());
+                    }
+                    CachedSeries::OutOfReach {
+                        degree: d,
+                        budget: b,
+                    } if *d <= degree && *b >= budget => {
+                        return None;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    let result = error_series(rotations, terms, degree, budget);
+    let entry = match &result {
+        Some((norms, work)) => {
+            *spent += work;
+            CachedSeries::Done(degree, norms.clone())
+        }
+        None => CachedSeries::OutOfReach { degree, budget },
+    };
+    let mut cache = SERIES_CACHE.lock().unwrap_or_else(|p| p.into_inner());
+    match cache.iter().position(|(k, _)| k == key) {
+        Some(i) => cache[i].1.push(entry),
+        None => {
+            if cache.len() >= SERIES_CACHE_SIZE {
+                cache.remove(0);
+            }
+            cache.push((key.clone(), vec![entry]));
+        }
+    }
+    result.map(|(norms, _)| norms)
 }
 
 /// One random qDRIFT circuit for `exp(−iHt)` with `samples` rotations,
@@ -865,11 +963,44 @@ mod tests {
             let b128 = trotter_error_bounds(h, 1.0, 128, 4).unwrap().nested;
             assert!((b64 / b128 / 16.0 - 1.0).abs() < 0.1, "{}", b64 / b128);
         }
-        // Too large a series is given up, not computed for long.
+        // A large series is given up within the budget, and the answer is
+        // still the smallest bound.
         let big = random_hamiltonian(8, 40, 5);
-        let start = std::time::Instant::now();
         let b = trotter_error_bounds(&big, 1.0, 64, 6).unwrap();
-        assert!(b.nested.is_infinite() && b.bound == b.stages.min(b.taylor).min(2.0));
-        assert!(start.elapsed().as_secs_f64() < 20.0);
+        assert_eq!(b.bound, b.nested.min(b.stages).min(b.taylor).min(2.0));
+    }
+
+    #[test]
+    fn nested_bounds_do_not_depend_on_the_units_of_h() {
+        // H·s for time t/s is the same evolution.
+        let h = random_hamiltonian(3, 5, 9);
+        for (order, steps) in [(4usize, 8usize), (6, 8), (8, 8)] {
+            let unit = trotter_error_bounds(&h, 1.0, steps, order).unwrap().nested;
+            assert!(unit.is_finite(), "order {order}");
+            for scale in [1e-6, 1e6, 1e12, 1e24, 1e40] {
+                // Same terms in the same order (add_term, as `h` was built).
+                let mut hs = PauliSum::new();
+                for &(c, p) in h.terms() {
+                    hs.add_term(c * scale, p);
+                }
+                let b = trotter_error_bounds(&hs, 1.0 / scale, steps, order).unwrap();
+                assert!(
+                    (b.nested / unit - 1.0).abs() < 1e-6,
+                    "order {order}, scale {scale}: {} vs {unit}",
+                    b.nested
+                );
+            }
+        }
+        // A second call reuses the series.
+        let h = heisenberg_xxz(6, 1.0, 0.5, false);
+        let first = trotter_error_bounds(&h, 1.0, 40, 4).unwrap();
+        let start = std::time::Instant::now();
+        let again = trotter_error_bounds(&h, 1.0, 40, 4).unwrap();
+        assert_eq!(first, again);
+        assert!(
+            start.elapsed().as_secs_f64() < 0.05,
+            "{:?}",
+            start.elapsed()
+        );
     }
 }

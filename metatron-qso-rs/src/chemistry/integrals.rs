@@ -1069,7 +1069,7 @@ impl AoIntegrals {
     ) -> Result<Self> {
         if !(threshold >= 0.0 && threshold.is_finite()) {
             return Err(QsoError::invalid(
-                "threshold",
+                "screening",
                 format!("the screening threshold must be finite and non-negative, not {threshold}"),
             ));
         }
