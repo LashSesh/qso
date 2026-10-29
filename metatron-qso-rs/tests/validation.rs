@@ -265,7 +265,8 @@ fn interacting_bosons_tell_cospectral_strongly_regular_graphs_apart() {
             let d0 = certificate_distance(&free[a], &free[b]);
             let d1 = certificate_distance(&hubbard[a], &hubbard[b]);
             assert!(d0 < 1e-12, "{a} {b}: {d0:e}");
-            assert!(d1 > 1e-6, "{a} {b}: {d1:e}");
+            // 1.7·10⁻⁴ to 3.4·10⁻⁴ (README).
+            assert!((1.7e-4..3.5e-4).contains(&d1), "{a} {b}: {d1:e}");
         }
     }
 }

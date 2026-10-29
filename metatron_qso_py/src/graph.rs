@@ -403,7 +403,9 @@ impl PyGraph {
     /// one node inside and one outside the set swap adjacency (unweighted
     /// graphs).
     fn seidel_switching(&self, nodes: Vec<usize>) -> PyResult<Self> {
-        generators::seidel_switching(&self.inner, &nodes).raise().map(wrap)
+        generators::seidel_switching(&self.inner, &nodes)
+            .raise()
+            .map(wrap)
     }
 
     /// Cartesian product: node (g, h) has index g·|H| + h.

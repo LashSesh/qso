@@ -6,6 +6,25 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Interacting walkers** (milestone 1.29). `walks::InteractingWalk`
+  simulates N bosons, fermions or distinguishable particles on a graph:
+  hopping with the adjacency or Laplacian generator, on-site interaction
+  U and neighbour interaction V. It gives exact evolution in the
+  occupation basis, densities, pair correlations, propagators and graph
+  certificates (`certificate`, `certificate_distance`).
+  - Validated against permanents and determinants of the single-walker
+    propagator, the tensor-product space, and the Hubbard dimer.
+  - Two free bosons cannot tell apart T(8) and the three Chang graphs, or
+    the Shrikhande and 4 × 4 rook's graphs; two interacting bosons can
+    (validation suite).
+  - Python: `InteractingWalk`, `interacting_certificate_distance`. CLI:
+    `qso particles`. Tutorial: `08_interacting_walks`.
+- **Graphs:** `generators::seidel_switching` and the three Chang graphs
+  (`generators::chang`, spec `chang:K`), in Python as
+  `Graph.seidel_switching` and `Graph.chang`.
+
 ### Fixed
 
 - Documentation site: the guide of 1.7.0 at `/1.7.0/` was missing. Its

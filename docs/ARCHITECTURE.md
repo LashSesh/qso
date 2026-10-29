@@ -15,7 +15,8 @@ algorithms  │ VQE · QAOA (+ mixers, QUBO) · Grover · QFT/QPE ·   │
             │ gradients (adjoint / parameter shift / FD)         │
 optimize    │ L-BFGS · Adam · GD · Nelder–Mead · SPSA            │
 walks       │ CTQW · quotients · transfer · coined/Szegedy ·     │
-            │ search · walk circuits · dephasing · classical     │
+            │ search · walk circuits · dephasing · classical ·   │
+            │ interacting walkers                                │
 mitigation  │ readout calibration · ZNE · PEC · Pauli twirling    │
 estimation  │ estimates with errors · shot allocation · shadows   │
 backend     │ statevector / density-matrix / device backends      │
@@ -536,6 +537,16 @@ agree with brute force on random graphs.
   the measurement time.
 * Dephasing walks integrate the Lindblad equation with adaptive RK4 (step
   doubling, Richardson extrapolation).
+* Interacting walkers (`walks/interacting.rs`) work in the occupation
+  basis. Configurations of bosons and fermions are sorted site lists,
+  ranked in colex order by the combinatorial number system (a boson
+  multiset `s₁ ≤ … ≤ s_N` as the set `s_k + k`), so a configuration's
+  index is computed, not looked up. Distinguishable particles are base-n
+  tuples. The Hamiltonian is built once as a sparse matrix from the
+  single-particle `h` (hopping amplitudes `√(n_j (n_i + 1))` for bosons,
+  the Jordan–Wigner sign of the sites in between for fermions). Up to
+  2048 configurations it is diagonalised; beyond that it propagates by
+  Krylov.
 
 ## Error handling
 

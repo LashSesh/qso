@@ -22,11 +22,14 @@ for spec in ["metatron", "metatron:1", "fruit-of-life", "petersen", "heawood",
 ```
 
 Each family also has a constructor: `Graph.johnson(n, k)`, `kneser(n, k)`,
-`hamming(d, q)`, `paley(q)`, `rook(m, n)`, `shrikhande()`,
+`hamming(d, q)`, `paley(q)`, `rook(m, n)`, `shrikhande()`, `chang(k)` (the
+three Chang graphs, strongly regular like `johnson(8, 2)`; spec `chang:K`),
 `circulant(n, jumps)` and `cayley_z2(d, generators)` (node `x` joined to
 `x XOR g`), besides the older `complete`, `cycle`, `path`, `star`, `grid`,
 `hypercube`, `platonic`, `petersen`, `heawood` and the random graphs.
-`g.cartesian_product(h)` builds products such as prisms and rook's graphs.
+`g.cartesian_product(h)` builds products such as prisms and rook's graphs,
+and `g.seidel_switching(nodes)` swaps adjacency between a node set and the
+rest of the graph.
 
 Specifications and the Python constructors reject graphs with more than
 2²⁰ nodes or 2²² edges before building anything. Hypercubes up to dimension
