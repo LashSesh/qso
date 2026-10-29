@@ -13,8 +13,9 @@ state-vector core at memory bandwidth), 1.12 (noise learning) and 1.13
 finished milestones are released together, not one by one. The third
 (1.14 to 1.17), fourth (1.18 to 1.21), fifth (1.22 to 1.25) and sixth
 (1.26 to 1.28) stages ship together as release 1.7.0. The seventh stage
-(1.29 to 1.33) is delivered (section 4g); the eighth (1.34 to 1.37),
-magnetic resonance for medical research, in section 4h. Up to 1.3
+(1.29 to 1.33) is delivered (section 4g); of the eighth (1.34 to 1.37),
+magnetic resonance for medical research, in section 4h, 1.34 is
+delivered. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -52,7 +53,7 @@ which withdraws the results of version 1.
 | Boson sampling | exact probabilities and exact sampling (1.1); partial distinguishability, loss and Gaussian boson sampling with hafnians and torontonians (1.14) | mixed Gaussian states with many photons spread over many modes are impractical (10¹² operations at 20 photons in 10 modes) |
 | Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | noise learning for layers of two-qubit Clifford gates only, on density matrices up to 10 qubits and Pauli frames up to 64 (1.12, 1.31), with non-Pauli channels twirled one at a time; mitigation with the learned model above 24 qubits only on matrix-product states, for channels that are mixtures of unitaries (1.31); no leakage; channels on at most four qubits, slow noise as quasi-static and telegraph processes only, and on trajectories only (1.30); virtual distillation (1.17) mitigates only its measured copies' preparation |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18) | time-dependent Hamiltonians and decoherent coined walks without symmetry reduction; pretty good transfer on other graphs |
-| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the nested-commutator bound of product formulas (1.32) is tight for small Hamiltonians only, its tail ignoring which terms commute; spin relaxation is phenomenological (T₁ and T₂ per spin) and exact up to about six relaxing spins of one isotope; larger relaxing systems run for short times only, and propagations estimated above a minute are refused |
+| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the nested-commutator bound of product formulas (1.32) is tight for small Hamiltonians only, its tail ignoring which terms commute; spin relaxation, phenomenological (T₁ and T₂) or from dipolar couplings and shielding anisotropy by Redfield theory for isotropic tumbling (1.34), is exact up to about six relaxing spins of one isotope; larger relaxing systems run for short times only (Redfield not at all), and propagations estimated above a minute are refused |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
 | Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22) | circuit distances of hypergraph models are bounds, not always exact |
 | Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9), in the browser build too (1.25) | — |
@@ -2238,7 +2239,7 @@ real image (loading and reading out 10⁶ to 10⁹ values undoes it), and
 any clinical claim. QSO stays a tool for physicists and chemists who
 design these experiments, not medical software.
 
-### 1.34 — Relaxation from first principles (M)
+### 1.34 — Relaxation from first principles (M, delivered)
 
 Use case: predicting relaxation times instead of taking them as input.
 For example, whether deuteration lengthens the T₁ of a ¹³C agent, or how
@@ -2259,6 +2260,85 @@ spins is immune to their mutual dipolar relaxation (Carravetta and Levitt,
 J. Am. Chem. Soc. 126, 6228 (2004)). For three to five spins every rate
 matches QuTiP's Bloch–Redfield solver (`brmesolve`) in the
 cross-validation.
+
+Delivered as planned in `spin/redfield.rs`: positions and shielding
+tensors per spin, a rotational correlation time per system, the
+non-secular Bloch–Wangsness–Redfield superoperator with all
+cross-correlations (secular with respect to the carriers in the rotating
+frame) relaxing towards the thermal state, in every propagation path
+together with the T₁ and T₂ of 1.33, and `relaxation_rates` for any
+observables (`qso spins --rates`). Writing the spatial tensors in an
+orthonormal basis makes the isotropic average a sum of 30 independent
+terms, built entry by entry for each coherence-order block. One change to
+the plan: QuTiP's Bloch–Redfield tensor is compared directly (exactly
+propagated) rather than through its `brmesolve` integrator, for two to
+four spins. Measured:
+
+- **Solomon and BPP.** Auto-, cross- and transverse rates of ¹H–¹H and
+  ¹³C–¹H pairs at three correlation times, in both frames, to 10⁻⁹; the
+  total rate of two equivalent protons to 10⁻⁹ of Bloembergen, Purcell and
+  Pound.
+- **Overhauser enhancement.** 2.988 for ¹³C under proton saturation in
+  extreme narrowing (`1 + γ_H/(2γ_C)`); the transient after inverting the
+  proton follows Solomon's equations to 10⁻⁷.
+- **Shielding anisotropy.** `R₁` and `R₂` of a general tensor to 10⁻⁹,
+  four times faster per doubling of the field; the interference with the
+  dipolar coupling (the TROSY rate) to 10⁻⁹ of its closed form, with the
+  sign of the shielding convention.
+- **Singlet order** of two equivalent protons does not relax by their
+  dipolar coupling (below 10⁻¹² of the magnetisation's rate) and lives on
+  over twenty magnetisation lifetimes; a third proton or anisotropy
+  relaxes it.
+- **Equilibrium and deuteration.** Every state relaxes to the thermal one
+  (exactly in the rotating frame, to `J/Δν` in the laboratory frame);
+  deuteration slows the dipolar relaxation of carbon 15.9 times.
+- **QuTiP.** With bath operators from an exact numerical average over
+  orientations, QuTiP's `bloch_redfield_tensor` gives the same rates for a
+  ¹³C–¹H₂, a ¹³CH₃ and an amide ¹⁵N–¹H with anisotropy to 4·10⁻¹⁵, and the
+  same expectations after exact propagation to 3·10⁻⁹.
+- **Cost.** Building the superoperator takes 0.04 s for five spins and
+  0.5 s for six; one second of five relaxing protons with it costs
+  0.2 s.
+
+An independent review rederived the theory (the isotropic correlation,
+the factor 1/5, the weights, the signs, the spectral densities at
+laboratory frequencies) and wrote its own superoperator as a direct
+Cartesian sum: QSO's agrees to 2·10⁻¹⁵ in six systems and both frames,
+conserves the coherence orders exactly, and its dynamics agree in every
+path (delays, FIDs, shaped pulses, Dormand–Prince steps, field jumps).
+It found:
+
+- **NaN after long delays.** Coherence blocks were shifted by their mean
+  diagonal including the mean decay, so after about 10³ s (Redfield) or
+  10⁴ s (laboratory frame, 1.33) `exp` overflowed while `e^{shift}`
+  underflowed. The shift now carries only the mean precession (test: 20
+  minutes and twice a singlet lifetime).
+- **Validity and limits.** Any correlation time was accepted, so τ_c = 1 ms
+  gave meaningless rates and extreme inputs NaN; the superoperator was
+  rebuilt for every delay and shaped-pulse segment, outside the work
+  limit (a 200-segment pulse took 13 s instead of 0.6 s). Now
+  `|A|·τ_c > 1` and non-finite superoperators are refused, the build is
+  counted, and `evolve` reuses it while the field stays (2.2 s).
+- **Output.** Spins without relaxation printed `T1 -inf`; the rates are
+  now never −0 and the CLI prints "none".
+- **Tests.** Nothing pinned the sign of the shielding term relative to
+  the dipolar one (the QuTiP comparison rebuilds the same Hamiltonian),
+  and Redfield was not tested with FIDs, shaped pulses, Dormand–Prince
+  steps, field jumps or the rotating-frame projection. All are tested
+  now.
+- **Docs.** The thermal correction was said to hold "at any
+  temperature"; it is semiclassical, first order in `ħω/k_BT` away from
+  equilibrium, and can give unphysical states near full polarisation.
+  The guide now states this, the shielding convention (a chemical-shift
+  tensor is `−σ`), the validity condition, the mechanisms not modelled
+  (scalar, quadrupolar, spin-rotation, paramagnetic, intermolecular,
+  exchange), the size limits, and that `--rates` prints auto-relaxation
+  times; the tutorial's deuteration gain is stated for its field and
+  model.
+
+Left as is: the laboratory frame loses about `ε·Δω·t` over long delays
+(3·10⁻⁵ after 1000 s at 9.4 T); each step of a field sweep rebuilds the
+superoperator; Python accepts `True` as a number, as Python does.
 
 ### 1.35 — Hyperpolarisation in realistic models (M–L)
 
