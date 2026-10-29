@@ -13,7 +13,7 @@ state-vector core at memory bandwidth), 1.12 (noise learning) and 1.13
 finished milestones are released together, not one by one. The third
 (1.14 to 1.17), fourth (1.18 to 1.21), fifth (1.22 to 1.25) and sixth
 (1.26 to 1.28) stages ship together as release 1.7.0. The seventh stage
-(1.29 to 1.32) is planned in section 4g. Up to 1.3
+(1.29 to 1.33) is planned in section 4g. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -1714,11 +1714,12 @@ A GPU backend: it needs hardware to test on and a dependency (`wgpu`),
 neither available now (1.28 restates the decision with the CPU numbers).
 Multi-node simulation, which the use case does not need below 30 qubits.
 
-## 4g. Seventh stage (1.29 to 1.32)
+## 4g. Seventh stage (1.29 to 1.33)
 
 Planned October 2026, after release 1.7.0, from the gaps that remain in
 the table of section 1. The stage starts with QSO's identity, walks on
-graphs, and then closes three gaps of the noise and physics rows. The
+graphs, then closes three gaps of the noise and physics rows, and ends
+with spin dynamics for magnetic resonance (1.33, added on request). The
 rules stay: no new dependency of the crate, an independent reference for
 every deliverable, reference tools in the cross-validation only.
 
@@ -1814,6 +1815,58 @@ the exact error of small Heisenberg, Ising and random Hamiltonians at
 every step count tested, falls as `r^{−2k}`, and is stated against the
 old one.
 
+### 1.33 — Spin dynamics and magnetic resonance (M–L)
+
+Use case: designing and understanding magnetic resonance experiments on
+small molecules, above all hyperpolarisation. Hyperpolarised
+[1-¹³C]pyruvate (dissolution DNP, Ardenkjær-Larsen et al., PNAS 100,
+10158 (2003)) makes tumour metabolism visible in MRI, and was first used
+in patients with prostate cancer by Nelson et al. (Sci. Transl. Med. 5,
+198ra108 (2013)). Parahydrogen methods (PASADENA, Bowers and Weitekamp 1986–1987;
+ALTADENA, Pravica and Weitekamp 1988; SABRE, Adams et al., Science 323,
+1708 (2009))
+polarise molecules chemically. Each method moves polarisation through a
+network of coupled nuclear spins with pulses, fields and relaxation.
+These dynamics are a quantum simulation in the literal sense: a spin-½
+nucleus is a qubit, and a molecule's spin system has 2 to about 12 of
+them.
+
+QSO already has most of what this needs:
+
+- density matrices up to 14 qubits and trajectories beyond;
+- T₁/T₂ relaxation and Lindblad dynamics (1.4);
+- time-dependent Hamiltonians with a fourth-order Magnus integrator
+  (1.13);
+- the Pauli algebra (1.5);
+- the slow noise and echoes of 1.30.
+
+The coupling network of a molecule is a weighted graph, so polarisation
+transfer through it is state transfer on a graph (1.3, 1.18).
+
+| Deliverable | Detail |
+|---|---|
+| Spin systems | nuclei by isotope (gyromagnetic ratios of ¹H, ²H, ¹³C, ¹⁵N, ¹⁹F, ³¹P), chemical shifts, scalar (J) couplings and the field; the Hamiltonian in the laboratory and in the rotating frame, with the coupling graph as a QSO graph |
+| Pulses and sequences | hard and shaped pulses on chosen isotopes, delays and free evolution, phase cycles; free induction decay and spectra by Fourier transform |
+| Relaxation | phenomenological T₁ and T₂ per spin, relaxation towards thermal equilibrium at a given field and temperature; cross-relaxation and Redfield theory left for later |
+| Polarisation transfer | INEPT; parahydrogen singlet order turned into magnetisation (PASADENA, ALTADENA); SABRE transfer at level anti-crossings while the field is swept |
+| Bindings | Python, CLI, a guide page and a tutorial on hyperpolarisation |
+
+Validation:
+
+- **Two spins in closed form.** Free induction decay, spin echo, and the
+  INEPT gain of γ(¹H)/γ(¹³C) ≈ 3.98 over direct excitation.
+- **Parahydrogen.** The PASADENA and ALTADENA line patterns of a two-spin
+  product in closed form.
+- **Level anti-crossings.** For the smallest SABRE models, at the fields
+  given by the couplings and shifts.
+- **Larger spin systems.** Cross-validated against QuTiP's master-equation
+  solver, a reference in the cross-validation only, like PySCF and Stim.
+
+Not part of the milestone: MRI image simulation (classical Bloch equations
+per voxel, served by MRI simulators), quantum algorithms for CT, and any
+clinical claim. QSO is a tool for physicists who design these
+experiments, not medical software.
+
 ### Not in this stage
 
 Leakage out of the qubit space, which needs qutrits throughout the
@@ -1881,7 +1934,8 @@ good state transfer outside the cyclotomic families.
     Correlated and slow noise (1.30) comes before learning at scale
     (1.31), because the larger learning experiments should include it.
     Screening and tighter bounds (1.32) close two small, long-standing
-    gaps.
+    gaps. Spin dynamics (1.33) comes last, because it builds on the echoes
+    and slow noise of 1.30.
 
 ## 6. Measures of success
 
@@ -1945,6 +1999,11 @@ Taken (October 2026):
   Pauli-frame sampler (1.31), integral screening and commutator bounds
   for higher orders (1.32). Leakage stays out: it needs qutrits in every
   simulator.
+* Spin dynamics and magnetic resonance (1.33, added October 2026): the
+  quantum dynamics of nuclear spins behind hyperpolarised MRI, built on
+  the density-matrix, relaxation and Magnus tools QSO already has. Image
+  simulation, quantum algorithms for CT and clinical claims stay out of
+  scope; QuTiP joins the cross-validation as a reference only.
 * The browser playground stays, because it costs little to maintain: it
   is plain HTML and JavaScript without dependencies or a build step, it
   uses only the npm package's JSON interface, which the package's tests
