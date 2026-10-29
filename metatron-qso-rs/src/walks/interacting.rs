@@ -21,21 +21,25 @@
 //! Configurations are listed as sites in ascending order (bosons and
 //! fermions) or as the site of each particle (distinguishable), and the
 //! fermionic sign follows that order. Up to [`DENSE_LIMIT`] configurations
-//! the walk is solved by a dense eigendecomposition, above by Krylov
-//! propagation.
+//! the walk is solved by a dense eigendecomposition (computed on first
+//! use), above by Krylov propagation.
 //!
 //! Without interaction the amplitudes are permanents (bosons) and
 //! determinants (fermions) of submatrices of the single-particle
-//! propagator. One walker's dynamics depend only on the spectrum and
-//! eigenvectors of the graph, and two non-interacting particles still see
-//! no difference between strongly regular graphs with the same parameters;
-//! interacting bosons do (Gamble, Friesen, Zhou, Joynt and Coppersmith,
-//! Phys. Rev. A 81, 052313 (2010)). [`InteractingWalk::certificate`] turns
-//! this into a graph invariant: the sorted transition probabilities
-//! between all configurations at given times.
+//! propagator. On a strongly regular graph that propagator `exp(−iAt)` is
+//! a combination of `I`, `A` and `J − I − A` whose coefficients depend
+//! only on the graph's parameters, so one walker, and two non-interacting
+//! particles too, see no difference between strongly regular graphs with
+//! the same parameters. Interacting bosons do (Gamble, Friesen, Zhou,
+//! Joynt and Coppersmith, Phys. Rev. A 81, 052313 (2010)), though not on
+//! every pair of graphs (Smith, arXiv:1004.0206 (2010)).
+//! [`InteractingWalk::certificate`] turns this into a graph invariant: the
+//! sorted transition probabilities between all configurations at given
+//! times.
 //!
 //! ```
 //! use metatron_qso::graph::generators;
+//! use metatron_qso::walks::interacting::certificate_distance;
 //! use metatron_qso::walks::{Generator, InteractingWalk, Statistics};
 //!
 //! // Two bosons on the Shrikhande and on the 4 × 4 rook's graph, both
@@ -51,11 +55,14 @@
 //! let times = [1.0];
 //! let free = walk(&a, 0.0).certificate(&times).unwrap();
 //! let free_b = walk(&b, 0.0).certificate(&times).unwrap();
-//! assert!(metatron_qso::walks::interacting::certificate_distance(&free, &free_b) < 1e-9);
-//! let hub = walk(&a, 1.0).certificate(&times).unwrap();
-//! let hub_b = walk(&b, 1.0).certificate(&times).unwrap();
-//! assert!(metatron_qso::walks::interacting::certificate_distance(&hub, &hub_b) > 1e-6);
+//! let tolerance = walk(&a, 0.0).certificate_tolerance(&times).unwrap();
+//! assert!(certificate_distance(&free, &free_b) < tolerance);
+//! let (ha, hb) = (walk(&a, 1.0), walk(&b, 1.0));
+//! let distance = certificate_distance(&ha.certificate(&times).unwrap(), &hb.certificate(&times).unwrap());
+//! assert!(distance > ha.certificate_tolerance(&times).unwrap());
 //! ```
+
+use std::sync::OnceLock;
 
 use num_complex::Complex64 as C64;
 use serde::{Deserialize, Serialize};
@@ -67,6 +74,17 @@ use crate::linalg::{CMatrix, CsrMatrix, KrylovOptions, RMatrix, eigh_real, expm_
 
 /// Largest number of configurations accepted (`2²²`, 4 194 304).
 pub const MAX_CONFIGURATIONS: usize = 1 << 22;
+
+/// Largest number of stored sites: configurations times particles, and
+/// the entries of the ranking table (`2²⁵`).
+const MAX_STORED_SITES: usize = 1 << 25;
+
+/// Largest number of nonzero entries of the Hamiltonian (`2²⁵`, about
+/// 1.3 GB while it is built).
+const MAX_NONZEROS: usize = 1 << 25;
+
+/// Largest certificate (`2²⁶` values, 512 MB).
+const MAX_CERTIFICATE: usize = 1 << 26;
 
 /// Exchange statistics of the particles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -108,12 +126,15 @@ fn binomial(n: usize, k: usize) -> Option<usize> {
 /// Number of configurations, `None` beyond [`MAX_CONFIGURATIONS`].
 fn count(statistics: Statistics, n: usize, particles: usize) -> Option<usize> {
     match statistics {
-        Statistics::Bosons => binomial(n + particles - 1, particles),
+        Statistics::Bosons => binomial((n - 1).checked_add(particles)?, particles),
         Statistics::Fermions => binomial(n, particles),
         Statistics::Distinguishable => {
             let mut d: usize = 1;
             for _ in 0..particles {
                 d = d.checked_mul(n).filter(|&d| d <= MAX_CONFIGURATIONS)?;
+                if n == 1 {
+                    break;
+                }
             }
             Some(d)
         }
@@ -133,19 +154,26 @@ pub struct InteractingWalk {
     /// Single-particle Hamiltonian `h`: diagonal and off-diagonal entries.
     diagonal: Vec<f64>,
     hopping: Vec<Vec<(usize, f64)>>,
-    /// The graph's edges, for the neighbour interaction.
-    edges: Vec<(usize, usize)>,
-    /// Binomial table `C(m, k)` for ranking: `binom[m][k]`.
+    /// Sorted neighbours of every node, for the neighbour interaction.
+    neighbours: Vec<Vec<usize>>,
+    /// Binomial table `C(m, k)` for ranking (bosons and fermions):
+    /// `binom[m][k]`.
     binom: Vec<Vec<usize>>,
     /// Configurations, `particles` sites each, in the order of their rank.
     configurations: Vec<usize>,
     hamiltonian: CsrMatrix,
-    spectral: Option<(Vec<f64>, RMatrix)>,
+    /// Eigenvalues and eigenvectors, computed on first use (`None` above
+    /// [`DENSE_LIMIT`] configurations).
+    spectral: OnceLock<Option<(Vec<f64>, RMatrix)>>,
 }
 
 impl InteractingWalk {
     /// `particles ≥ 1` particles of the given statistics on `graph`, with
     /// hopping rate `gamma > 0` and no interaction.
+    ///
+    /// Walks with more than [`MAX_CONFIGURATIONS`] configurations, more
+    /// than 2²⁵ stored sites (configurations times particles) or a
+    /// Hamiltonian with more than 2²⁵ nonzero entries are rejected.
     pub fn new(
         graph: &Graph,
         generator: Generator,
@@ -172,16 +200,55 @@ impl InteractingWalk {
                 format!("{particles} fermions do not fit on {n} sites"),
             ));
         }
-        let dimension = count(statistics, n, particles).ok_or_else(|| {
+        let too_many = |what: &str| {
             QsoError::invalid(
                 "particles",
                 format!(
-                    "{particles} {} on {n} sites have more than \
-                     {MAX_CONFIGURATIONS} configurations",
+                    "{particles} {} on {n} sites: too many {what}",
                     statistics.name()
                 ),
             )
-        })?;
+        };
+        let dimension = count(statistics, n, particles)
+            .ok_or_else(|| too_many(&format!("configurations (more than {MAX_CONFIGURATIONS})")))?;
+        if dimension
+            .checked_mul(particles)
+            .is_none_or(|s| s > MAX_STORED_SITES)
+        {
+            return Err(too_many("stored sites (more than 2²⁵)"));
+        }
+        // Ranks of sets of `particles` elements of {0, …, n + particles − 2}
+        // (bosons as sets after shifting by position).
+        let binom = if statistics == Statistics::Distinguishable {
+            Vec::new()
+        } else {
+            let universe = n
+                .checked_add(particles)
+                .ok_or_else(|| too_many("particles"))?;
+            if (universe + 1)
+                .checked_mul(particles + 1)
+                .is_none_or(|s| s > MAX_STORED_SITES)
+            {
+                return Err(too_many("particles for the ranking table"));
+            }
+            (0..=universe)
+                .map(|m| {
+                    (0..=particles)
+                        .map(|k| binomial(m, k).unwrap_or(usize::MAX))
+                        .collect()
+                })
+                .collect()
+        };
+        // At most one diagonal entry and one entry per particle and
+        // neighbour of its site in every column.
+        let max_degree = (0..n).map(|u| graph.neighbors(u).len()).max().unwrap_or(0);
+        let nonzeros = particles
+            .checked_mul(max_degree)
+            .and_then(|x| x.checked_add(1))
+            .and_then(|x| x.checked_mul(dimension));
+        if nonzeros.is_none_or(|x| x > MAX_NONZEROS) {
+            return Err(too_many("nonzero Hamiltonian entries (more than 2²⁵)"));
+        }
         let h = match generator {
             Generator::Laplacian => graph.laplacian_csr().scaled(gamma),
             Generator::Adjacency => graph.adjacency_csr().scaled(-gamma),
@@ -197,14 +264,11 @@ impl InteractingWalk {
                 }
             }
         }
-        // Ranks of sets of `particles` elements of a universe of
-        // n + particles − 1 (bosons as sets after shifting by position).
-        let universe = n + particles;
-        let binom = (0..=universe)
-            .map(|m| {
-                (0..=particles)
-                    .map(|k| binomial(m, k).unwrap_or(usize::MAX))
-                    .collect()
+        let neighbours = (0..n)
+            .map(|u| {
+                let mut v: Vec<usize> = graph.neighbors(u).iter().map(|&(v, _)| v).collect();
+                v.sort_unstable();
+                v
             })
             .collect();
         let mut walk = Self {
@@ -217,14 +281,13 @@ impl InteractingWalk {
             neighbour: 0.0,
             diagonal,
             hopping,
-            edges: graph.edges().iter().map(|&(u, v, _)| (u, v)).collect(),
+            neighbours,
             binom,
             configurations: Vec::new(),
             hamiltonian: CsrMatrix::from_triplets(0, &[])?,
-            spectral: None,
+            spectral: OnceLock::new(),
         };
-        let configurations = (0..dimension).flat_map(|r| walk.unrank(r)).collect();
-        walk.configurations = configurations;
+        walk.configurations = walk.enumerate(dimension);
         walk.build()?;
         Ok(walk)
     }
@@ -239,9 +302,11 @@ impl InteractingWalk {
                 "interaction strengths must be finite",
             ));
         }
-        self.on_site = on_site;
-        self.neighbour = neighbour;
-        self.build()?;
+        if (on_site, neighbour) != (self.on_site, self.neighbour) {
+            self.on_site = on_site;
+            self.neighbour = neighbour;
+            self.build()?;
+        }
         Ok(self)
     }
 
@@ -289,8 +354,7 @@ impl InteractingWalk {
                 format!("configuration {index} of {}", self.dimension()),
             ));
         }
-        let p = self.particles;
-        Ok(&self.configurations[index * p..(index + 1) * p])
+        Ok(self.config(index))
     }
 
     /// The many-particle Hamiltonian in the occupation basis.
@@ -299,9 +363,9 @@ impl InteractingWalk {
     }
 
     /// Eigenvalues of the Hamiltonian (ascending), up to [`DENSE_LIMIT`]
-    /// configurations.
+    /// configurations; the first call diagonalises the Hamiltonian.
     pub fn spectrum(&self) -> Option<&[f64]> {
-        self.spectral.as_ref().map(|(v, _)| v.as_slice())
+        self.spectral().map(|(v, _)| v.as_slice())
     }
 
     /// Index of the configuration with particles on `sites` (in any order
@@ -352,16 +416,21 @@ impl InteractingWalk {
         if !t.is_finite() {
             return Err(QsoError::invalid("t", "time must be finite"));
         }
-        match &self.spectral {
+        match self.spectral() {
             Some((values, vectors)) => {
                 let mut c = vec![C64::new(0.0, 0.0); d];
                 for (k, ck) in c.iter_mut().enumerate() {
-                    let acc: C64 = (0..d).map(|j| psi0[j] * vectors[(j, k)]).sum();
+                    let column = vectors.column(k);
+                    let acc: C64 = psi0.iter().zip(column.iter()).map(|(p, &v)| p * v).sum();
                     *ck = acc * C64::from_polar(1.0, -values[k] * t);
                 }
-                Ok((0..d)
-                    .map(|j| (0..d).map(|k| c[k] * vectors[(j, k)]).sum())
-                    .collect())
+                let mut out = vec![C64::new(0.0, 0.0); d];
+                for (k, ck) in c.iter().enumerate() {
+                    for (o, &v) in out.iter_mut().zip(vectors.column(k).iter()) {
+                        *o += ck * v;
+                    }
+                }
+                Ok(out)
             }
             None => {
                 let h = &self.hamiltonian;
@@ -378,7 +447,7 @@ impl InteractingWalk {
     }
 
     /// Mean occupations `⟨n_i⟩` of the sites in the state `psi`; they sum
-    /// to the number of particles times the norm.
+    /// to the number of particles times the squared norm of `psi`.
     pub fn densities(&self, psi: &[C64]) -> Result<Vec<f64>> {
         self.check_state(psi)?;
         let mut out = vec![0.0; self.n];
@@ -415,12 +484,17 @@ impl InteractingWalk {
         if !t.is_finite() {
             return Err(QsoError::invalid("t", "time must be finite"));
         }
-        let v = vectors.map(|x| C64::new(x, 0.0));
-        let mut left = v.clone();
-        for (k, mut col) in left.column_iter_mut().enumerate() {
-            col *= C64::from_polar(1.0, -values[k] * t);
+        // V·diag(e^{−iλt})·Vᵀ as two real products.
+        let (mut re, mut im) = (vectors.clone(), vectors.clone());
+        for (k, &lambda) in values.iter().enumerate() {
+            let (sin, cos) = (lambda * t).sin_cos();
+            re.column_mut(k).scale_mut(cos);
+            im.column_mut(k).scale_mut(-sin);
         }
-        Ok(left * v.transpose())
+        let (re, im) = (re * vectors.transpose(), im * vectors.transpose());
+        Ok(CMatrix::from_fn(re.nrows(), re.ncols(), |r, c| {
+            C64::new(re[(r, c)], im[(r, c)])
+        }))
     }
 
     /// Transition probabilities `|⟨a|exp(−iHt)|b⟩|²` between all pairs of
@@ -431,16 +505,31 @@ impl InteractingWalk {
 
     /// Graph certificate: for each time, the transition probabilities
     /// between all pairs of configurations, sorted; the lists of all times
-    /// are concatenated. Isomorphic graphs give the same certificate (to
-    /// rounding), so graphs whose certificates differ
-    /// ([`certificate_distance`]) are not isomorphic. The converse does not
-    /// hold: without interaction, strongly regular graphs with the same
-    /// parameters have the same certificate.
+    /// are concatenated (at most 2²⁶ values). Isomorphic graphs give the
+    /// same certificate up to rounding, which grows with the time; graphs
+    /// whose certificates differ ([`certificate_distance`]) by more than
+    /// [`certificate_tolerance`](Self::certificate_tolerance) are not
+    /// isomorphic, up to floating-point error. The converse does not hold:
+    /// without interaction, strongly regular graphs with the same
+    /// parameters have the same certificate, and with interaction some
+    /// non-isomorphic graphs do too.
     pub fn certificate(&self, times: &[f64]) -> Result<Vec<f64>> {
-        if times.is_empty() {
-            return Err(QsoError::invalid("times", "need at least one time"));
+        self.check_times(times)?;
+        let d = self.dimension();
+        if times
+            .len()
+            .checked_mul(d * d)
+            .is_none_or(|x| x > MAX_CERTIFICATE)
+        {
+            return Err(QsoError::invalid(
+                "times",
+                format!(
+                    "{} times × {d}² configurations: more than 2²⁶ values",
+                    times.len()
+                ),
+            ));
         }
-        let mut out = Vec::with_capacity(times.len() * self.dimension().pow(2));
+        let mut out = Vec::with_capacity(times.len() * d * d);
         for &t in times {
             let mut p: Vec<f64> = self.transition_probabilities(t)?.iter().copied().collect();
             p.sort_by(f64::total_cmp);
@@ -449,11 +538,46 @@ impl InteractingWalk {
         Ok(out)
     }
 
+    /// Tolerance for comparing certificates at `times`:
+    /// `10⁻¹² · max(1, |t|max · ‖H‖)`. The rounding of the eigenvalues
+    /// turns into phase errors that grow linearly with the time; measured
+    /// distances between certificates of isomorphic graphs stay below
+    /// 10⁻¹⁵ · |t| · ‖H‖, a thousandth of this tolerance.
+    pub fn certificate_tolerance(&self, times: &[f64]) -> Result<f64> {
+        self.check_times(times)?;
+        let (values, _) = self.require_dense()?;
+        let norm = values.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+        let t = times.iter().fold(0.0f64, |m, t| m.max(t.abs()));
+        Ok(1e-12 * (t * norm).max(1.0))
+    }
+
+    fn check_times(&self, times: &[f64]) -> Result<()> {
+        if times.is_empty() {
+            return Err(QsoError::invalid("times", "need at least one time"));
+        }
+        if times.iter().any(|t| !t.is_finite()) {
+            return Err(QsoError::invalid("times", "times must be finite"));
+        }
+        Ok(())
+    }
+
+    fn spectral(&self) -> Option<&(Vec<f64>, RMatrix)> {
+        self.spectral
+            .get_or_init(|| {
+                (self.dimension() <= DENSE_LIMIT).then(|| eigh_real(&self.hamiltonian.to_dense()))
+            })
+            .as_ref()
+    }
+
     fn require_dense(&self) -> Result<&(Vec<f64>, RMatrix)> {
-        self.spectral.as_ref().ok_or(QsoError::TooManyQubits {
-            what: "dense interacting walk (configurations)",
-            max: DENSE_LIMIT,
-            requested: self.dimension(),
+        self.spectral().ok_or_else(|| {
+            QsoError::invalid(
+                "dimension",
+                format!(
+                    "{} configurations; the dense propagator needs at most {DENSE_LIMIT}",
+                    self.dimension()
+                ),
+            )
         })
     }
 
@@ -488,63 +612,84 @@ impl InteractingWalk {
         }
     }
 
-    fn unrank(&self, mut r: usize) -> Vec<usize> {
+    /// All `dimension` configurations in the order of their rank, one
+    /// successor at a time.
+    fn enumerate(&self, dimension: usize) -> Vec<usize> {
         let p = self.particles;
+        let mut out = Vec::with_capacity(dimension * p);
         match self.statistics {
             Statistics::Distinguishable => {
+                // Base-n digits, the last particle the least significant.
                 let mut sites = vec![0; p];
-                for s in sites.iter_mut().rev() {
-                    *s = r % self.n;
-                    r /= self.n;
+                for _ in 0..dimension {
+                    out.extend_from_slice(&sites);
+                    for s in sites.iter_mut().rev() {
+                        *s += 1;
+                        if *s < self.n {
+                            break;
+                        }
+                        *s = 0;
+                    }
                 }
-                sites
             }
             Statistics::Fermions | Statistics::Bosons => {
+                // Colex successor of the set c₀ < c₁ < …: raise the lowest
+                // element that has room below its upper neighbour and reset
+                // the elements under it.
                 let shift = usize::from(self.statistics == Statistics::Bosons);
-                let mut sites = vec![0; p];
-                // Largest c with C(c, k + 1) ≤ r, from the last element down.
-                let mut c = self.n + shift * (p - 1);
-                for k in (0..p).rev() {
-                    while self.binom[c][k + 1] > r {
-                        c -= 1;
+                let top = self.n + shift * (p - 1);
+                let mut c: Vec<usize> = (0..p).collect();
+                for _ in 0..dimension {
+                    out.extend(c.iter().enumerate().map(|(k, &x)| x - shift * k));
+                    for k in 0..p {
+                        let limit = if k + 1 < p { c[k + 1] } else { top };
+                        if c[k] + 1 < limit {
+                            c[k] += 1;
+                            for (j, cj) in c[..k].iter_mut().enumerate() {
+                                *cj = j;
+                            }
+                            break;
+                        }
                     }
-                    r -= self.binom[c][k + 1];
-                    sites[k] = c - shift * k;
                 }
-                sites
             }
         }
+        out
     }
 
-    /// Build the Hamiltonian (and its eigendecomposition if dense).
+    /// Build the Hamiltonian; the eigendecomposition follows on first use.
     fn build(&mut self) -> Result<()> {
         let d = self.dimension();
         let p = self.particles;
         let mut triplets = Vec::new();
         let mut occupation = vec![0usize; self.n];
+        let mut distinct = Vec::with_capacity(p);
         let mut moved = vec![0usize; p];
         for a in 0..d {
             let sites = self.config(a);
+            distinct.clear();
             for &s in sites {
+                if occupation[s] == 0 {
+                    distinct.push(s);
+                }
                 occupation[s] += 1;
             }
-            // Diagonal: potential, on-site and neighbour interaction.
+            // Diagonal: potential, pairs on one site, pairs on adjacent
+            // sites (each edge once).
             let mut diag: f64 = sites.iter().map(|&s| self.diagonal[s]).sum();
-            for (k, &s) in sites.iter().enumerate() {
-                // Pairs on the same site and on adjacent sites, each once.
-                for &q in &sites[k + 1..] {
-                    if q == s {
-                        diag += self.on_site;
+            let same: usize = distinct
+                .iter()
+                .map(|&s| occupation[s] * (occupation[s] - 1) / 2)
+                .sum();
+            diag += self.on_site * same as f64;
+            if self.neighbour != 0.0 {
+                for (x, &u) in distinct.iter().enumerate() {
+                    for &v in &distinct[x + 1..] {
+                        if self.neighbours[u].binary_search(&v).is_ok() {
+                            diag += self.neighbour * (occupation[u] * occupation[v]) as f64;
+                        }
                     }
                 }
-            }
-            if self.neighbour != 0.0 {
-                let pairs: usize = self
-                    .edges
-                    .iter()
-                    .map(|&(u, v)| occupation[u] * occupation[v])
-                    .sum();
-                diag += self.neighbour * pairs as f64;
             }
             if diag != 0.0 {
                 triplets.push((a, a, diag));
@@ -579,29 +724,33 @@ impl InteractingWalk {
                     triplets.push((self.rank(&moved), a, amplitude));
                 }
             }
-            for &s in self.config(a) {
+            for &s in &distinct {
                 occupation[s] = 0;
             }
         }
         self.hamiltonian = CsrMatrix::from_triplets(d, &triplets)?;
-        self.spectral = (d <= DENSE_LIMIT).then(|| eigh_real(&self.hamiltonian.to_dense()));
+        self.spectral = OnceLock::new();
         Ok(())
     }
 }
 
 /// Largest difference between two certificates of
-/// [`InteractingWalk::certificate`], infinite if their lengths differ.
-/// Isomorphic graphs give distances at the level of rounding (below
-/// 10⁻¹²); a distance above about 10⁻⁹ proves that two graphs are not
-/// isomorphic.
+/// [`InteractingWalk::certificate`]: infinite if their lengths differ,
+/// NaN if either holds NaN. Compare it with
+/// [`InteractingWalk::certificate_tolerance`].
 pub fn certificate_distance(a: &[f64], b: &[f64]) -> f64 {
     if a.len() != b.len() {
         return f64::INFINITY;
     }
-    a.iter()
-        .zip(b)
-        .map(|(x, y)| (x - y).abs())
-        .fold(0.0, f64::max)
+    let mut max = 0.0f64;
+    for (x, y) in a.iter().zip(b) {
+        let d = (x - y).abs();
+        if d.is_nan() {
+            return f64::NAN;
+        }
+        max = max.max(d);
+    }
+    max
 }
 
 #[cfg(test)]

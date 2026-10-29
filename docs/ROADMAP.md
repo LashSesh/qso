@@ -1723,15 +1723,16 @@ with spin dynamics for magnetic resonance (1.33, added on request). The
 rules stay: no new dependency of the crate, an independent reference for
 every deliverable, reference tools in the cross-validation only.
 
-### 1.29 — Interacting walkers (M)
+### 1.29 — Interacting walkers (M, delivered)
 
 Use case: walks of several particles on a graph, the many-body side of
 graph-structured quantum computing. This covers Bose– and Fermi–Hubbard
 dynamics on lattices and graphs, two-particle interference (the
 Hong–Ou–Mandel effect on a graph), and telling graphs apart where one
-walker cannot. One walker's dynamics depend only on the spectrum and
-eigenvectors of the graph, so cospectral graphs (strongly regular graphs
-with the same parameters, above all) look alike to it. Gamble,
+walker cannot. On a strongly regular graph one walker's propagator is a
+combination of `I`, `A` and `J − I − A` with coefficients fixed by the
+parameters, so strongly regular graphs with the same parameters look
+alike to it. Gamble,
 Friesen, Zhou, Joynt and Coppersmith (Phys. Rev. A 81, 052313 (2010))
 found that two non-interacting particles still fail on strongly regular
 graphs, while two interacting bosons distinguished every pair they
@@ -1759,6 +1760,62 @@ Validation:
   and rook graphs and for T(8) and the Chang graphs (Gamble et al.).
   With interaction they tell all of them apart; the canonical labelling
   confirms that the graphs are not isomorphic.
+
+Delivered as planned: `walks::InteractingWalk` (Python
+`InteractingWalk`, CLI `qso particles`) with `certificate`,
+`certificate_tolerance` and `certificate_distance`;
+`generators::seidel_switching` and `generators::chang`; a section of the
+walks chapter and the tutorial `08_interacting_walks`. Measured:
+
+- **References.** Amplitudes equal the permanents and determinants of
+  the single-walker propagator to 10⁻¹². With interaction, they equal the
+  Hamiltonian of the tensor-product space restricted to the symmetric or
+  antisymmetric subspace to 10⁻¹². That holds up to four particles on
+  `K₅` with weights of both signs.
+- **Krylov propagation** (2744 to 3003 configurations, with U and V)
+  equals an independent Taylor integration to 10⁻¹⁰.
+- **The Hubbard dimer** follows its closed-form spectrum.
+- **Certificates.** Without interaction all pairs among `T(8)` and the
+  Chang graphs, and the Shrikhande and rook's graphs, agree to 10⁻¹².
+  With `U = 1` they differ by 1.7–3.4·10⁻⁴ and 5.4·10⁻³ respectively.
+  The canonical labelling confirms that the graphs are not isomorphic,
+  and their automorphism groups have orders 8!, 384, 96 and 360.
+
+An independent review compared the code with its own references. It
+built the Hamiltonian on the tensor-product space for 40 random graphs
+of up to six nodes, with weights of both signs, up to four particles and
+both generators. It ran a second-quantised Krylov builder against
+SciPy, and checked the Chang graphs with networkx. It found no error in
+the physics, the ranking or the documented numbers. It found:
+
+- **No limits on the resources.** The particle count, the stored sites,
+  the Hamiltonian's nonzeros and the length of a certificate had no
+  bound, so some inputs aborted the process (100 000 bosons on an edge,
+  two fermions on `K₁₅₀₀`). They are refused now, with checked
+  arithmetic.
+- **A fixed threshold for certificates.** 10⁻⁹ called a relabelled copy
+  of a graph "not isomorphic" at `t = 10⁶`, because rounding grows with
+  the time. The threshold is now `certificate_tolerance`,
+  `10⁻¹² · max(1, |t|·‖H‖)`, and a test pins the relabelled rook's graph
+  at `t = 10⁶` far below it.
+- **Quadratic costs.** One search per rank when listing the
+  configurations, now a successor function. One walker on 2²⁰ nodes
+  takes 0.7 s, where the old code needed minutes. Two fermions on 2000
+  nodes (2 million configurations) take 1.8 s with the Hamiltonian. Two eigendecompositions per walk (now one, on
+  first use). The neighbour interaction summed over all edges for every
+  configuration (now over pairs of occupied sites).
+- **Seidel switching** ignored the edge limit of the generators and took
+  `O(n²)` time. It now checks the limit first and keeps node positions.
+- **Smaller faults.** NaN in a certificate distance read as "equal". The
+  CLI printed `null` distances and "1 bosons", and failed by default with
+  more bosons than nodes. The dense-limit error of walks spoke of qubits.
+- **Docs.** The argument why one walker cannot tell strongly regular
+  graphs apart was a non-sequitur; it is now that the propagator lies in
+  the span of `I`, `A` and `J − I − A`. The Shrikhande pair was claimed
+  for the validation suite, which now checks it.
+- **Weak tests.** The tensor-product test now covers hops over three
+  fermions and negative weights, and there is a Krylov test with
+  interaction for fermions and distinguishable particles.
 
 ### 1.30 — Correlated and non-Markovian noise (M)
 

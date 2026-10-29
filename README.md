@@ -112,7 +112,7 @@ or by the benchmark report you can run yourself.
 | Fourth-order Magnus integrator, error ratio when the step halves | 18.5 / 16.6 / 16.1 | 2⁴ = 16 |
 | Coined walk on Metatron's Cube with the coin measured every step (Fourier coin) | equals the simple random walk to 10⁻¹³ | classical random walk |
 | Shrikhande vs 4 × 4 rook's graph (same spectrum) | not isomorphic, \|Aut\| 192 vs 1152 | — |
-| T(8) and the three Chang graphs, all (28, 12, 6, 4): certificate distance of two bosons, free / with U = 1 | below 10⁻¹² / 1.7–3.4·10⁻⁴ for all six pairs | same / different, Gamble et al. 2010; not isomorphic (canonical labelling), \|Aut\| 8!, 384, 96, 360 |
+| T(8) and the three Chang graphs, all (28, 12, 6, 4); Shrikhande and 4 × 4 rook's graph: certificate distance of two bosons, free / with U = 1 | below 10⁻¹² / 1.7–3.4·10⁻⁴ for all six pairs; 5.4·10⁻³ | same / different, Gamble et al. 2010; not isomorphic (canonical labelling), \|Aut\| 8!, 384, 96, 360 |
 | Automorphism group orders: Metatron's Cube / Fruit of Life / dodecahedron | 6 227 020 800 / 12 / 120 | 13! / D₆ / I_h |
 | Hong–Ou–Mandel: two photons on a 50:50 beam splitter, coincidence probability | 0 (distinguishable: 0.5) | 0, Hong, Ou & Mandel 1987 |
 | Full bunching of n photons, boson / distinguishable probability | n! for n = 1 … 6 | n! |
@@ -157,7 +157,7 @@ or by the benchmark report you can run yourself.
 | Circuit distance: random models; Stim's surface and repetition circuits | equal to enumeration; equal to `shortest_graphlike_error` and no larger than `search_for_undetectable_logical_errors` | enumeration; Stim 1.16 |
 | [[72, 12, 6]] memory, depth-8 cycle of Bravyi et al. vs. greedy CNOT layers, 3 rounds | circuit distance 6 vs. 4 (both exact) | Bravyi et al. 2024: ≤ 6 |
 
-The test-suite (576 Rust tests and 296 Python tests, run in CI on Linux
+The test-suite (594 Rust tests and 303 Python tests, run in CI on Linux
 (x86_64 and arm64), macOS and Windows; together with the command line
 and the Python tests they cover 92.0 % of the Rust lines and 81.5 % of
 the branches) also checks:
@@ -388,7 +388,7 @@ machine-readable output; `qso <command> --help` lists all options.
 | `graph [SPEC]` | Structure, Laplacian spectrum, automorphism group and orbits, strongly regular parameters | `--save FILE` |
 | `iso A B` | Isomorphism test with a mapping | — |
 | `walk` | Node probabilities at time t and limiting distribution | `--graph`, `--start`, `--time`, `--gamma`, `--generator laplacian\|adjacency` |
-| `particles` | Walk of several interacting bosons, fermions or distinguishable particles; with `--compare GRAPH` the certificate distance | `--graph`, `--particles`, `--statistics`, `--start`, `--time`, `--on-site`, `--neighbour`, `--compare` |
+| `particles` | Walk of several interacting bosons, fermions or distinguishable particles; with `--compare GRAPH` the certificate distance | `--graph`, `--particles`, `--statistics`, `--start`, `--time`, `--gamma`, `--generator` (default `adjacency`), `--on-site`, `--neighbour`, `--compare` |
 | `search` | Quantum-walk spatial search (rate and time optimised unless `--gamma` is given) | `--graph`, `--marked 3,7`, `--gamma`, `--generator`, `--t-max` |
 | `reduce` | Equitable partition from a start node and the reduced walk | `--graph`, `--start`, `--time` |
 | `transfer` | Perfect state transfer or the best transfer in a window; pretty good state transfer decided exactly on paths and cycles | `--graph`, `--from`, `--to`, `--t-max` |

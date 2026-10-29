@@ -241,10 +241,14 @@ impl ContinuousWalk {
     }
 
     fn require_dense(&self) -> Result<&(Vec<f64>, RMatrix)> {
-        self.spectral.as_ref().ok_or(QsoError::TooManyQubits {
-            what: "dense walk analysis (nodes)",
-            max: DENSE_LIMIT,
-            requested: self.n,
+        self.spectral.as_ref().ok_or_else(|| {
+            QsoError::invalid(
+                "graph",
+                format!(
+                    "{} nodes; dense walk analysis needs at most {DENSE_LIMIT}",
+                    self.n
+                ),
+            )
         })
     }
 

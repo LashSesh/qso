@@ -157,12 +157,30 @@ fn permutations(p: usize) -> Vec<(Vec<usize>, f64)> {
     out
 }
 
+/// `K₅` with weights of both signs: hops jump over up to three fermions.
+fn signed_complete() -> Graph {
+    let mut edges = Vec::new();
+    for u in 0..5 {
+        for v in u + 1..5 {
+            let w = [0.9, -1.2, 0.5, -0.7, 1.4][(u * 3 + v) % 5];
+            edges.push((u, v, w));
+        }
+    }
+    Graph::from_weighted_edges(5, &edges).unwrap()
+}
+
 #[test]
 fn hamiltonian_matches_the_tensor_product_space() {
-    let g = kite();
+    for (g, sizes) in [(kite(), vec![2, 3]), (signed_complete(), vec![4])] {
+        hamiltonian_matches_on(&g, &sizes);
+    }
+}
+
+fn hamiltonian_matches_on(g: &Graph, sizes: &[usize]) {
+    let g = g.clone();
     for generator in [Generator::Adjacency, Generator::Laplacian] {
         for s in ALL {
-            for p in [2, 3] {
+            for &p in sizes {
                 let (u, v) = (1.9, -0.6);
                 let w = walk(&g, generator, s, p).with_interaction(u, v).unwrap();
                 let reference = reference_hamiltonian(&g, generator, s, p, u, v, &w);
@@ -251,6 +269,56 @@ fn krylov_propagation_matches_permanents() {
         assert!((got - expected).norm() < 1e-9, "{output:?}");
     }
     assert!(w.propagator(t).is_err());
+}
+
+/// `exp(−iHt)ψ` by many small Taylor steps, independent of the Krylov
+/// code.
+fn taylor_evolve(h: &CsrMatrix, psi: &[C64], t: f64) -> Vec<C64> {
+    let steps = 200;
+    let dt = t / steps as f64;
+    let mut psi = psi.to_vec();
+    let mut term = vec![C64::new(0.0, 0.0); psi.len()];
+    let mut next = term.clone();
+    for _ in 0..steps {
+        term.copy_from_slice(&psi);
+        for k in 1..=20 {
+            h.matvec(&term, &mut next);
+            let f = C64::new(0.0, -dt / k as f64);
+            for (a, b) in term.iter_mut().zip(&next) {
+                *a = b * f;
+            }
+            for (p, a) in psi.iter_mut().zip(&term) {
+                *p += a;
+            }
+        }
+    }
+    psi
+}
+
+#[test]
+fn krylov_propagation_with_interaction() {
+    // Beyond the dense limit: five fermions on 15 nodes (3003
+    // configurations) and three distinguishable particles on 14 (2744).
+    let g15 = generators::circulant(15, &[1, 3]).unwrap();
+    let g14 = generators::grid_2d(2, 7, false);
+    for (g, s, p, start) in [
+        (g15, Statistics::Fermions, 5, vec![0, 3, 4, 9, 14]),
+        (g14, Statistics::Distinguishable, 3, vec![0, 0, 7]),
+    ] {
+        let w = walk(&g, Generator::Laplacian, s, p)
+            .with_interaction(2.5, -0.8)
+            .unwrap();
+        assert!(w.dimension() > DENSE_LIMIT && w.spectrum().is_none());
+        let psi0 = w.basis_state(&start).unwrap();
+        let ours = w.evolve(&psi0, 0.6).unwrap();
+        let reference = taylor_evolve(w.hamiltonian(), &psi0, 0.6);
+        let err = ours
+            .iter()
+            .zip(&reference)
+            .map(|(a, b)| (a - b).norm())
+            .fold(0.0, f64::max);
+        assert!(err < 1e-10, "{s:?}: {err:e}");
+    }
 }
 
 #[test]
@@ -370,6 +438,42 @@ fn certificates_are_graph_invariants() {
         }
     }
     assert_eq!(certificate_distance(&[1.0], &[1.0, 2.0]), f64::INFINITY);
+    assert!(certificate_distance(&[f64::NAN, 1.0], &[0.0, 1.0]).is_nan());
+}
+
+#[test]
+fn certificate_tolerance_grows_with_the_time() {
+    // Rounding grows linearly with t: at t = 10⁶ the certificates of a
+    // relabelled 4 × 4 rook's graph differ by about 10⁻⁹, far below the
+    // tolerance, which still separates the Shrikhande graph.
+    let rook = generators::rook(4, 4).unwrap();
+    let mut perm: Vec<usize> = (0..16).collect();
+    Rng::seed_from_u64(3).shuffle(&mut perm);
+    let relabelled = rook.relabeled(&perm).unwrap();
+    let make = |g: &Graph| {
+        walk(g, Generator::Adjacency, Statistics::Bosons, 2)
+            .with_interaction(1.0, 0.0)
+            .unwrap()
+    };
+    for t in [1.0, 1e3, 1e6] {
+        let w = make(&rook);
+        let tolerance = w.certificate_tolerance(&[t]).unwrap();
+        let a = w.certificate(&[t]).unwrap();
+        let same = certificate_distance(&a, &make(&relabelled).certificate(&[t]).unwrap());
+        assert!(
+            same < 1e-3 * tolerance,
+            "t = {t}: {same:e} vs {tolerance:e}"
+        );
+        let other = make(&generators::shrikhande()).certificate(&[t]).unwrap();
+        assert!(
+            certificate_distance(&a, &other) > 10.0 * tolerance,
+            "t = {t}"
+        );
+    }
+    let w = make(&rook);
+    assert!(w.certificate_tolerance(&[]).is_err());
+    assert!(w.certificate_tolerance(&[f64::INFINITY]).is_err());
+    assert!(w.certificate(&[f64::NAN]).is_err());
 }
 
 #[test]
@@ -412,7 +516,7 @@ fn invalid_walks_are_rejected() {
         )
         .is_err()
     );
-    // 4²² configurations of 22 distinguishable particles are too many.
+    // 4¹² configurations of 12 distinguishable particles are too many.
     assert!(new(Statistics::Distinguishable, 12).is_err());
     let big = generators::cycle(200);
     assert!(InteractingWalk::new(&big, Generator::Adjacency, 1.0, Statistics::Bosons, 4).is_err());
@@ -428,4 +532,79 @@ fn invalid_walks_are_rejected() {
     );
     assert!(w.clone().with_interaction(f64::INFINITY, 0.0).is_err());
     assert!(w.certificate(&[]).is_err());
+    // Too many values in a certificate, stored sites, or nonzeros.
+    let k = InteractingWalk::new(
+        &generators::complete(64),
+        Generator::Adjacency,
+        1.0,
+        Statistics::Fermions,
+        2,
+    )
+    .unwrap();
+    assert!(k.certificate(&vec![1.0; 100]).is_err());
+    let edge = generators::path(2);
+    assert!(
+        InteractingWalk::new(
+            &edge,
+            Generator::Adjacency,
+            1.0,
+            Statistics::Bosons,
+            100_000
+        )
+        .is_err()
+    );
+    assert!(
+        InteractingWalk::new(
+            &edge,
+            Generator::Adjacency,
+            1.0,
+            Statistics::Bosons,
+            usize::MAX
+        )
+        .is_err()
+    );
+    let point = Graph::new(1);
+    assert!(
+        InteractingWalk::new(
+            &point,
+            Generator::Adjacency,
+            1.0,
+            Statistics::Distinguishable,
+            1 << 26
+        )
+        .is_err()
+    );
+    let one = InteractingWalk::new(&point, Generator::Adjacency, 1.0, Statistics::Bosons, 1000)
+        .unwrap()
+        .with_interaction(2.0, 0.0)
+        .unwrap();
+    // 1000 bosons on one site: U · 1000 · 999 / 2.
+    assert_eq!(one.spectrum().unwrap(), &[999_000.0]);
+    let dense = generators::complete(1500);
+    assert!(
+        InteractingWalk::new(&dense, Generator::Adjacency, 1.0, Statistics::Fermions, 2).is_err()
+    );
+}
+
+#[test]
+fn many_sites_are_enumerated_quickly() {
+    // One walker on 2¹⁶ nodes and two fermions on 2000: the configurations
+    // come from a successor function, not one search per rank.
+    let start = std::time::Instant::now();
+    let w = walk(
+        &generators::cycle(1 << 16),
+        Generator::Adjacency,
+        Statistics::Bosons,
+        1,
+    );
+    assert_eq!(w.index_of(&[65_535]).unwrap(), 65_535);
+    let f = walk(
+        &generators::cycle(2000),
+        Generator::Adjacency,
+        Statistics::Fermions,
+        2,
+    );
+    assert_eq!(f.dimension(), 1999 * 1000);
+    assert_eq!(f.index_of(&[1998, 1999]).unwrap(), f.dimension() - 1);
+    assert!(start.elapsed().as_secs_f64() < 30.0);
 }

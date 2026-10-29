@@ -195,14 +195,21 @@ state.
 
 ### Telling graphs apart
 
-One walker sees only the spectrum and the eigenvectors of a graph, so
-strongly regular graphs with the same parameters look alike to it. Two
-free particles cannot tell them apart either; two interacting bosons can
-(Gamble, Friesen, Zhou, Joynt and Coppersmith, Phys. Rev. A 81, 052313
-(2010)). `certificate(times)` lists the transition probabilities between
-all configurations, sorted, at each time. Isomorphic graphs give the
-same list to rounding, so a difference above about 10⁻⁹ proves that two
-graphs are not isomorphic:
+On a strongly regular graph the walk propagator `exp(−iAt)` is a
+combination of `I`, `A` and `J − I − A` whose coefficients depend only on
+the graph's parameters. So one walker cannot tell apart strongly regular
+graphs with the same parameters, and two free particles cannot either.
+Two interacting bosons can (Gamble, Friesen, Zhou, Joynt and
+Coppersmith, Phys. Rev. A 81, 052313 (2010)), though not on every pair
+of non-isomorphic graphs (Smith, arXiv:1004.0206 (2010)).
+
+`certificate(times)` lists the transition probabilities between all
+configurations, sorted, at each time. Isomorphic graphs give the same
+list up to rounding, which grows with the time.
+`certificate_tolerance(times)` is `10⁻¹² · max(1, |t| · ‖H‖)`, a thousand
+times the rounding measured on isomorphic graphs up to `t = 10⁶`. A
+larger distance shows, up to floating-point error, that two graphs are
+not isomorphic:
 
 ```python
 import metatron_qso as q
@@ -213,7 +220,8 @@ def certificate(graph, u):
 t8, chang = q.Graph.johnson(8, 2), q.Graph.chang(1)   # both (28, 12, 6, 4)
 for u in [0.0, 1.0]:
     d = q.interacting_certificate_distance(certificate(t8, u), certificate(chang, u))
-    print(u, d > 1e-9)
+    tolerance = q.InteractingWalk(t8, 2, on_site=u).certificate_tolerance([1.0])
+    print(u, d > tolerance)
 # 0.0 False
 # 1.0 True
 ```
@@ -222,17 +230,21 @@ The validation suite checks this for all six pairs among `T(8)` and
 the three Chang graphs (`Graph.chang(1)` to `Graph.chang(3)`, obtained
 from `T(8)` by `seidel_switching`), and for the Shrikhande and 4 × 4
 rook's graphs. Without interaction the certificates of every pair agree
-to 10⁻¹². With `U = 1` they differ by 1.7·10⁻⁴ to 3.4·10⁻⁴. The same
-comparison runs from the command line with
-`qso particles --graph shrikhande --compare rook:4x4 --on-site 1`.
+to 10⁻¹². With `U = 1` they differ by 1.7·10⁻⁴ to 3.4·10⁻⁴ (`T(8)` and
+the Chang graphs) and by 5.4·10⁻³ (Shrikhande and rook), at least a
+million times the tolerance. The same comparison runs from the command
+line with `qso particles --graph shrikhande --compare rook:4x4 --on-site 1`.
 
 The amplitudes are checked in the tests against independent references:
 
 - without interaction, against permanents (bosons) and determinants
   (fermions) of the single-walker propagator, also for 2925
-  configurations propagated by Krylov;
+  configurations propagated by Krylov; with interaction, the Krylov
+  propagation of 3003 fermion and 2744 distinguishable configurations
+  against an independent Taylor integration;
 - against the Hamiltonian built on the full tensor-product space and
-  restricted to the symmetric or antisymmetric subspace;
+  restricted to the symmetric or antisymmetric subspace, up to four
+  particles on a complete graph with weights of both signs;
 - against the closed-form spectrum of the Hubbard dimer.
 
 ## In Rust

@@ -461,7 +461,9 @@ pub fn shrikhande() -> Graph {
 /// `set`: every pair with one node inside and one outside the set changes
 /// from adjacent to non-adjacent and back; pairs on the same side keep
 /// their state. Switching a regular graph can give a non-isomorphic graph
-/// with the same parameters (the Chang graphs, [`chang`]).
+/// with the same parameters (the Chang graphs, [`chang`]). Node positions
+/// are kept; results with more than [`MAX_GENERATED_EDGES`] edges are
+/// rejected before anything is built.
 pub fn seidel_switching(graph: &Graph, set: &[usize]) -> Result<Graph> {
     if !graph.is_unweighted() {
         return Err(QsoError::invalid(
@@ -480,15 +482,30 @@ pub fn seidel_switching(graph: &Graph, set: &[usize]) -> Result<Graph> {
         }
         inside[u] = true;
     }
-    let mut g = Graph::new(n).with_name(format!("{} switched", graph.name()));
-    for u in 0..n {
-        for v in u + 1..n {
-            if graph.has_edge(u, v) != (inside[u] != inside[v]) {
-                g.add_edge(u, v).expect("valid edge");
+    let (ins, outs): (Vec<usize>, Vec<usize>) = (0..n).partition(|&u| inside[u]);
+    let crossing = |&&(u, v, _): &&(usize, usize, f64)| inside[u] != inside[v];
+    let kept: Vec<(usize, usize)> = graph
+        .edges()
+        .iter()
+        .filter(|e| !crossing(e))
+        .map(|&(u, v, _)| (u, v))
+        .collect();
+    let crossed = (graph.num_edges() - kept.len()) as u128;
+    let new = ins.len() as u128 * outs.len() as u128 - crossed;
+    check_generated_size(n as u128, kept.len() as u128 + new)?;
+    let mut edges = kept;
+    for &u in &ins {
+        for &v in &outs {
+            if !graph.has_edge(u, v) {
+                edges.push((u.min(v), u.max(v)));
             }
         }
     }
-    Ok(g)
+    let g = Graph::from_edges(n, &edges)?.with_name(format!("{} switched", graph.name()));
+    match graph.positions() {
+        Some(p) => g.with_positions(p.to_vec()),
+        None => Ok(g),
+    }
 }
 
 /// The Chang graphs (`which` = 1, 2, 3): strongly regular (28, 12, 6, 4)
@@ -943,11 +960,24 @@ mod tests {
         // Switching with respect to a set and its complement is the same.
         let set = [0, 3, 5, 9];
         let rest: Vec<usize> = (0..28).filter(|u| !set.contains(u)).collect();
+        let sorted = |g: Graph| {
+            let mut e = g.edges().to_vec();
+            e.sort_by_key(|&(u, v, _)| (u, v));
+            e
+        };
         assert_eq!(
-            seidel_switching(&t8, &set).unwrap().edges(),
-            seidel_switching(&t8, &rest).unwrap().edges()
+            sorted(seidel_switching(&t8, &set).unwrap()),
+            sorted(seidel_switching(&t8, &rest).unwrap())
         );
         assert!(seidel_switching(&t8, &[28]).is_err());
+        // Positions are kept; results beyond the edge limit are refused
+        // before they are built (3000 × 3000 new edges).
+        let cube = platonic(PlatonicSolid::Cube);
+        let switched = seidel_switching(&cube, &[0, 1]).unwrap();
+        assert_eq!(switched.positions(), cube.positions());
+        assert_eq!(seidel_switching(&cube, &[]).unwrap().num_edges(), 12);
+        let half: Vec<usize> = (0..3000).collect();
+        assert!(seidel_switching(&path(6000), &half).is_err());
         assert_eq!(
             petersen().strongly_regular_parameters(),
             Some((10, 3, 0, 1))

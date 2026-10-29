@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
@@ -153,6 +153,27 @@ fn walks_reduction_and_transfer() {
     ]);
     assert_eq!(fermions["configurations"], 1);
     assert!(qso_fails(&["particles", "--statistics", "anyons"]).contains("statistics"));
+    // Different sizes; isomorphic graphs at a large time stay below the
+    // tolerance; more bosons than nodes start wrapped around.
+    let sizes = qso(&["particles", "--graph", "cycle:5", "--compare", "cycle:6"]);
+    assert_eq!(sizes["compare"]["distinguished"], true);
+    let late = qso(&[
+        "particles",
+        "--graph",
+        "rook:4x4",
+        "--compare",
+        "hamming:2,4",
+        "--on-site",
+        "1",
+        "--time",
+        "1e6",
+    ]);
+    assert_eq!(late["compare"]["distinguished"], false);
+    let wrapped = qso(&["particles", "--graph", "path:2", "--particles", "3"]);
+    assert_eq!(wrapped["start"], json!([0, 1, 0]));
+    assert!(
+        qso_text(&["particles", "--graph", "path:3", "--particles", "1"]).contains("1 boson on")
+    );
 }
 
 #[test]

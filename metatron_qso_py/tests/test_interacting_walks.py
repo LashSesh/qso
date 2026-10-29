@@ -67,16 +67,18 @@ def test_certificates_tell_chang_graphs_from_t8():
     def cert(g, u):
         return q.InteractingWalk(g, 2, on_site=u).certificate([1.0])
 
+    tolerance = q.InteractingWalk(t8, 2, on_site=1.0).certificate_tolerance([1.0])
     assert q.interacting_certificate_distance(cert(t8, 0.0), cert(chang, 0.0)) < 1e-12
-    assert q.interacting_certificate_distance(cert(t8, 1.0), cert(chang, 1.0)) > 1e-6
+    assert q.interacting_certificate_distance(cert(t8, 1.0), cert(chang, 1.0)) > tolerance
     assert q.interacting_certificate_distance([1.0], [1.0, 2.0]) == math.inf
+    assert math.isnan(q.interacting_certificate_distance([math.nan], [0.0]))
 
 
 def test_seidel_switching():
     g = q.Graph.johnson(8, 2)
     s = g.seidel_switching([0, 5, 9])
     rest = [u for u in range(28) if u not in (0, 5, 9)]
-    assert s.edges == g.seidel_switching(rest).edges
+    assert sorted(s.edges) == sorted(g.seidel_switching(rest).edges)
     assert sorted(g.seidel_switching([]).edges) == sorted(g.edges)
 
 
@@ -94,4 +96,8 @@ def test_errors():
     with pytest.raises(ValueError):
         q.Graph.chang(4)
     assert "2 fermions" in repr(w)
+    with pytest.raises(ValueError, match="stored sites"):
+        q.InteractingWalk(q.Graph.path(2), 100_000)
+    with pytest.raises(ValueError, match="nonzero"):
+        q.InteractingWalk(q.Graph.complete(1500), 2, "fermions")
     assert w.configuration(0) == [0, 1]

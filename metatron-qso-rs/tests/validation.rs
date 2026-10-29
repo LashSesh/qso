@@ -243,30 +243,41 @@ fn shrikhande_and_rook_graph_are_cospectral_but_not_isomorphic() {
 fn interacting_bosons_tell_cospectral_strongly_regular_graphs_apart() {
     use metatron_qso::walks::interacting::certificate_distance;
     use metatron_qso::walks::{InteractingWalk, Statistics};
-    // T(8) and the three Chang graphs, all (28, 12, 6, 4) and pairwise
-    // not isomorphic: two free bosons see no difference (Gamble et al.,
+    // T(8) and the three Chang graphs, all (28, 12, 6, 4), and the
+    // Shrikhande and 4 × 4 rook's graphs, both (16, 6, 2, 2), pairwise not
+    // isomorphic: two free bosons see no difference (Gamble et al.,
     // Phys. Rev. A 81, 052313 (2010)), two interacting ones tell every
     // pair apart.
-    let mut graphs = vec![generators::johnson(8, 2).unwrap()];
-    graphs.extend((1..=3).map(|k| generators::chang(k).unwrap()));
-    let certificate = |g: &Graph, u: f64| {
+    let walk = |g: &Graph, u: f64| {
         InteractingWalk::new(g, Generator::Adjacency, 1.0, Statistics::Bosons, 2)
             .unwrap()
             .with_interaction(u, 0.0)
             .unwrap()
-            .certificate(&[1.0])
-            .unwrap()
     };
-    let free: Vec<_> = graphs.iter().map(|g| certificate(g, 0.0)).collect();
-    let hubbard: Vec<_> = graphs.iter().map(|g| certificate(g, 1.0)).collect();
-    for a in 0..4 {
-        for b in a + 1..4 {
-            assert!(!graphs[a].is_isomorphic(&graphs[b]));
-            let d0 = certificate_distance(&free[a], &free[b]);
-            let d1 = certificate_distance(&hubbard[a], &hubbard[b]);
-            assert!(d0 < 1e-12, "{a} {b}: {d0:e}");
-            // 1.7·10⁻⁴ to 3.4·10⁻⁴ (README).
-            assert!((1.7e-4..3.5e-4).contains(&d1), "{a} {b}: {d1:e}");
+    let mut chang = vec![generators::johnson(8, 2).unwrap()];
+    chang.extend((1..=3).map(|k| generators::chang(k).unwrap()));
+    let srg16 = vec![generators::shrikhande(), generators::rook(4, 4).unwrap()];
+    for (family, range) in [(chang, 1.7e-4..3.5e-4), (srg16, 5e-3..6e-3)] {
+        let free: Vec<_> = family
+            .iter()
+            .map(|g| walk(g, 0.0).certificate(&[1.0]).unwrap())
+            .collect();
+        let hubbard: Vec<_> = family
+            .iter()
+            .map(|g| walk(g, 1.0).certificate(&[1.0]).unwrap())
+            .collect();
+        let tolerance = walk(&family[0], 1.0).certificate_tolerance(&[1.0]).unwrap();
+        for a in 0..family.len() {
+            for b in a + 1..family.len() {
+                assert!(!family[a].is_isomorphic(&family[b]));
+                let d0 = certificate_distance(&free[a], &free[b]);
+                let d1 = certificate_distance(&hubbard[a], &hubbard[b]);
+                assert!(d0 < 1e-12, "{a} {b}: {d0:e}");
+                // T(8)/Chang: 1.7·10⁻⁴ to 3.4·10⁻⁴; Shrikhande/rook:
+                // 5.4·10⁻³ (README).
+                assert!(range.contains(&d1), "{a} {b}: {d1:e}");
+                assert!(d1 > 1e6 * tolerance);
+            }
         }
     }
 }

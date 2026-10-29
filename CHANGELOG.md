@@ -13,20 +13,26 @@ All notable changes to this project are documented here. The format follows
   hopping with the adjacency or Laplacian generator, on-site interaction
   U and neighbour interaction V. It gives exact evolution in the
   occupation basis, densities, pair correlations, propagators and graph
-  certificates (`certificate`, `certificate_distance`).
+  certificates (`certificate`, `certificate_distance`, compared against
+  `certificate_tolerance`, which grows with the time).
   - Validated against permanents and determinants of the single-walker
     propagator, the tensor-product space, and the Hubbard dimer.
   - Two free bosons cannot tell apart T(8) and the three Chang graphs, or
     the Shrikhande and 4 × 4 rook's graphs; two interacting bosons can
     (validation suite).
+  - Walks beyond 2²² configurations, 2²⁵ stored sites or 2²⁵ nonzero
+    Hamiltonian entries are refused instead of exhausting memory.
   - Python: `InteractingWalk`, `interacting_certificate_distance`. CLI:
     `qso particles`. Tutorial: `08_interacting_walks`.
-- **Graphs:** `generators::seidel_switching` and the three Chang graphs
+- **Graphs:** `generators::seidel_switching` (within the size limits of
+  the generators, keeping node positions) and the three Chang graphs
   (`generators::chang`, spec `chang:K`), in Python as
   `Graph.seidel_switching` and `Graph.chang`.
 
 ### Fixed
 
+- `ContinuousWalk` beyond 2048 nodes reported that dense analysis
+  "supports at most 2048 qubits"; the message now speaks of nodes.
 - Documentation site: the guide of 1.7.0 at `/1.7.0/` was missing. Its
   Rust tutorials are rendered from the tag's examples, which the build of
   a release did not do, so mdBook failed and the version was left out.

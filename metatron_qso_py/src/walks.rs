@@ -558,8 +558,10 @@ fn statistics(name: &str) -> PyResult<Statistics> {
 /// States are vectors over the configurations: multisets of sites for
 /// bosons, sets for fermions, the site of each particle for
 /// distinguishable particles. Up to 2048 configurations the walk is
-/// diagonalised once (needed for `propagator`, `transition_probabilities`
-/// and `certificate`); above, it propagates by Krylov.
+/// diagonalised on first use (needed for `propagator`,
+/// `transition_probabilities` and `certificate`); above, it propagates by
+/// Krylov. Walks beyond 2^22 configurations, 2^25 stored sites or 2^25
+/// nonzero Hamiltonian entries are refused.
 #[pyclass(name = "InteractingWalk", module = "metatron_qso", frozen)]
 pub struct PyInteractingWalk {
     inner: InteractingWalk,
@@ -690,7 +692,8 @@ impl PyInteractingWalk {
     }
 
     /// Graph certificate: the sorted transition probabilities at each of
-    /// `times`, concatenated. Compare with `interacting_certificate_distance`.
+    /// `times`, concatenated. Compare two with
+    /// `interacting_certificate_distance` against `certificate_tolerance`.
     fn certificate<'py>(
         &self,
         py: Python<'py>,
@@ -699,6 +702,17 @@ impl PyInteractingWalk {
         let times = real_vec(&times);
         let w = &self.inner;
         Ok(real_array(py, py.detach(|| w.certificate(&times)).raise()?))
+    }
+
+    /// Tolerance for comparing certificates at `times`:
+    /// `1e-12 · max(1, max|t| · ‖H‖)`. Rounding grows with the time;
+    /// certificates of isomorphic graphs stay far below it, and a larger
+    /// distance shows, up to floating-point error, that two graphs are not
+    /// isomorphic.
+    fn certificate_tolerance(&self, py: Python<'_>, times: RealArg<'_>) -> PyResult<f64> {
+        let times = real_vec(&times);
+        let w = &self.inner;
+        py.detach(|| w.certificate_tolerance(&times)).raise()
     }
 
     /// Eigenvalues of the Hamiltonian (ascending), or `None` above 2048
@@ -761,8 +775,9 @@ impl PyInteractingWalk {
 }
 
 /// Largest difference between two certificates of
-/// `InteractingWalk.certificate` (infinite if their lengths differ); above
-/// about 1e-9 the graphs are not isomorphic.
+/// `InteractingWalk.certificate`: infinite if their lengths differ, NaN if
+/// either holds NaN. Above `InteractingWalk.certificate_tolerance` the
+/// graphs are not isomorphic, up to floating-point error.
 #[pyfunction(name = "interacting_certificate_distance")]
 fn certificate_distance_py(a: RealArg<'_>, b: RealArg<'_>) -> f64 {
     certificate_distance(&real_vec(&a), &real_vec(&b))

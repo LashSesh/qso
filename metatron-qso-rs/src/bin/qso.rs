@@ -180,8 +180,9 @@ enum Command {
         generator: GeneratorArg,
     },
     /// Walk of several bosons, fermions or distinguishable particles with
-    /// on-site (U) and neighbour (V) interaction; with --compare, the
-    /// certificate distance to a second graph (above 1e-9: not isomorphic).
+    /// on-site (U) and neighbour (V) interaction (hopping by the adjacency
+    /// matrix unless --generator laplacian); with --compare, the
+    /// certificate distance to a second graph against its tolerance.
     Particles {
         #[arg(long, default_value = "shrikhande")]
         graph: String,
@@ -956,13 +957,23 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             };
             let g = graph(spec)?;
             let walk = make(&g)?;
-            let sites: Vec<usize> = start.clone().unwrap_or_else(|| (0..*particles).collect());
+            // Default start: particle k on node k (wrapping around for
+            // more bosons or distinguishable particles than nodes).
+            let sites: Vec<usize> = start
+                .clone()
+                .unwrap_or_else(|| (0..*particles).map(|k| k % g.num_nodes()).collect());
             let psi = walk.evolve(&walk.basis_state(&sites)?, *time)?;
             let densities = walk.densities(&psi)?;
+            let kind = match (statistics, *particles == 1) {
+                (Statistics::Bosons, true) => "boson",
+                (Statistics::Fermions, true) => "fermion",
+                (Statistics::Distinguishable, true) => "particle",
+                (Statistics::Distinguishable, false) => "distinguishable particles",
+                (s, false) => s.name(),
+            };
             let mut text = format!(
-                "{particles} {} on {} ({} configurations, U = {on_site}, V = {neighbour}), \
+                "{particles} {kind} on {} ({} configurations, U = {on_site}, V = {neighbour}), \
                  from sites {sites:?}\n⟨n_i⟩ at t = {time}:\n  {}",
-                statistics.name(),
                 g.name(),
                 walk.dimension(),
                 vector(&densities)
@@ -972,22 +983,40 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 "time": time, "on_site": on_site, "neighbour": neighbour, "densities": densities});
             if let Some(other) = compare {
                 let h = graph(other)?;
-                let distance = interacting::certificate_distance(
-                    &walk.certificate(&[*time])?,
-                    &make(&h)?.certificate(&[*time])?,
-                );
-                let distinguished = distance > 1e-9;
-                text.push_str(&format!(
-                    "\ncertificate distance to {}: {distance:.3e} ({})",
-                    h.name(),
-                    if distinguished {
-                        "not isomorphic"
-                    } else {
-                        "not distinguished"
-                    }
-                ));
-                out["compare"] = json!({"graph": h.name(), "distance": distance,
-                    "distinguished": distinguished});
+                let second = make(&h)?;
+                let times = [*time];
+                if walk.dimension() != second.dimension() {
+                    // Different numbers of nodes: nothing to compare.
+                    text.push_str(&format!(
+                        "\n{} has {} configurations, {} has {}: not isomorphic",
+                        g.name(),
+                        walk.dimension(),
+                        h.name(),
+                        second.dimension()
+                    ));
+                    out["compare"] = json!({"graph": h.name(), "distance": null,
+                        "tolerance": null, "distinguished": true});
+                } else {
+                    let distance = interacting::certificate_distance(
+                        &walk.certificate(&times)?,
+                        &second.certificate(&times)?,
+                    );
+                    let tolerance = walk
+                        .certificate_tolerance(&times)?
+                        .max(second.certificate_tolerance(&times)?);
+                    let distinguished = distance > tolerance;
+                    text.push_str(&format!(
+                        "\ncertificate distance to {}: {distance:.3e}, tolerance {tolerance:.1e} ({})",
+                        h.name(),
+                        if distinguished {
+                            "not isomorphic"
+                        } else {
+                            "not distinguished"
+                        }
+                    ));
+                    out["compare"] = json!({"graph": h.name(), "distance": distance,
+                        "tolerance": tolerance, "distinguished": distinguished});
+                }
             }
             Ok((out, text))
         }

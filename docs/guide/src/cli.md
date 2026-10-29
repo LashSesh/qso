@@ -8,7 +8,7 @@ machine-readable output; `qso <command> --help` lists all options.
 | `graph [SPEC]` | Structure, Laplacian spectrum, automorphism group and orbits, strongly regular parameters | `--save FILE` (edge list, or GraphML for `.graphml`/`.xml`) |
 | `iso A B` | Isomorphism test with an explicit mapping | — |
 | `walk` | Node probabilities at time t and limiting distribution | `--graph`, `--start`, `--time`, `--gamma`, `--generator laplacian\|adjacency` |
-| `particles` | Walk of several bosons, fermions or distinguishable particles with interaction: site densities, and with `--compare GRAPH` the certificate distance (above 10⁻⁹: not isomorphic) | `--graph`, `--particles`, `--statistics bosons\|fermions\|distinguishable`, `--start 0,1`, `--time`, `--on-site U`, `--neighbour V`, `--compare` |
+| `particles` | Walk of several bosons, fermions or distinguishable particles with interaction: site densities, and with `--compare GRAPH` the certificate distance against its tolerance | `--graph`, `--particles`, `--statistics bosons\|fermions\|distinguishable`, `--start 0,1`, `--time`, `--gamma`, `--generator` (default `adjacency`, unlike `walk` and `search`), `--on-site U`, `--neighbour V`, `--compare` |
 | `search` | Spatial search; rate and time are optimised unless `--gamma` is given | `--graph`, `--marked 3,7`, `--gamma`, `--generator`, `--t-max` |
 | `reduce` | Equitable partition from a start node and the walk on it | `--graph`, `--start`, `--time`, `--gamma`, `--generator` |
 | `transfer` | Perfect state transfer, or the best transfer within a window | `--graph`, `--from`, `--to`, `--generator`, `--t-max` |
