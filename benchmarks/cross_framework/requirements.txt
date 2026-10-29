@@ -13,3 +13,4 @@ stim==1.16.0
 pymatching==2.4.0
 pyscf==2.14.0
 ldpc==2.4.1
+qutip==5.3.1

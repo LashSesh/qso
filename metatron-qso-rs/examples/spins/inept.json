@@ -1,0 +1,9 @@
+[
+  {"pulse": {"target": {"isotope": "1H"}, "angle": 90.0, "phase": 0.0}},
+  {"delay": 0.0017857142857142857},
+  {"pulse": {"target": {"isotope": "1H"}, "angle": 180.0, "phase": 0.0}},
+  {"pulse": {"target": {"isotope": "13C"}, "angle": 180.0, "phase": 0.0}},
+  {"delay": 0.0017857142857142857},
+  {"pulse": {"target": {"isotope": "1H"}, "angle": 90.0, "phase": 90.0}},
+  {"pulse": {"target": {"isotope": "13C"}, "angle": 90.0, "phase": 0.0}}
+]

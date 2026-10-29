@@ -35,7 +35,7 @@ import frameworks as fw  # noqa: E402
 PACKAGES = [
     "metatron-qso", "qiskit", "qiskit-aer", "qulacs", "cirq-core", "pennylane",
     "pennylane-lightning", "thewalrus", "numpy", "projectq", "stim", "pymatching", "pyscf",
-    "ldpc",
+    "ldpc", "qutip",
 ]
 
 # ----------------------------------------------------------------------------
@@ -227,6 +227,7 @@ def correctness(quick: bool) -> dict:
         "bposd_vs_ldpc": bposd_vs_ldpc(quick),
         "correlated_and_distance_vs_stim": correlated_and_distance_vs_stim(quick),
         "chemistry_vs_pyscf": chemistry_vs_pyscf(),
+        "spins_vs_qutip": spins_vs_qutip(),
     }
 
 
@@ -898,8 +899,91 @@ TOLERANCES = {
     # single precision against double (measured up to 1.1·10⁻⁸ for the
     # energy and 1.3·10⁻⁶ for the gradient).
     "qaoa_double": 1e-10,
+    "spin_expectation": 1e-7,
     "qaoa_single": 1e-5,
 }
+
+
+def spins_vs_qutip() -> dict:
+    """Spin dynamics with relaxation against QuTiP's master-equation solver.
+
+    The Lindblad operators are built here from the documented formulas
+    (T1 towards thermal equilibrium, pure dephasing from T2) and QSO's spin
+    operators; QuTiP integrates the same equation. Expectations of every
+    spin's I_z and of each isotope's F_x, F_y are compared over time.
+    """
+    import metatron_qso as q
+    import qutip as qt
+    from metatron_qso import spin
+
+    hbar, kb = 1.054571817e-34, 1.380649e-23
+
+    def collapse(sys):
+        ops = []
+        for i, (iso, shift, t1, t2) in enumerate(sys.spins):
+            iz, ip = sys.spin_operator(i, "z"), sys.spin_operator(i, "+")
+            r1 = 0.0 if t1 is None else 1 / t1
+            if r1 > 0:
+                x = hbar * q.spin.gyromagnetic_ratio(iso) * sys.field * (1 + shift * 1e-6) / (kb * sys.temperature)
+                up = r1 / (1 + math.exp(-x))
+                ops += [math.sqrt(r1 - up) * ip.conj().T, math.sqrt(up) * ip]
+            if t2 is not None and 1 / t2 - r1 / 2 > 0:
+                ops.append(math.sqrt(2 * (1 / t2 - r1 / 2)) * iz)
+        return ops
+
+    def build(field, spins, couplings, temperature=298.15, frame="rotating"):
+        sys = q.SpinSystem(field, temperature=temperature, frame=frame)
+        for iso, shift, t1, t2 in spins:
+            sys.add_spin(iso, shift, t1=t1, t2=t2)
+        for i, j, jh in couplings:
+            sys.couple(i, j, jh)
+        return sys
+
+    cases = {
+        "three protons, T1/T2, 1 T, 0.05 K": (
+            build(1.0, [("1H", 0.0, 0.4, 0.1), ("1H", 2.0, 0.6, 0.15), ("1H", 5.0, 0.8, 0.2)], [(0, 1, 6.0), (1, 2, -3.0)], 0.05),
+            "thermal", [spin.pulse("1H", 70, 20)], 0.2,
+        ),
+        "1H-1H-13C-15N, T1/T2, 9.4 T": (
+            build(9.4, [("1H", 1.0, 0.5, 0.2), ("1H", 3.0, 0.7, 0.3), ("13C", 40.0, 1.5, 0.5), ("15N", 120.0, 2.0, 0.6)],
+                  [(0, 1, 7.0), (0, 2, 140.0), (1, 2, 5.0), (2, 3, -12.0)], 2.0),
+            "thermal", spin.inept("1H", "13C", 140.0), 0.1,
+        ),
+        "five protons, T1/T2, 1 T": (
+            build(1.0, [("1H", float(k), 0.5 + 0.1 * k, 0.2) for k in range(5)], [(k, k + 1, 3.0 + k) for k in range(4)], 0.1),
+            "thermal", [spin.pulse("1H", 60, 0)], 0.05,
+        ),
+        "SABRE-SHEATH, 1H-1H-15N, 0.14 uT, laboratory frame": (
+            build(1.4e-7, [("1H", -22.0, None, None), ("1H", -22.0, None, None), ("15N", 250.0, None, None)],
+                  [(0, 1, -7.0), (0, 2, -2.0)], frame="laboratory"),
+            "parahydrogen", [], 2.0,
+        ),
+    }
+    out = {}
+    worst = 0.0
+    for name, (sys, initial, sequence, duration) in cases.items():
+        rho0 = sys.thermal_state() if initial == "thermal" else sys.parahydrogen_state(0, 1)
+        rho0 = sys.evolve(rho0, sequence)
+        dims = [[2] * len(sys.spins)] * 2
+        ops = [sys.spin_operator(i, "z") for i in range(len(sys.spins))]
+        for iso in sorted({s[0] for s in sys.spins}):
+            ops += [sys.total_operator(iso, "x"), sys.total_operator(iso, "y")]
+        times = np.linspace(0.0, duration, 11)
+        result = qt.mesolve(
+            qt.Qobj(sys.hamiltonian(), dims=dims), qt.Qobj(rho0, dims=dims), times,
+            [qt.Qobj(c, dims=dims) for c in collapse(sys)],
+            e_ops=[qt.Qobj(o, dims=dims) for o in ops],
+            options={"atol": 1e-13, "rtol": 1e-11, "nsteps": 10**7},
+        )
+        diff = 0.0
+        for k, t in enumerate(times):
+            rho = sys.evolve(rho0, [spin.delay(float(t))])
+            for op, ref in zip(ops, result.expect):
+                diff = max(diff, abs(sys.expectation(rho, op).real - ref[k]))
+        worst = max(worst, diff)
+        out[name] = {"spins": len(sys.spins), "max_expectation_difference": diff}
+    out["max_expectation_difference"] = worst
+    return out
 
 
 def check(c: dict) -> list[str]:
@@ -979,6 +1063,9 @@ def check(c: dict) -> list[str]:
             diff = max(r["value_rel_diff"], r.get("gradient_rel_diff", 0.0))
             if not diff <= tol:
                 failures.append(f"QAOA energy or gradient of {lib} at {n} qubits differs from QSO's by {diff:.3g}")
+    sp = c["spins_vs_qutip"]["max_expectation_difference"]
+    if not sp <= TOLERANCES["spin_expectation"]:
+        failures.append(f"spin dynamics differ from QuTiP by {sp:.3g}")
     chem = c["chemistry_vs_pyscf"]
     if not chem["integral_max_difference"] <= TOLERANCES["integral"]:
         failures.append(f"integrals differ from PySCF by {chem['integral_max_difference']:.3g}")

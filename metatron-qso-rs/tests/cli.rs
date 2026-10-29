@@ -379,6 +379,27 @@ fn chemistry_and_dynamics() {
 }
 
 #[test]
+fn spin_dynamics() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let ch = format!("{root}/examples/spins/ch.json");
+    let inept = format!("{root}/examples/spins/inept.json");
+    let r = qso(&["spins", &ch, "--observe", "13C", "--sequence", &inept]);
+    let lines = r["lines"].as_array().unwrap();
+    assert_eq!(lines.len(), 2);
+    // INEPT: antiphase lines of about γ_H/γ_C ± 1 times the direct ones.
+    let direct = qso(&["spins", &ch, "--observe", "13C"]);
+    let im = |v: &serde_json::Value| f(&v["amplitude"][1]);
+    let d = im(&direct["lines"][0]).abs();
+    assert!((im(&lines[0]).abs() / d - 4.976).abs() < 0.01);
+    assert!((im(&lines[1]).abs() / d - 2.976).abs() < 0.01);
+    let para = format!("{root}/examples/spins/parahydrogen.json");
+    let p = qso(&["spins", &para, "--initial", "pasadena:0,1", "--pulse", "45"]);
+    for l in p["lines"].as_array().unwrap() {
+        close(im(l).abs(), 0.125, 4e-4);
+    }
+}
+
+#[test]
 fn error_correction() {
     let stim = Scratch::new("surface.stim");
     let r = qso(&[

@@ -29,6 +29,7 @@ use metatron_qso::quantum::{
     Circuit, PauliSum, Precision, Program, bitstring, from_qasm2, record_bitstring, to_qasm2,
 };
 use metatron_qso::rng::Rng;
+use metatron_qso::spin::{Event as SpinEvent, Isotope, SpinSystem, Target as SpinTarget};
 use metatron_qso::stabilizer::StabilizerState;
 use metatron_qso::stabilizer::program::{is_clifford_program, sample_program};
 use metatron_qso::walks::{
@@ -411,6 +412,27 @@ enum Command {
         /// Number of full-CI roots to report.
         #[arg(long, default_value_t = 1)]
         roots: usize,
+    },
+    /// Nuclear spin dynamics: a spin system (JSON) from thermal
+    /// equilibrium or parahydrogen, a pulse sequence (JSON events, or one
+    /// pulse on the observed isotope), and the stick spectrum and
+    /// polarisations after it.
+    Spins {
+        /// JSON file with the spin system.
+        system: std::path::PathBuf,
+        /// Isotope to observe (1H, 13C, 15N, …).
+        #[arg(long, default_value = "1H")]
+        observe: String,
+        /// JSON file with a list of events (default: --pulse on --observe).
+        #[arg(long)]
+        sequence: Option<std::path::PathBuf>,
+        /// Angle (degrees) of the default pulse.
+        #[arg(long, default_value_t = 90.0)]
+        pulse: f64,
+        /// thermal, parahydrogen:I,J (singlet on spins I and J) or
+        /// pasadena:I,J (the singlet averaged over free evolution).
+        #[arg(long, default_value = "thermal")]
+        initial: String,
     },
     /// Trotter–Suzuki circuit for exp(−iHt) with its error bound.
     Trotter {
@@ -1731,6 +1753,85 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 }
             }
             Ok((json!(rows), lines.join("\n")))
+        }
+        Command::Spins {
+            system,
+            observe,
+            sequence,
+            pulse,
+            initial,
+        } => {
+            let sys = SpinSystem::from_json(&read_text(system)?)?;
+            let isotope = Isotope::from_name(observe)?;
+            let pair = |text: &str| -> Result<(usize, usize)> {
+                let v: Vec<&str> = text.split(',').collect();
+                match v.as_slice() {
+                    [a, b] => Ok((
+                        a.trim()
+                            .parse()
+                            .map_err(|_| QsoError::Parse(format!("spin '{a}'")))?,
+                        b.trim()
+                            .parse()
+                            .map_err(|_| QsoError::Parse(format!("spin '{b}'")))?,
+                    )),
+                    _ => Err(QsoError::Parse(format!("'{text}' is not two spins I,J"))),
+                }
+            };
+            let rho = match initial.split_once(':') {
+                None if initial == "thermal" => sys.thermal_state()?,
+                Some(("parahydrogen", spins)) => {
+                    let (i, j) = pair(spins)?;
+                    sys.parahydrogen_state(i, j, 1.0)?
+                }
+                Some(("pasadena", spins)) => {
+                    let (i, j) = pair(spins)?;
+                    sys.time_average(&sys.parahydrogen_state(i, j, 1.0)?)?
+                }
+                _ => {
+                    return Err(QsoError::invalid(
+                        "initial",
+                        format!("'{initial}' (thermal, parahydrogen:I,J or pasadena:I,J)"),
+                    ));
+                }
+            };
+            let events: Vec<SpinEvent> = match sequence {
+                Some(path) => serde_json::from_str(&read_text(path)?)
+                    .map_err(|e| QsoError::Parse(format!("{}: {e}", path.display())))?,
+                None => vec![SpinEvent::pulse(SpinTarget::Isotope(isotope), *pulse, 0.0)],
+            };
+            let after = sys.evolve(&rho, &events)?;
+            let lines = sys.lines(&after, isotope)?;
+            let polarizations = (0..sys.spins().len())
+                .map(|i| sys.polarization(&after, i))
+                .collect::<Result<Vec<f64>>>()?;
+            let mut text = format!(
+                "{} spins at {} T ({:?} frame), {} events; {} lines of {}:",
+                sys.spins().len(),
+                sys.field(),
+                sys.frame(),
+                events.len(),
+                lines.len(),
+                isotope.name()
+            );
+            for l in &lines {
+                text.push_str(&format!(
+                    "\n  {:>12.4} Hz  {:>9.4} ppm  {:+.4e} {:+.4e}i",
+                    l.frequency, l.ppm, l.amplitude.re, l.amplitude.im
+                ));
+            }
+            let shown: Vec<String> = polarizations.iter().map(|p| format!("{p:+.4e}")).collect();
+            text.push_str(&format!("\npolarisations: {}", shown.join(" ")));
+            let rows: Vec<serde_json::Value> = lines
+                .iter()
+                .map(|l| {
+                    json!({"frequency": l.frequency, "ppm": l.ppm,
+                    "amplitude": [l.amplitude.re, l.amplitude.im]})
+                })
+                .collect();
+            Ok((
+                json!({"lines": rows, "polarizations": polarizations, "events": events.len()}),
+                text,
+            ))
         }
         Command::Trotter {
             hamiltonian,

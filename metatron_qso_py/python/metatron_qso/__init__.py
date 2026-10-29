@@ -16,8 +16,9 @@ QUBO/Ising problems with QAOA mixers; amplitude estimation; stabilizer
 simulation and graph states; and quantum error correction (detector
 circuits, Pauli-frame sampling, detector error models, union-find and
 minimum-weight matching and BP+OSD decoding, repetition, surface,
-colour and bivariate bicycle code memory experiments); and matrix-product
-states for circuits with little entanglement on many qubits.
+colour and bivariate bicycle code memory experiments); matrix-product
+states for circuits with little entanglement on many qubits; and nuclear
+spin dynamics for magnetic resonance (``metatron_qso.spin``).
 
 Conventions: qubit 0 is the least significant bit of a basis index; bit
 strings print qubit n-1 first; time evolution is exp(-iHt); rotations are
@@ -27,6 +28,7 @@ R_P(theta) = exp(-i theta P / 2). Invalid input raises ``ValueError``.
 from ._core import (
     AmplitudeProblem,
     AoIntegrals,
+    SpinSystem,
     BosonSampler,
     BpOsdDecoder,
     BpOsdOutcome,
@@ -172,6 +174,7 @@ from ._core import (
 __all__ = [
     "AmplitudeProblem",
     "AoIntegrals",
+    "SpinSystem",
     "BosonSampler",
     "BpOsdDecoder",
     "BpOsdOutcome",
@@ -313,3 +316,5 @@ __all__ = [
     "vqd",
     "zne",
 ]
+
+from . import spin  # noqa: E402  (the spin-dynamics names live in metatron_qso.spin)
