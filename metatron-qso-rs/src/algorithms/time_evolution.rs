@@ -10,28 +10,41 @@
 //!   `S₂ₖ(τ) = S₂ₖ₋₂(uτ)² S₂ₖ₋₂((1 − 4u)τ) S₂ₖ₋₂(uτ)²` with
 //!   `u = 1/(4 − 4^{1/(2k−1)})`.
 //!
-//! [`trotter_error_bound`] bounds the spectral-norm distance between the
-//! circuit's unitary and `exp(−iHt)`:
+//! [`trotter_error_bounds`] bounds the spectral-norm distance between the
+//! circuit's unitary and `exp(−iHt)` in three ways, and
+//! [`trotter_error_bound`] returns the smallest (at most 2):
 //!
-//! * order 1: `τ²/2 · Σ_γ ‖[Σ_{γ'>γ} H_γ', H_γ]‖` (Childs, Su, Tran, Wiebe
-//!   and Zhu, Phys. Rev. X 11, 011020 (2021), Proposition 15);
-//! * order 2: `τ³/12 · Σ_γ ‖[B_γ, [B_γ, H_γ]]‖ + τ³/24 · Σ_γ ‖[H_γ, [H_γ, B_γ]]‖`
-//!   with `B_γ = Σ_{γ'>γ} H_γ'` (Proposition 16 there);
-//! * order 2k ≥ 4: the smaller of two bounds. The product of the 5^{k−1}
-//!   second-order stages with times `s_i τ` (`Σ s_i = 1`) differs from
-//!   `exp(−iHτ)` by at most `Σ_i` (order-2 bound at `|s_i| τ`), a
-//!   commutator bound of third order in τ; and, since the formula is exact
-//!   to order 2k, the Taylor remainder `2 Σ_{m>2k} (Mτ)^m/m!` with
-//!   `M = Σ_i |s_i| · Σ_γ |h_γ|` bounds both series.
+//! * **Nested commutators** ([`TrotterBounds::nested`]), for every order p.
+//!   One step is a product of exponentials `E_j = exp(τB_j)`, and
+//!   `S'(τ) = (A + T(τ)) S(τ)` with `A = −iH` and
+//!   `T(τ) = Σ_j Ad_{E_J ⋯ E_{j+1}}(B_j) − A`, so that
+//!   `‖S(τ) − e^{τA}‖ ≤ ∫₀^τ ‖T(σ)‖ dσ` (the error representation of
+//!   Childs, Su, Tran, Wiebe and Zhu, Phys. Rev. X 11, 011020 (2021)).
+//!   The Taylor coefficients `C_m` of `T` vanish below `m = p`; those from
+//!   p up to a degree D are nested commutators of order m + 1, computed as
+//!   Pauli operators (their norms bounded by the sum of absolute
+//!   coefficients). Beyond D, `‖C_m‖ ≤ Σ_j ‖B_j‖ (2β_j)^m/m!` with `β_j`
+//!   the norm of the exponentials after `E_j`. D grows from p + 1 until
+//!   that tail is below 1 % of the rest, within a fixed budget of work;
+//!   a bound out of reach is infinite.
+//! * **Stage by stage** ([`TrotterBounds::stages`]). Order 1:
+//!   `τ²/2 · Σ_γ ‖[Σ_{γ'>γ} H_γ', H_γ]‖` (Proposition 15 there); order 2:
+//!   `τ³/12 · Σ_γ ‖[B_γ, [B_γ, H_γ]]‖ + τ³/24 · Σ_γ ‖[H_γ, [H_γ, B_γ]]‖`
+//!   with `B_γ = Σ_{γ'>γ} H_γ'` (Proposition 16); order 2k ≥ 4: the sum
+//!   of the order-2 bound over the 5^{k−1} second-order stages at their
+//!   times `|s_i| τ`, of third order only.
+//! * **Taylor** ([`TrotterBounds::taylor`]): a formula exact to order p
+//!   differs from `exp(−iHτ)` by at most `2 Σ_{m>p} (Mτ)^m/m!` with
+//!   `M = Σ_i |s_i| · Σ_γ |h_γ|`.
 //!
-//! The commutators are computed exactly in the Pauli algebra; their norms
-//! are bounded by the sum of the absolute coefficients. Bounds per step
-//! are multiplied by `r`, and no bound exceeds 2.
-//!
-//! In the tests (Heisenberg, Ising and random 4-qubit Hamiltonians) the
-//! first- and second-order bounds exceed the actual error by factors of
-//! 3.5–13. The bound for order 4 and higher is valid but loose: it falls
-//! only as `r⁻²` until `Mτ` is small, while the error falls as `r⁻⁴`.
+//! Bounds per step are multiplied by `r`. In the validation suite
+//! (Heisenberg, Ising and random 4-qubit Hamiltonians, 8 to 32 steps) the
+//! nested bound exceeds the actual error by factors of 7–11 at order 4 and
+//! 8–24 at order 6, and falls as `r^{−p}` like the error. The
+//! stage-by-stage bound of these orders falls only as `r⁻²` and exceeds
+//! the error 800 to 10⁹ times. At orders 1 and 2 the two are within a few
+//! percent; at few steps, where `2βτ` is large, the nested bound is out
+//! of reach and the others apply.
 //!
 //! [`qdrift_circuit`] samples `N` terms with probabilities `|h_γ|/λ`,
 //! `λ = Σ|h_γ|`, each applied for time `λt/N` (Campbell, Phys. Rev. Lett.
@@ -42,16 +55,26 @@
 //! circuits omit.
 //!
 //! ```
-//! use metatron_qso::algorithms::time_evolution::{trotter_circuit, trotter_error_bound};
+//! use metatron_qso::algorithms::time_evolution::{
+//!     trotter_circuit, trotter_error_bound, trotter_error_bounds,
+//! };
 //! use metatron_qso::algorithms::models::heisenberg_xxz;
 //!
 //! let h = heisenberg_xxz(4, 1.0, 0.5, false);
-//! // Second order, 20 steps: ‖U − exp(−iHt)‖ ≤ 0.0229.
+//! // Second order, 20 steps: ‖U − exp(−iHt)‖ ≤ 0.0220.
 //! let c = trotter_circuit(&h, 4, 1.0, 20, 2).unwrap();
 //! let bound = trotter_error_bound(&h, 1.0, 20, 2).unwrap();
-//! assert!((bound - 0.0229).abs() < 1e-4);
+//! assert!((bound - 0.0220).abs() < 1e-4);
 //! assert_eq!(c.n_qubits(), 4);
+//! // Fourth order: 2.0·10⁻⁵ from nested commutators, 0.013 stage by stage.
+//! let b = trotter_error_bounds(&h, 1.0, 20, 4).unwrap();
+//! assert!((b.nested - 2.02e-5).abs() < 1e-7 && (b.stages - 0.0131).abs() < 1e-4);
 //! ```
+
+use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
+
+use serde::{Deserialize, Serialize};
 
 use crate::error::{QsoError, Result};
 use crate::quantum::{Circuit, PauliString, PauliSum, QubitOperator};
@@ -243,35 +266,261 @@ fn taylor_tail(x: f64, p: usize) -> f64 {
     2.0 * sum
 }
 
+/// Most Pauli strings in one coefficient of the error series of
+/// [`TrotterBounds::nested`]; larger series are not computed.
+pub const MAX_SERIES_TERMS: usize = 1 << 16;
+
+/// Hasher for the two masks of a [`PauliString`] (multiply and rotate; the
+/// default SipHash is several times slower here).
+#[derive(Clone, Copy, Default)]
+struct MaskHasher(u64);
+
+impl Hasher for MaskHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.write_u64(u64::from(b));
+        }
+    }
+
+    fn write_u64(&mut self, v: u64) {
+        self.0 = (self.0.rotate_left(29) ^ v).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    }
+}
+
+type StringMap = HashMap<PauliString, C64, BuildHasherDefault<MaskHasher>>;
+
+/// The norms `‖C_m‖₁` (sum of absolute Pauli coefficients), m = 0..=degree
+/// (and the operations spent),
+/// of the error generator `T(τ) = Σ_m C_m τ^m` of one step with
+/// exponentials `exp(τ B_j)`, `B_j = −i b_j P_j` (`rotations`: `(P_j, b_j)`
+/// in the order they act), for `H = Σ terms`: `S'(τ) = (A + T(τ)) S(τ)`
+/// with `A = −iH`, and
+/// `T(τ) = Σ_j Ad_{E_J ⋯ E_{j+1}}(B_j) − A`, built by Horner's scheme
+/// `Y_j = B_j + exp(τ ad_{B_j}) Y_{j−1}` on power series in τ. `None` when
+/// a coefficient would hold more than [`MAX_SERIES_TERMS`] strings or the
+/// pass would take more than `budget` operations on strings.
+fn error_series(
+    rotations: &[(PauliString, f64)],
+    terms: &[(f64, PauliString)],
+    degree: usize,
+    budget: f64,
+) -> Option<(Vec<f64>, f64)> {
+    type Series = Vec<StringMap>;
+    let mut y: Series = vec![StringMap::default(); degree + 1];
+    let mut work = 0.0;
+    for &(p, b) in rotations {
+        // ad_B(c Q) = −i b c [P, Q] = −2i b c P Q when P and Q anticommute.
+        let ad = |x: &StringMap| -> StringMap {
+            let mut out = StringMap::with_capacity_and_hasher(x.len(), Default::default());
+            for (q, &c) in x {
+                if p.commutes_with(q) {
+                    continue;
+                }
+                let (phase, r) = p.multiply(q);
+                *out.entry(r).or_insert(C64::new(0.0, 0.0)) += C64::new(0.0, -2.0 * b) * c * phase;
+            }
+            out.retain(|_, c| *c != C64::new(0.0, 0.0));
+            out
+        };
+        // exp(τ ad_B) on the series: new[d + k] += ad_B^k(old[d]) / k!.
+        let mut next: Series = vec![StringMap::default(); degree + 1];
+        for d in 0..=degree {
+            let mut z = std::mem::take(&mut y[d]);
+            let mut factorial = 1.0;
+            for k in 0..=degree - d {
+                if z.is_empty() {
+                    break;
+                }
+                if k > 0 {
+                    factorial *= k as f64;
+                }
+                let target = &mut next[d + k];
+                for (q, &c) in &z {
+                    *target.entry(*q).or_insert(C64::new(0.0, 0.0)) += c / factorial;
+                }
+                work += z.len() as f64;
+                if target.len() > MAX_SERIES_TERMS || work > budget {
+                    return None;
+                }
+                if k < degree - d {
+                    z = ad(&z);
+                }
+            }
+        }
+        *next[0].entry(p).or_insert(C64::new(0.0, 0.0)) += C64::new(0.0, -b);
+        y = next;
+    }
+    // Subtract A from the constant term.
+    for &(h, p) in terms {
+        *y[0].entry(p).or_insert(C64::new(0.0, 0.0)) -= C64::new(0.0, -h);
+    }
+    Some((
+        y.iter()
+            .map(|m| m.values().map(|c| c.norm()).sum())
+            .collect(),
+        work,
+    ))
+}
+
+/// The bounds of [`trotter_error_bounds`] on `‖U_circuit − exp(−iHt)‖`;
+/// `bound` is the smallest. A bound that is not available is infinite.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct TrotterBounds {
+    /// The smallest of the others, at most 2.
+    pub bound: f64,
+    /// From the nested commutators of order p + 1 and p + 2 of the error
+    /// generator, computed as Pauli operators, and a Taylor tail (see the
+    /// module docs). Infinite when the series is larger than
+    /// [`MAX_SERIES_TERMS`].
+    pub nested: f64,
+    /// The commutator bound of order 1 or 2 (Childs et al.,
+    /// Propositions 15 and 16), applied stage by stage for higher orders.
+    pub stages: f64,
+    /// The Taylor remainder of a formula exact to order p.
+    pub taylor: f64,
+}
+
 /// Upper bound on `‖U_circuit − exp(−iHt)‖` (spectral norm, ignoring the
 /// global phase of the identity term) for [`trotter_circuit`] with the same
-/// arguments. See the module docs; the cost grows as Γ² (order 1) or Γ³
-/// (higher orders) in the number of terms Γ.
+/// arguments: the smallest of [`trotter_error_bounds`].
 pub fn trotter_error_bound(h: &PauliSum, t: f64, steps: usize, order: usize) -> Result<f64> {
+    Ok(trotter_error_bounds(h, t, steps, order)?.bound)
+}
+
+/// The bounds on `‖U_circuit − exp(−iHt)‖` for [`trotter_circuit`] with
+/// the same arguments; see the module docs. The commutator sums cost Γ²
+/// (order 1) or Γ³ (higher orders) in the number of terms Γ; the nested
+/// bound costs one pass over the step's exponentials per power of τ up to
+/// p + 1, on operators of up to [`MAX_SERIES_TERMS`] strings.
+pub fn trotter_error_bounds(
+    h: &PauliSum,
+    t: f64,
+    steps: usize,
+    order: usize,
+) -> Result<TrotterBounds> {
     check(h, t, order)?;
     if steps == 0 {
         return Err(QsoError::invalid("steps", "need at least one step"));
     }
     let terms = nontrivial_terms(h);
-    // Nested commutators multiply three coefficients; beyond 1e100 they
+    // Nested commutators multiply several coefficients; beyond 1e100 they
     // could overflow, and the trivial bound 2 is all that is left anyway.
     if terms.iter().any(|(c, _)| c.abs() > 1e100) {
-        return Ok(2.0);
+        return Ok(TrotterBounds {
+            bound: 2.0,
+            nested: f64::INFINITY,
+            stages: f64::INFINITY,
+            taylor: f64::INFINITY,
+        });
     }
     let tau = t.abs() / steps as f64;
     let (first, bba, aab) = commutator_sums(&terms, order > 1);
     let lambda: f64 = terms.iter().map(|(c, _)| c.abs()).sum();
-    let per_step = if order == 1 {
-        (tau * tau / 2.0 * first).min(taylor_tail(lambda * tau, 1))
+    let (stage_step, taylor_step) = if order == 1 {
+        (tau * tau / 2.0 * first, taylor_tail(lambda * tau, 1))
     } else {
         let c2 = bba / 12.0 + aab / 24.0;
         let stages = suzuki_stages(order);
         let cubic: f64 = stages.iter().map(|s| s.abs().powi(3)).sum::<f64>() * c2 * tau.powi(3);
         let mass: f64 = stages.iter().map(|s| s.abs()).sum::<f64>() * lambda;
-        cubic.min(taylor_tail(mass * tau, order))
+        (cubic, taylor_tail(mass * tau, order))
     };
-    let bound = steps as f64 * per_step;
-    Ok(if bound.is_nan() { 2.0 } else { bound.min(2.0) })
+    let other = stage_step.min(taylor_step).min(2.0 / steps as f64);
+    let nested_step = nested_step_bound(&terms, tau, order, other);
+    let total = |per_step: f64| {
+        let b = steps as f64 * per_step;
+        if b.is_nan() { f64::INFINITY } else { b }
+    };
+    let (nested, stages, taylor) = (total(nested_step), total(stage_step), total(taylor_step));
+    Ok(TrotterBounds {
+        bound: nested.min(stages).min(taylor).min(2.0),
+        nested,
+        stages,
+        taylor,
+    })
+}
+
+/// Highest power of τ the nested bound computes exactly.
+const MAX_SERIES_DEGREE: usize = 40;
+/// Most operations on strings one nested bound spends on its series
+/// (about half a second).
+const MAX_SERIES_WORK: f64 = 4e6;
+
+/// `‖S(τ) − exp(−iHτ)‖` for one step of the formula of `order` p, from
+/// `S(τ) − e^{τA} = ∫₀^τ e^{(τ−σ)A} T(σ) S(σ) dσ`: at most
+/// `∫₀^τ ‖T(σ)‖ dσ`. The coefficients `C_m` of `T` vanish below `m = p`;
+/// those from p to a degree D are computed exactly, the rest bounded by
+/// `‖C_m‖ ≤ Σ_j ‖B_j‖ (2β_j)^m / m!` with `β_j = Σ_{i>j} ‖B_i‖` (the
+/// multinomial theorem on the nested commutators of the conjugations).
+/// D starts at p + 1 and grows until that tail is below 1 % of the rest,
+/// within [`MAX_SERIES_DEGREE`], [`MAX_SERIES_TERMS`] and
+/// [`MAX_SERIES_WORK`]. Nothing is computed, or the degree no longer
+/// raised, once even the tail beyond [`MAX_SERIES_DEGREE`] is at least
+/// `other`, the best other bound of the step.
+fn nested_step_bound(terms: &[(f64, PauliString)], tau: f64, order: usize, other: f64) -> f64 {
+    // Unit step: rotation exp(−iθP/2) is exp(τ B) with B = −i(θ/2)P.
+    let rotations: Vec<(PauliString, f64)> = step_rotations(terms, 1.0, order)
+        .into_iter()
+        .map(|(p, theta)| (p, theta / 2.0))
+        .collect();
+    // ‖B_j‖/(2β_j) and 2β_j τ of every exponential with later ones.
+    let mut weights = Vec::with_capacity(rotations.len());
+    let mut beta = 0.0;
+    for &(_, b) in rotations.iter().rev() {
+        if beta > 0.0 {
+            weights.push((b.abs() / (2.0 * beta), 2.0 * beta * tau));
+        }
+        beta += b.abs();
+    }
+    let tail = |degree: usize| -> f64 {
+        weights
+            .iter()
+            .map(|&(w, x)| w * taylor_tail(x, degree + 1) / 2.0)
+            .sum()
+    };
+    if tail(MAX_SERIES_DEGREE) >= other {
+        return f64::INFINITY;
+    }
+    let mut degree = order + 1;
+    let mut best = f64::INFINITY;
+    let mut spent = 0.0;
+    loop {
+        let Some((norms, work)) = error_series(&rotations, terms, degree, MAX_SERIES_WORK - spent)
+        else {
+            return best;
+        };
+        spent += work;
+        // Coefficients below order p vanish exactly; they are kept for the
+        // rounding they hold.
+        let lead: f64 = (0..=degree)
+            .map(|m| norms[m] * tau.powi(m as i32 + 1) / (m + 1) as f64)
+            .sum();
+        let rest = tail(degree);
+        best = best.min(lead + rest);
+        if rest <= 0.01 * lead || degree >= MAX_SERIES_DEGREE {
+            return best;
+        }
+        // The smallest degree whose tail is small enough, unless its pass
+        // (about (D + 1)(D + 2)/2 operations per string) would exceed the
+        // budget.
+        let mut next = degree + 1;
+        while next < MAX_SERIES_DEGREE && tail(next) > 0.01 * lead {
+            next += 1;
+        }
+        if tail(next) + lead >= other.min(best) {
+            return best;
+        }
+        let growth = ((next + 1) * (next + 2)) as f64 / ((degree + 1) * (degree + 2)) as f64;
+        if spent + work * growth > MAX_SERIES_WORK {
+            return best;
+        }
+        degree = next;
+    }
 }
 
 /// One random qDRIFT circuit for `exp(−iHt)` with `samples` rotations,
@@ -578,5 +827,49 @@ mod tests {
         for order in [1, 2, 4] {
             assert_eq!(trotter_error_bound(&huge, 1.0, 1, order).unwrap(), 2.0);
         }
+    }
+
+    #[test]
+    fn nested_bounds_hold_and_fall_with_the_order() {
+        let n = 4;
+        let hs = [
+            heisenberg_xxz(n, 1.0, 0.5, false),
+            transverse_field_ising(n, 1.0, 0.7, false),
+            random_hamiltonian(n, 8, 3),
+        ];
+        for h in &hs {
+            let terms = nontrivial_terms(h);
+            let target = exact(h, n, 1.0);
+            for order in [1usize, 2, 4] {
+                // The coefficients below order p vanish.
+                let rotations: Vec<(PauliString, f64)> = step_rotations(&terms, 1.0, order)
+                    .into_iter()
+                    .map(|(p, theta)| (p, theta / 2.0))
+                    .collect();
+                let (norms, _) =
+                    error_series(&rotations, &terms, order + 1, f64::INFINITY).unwrap();
+                assert!(norms[..order].iter().all(|c| *c < 1e-12), "{norms:?}");
+                assert!(norms[order] > 1e-3);
+                for steps in [1usize, 4, 16] {
+                    let c = trotter_circuit(h, n, 1.0, steps, order).unwrap();
+                    let e = spectral_norm(&(unitary(&c) - &target));
+                    let b = trotter_error_bounds(h, 1.0, steps, order).unwrap();
+                    for v in [b.nested, b.stages, b.taylor, b.bound] {
+                        assert!(v >= e, "order {order}, {steps} steps: {v} < {e}");
+                    }
+                    assert_eq!(b.bound, b.nested.min(b.stages).min(b.taylor).min(2.0));
+                }
+            }
+            // Order 4 falls as r⁻⁴.
+            let b64 = trotter_error_bounds(h, 1.0, 64, 4).unwrap().nested;
+            let b128 = trotter_error_bounds(h, 1.0, 128, 4).unwrap().nested;
+            assert!((b64 / b128 / 16.0 - 1.0).abs() < 0.1, "{}", b64 / b128);
+        }
+        // Too large a series is given up, not computed for long.
+        let big = random_hamiltonian(8, 40, 5);
+        let start = std::time::Instant::now();
+        let b = trotter_error_bounds(&big, 1.0, 64, 6).unwrap();
+        assert!(b.nested.is_infinite() && b.bound == b.stages.min(b.taylor).min(2.0));
+        assert!(start.elapsed().as_secs_f64() < 20.0);
     }
 }

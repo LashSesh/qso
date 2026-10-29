@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use metatron_qso::algorithms::ansatz::{self, Entanglement};
 use metatron_qso::algorithms::qaoa::{MaxCutQaoa, QaoaConfig, optimize_layerwise_at};
-use metatron_qso::algorithms::time_evolution::{trotter_circuit, trotter_error_bound};
+use metatron_qso::algorithms::time_evolution::{trotter_circuit, trotter_error_bounds};
 use metatron_qso::algorithms::{grover, models, vqe::Vqe};
 use metatron_qso::backend::{Backend, DensityMatrixBackend, DeviceBackend, StatevectorBackend};
 use metatron_qso::chemistry::adapt::{AdaptOptions, adapt_vqe_molecule};
@@ -1743,7 +1743,8 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             let h: PauliSum = hamiltonian.parse()?;
             let n = qubits.unwrap_or(h.min_qubits().max(1));
             let c = trotter_circuit(&h, n, *time, *steps, *order)?;
-            let bound = trotter_error_bound(&h, *time, *steps, *order)?;
+            let bounds = trotter_error_bounds(&h, *time, *steps, *order)?;
+            let bound = bounds.bound;
             // The actual error when the unitary is small enough to form.
             let actual = if n <= 10 {
                 let traceless = PauliSum::from_terms(
@@ -1780,7 +1781,19 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 ))
             );
             Ok((
-                json!({"qubits": n, "gates": c.len(), "depth": c.depth(), "error_bound": bound, "column_error": actual}),
+                json!({
+                    "qubits": n,
+                    "gates": c.len(),
+                    "depth": c.depth(),
+                    "error_bound": bound,
+                    // Infinite bounds (out of reach) are null.
+                    "bounds": {
+                        "nested": bounds.nested.is_finite().then_some(bounds.nested),
+                        "stages": bounds.stages.is_finite().then_some(bounds.stages),
+                        "taylor": bounds.taylor.is_finite().then_some(bounds.taylor),
+                    },
+                    "column_error": actual
+                }),
                 text,
             ))
         }

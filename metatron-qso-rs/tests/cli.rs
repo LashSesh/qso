@@ -368,6 +368,9 @@ fn chemistry_and_dynamics() {
         out.path(),
     ]);
     assert!(f(&t["column_error"]) <= f(&t["error_bound"]));
+    // Order 4 at 20 steps: the nested bound is the smallest.
+    assert_eq!(f(&t["bounds"]["nested"]), f(&t["error_bound"]));
+    assert!(f(&t["bounds"]["stages"]) > 10.0 * f(&t["error_bound"]));
     assert!(
         std::fs::read_to_string(&out.0)
             .unwrap()

@@ -392,6 +392,21 @@ The error bounds are computed in the Pauli algebra with `QubitOperator`
 (a `BTreeMap` from string to complex coefficient, deterministic in order):
 nested commutators of suffix sums, bounded by the coefficient one-norm.
 
+The nested error bound of a product formula follows one step through
+its exponentials by Horner's scheme, `Y_j = B_j + exp(τ ad_{B_j}) Y_{j−1}`,
+on power series in τ whose coefficients are Pauli operators in hash maps
+keyed by the two masks. One pass up to degree D costs about D²/2
+commutator operations per exponential and string; the degree grows
+until the multinomial tail is small, and a budget of operations ends the
+attempt early (the bound is then infinite and the stage-by-stage one
+applies).
+
+The repulsion integrals are screened before they are computed: one pass
+over the diagonal quartets `(ab|ab)` gives the Schwarz factor of every
+pair of shell groups, and the list of quartets keeps only those whose
+product of factors reaches the threshold. Skipped quartets stay zero in
+the tensor.
+
 The three fermion mappings are one algorithm. An encoding is a lower
 unitriangular binary matrix `A` with `b = A n`; `a_j† = X_F Z_P (1 + Z_N)/2`
 where `F` is column `j` of `A`, `P` encodes `n_0 ⊕ … ⊕ n_{j−1}` and `N`

@@ -849,18 +849,56 @@ fn eri_shells(
     out
 }
 
+/// Schwarz factors `Q_ab = √max |(ab|ab)|` of every pair of groups of
+/// shells, the maximum over their components.
+fn schwarz_factors(functions: &[Function], pairs: &[ShellPair]) -> Vec<f64> {
+    parallel::map_tasks(pairs.len(), |x| {
+        let (mut r, mut work, mut w) = (Vec::new(), Vec::new(), Vec::new());
+        let ab = &pairs[x];
+        let block = eri_shells(functions, ab, ab, &mut r, &mut work, &mut w);
+        let (na, nb) = ab.components();
+        let mut max: f64 = 0.0;
+        for ka in 0..na {
+            for kb in 0..nb {
+                let k = ka * nb + kb;
+                max = max.max(block[k * na * nb + k].abs());
+            }
+        }
+        max.sqrt()
+    })
+}
+
 /// All `(ij|kl)` over the Cartesian functions, from the unique quartets of
 /// groups of shells (`shells`: first function, angular momentum and number
 /// of functions; the columns of a general contraction share their
-/// primitives and form one group), in parallel.
-fn repulsion(functions: &[Function], shells: &[(usize, usize, usize)]) -> Vec<f64> {
+/// primitives and form one group), in parallel. A quartet with
+/// `Q_ab·Q_cd < threshold` is skipped (its integrals set to zero): by the
+/// Cauchy–Schwarz inequality `|(ab|cd)| ≤ √((ab|ab)(cd|cd))`, each of its
+/// integrals lies below the threshold. Returns the integrals and the
+/// number of quartets skipped and computed.
+fn repulsion(
+    functions: &[Function],
+    shells: &[(usize, usize, usize)],
+    threshold: f64,
+) -> (Vec<f64>, usize, usize) {
     let n = functions.len();
     let pairs: Vec<ShellPair> = (0..shells.len())
         .flat_map(|i| (0..=i).map(move |j| (i, j)))
         .map(|(i, j)| ShellPair::new(functions, shells[i], shells[j]))
         .collect();
+    let q = if threshold > 0.0 {
+        schwarz_factors(functions, &pairs)
+    } else {
+        vec![f64::INFINITY; pairs.len()]
+    };
+    let all = pairs.len() * (pairs.len() + 1) / 2;
     let quartets: Vec<(usize, usize)> = (0..pairs.len())
         .flat_map(|x| (0..=x).map(move |y| (x, y)))
+        .filter(|&(x, y)| {
+            // A NaN factor keeps the quartet.
+            let bound = q[x] * q[y];
+            bound.is_nan() || bound >= threshold
+        })
         .collect();
     let chunk = 16;
     let blocks: Vec<Vec<f64>> = parallel::map_tasks(quartets.len().div_ceil(chunk), |c| {
@@ -904,17 +942,19 @@ fn repulsion(functions: &[Function], shells: &[(usize, usize, usize)]) -> Vec<f6
             }
         }
     }
-    eri
+    (eri, all - quartets.len(), quartets.len())
 }
 
 /// Overlap, kinetic, nuclear-attraction and electron-repulsion integrals
-/// over Cartesian functions (`n × n` and `n⁴`, row-major).
-type Integrals = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
+/// over Cartesian functions (`n × n` and `n⁴`, row-major), and the shell
+/// quartets skipped and computed.
+type Integrals = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, (usize, usize));
 
 fn cartesian_integrals(
     molecule: &Molecule,
     functions: &[Function],
     shells: &[(usize, usize, usize)],
+    threshold: f64,
 ) -> Integrals {
     let n = functions.len();
     // Primitive products of every pair i ≥ j, in the order of the
@@ -950,8 +990,8 @@ fn cartesian_integrals(
             m[j * n + i] = v;
         }
     }
-    let eri = repulsion(functions, shells);
-    (overlap, kinetic, nuclear, eri)
+    let (eri, skipped, computed) = repulsion(functions, shells, threshold);
+    (overlap, kinetic, nuclear, eri, (skipped, computed))
 }
 
 /// Integrals over the atomic orbitals of a molecule.
@@ -972,7 +1012,14 @@ pub struct AoIntegrals {
     harmonics: Harmonics,
     charges: Vec<u32>,
     positions: Vec<[f64; 3]>,
+    /// Schwarz threshold, and shell quartets skipped and computed.
+    screening: f64,
+    quartets: (usize, usize),
 }
+
+/// Default Schwarz threshold of [`AoIntegrals::compute`] (Hartree): shell
+/// quartets whose integrals are all bounded by it are skipped.
+pub const SCREENING_THRESHOLD: f64 = 1e-12;
 
 /// `out[L, i, j, k] = Σ_l a[i, j, k, l] T[l, L]` for a sparse `T` given by
 /// its columns: transforms the last index and moves it to the front.
@@ -1001,8 +1048,34 @@ impl AoIntegrals {
     /// The integrals of `molecule` in `basis`. Functions are ordered by
     /// atom, then by shell as the basis lists them, and within a shell as
     /// [`Harmonics`] says (`p` functions as `x, y, z`): the order of PySCF.
+    /// Repulsion integrals are screened with [`SCREENING_THRESHOLD`].
     pub fn compute_with(molecule: &Molecule, basis: Basis, harmonics: Harmonics) -> Result<Self> {
-        Self::from_shells(molecule, basis, harmonics, &|z| basis.shells(z).to_vec())
+        Self::compute_screened(molecule, basis, harmonics, SCREENING_THRESHOLD)
+    }
+
+    /// [`AoIntegrals::compute_with`] with Schwarz screening at `threshold`
+    /// (Hartree; 0 computes every integral). A quartet of shells is
+    /// skipped when `Q_ab·Q_cd < threshold`, with `Q_ab = √max |(ab|ab)|`
+    /// over the Cartesian components of the pair: by the Cauchy–Schwarz
+    /// inequality every integral of the quartet is smaller. Spherical
+    /// functions combine Cartesian ones, so their integrals change by at
+    /// most the threshold times the products of the combination's
+    /// coefficients.
+    pub fn compute_screened(
+        molecule: &Molecule,
+        basis: Basis,
+        harmonics: Harmonics,
+        threshold: f64,
+    ) -> Result<Self> {
+        if !(threshold >= 0.0 && threshold.is_finite()) {
+            return Err(QsoError::invalid(
+                "threshold",
+                format!("the screening threshold must be finite and non-negative, not {threshold}"),
+            ));
+        }
+        Self::from_shells(molecule, basis, harmonics, threshold, &|z| {
+            basis.shells(z).to_vec()
+        })
     }
 
     /// The integrals with the shells `shells(z)` on every atom of atomic
@@ -1011,6 +1084,7 @@ impl AoIntegrals {
         molecule: &Molecule,
         basis: Basis,
         harmonics: Harmonics,
+        threshold: f64,
         shells_of: &dyn Fn(u32) -> Vec<ShellData>,
     ) -> Result<Self> {
         // Cartesian components of every shell: (first component, l, atom).
@@ -1068,8 +1142,8 @@ impl AoIntegrals {
             }
             previous = Some((first, l, atom));
         }
-        let (overlap, kinetic, nuclear, eri) =
-            cartesian_integrals(molecule, &functions, &shell_list);
+        let (overlap, kinetic, nuclear, eri, quartets) =
+            cartesian_integrals(molecule, &functions, &shell_list, threshold);
         // Every final function as a combination of Cartesian components.
         let mut columns: Vec<Vec<(usize, f64)>> = Vec::with_capacity(n);
         let mut atoms = Vec::with_capacity(n);
@@ -1161,7 +1235,20 @@ impl AoIntegrals {
             harmonics,
             charges: molecule.charges.clone(),
             positions: molecule.positions.clone(),
+            screening: threshold,
+            quartets,
         })
+    }
+
+    /// The Schwarz threshold the repulsion integrals were screened with.
+    pub fn screening_threshold(&self) -> f64 {
+        self.screening
+    }
+
+    /// Quartets of shells (groups of shells sharing primitives, unique up
+    /// to the eightfold symmetry) skipped by screening, and computed.
+    pub fn screened_quartets(&self) -> (usize, usize) {
+        self.quartets
     }
 
     /// Spherical or Cartesian `d` and higher shells.

@@ -79,8 +79,8 @@ or by the benchmark report you can run yourself.
 | **Gradients** | Adjoint differentiation (all partial derivatives for about three circuit runs), parameter-shift rules (2-term, and 4-term for controlled rotations), finite differences; batched evaluation of many parameter vectors in parallel |
 | **Algorithms** | VQE with seeded parallel restarts; QAOA for weighted MaxCut (fast diagonal simulation, exact optimum by enumeration, INTERP layer-wise initialisation); Grover search with any number of marked items; QFT; phase estimation; variational classifier with data re-uploading; graph classifier with trainable QAOA-type layers |
 | **Excited states and geometry** | VQD and SSVQE; exact state derivatives, quantum Fisher information, quantum natural gradient; variational imaginary-time evolution |
-| **Hamiltonian simulation** | Pauli rotations for any string; Trotter–Suzuki circuits of order 1, 2, 4, 6, … with rigorous error bounds (commutator bounds for orders 1 and 2); qDRIFT with its error bound |
-| **Electronic structure** | Fermionic operators with normal ordering; Jordan–Wigner, parity (with two-qubit reduction) and Bravyi–Kitaev mappings; Gaussian integrals over shells up to g, spherical or Cartesian (STO-3G, 6-31G, 6-31G*, cc-pVDZ; H to Ar), restricted, unrestricted and restricted open-shell Hartree–Fock with DIIS, frozen-core active spaces (also of open shells); molecular integrals from FCIDUMP files (H₂, LiH, BeH₂ bundled with PySCF reference energies); Hartree–Fock states; full CI; UCCSD, k-UpCCGSD and ADAPT-VQE |
+| **Hamiltonian simulation** | Pauli rotations for any string; Trotter–Suzuki circuits of order 1, 2, 4, 6, … with rigorous error bounds (nested commutators of the step's error, computed in the Pauli algebra, for every order; the commutator bounds of Childs et al. for orders 1 and 2); qDRIFT with its error bound |
+| **Electronic structure** | Fermionic operators with normal ordering; Jordan–Wigner, parity (with two-qubit reduction) and Bravyi–Kitaev mappings; Gaussian integrals over shells up to g, spherical or Cartesian, with Schwarz screening (STO-3G, 6-31G, 6-31G*, cc-pVDZ; H to Ar), restricted, unrestricted and restricted open-shell Hartree–Fock with DIIS, frozen-core active spaces (also of open shells); molecular integrals from FCIDUMP files (H₂, LiH, BeH₂ bundled with PySCF reference energies); Hartree–Fock states; full CI; UCCSD, k-UpCCGSD and ADAPT-VQE |
 | **Optimisation and estimation** | QUBO and Ising problems with exact enumeration; QAOA for any diagonal cost with X, XY (Hamming-weight conserving) and warm-start mixers; canonical, iterative and maximum-likelihood amplitude estimation |
 | **Models** | Transverse-field Ising, XXZ Heisenberg, MaxCut cost operator, H₂ / STO-3G (2 qubits, with full-CI reference), any molecule given as an FCIDUMP file |
 | **Optimisers** | L-BFGS with strong-Wolfe line search, Adam, gradient descent with momentum, Nelder–Mead, SPSA |
@@ -139,6 +139,8 @@ or by the benchmark report you can run yourself.
 | LiH on 10 qubits: UCCSD (92 parameters) / ADAPT-VQE (30 operators), error vs. full CI | 1.1·10⁻⁵ / 1.1·10⁻⁵ Ha | chemical accuracy 1.6·10⁻³ Ha |
 | VQD, all four levels of H₂ (Sz = 0) | equal to full CI to 10⁻⁶ Ha | PySCF full CI |
 | Trotter–Suzuki on a 4-qubit Heisenberg chain: error ratio when the steps double, orders 1 / 2 / 4 | 2.01 / 4.00 / 16.06, always below the error bound | 2, 4, 16 |
+| Error bounds of orders 4 / 6 from nested commutators, 4-qubit Heisenberg, Ising and random Hamiltonians, 8–32 steps: bound ÷ actual error; same for the stage-by-stage bound | 7–11 / 8–24; 800–10⁹ | the exact error (spectral norm) |
+| Schwarz screening at 10⁻¹², chain of 32 H in 6-31G (64 functions): quartets skipped, RHF energy | 86 %; −17.121863274386 Ha (unscreened to 5·10⁻¹³) | PySCF RHF −17.121863274403, to 2·10⁻¹¹ Ha |
 | Maximum-likelihood amplitude estimation: slope of log RMSE against log oracle calls | −0.99 (sampling: −0.49) | −1 (Heisenberg limit), −1/2 |
 | GHZ state on 10 000 qubits (stabilizer simulator): ⟨Z₀Z₉₉₉₉⟩ / ⟨Z₄₃₂₁⟩ / ⟨X^⊗n⟩ | 1 / 0 / 1 | 1 / 0 / 1 |
 | Graph-state entanglement across the two halves of the hypercube Q₁₀ / of the cycle C₁₀₀₀ | 512 / 2 ebits | cut-rank over GF(2): 512 / 2 |
@@ -482,7 +484,7 @@ Know its boundaries:
 | OpenQASM | version 2.0 and an OpenQASM 3 subset | OpenQASM 3's classical variables and arithmetic, loops, subroutines, calibrations and timing are rejected with an error naming the feature. Exact distributions follow up to 4096 measurement branches; beyond that, sampling simulates shot by shot |
 | WebAssembly | 26 qubits; graphs and walks up to 2048 nodes | 4 GiB address space; single-threaded |
 | Full CI | 2¹⁸ determinants, 32 roots (dense up to 1024) | Davidson on `H c` without the matrix above 1024 determinants; molecules up to 32 spatial orbitals can be mapped to qubits |
-| Product-formula bound, order ≥ 4 | rigorous but loose | Falls only as `r⁻²` with the steps until they are short; the actual error falls as `r⁻⁴` |
+| Product-formula bound, order ≥ 4 | rigorous, 7–24 times the error at 8–32 steps (small Hamiltonians) | The nested-commutator bound has a work budget: for large Hamiltonians or few steps it is out of reach, and the looser stage-by-stage bound (falling only as `r⁻²`) applies |
 
 Not included: GPU acceleration, tensor-network simulation, simulation of noisy Clifford circuits at scale (planned for 1.8),
 molecular integrals in larger basis sets (triple zeta and beyond) or beyond argon (QSO reads such

@@ -1803,3 +1803,93 @@ fn layered_mitigation_beyond_trajectories_runs_on_matrix_product_states() {
         zne.estimate
     );
 }
+
+#[test]
+fn screened_integrals_keep_the_energy_of_a_long_chain() {
+    use metatron_qso::chemistry::integrals::{AoIntegrals, Basis, Harmonics, Molecule};
+    use metatron_qso::chemistry::scf::{ScfOptions, rhf};
+    // 32 hydrogens 1 Å apart in 6-31G: 64 functions, the size limit.
+    // Schwarz screening at 10⁻¹² skips most shell quartets.
+    let chain: Vec<String> = (0..32).map(|i| format!("H 0 0 {i}")).collect();
+    let mol = Molecule::from_atoms(&chain.join("; "), 0, 1).unwrap();
+    let screened = AoIntegrals::compute(&mol, Basis::SixThirtyOneG).unwrap();
+    let full = AoIntegrals::compute_screened(&mol, Basis::SixThirtyOneG, Harmonics::Spherical, 0.0)
+        .unwrap();
+    assert_eq!(screened.n_functions(), 64);
+    let (skipped, computed) = screened.screened_quartets();
+    assert!(skipped as f64 > 0.85 * (skipped + computed) as f64);
+    let options = ScfOptions::default();
+    let e = rhf(&mol, &screened, &options).unwrap().energy;
+    let e_full = rhf(&mol, &full, &options).unwrap().energy;
+    assert!((e - e_full).abs() < 1e-11, "{e} vs {e_full}");
+    // PySCF 2.14 RHF (geometry in ångström; its bohr differs, see 1.23).
+    assert!((e - (-17.121_863_274_403)).abs() < 1e-10, "{e}");
+}
+
+#[test]
+fn nested_commutator_bounds_of_higher_orders_hold_and_fall_as_the_error() {
+    use metatron_qso::algorithms::time_evolution::{trotter_circuit, trotter_error_bounds};
+    use metatron_qso::linalg::expm_hermitian;
+    let n = 4;
+    let mut rng = Rng::seed_from_u64(3);
+    let letters = [Pauli::X, Pauli::Y, Pauli::Z];
+    let mut random = PauliSum::new();
+    for _ in 0..8 {
+        let mut factors: Vec<(usize, Pauli)> = Vec::new();
+        for q in 0..n {
+            if rng.uniform() < 0.6 {
+                factors.push((q, letters[rng.below(3) as usize]));
+            }
+        }
+        if !factors.is_empty() {
+            random.add_term(
+                rng.uniform_range(-1.0, 1.0),
+                PauliString::new(&factors).unwrap(),
+            );
+        }
+    }
+    let hamiltonians = [
+        ("Heisenberg", models::heisenberg_xxz(n, 1.0, 0.5, false)),
+        ("Ising", models::transverse_field_ising(n, 1.0, 0.7, false)),
+        ("random", random),
+    ];
+    for (name, h) in &hamiltonians {
+        let exact = expm_hermitian(&h.to_dense(n).unwrap(), 1.0);
+        let error = |steps: usize, order: usize| {
+            let c = trotter_circuit(h, n, 1.0, steps, order).unwrap();
+            let mut u = metatron_qso::linalg::CMatrix::zeros(1 << n, 1 << n);
+            for col in 0..1 << n {
+                let mut psi = StateVector::basis(n, col).unwrap();
+                psi.apply_circuit(&c, &[]).unwrap();
+                for (row, a) in psi.amplitudes().iter().enumerate() {
+                    u[(row, col)] = *a;
+                }
+            }
+            (u - &exact).singular_values().max()
+        };
+        for order in [4usize, 6] {
+            let mut previous: Option<(f64, f64)> = None;
+            for steps in [1usize, 2, 4, 8, 16, 32] {
+                let e = error(steps, order);
+                let b = trotter_error_bounds(h, 1.0, steps, order).unwrap();
+                // Every bound holds; errors near rounding are left out.
+                for v in [b.bound, b.nested, b.stages, b.taylor] {
+                    assert!(v >= e, "{name} order {order}, {steps} steps: {v} < {e}");
+                }
+                if steps >= 8 {
+                    // The new bound beats the old one by far, and falls
+                    // as r^{−p}.
+                    assert!(b.nested < 0.05 * b.stages, "{name} {order} {steps}");
+                }
+                if steps >= 16
+                    && let Some((nb, _)) = previous
+                {
+                    let rate = nb / b.nested;
+                    let want = 2f64.powi(order as i32);
+                    assert!((rate / want - 1.0).abs() < 0.25, "{name} {order}: {rate}");
+                }
+                previous = Some((b.nested, e));
+            }
+        }
+    }
+}

@@ -42,7 +42,9 @@ def test_hartree_fock_and_full_ci():
     assert hf.integrals is hf.integrals
     again = q.hartree_fock(q.Molecule(H2O), "6-31g", integrals=hf.integrals)
     assert again.energy == hf.energy and again.integrals is hf.integrals
-    oh = q.hartree_fock(q.Molecule("O 0 0 0; H 0 0 0.97", multiplicity=2), "6-31g", unrestricted=True)
+    oh = q.hartree_fock(
+        q.Molecule("O 0 0 0; H 0 0 0.97", multiplicity=2), "6-31g", unrestricted=True
+    )
     assert not oh.restricted and len(oh.orbital_energies) == 2
     assert abs(oh.energy - -75.36316824957633) < 1e-10
     assert abs(oh.s_squared() - 0.7537742361406874) < 1e-7
@@ -102,4 +104,19 @@ def test_d_functions_and_open_shells() -> None:
     with pytest.raises(ValueError):
         q.AoIntegrals(h2o, "6-31g*", "pure")  # type: ignore[arg-type]
     with pytest.raises(ValueError):
-        q.hartree_fock(h2o, "6-31g*", integrals=q.AoIntegrals(h2o, "6-31g*", "cartesian"))
+        q.hartree_fock(
+            h2o, "6-31g*", integrals=q.AoIntegrals(h2o, "6-31g*", "cartesian")
+        )
+
+
+def test_schwarz_screening():
+    chain = q.Molecule("; ".join(f"H 0 0 {1.1 * i}" for i in range(10)))
+    full = q.AoIntegrals(chain, "6-31g", screening=0.0)
+    screened = q.AoIntegrals(chain, "6-31g")
+    assert full.screened_quartets[0] == 0 and screened.screening == 1e-12
+    skipped, computed = screened.screened_quartets
+    assert skipped > 0 and skipped + computed == full.screened_quartets[1]
+    loose = q.AoIntegrals(chain, "6-31g", screening=1e-6)
+    assert np.abs(loose.eri - full.eri).max() < 1e-6
+    with pytest.raises(ValueError, match="screening threshold"):
+        q.AoIntegrals(chain, "6-31g", screening=-1.0)

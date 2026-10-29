@@ -1443,6 +1443,16 @@ def trotter_circuit(
 def trotter_error_bound(
     hamiltonian: PauliSum, t: float, steps: int = 1, order: int = 2
 ) -> float: ...
+@type_check_only
+class TrotterBounds(TypedDict):
+    bound: float
+    nested: float
+    stages: float
+    taylor: float
+
+def trotter_error_bounds(
+    hamiltonian: PauliSum, t: float, steps: int = 1, order: int = 2
+) -> TrotterBounds: ...
 def qdrift_circuit(
     hamiltonian: PauliSum, n_qubits: int, t: float, samples: int, seed: int = 0
 ) -> Circuit: ...
@@ -1539,7 +1549,12 @@ class AoIntegrals:
         molecule: Molecule,
         basis: str = "sto-3g",
         harmonics: Literal["spherical", "cartesian"] = "spherical",
+        screening: float = 1e-12,
     ) -> AoIntegrals: ...
+    @property
+    def screening(self) -> float: ...
+    @property
+    def screened_quartets(self) -> Tuple[int, int]: ...
     @property
     def n_functions(self) -> int: ...
     @property

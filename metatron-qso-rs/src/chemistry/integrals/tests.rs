@@ -284,7 +284,9 @@ fn f_and_g_shells_match_pyscf() {
             32513.07582190359,
         ),
     ] {
-        let ints = AoIntegrals::from_shells(&mol, Basis::Sto3g, harmonics, &shells).unwrap();
+        let ints =
+            AoIntegrals::from_shells(&mol, Basis::Sto3g, harmonics, SCREENING_THRESHOLD, &shells)
+                .unwrap();
         assert_eq!(ints.n_functions(), n);
         assert!((sum(n, &|i, j| ints.overlap(i, j)) - s_sum).abs() < 1e-11 * s_sum);
         assert!((sum(n, &|i, j| ints.core(i, j)) - h_sum).abs() < 1e-11 * h_sum);
@@ -346,4 +348,67 @@ fn solid_harmonics_have_pyscfs_signs() {
     let at = |p: [u32; 3]| c[powers.iter().position(|q| *q == p).unwrap()];
     assert!((at([2, 1, 0]) / at([0, 3, 0]) - -3.0).abs() < 1e-12);
     assert!(at([2, 1, 0]) > 0.0);
+}
+
+#[test]
+fn screening_bounds_every_skipped_integral() {
+    // A chain of twelve hydrogens (Cartesian 6-31G): skipped quartets hold
+    // integrals below the threshold, and the rest are unchanged.
+    let chain: Vec<String> = (0..12)
+        .map(|i| format!("H 0 0 {}", 1.1 * i as f64))
+        .collect();
+    let mol = Molecule::from_atoms(&chain.join("; "), 0, 1).unwrap();
+    let exact =
+        AoIntegrals::compute_screened(&mol, Basis::SixThirtyOneG, Harmonics::Spherical, 0.0)
+            .unwrap();
+    assert_eq!(exact.screened_quartets().0, 0);
+    for threshold in [1e-12, 1e-8, 1e-4] {
+        let s = AoIntegrals::compute_screened(
+            &mol,
+            Basis::SixThirtyOneG,
+            Harmonics::Spherical,
+            threshold,
+        )
+        .unwrap();
+        let (skipped, computed) = s.screened_quartets();
+        // 24 functions in 24 one-function groups: 300 pairs, 45 150 quartets.
+        assert_eq!(skipped + computed, 300 * 301 / 2);
+        assert!(skipped > 0, "{threshold}");
+        assert_eq!(s.screening_threshold(), threshold);
+        let mut worst: f64 = 0.0;
+        for (a, b) in exact.eri_tensor().iter().zip(s.eri_tensor()) {
+            assert!(*b == 0.0 || a == b, "a computed integral changed");
+            worst = worst.max((a - b).abs());
+        }
+        assert!(worst < threshold, "{threshold}: {worst}");
+    }
+    // Spherical d functions combine Cartesian ones: a water dimer 6 Å
+    // apart in cc-pVDZ stays within a small multiple of the threshold.
+    let dimer = Molecule::from_atoms(
+        "O 0 0 0; H 0.757 0.586 0; H -0.757 0.586 0; O 0 0 6; H 0.757 0.586 6; H -0.757 0.586 6",
+        0,
+        1,
+    )
+    .unwrap();
+    let exact =
+        AoIntegrals::compute_screened(&dimer, Basis::CcPvdz, Harmonics::Spherical, 0.0).unwrap();
+    let threshold = 1e-8;
+    let s = AoIntegrals::compute_screened(&dimer, Basis::CcPvdz, Harmonics::Spherical, threshold)
+        .unwrap();
+    assert!(s.screened_quartets().0 > 0);
+    let worst = exact
+        .eri_tensor()
+        .iter()
+        .zip(s.eri_tensor())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0, f64::max);
+    assert!(worst < 4.0 * threshold, "{worst}");
+    // The default screens at 10⁻¹²; thresholds must be finite and ≥ 0.
+    let d = AoIntegrals::compute(&mol, Basis::Sto3g).unwrap();
+    assert_eq!(d.screening_threshold(), SCREENING_THRESHOLD);
+    for bad in [-1.0, f64::NAN, f64::INFINITY] {
+        assert!(
+            AoIntegrals::compute_screened(&mol, Basis::Sto3g, Harmonics::Spherical, bad).is_err()
+        );
+    }
 }

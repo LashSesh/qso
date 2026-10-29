@@ -525,16 +525,36 @@ fn matrix<'py>(
 impl PyAoIntegrals {
     /// The integrals of `molecule` in `basis` (`"sto-3g"`, `"6-31g"`,
     /// `"6-31g*"` or `"cc-pvdz"`), with `"spherical"` (default, as PySCF)
-    /// or `"cartesian"` d shells.
+    /// or `"cartesian"` d shells. Quartets of shells whose repulsion
+    /// integrals are all below `screening` (Hartree, by the Schwarz
+    /// inequality) are skipped; 0 computes every integral.
     #[new]
-    #[pyo3(signature = (molecule, basis = "sto-3g", harmonics = "spherical"))]
-    fn new(py: Python<'_>, molecule: &PyMolecule, basis: &str, harmonics: &str) -> PyResult<Self> {
+    #[pyo3(signature = (molecule, basis = "sto-3g", harmonics = "spherical", screening = 1e-12))]
+    fn new(
+        py: Python<'_>,
+        molecule: &PyMolecule,
+        basis: &str,
+        harmonics: &str,
+        screening: f64,
+    ) -> PyResult<Self> {
         let basis = Basis::from_name(basis).raise()?;
         let harmonics = parse_harmonics(harmonics)?;
         let mol = &molecule.inner;
-        py.detach(|| AoIntegrals::compute_with(mol, basis, harmonics))
+        py.detach(|| AoIntegrals::compute_screened(mol, basis, harmonics, screening))
             .raise()
             .map(|inner| Self { inner })
+    }
+
+    /// The Schwarz threshold the repulsion integrals were screened with.
+    #[getter]
+    fn screening(&self) -> f64 {
+        self.inner.screening_threshold()
+    }
+
+    /// Quartets of shells skipped by screening, and computed.
+    #[getter]
+    fn screened_quartets(&self) -> (usize, usize) {
+        self.inner.screened_quartets()
     }
 
     /// The basis set's name.

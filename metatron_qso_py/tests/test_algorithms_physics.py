@@ -9,7 +9,9 @@ import pytest
 
 import metatron_qso as q
 
-MOLECULES = Path(__file__).resolve().parents[2] / "metatron-qso-rs" / "examples" / "molecules"
+MOLECULES = (
+    Path(__file__).resolve().parents[2] / "metatron-qso-rs" / "examples" / "molecules"
+)
 
 
 def expm(h: np.ndarray, t: float) -> np.ndarray:
@@ -49,6 +51,9 @@ def test_pauli_rotation_and_trotter_bounds():
         assert err <= q.trotter_error_bound(ham, 1.0, steps=8, order=order)
         errors.append(err)
     assert errors[0] > errors[1] > errors[2]
+    b = q.trotter_error_bounds(ham, 1.0, steps=8, order=4)
+    assert b["bound"] == min(b["nested"], b["stages"], b["taylor"], 2.0)
+    assert errors[2] <= b["nested"] < b["stages"]
     assert q.qdrift_error_bound(ham, 1.0, 1000) < q.qdrift_error_bound(ham, 1.0, 100)
     assert len(q.qdrift_circuit(ham, 3, 1.0, 50, seed=1)) >= 50
     with pytest.raises(ValueError):
@@ -63,7 +68,9 @@ def test_fermions_and_molecules():
     assert hop.is_hermitian()
     for mapping in ("jordan_wigner", "parity", "bravyi_kitaev"):
         h = hop.to_qubit(mapping).to_pauli_sum()
-        assert sorted(np.linalg.eigvalsh(h.to_matrix(2))) == pytest.approx([-0.5, 0, 0, 0.5])
+        assert sorted(np.linalg.eigvalsh(h.to_matrix(2))) == pytest.approx(
+            [-0.5, 0, 0, 0.5]
+        )
     with pytest.raises(ValueError):
         q.FermionOperator("[0^").normal_ordered()
     with pytest.raises(ValueError):
@@ -72,12 +79,16 @@ def test_fermions_and_molecules():
     ref = json.loads((MOLECULES / "reference.json").read_text())
     lih = q.MolecularIntegrals.from_file(MOLECULES / "lih_sto3g.fcidump")
     assert (lih.n_orbitals, lih.n_alpha, lih.n_beta) == (6, 2, 2)
-    assert lih.hartree_fock_energy() == pytest.approx(ref["lih_sto3g"]["hartree_fock"], abs=1e-9)
+    assert lih.hartree_fock_energy() == pytest.approx(
+        ref["lih_sto3g"]["hartree_fock"], abs=1e-9
+    )
     assert lih.fci_energies(2) == pytest.approx(ref["lih_sto3g"]["fci"][:2], abs=1e-8)
     h = lih.qubit_hamiltonian("parity", two_qubit_reduction=True)
     hf = lih.hartree_fock_circuit("parity", two_qubit_reduction=True)
     assert hf.n_qubits == 10
-    assert h.expectation(q.simulate(hf)) == pytest.approx(lih.hartree_fock_energy(), abs=1e-9)
+    assert h.expectation(q.simulate(hf)) == pytest.approx(
+        lih.hartree_fock_energy(), abs=1e-9
+    )
     again = q.MolecularIntegrals.from_fcidump(lih.to_fcidump())
     assert again.two_body(0, 1, 0, 1) == pytest.approx(lih.two_body(0, 1, 0, 1))
     with pytest.raises(ValueError):
@@ -88,8 +99,11 @@ def test_fermions_and_molecules():
     h2 = q.MolecularIntegrals.from_file(MOLECULES / "h2_sto3g.fcidump")
     fci = h2.fci_energies()[0]
     ansatz = q.uccsd(h2, "bravyi_kitaev")
-    res = q.run_vqe(h2.qubit_hamiltonian("bravyi_kitaev"), ansatz,
-                    initial_parameters=np.zeros(ansatz.num_parameters))
+    res = q.run_vqe(
+        h2.qubit_hamiltonian("bravyi_kitaev"),
+        ansatz,
+        initial_parameters=np.zeros(ansatz.num_parameters),
+    )
     assert res["energy"] == pytest.approx(fci, abs=1e-8)
     assert q.k_upccgsd(h2, 2).num_parameters == 4
     adapt = q.adapt_vqe(h2, "parity", two_qubit_reduction=True, gradient_tolerance=1e-6)
@@ -107,10 +121,14 @@ def test_geometry_and_excited_states():
     ng = q.natural_gradient(c, ham, theta)
     assert ng["direction"].shape == theta.shape
     ra = q.real_amplitudes(2, 2)
-    qng = q.quantum_natural_gradient(ra, ham, np.full(ra.num_parameters, 0.1), learning_rate=0.2)
+    qng = q.quantum_natural_gradient(
+        ra, ham, np.full(ra.num_parameters, 0.1), learning_rate=0.2
+    )
     exact = np.linalg.eigvalsh(ham.to_matrix(2))
     assert qng["converged"] and qng["energy"] == pytest.approx(exact[0], abs=1e-7)
-    ite = q.imaginary_time_evolution(ra, ham, np.full(ra.num_parameters, 0.1), time=1.0, steps=20)
+    ite = q.imaginary_time_evolution(
+        ra, ham, np.full(ra.num_parameters, 0.1), time=1.0, steps=20
+    )
     assert ite["parameters"].shape == (21, ra.num_parameters)
     assert np.all(np.diff(ite["energies"]) <= 1e-12)
     ansatz = q.efficient_su2(2, 2)
@@ -139,7 +157,8 @@ def test_qubo_qaoa_and_amplitude_estimation():
     assert r["feasible_probability"] == pytest.approx(1.0)
     warm = q.Qaoa(cost, 5, 1, mixer="warm_start", warm_start=[0.5] * 5)
     assert warm.analyze([0.0, 0.0])["expectation"] == pytest.approx(
-        np.mean([qubo.value(x) for x in range(32)]))
+        np.mean([qubo.value(x) for x in range(32)])
+    )
     with pytest.raises(ValueError):
         q.Qaoa(cost, 5, 1, mixer="xy_ring")
     with pytest.raises(ValueError):
@@ -149,7 +168,9 @@ def test_qubo_qaoa_and_amplitude_estimation():
     assert problem.exact() == pytest.approx(0.3)
     can = q.canonical_amplitude_estimation(problem, 6)
     assert abs(can["estimate"] - 0.3) < np.pi / 64
-    it = q.iterative_amplitude_estimation(problem, epsilon=0.005, alpha=0.05, shots=100, seed=1)
+    it = q.iterative_amplitude_estimation(
+        problem, epsilon=0.005, alpha=0.05, shots=100, seed=1
+    )
     assert it["interval"][0] <= 0.3 <= it["interval"][1]
     ml = q.ml_amplitude_estimation(problem, levels=6, shots=100, seed=1)
     assert abs(ml["estimate"] - 0.3) < 0.01
@@ -166,21 +187,39 @@ def test_review_regressions():
         lambda: q.qdrift_circuit(q.PauliSum("1e308 X0 + 1e308 Z0"), 1, 1.0, 10),
         lambda: q.qdrift_circuit(q.PauliSum("X0 + Z0"), 1, 1e308, 1),
         lambda: q.Qaoa(q.PauliSum("1e308 Z0"), 1, 1),
-        lambda: q.qdrift_circuit(q.PauliSum("X0 Y1 Z2 X3 Y4 Z5 X6 Y7 Z8 X9 + Z0"), 10, 1.0, 10**7),
+        lambda: q.qdrift_circuit(
+            q.PauliSum("X0 Y1 Z2 X3 Y4 Z5 X6 Y7 Z8 X9 + Z0"), 10, 1.0, 10**7
+        ),
         lambda: q.FermionOperator("[" + " ".join(f"{i}^" for i in range(30)) + "]"),
         lambda: q.Qaoa(q.PauliSum("Z0 + Z1"), 2, 1).optimize(restarts=2**64 - 1),
         lambda: q.vqd(q.PauliSum("Z0"), q.real_amplitudes(1, 1), 1, restarts=2**64 - 1),
         lambda: q.ml_amplitude_estimation(q.AmplitudeProblem.bernoulli(0.3), levels=21),
-        lambda: q.iterative_amplitude_estimation(q.AmplitudeProblem.bernoulli(0.3), epsilon=1e-300),
+        lambda: q.iterative_amplitude_estimation(
+            q.AmplitudeProblem.bernoulli(0.3), epsilon=1e-300
+        ),
         lambda: q.Qubo([[1e308, 1e308], [1e308, 1e308]]),
         lambda: q.Qaoa(q.PauliSum("Z0 + Z1"), 2, 1, weight=1),
         lambda: q.Qaoa(q.PauliSum("Z0 + Z1"), 2, 1, warm_start=[0.5, 0.5]),
-        lambda: q.quantum_natural_gradient(q.real_amplitudes(1, 1), q.PauliSum("Z0"), [0.1, 0.2],
-                                           gradient_tolerance=float("nan")),
-        lambda: q.ssvqe(q.PauliSum("Z0"), q.real_amplitudes(1, 1), 2, weights=[1.0, 1.0]),
-        lambda: q.MolecularIntegrals.from_fcidump(" &FCI NORB=32,NELEC=32 &END\n 1.0 1 1 0 0\n").fci_energies(),
-        lambda: q.uccsd(q.MolecularIntegrals.from_fcidump(" &FCI NORB=32,NELEC=32 &END\n 1.0 1 1 0 0\n")),
-        lambda: q.k_upccgsd(q.MolecularIntegrals.from_file(MOLECULES / "h2_sto3g.fcidump"), k=10**12),
+        lambda: q.quantum_natural_gradient(
+            q.real_amplitudes(1, 1),
+            q.PauliSum("Z0"),
+            [0.1, 0.2],
+            gradient_tolerance=float("nan"),
+        ),
+        lambda: q.ssvqe(
+            q.PauliSum("Z0"), q.real_amplitudes(1, 1), 2, weights=[1.0, 1.0]
+        ),
+        lambda: q.MolecularIntegrals.from_fcidump(
+            " &FCI NORB=32,NELEC=32 &END\n 1.0 1 1 0 0\n"
+        ).fci_energies(),
+        lambda: q.uccsd(
+            q.MolecularIntegrals.from_fcidump(
+                " &FCI NORB=32,NELEC=32 &END\n 1.0 1 1 0 0\n"
+            )
+        ),
+        lambda: q.k_upccgsd(
+            q.MolecularIntegrals.from_file(MOLECULES / "h2_sto3g.fcidump"), k=10**12
+        ),
     ]
     for k, call in enumerate(bad):
         with pytest.raises(ValueError):

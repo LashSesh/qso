@@ -68,6 +68,25 @@ All notable changes to this project are documented here. The format follows
     `pea_layered`, and `max_bond` (for `simulator="mps"` only).
   - Learned rates on 7 to 10 qubits (more than 64 generators) now come
     from the new fit; they agree with 1.30 to rounding (about 10⁻¹⁷).
+- **Faster integrals and tighter bounds** (milestone 1.32).
+  - Schwarz screening of the repulsion integrals by quartets of shells:
+    `AoIntegrals::compute` skips quartets whose integrals are all below
+    `SCREENING_THRESHOLD` (10⁻¹² Ha); `compute_screened` takes another
+    threshold (0 computes everything), and `screened_quartets` counts
+    them. A 64-function hydrogen chain takes 0.2 s instead of 1.5 s, its
+    RHF energy unchanged to 5·10⁻¹³ Ha. Python: `AoIntegrals(...,
+    screening=)`, `.screening`, `.screened_quartets`.
+  - `trotter_error_bounds` returns three bounds for product formulas:
+    `nested` (new, every order: the Taylor coefficients of the step's
+    error generator computed as Pauli operators up to an adaptive degree,
+    with a rigorous tail), `stages` (the commutator bounds of 1.5) and
+    `taylor`. `trotter_error_bound` returns the smallest. At order 4 and
+    6 the bound now falls as `r^{−p}` and lies 7–24 times above the
+    actual error at 8–32 steps, where the old one was 800–10⁹ times
+    above. Python: `trotter_error_bounds`; `qso trotter` lists the bounds
+    in its JSON.
+  - Bounds of orders 1 and 2 can be slightly smaller than in 1.31, as the
+    smallest of the three is returned.
 - **Graphs:** `generators::seidel_switching` (within the size limits of
   the generators, keeping node positions) and the three Chang graphs
   (`generators::chang`, spec `chang:K`), in Python as
