@@ -457,6 +457,83 @@ pub fn shrikhande() -> Graph {
     g
 }
 
+/// Seidel switching of an unweighted graph with respect to the node set
+/// `set`: every pair with one node inside and one outside the set changes
+/// from adjacent to non-adjacent and back; pairs on the same side keep
+/// their state. Switching a regular graph can give a non-isomorphic graph
+/// with the same parameters (the Chang graphs, [`chang`]).
+pub fn seidel_switching(graph: &Graph, set: &[usize]) -> Result<Graph> {
+    if !graph.is_unweighted() {
+        return Err(QsoError::invalid(
+            "graph",
+            "Seidel switching needs an unweighted graph",
+        ));
+    }
+    let n = graph.num_nodes();
+    let mut inside = vec![false; n];
+    for &u in set {
+        if u >= n {
+            return Err(QsoError::NodeOutOfRange {
+                node: u,
+                n_nodes: n,
+            });
+        }
+        inside[u] = true;
+    }
+    let mut g = Graph::new(n).with_name(format!("{} switched", graph.name()));
+    for u in 0..n {
+        for v in u + 1..n {
+            if graph.has_edge(u, v) != (inside[u] != inside[v]) {
+                g.add_edge(u, v).expect("valid edge");
+            }
+        }
+    }
+    Ok(g)
+}
+
+/// The Chang graphs (`which` = 1, 2, 3): strongly regular (28, 12, 6, 4)
+/// like the triangular graph `T(8) = J(8, 2)`, but not isomorphic to it
+/// or to each other (Chang, 1959). Each is the Seidel switching of `T(8)`
+/// with respect to the edges of `K₈` forming four disjoint edges (1), an
+/// 8-cycle (2) or a triangle and a 5-cycle (3). Nodes are the pairs of
+/// `{0, …, 7}` in the colex order of [`johnson`].
+pub fn chang(which: usize) -> Result<Graph> {
+    let edges: &[(usize, usize)] = match which {
+        1 => &[(0, 1), (2, 3), (4, 5), (6, 7)],
+        2 => &[
+            (0, 1),
+            (1, 2),
+            (2, 3),
+            (3, 4),
+            (4, 5),
+            (5, 6),
+            (6, 7),
+            (7, 0),
+        ],
+        3 => &[
+            (0, 1),
+            (1, 2),
+            (2, 0),
+            (3, 4),
+            (4, 5),
+            (5, 6),
+            (6, 7),
+            (7, 3),
+        ],
+        _ => {
+            return Err(QsoError::invalid(
+                "which",
+                "the Chang graphs are 1, 2 and 3",
+            ));
+        }
+    };
+    let set: Vec<usize> = edges
+        .iter()
+        .map(|&(a, b)| colex_rank(1 << a | 1 << b))
+        .collect();
+    Ok(seidel_switching(&johnson(8, 2)?, &set)?.with_name(format!("Chang {which}")))
+}
+
 /// The five Platonic solids.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PlatonicSolid {
@@ -622,7 +699,7 @@ pub fn check_generated_size(nodes: u128, edges: u128) -> Result<()> {
 /// | `bipartite:A,B` | complete bipartite graph |
 /// | `platonic:NAME` | tetrahedron, cube, octahedron, dodecahedron, icosahedron |
 /// | `johnson:N,K`, `kneser:N,K`, `hamming:D,Q` | distance-regular families |
-/// | `paley:Q`, `shrikhande`, `rook:MxN` | strongly regular graphs |
+/// | `paley:Q`, `shrikhande`, `rook:MxN`, `chang:K` | strongly regular graphs |
 /// | `circulant:N,S1,S2,…` | Cayley graph of `Z_N` with jumps `±S_i` |
 /// | `random-regular:N,D[,SEED]`, `erdos-renyi:N,P[,SEED]` | random graphs |
 ///
@@ -662,6 +739,7 @@ pub fn from_spec(spec: &str) -> Result<Graph> {
         "petersen" => petersen(),
         "heawood" => heawood(),
         "shrikhande" => shrikhande(),
+        "chang" => chang(one()?)?,
         "johnson" | "kneser" | "hamming" => match nums(',')?.as_slice() {
             [a, b] => {
                 let (a, b) = (int(*a)?, int(*b)?);
@@ -845,6 +923,31 @@ mod tests {
         );
         assert_eq!(shrikhande().automorphism_group().order(), Some(192));
         assert_eq!(rook(4, 4).unwrap().automorphism_group().order(), Some(1152));
+        // T(8) and the three Chang graphs: (28, 12, 6, 4), pairwise not
+        // isomorphic; their groups have orders 8! and 384, 96 and 360
+        // (A. E. Brouwer's page on the Chang graphs).
+        let t8 = johnson(8, 2).unwrap();
+        let changs: Vec<Graph> = (1..=3).map(|k| chang(k).unwrap()).collect();
+        let mut orders = vec![t8.automorphism_group().order()];
+        for (k, g) in changs.iter().enumerate() {
+            assert_eq!(g.strongly_regular_parameters(), Some((28, 12, 6, 4)));
+            assert!(!g.is_isomorphic(&t8), "Chang {}", k + 1);
+            for h in &changs[k + 1..] {
+                assert!(!g.is_isomorphic(h));
+            }
+            orders.push(g.automorphism_group().order());
+        }
+        assert_eq!(orders, [Some(40320), Some(384), Some(96), Some(360)]);
+        assert!(chang(0).is_err() && chang(4).is_err());
+        assert!(from_spec("chang:2").unwrap().is_isomorphic(&changs[1]));
+        // Switching with respect to a set and its complement is the same.
+        let set = [0, 3, 5, 9];
+        let rest: Vec<usize> = (0..28).filter(|u| !set.contains(u)).collect();
+        assert_eq!(
+            seidel_switching(&t8, &set).unwrap().edges(),
+            seidel_switching(&t8, &rest).unwrap().edges()
+        );
+        assert!(seidel_switching(&t8, &[28]).is_err());
         assert_eq!(
             petersen().strongly_regular_parameters(),
             Some((10, 3, 0, 1))

@@ -132,6 +132,27 @@ fn walks_reduction_and_transfer() {
     assert_eq!(c["steps"], 6);
     let h = qso(&["hitting", "--graph", "cycle:16"]);
     assert!(f(&h["quantum"]) < f(&h["classical"]));
+
+    // Two bosons: the Shrikhande and rook's graph look alike without
+    // interaction and differ with it.
+    let free = qso(&["particles", "--compare", "rook:4x4"]);
+    assert_eq!(free["configurations"], 136);
+    assert_eq!(free["compare"]["distinguished"], false);
+    let d: Vec<f64> = serde_json::from_value(free["densities"].clone()).unwrap();
+    close(d.iter().sum(), 2.0, 1e-12);
+    let hub = qso(&["particles", "--on-site", "1", "--compare", "rook:4x4"]);
+    assert_eq!(hub["compare"]["distinguished"], true);
+    let fermions = qso(&[
+        "particles",
+        "--graph",
+        "path:2",
+        "--statistics",
+        "fermions",
+        "--neighbour",
+        "0.5",
+    ]);
+    assert_eq!(fermions["configurations"], 1);
+    assert!(qso_fails(&["particles", "--statistics", "anyons"]).contains("statistics"));
 }
 
 #[test]

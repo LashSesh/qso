@@ -239,6 +239,37 @@ fn shrikhande_and_rook_graph_are_cospectral_but_not_isomorphic() {
     assert_eq!(r.automorphism_group().order(), Some(1152));
 }
 
+#[test]
+fn interacting_bosons_tell_cospectral_strongly_regular_graphs_apart() {
+    use metatron_qso::walks::interacting::certificate_distance;
+    use metatron_qso::walks::{InteractingWalk, Statistics};
+    // T(8) and the three Chang graphs, all (28, 12, 6, 4) and pairwise
+    // not isomorphic: two free bosons see no difference (Gamble et al.,
+    // Phys. Rev. A 81, 052313 (2010)), two interacting ones tell every
+    // pair apart.
+    let mut graphs = vec![generators::johnson(8, 2).unwrap()];
+    graphs.extend((1..=3).map(|k| generators::chang(k).unwrap()));
+    let certificate = |g: &Graph, u: f64| {
+        InteractingWalk::new(g, Generator::Adjacency, 1.0, Statistics::Bosons, 2)
+            .unwrap()
+            .with_interaction(u, 0.0)
+            .unwrap()
+            .certificate(&[1.0])
+            .unwrap()
+    };
+    let free: Vec<_> = graphs.iter().map(|g| certificate(g, 0.0)).collect();
+    let hubbard: Vec<_> = graphs.iter().map(|g| certificate(g, 1.0)).collect();
+    for a in 0..4 {
+        for b in a + 1..4 {
+            assert!(!graphs[a].is_isomorphic(&graphs[b]));
+            let d0 = certificate_distance(&free[a], &free[b]);
+            let d1 = certificate_distance(&hubbard[a], &hubbard[b]);
+            assert!(d0 < 1e-12, "{a} {b}: {d0:e}");
+            assert!(d1 > 1e-6, "{a} {b}: {d1:e}");
+        }
+    }
+}
+
 /// The toy device of `examples/devices/toy_device.json`.
 fn toy_device() -> metatron_qso::noise::DeviceModel {
     metatron_qso::noise::DeviceModel::from_json(include_str!("../examples/devices/toy_device.json"))

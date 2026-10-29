@@ -2,6 +2,7 @@
 //! baselines.
 
 use metatron_qso::walks::driven::{DrivenWalk, MagnusOptions, Term};
+use metatron_qso::walks::interacting::{InteractingWalk, Statistics, certificate_distance};
 use metatron_qso::walks::{
     ContinuousWalk, DephasingWalk, Generator, SpatialSearch, classical_hitting_times,
     classical_walk_probabilities,
@@ -13,8 +14,8 @@ use pyo3::types::PyDict;
 use crate::algorithms::Indices;
 use crate::graph::PyGraph;
 use crate::{
-    ComplexArg, ComplexMatrixArg, Raise, cmatrix, complex_array, complex_vec, invalid, pydict,
-    real_array, square_complex,
+    ComplexArg, ComplexMatrixArg, Raise, RealArg, cmatrix, complex_array, complex_vec, invalid,
+    pydict, real_array, real_vec, rmatrix, square_complex,
 };
 
 pub(crate) fn generator(name: &str) -> PyResult<Generator> {
@@ -537,8 +538,240 @@ impl PyDrivenWalk {
     }
 }
 
+fn statistics(name: &str) -> PyResult<Statistics> {
+    match name.to_ascii_lowercase().as_str() {
+        "bosons" => Ok(Statistics::Bosons),
+        "fermions" => Ok(Statistics::Fermions),
+        "distinguishable" => Ok(Statistics::Distinguishable),
+        _ => Err(invalid(format!(
+            "unknown statistics '{name}' (expected bosons, fermions or distinguishable)"
+        ))),
+    }
+}
+
+/// Walk of `particles` bosons, fermions or distinguishable particles on a
+/// graph: hopping with `H = −γA` (`"adjacency"`, the default: the
+/// Bose–Hubbard model) or `H = γL` (`"laplacian"`), on-site interaction
+/// `on_site` (U) and interaction `neighbour` (V) between particles on
+/// adjacent sites.
+///
+/// States are vectors over the configurations: multisets of sites for
+/// bosons, sets for fermions, the site of each particle for
+/// distinguishable particles. Up to 2048 configurations the walk is
+/// diagonalised once (needed for `propagator`, `transition_probabilities`
+/// and `certificate`); above, it propagates by Krylov.
+#[pyclass(name = "InteractingWalk", module = "metatron_qso", frozen)]
+pub struct PyInteractingWalk {
+    inner: InteractingWalk,
+}
+
+#[pymethods]
+impl PyInteractingWalk {
+    #[new]
+    #[pyo3(signature = (
+        graph,
+        particles,
+        statistics = "bosons",
+        generator = "adjacency",
+        gamma = 1.0,
+        on_site = 0.0,
+        neighbour = 0.0,
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        py: Python<'_>,
+        graph: &PyGraph,
+        particles: usize,
+        statistics: &str,
+        generator: &str,
+        gamma: f64,
+        on_site: f64,
+        neighbour: f64,
+    ) -> PyResult<Self> {
+        let (s, gen_) = (self::statistics(statistics)?, self::generator(generator)?);
+        let g = &graph.inner;
+        let inner = py
+            .detach(|| {
+                InteractingWalk::new(g, gen_, gamma, s, particles)?
+                    .with_interaction(on_site, neighbour)
+            })
+            .raise()?;
+        Ok(Self { inner })
+    }
+
+    /// The sites of configuration `index`.
+    fn configuration(&self, index: usize) -> PyResult<Vec<usize>> {
+        Ok(self.inner.configuration(index).raise()?.to_vec())
+    }
+
+    /// Index of the configuration with particles on `sites` (any order
+    /// for bosons and fermions).
+    fn index_of(&self, sites: Vec<usize>) -> PyResult<usize> {
+        self.inner.index_of(&sites).raise()
+    }
+
+    /// The basis state with particles on `sites`.
+    fn basis_state<'py>(
+        &self,
+        py: Python<'py>,
+        sites: Vec<usize>,
+    ) -> PyResult<Bound<'py, PyArray1<metatron_qso::C64>>> {
+        Ok(complex_array(py, self.inner.basis_state(&sites).raise()?))
+    }
+
+    /// `exp(−iHt)|psi0⟩`.
+    fn evolve<'py>(
+        &self,
+        py: Python<'py>,
+        psi0: ComplexArg<'_>,
+        t: f64,
+    ) -> PyResult<Bound<'py, PyArray1<metatron_qso::C64>>> {
+        let psi0 = complex_vec(&psi0);
+        let w = &self.inner;
+        Ok(complex_array(py, py.detach(|| w.evolve(&psi0, t)).raise()?))
+    }
+
+    /// Probabilities of all configurations at time `t`, started with
+    /// particles on `sites`.
+    fn probabilities<'py>(
+        &self,
+        py: Python<'py>,
+        sites: Vec<usize>,
+        t: f64,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let w = &self.inner;
+        Ok(real_array(
+            py,
+            py.detach(|| w.probabilities(&sites, t)).raise()?,
+        ))
+    }
+
+    /// Mean site occupations `⟨n_i⟩` in the state `psi`.
+    fn densities<'py>(
+        &self,
+        py: Python<'py>,
+        psi: ComplexArg<'_>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let psi = complex_vec(&psi);
+        Ok(real_array(py, self.inner.densities(&psi).raise()?))
+    }
+
+    /// Density correlations `⟨n_i n_j⟩` in the state `psi`.
+    fn pair_correlations<'py>(
+        &self,
+        py: Python<'py>,
+        psi: ComplexArg<'_>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let psi = complex_vec(&psi);
+        Ok(rmatrix(py, &self.inner.pair_correlations(&psi).raise()?))
+    }
+
+    /// Dense propagator `exp(−iHt)` over the configurations.
+    fn propagator<'py>(
+        &self,
+        py: Python<'py>,
+        t: f64,
+    ) -> PyResult<Bound<'py, PyArray2<metatron_qso::C64>>> {
+        let w = &self.inner;
+        Ok(cmatrix(py, &py.detach(|| w.propagator(t)).raise()?))
+    }
+
+    /// `|⟨a|exp(−iHt)|b⟩|²` for all pairs of configurations.
+    fn transition_probabilities<'py>(
+        &self,
+        py: Python<'py>,
+        t: f64,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let w = &self.inner;
+        Ok(rmatrix(
+            py,
+            &py.detach(|| w.transition_probabilities(t)).raise()?,
+        ))
+    }
+
+    /// Graph certificate: the sorted transition probabilities at each of
+    /// `times`, concatenated. Compare with `interacting_certificate_distance`.
+    fn certificate<'py>(
+        &self,
+        py: Python<'py>,
+        times: RealArg<'_>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let times = real_vec(&times);
+        let w = &self.inner;
+        Ok(real_array(py, py.detach(|| w.certificate(&times)).raise()?))
+    }
+
+    /// Eigenvalues of the Hamiltonian (ascending), or `None` above 2048
+    /// configurations.
+    #[getter]
+    fn spectrum<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<f64>>> {
+        self.inner.spectrum().map(|v| real_array(py, v.to_vec()))
+    }
+
+    #[getter]
+    fn dimension(&self) -> usize {
+        self.inner.dimension()
+    }
+
+    #[getter]
+    fn num_nodes(&self) -> usize {
+        self.inner.num_nodes()
+    }
+
+    #[getter]
+    fn particles(&self) -> usize {
+        self.inner.particles()
+    }
+
+    #[getter]
+    fn statistics(&self) -> &'static str {
+        self.inner.statistics().name()
+    }
+
+    #[getter]
+    fn generator(&self) -> &'static str {
+        generator_name(self.inner.generator())
+    }
+
+    #[getter]
+    fn gamma(&self) -> f64 {
+        self.inner.gamma()
+    }
+
+    #[getter]
+    fn on_site(&self) -> f64 {
+        self.inner.on_site()
+    }
+
+    #[getter]
+    fn neighbour(&self) -> f64 {
+        self.inner.neighbour()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "InteractingWalk({} {}, {} configurations, U={}, V={})",
+            self.inner.particles(),
+            self.inner.statistics().name(),
+            self.inner.dimension(),
+            self.inner.on_site(),
+            self.inner.neighbour()
+        )
+    }
+}
+
+/// Largest difference between two certificates of
+/// `InteractingWalk.certificate` (infinite if their lengths differ); above
+/// about 1e-9 the graphs are not isomorphic.
+#[pyfunction(name = "interacting_certificate_distance")]
+fn certificate_distance_py(a: RealArg<'_>, b: RealArg<'_>) -> f64 {
+    certificate_distance(&real_vec(&a), &real_vec(&b))
+}
+
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyContinuousWalk>()?;
+    m.add_class::<PyInteractingWalk>()?;
+    m.add_function(wrap_pyfunction!(certificate_distance_py, m)?)?;
     m.add_class::<PySpatialSearch>()?;
     m.add_class::<PyDephasingWalk>()?;
     m.add_class::<PyDrivenWalk>()?;

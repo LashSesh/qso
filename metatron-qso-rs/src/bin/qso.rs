@@ -32,8 +32,9 @@ use metatron_qso::rng::Rng;
 use metatron_qso::stabilizer::StabilizerState;
 use metatron_qso::stabilizer::program::{is_clifford_program, sample_program};
 use metatron_qso::walks::{
-    Coin, CoinedWalk, ContinuousWalk, Generator, PrettyGoodTransfer, Quotient, QuotientWalk,
-    SpatialSearch, StateTransfer, SzegedyWalk, circuits, classical_hitting_times,
+    Coin, CoinedWalk, ContinuousWalk, Generator, InteractingWalk, PrettyGoodTransfer, Quotient,
+    QuotientWalk, SpatialSearch, StateTransfer, Statistics, SzegedyWalk, circuits,
+    classical_hitting_times, interacting,
 };
 use metatron_qso::{QsoError, Result};
 
@@ -177,6 +178,36 @@ enum Command {
         gamma: f64,
         #[arg(long, value_enum, default_value_t = GeneratorArg::Laplacian)]
         generator: GeneratorArg,
+    },
+    /// Walk of several bosons, fermions or distinguishable particles with
+    /// on-site (U) and neighbour (V) interaction; with --compare, the
+    /// certificate distance to a second graph (above 1e-9: not isomorphic).
+    Particles {
+        #[arg(long, default_value = "shrikhande")]
+        graph: String,
+        #[arg(long, default_value_t = 2)]
+        particles: usize,
+        /// bosons, fermions or distinguishable.
+        #[arg(long, default_value = "bosons")]
+        statistics: String,
+        /// Comma-separated start sites (default: 0, 1, …).
+        #[arg(long, value_delimiter = ',')]
+        start: Option<Vec<usize>>,
+        #[arg(long, default_value_t = 1.0)]
+        time: f64,
+        #[arg(long, default_value_t = 1.0)]
+        gamma: f64,
+        #[arg(long, value_enum, default_value_t = GeneratorArg::Adjacency)]
+        generator: GeneratorArg,
+        /// On-site interaction U.
+        #[arg(long, default_value_t = 0.0)]
+        on_site: f64,
+        /// Interaction V between neighbours.
+        #[arg(long, default_value_t = 0.0)]
+        neighbour: f64,
+        /// Second graph whose certificate (at --time) is compared.
+        #[arg(long)]
+        compare: Option<String>,
     },
     /// Quantum-walk spatial search (Childs–Goldstone).
     Search {
@@ -895,6 +926,70 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 json!({"graph": g.name(), "time": time, "probabilities": p, "limiting_distribution": limit}),
                 text,
             ))
+        }
+        Command::Particles {
+            graph: spec,
+            particles,
+            statistics,
+            start,
+            time,
+            gamma,
+            generator,
+            on_site,
+            neighbour,
+            compare,
+        } => {
+            let statistics = match statistics.to_ascii_lowercase().as_str() {
+                "bosons" => Statistics::Bosons,
+                "fermions" => Statistics::Fermions,
+                "distinguishable" => Statistics::Distinguishable,
+                other => {
+                    return Err(QsoError::invalid(
+                        "statistics",
+                        format!("'{other}' (expected bosons, fermions or distinguishable)"),
+                    ));
+                }
+            };
+            let make = |g: &Graph| {
+                InteractingWalk::new(g, (*generator).into(), *gamma, statistics, *particles)?
+                    .with_interaction(*on_site, *neighbour)
+            };
+            let g = graph(spec)?;
+            let walk = make(&g)?;
+            let sites: Vec<usize> = start.clone().unwrap_or_else(|| (0..*particles).collect());
+            let psi = walk.evolve(&walk.basis_state(&sites)?, *time)?;
+            let densities = walk.densities(&psi)?;
+            let mut text = format!(
+                "{particles} {} on {} ({} configurations, U = {on_site}, V = {neighbour}), \
+                 from sites {sites:?}\n⟨n_i⟩ at t = {time}:\n  {}",
+                statistics.name(),
+                g.name(),
+                walk.dimension(),
+                vector(&densities)
+            );
+            let mut out = json!({"graph": g.name(), "statistics": statistics.name(),
+                "particles": particles, "configurations": walk.dimension(), "start": sites,
+                "time": time, "on_site": on_site, "neighbour": neighbour, "densities": densities});
+            if let Some(other) = compare {
+                let h = graph(other)?;
+                let distance = interacting::certificate_distance(
+                    &walk.certificate(&[*time])?,
+                    &make(&h)?.certificate(&[*time])?,
+                );
+                let distinguished = distance > 1e-9;
+                text.push_str(&format!(
+                    "\ncertificate distance to {}: {distance:.3e} ({})",
+                    h.name(),
+                    if distinguished {
+                        "not isomorphic"
+                    } else {
+                        "not distinguished"
+                    }
+                ));
+                out["compare"] = json!({"graph": h.name(), "distance": distance,
+                    "distinguished": distinguished});
+            }
+            Ok((out, text))
         }
         Command::Search {
             graph: spec,
