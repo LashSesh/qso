@@ -379,7 +379,9 @@ the `m_s = 0` population:
 
 ```python
 nv = spin.NvCenter(0.0403, nitrogen="14N", carbons=[(60e3, 30e3)])
-print(nv.lines()[:2])       # (1738.42 MHz, 0.083), (1738.48 MHz, 0.083), …
+strong = [line for line in nv.lines() if line[1] > 0.01]
+print(strong[:2])     # (1738.42 MHz, 0.083), (1738.48 MHz, 0.083): weak lines
+                      # (10⁻⁴) flip the carbon
 p = nv.signal(spin.cpmg(64, 0.541e-6))   # 0.13: the carbon's first dip
 ```
 
@@ -388,13 +390,24 @@ p = nv.signal(spin.cpmg(64, 0.541e-6))   # 0.13: the carbon's first dip
   the usual ones, π pulses spaced `2τ`, the last π/2 about `−x` so that
   the signal is `(1 + coherence)/2`. A pulse drives the transition
   `0 ↔ transition` (`−1`, the default, or `+1`) at `frequency` (default:
-  on resonance with the bare line, `D ± γ_e B`). With `rabi=None` pulses
-  are ideal: instantaneous and on that transition alone. With a Rabi
-  frequency `Ω` (Hz) the microwave `2π(Ω/√2)(cos φ S_x + sin φ S_y)`
-  (rotating-wave approximation) drives both transitions for `θ/(360°·Ω)`
-  seconds while everything else evolves, and free periods count between
-  pulse centres, as in experiments; a negative angle is the positive one
-  about the opposite axis.
+  on resonance with the bare line, `D ± γ_e B`). The phase is the
+  carrier's: a linearly polarised microwave `√2·2πΩ cos(2πft + φ) S_x`
+  becomes `2π(Ω/2)(e^{−iφ}|±1⟩⟨0| + h.c.)` in the rotating-wave
+  approximation, the same phase on both transitions, which matters at low
+  field where both are driven. On the qubit `{m, 0}` (`|m⟩` first) a pulse
+  rotates about `cos φ x + sin φ y`. With `rabi=None` pulses are ideal:
+  instantaneous and on that transition alone. With a Rabi frequency `Ω`
+  (Hz) the microwave drives both transitions for `θ/(360°·Ω)` seconds
+  while everything else evolves, and free periods count between pulse
+  centres (from the start or to the end at the ends of a sequence), as in
+  experiments; adjacent free periods are merged first, and a negative
+  angle is the positive one about the opposite axis.
+- **Frequencies are signed.** The transition `0 ↔ m` lies at
+  `D + m γ_e B` (plus the nuclear terms), which is negative for `m = −1`
+  above `B = D/γ_e ≈ 102 mT`, where that level falls below `m_s = 0`. A
+  microwave at `|f|` of phase `φ` is then the frame frequency `−|f|` with
+  phase `−φ`; `lines`, `odmr`, `frequency` and the default all use the
+  signed value.
 - **Pulse errors are physical.** Finite pulses are off resonance for the
   other ¹⁴N lines (±2.14 MHz) and slightly drive the other transition.
   At 20 MHz the first carbon dip above keeps its depth under XY-8 (0.12)
@@ -402,8 +415,11 @@ p = nv.signal(spin.cpmg(64, 0.541e-6))   # 0.13: the carbon's first dip
   along its pulse axis, not for the electron–carbon terms the resonance
   builds up.
 - **ODMR.** `lines()` gives the resonance lines with their strengths
-  averaged over the nuclei; `odmr(frequencies, rabi, duration)` the
-  `m_s = 0` population after one pulse at each frequency (pulsed ODMR).
+  `|⟨b|S_x|a⟩|²` averaged over the nuclei (½ per transition), lines within
+  1 mHz merged (degenerate levels, e.g. at zero field), computed one
+  nucleus at a time; `odmr(frequencies, rabi, duration)` gives the
+  `m_s = 0` population after one pulse at each frequency (pulsed ODMR),
+  one full exponential per frequency, refused beyond the work limit.
   Continuous-wave ODMR, which needs the optical cycle, is not modelled.
 - **Field noise.** `spin.FieldNoise.telegraph(amplitude, rate)`,
   `.ornstein_uhlenbeck(sigma, correlation_time)` and `.pink(sigma,
@@ -412,21 +428,28 @@ p = nv.signal(spin.cpmg(64, 0.541e-6))   # 0.13: the carbon's first dip
   Ornstein–Uhlenbeck fluctuators with corners spaced evenly in their
   logarithm. `spectrum(ω)` and `correlation(τ)` give its spectrum and
   correlation function.
-- **Filter functions.** For ideal pulses `spin.filter_function(events, ω)`
+- **Filter functions.** For instantaneous pulses (π/2, free periods and
+  π pulses, π/2; angles modulo 360°) `spin.filter_function(events, ω)`
   is `|Y(ω)|²` (s²), `Y` the Fourier transform of the sign of the
   coherence (Cywiński et al., Phys. Rev. B 77, 174509 (2008)), and
   `spin.decay_exponent(events, noise)` is `χ = ½⟨φ²⟩ = 2π∫₀^∞ S(ω)|Y(ω)|²
-  dω`, computed exactly in the time domain. The coherence of Gaussian
-  noise decays as `e^{−χ}`; telegraph noise is not Gaussian, and its
-  `χ` is only the second-order term.
+  dω`, computed exactly in the time domain in one pass over the periods.
+  The coherence of Gaussian noise decays as `e^{−χ}`; telegraph noise is
+  not Gaussian, and its `χ` is only the second-order term. For finite
+  pulses both are the approximation of free periods between pulse
+  centres: a Hahn echo of 2 × 0.4 μs under Ornstein–Uhlenbeck noise of
+  1 MHz and 20 ns gives 0.7735 ± 0.0011 with 2 MHz pulses, 0.7774 ±
+  0.0012 with ideal ones, where `(1 + e^{−χ})/2` is 0.7788.
 - **Exact trajectories.** `signal_with_noise(events, noise, trajectories,
   seed)` averages the signal over sampled noise paths and returns the
   mean and its standard error. Between pulses `S_z` commutes with the
   Hamiltonian, so a path enters as the phase `2π∫b dt` of each period,
   sampled exactly (jointly Gaussian with the end value for
   Ornstein–Uhlenbeck noise, from the flip times for telegraph noise).
-  During finite pulses the noise is held at its exact mean over each of
-  16 pieces.
+  During a finite pulse the noise is held at its exact mean over pieces
+  of at most `1/(16θ)` (`θ` its fastest correlation rate), up to 16 per
+  pulse and one if it barely changes during the pulse; each piece is a
+  full exponential. One trajectory has no standard error (NaN).
 
 ```python
 noise = spin.FieldNoise.ornstein_uhlenbeck(2e5, 1e-6)   # 200 kHz, 1 μs
@@ -442,13 +465,17 @@ for events in (spin.ramsey(1e-6), spin.hahn(1e-6), spin.cpmg(8, 0.125e-6)):
   diagonal in the electron level and, within a block, a sum of one term
   per nucleus, so free evolution applies one 2 × 2 or 3 × 3 factor per
   nucleus to each block; equal periods and pulses are computed once.
-  CPMG-64 with ¹⁴N and one ¹³C (dimension 18) takes 0.5 ms with ideal
+  CPMG-64 with ¹⁴N and one ¹³C (dimension 18) takes 0.4 ms with ideal
   pulses and 1.2 ms with finite ones; CPMG-16 with ¹⁴N and six ¹³C
-  (dimension 576, the largest with ¹⁴N) 0.3 s and 8.5 s (a finite pulse
+  (dimension 576, the largest with ¹⁴N) 0.4 s and 8.5 s (a finite pulse
   is a full matrix exponential). 10⁴ noisy trajectories of CPMG-16 on a
-  bare centre take 0.05 s (1.4 s with finite pulses); each finite pulse
-  under noise costs sixteen full exponentials, and trajectories beyond the
-  work limit are refused before they start.
+  bare centre take 0.05 s (0.15–0.2 s with finite pulses), 10³ of
+  CPMG-64 with ¹⁴N and two ¹³C and finite pulses 8.5 s. Drawing the noise
+  costs about 80 ns per component and period: 1/f noise of 1000
+  fluctuators over CPMG-100 takes 1.7 s for 10³ trajectories. Propagations,
+  ODMR sweeps and trajectories beyond the work limit (about a minute on
+  one core) are refused before they start; `lines` and `decay_exponent`
+  cost little at any size (0.03 s for dimension 768).
 
 ## Validation
 
@@ -567,8 +594,15 @@ parahydrogen averaged at high field.
   to 10⁻¹⁰ over 1360 spacings, with six dips within 1.5 % of
   `τ_k = (2k − 1)π/(2ω_L + A_∥)`. An independent NumPy propagation
   (¹⁴N and two ¹³C, both transitions, ideal and finite pulses, a
-  negative angle) agrees to 10⁻¹⁰, and the block propagation agrees with
-  the dense one for arbitrary states to 10⁻¹⁰. The decay exponents of
+  negative angle, a random state, whose coherences show the pulse phases)
+  agrees to 10⁻¹⁰, and the block propagation agrees with the dense one
+  for arbitrary states, Hermitian or not, to 10⁻¹⁰. Against a linearly
+  polarised carrier simulated in the laboratory frame (no rotating-wave
+  approximation) at zero field, 0.5 mT and 2 mT, Hahn, XY-8 and
+  phase-shifted Ramsey sequences agree to 10⁻² (the rotating-wave error
+  is about `Ω/f`), and ideal pulses are the limit of selective finite ones
+  (2·10⁻³ at 30 MHz and 1 T). Noise during finite pulses agrees with 128
+  pieces per pulse within the statistical error. The decay exponents of
   Ornstein–Uhlenbeck noise equal the closed forms of Klauder and
   Anderson for Ramsey and Hahn echoes to 10⁻⁹ and a quadrature of
   `S(ω)|Y(ω)|²` for 1/f noise to 10⁻⁵; trajectories match `e^{−χ}` within

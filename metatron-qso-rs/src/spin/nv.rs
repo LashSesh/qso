@@ -11,12 +11,16 @@
 //!      + Σ_k [S_z (A_∥ I_z + A_⊥ I_x)_k − γ_C B I_z^k]
 //! ```
 //!
-//! in the frame rotating at the microwave frequency `f` (Hz), where a
-//! microwave field of Rabi frequency `Ω` drives both electron transitions
-//! `0 ↔ ±1` as `2π(Ω/√2)(cos φ S_x + sin φ S_y)` (rotating-wave
-//! approximation). Pulses act on the qubit `{0, m}` of one transition
+//! in the frame rotating at the microwave frequency `f` (Hz). A linearly
+//! polarised microwave `√2·2πΩ cos(2πft + φ) S_x` of Rabi frequency `Ω` and
+//! carrier phase `φ` drives both electron transitions `0 ↔ ±1` as
+//! `2π(Ω/2)(e^{−iφ}|±1⟩⟨0| + h.c.)` (rotating-wave approximation; the same
+//! phase on both). Pulses act on the qubit `{m, 0}` of one transition
 //! (`m = −1` by default), ideally (instantaneous and selective) or with
-//! finite duration. The electron starts in `m_s = 0` (optical pumping), the
+//! finite duration. Frequencies are signed: the transition `0 ↔ m` lies at
+//! `D + m γ_e B`, negative for `m = −1` above `B = D/γ_e ≈ 102 mT`, where a
+//! microwave at `|f|` of phase `φ` is the frame frequency `−|f|` with
+//! phase `−φ`. The electron starts in `m_s = 0` (optical pumping), the
 //! nuclei unpolarised, and the readout is the population of `m_s = 0`.
 //!
 //! Classical field noise `b(t)` along the axis adds `2π b(t) S_z` (Hz):
@@ -43,7 +47,9 @@ use crate::rng::Rng;
 /// Phys. Rep. 528, 1 (2013)).
 pub const NV_ZERO_FIELD_SPLITTING: f64 = 2.87e9;
 
-/// Gyromagnetic ratio of the NV electron spin, `g = 2.0028` (Hz/T).
+/// Gyromagnetic ratio of the NV electron spin (Hz/T): `g = 2.0023`, the
+/// free electron's; measured values for the NV centre differ by a few
+/// parts in 10⁴ (set [`NvCenter::gyromagnetic_ratio`] to use one).
 pub const NV_GYROMAGNETIC_RATIO: f64 = 28.025e9;
 
 /// Gyromagnetic ratio of ¹⁴N (Hz/T).
@@ -139,10 +145,13 @@ pub enum NvEvent {
 /// How pulses are applied: ideal (instantaneous, on the chosen transition
 /// alone) or with a Rabi frequency (Hz) that drives both transitions; then
 /// a pulse of angle `θ` lasts `θ/(2πΩ)` and free periods count between
-/// pulse centres.
+/// pulse centres. A pulse of phase `φ` rotates the qubit `{m, 0}` (`|m⟩`
+/// first) about `cos φ x + sin φ y`, the phase of the carrier on both
+/// transitions.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Microwave {
-    /// Microwave frequency (Hz), the frame of the Hamiltonian.
+    /// Microwave frequency (Hz, signed as the transitions in
+    /// [`NvCenter::lines`]), the frame of the Hamiltonian.
     pub frequency: f64,
     /// The qubit `{0, m}`: `m = −1` or `+1`.
     pub transition: i8,
@@ -381,6 +390,7 @@ impl Blocks {
 }
 
 /// A step of a planned sequence.
+#[derive(Clone, Copy)]
 enum Step {
     /// A free period (index into `Plan::free`).
     Free(usize),
@@ -468,9 +478,12 @@ impl NvCenter {
         out
     }
 
-    /// Hilbert-space dimension.
+    /// Hilbert-space dimension (`usize::MAX` if it overflows).
     pub fn dimension(&self) -> usize {
-        self.levels().iter().product()
+        self.levels()
+            .iter()
+            .try_fold(1usize, |acc, &n| acc.checked_mul(n))
+            .unwrap_or(usize::MAX)
     }
 
     /// Check the parameters.
@@ -493,8 +506,9 @@ impl NvCenter {
             return Err(QsoError::invalid(
                 "nv",
                 format!(
-                    "dimension {} exceeds {MAX_NV_DIMENSION} (at most six ¹³C with ¹⁴N)",
-                    self.dimension()
+                    "{} ¹³C: the dimension exceeds {MAX_NV_DIMENSION} (at most six ¹³C with \
+                     ¹⁴N, seven with ¹⁵N, eight without nitrogen)",
+                    self.carbons.len()
                 ),
             ));
         }
@@ -555,16 +569,9 @@ impl NvCenter {
     }
 
     /// The optically pumped state: `m_s = 0`, nuclei unpolarised.
-    pub fn initial_state(&self) -> CMatrix {
-        let d = self.dimension();
-        let nuclear = d / 3;
-        CMatrix::from_fn(d, d, |r, c| {
-            if r == c && r / nuclear == 1 {
-                C64::new(1.0 / nuclear as f64, 0.0)
-            } else {
-                ZERO
-            }
-        })
+    pub fn initial_state(&self) -> Result<CMatrix> {
+        self.validate()?;
+        Ok(self.initial_blocks().to_full())
     }
 
     /// The population of `m_s = 0` in `rho`.
@@ -573,25 +580,33 @@ impl NvCenter {
         (nuclear..2 * nuclear).map(|i| rho[(i, i)].re).sum()
     }
 
-    /// Microwave drive `2π(Ω/√2)(cos φ S_x + sin φ S_y)` (rad/s).
+    /// `√2 e^{−iφS_z²} S_x e^{iφS_z²}`: `e^{−iφ}|±1⟩⟨0| + h.c.`, the
+    /// electron operator of a linearly polarised carrier of phase `φ`
+    /// (degrees) in the frame rotating with `S_z²`, after the rotating-wave
+    /// approximation (the same phase on both transitions).
+    fn carrier(phase: f64) -> CMatrix {
+        let p = C64::from_polar(1.0, -phase.to_radians());
+        let mut g = CMatrix::zeros(3, 3);
+        for m in [0, 2] {
+            g[(m, 1)] = p;
+            g[(1, m)] = p.conj();
+        }
+        g
+    }
+
+    /// Microwave drive `2π(Ω/2)(e^{−iφ}|±1⟩⟨0| + h.c.)` (rad/s).
     fn drive(&self, rabi: f64, phase: f64) -> CMatrix {
-        let [_, sx, sy] = Self::electron();
-        let (c, s) = (phase.to_radians().cos(), phase.to_radians().sin());
         self.embed(
             0,
-            &((sx * C64::new(c, 0.0) + sy * C64::new(s, 0.0))
-                * C64::new(TWO_PI * rabi / std::f64::consts::SQRT_2, 0.0)),
+            &(Self::carrier(phase) * C64::new(TWO_PI * rabi / 2.0, 0.0)),
         )
     }
 
-    /// An ideal pulse on the qubit `{0, m}`: `exp(−iθ/2 (cos φ X + sin φ Y))`
-    /// with `X`, `Y` the drive's operators restricted to that transition
-    /// (on the electron, 3 × 3).
+    /// An ideal pulse on the qubit `{m, 0}`: `exp(−iθ/2 G)` with `G` the
+    /// drive's operator restricted to that transition, `cos φ σ_x + sin φ
+    /// σ_y` with `|m⟩` first (on the electron, 3 × 3).
     fn ideal_pulse(transition: i8, angle: f64, phase: f64) -> CMatrix {
-        let [_, sx, sy] = Self::electron();
-        let (c, s) = (phase.to_radians().cos(), phase.to_radians().sin());
-        let g = (sx * C64::new(c, 0.0) + sy * C64::new(s, 0.0))
-            * C64::new(std::f64::consts::SQRT_2, 0.0);
+        let g = Self::carrier(phase);
         let keep = if transition < 0 { [1, 2] } else { [0, 1] };
         let block = CMatrix::from_fn(3, 3, |r, col| {
             if keep.contains(&r) && keep.contains(&col) {
@@ -632,12 +647,21 @@ impl NvCenter {
         Ok(())
     }
 
-    /// With finite pulses, free periods are measured between pulse
-    /// centres: each is shortened by half the duration of each pulse next
-    /// to it (an error if that leaves less than nothing).
+    /// Adjacent free periods merged; with finite pulses, free periods are
+    /// measured between pulse centres (from the start or to the end of the
+    /// sequence at its ends): each is shortened by half the duration of
+    /// each pulse next to it (an error if that leaves less than nothing).
     fn centred(events: &[NvEvent], drive: &Microwave) -> Result<Vec<NvEvent>> {
+        let mut merged: Vec<NvEvent> = Vec::with_capacity(events.len());
+        for &e in events {
+            match (merged.last_mut(), e) {
+                (Some(NvEvent::Free(t)), NvEvent::Free(u)) => *t += u,
+                _ => merged.push(e),
+            }
+        }
+        let events = &merged;
         let Some(rabi) = drive.rabi else {
-            return Ok(events.to_vec());
+            return Ok(merged);
         };
         let half = |e: Option<&NvEvent>| match e {
             Some(NvEvent::Pulse { angle, .. }) => angle.abs() / 360.0 / rabi / 2.0,
@@ -675,7 +699,9 @@ impl NvCenter {
         Ok(state.bright())
     }
 
-    /// Apply `events` to `rho`.
+    /// Apply `events` to `rho`: `U ρ U†`, for any square matrix of the
+    /// centre's dimension (a non-Hermitian one as its Hermitian and
+    /// anti-Hermitian parts).
     pub fn evolve(&self, rho: &CMatrix, events: &[NvEvent], drive: &Microwave) -> Result<CMatrix> {
         let d = self.dimension();
         let plan = self.plan(events, drive, true)?;
@@ -685,11 +711,24 @@ impl NvCenter {
                 actual: rho.nrows(),
             });
         }
-        let mut state = Blocks::from_full(rho);
-        for step in &plan.steps {
-            plan.apply(&mut state, step);
+        if rho.iter().any(|z| !z.is_finite()) {
+            return Err(QsoError::invalid("rho", "entries must be finite"));
         }
-        Ok(state.to_full())
+        let run = |m: CMatrix| {
+            let mut state = Blocks::from_full(&m);
+            for step in &plan.steps {
+                plan.apply(&mut state, step);
+            }
+            state.to_full()
+        };
+        let adjoint = rho.adjoint();
+        if *rho == adjoint {
+            return Ok(run(rho.clone()));
+        }
+        let half = C64::new(0.5, 0.0);
+        let hermitian = (rho + &adjoint) * half;
+        let anti = (rho - &adjoint) * C64::new(0.0, -0.5);
+        Ok(run(hermitian) + run(anti) * C64::new(0.0, 1.0))
     }
 
     /// The pumped state in blocks.
@@ -750,6 +789,21 @@ impl NvCenter {
             Some(_) => Some(self.hamiltonian(drive.frequency)?),
             None => None,
         };
+        if let (true, Some(rabi)) = (unitaries, drive.rabi) {
+            // Each distinct finite pulse is one exponential, each pulse two
+            // full products.
+            let mut distinct = std::collections::HashSet::new();
+            let mut count = 0.0;
+            for e in &events {
+                if let NvEvent::Pulse { angle, phase } = *e {
+                    let (duration, phase) = finite(angle, phase, rabi);
+                    distinct.insert((duration.to_bits(), phase.to_bits()));
+                    count += 1.0;
+                }
+            }
+            let d3 = (self.dimension() as f64).powi(3);
+            check_work((distinct.len() as f64 * EXPM_WORK + 2.0 * count * PRODUCT_WORK) * d3)?;
+        }
         let mut free: Vec<FreeStep> = Vec::new();
         let mut pulses: Vec<CMatrix> = Vec::new();
         let mut seen_free: HashMap<u64, usize> = HashMap::new();
@@ -803,40 +857,79 @@ impl NvCenter {
         })
     }
 
-    /// The electron-spin resonance lines (Hz, from `m_s = 0`-like to `±1`-like
-    /// eigenstates of the Hamiltonian at `f = 0`) with their strengths
-    /// `|⟨b|S_x|a⟩|²` averaged over the unpolarised nuclei; lines below
-    /// 10⁻⁶ of the strongest are dropped; sorted by frequency.
+    /// The electron-spin resonance lines `(frequency in Hz, strength)` from
+    /// the `m_s = 0` levels to the `m_s = ±1` levels: frequencies signed as
+    /// the level differences (`D + m γ_e B` for a bare centre, negative for
+    /// `m = −1` above `B = D/γ_e ≈ 102 mT`), strengths `|⟨b|S_x|a⟩|²`
+    /// averaged over the unpolarised nuclei (they add up to `½` per
+    /// transition). Lines within 1 mHz are merged, their strengths added
+    /// (degenerate levels), and lines below 10⁻⁶ of the strongest dropped;
+    /// sorted by frequency. The levels are products of one state per
+    /// nucleus, so this costs about `d²` operations, not `d³`.
     pub fn lines(&self) -> Result<Vec<(f64, f64)>> {
-        let h = self.hamiltonian(0.0)?;
-        let (e, v) = crate::linalg::eigh(&h);
-        let [sz, sx, _] = Self::electron();
-        let sz2 = self.embed(0, &(&sz * &sz));
-        let sx = self.embed(0, &sx);
-        let d = self.dimension();
-        let weight_zero: Vec<bool> = (0..d)
-            .map(|j| {
-                let col = v.column(j);
-                (col.adjoint() * &sz2 * col)[(0, 0)].re < 0.5
-            })
-            .collect();
-        let m = v.adjoint() * sx * &v;
-        let nuclear = (d / 3) as f64;
+        self.validate()?;
+        let secular = self.secular(0.0);
+        let n = self.dimension() / 3;
+        let dims = &secular.dims;
+        // Squared overlaps |⟨v_b^k(μ)|v_0^k(ν)⟩|² of each nucleus.
+        let overlaps = |b: usize| -> Vec<CMatrix> {
+            secular.nuclei[b]
+                .iter()
+                .zip(&secular.nuclei[1])
+                .map(|((_, vb), (_, v0))| vb.adjoint() * v0)
+                .collect()
+        };
+        let digits = |mut i: usize| -> Vec<usize> {
+            let mut out = vec![0; dims.len()];
+            for (k, &dk) in dims.iter().enumerate().rev() {
+                out[k] = i % dk;
+                i /= dk;
+            }
+            out
+        };
+        let energy = |a: usize, idx: &[usize]| -> f64 {
+            secular.energy[a]
+                + secular.nuclei[a]
+                    .iter()
+                    .zip(idx)
+                    .map(|((e, _), &i)| e[i])
+                    .sum::<f64>()
+        };
         let mut out = Vec::new();
-        for a in (0..d).filter(|&a| weight_zero[a]) {
-            for b in (0..d).filter(|&b| !weight_zero[b]) {
-                let strength = m[(b, a)].norm_sqr() / nuclear;
-                out.push(((e[b] - e[a]) / TWO_PI, strength));
+        for b in [0, 2] {
+            let o = overlaps(b);
+            for nu in 0..n {
+                let from = digits(nu);
+                let e0 = energy(1, &from);
+                for mu in 0..n {
+                    let to = digits(mu);
+                    let weight: f64 = o
+                        .iter()
+                        .zip(to.iter().zip(&from))
+                        .map(|(m, (&i, &j))| m[(i, j)].norm_sqr())
+                        .product();
+                    out.push(((energy(b, &to) - e0) / TWO_PI, 0.5 * weight / n as f64));
+                }
             }
         }
-        let top = out.iter().fold(0.0f64, |t, l| t.max(l.1));
-        out.retain(|l| l.1 > 1e-6 * top);
         out.sort_by(|a, b| a.0.total_cmp(&b.0));
-        Ok(out)
+        let mut merged: Vec<(f64, f64)> = Vec::with_capacity(out.len());
+        for (f, w) in out {
+            match merged.last_mut() {
+                Some(last) if f - last.0 <= 1e-3 => last.1 += w,
+                _ => merged.push((f, w)),
+            }
+        }
+        let top = merged.iter().fold(0.0f64, |t, l| t.max(l.1));
+        merged.retain(|l| l.1 > 1e-6 * top);
+        Ok(merged)
     }
 
     /// Pulsed ODMR: the `m_s = 0` population after a microwave pulse of
-    /// Rabi frequency `rabi` (Hz) and `duration` (s) at each frequency.
+    /// Rabi frequency `rabi` (Hz) and `duration` (s) at each frequency
+    /// (Hz, in the signed convention of [`NvCenter::lines`]). Each frequency
+    /// needs one exponential of the full Hamiltonian; more than
+    /// [`super::MAX_RELAXATION_WORK`] operations in all are refused.
     pub fn odmr(&self, frequencies: &[f64], rabi: f64, duration: f64) -> Result<Vec<f64>> {
         self.validate()?;
         if !(rabi.is_finite() && rabi > 0.0 && duration.is_finite() && duration >= 0.0) {
@@ -848,15 +941,51 @@ impl NvCenter {
         if frequencies.iter().any(|f| !f.is_finite()) {
             return Err(QsoError::invalid("odmr", "frequencies must be finite"));
         }
-        let rho = self.initial_state();
+        let d = self.dimension();
+        check_work(frequencies.len() as f64 * EXPM_WORK * (d as f64).powi(3))?;
+        let n = d / 3;
         let drive = self.drive(rabi, 0.0);
         let results = crate::parallel::map_tasks(frequencies.len(), |k| {
             let h = self.hamiltonian(frequencies[k])? + &drive;
-            let u = expm_hermitian(&h, duration);
-            Ok(self.bright(&(&u * &rho * u.adjoint())))
+            let (e, v) = eigh(&h);
+            // Only the block of m_s = 0 of U matters: Σ |U_ij|²/n over it.
+            let rows = v.rows(n, n);
+            let mut phased = rows.clone_owned();
+            for (j, &x) in e.iter().enumerate() {
+                let p = C64::from_polar(1.0, -x * duration);
+                for r in 0..n {
+                    phased[(r, j)] *= p;
+                }
+            }
+            let block = cmul(&phased, &rows.adjoint());
+            Ok(block.iter().map(|z| z.norm_sqr()).sum::<f64>() / n as f64)
         });
         results.into_iter().collect()
     }
+}
+
+/// Operations (in the units of [`super::MAX_RELAXATION_WORK`]) of one
+/// exponential of a `d × d` Hermitian matrix, per `d³` (measured).
+const EXPM_WORK: f64 = 400.0;
+
+/// The same for one complex product of `d × d` matrices.
+const PRODUCT_WORK: f64 = 10.0;
+
+/// The same for one component of the noise over one period (two normal
+/// draws, or one flip of telegraph noise; measured).
+const SAMPLE_WORK: f64 = 2000.0;
+
+fn check_work(work: f64) -> Result<()> {
+    if work > super::MAX_RELAXATION_WORK {
+        return Err(QsoError::invalid(
+            "nv",
+            format!(
+                "this needs about {work:.1e} operations (limit {:.1e})",
+                super::MAX_RELAXATION_WORK
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// Classical noise `b(t)` (Hz) of the field along the NV axis, coupling as
@@ -885,41 +1014,41 @@ pub enum FieldNoise {
 impl FieldNoise {
     /// Check the parameters.
     pub fn validate(&self) -> Result<()> {
-        let ok = match *self {
-            FieldNoise::Telegraph { amplitude, rate } => {
-                amplitude.is_finite() && rate.is_finite() && rate >= 0.0
-            }
+        let (ok, need) = match *self {
+            FieldNoise::Telegraph { amplitude, rate } => (
+                amplitude.is_finite() && rate.is_finite() && rate >= 0.0,
+                "a finite amplitude and a finite rate ≥ 0",
+            ),
             FieldNoise::OrnsteinUhlenbeck {
                 sigma,
                 correlation_time,
-            } => {
+            } => (
                 sigma.is_finite()
                     && sigma >= 0.0
                     && correlation_time.is_finite()
-                    && correlation_time > 0.0
-            }
+                    && correlation_time > 0.0,
+                "a finite sigma ≥ 0 and a finite correlation time > 0",
+            ),
             FieldNoise::Pink {
                 sigma,
                 lowest,
                 highest,
                 fluctuators,
-            } => {
+            } => (
                 sigma.is_finite()
                     && sigma >= 0.0
                     && lowest.is_finite()
                     && highest.is_finite()
                     && lowest > 0.0
                     && highest >= lowest
-                    && (1..=1000).contains(&fluctuators)
-            }
+                    && (1..=1000).contains(&fluctuators),
+                "a finite sigma ≥ 0, 0 < lowest ≤ highest (finite) and 1..=1000 fluctuators",
+            ),
         };
         if ok {
             Ok(())
         } else {
-            Err(QsoError::invalid(
-                "noise",
-                "finite amplitudes, positive rates and 1..=1000 fluctuators",
-            ))
+            Err(QsoError::invalid("noise", need))
         }
     }
 
@@ -964,47 +1093,68 @@ impl FieldNoise {
     }
 
     /// The two-sided spectrum `S(ω) = ∫ ⟨b(0)b(τ)⟩ e^{iωτ} dτ` (Hz²·s) at
-    /// angular frequency `ω` (rad/s).
+    /// angular frequency `ω` (rad/s). Static noise (a telegraph of rate
+    /// 0) is `2πc²δ(ω)`: infinite at `ω = 0`, zero elsewhere.
     pub fn spectrum(&self, omega: f64) -> f64 {
         self.components()
             .iter()
-            .map(|(c2, theta)| 2.0 * c2 * theta / (theta * theta + omega * omega))
+            .map(|&(c2, theta)| {
+                if theta > 0.0 {
+                    2.0 * c2 * theta / (theta * theta + omega * omega)
+                } else if omega == 0.0 && c2 > 0.0 {
+                    f64::INFINITY
+                } else {
+                    0.0
+                }
+            })
             .sum()
     }
 }
 
 /// The free periods of a sequence of ideal pulses with their signs in the
-/// toggling frame: `π/2`, free periods and `π` pulses, `π/2`.
+/// toggling frame: a `π/2` pulse, free periods and `π` pulses (or `2π`,
+/// which do nothing), a `π/2` pulse; angles modulo 360°, of either sign.
 fn segments(events: &[NvEvent]) -> Result<Vec<(f64, f64, f64)>> {
+    NvCenter::check_events(events)?;
     let bad = || {
         QsoError::invalid(
             "sequence",
             "filter functions need π/2, free periods and π pulses, π/2",
         )
     };
+    // The angle modulo 360°, if it is a multiple of 90° (to 10⁻⁹).
+    let quarter = |e: &NvEvent| match *e {
+        NvEvent::Pulse { angle, .. } => {
+            let turns = angle.rem_euclid(360.0) / 90.0;
+            ((turns - turns.round()).abs() < 1e-11).then(|| turns.round() as i64 % 4)
+        }
+        NvEvent::Free(_) => None,
+    };
     let n = events.len();
-    let is_angle = |e: &NvEvent, a: f64| matches!(*e, NvEvent::Pulse { angle, .. } if (angle - a).abs() < 1e-9);
-    if n < 2 || !is_angle(&events[0], 90.0) || !is_angle(&events[n - 1], 90.0) {
+    let half = |e: &NvEvent| matches!(quarter(e), Some(1 | 3));
+    if n < 2 || !half(&events[0]) || !half(&events[n - 1]) {
         return Err(bad());
     }
     let (mut t, mut sign) = (0.0, 1.0);
     let mut out = Vec::new();
     for e in &events[1..n - 1] {
-        match *e {
-            NvEvent::Free(dt) => {
+        match (*e, quarter(e)) {
+            (NvEvent::Free(dt), _) => {
                 out.push((t, t + dt, sign));
                 t += dt;
             }
-            _ if is_angle(e, 180.0) => sign = -sign,
+            (_, Some(2)) => sign = -sign,
+            (_, Some(0)) => {}
             _ => return Err(bad()),
         }
     }
     Ok(out)
 }
 
-/// The filter function `|Y(ω)|²` (s²) of a sequence of ideal pulses at
-/// angular frequency `ω`: `Y(ω) = ∫ y(t) e^{iωt} dt` with `y = ±1` the sign
-/// of the coherence in the toggling frame.
+/// The filter function `|Y(ω)|²` (s²) of a sequence at angular frequency
+/// `ω`: `Y(ω) = ∫ y(t) e^{iωt} dt` with `y = ±1` the sign of the coherence
+/// in the toggling frame. Pulses are instantaneous here: for finite ones
+/// this is the approximation of free periods between pulse centres.
 pub fn filter_function(events: &[NvEvent], omega: f64) -> Result<f64> {
     let mut y = C64::new(0.0, 0.0);
     for (a, b, s) in segments(events)? {
@@ -1020,41 +1170,112 @@ pub fn filter_function(events: &[NvEvent], omega: f64) -> Result<f64> {
 }
 
 /// The Gaussian decay exponent `χ` of the coherence of the qubit `{0, ±1}`
-/// under `noise` for a sequence of ideal pulses: `χ = ½⟨φ²⟩`, `φ = 2π∫b y
-/// dt`, computed exactly in the time domain from the exponential
-/// correlations (equal to `(2π)²/(2·2π) ∫ S(ω)|Y(ω)|² dω`). For Gaussian
-/// noise the coherence decays as `e^{−χ}`.
+/// under `noise` for a sequence of instantaneous pulses (for finite ones,
+/// the approximation of free periods between pulse centres): `χ = ½⟨φ²⟩`,
+/// `φ = 2π∫b y dt`, computed exactly in the time domain from the
+/// exponential correlations, in one pass over the periods (equal to
+/// `(2π)²/(2·2π) ∫ S(ω)|Y(ω)|² dω`). For Gaussian noise the coherence
+/// decays as `e^{−χ}`; for telegraph noise `χ` is only its second-order
+/// term.
 pub fn decay_exponent(events: &[NvEvent], noise: &FieldNoise) -> Result<f64> {
     noise.validate()?;
     let segs = segments(events)?;
     let mut phase2 = 0.0;
     for (c2, theta) in noise.components() {
-        let g = |x: f64| -(-x).exp_m1();
-        for (i, &(a1, b1, s1)) in segs.iter().enumerate() {
-            let l1 = b1 - a1;
-            // ∫∫ over the same segment: (2/θ²)(θL − 1 + e^{−θL}).
-            let x = theta * l1;
-            let same = if x < 1e-4 {
-                l1 * l1 * (1.0 - x / 3.0 + x * x / 12.0)
+        // h(L) = ∫₀^L e^{−θs} ds, the weight of a period seen from later ones.
+        let h = |l: f64| {
+            let x = theta * l;
+            if x < 1e-8 {
+                l * (1.0 - 0.5 * x)
             } else {
-                2.0 * (x - g(x)) / (theta * theta)
-            };
-            phase2 += c2 * same;
-            for &(a2, b2, s2) in &segs[i + 1..] {
-                let l2 = b2 - a2;
-                let pair = if theta == 0.0 {
-                    l1 * l2
-                } else {
-                    g(theta * l1) * g(theta * l2) * (-theta * (a2 - b1)).exp() / (theta * theta)
-                };
-                phase2 += 2.0 * c2 * s1 * s2 * pair;
+                -(-x).exp_m1() / theta
             }
+        };
+        // Σ_{i<j} s_i h(L_i) e^{−θ(a_j − b_i)}, carried from period to period.
+        let mut earlier = 0.0;
+        let mut previous: Option<(f64, f64, f64)> = None;
+        for &(a, b, s) in &segs {
+            let l = b - a;
+            if let Some((pa, pb, ps)) = previous {
+                earlier = earlier * (-theta * (a - pa)).exp()
+                    + ps * h(pb - pa) * (-theta * (a - pb)).exp();
+            }
+            // ∫∫ over the same period: (2/θ²)(θL − 1 + e^{−θL}).
+            let x = theta * l;
+            let same = if x < 1e-4 {
+                l * l * (1.0 - x / 3.0 + x * x / 12.0)
+            } else {
+                2.0 * (x + (-x).exp_m1()) / (theta * theta)
+            };
+            phase2 += c2 * (same + 2.0 * s * h(l) * earlier);
+            previous = Some((a, b, s));
         }
     }
     Ok(0.5 * TWO_PI * TWO_PI * phase2)
 }
 
-/// One sampled path of the noise, advanced interval by interval.
+/// The exact update of one Ornstein–Uhlenbeck component over a period:
+/// given the value `x` at its start, the integral is `x·mean + k z₁ +
+/// rest·z₂` and the value at its end `x·decay + spread·z₁` (`z` standard
+/// normal; the pair is jointly Gaussian).
+#[derive(Clone, Copy)]
+struct OuStep {
+    decay: f64,
+    mean: f64,
+    spread: f64,
+    k: f64,
+    rest: f64,
+}
+
+impl OuStep {
+    fn new(c2: f64, theta: f64, dt: f64) -> Self {
+        let y = theta * dt;
+        let decay = (-y).exp();
+        let g = -(-y).exp_m1();
+        let var_x = c2 * -(-2.0 * y).exp_m1();
+        // Var ∫x = c²/θ² (2y − 3 + 4e^{−y} − e^{−2y}), by its series where
+        // that difference cancels (to about 10⁻¹¹ either way).
+        let var_i = if y < 0.02 {
+            c2 * dt
+                * dt
+                * y
+                * (2.0 / 3.0 - y / 2.0 + 7.0 * y * y / 30.0 - y.powi(3) / 12.0
+                    + 31.0 * y.powi(4) / 1260.0)
+        } else {
+            c2 / (theta * theta) * (2.0 * y - 3.0 + 4.0 * decay - decay * decay)
+        };
+        let cov = c2 / theta * g * g;
+        let spread = var_x.max(0.0).sqrt();
+        let k = if spread > 0.0 { cov / spread } else { 0.0 };
+        OuStep {
+            decay,
+            mean: if y < 1e-8 {
+                dt * (1.0 - 0.5 * y)
+            } else {
+                g / theta
+            },
+            spread,
+            k,
+            rest: (var_i - k * k).max(0.0).sqrt(),
+        }
+    }
+}
+
+/// The updates of every component over a period `dt` (empty for
+/// telegraph noise, which draws its flips).
+fn ou_steps(noise: &FieldNoise, dt: f64) -> Vec<OuStep> {
+    if noise.is_gaussian() {
+        noise
+            .components()
+            .iter()
+            .map(|&(c2, theta)| OuStep::new(c2, theta, dt))
+            .collect()
+    } else {
+        Vec::new()
+    }
+}
+
+/// One sampled path of the noise, advanced period by period.
 struct NoisePath {
     /// Current value of each component (Hz).
     values: Vec<f64>,
@@ -1087,13 +1308,14 @@ impl NoisePath {
         }
     }
 
-    /// `∫ b dt` over the next `dt` (exactly), advancing the path.
-    fn integral(&mut self, dt: f64, rng: &mut Rng) -> f64 {
+    /// `∫ b dt` over the next `dt` (exactly), advancing the path; `steps`
+    /// are the Ornstein–Uhlenbeck updates for that `dt`.
+    fn integral(&mut self, dt: f64, steps: &[OuStep], rng: &mut Rng) -> f64 {
         let mut total = 0.0;
-        for (x, &(c2, theta)) in self.values.iter_mut().zip(&self.components) {
-            if self.telegraph {
+        if self.telegraph {
+            for (x, &(_, theta)) in self.values.iter_mut().zip(&self.components) {
                 // Flips at rate θ/2 (θ = 2·rate); waiting times are
-                // memoryless, so each interval draws its own.
+                // memoryless, so each period draws its own.
                 let rate = theta / 2.0;
                 let mut left = dt;
                 loop {
@@ -1110,30 +1332,12 @@ impl NoisePath {
                     left -= wait;
                     *x = -*x;
                 }
-            } else {
-                // (x', I) jointly Gaussian given x (Ornstein–Uhlenbeck).
-                let y = theta * dt;
-                let e = (-y).exp();
-                let g = -(-y).exp_m1();
-                let mean_x = *x * e;
-                let mean_i = *x * g / theta;
-                let var_x = c2 * -(-2.0 * y).exp_m1();
-                let var_i = if y < 1e-3 {
-                    c2 * dt * dt * y * (2.0 / 3.0 - y / 2.0 + 7.0 * y * y / 30.0)
-                } else {
-                    c2 / (theta * theta) * (2.0 * y - 3.0 + 4.0 * e - e * e)
-                };
-                let cov = c2 / theta * g * g;
+            }
+        } else {
+            for (x, step) in self.values.iter_mut().zip(steps) {
                 let (z1, z2) = (rng.normal(), rng.normal());
-                let sx = var_x.max(0.0).sqrt();
-                let (i_from_x, i_rest) = if sx > 0.0 {
-                    let k = cov / sx;
-                    (k * z1, (var_i - k * k).max(0.0).sqrt() * z2)
-                } else {
-                    (0.0, var_i.max(0.0).sqrt() * z2)
-                };
-                total += mean_i + i_from_x + i_rest;
-                *x = mean_x + sx * z1;
+                total += *x * step.mean + step.k * z1 + step.rest * z2;
+                *x = *x * step.decay + step.spread * z1;
             }
         }
         total
@@ -1142,10 +1346,13 @@ impl NoisePath {
 
 impl NvCenter {
     /// The `m_s = 0` population after `events` averaged over
-    /// `trajectories` exact paths of `noise` (seeded), with its standard
-    /// error. Between pulses the noise enters as a phase `exp(−2πi I S_z)`
-    /// with `I = ∫b dt` sampled exactly; during finite pulses it is
-    /// constant over each of 16 pieces (its exact mean there).
+    /// `trajectories` paths of `noise` (seeded), with its standard error
+    /// (NaN for one trajectory). Between pulses the noise enters as a
+    /// phase `exp(−2πi I S_z)` with `I = ∫b dt` sampled exactly. During a
+    /// finite pulse it is held at its exact mean over each of up to 16
+    /// pieces, as many as needed for pieces of at most `1/(16θ)` (one piece
+    /// if the noise barely changes during the pulse; `θ` the fastest rate
+    /// of its correlations), each a full exponential.
     pub fn signal_with_noise(
         &self,
         events: &[NvEvent],
@@ -1159,32 +1366,69 @@ impl NvCenter {
             return Err(QsoError::invalid("trajectories", "at least one"));
         }
         let plan = self.plan(events, drive, false)?;
+        let components = noise.components();
+        let fastest = components.iter().fold(0.0f64, |m, c| m.max(c.1));
+        // Per finite step: the pulse's Hamiltonian, its pieces and their
+        // updates, computed once for all trajectories.
+        let mut hamiltonians: HashMap<u64, CMatrix> = HashMap::new();
+        let mut pieces: Vec<Option<(usize, f64, Vec<OuStep>)>> = Vec::new();
+        for step in &plan.steps {
+            pieces.push(match *step {
+                Step::Finite {
+                    duration, phase, ..
+                } => {
+                    let (Some(h0), Some(rabi)) = (&plan.h0, drive.rabi) else {
+                        unreachable!("finite pulses have a Hamiltonian and a Rabi frequency")
+                    };
+                    hamiltonians
+                        .entry(phase.to_bits())
+                        .or_insert_with(|| h0 + self.drive(rabi, phase));
+                    let count = if duration > 0.0 {
+                        (16.0 * fastest * duration).ceil().clamp(1.0, 16.0) as usize
+                    } else {
+                        0
+                    };
+                    let piece = duration / count.max(1) as f64;
+                    Some((count, piece, ou_steps(noise, piece)))
+                }
+                _ => None,
+            });
+        }
+        let free_steps: Vec<Vec<OuStep>> = plan.free.iter().map(|f| ou_steps(noise, f.t)).collect();
+        // Operations (estimated): a free period applies one small factor
+        // per nucleus on each side of six blocks and samples every
+        // component (telegraph noise each flip); an ideal pulse combines
+        // blocks; each piece of a finite pulse is a full exponential and
+        // the pulse two full products.
         let d = self.dimension() as f64;
         let n = d / 3.0;
         let nuclear: f64 = plan.secular.dims.iter().map(|&k| (k * k) as f64).sum();
-        // Operations (estimated): a free period applies one small factor
-        // per nucleus on each side of six blocks; an ideal pulse combines
-        // blocks; each of the 16 pieces of a finite pulse is a full
-        // exponential (about 12 d³) and two products.
+        let sampling = |t: f64| -> f64 {
+            components
+                .iter()
+                .map(|&(_, theta)| {
+                    SAMPLE_WORK * (1.0 + if noise.is_gaussian() { 0.0 } else { theta * t })
+                })
+                .sum()
+        };
         let per: f64 = plan
             .steps
             .iter()
-            .map(|step| match step {
-                Step::Free(_) => 8.0 * 12.0 * n * n * (nuclear + 1.0),
-                Step::Ideal(_) => 8.0 * 54.0 * n * n,
-                Step::Finite { .. } => 16.0 * 18.0 * d * d * d,
+            .zip(&pieces)
+            .map(|(step, piece)| match (step, piece) {
+                (Step::Free(j), _) => {
+                    8.0 * 12.0 * n * n * (nuclear + 1.0) + sampling(plan.free[*j].t)
+                }
+                (Step::Ideal(_), _) => 8.0 * 54.0 * n * n,
+                (Step::Finite { duration, .. }, Some((count, _, _))) => {
+                    *count as f64 * (EXPM_WORK + PRODUCT_WORK) * d * d * d
+                        + 2.0 * PRODUCT_WORK * d * d * d
+                        + sampling(*duration)
+                }
+                (Step::Finite { .. }, None) => unreachable!("finite steps have pieces"),
             })
             .sum();
-        let work = per * trajectories as f64;
-        if work > super::MAX_RELAXATION_WORK {
-            return Err(QsoError::invalid(
-                "nv",
-                format!(
-                    "{trajectories} trajectories need about {work:.1e} operations (limit {:.1e})",
-                    super::MAX_RELAXATION_WORK
-                ),
-            ));
-        }
+        check_work(per * trajectories as f64)?;
         let sz = self.embed(0, &Self::electron()[0]);
         let start = self.initial_blocks();
         let root = Rng::seed_from_u64(seed);
@@ -1192,38 +1436,38 @@ impl NvCenter {
             let mut rng = root.fork(k as u64);
             let mut path = NoisePath::new(noise, &mut rng);
             let mut state = start.clone();
-            for step in &plan.steps {
-                match *step {
-                    Step::Free(j) => {
+            for (step, piece) in plan.steps.iter().zip(&pieces) {
+                match (*step, piece) {
+                    (Step::Free(j), _) => {
                         let free = &plan.free[j];
-                        let phase = TWO_PI * path.integral(free.t, &mut rng);
+                        let phase = TWO_PI * path.integral(free.t, &free_steps[j], &mut rng);
                         state.free(free, &plan.secular.dims, phase);
                     }
-                    Step::Ideal(j) => state.electron(&plan.pulses[j]),
-                    Step::Finite {
-                        duration, phase, ..
-                    } => {
-                        let (Some(h0), Some(rabi)) = (&plan.h0, drive.rabi) else {
-                            unreachable!("finite pulses have a Hamiltonian and a Rabi frequency")
-                        };
-                        let piece = duration / 16.0;
-                        let h = h0 + self.drive(rabi, phase);
+                    (Step::Ideal(j), _) => state.electron(&plan.pulses[j]),
+                    (Step::Finite { phase, .. }, Some((count, piece, steps))) => {
+                        let h = &hamiltonians[&phase.to_bits()];
                         let mut u = CMatrix::identity(sz.nrows(), sz.nrows());
-                        for _ in 0..if piece > 0.0 { 16 } else { 0 } {
-                            let mean = path.integral(piece, &mut rng) / piece;
-                            let hk = &h + &sz * C64::new(TWO_PI * mean, 0.0);
-                            u = cmul(&expm_hermitian(&hk, piece), &u);
+                        for _ in 0..*count {
+                            let mean = path.integral(*piece, steps, &mut rng) / piece;
+                            let hk = h + &sz * C64::new(TWO_PI * mean, 0.0);
+                            u = cmul(&expm_hermitian(&hk, *piece), &u);
                         }
                         state.full(&u);
                     }
+                    (Step::Finite { .. }, None) => unreachable!("finite steps have pieces"),
                 }
             }
             state.bright()
         });
         let n = values.len() as f64;
         let mean = values.iter().sum::<f64>() / n;
-        let var = values.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0).max(1.0);
-        Ok((mean, (var / n).sqrt()))
+        let error = if values.len() < 2 {
+            f64::NAN
+        } else {
+            let var = values.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0);
+            (var / n).sqrt()
+        };
+        Ok((mean, error))
     }
 }
 

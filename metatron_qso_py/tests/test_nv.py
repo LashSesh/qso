@@ -31,7 +31,7 @@ def kron(*mats):
 def reference_hamiltonian(field, frequency, nitrogen, carbons):
     """`H` (rad/s) in the frame rotating at `frequency`, built from the
     secular NV Hamiltonian of Doherty et al. (2013) term by term."""
-    d, gamma = 2.87e9, 28.025e9
+    d, gamma = 2.87e9, spin.NV_GYROMAGNETIC_RATIO
     sz = ops(3)[0]
     dims = [3] + ([3] if nitrogen else []) + [2] * len(carbons)
 
@@ -53,26 +53,31 @@ def reference_hamiltonian(field, frequency, nitrogen, carbons):
     return TWO_PI * h, embed
 
 
-def reference_signal(field, frequency, nitrogen, carbons, events, transition, rabi):
-    """The `m_s = 0` population after `events` given as `("pulse", angle,
-    phase)` or `("free", t)`."""
+def reference_evolve(
+    field, frequency, nitrogen, carbons, rho, events, transition, rabi
+):
+    """`U ρ U†` after `events` given as `("pulse", angle, phase)` or
+    `("free", t)`. Finite pulses keep the co-rotating half of a carrier
+    `√2·2πΩ cos(ωt + φ) S_x`: `2π(Ω/2) e^{−iφ}` from `|0⟩` to `|±1⟩`; ideal
+    pulses rotate the two levels `{m, 0}` alone, in closed form."""
     scipy_linalg = pytest.importorskip("scipy.linalg")
     h0, embed = reference_hamiltonian(field, frequency, nitrogen, carbons)
-    dim = h0.shape[0]
-    _, sx, sy = ops(3)
 
     def duration(e):
         return abs(e[1]) / 360 / rabi if (rabi and e[0] == "pulse") else 0.0
 
-    rho = np.zeros((dim, dim), complex)
-    nuclear = dim // 3
-    rho[nuclear : 2 * nuclear, nuclear : 2 * nuclear] = np.eye(nuclear) / nuclear
-    for k, e in enumerate(events):
+    merged = []
+    for e in events:
+        if merged and e[0] == "free" and merged[-1][0] == "free":
+            merged[-1] = ("free", merged[-1][1] + e[1])
+        else:
+            merged.append(e)
+    for k, e in enumerate(merged):
         if e[0] == "free":
             t = e[1]
             if rabi:
-                before = duration(events[k - 1]) if k > 0 else 0.0
-                after = duration(events[k + 1]) if k + 1 < len(events) else 0.0
+                before = duration(merged[k - 1]) if k > 0 else 0.0
+                after = duration(merged[k + 1]) if k + 1 < len(merged) else 0.0
                 t -= (before + after) / 2
             u = scipy_linalg.expm(-1j * h0 * t)
         else:
@@ -80,26 +85,25 @@ def reference_signal(field, frequency, nitrogen, carbons, events, transition, ra
             if rabi:
                 if angle < 0:
                     angle, phase = -angle, phase + 180
-                phi = math.radians(phase)
-                drive = (
-                    TWO_PI
-                    * rabi
-                    / math.sqrt(2)
-                    * (math.cos(phi) * sx + math.sin(phi) * sy)
-                )
+                up = np.zeros((3, 3), complex)  # |±1⟩⟨0|, levels m = +1, 0, −1
+                up[0, 1] = up[2, 1] = 1
+                half = TWO_PI * rabi / 2 * np.exp(-1j * math.radians(phase)) * up
+                drive = half + half.conj().T
                 u = scipy_linalg.expm(-1j * (h0 + embed(0, drive)) * angle / 360 / rabi)
             else:
-                # The qubit {0, m}: Pauli matrices in that two-level block.
-                a, b = (1, 2) if transition < 0 else (0, 1)
-                x = np.zeros((3, 3), complex)
-                y = np.zeros((3, 3), complex)
-                x[a, b] = x[b, a] = 1
-                y[a, b], y[b, a] = math.sqrt(2) * sy[a, b], math.sqrt(2) * sy[b, a]
-                phi = math.radians(phase)
-                g = math.cos(phi) * x + math.sin(phi) * y
-                u = embed(0, scipy_linalg.expm(-0.5j * math.radians(angle) * g))
+                m = 2 if transition < 0 else 0
+                g = np.zeros((3, 3), complex)
+                g[m, 1] = np.exp(-1j * math.radians(phase))
+                g[1, m] = np.exp(1j * math.radians(phase))
+                p = np.zeros((3, 3))
+                p[m, m] = p[1, 1] = 1
+                c, s_ = (
+                    math.cos(math.radians(angle) / 2),
+                    math.sin(math.radians(angle) / 2),
+                )
+                u = embed(0, np.eye(3) - p + c * p - 1j * s_ * g)
         rho = u @ rho @ u.conj().T
-    return float(np.trace(rho[nuclear : 2 * nuclear, nuclear : 2 * nuclear]).real)
+    return rho
 
 
 def as_tuples(events):
@@ -111,25 +115,59 @@ def as_tuples(events):
 
 @pytest.mark.parametrize("rabi", [None, 12e6])
 @pytest.mark.parametrize("transition", [-1, 1])
-def test_signals_match_an_independent_numpy_propagation(rabi, transition):
+def test_evolution_matches_an_independent_numpy_propagation(rabi, transition):
     field, nitrogen, carbons = 0.031, True, [(60e3, 30e3), (-20e3, 45e3)]
     nv = spin.NvCenter(field, nitrogen="14N", carbons=carbons)
-    frequency = 2.87e9 + transition * 28.025e9 * field + 0.3e6
+    frequency = 2.87e9 + transition * spin.NV_GYROMAGNETIC_RATIO * field + 0.3e6
     h, _ = reference_hamiltonian(field, frequency, nitrogen, carbons)
     assert np.abs(nv.hamiltonian(frequency) - h).max() < 1e-12 * np.abs(h).max()
+    # A random state: the phases of the pulses show in its coherences.
+    rng = np.random.default_rng(4)
+    a = rng.normal(size=(36, 36)) + 1j * rng.normal(size=(36, 36))
+    rho = a @ a.conj().T
+    rho /= np.trace(rho)
     sequences = [
         spin.ramsey(0.3e-6),
         spin.hahn(0.5e-6),
         spin.xy8(1, 0.2e-6),
         spin.cpmg(3, 0.25e-6),
         [spin.nv_pulse(-70, 20), spin.nv_free(0.1e-6), spin.nv_pulse(45, 100)],
+        [
+            spin.nv_pulse(90, 30),
+            spin.nv_free(0.0),
+            spin.nv_free(0.2e-6),
+            spin.nv_pulse(135, 250),
+        ],
     ]
     for events in sequences:
-        got = nv.signal(events, frequency=frequency, transition=transition, rabi=rabi)
-        want = reference_signal(
-            field, frequency, nitrogen, carbons, as_tuples(events), transition, rabi
+        kw = {"frequency": frequency, "transition": transition, "rabi": rabi}
+        got = nv.evolve(rho, events, **kw)
+        want = reference_evolve(
+            field,
+            frequency,
+            nitrogen,
+            carbons,
+            rho,
+            as_tuples(events),
+            transition,
+            rabi,
         )
-        assert abs(got - want) < 1e-10, (events, got, want)
+        assert np.abs(got - want).max() < 1e-10, events
+        start = nv.initial_state()
+        p0 = reference_evolve(
+            field,
+            frequency,
+            nitrogen,
+            carbons,
+            start,
+            as_tuples(events),
+            transition,
+            rabi,
+        )
+        n = 12
+        assert nv.signal(events, **kw) == pytest.approx(
+            np.trace(p0[n : 2 * n, n : 2 * n]).real, abs=1e-10
+        )
 
 
 def ou_ramsey(sigma, tc, t):
@@ -296,3 +334,28 @@ def test_nv_bindings():
         nv.signal_with_noise(spin.hahn(1e-6), noise, 0)
     with pytest.raises(ValueError):
         spin.NvCenter.from_json('{"field": 1}')
+    with pytest.raises(ValueError):
+        nv.signal(spin.ramsey(1e-6), transition=128)
+    with pytest.raises(ValueError):
+        spin.cpmg(0, 1e-6)
+    with pytest.raises(ValueError):
+        spin.xy8(0, 1e-6)
+    with pytest.raises(ValueError):
+        spin.NvCenter(0.01, nitrogen=("14N", 1.0))
+    # Custom nitrogen couplings and the getters.
+    custom = spin.NvCenter(0.02, nitrogen=("15N", 3.1e6, 0.0), carbons=[(5e4, 1e4)])
+    assert custom.nitrogen == ("15N", 3.1e6, 0.0)
+    assert custom.carbons == [(5e4, 1e4)]
+    assert nv.nitrogen == ("14N", -2.14e6, -4.945e6)
+    assert custom.zero_field_splitting == 2.87e9
+    assert custom.gyromagnetic_ratio == spin.NV_GYROMAGNETIC_RATIO
+    assert spin.NvCenter.from_json(custom.to_json()).nitrogen == custom.nitrogen
+    # Lines carry half the strength per transition.
+    assert sum(w for _, w in nv.lines()) == pytest.approx(1.0)
+    # evolve takes any operator (here a coherence) linearly.
+    x = np.zeros((18, 18), complex)
+    x[6, 12] = 1.0
+    y = nv.evolve(x, spin.hahn(1e-6))
+    assert np.allclose(y + y.conj().T, nv.evolve(x + x.conj().T, spin.hahn(1e-6)))
+    _, err = nv.signal_with_noise(spin.hahn(1e-6), noise, 1)
+    assert math.isnan(err)

@@ -78,15 +78,22 @@ All notable changes to this project are documented here. The format follows
     approximation, both transitions driven, free periods between pulse
     centres); JSON.
   - Sequences `ramsey`, `hahn`, `cpmg`, `xy8` (`NvEvent`).
+  - The microwave phase is the carrier's, the same on both transitions;
+    frequencies are signed (`D + m γ_e B`, negative for `m = −1` above
+    102 mT).
   - `FieldNoise`: telegraph, Ornstein–Uhlenbeck and 1/f field noise with
     spectra and correlations; `filter_function` and `decay_exponent`
-    (the Gaussian `χ`, exact in the time domain); `signal_with_noise`
-    averages exactly sampled noise trajectories (with standard errors).
+    (the Gaussian `χ`, exact in the time domain, in one pass);
+    `signal_with_noise` averages noise trajectories, sampled exactly
+    between pulses and held at their mean over pieces of finite pulses
+    (with standard errors).
   - Free evolution in blocks of the electron level, one small factor per
-    nucleus: CPMG-16 with ¹⁴N and six ¹³C (dimension 576) takes 0.3 s.
+    nucleus: CPMG-16 with ¹⁴N and six ¹³C (dimension 576) takes 0.4 s;
+    `lines` one nucleus at a time. Work beyond the limit is refused.
   - Validated against the resonance lines `D ± γ_e B ± A_N m_I`, the CPMG
     closed form of Taminiau et al. for a ¹³C (10⁻¹⁰), an independent
-    NumPy propagation (10⁻¹⁰), the dense propagation, Klauder and
+    NumPy propagation of random states (10⁻¹⁰), the dense propagation, a
+    linearly polarised carrier in the laboratory frame, Klauder and
     Anderson's Ornstein–Uhlenbeck decays (10⁻⁹), a quadrature of the
     filter-function integral (10⁻⁵), Kubo–Anderson for telegraph noise,
     and the robustness of XY-8 to pulse errors.

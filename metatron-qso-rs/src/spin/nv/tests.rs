@@ -51,6 +51,40 @@ fn odmr_lines_lie_at_d_plus_minus_gamma_b_split_by_the_nitrogen() {
         assert!((freqs[k] - want).abs() <= 2e4, "{} vs {want}", freqs[k]);
         assert!((p0[k] - 2.0 / 3.0).abs() < 0.02, "{}", p0[k]);
     }
+    // ODMR is one finite pulse at each frequency.
+    let nv = nv.with_carbon(60e3, 30e3);
+    for f in [centre - 2.2e6, centre, centre + 0.7e6] {
+        let mw = Microwave {
+            frequency: f,
+            transition: -1,
+            rabi: Some(rabi),
+        };
+        let start = nv.initial_state().unwrap();
+        let want = nv.bright(&dense(&nv, &start, &[pulse(180.0, 0.0)], &mw, 0.0));
+        let got = nv.odmr(&[f], rabi, 1.0 / (2.0 * rabi)).unwrap()[0];
+        assert!((got - want).abs() < 1e-10, "{got} vs {want}");
+    }
+    // At zero field the nuclear levels of m_s = 0 are degenerate: the lines
+    // of both transitions merge at D ± A/2, A = √(A_∥² + A_⊥²), half each.
+    let lines = NvCenter::new(0.0).with_carbon(60e3, 30e3).lines().unwrap();
+    let a = 60e3f64.hypot(30e3);
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    for (line, want) in lines.iter().zip([-a / 2.0, a / 2.0]) {
+        assert!(
+            (line.0 - NV_ZERO_FIELD_SPLITTING - want).abs() < 1e-3,
+            "{lines:?}"
+        );
+        assert!((line.1 - 0.5).abs() < 1e-12, "{lines:?}");
+    }
+    // Above B = D/γ_e the line of m = −1 is negative: D − γ_e B.
+    let high = NvCenter::new(0.15);
+    let lines = high.lines().unwrap();
+    let want = NV_ZERO_FIELD_SPLITTING - NV_GYROMAGNETIC_RATIO * 0.15;
+    assert!(want < 0.0 && (lines[0].0 - want).abs() < 1e-3, "{lines:?}");
+    assert!((Microwave::resonant(&high, -1, None).frequency - want).abs() < 1e-3);
+    let p = high.odmr(&[want, -want], 1e6, 0.5e-6).unwrap();
+    // (Off resonance by gigahertz, the other levels respond at 10⁻⁸.)
+    assert!(p[0] < 1e-6 && p[1] > 1.0 - 1e-6, "{p:?}");
 }
 
 /// The dense propagation that the blocks replace: full Hamiltonian and
@@ -83,6 +117,32 @@ fn dense(
 
 #[test]
 fn blocks_match_the_dense_propagation() {
+    // ¹⁵N with three carbons: arbitrary states, also non-Hermitian ones.
+    let nv = NvCenter::new(0.012)
+        .with_nitrogen(Nitrogen::n15())
+        .with_carbon(90e3, -10e3)
+        .with_carbon(-20e3, 45e3)
+        .with_carbon(5e3, 2e3);
+    let d = nv.dimension();
+    let mut rng = Rng::seed_from_u64(9);
+    let x = CMatrix::from_fn(d, d, |_, _| C64::new(rng.normal(), rng.normal()));
+    let events = [
+        pulse(90.0, 30.0),
+        NvEvent::Free(0.4e-6),
+        pulse(180.0, 0.0),
+        NvEvent::Free(0.1e-6),
+        NvEvent::Free(0.3e-6),
+        pulse(-45.0, 250.0),
+    ];
+    for transition in [-1, 1] {
+        for rabi in [None, Some(8e6)] {
+            let mw = Microwave::resonant(&nv, transition, rabi);
+            let want = dense(&nv, &x, &events, &mw, 0.0);
+            let got = nv.evolve(&x, &events, &mw).unwrap();
+            let worst = (got - &want).iter().fold(0.0f64, |m, z| m.max(z.norm()));
+            assert!(worst < 1e-10, "{transition} {rabi:?}: {worst}");
+        }
+    }
     let nv = NvCenter::new(0.031)
         .with_nitrogen(Nitrogen::n14())
         .with_carbon(60e3, 30e3)
@@ -117,7 +177,7 @@ fn blocks_match_the_dense_propagation() {
             assert!(worst < 1e-10, "{transition} {rabi:?}: {worst}");
             // Static telegraph noise: each trajectory sees +a or −a
             // throughout, during finite pulses too.
-            let start = nv.initial_state();
+            let start = nv.initial_state().unwrap();
             let plus = nv.bright(&dense(&nv, &start, &events, &mw, 2e5));
             let minus = nv.bright(&dense(&nv, &start, &events, &mw, -2e5));
             assert!((plus - minus).abs() > 1e-3, "{plus} {minus}");
@@ -134,6 +194,153 @@ fn blocks_match_the_dense_propagation() {
             assert!(seen[0] && seen[1]);
         }
     }
+}
+
+/// The `m_s = 0` population of a bare centre after `events` in the
+/// laboratory frame: a linearly polarised carrier `√2·2πΩ cos(2πft + φ)
+/// S_x`, no rotating-wave approximation, the clock starting at the first
+/// event; free periods exact, pulses by exponential midpoint steps in the
+/// interaction picture of the static Hamiltonian, 64 per carrier period.
+fn laboratory(nv: &NvCenter, events: &[NvEvent], drive: &Microwave) -> f64 {
+    let rabi = drive.rabi.unwrap();
+    let energy: Vec<f64> = [1.0, 0.0, -1.0]
+        .iter()
+        .map(|m| TWO_PI * (nv.zero_field_splitting * m * m + nv.gyromagnetic_ratio * nv.field * m))
+        .collect();
+    let sx = NvCenter::electron()[1].clone();
+    let omega = TWO_PI * drive.frequency;
+    // Interaction picture: ψ_I(t) = e^{iH₀t} ψ(t), populations equal.
+    let mut psi = nalgebra::DVector::from_vec(vec![ZERO, C64::new(1.0, 0.0), ZERO]);
+    let mut t = 0.0;
+    for event in NvCenter::centred(events, drive).unwrap() {
+        match event {
+            NvEvent::Free(dt) => t += dt,
+            NvEvent::Pulse { angle, phase } => {
+                let (duration, phase) = finite(angle, phase, rabi);
+                let steps = (duration * drive.frequency.abs() * 64.0).ceil().max(1.0) as usize;
+                let dt = duration / steps as f64;
+                for k in 0..steps {
+                    let tm = t + (k as f64 + 0.5) * dt;
+                    let v = std::f64::consts::SQRT_2
+                        * TWO_PI
+                        * rabi
+                        * (omega * tm + phase.to_radians()).cos();
+                    let h = CMatrix::from_fn(3, 3, |a, b| {
+                        sx[(a, b)] * v * C64::from_polar(1.0, (energy[a] - energy[b]) * tm)
+                    });
+                    psi = expm_hermitian(&h, dt) * psi;
+                }
+                t += duration;
+            }
+        }
+    }
+    psi[1].norm_sqr()
+}
+
+#[test]
+fn the_drive_matches_a_linearly_polarised_carrier_in_the_laboratory() {
+    // At zero and low field a carrier drives both transitions with one
+    // phase: phase-shifted sequences (Hahn, XY-8) test the convention.
+    // Rotating-wave errors are about Ω/f ≈ 2·10⁻³ here.
+    for (b, transition) in [(0.0, -1), (0.5e-3, -1), (2e-3, 1)] {
+        let nv = NvCenter::new(b);
+        let mw = Microwave::resonant(&nv, transition, Some(5e6));
+        for events in [
+            hahn(0.3e-6),
+            xy8(1, 0.1e-6),
+            vec![pulse(90.0, 0.0), NvEvent::Free(0.2e-6), pulse(90.0, 90.0)],
+        ] {
+            let lab = laboratory(&nv, &events, &mw);
+            let got = nv.signal(&events, &mw).unwrap();
+            assert!((got - lab).abs() < 0.01, "{b} {transition}: {got} vs {lab}");
+        }
+    }
+}
+
+#[test]
+fn ideal_pulses_are_the_limit_of_selective_finite_ones() {
+    // At 1 T the transitions are 56 GHz apart: 30 MHz pulses are
+    // selective and short, for both transitions, any angle and phase.
+    let nv = NvCenter::new(1.0);
+    let events = [
+        pulse(90.0, 0.0),
+        NvEvent::Free(0.1e-6),
+        pulse(-60.0, 135.0),
+        NvEvent::Free(0.2e-6),
+        pulse(270.0, 200.0),
+        NvEvent::Free(0.1e-6),
+        pulse(45.0, 90.0),
+    ];
+    for transition in [-1, 1] {
+        let ideal = Microwave::resonant(&nv, transition, None);
+        let finite = Microwave {
+            rabi: Some(30e6),
+            ..ideal
+        };
+        let rho = nv.initial_state().unwrap();
+        let (a, b) = (
+            nv.evolve(&rho, &events, &ideal).unwrap(),
+            nv.evolve(&rho, &events, &finite).unwrap(),
+        );
+        let worst = (a - b).iter().fold(0.0f64, |m, z| m.max(z.norm()));
+        assert!(worst < 2e-3, "{transition}: {worst}");
+    }
+}
+
+#[test]
+fn noise_during_finite_pulses_matches_finer_pieces() {
+    // Correlation time 20 ns, π pulses of 100 ns: the noise changes during
+    // a pulse. Against a reference with 128 pieces per pulse.
+    let nv = NvCenter::new(0.4);
+    let mw = on(&nv, Some(5e6));
+    let noise = FieldNoise::OrnsteinUhlenbeck {
+        sigma: 1e6,
+        correlation_time: 20e-9,
+    };
+    let events = hahn(0.3e-6);
+    let (mean, err) = nv
+        .signal_with_noise(&events, &mw, &noise, 20000, 1)
+        .unwrap();
+    let h0 = nv.hamiltonian(mw.frequency).unwrap();
+    let sz = NvCenter::electron()[0].clone();
+    let centred = NvCenter::centred(&events, &mw).unwrap();
+    let root = Rng::seed_from_u64(77);
+    let values: Vec<f64> = crate::parallel::map_tasks(20000, |k| {
+        let mut rng = root.fork(k as u64);
+        let mut path = NoisePath::new(&noise, &mut rng);
+        let mut rho = nv.initial_state().unwrap();
+        for event in &centred {
+            let u = match *event {
+                NvEvent::Free(t) => {
+                    let phase = TWO_PI * path.integral(t, &ou_steps(&noise, t), &mut rng);
+                    expm_hermitian(&(&h0 + &sz * C64::new(phase / t, 0.0)), t)
+                }
+                NvEvent::Pulse { angle, phase } => {
+                    let (duration, phase) = finite(angle, phase, 5e6);
+                    let piece = duration / 128.0;
+                    let steps = ou_steps(&noise, piece);
+                    let h = &h0 + nv.drive(5e6, phase);
+                    let mut u = CMatrix::identity(3, 3);
+                    for _ in 0..128 {
+                        let b = path.integral(piece, &steps, &mut rng) / piece;
+                        u = expm_hermitian(&(&h + &sz * C64::new(TWO_PI * b, 0.0)), piece) * u;
+                    }
+                    u
+                }
+            };
+            rho = &u * rho * u.adjoint();
+        }
+        nv.bright(&rho)
+    });
+    let n = values.len() as f64;
+    let want = values.iter().sum::<f64>() / n;
+    let spread = (values.iter().map(|x| (x - want).powi(2)).sum::<f64>() / (n - 1.0) / n).sqrt();
+    assert!(
+        (mean - want).abs() < 4.0 * (err * err + spread * spread).sqrt(),
+        "{mean} ± {err} vs {want} ± {spread}"
+    );
+    // The noise matters here: without it the echo returns to one.
+    assert!(want < 0.9, "{want}");
 }
 
 /// `M` of Taminiau et al. (PRL 109, 137602 (2012), supplement eqs. 11–13):
@@ -295,12 +502,11 @@ fn gaussian_noise_follows_the_filter_function() {
             (chi / from_spectrum - 1.0).abs() < 1e-5,
             "{chi} vs {from_spectrum}"
         );
-        let (mean, err) = nv.signal_with_noise(&events, &mw, &noise, 4000, 3).unwrap();
+        let (mean, err) = nv
+            .signal_with_noise(&events, &mw, &noise, 20000, 3)
+            .unwrap();
         let want = (1.0 + (-chi).exp()) / 2.0;
-        assert!(
-            (mean - want).abs() < 4.0 * err + 1e-3,
-            "{mean} ± {err} vs {want}"
-        );
+        assert!((mean - want).abs() < 4.0 * err, "{mean} ± {err} vs {want}");
         assert!(chi > 0.05, "{chi}");
     }
     // Ramsey in closed form: χ = (2π)²σ²τ_c²(T/τ_c − 1 + e^{−T/τ_c}).
@@ -326,10 +532,12 @@ fn telegraph_noise_follows_kubo_and_anderson() {
             } else {
                 telegraph_free(nu, rate, total)
             };
-            let (mean, err) = nv.signal_with_noise(&events, &mw, &noise, 4000, 5).unwrap();
+            let (mean, err) = nv
+                .signal_with_noise(&events, &mw, &noise, 20000, 5)
+                .unwrap();
             let want = (1.0 + want) / 2.0;
             assert!(
-                (mean - want).abs() < 4.0 * err + 1e-3,
+                (mean - want).abs() < 4.0 * err,
                 "{rate} {echo}: {mean} ± {err} vs {want}"
             );
         }
@@ -358,12 +566,11 @@ fn pink_noise_has_a_one_over_f_spectrum_and_gaussian_decay() {
     let mw = on(&nv, None);
     for events in [hahn(3e-6), cpmg(8, 0.5e-6)] {
         let chi = decay_exponent(&events, &noise).unwrap();
-        let (mean, err) = nv.signal_with_noise(&events, &mw, &noise, 4000, 9).unwrap();
+        let (mean, err) = nv
+            .signal_with_noise(&events, &mw, &noise, 20000, 9)
+            .unwrap();
         let want = (1.0 + (-chi).exp()) / 2.0;
-        assert!(
-            (mean - want).abs() < 4.0 * err + 1e-3,
-            "{mean} ± {err} vs {want}"
-        );
+        assert!((mean - want).abs() < 4.0 * err, "{mean} ± {err} vs {want}");
     }
 }
 
@@ -393,6 +600,80 @@ fn nv_input_is_checked() {
     assert_eq!(NvCenter::from_json(&nv.to_json()).unwrap(), nv);
     assert!(NvCenter::from_json(&big.to_json()).is_err());
     assert!(NvCenter::from_json("{\"field\": 1}").is_err());
+    // The dimension saturates instead of wrapping: 64 carbons are refused.
+    let mut huge = NvCenter::new(0.01);
+    for _ in 0..64 {
+        huge = huge.with_carbon(1e3, 0.0);
+    }
+    assert_eq!(huge.dimension(), usize::MAX);
+    assert!(huge.validate().is_err() && huge.initial_state().is_err());
+    assert!(huge.signal(&ramsey(1e-6), &on(&huge, None)).is_err());
+    // Filter functions take angles modulo 360° and check the periods.
+    let noise = FieldNoise::OrnsteinUhlenbeck {
+        sigma: 1e5,
+        correlation_time: 1e-6,
+    };
+    let odd = [
+        pulse(-90.0, 0.0),
+        NvEvent::Free(1e-6),
+        pulse(540.0, 90.0),
+        NvEvent::Free(0.5e-6),
+        pulse(360.0, 0.0),
+        NvEvent::Free(0.5e-6),
+        pulse(270.0, 0.0),
+    ];
+    let (a, b) = (
+        decay_exponent(&odd, &noise).unwrap(),
+        decay_exponent(&hahn(1e-6), &noise).unwrap(),
+    );
+    assert!((a - b).abs() < 1e-15 * b, "{a} vs {b}");
+    for bad in [-2e-6, f64::NAN] {
+        let events = [pulse(90.0, 0.0), NvEvent::Free(bad), pulse(90.0, 0.0)];
+        assert!(decay_exponent(&events, &noise).is_err());
+        assert!(filter_function(&events, 1.0).is_err());
+    }
+    assert!(
+        decay_exponent(
+            &[pulse(90.0, 0.0), pulse(100.0, 0.0), pulse(90.0, 0.0)],
+            &noise
+        )
+        .is_err()
+    );
+    // Static telegraph noise: a delta spectrum, and χ = (2πaτ)²/2 for
+    // Ramsey however slow the flips (no underflow).
+    let frozen = FieldNoise::Telegraph {
+        amplitude: 1e5,
+        rate: 0.0,
+    };
+    assert!(frozen.spectrum(0.0).is_infinite() && frozen.spectrum(1.0) == 0.0);
+    for rate in [0.0, 1e-200] {
+        let noise = FieldNoise::Telegraph {
+            amplitude: 1e5,
+            rate,
+        };
+        let chi = decay_exponent(&ramsey(1e-6), &noise).unwrap();
+        let want = 0.5 * (TWO_PI * 1e5 * 1e-6f64).powi(2);
+        assert!((chi - want).abs() < 1e-12 * want, "{chi}");
+        assert!(decay_exponent(&hahn(1e-6), &noise).unwrap().abs() < 1e-12);
+    }
+    // Adjacent free periods merge before pulses are centred.
+    let finite = on(&nv, Some(10e6));
+    let split = [
+        pulse(90.0, 0.0),
+        NvEvent::Free(0.0),
+        NvEvent::Free(1e-6),
+        pulse(90.0, 180.0),
+    ];
+    let (a, b) = (
+        nv.signal(&split, &finite).unwrap(),
+        nv.signal(&ramsey(1e-6), &finite).unwrap(),
+    );
+    assert!((a - b).abs() < 1e-14, "{a} vs {b}");
+    // One trajectory has no standard error.
+    let (_, err) = nv
+        .signal_with_noise(&ramsey(1e-6), &on(&nv, None), &noise, 1, 0)
+        .unwrap();
+    assert!(err.is_nan());
     // A finite pulse of negative angle is the positive one about the
     // opposite axis (forward in time), also under noise.
     let finite = on(&nv, Some(10e6));

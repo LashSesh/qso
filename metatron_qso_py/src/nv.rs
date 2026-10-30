@@ -110,16 +110,22 @@ fn py_hahn(tau: f64) -> Vec<PyNvEvent> {
     wrap(hahn(tau))
 }
 
-/// CPMG: `n` π pulses about y spaced `2τ`.
+/// CPMG: `n ≥ 1` π pulses about y spaced `2τ`.
 #[pyfunction(name = "cpmg")]
-fn py_cpmg(n: usize, tau: f64) -> Vec<PyNvEvent> {
-    wrap(cpmg(n, tau))
+fn py_cpmg(n: usize, tau: f64) -> PyResult<Vec<PyNvEvent>> {
+    if n == 0 {
+        return Err(invalid("CPMG needs at least one π pulse"));
+    }
+    Ok(wrap(cpmg(n, tau)))
 }
 
-/// XY-8: `n` blocks of eight π pulses (`x y x y y x y x`) spaced `2τ`.
+/// XY-8: `n ≥ 1` blocks of eight π pulses (`x y x y y x y x`) spaced `2τ`.
 #[pyfunction(name = "xy8")]
-fn py_xy8(n: usize, tau: f64) -> Vec<PyNvEvent> {
-    wrap(xy8(n, tau))
+fn py_xy8(n: usize, tau: f64) -> PyResult<Vec<PyNvEvent>> {
+    if n == 0 {
+        return Err(invalid("XY-8 needs at least one block"));
+    }
+    Ok(wrap(xy8(n, tau)))
 }
 
 /// Classical field noise `b(t)` (Hz) along the NV axis: telegraph,
@@ -204,8 +210,9 @@ impl PyFieldNoise {
     }
 }
 
-/// The filter function `|Y(ω)|²` (s²) of a sequence of ideal pulses at
-/// each angular frequency `ω` (rad/s).
+/// The filter function `|Y(ω)|²` (s²) of a sequence at each angular
+/// frequency `ω` (rad/s), for instantaneous pulses (π/2, free periods and
+/// π pulses, π/2; angles modulo 360°).
 #[pyfunction(name = "filter_function")]
 fn py_filter_function<'py>(
     py: Python<'py>,
@@ -213,39 +220,71 @@ fn py_filter_function<'py>(
     omega: RealArg<'_>,
 ) -> PyResult<Bound<'py, PyArray1<f64>>> {
     let ev = self::events(&events);
-    let values = real_vec(&omega)
-        .iter()
-        .map(|&w| filter_function(&ev, w))
-        .collect::<metatron_qso::Result<Vec<f64>>>()
+    let w = real_vec(&omega);
+    let values = py
+        .detach(|| {
+            w.iter()
+                .map(|&w| filter_function(&ev, w))
+                .collect::<metatron_qso::Result<Vec<f64>>>()
+        })
         .raise()?;
     Ok(real_array(py, values))
 }
 
-/// The Gaussian decay exponent `χ` of a sequence of ideal pulses under
-/// `noise`: the coherence decays as `exp(−χ)` for Gaussian noise.
+/// The Gaussian decay exponent `χ` of a sequence of instantaneous pulses
+/// under `noise`: the coherence decays as `exp(−χ)` for Gaussian noise
+/// (for telegraph noise `χ` is only the second-order term).
 #[pyfunction(name = "decay_exponent")]
-fn py_decay_exponent(events: Vec<PyRef<'_, PyNvEvent>>, noise: &PyFieldNoise) -> PyResult<f64> {
-    decay_exponent(&self::events(&events), &noise.inner).raise()
+fn py_decay_exponent(
+    py: Python<'_>,
+    events: Vec<PyRef<'_, PyNvEvent>>,
+    noise: &PyFieldNoise,
+) -> PyResult<f64> {
+    let (ev, noise) = (self::events(&events), noise.inner);
+    py.detach(|| decay_exponent(&ev, &noise)).raise()
 }
 
-fn nitrogen(name: Option<&str>) -> PyResult<Option<Nitrogen>> {
-    match name {
-        None => Ok(None),
-        Some("14N") => Ok(Some(Nitrogen::n14())),
-        Some("15N") => Ok(Some(Nitrogen::n15())),
-        Some(other) => Err(invalid(format!(
-            "unknown nitrogen '{other}' (use 14N, 15N or None)"
+/// `"14N"`, `"15N"`, `None` or `(isotope, A_N, P)` with the hyperfine and
+/// quadrupole couplings in Hz.
+fn nitrogen(spec: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Nitrogen>> {
+    let Some(spec) = spec else {
+        return Ok(None);
+    };
+    let named = |name: &str| match name {
+        "14N" => Ok(Nitrogen::n14()),
+        "15N" => Ok(Nitrogen::n15()),
+        other => Err(invalid(format!(
+            "unknown nitrogen '{other}' (use 14N, 15N, None or (isotope, A_N, P))"
         ))),
+    };
+    if let Ok(name) = spec.extract::<String>() {
+        return named(&name).map(Some);
+    }
+    let (name, parallel, quadrupole): (String, f64, f64) = spec
+        .extract()
+        .map_err(|_| invalid("nitrogen is 14N, 15N, None or (isotope, A_N in Hz, P in Hz)"))?;
+    let mut n = named(&name)?;
+    n.parallel = parallel;
+    n.quadrupole = quadrupole;
+    Ok(Some(n))
+}
+
+fn isotope_name(n: &Nitrogen) -> &'static str {
+    match n.isotope {
+        NitrogenIsotope::N14 => "14N",
+        NitrogenIsotope::N15 => "15N",
     }
 }
 
 /// An NV centre in a field `field` (T) along its axis with an optional
-/// nitrogen (`"14N"`, `"15N"`) and ¹³C nuclei `(A_∥, A_⊥)` (Hz), in the
-/// secular approximation. Pulses drive the transition `0 ↔ transition`
-/// (−1 or +1) at `frequency` (Hz; default: on resonance with the bare
-/// line), ideally (`rabi=None`) or with a Rabi frequency (Hz) that drives
-/// both transitions. The electron starts in `m_s = 0`, the nuclei
-/// unpolarised; signals are the `m_s = 0` population.
+/// nitrogen (`"14N"`, `"15N"`, or `(isotope, A_N, P)` in Hz) and ¹³C nuclei
+/// `(A_∥, A_⊥)` (Hz), in the secular approximation. Pulses drive the
+/// transition `0 ↔ transition` (−1 or +1) at `frequency` (Hz, signed as in
+/// `lines`; default: on resonance with the bare line `D + m γ_e B`, which
+/// is negative for m = −1 above 102 mT), ideally (`rabi=None`) or with a
+/// Rabi frequency (Hz) that drives both transitions with the carrier's
+/// phase. The electron starts in `m_s = 0`, the nuclei unpolarised;
+/// signals are the `m_s = 0` population.
 #[pyclass(name = "NvCenter", module = "metatron_qso")]
 #[derive(Clone)]
 pub struct PyNvCenter {
@@ -253,12 +292,22 @@ pub struct PyNvCenter {
 }
 
 impl PyNvCenter {
-    fn drive(&self, frequency: Option<f64>, transition: i8, rabi: Option<f64>) -> Microwave {
+    fn drive(
+        &self,
+        frequency: Option<f64>,
+        transition: i64,
+        rabi: Option<f64>,
+    ) -> PyResult<Microwave> {
+        let transition = match transition {
+            1 => 1,
+            -1 => -1,
+            other => return Err(invalid(format!("transition is −1 or +1, got {other}"))),
+        };
         let mut mw = Microwave::resonant(&self.inner, transition, rabi);
         if let Some(f) = frequency {
             mw.frequency = f;
         }
-        mw
+        Ok(mw)
     }
 }
 
@@ -274,7 +323,7 @@ impl PyNvCenter {
     ))]
     fn new(
         field: f64,
-        nitrogen: Option<&str>,
+        nitrogen: Option<&Bound<'_, PyAny>>,
         carbons: Vec<(f64, f64)>,
         zero_field_splitting: f64,
         gyromagnetic_ratio: f64,
@@ -302,6 +351,36 @@ impl PyNvCenter {
         self.inner.dimension()
     }
 
+    /// The nitrogen as `(isotope, A_N, P)` (Hz), or `None`.
+    #[getter]
+    fn nitrogen(&self) -> Option<(&'static str, f64, f64)> {
+        self.inner
+            .nitrogen
+            .map(|n| (isotope_name(&n), n.parallel, n.quadrupole))
+    }
+
+    /// The ¹³C couplings `(A_∥, A_⊥)` (Hz).
+    #[getter]
+    fn carbons(&self) -> Vec<(f64, f64)> {
+        self.inner
+            .carbons
+            .iter()
+            .map(|c| (c.parallel, c.perpendicular))
+            .collect()
+    }
+
+    /// The zero-field splitting `D` (Hz).
+    #[getter]
+    fn zero_field_splitting(&self) -> f64 {
+        self.inner.zero_field_splitting
+    }
+
+    /// The electron's gyromagnetic ratio (Hz/T).
+    #[getter]
+    fn gyromagnetic_ratio(&self) -> f64 {
+        self.inner.gyromagnetic_ratio
+    }
+
     /// The Hamiltonian (rad/s) in the frame rotating at `frequency` (Hz).
     #[pyo3(signature = (frequency = 0.0))]
     fn hamiltonian<'py>(
@@ -313,13 +392,17 @@ impl PyNvCenter {
     }
 
     /// The optically pumped state: `m_s = 0`, nuclei unpolarised.
-    fn initial_state<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<C64>> {
-        cmatrix(py, &self.inner.initial_state())
+    fn initial_state<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<C64>>> {
+        Ok(cmatrix(py, &self.inner.initial_state().raise()?))
     }
 
-    /// The electron-spin resonance lines `(frequency Hz, strength)`, sorted.
-    fn lines(&self) -> PyResult<Vec<(f64, f64)>> {
-        self.inner.lines().raise()
+    /// The electron-spin resonance lines `(frequency Hz, strength)` from
+    /// `m_s = 0` to `m_s = ±1`, sorted: frequencies signed as the level
+    /// differences, strengths averaged over the nuclei (½ per transition),
+    /// lines within 1 mHz merged.
+    fn lines(&self, py: Python<'_>) -> PyResult<Vec<(f64, f64)>> {
+        let nv = &self.inner;
+        py.detach(|| nv.lines()).raise()
     }
 
     /// Pulsed ODMR: the `m_s = 0` population after a pulse of Rabi
@@ -339,7 +422,8 @@ impl PyNvCenter {
         ))
     }
 
-    /// Apply `events` to the density matrix `rho`.
+    /// Apply `events` to `rho`: `U ρ U†` (any square matrix of the centre's
+    /// dimension).
     #[pyo3(
         signature = (rho, events, frequency = None, transition = -1, rabi = None),
         text_signature = "(self, /, rho, events, frequency=None, transition=-1, rabi=None)"
@@ -350,7 +434,7 @@ impl PyNvCenter {
         rho: ComplexMatrixArg<'_>,
         events: Vec<PyRef<'_, PyNvEvent>>,
         frequency: Option<f64>,
-        transition: i8,
+        transition: i64,
         rabi: Option<f64>,
     ) -> PyResult<Bound<'py, PyArray2<C64>>> {
         let (d, data) = square_complex("rho", &rho)?;
@@ -362,7 +446,7 @@ impl PyNvCenter {
         }
         let rho = CMatrix::from_row_slice(d, d, &data);
         let ev = self::events(&events);
-        let mw = self.drive(frequency, transition, rabi);
+        let mw = self.drive(frequency, transition, rabi)?;
         let nv = &self.inner;
         Ok(cmatrix(
             py,
@@ -380,17 +464,19 @@ impl PyNvCenter {
         py: Python<'_>,
         events: Vec<PyRef<'_, PyNvEvent>>,
         frequency: Option<f64>,
-        transition: i8,
+        transition: i64,
         rabi: Option<f64>,
     ) -> PyResult<f64> {
         let ev = self::events(&events);
-        let mw = self.drive(frequency, transition, rabi);
+        let mw = self.drive(frequency, transition, rabi)?;
         let nv = &self.inner;
         py.detach(|| nv.signal(&ev, &mw)).raise()
     }
 
-    /// The `m_s = 0` population averaged over `trajectories` exact paths
-    /// of `noise` (seeded): `(mean, standard error)`.
+    /// The `m_s = 0` population averaged over `trajectories` paths of
+    /// `noise` (seeded): `(mean, standard error)`, NaN for one trajectory.
+    /// The noise is exact between pulses and held at its mean over pieces
+    /// of finite pulses.
     #[pyo3(
         signature = (
             events, noise, trajectories, seed = 0, frequency = None, transition = -1, rabi = None,
@@ -406,11 +492,11 @@ impl PyNvCenter {
         trajectories: usize,
         seed: u64,
         frequency: Option<f64>,
-        transition: i8,
+        transition: i64,
         rabi: Option<f64>,
     ) -> PyResult<(f64, f64)> {
         let ev = self::events(&events);
-        let mw = self.drive(frequency, transition, rabi);
+        let mw = self.drive(frequency, transition, rabi)?;
         let (nv, noise) = (&self.inner, noise.inner);
         py.detach(|| nv.signal_with_noise(&ev, &mw, &noise, trajectories, seed))
             .raise()

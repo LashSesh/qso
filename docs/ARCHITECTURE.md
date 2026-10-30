@@ -470,11 +470,17 @@ nucleus's index (`apply_factors`), and mirrors the rest; an ideal pulse
 combines blocks with the electron's 3 × 3 unitary; a finite pulse, which
 mixes the levels while the nuclei evolve, is the exponential of the full
 Hamiltonian (`cmul` on the whole matrix). A `Plan` computes each distinct
-period and pulse once. Noise trajectories add `exp(−2πi I S_z)` to each
-period, a phase per block, with `I = ∫b dt` sampled exactly; during
-finite pulses the noise is held at its exact mean over 16 pieces. The
-Gaussian decay exponent sums the exactly integrated exponential
-correlations of every pair of free periods.
+period and pulse once. The drive is `e^{−iφS_z²} S_x e^{iφS_z²}`, the
+co-rotating part of a linearly polarised carrier, so both transitions see
+one phase. Noise trajectories add `exp(−2πi I S_z)` to each period, a
+phase per block, with `I = ∫b dt` sampled exactly from coefficients
+computed once per period length; during a finite pulse the noise is held
+at its exact mean over pieces of at most `1/(16θ)`, up to 16. Resonance
+lines use the product structure too: the levels of each block are
+products of one state per nucleus, so a line's strength is a product of
+one overlap per nucleus. The Gaussian decay exponent sums the exactly
+integrated exponential correlations of every pair of free periods as a
+running sum, in one pass.
 
 ## Hamiltonian simulation and chemistry (`algorithms/time_evolution.rs`, `chemistry/`)
 
