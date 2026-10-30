@@ -9,10 +9,14 @@ use metatron_qso::spin::{
 };
 use numpy::{PyArray1, PyArray2};
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
 use metatron_qso::spin::bath::{
     self, BathSpin, Cce, DIAMOND_LATTICE_CONSTANT, MAX_BATH_SPINS, MAX_CLUSTER_ORDER,
     MAX_EXACT_BATH, NATURAL_C13_ABUNDANCE, SpinBath,
+};
+use metatron_qso::spin::optics::{
+    self, CwOdmr, NV_EXCITED_SPLITTING, OpticalNv, Photophysics, PulsedReadout, TwoLevelOdmr,
 };
 
 use crate::{
@@ -799,7 +803,391 @@ fn py_ensemble_signal<'py>(
     Ok((real_array(py, mean), real_array(py, err)))
 }
 
+fn cw_dict<'py>(py: Python<'py>, line: CwOdmr) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("frequencies", real_array(py, line.frequencies))?;
+    d.set_item("rates", real_array(py, line.rates))?;
+    d.set_item("off_resonance", line.off_resonance)?;
+    d.set_item("contrast", line.contrast)?;
+    d.set_item("linewidth", line.linewidth)?;
+    d.set_item("slope", line.slope)?;
+    d.set_item("sensitivity", line.sensitivity)?;
+    Ok(d)
+}
+
+fn readout_dict<'py>(py: Python<'py>, r: PulsedReadout) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("readout_contrast", r.readout_contrast())?;
+    d.set_item("times", real_array(py, r.times))?;
+    d.set_item("bright", real_array(py, r.bright))?;
+    d.set_item("dark", real_array(py, r.dark))?;
+    d.set_item("window", r.window)?;
+    d.set_item("photons_bright", r.photons_bright)?;
+    d.set_item("photons_dark", r.photons_dark)?;
+    Ok(d)
+}
+
+/// The electron spin of an NV centre in its optical cycle: the
+/// seven-level model of Tetienne et al. (ground and excited triplets, a
+/// metastable singlet) in a field `field` (T, frame of the centre: z
+/// along the axis) of any direction, as a Lindblad equation with the
+/// rates `(k_r, k_47, k_57, k_71, k_72)` (1/s; default: Tetienne et al.),
+/// ground-state dephasing `Γ₂*` and spin-lattice rate `Γ₁` (1/s), and the
+/// detected fraction `collection` of the emitted photons. `pump` is the
+/// optical excitation rate of each spin-conserving transition (1/s); a
+/// microwave of `frequency` (Hz, signed as `lines`) and Rabi frequency
+/// `rabi` (Hz) drives the ground state.
+#[pyclass(name = "OpticalNv", module = "metatron_qso", frozen)]
+pub struct PyOpticalNv {
+    inner: OpticalNv,
+}
+
+#[pymethods]
+impl PyOpticalNv {
+    #[new]
+    #[pyo3(signature = (
+        field = [0.0, 0.0, 0.0], rates = None, dephasing = 2e5, spin_lattice = 1e3,
+        collection = 0.01, zero_field_splitting = NV_ZERO_FIELD_SPLITTING,
+        excited_splitting = NV_EXCITED_SPLITTING, gyromagnetic_ratio = NV_GYROMAGNETIC_RATIO,
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        field: [f64; 3],
+        rates: Option<[f64; 5]>,
+        dephasing: f64,
+        spin_lattice: f64,
+        collection: f64,
+        zero_field_splitting: f64,
+        excited_splitting: f64,
+        gyromagnetic_ratio: f64,
+    ) -> PyResult<Self> {
+        let mut inner = OpticalNv::new(field);
+        if let Some(
+            [
+                radiative,
+                isc_zero,
+                isc_plus_minus,
+                singlet_zero,
+                singlet_plus_minus,
+            ],
+        ) = rates
+        {
+            inner.rates = Photophysics {
+                radiative,
+                isc_zero,
+                isc_plus_minus,
+                singlet_zero,
+                singlet_plus_minus,
+            };
+        }
+        inner.dephasing = dephasing;
+        inner.spin_lattice = spin_lattice;
+        inner.collection = collection;
+        inner.zero_field_splitting = zero_field_splitting;
+        inner.excited_splitting = excited_splitting;
+        inner.gyromagnetic_ratio = gyromagnetic_ratio;
+        inner.validate().raise()?;
+        Ok(Self { inner })
+    }
+
+    #[getter]
+    fn field(&self) -> [f64; 3] {
+        self.inner.field
+    }
+
+    /// `(k_r, k_47, k_57, k_71, k_72)` (1/s).
+    #[getter]
+    fn rates(&self) -> [f64; 5] {
+        let r = self.inner.rates;
+        [
+            r.radiative,
+            r.isc_zero,
+            r.isc_plus_minus,
+            r.singlet_zero,
+            r.singlet_plus_minus,
+        ]
+    }
+
+    #[getter]
+    fn collection(&self) -> f64 {
+        self.inner.collection
+    }
+
+    /// `H/h` of the ground triplet (Hz), basis `m_s = +1, 0, −1`.
+    fn ground_hamiltonian<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<C64>> {
+        cmatrix(py, &self.inner.ground_hamiltonian())
+    }
+
+    /// `H/h` of the excited triplet (Hz).
+    fn excited_hamiltonian<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<C64>> {
+        cmatrix(py, &self.inner.excited_hamiltonian())
+    }
+
+    /// Energies (Hz, ascending) and eigenvectors (columns) of the ground
+    /// triplet.
+    fn ground_levels<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray2<C64>>)> {
+        let (e, v) = self.inner.ground_levels().raise()?;
+        Ok((real_array(py, e), cmatrix(py, &v)))
+    }
+
+    /// Energies and eigenvectors of the excited triplet.
+    fn excited_levels<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray2<C64>>)> {
+        let (e, v) = self.inner.excited_levels().raise()?;
+        Ok((real_array(py, e), cmatrix(py, &v)))
+    }
+
+    /// The two ESR lines `(frequency, strength)`, from the level closest
+    /// to `m_s = 0` to those closest to `−1` and `+1` (signed).
+    fn lines(&self) -> PyResult<Vec<(f64, f64)>> {
+        Ok(self.inner.lines().raise()?.to_vec())
+    }
+
+    /// The steady state (7 × 7: ground levels, excited levels, singlet).
+    #[pyo3(signature = (pump, frequency = None, rabi = 0.0))]
+    fn steady_state<'py>(
+        &self,
+        py: Python<'py>,
+        pump: f64,
+        frequency: Option<f64>,
+        rabi: f64,
+    ) -> PyResult<Bound<'py, PyArray2<C64>>> {
+        let rho = self
+            .inner
+            .steady_state(pump, frequency.map(|f| (f, rabi)))
+            .raise()?;
+        Ok(cmatrix(py, &rho))
+    }
+
+    /// The detected photon rate (1/s) in the steady state.
+    #[pyo3(signature = (pump, frequency = None, rabi = 0.0))]
+    fn fluorescence(&self, pump: f64, frequency: Option<f64>, rabi: f64) -> PyResult<f64> {
+        let rho = self
+            .inner
+            .steady_state(pump, frequency.map(|f| (f, rabi)))
+            .raise()?;
+        Ok(self.inner.fluorescence(&rho))
+    }
+
+    /// The photon rate at each microwave frequency (CW-ODMR).
+    fn cw_odmr<'py>(
+        &self,
+        py: Python<'py>,
+        frequencies: RealArg<'_>,
+        rabi: f64,
+        pump: f64,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let (f, nv) = (real_vec(&frequencies), &self.inner);
+        Ok(real_array(
+            py,
+            py.detach(|| nv.cw_odmr(&f, rabi, pump)).raise()?,
+        ))
+    }
+
+    /// A CW-ODMR line around `centre` over `span` (Hz) with its contrast,
+    /// full width, steepest slope and shot-noise sensitivity (T/√Hz).
+    #[pyo3(signature = (centre, span, rabi, pump, points = 401))]
+    fn cw_line<'py>(
+        &self,
+        py: Python<'py>,
+        centre: f64,
+        span: f64,
+        rabi: f64,
+        pump: f64,
+        points: usize,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let nv = &self.inner;
+        let line = py
+            .detach(|| nv.cw_line(centre, span, points, rabi, pump))
+            .raise()?;
+        cw_dict(py, line)
+    }
+
+    /// The fluorescence after the laser is switched on, from the
+    /// laser-polarised state (`bright`) and after an ideal π pulse on the
+    /// transition (`dark`), with the best counting window.
+    #[pyo3(
+        signature = (pump, duration, steps = 1000, transition = -1),
+        text_signature = "(self, /, pump, duration, steps=1000, transition=-1)"
+    )]
+    fn pulsed_readout<'py>(
+        &self,
+        py: Python<'py>,
+        pump: f64,
+        duration: f64,
+        steps: usize,
+        transition: i64,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let (nv, t) = (&self.inner, transition_of(transition)?);
+        let r = py
+            .detach(|| nv.pulsed_readout(pump, duration, steps, t))
+            .raise()?;
+        readout_dict(py, r)
+    }
+
+    /// The population of the level closest to `m_s = 0` after the laser
+    /// (`duration` s from the unpolarised state, `inf` for the steady
+    /// state) once the excited levels and the singlet have decayed.
+    #[pyo3(signature = (pump, duration = f64::INFINITY))]
+    fn polarisation(&self, pump: f64, duration: f64) -> PyResult<f64> {
+        self.inner.polarisation(pump, duration).raise()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("OpticalNv(field={:?} T)", self.inner.field)
+    }
+}
+
+/// The reduced model of Dréau et al. (2011): the ground qubit {0, 1} with
+/// optical polarisation `polarisation` (Γ_p), optically induced coherence
+/// decay `coherence` (Γ_c), spin-lattice rate `spin_lattice` (Γ₁),
+/// dephasing (Γ₂*) and photon rates `bright` (α) and `dark` (β); rates in
+/// 1/s, detunings and Rabi frequencies in rad/s.
+#[pyclass(name = "TwoLevelOdmr", module = "metatron_qso", frozen)]
+pub struct PyTwoLevelOdmr {
+    inner: TwoLevelOdmr,
+}
+
+#[pymethods]
+impl PyTwoLevelOdmr {
+    #[new]
+    fn new(
+        polarisation: f64,
+        coherence: f64,
+        spin_lattice: f64,
+        dephasing: f64,
+        bright: f64,
+        dark: f64,
+    ) -> Self {
+        Self {
+            inner: TwoLevelOdmr {
+                polarisation,
+                coherence,
+                spin_lattice,
+                dephasing,
+                bright,
+                dark,
+            },
+        }
+    }
+
+    /// The steady-state population of |1⟩ at detuning `ω₀ − ω_m` (rad/s).
+    fn population(&self, detuning: f64, rabi: f64) -> PyResult<f64> {
+        self.inner.population(detuning, rabi).raise()
+    }
+
+    /// The photon rate at a detuning.
+    fn rate(&self, detuning: f64, rabi: f64) -> PyResult<f64> {
+        self.inner.rate(detuning, rabi).raise()
+    }
+
+    /// The line over `span` (rad/s) with its contrast, width (Hz) and
+    /// sensitivity.
+    #[pyo3(signature = (span, rabi, points = 2001))]
+    fn line<'py>(
+        &self,
+        py: Python<'py>,
+        span: f64,
+        rabi: f64,
+        points: usize,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        cw_dict(py, self.inner.line(span, points, rabi).raise()?)
+    }
+}
+
+/// `√(τ + overhead)/(2π γ_e τ C |L|)` (T/√Hz): Ramsey magnetometry of a
+/// static field with readout contrast `C`.
+#[pyfunction(name = "ramsey_sensitivity")]
+#[pyo3(signature = (tau, coherence, readout, overhead = 0.0))]
+fn py_ramsey_sensitivity(tau: f64, coherence: f64, readout: f64, overhead: f64) -> PyResult<f64> {
+    optics::ramsey_sensitivity(tau, coherence, readout, overhead).raise()
+}
+
+/// The Hahn echo of total duration `total` for an AC field in its best
+/// phase: π/2 times the Ramsey expression.
+#[pyfunction(name = "echo_sensitivity")]
+#[pyo3(signature = (total, coherence, readout, overhead = 0.0))]
+fn py_echo_sensitivity(total: f64, coherence: f64, readout: f64, overhead: f64) -> PyResult<f64> {
+    optics::echo_sensitivity(total, coherence, readout, overhead).raise()
+}
+
+/// The best sensitivity over times and coherences: `(time, T/√Hz)`.
+#[pyfunction(name = "best_sensitivity")]
+#[pyo3(signature = (times, coherences, readout, overhead = 0.0, echo = false))]
+fn py_best_sensitivity(
+    times: Vec<f64>,
+    coherences: Vec<f64>,
+    readout: f64,
+    overhead: f64,
+    echo: bool,
+) -> PyResult<(f64, f64)> {
+    optics::best_sensitivity(&times, &coherences, readout, overhead, echo).raise()
+}
+
+/// `[1 + 2(a + b)/(a − b)²]^{−1/2}` for mean photon numbers `a`, `b`.
+#[pyfunction(name = "readout_contrast")]
+fn py_readout_contrast(a: f64, b: f64) -> f64 {
+    optics::readout_contrast(a, b)
+}
+
+/// The NV axes of the four orientations in the cubic frame.
+#[pyfunction(name = "nv_orientations")]
+fn py_nv_orientations() -> [[f64; 3]; 4] {
+    optics::nv_orientations()
+}
+
+/// The two signed ESR lines of each orientation (Hz) for a field (T, cubic
+/// frame).
+#[pyfunction(name = "ensemble_lines")]
+#[pyo3(signature = (field, zero_field_splitting = NV_ZERO_FIELD_SPLITTING, gyromagnetic_ratio = NV_GYROMAGNETIC_RATIO))]
+fn py_ensemble_lines(
+    field: [f64; 3],
+    zero_field_splitting: f64,
+    gyromagnetic_ratio: f64,
+) -> PyResult<[[f64; 2]; 4]> {
+    optics::ensemble_lines(field, zero_field_splitting, gyromagnetic_ratio).raise()
+}
+
+/// The field vector (T, cubic frame, up to its sign) from the lines of the
+/// four orientations.
+#[pyfunction(name = "field_from_lines")]
+#[pyo3(signature = (lines, zero_field_splitting = NV_ZERO_FIELD_SPLITTING, gyromagnetic_ratio = NV_GYROMAGNETIC_RATIO))]
+fn py_field_from_lines(
+    lines: [[f64; 2]; 4],
+    zero_field_splitting: f64,
+    gyromagnetic_ratio: f64,
+) -> PyResult<[f64; 3]> {
+    optics::field_from_lines(lines, zero_field_splitting, gyromagnetic_ratio).raise()
+}
+
+/// `(|B_∥|, B_⊥)` (T) from the two signed lines of one orientation.
+#[pyfunction(name = "axial_and_transverse")]
+#[pyo3(signature = (lines, zero_field_splitting = NV_ZERO_FIELD_SPLITTING, gyromagnetic_ratio = NV_GYROMAGNETIC_RATIO))]
+fn py_axial_and_transverse(
+    lines: [f64; 2],
+    zero_field_splitting: f64,
+    gyromagnetic_ratio: f64,
+) -> PyResult<(f64, f64)> {
+    optics::axial_and_transverse(lines, zero_field_splitting, gyromagnetic_ratio).raise()
+}
+
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyOpticalNv>()?;
+    m.add_class::<PyTwoLevelOdmr>()?;
+    m.add_function(wrap_pyfunction!(py_ramsey_sensitivity, m)?)?;
+    m.add_function(wrap_pyfunction!(py_echo_sensitivity, m)?)?;
+    m.add_function(wrap_pyfunction!(py_best_sensitivity, m)?)?;
+    m.add_function(wrap_pyfunction!(py_readout_contrast, m)?)?;
+    m.add_function(wrap_pyfunction!(py_nv_orientations, m)?)?;
+    m.add_function(wrap_pyfunction!(py_ensemble_lines, m)?)?;
+    m.add_function(wrap_pyfunction!(py_field_from_lines, m)?)?;
+    m.add_function(wrap_pyfunction!(py_axial_and_transverse, m)?)?;
+    m.add("NV_EXCITED_SPLITTING", NV_EXCITED_SPLITTING)?;
     m.add_class::<PySpinBath>()?;
     m.add_function(wrap_pyfunction!(py_point_dipole, m)?)?;
     m.add_function(wrap_pyfunction!(py_diamond_sites, m)?)?;

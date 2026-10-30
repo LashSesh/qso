@@ -367,18 +367,18 @@ impl OpticalNv {
         let back = [r.singlet_plus_minus, r.singlet_zero, r.singlet_plus_minus];
         let mut jumps = Vec::new();
         let conserve = |i: &[f64; 3], j: &[f64; 3]| (0..3).map(|p| i[p] * j[p]).sum::<f64>();
-        for i in 0..3 {
-            for j in 0..3 {
-                let overlap = conserve(&wg[i], &we[j]);
+        for (i, gi) in wg.iter().enumerate() {
+            for (j, ej) in we.iter().enumerate() {
+                let overlap = conserve(gi, ej);
                 jumps.push((i, 3 + j, pump * overlap));
                 jumps.push((3 + j, i, r.radiative * overlap));
             }
         }
-        for j in 0..3 {
-            jumps.push((3 + j, 6, (0..3).map(|p| we[j][p] * isc[p]).sum()));
+        for (j, ej) in we.iter().enumerate() {
+            jumps.push((3 + j, 6, (0..3).map(|p| ej[p] * isc[p]).sum()));
         }
-        for i in 0..3 {
-            jumps.push((6, i, (0..3).map(|p| wg[i][p] * back[p]).sum()));
+        for (i, gi) in wg.iter().enumerate() {
+            jumps.push((6, i, (0..3).map(|p| gi[p] * back[p]).sum()));
         }
         if self.spin_lattice > 0.0 {
             for i in 0..3 {

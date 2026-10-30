@@ -2595,6 +2595,113 @@ NV_ZERO_FIELD_SPLITTING: float
 NV_GYROMAGNETIC_RATIO: float
 MAX_NV_DIMENSION: int
 
+@type_check_only
+class CwLine(TypedDict):
+    frequencies: RealArray
+    rates: RealArray
+    off_resonance: float
+    contrast: float
+    linewidth: float
+    slope: float
+    sensitivity: float
+
+@type_check_only
+class PulsedReadout(TypedDict):
+    readout_contrast: float
+    times: RealArray
+    bright: RealArray
+    dark: RealArray
+    window: float
+    photons_bright: float
+    photons_dark: float
+
+@final
+class OpticalNv:
+    def __new__(
+        cls,
+        field: Sequence[float] = ...,
+        rates: Optional[Sequence[float]] = None,
+        dephasing: float = 2e5,
+        spin_lattice: float = 1e3,
+        collection: float = 0.01,
+        zero_field_splitting: float = ...,
+        excited_splitting: float = ...,
+        gyromagnetic_ratio: float = ...,
+    ) -> OpticalNv: ...
+    @property
+    def field(self) -> list[float]: ...
+    @property
+    def rates(self) -> list[float]: ...
+    @property
+    def collection(self) -> float: ...
+    def ground_hamiltonian(self) -> ComplexArray: ...
+    def excited_hamiltonian(self) -> ComplexArray: ...
+    def ground_levels(self) -> Tuple[RealArray, ComplexArray]: ...
+    def excited_levels(self) -> Tuple[RealArray, ComplexArray]: ...
+    def lines(self) -> list[Tuple[float, float]]: ...
+    def steady_state(
+        self, pump: float, frequency: Optional[float] = None, rabi: float = 0.0
+    ) -> ComplexArray: ...
+    def fluorescence(
+        self, pump: float, frequency: Optional[float] = None, rabi: float = 0.0
+    ) -> float: ...
+    def cw_odmr(self, frequencies: ArrayLike, rabi: float, pump: float) -> RealArray: ...
+    def cw_line(
+        self, centre: float, span: float, rabi: float, pump: float, points: int = 401
+    ) -> CwLine: ...
+    def pulsed_readout(
+        self, pump: float, duration: float, steps: int = 1000, transition: int = -1
+    ) -> PulsedReadout: ...
+    def polarisation(self, pump: float, duration: float = ...) -> float: ...
+
+@final
+class TwoLevelOdmr:
+    def __new__(
+        cls,
+        polarisation: float,
+        coherence: float,
+        spin_lattice: float,
+        dephasing: float,
+        bright: float,
+        dark: float,
+    ) -> TwoLevelOdmr: ...
+    def population(self, detuning: float, rabi: float) -> float: ...
+    def rate(self, detuning: float, rabi: float) -> float: ...
+    def line(self, span: float, rabi: float, points: int = 2001) -> CwLine: ...
+
+def ramsey_sensitivity(
+    tau: float, coherence: float, readout: float, overhead: float = 0.0
+) -> float: ...
+def echo_sensitivity(
+    total: float, coherence: float, readout: float, overhead: float = 0.0
+) -> float: ...
+def best_sensitivity(
+    times: Sequence[float],
+    coherences: Sequence[float],
+    readout: float,
+    overhead: float = 0.0,
+    echo: bool = False,
+) -> Tuple[float, float]: ...
+def readout_contrast(a: float, b: float) -> float: ...
+def nv_orientations() -> list[list[float]]: ...
+def ensemble_lines(
+    field: Sequence[float],
+    zero_field_splitting: float = ...,
+    gyromagnetic_ratio: float = ...,
+) -> list[list[float]]: ...
+def field_from_lines(
+    lines: Sequence[Sequence[float]],
+    zero_field_splitting: float = ...,
+    gyromagnetic_ratio: float = ...,
+) -> list[float]: ...
+def axial_and_transverse(
+    lines: Sequence[float],
+    zero_field_splitting: float = ...,
+    gyromagnetic_ratio: float = ...,
+) -> Tuple[float, float]: ...
+
+NV_EXCITED_SPLITTING: float
+
 @final
 class SpinBath:
     def __new__(
