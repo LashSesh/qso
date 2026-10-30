@@ -697,6 +697,7 @@ fn limits_and_invalid_input() {
 }
 
 #[test]
+#[cfg_attr(target_arch = "wasm32", ignore = "a panic aborts under WASI")]
 fn of_panics_outside_the_points() {
     let o = Orbitals::new(3, &[]).unwrap();
     assert!(std::panic::catch_unwind(|| o.of(0, 3)).is_err());

@@ -71,7 +71,7 @@ use crate::parallel::for_each_mut;
 pub const MAX_ORBITAL_PAIRS: usize = 1 << 26;
 
 /// Most union–find steps (generators times pairs) while orbitals are found.
-pub const MAX_ORBITAL_STEPS: usize = 1 << 34;
+pub const MAX_ORBITAL_STEPS: u64 = 1 << 34;
 
 /// Most entries of a reduced generator (20 bytes each, 1.25 GiB).
 pub const MAX_ORBITAL_ENTRIES: usize = 1 << 26;
@@ -132,7 +132,7 @@ impl Orbitals {
         for (k, g) in generators.iter().enumerate() {
             check_permutation(n, g, k)?;
         }
-        if generators.len().saturating_mul(pairs) > MAX_ORBITAL_STEPS {
+        if (generators.len() as u64).saturating_mul(pairs as u64) > MAX_ORBITAL_STEPS {
             return Err(QsoError::invalid(
                 "generators",
                 format!(
