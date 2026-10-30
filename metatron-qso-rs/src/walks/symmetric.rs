@@ -42,7 +42,7 @@
 //!     &g, Generator::Laplacian, 1.0, &[Dephasing::sites(256, 0.5)], &symmetries,
 //! ).unwrap();
 //! assert_eq!(walk.num_orbitals(), 165);
-//! let p = walk.populations(&walk.evolve(&walk.localized(0).unwrap(), 2.0).unwrap());
+//! let p = walk.populations(&walk.evolve(&walk.localized(0).unwrap(), 2.0).unwrap()).unwrap();
 //! assert!((p.iter().sum::<f64>() - 1.0).abs() < 1e-12);
 //! ```
 
@@ -510,9 +510,10 @@ impl SymmetricOpenWalk {
     }
 
     /// The population of every node.
-    pub fn populations(&self, x: &[C64]) -> Vec<f64> {
+    pub fn populations(&self, x: &[C64]) -> Result<Vec<f64>> {
         let o = &self.orbitals;
-        (0..o.n).map(|u| x[o.of(u, u)].re).collect()
+        o.check_len(x.len())?;
+        Ok((0..o.n).map(|u| x[o.of(u, u)].re).collect())
     }
 }
 
@@ -728,12 +729,13 @@ impl SymmetricCoinedWalk {
     }
 
     /// Probability of each node: the weight of the arcs leaving it.
-    pub fn node_probabilities(&self, x: &[C64]) -> Vec<f64> {
+    pub fn node_probabilities(&self, x: &[C64]) -> Result<Vec<f64>> {
+        self.orbitals.check_len(x.len())?;
         let mut p = vec![0.0; self.num_nodes];
         for (a, &u) in self.tails.iter().enumerate() {
             p[u] += x[self.orbitals.of(a, a)].re;
         }
-        p
+        Ok(p)
     }
 
     /// The underlying walk.

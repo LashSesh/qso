@@ -108,7 +108,7 @@ fn site_dephasing_matches_the_full_density_matrix() {
             .unwrap();
             assert!(reduced.num_orbitals() * 6 < n * n);
             let x = reduced.evolve(&reduced.localized(0).unwrap(), t).unwrap();
-            let p = reduced.populations(&x);
+            let p = reduced.populations(&x).unwrap();
             let err = max_diff(&p, &full.populations(0, t).unwrap());
             assert!(err < 1e-9, "n = {n}: {err:e}");
             // The whole state, not only its diagonal.
@@ -148,7 +148,9 @@ fn without_dephasing_q12_matches_the_quotient_walk() {
     let quotient =
         QuotientWalk::new(&Quotient::hypercube(d).unwrap(), Generator::Laplacian, 1.0).unwrap();
     let t = 0.9;
-    let p = walk.populations(&walk.evolve(&walk.localized(0).unwrap(), t).unwrap());
+    let p = walk
+        .populations(&walk.evolve(&walk.localized(0).unwrap(), t).unwrap())
+        .unwrap();
     let cells = quotient.cell_probabilities(0, t).unwrap();
     for (u, &pu) in p.iter().enumerate() {
         let k = (u as u32).count_ones() as usize;
@@ -180,7 +182,9 @@ fn per_coordinate_dephasing_on_q12_is_binomial() {
         &coordinate_permutations(d),
     )
     .unwrap();
-    let p = walk.populations(&walk.evolve(&walk.localized(0).unwrap(), t).unwrap());
+    let p = walk
+        .populations(&walk.evolve(&walk.localized(0).unwrap(), t).unwrap())
+        .unwrap();
     let flip = (1.0 - bloch_z(gamma, kappa, t)) / 2.0;
     for (u, &pu) in p.iter().enumerate() {
         let k = (u as u32).count_ones() as i32;
@@ -250,7 +254,9 @@ fn product_walks_match_the_trivial_group() {
     )
     .unwrap();
     assert_eq!(walk.num_orbitals(), n * n);
-    let p = walk.populations(&walk.evolve(&walk.localized(0).unwrap(), t).unwrap());
+    let p = walk
+        .populations(&walk.evolve(&walk.localized(0).unwrap(), t).unwrap())
+        .unwrap();
     let product = ProductOpenWalk::new(vec![
         (
             DephasingWalk::new(&path, Generator::Laplacian, gamma, 0.4).unwrap(),
@@ -285,7 +291,7 @@ fn coined_walks_match_the_full_density_matrix() {
         let x = reduced
             .evolve(&reduced.localized(0).unwrap(), steps)
             .unwrap();
-        let p = reduced.node_probabilities(&x);
+        let p = reduced.node_probabilities(&x).unwrap();
         let err = max_diff(&p, &full.probabilities(0, steps).unwrap());
         assert!(err < 1e-12, "{err:e}");
     }
@@ -299,7 +305,9 @@ fn coin_dephasing_needs_symmetries_that_keep_the_labels() {
     assert!(SymmetricCoinedWalk::new(&full, &stabilizer_of_zero(&g)).is_err());
     // Without symmetries every pair is its own orbital and the walk agrees.
     let reduced = SymmetricCoinedWalk::new(&full, &[]).unwrap();
-    let p = reduced.node_probabilities(&reduced.evolve(&reduced.localized(0).unwrap(), 6).unwrap());
+    let p = reduced
+        .node_probabilities(&reduced.evolve(&reduced.localized(0).unwrap(), 6).unwrap())
+        .unwrap();
     assert!(max_diff(&p, &full.probabilities(0, 6).unwrap()) < 1e-12);
 }
 

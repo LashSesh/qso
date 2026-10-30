@@ -184,7 +184,7 @@ fn density(rho: &ComplexMatrixArg<'_>) -> PyResult<CMatrix> {
 /// At most 2048 arcs.
 #[pyclass(name = "DecoherentCoinedWalk", module = "metatron_qso", frozen)]
 pub struct PyDecoherentCoinedWalk {
-    inner: DecoherentCoinedWalk,
+    pub(crate) inner: DecoherentCoinedWalk,
 }
 
 #[pymethods]

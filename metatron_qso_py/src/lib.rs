@@ -30,6 +30,7 @@ mod simulation;
 mod spin;
 mod stabilizer;
 mod state;
+mod symmetric;
 mod walks;
 
 use metatron_qso::C64;
@@ -211,5 +212,6 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     mps::register(m)?;
     spin::register(m)?;
     nv::register(m)?;
+    symmetric::register(m)?;
     Ok(())
 }

@@ -566,6 +566,27 @@ impl PyGraph {
         py.detach(|| g.automorphism_group().generators().to_vec())
     }
 
+    /// Generators of the automorphisms that fix every node of `fixed`.
+    fn stabilizer_generators(
+        &self,
+        py: Python<'_>,
+        fixed: Vec<usize>,
+    ) -> PyResult<Vec<Vec<usize>>> {
+        let g = &self.inner;
+        Ok(py
+            .detach(|| g.stabilizer(&fixed))
+            .raise()?
+            .generators()
+            .to_vec())
+    }
+
+    /// Order of the group of automorphisms that fix every node of `fixed`
+    /// (`None` if it exceeds 2^128).
+    fn stabilizer_order(&self, py: Python<'_>, fixed: Vec<usize>) -> PyResult<Option<u128>> {
+        let g = &self.inner;
+        Ok(py.detach(|| g.stabilizer(&fixed)).raise()?.order())
+    }
+
     fn is_connected(&self) -> bool {
         self.inner.is_connected()
     }

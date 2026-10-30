@@ -1,7 +1,7 @@
 //! Continuous-time quantum walks, spatial search, dephasing and classical
 //! baselines.
 
-use metatron_qso::walks::driven::{DrivenWalk, MagnusOptions, Term};
+use metatron_qso::walks::driven::{DrivenEvolution, DrivenWalk, MagnusOptions, Term};
 use metatron_qso::walks::interacting::{InteractingWalk, Statistics, certificate_distance};
 use metatron_qso::walks::{
     ContinuousWalk, DephasingWalk, Generator, SpatialSearch, classical_hitting_times,
@@ -318,7 +318,7 @@ impl PySpatialSearch {
 /// the density matrix; graphs with up to 512 nodes).
 #[pyclass(name = "DephasingWalk", module = "metatron_qso", frozen)]
 pub struct PyDephasingWalk {
-    inner: DephasingWalk,
+    pub(crate) inner: DephasingWalk,
     n: usize,
 }
 
@@ -505,37 +505,46 @@ impl PyDrivenWalk {
             max_step,
             max_steps,
         };
-        let mut error: Option<PyErr> = None;
-        let result = self.inner.evolve(
-            &complex_vec(&psi0),
-            t0,
-            t1,
-            |t| {
-                coefficients
-                    .call1((t,))
-                    .and_then(|v| v.extract::<Vec<f64>>())
-                    .map_err(|e| {
-                        error = Some(e);
-                        metatron_qso::QsoError::invalid(
-                            "coefficients",
-                            "the callable raised an exception",
-                        )
-                    })
-            },
-            &options,
-        );
-        if let Some(e) = error {
-            return Err(e);
-        }
-        let r = result.raise()?;
-        Ok(pydict!(py, {
-            "state" => complex_array(py, r.state),
-            "steps" => r.steps,
-            "rejected" => r.rejected,
-            "error_estimate" => r.error_estimate,
-            "forced" => r.forced,
-        }))
+        let psi0 = complex_vec(&psi0);
+        driven_result(py, coefficients, |c| {
+            self.inner.evolve(&psi0, t0, t1, c, &options)
+        })
     }
+}
+
+/// Run a driven evolution whose coefficients come from the Python callable
+/// `coefficients`, as the dict `DrivenWalk.evolve` returns.
+pub(crate) fn driven_result<'py, E>(
+    py: Python<'py>,
+    coefficients: &Bound<'py, PyAny>,
+    evolve: E,
+) -> PyResult<Bound<'py, PyDict>>
+where
+    E: FnOnce(
+        &mut dyn FnMut(f64) -> metatron_qso::Result<Vec<f64>>,
+    ) -> metatron_qso::Result<DrivenEvolution>,
+{
+    let mut error: Option<PyErr> = None;
+    let result = evolve(&mut |t| {
+        coefficients
+            .call1((t,))
+            .and_then(|v| v.extract::<Vec<f64>>())
+            .map_err(|e| {
+                error = Some(e);
+                metatron_qso::QsoError::invalid("coefficients", "the callable raised an exception")
+            })
+    });
+    if let Some(e) = error {
+        return Err(e);
+    }
+    let r = result.raise()?;
+    Ok(pydict!(py, {
+        "state" => complex_array(py, r.state),
+        "steps" => r.steps,
+        "rejected" => r.rejected,
+        "error_estimate" => r.error_estimate,
+        "forced" => r.forced,
+    }))
 }
 
 fn statistics(name: &str) -> PyResult<Statistics> {
