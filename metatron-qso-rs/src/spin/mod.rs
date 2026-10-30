@@ -100,6 +100,7 @@ use crate::linalg::{CMatrix, expm_hermitian};
 mod blocks;
 mod control;
 mod exchange;
+mod nv;
 mod redfield;
 #[cfg(test)]
 mod tests;
@@ -108,6 +109,11 @@ mod transfer_tests;
 
 pub use control::{Control, Drive, Member, Optimized, unitary_bound};
 pub use exchange::{Channel, Exchange, Fresh, Profile, Site};
+pub use nv::{
+    Carbon, FieldNoise, MAX_NV_DIMENSION, Microwave, NV_GYROMAGNETIC_RATIO,
+    NV_ZERO_FIELD_SPLITTING, Nitrogen, NitrogenIsotope, NvCenter, NvEvent, cpmg, decay_exponent,
+    filter_function, hahn, ramsey, xy8,
+};
 pub use redfield::{MU0_OVER_4PI, axial_csa};
 
 /// Reduced Planck constant (J s, CODATA 2018, exact).
