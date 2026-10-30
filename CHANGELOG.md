@@ -6,6 +6,28 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.8.0] — 2026-10-30
+
+Milestones 1.29 to 1.37 of the [roadmap](docs/ROADMAP.md), its seventh
+and eighth stages, released together:
+
+- **seventh stage**: 1.29 (interacting walkers), 1.30 (correlated and
+  non-Markovian noise), 1.31 (noise learning beyond ten qubits), 1.32
+  (integral screening and commutator bounds for higher orders), 1.33
+  (spin dynamics and magnetic resonance);
+- **eighth stage**, magnetic resonance for medical research: 1.34
+  (relaxation from first principles), 1.35 (hyperpolarisation in
+  realistic models), 1.36 (optimal control of spin experiments), 1.37
+  (quantum sensing with NV centres).
+
+New results are checked against closed forms, published limits,
+permanents and determinants, QuTiP, independent NumPy and SciPy builds
+and extended precision (named below). Every validated result of 1.7.0
+still holds (the validation tests only grew). QSO simulates the physics
+behind these experiments; it does not simulate images or make clinical
+claims. The public Rust API only grows (`cargo-semver-checks` against
+1.7.0).
+
 ### Added
 
 - **Interacting walkers** (milestone 1.29). `walks::InteractingWalk`
@@ -68,105 +90,26 @@ All notable changes to this project are documented here. The format follows
     `pea_layered`, and `max_bond` (for `simulator="mps"` only).
   - Learned rates on 7 to 10 qubits (more than 64 generators) now come
     from the new fit; they agree with 1.30 to rounding (about 10⁻¹⁷).
-- **Quantum sensing with NV centres** (milestone 1.37).
-  - `spin::NvCenter` (`spin.NvCenter` in Python): the electron spin 1 of
-    an NV centre with zero-field splitting, Zeeman term, ¹⁴N (hyperfine
-    and quadrupole) or ¹⁵N and ¹³C nuclei (`A_∥`, `A_⊥`) in the secular
-    approximation, in the frame of the microwave; resonance `lines`,
-    pulsed `odmr`, `signal` and `evolve` of sequences on either
-    transition with ideal pulses or finite ones (rotating-wave
-    approximation, both transitions driven, free periods between pulse
-    centres); JSON.
-  - Sequences `ramsey`, `hahn`, `cpmg`, `xy8` (`NvEvent`).
-  - The microwave phase is the carrier's, the same on both transitions;
-    frequencies are signed (`D + m γ_e B`, negative for `m = −1` above
-    102 mT).
-  - `FieldNoise`: telegraph, Ornstein–Uhlenbeck and 1/f field noise with
-    spectra and correlations; `filter_function` and `decay_exponent`
-    (the Gaussian `χ`, exact in the time domain, in one pass);
-    `signal_with_noise` averages noise trajectories, sampled exactly
-    between pulses and held at their mean over pieces of finite pulses
-    (with standard errors).
-  - Free evolution in blocks of the electron level, one small factor per
-    nucleus: CPMG-16 with ¹⁴N and six ¹³C (dimension 576) takes 0.4 s;
-    `lines` one nucleus at a time. Work beyond the limit is refused.
-  - Validated against the resonance lines `D ± γ_e B ± A_N m_I`, the CPMG
-    closed form of Taminiau et al. for a ¹³C (10⁻¹⁰), an independent
-    NumPy propagation of random states (10⁻¹⁰), the dense propagation, a
-    linearly polarised carrier in the laboratory frame, Klauder and
-    Anderson's Ornstein–Uhlenbeck decays (10⁻⁹), a quadrature of the
-    filter-function integral (10⁻⁵), Kubo–Anderson for telegraph noise,
-    and the robustness of XY-8 to pulse errors.
-  - Tutorial `11_nv_sensing`.
-- **Optimal control of spin experiments** (milestone 1.36).
-  - GRAPE (`Control`, `SpinSystem::optimize_control`; `spin.Control` in
-    Python): piecewise-constant rf amplitudes on several channels
-    (rotating frame) or field profiles, maximising `Re Tr(C† ρ(T))` over
-    an ensemble of rf scalings and offsets, with amplitude limits and
-    power and smoothness penalties. Exact gradients without relaxation
-    (eigenvectors of each step) and with it (Liouville space, the Van
-    Loan block exponential applied to vectors); the field dependence of
-    relaxation by central differences.
-  - `Event::Control` (`spin.rf_pulse`): rf on several channels at once,
-    replaying optimised pulses in `evolve`; `control_events`.
-  - `Exchange::optimize_profile` (`spin.Profile`): field profiles through
-    chemical exchange, e.g. for SABRE.
-  - `unitary_bound`: the largest transfer of any unitary (Glaser et al.).
-  - Validated against finite differences, an independent NumPy
-    propagation, the unitary bound (IS and I₂S, 10⁻⁶), the time-optimal
-    limits of Khaneja, Brockett and Glaser for two spins, refocused INEPT
-    under rf errors, and the adiabatic field cycling of parahydrogen.
-  - Tutorial `10_optimal_control`.
-  - The drift of `T₁` relaxation towards equilibrium is computed from
-    `tanh(x/2)/T₁` instead of the difference of the two rates, so thermal
-    polarisations at millitesla fields keep their digits in `evolve` too.
-- **Hyperpolarisation in realistic models** (milestone 1.35).
-  - `Exchange` (`spin.Exchange` in Python): chemical sites (spin systems
-    with concentrations) and first-order channels that carry some spins'
-    states, trace out the rest and bring the others in thermal or as
-    parahydrogen; the Bloch–McConnell equations in Liouville space,
-    propagated exactly block by block of coherence order over all sites,
-    with relaxation per site; `evolve`, `steady_state` (a scaled square
-    system by fully pivoted LU), `fid`, `polarization`, JSON. Sweeps and
-    FIDs beyond the work limit are refused before they start.
-  - `m2s`, `s2m` (Pileio, Carravetta and Levitt) and `spin_lock` for
-    long-lived singlet order; S2M after M2S returns the magnetisation
-    inverted.
-  - Validated against the two-site Bloch–McConnell FID (10⁻¹⁰) and
-    coalescence, a Monte Carlo of exchange events, an independent dense
-    NumPy implementation of the multi-site equations (10⁻¹⁰), SABRE
-    steady states up to 9.4 T against 40-digit solutions (10⁻¹⁴), SABRE
-    anti-crossings, the 2/3 bound of M2S/S2M (97–99.9 %), the
-    sudden-adiabatic theory of field cycling (¹³C polarisation to 10⁻⁴)
-    and the Redfield lifetime of singlet order under a spin lock
-    (4·10⁻⁴).
-  - Tutorial `09_hyperpolarisation`: SABRE with exchange, field cycling.
-- **Relaxation from first principles** (milestone 1.34).
-  - Spins take positions (Å) and shielding tensors (ppm), a system a
-    rotational correlation time: `set_position`, `set_csa`,
-    `axial_csa`, `with_correlation_time`, `dipolar_coupling`; in JSON
-    as `position`, `csa` and `correlation_time`.
-  - Bloch–Wangsness–Redfield relaxation by the dipolar couplings and
-    shielding anisotropies of a molecule tumbling isotropically, with
-    cross-correlations between all of them, towards thermal equilibrium
-    (`−R(ρ − ρ_eq)`); secular with respect to the carriers in the rotating
-    frame, in full in the laboratory frame. It adds to the T₁ and T₂ of
-    1.33 in every propagation (block exponentials, Dormand–Prince steps,
-    FIDs).
-  - `relaxation_rates(ops)`: auto- and cross-relaxation rates among
-    observables. `qso spins --rates` prints the auto-relaxation times
-    (1/Γ of I_z and I₊) of every spin, "none" where nothing relaxes.
-  - Redfield theory is refused outside fast motion (`|A|·τ_c > 1`), and
-    its superoperator counts towards the work limit; `evolve` reuses it
-    while the field stays.
-  - `Spin` is `#[non_exhaustive]` and has the fields `position` and `csa`.
-  - Long delays no longer turn into NaN: coherence blocks are shifted only
-    by their mean precession, not their mean decay (this affected the
-    laboratory frame of 1.33 after about 10⁴ s).
-  - Validated against Solomon's equations, BPP, the ¹³C Overhauser
-    enhancement (2.988), CSA rates (∝ B²), singlet immunity, the
-    deuteration factor 15.9, and QuTiP's `bloch_redfield_tensor` with bath
-    operators from an exact average over orientations (rates to 5·10⁻¹⁵).
+- **Faster integrals and tighter bounds** (milestone 1.32).
+  - Schwarz screening of the repulsion integrals by quartets of shells:
+    `AoIntegrals::compute` skips quartets whose integrals are all below
+    `SCREENING_THRESHOLD` (10⁻¹² Ha); `compute_screened` takes another
+    threshold (0 computes everything), and `screened_quartets` counts
+    them. A 64-function hydrogen chain takes 0.2 s instead of 1.5 s, its
+    RHF energy unchanged to 5·10⁻¹³ Ha. Python: `AoIntegrals(...,
+    screening=)`, `.screening`, `.screened_quartets`.
+  - `trotter_error_bounds` returns three bounds for product formulas:
+    `nested` (new, every order: the Taylor coefficients of the step's
+    error generator computed as Pauli operators up to an adaptive degree,
+    with a rigorous tail), `stages` (the commutator bounds of 1.5) and
+    `taylor`. `trotter_error_bound` returns the smallest. At order 4 and
+    6 the bound now falls as `r^{−p}` and lies 7–24 times above the
+    actual error at 8–32 steps for 4-qubit Hamiltonians, where the old
+    one was 780–10⁹ times above; for larger ones it is looser. Its series
+    is independent of the units of H and cached across calls. Python:
+    `trotter_error_bounds`; `qso trotter` lists the bounds in its JSON.
+  - Bounds of orders 1 and 2 can be slightly smaller than in 1.31, as the
+    smallest of the three is returned.
 - **Spin dynamics and magnetic resonance** (milestone 1.33), module
   `spin`.
   - `SpinSystem`: nuclei by isotope (¹H, ²H as spin 1, ¹³C, ¹⁵N, ¹⁹F,
@@ -203,26 +146,105 @@ All notable changes to this project are documented here. The format follows
   - `linalg`: the complex product by three real GEMMs and a general
     matrix exponential (Taylor degree 16, scaling and squaring) are shared
     with the matrix-product states.
-- **Faster integrals and tighter bounds** (milestone 1.32).
-  - Schwarz screening of the repulsion integrals by quartets of shells:
-    `AoIntegrals::compute` skips quartets whose integrals are all below
-    `SCREENING_THRESHOLD` (10⁻¹² Ha); `compute_screened` takes another
-    threshold (0 computes everything), and `screened_quartets` counts
-    them. A 64-function hydrogen chain takes 0.2 s instead of 1.5 s, its
-    RHF energy unchanged to 5·10⁻¹³ Ha. Python: `AoIntegrals(...,
-    screening=)`, `.screening`, `.screened_quartets`.
-  - `trotter_error_bounds` returns three bounds for product formulas:
-    `nested` (new, every order: the Taylor coefficients of the step's
-    error generator computed as Pauli operators up to an adaptive degree,
-    with a rigorous tail), `stages` (the commutator bounds of 1.5) and
-    `taylor`. `trotter_error_bound` returns the smallest. At order 4 and
-    6 the bound now falls as `r^{−p}` and lies 7–24 times above the
-    actual error at 8–32 steps for 4-qubit Hamiltonians, where the old
-    one was 780–10⁹ times above; for larger ones it is looser. Its series
-    is independent of the units of H and cached across calls. Python:
-    `trotter_error_bounds`; `qso trotter` lists the bounds in its JSON.
-  - Bounds of orders 1 and 2 can be slightly smaller than in 1.31, as the
-    smallest of the three is returned.
+- **Relaxation from first principles** (milestone 1.34).
+  - Spins take positions (Å) and shielding tensors (ppm), a system a
+    rotational correlation time: `set_position`, `set_csa`,
+    `axial_csa`, `with_correlation_time`, `dipolar_coupling`; in JSON
+    as `position`, `csa` and `correlation_time`.
+  - Bloch–Wangsness–Redfield relaxation by the dipolar couplings and
+    shielding anisotropies of a molecule tumbling isotropically, with
+    cross-correlations between all of them, towards thermal equilibrium
+    (`−R(ρ − ρ_eq)`); secular with respect to the carriers in the rotating
+    frame, in full in the laboratory frame. It adds to the T₁ and T₂ of
+    1.33 in every propagation (block exponentials, Dormand–Prince steps,
+    FIDs).
+  - `relaxation_rates(ops)`: auto- and cross-relaxation rates among
+    observables. `qso spins --rates` prints the auto-relaxation times
+    (1/Γ of I_z and I₊) of every spin, "none" where nothing relaxes.
+  - Redfield theory is refused outside fast motion (`|A|·τ_c > 1`), and
+    its superoperator counts towards the work limit; `evolve` reuses it
+    while the field stays.
+  - `Spin` is `#[non_exhaustive]` and has the fields `position` and `csa`.
+  - Long delays no longer turn into NaN: coherence blocks are shifted only
+    by their mean precession, not their mean decay (this affected the
+    laboratory frame of 1.33 after about 10⁴ s).
+  - Validated against Solomon's equations, BPP, the ¹³C Overhauser
+    enhancement (2.988), CSA rates (∝ B²), singlet immunity, the
+    deuteration factor 15.9, and QuTiP's `bloch_redfield_tensor` with bath
+    operators from an exact average over orientations (rates to 5·10⁻¹⁵).
+- **Hyperpolarisation in realistic models** (milestone 1.35).
+  - `Exchange` (`spin.Exchange` in Python): chemical sites (spin systems
+    with concentrations) and first-order channels that carry some spins'
+    states, trace out the rest and bring the others in thermal or as
+    parahydrogen; the Bloch–McConnell equations in Liouville space,
+    propagated exactly block by block of coherence order over all sites,
+    with relaxation per site; `evolve`, `steady_state` (a scaled square
+    system by fully pivoted LU), `fid`, `polarization`, JSON. Sweeps and
+    FIDs beyond the work limit are refused before they start.
+  - `m2s`, `s2m` (Pileio, Carravetta and Levitt) and `spin_lock` for
+    long-lived singlet order; S2M after M2S returns the magnetisation
+    inverted.
+  - Validated against the two-site Bloch–McConnell FID (10⁻¹⁰) and
+    coalescence, a Monte Carlo of exchange events, an independent dense
+    NumPy implementation of the multi-site equations (10⁻¹⁰), SABRE
+    steady states up to 9.4 T against 40-digit solutions (10⁻¹⁴), SABRE
+    anti-crossings, the 2/3 bound of M2S/S2M (97–99.9 %), the
+    sudden-adiabatic theory of field cycling (¹³C polarisation to 10⁻⁴)
+    and the Redfield lifetime of singlet order under a spin lock
+    (4·10⁻⁴).
+  - Tutorial `09_hyperpolarisation`: SABRE with exchange, field cycling.
+- **Optimal control of spin experiments** (milestone 1.36).
+  - GRAPE (`Control`, `SpinSystem::optimize_control`; `spin.Control` in
+    Python): piecewise-constant rf amplitudes on several channels
+    (rotating frame) or field profiles, maximising `Re Tr(C† ρ(T))` over
+    an ensemble of rf scalings and offsets, with amplitude limits and
+    power and smoothness penalties. Exact gradients without relaxation
+    (eigenvectors of each step) and with it (Liouville space, the Van
+    Loan block exponential applied to vectors); the field dependence of
+    relaxation by central differences.
+  - `Event::Control` (`spin.rf_pulse`): rf on several channels at once,
+    replaying optimised pulses in `evolve`; `control_events`.
+  - `Exchange::optimize_profile` (`spin.Profile`): field profiles through
+    chemical exchange, e.g. for SABRE.
+  - `unitary_bound`: the largest transfer of any unitary (Glaser et al.).
+  - Validated against finite differences, an independent NumPy
+    propagation, the unitary bound (IS and I₂S, 10⁻⁶), the time-optimal
+    limits of Khaneja, Brockett and Glaser for two spins, refocused INEPT
+    under rf errors, and the adiabatic field cycling of parahydrogen.
+  - Tutorial `10_optimal_control`.
+  - The drift of `T₁` relaxation towards equilibrium is computed from
+    `tanh(x/2)/T₁` instead of the difference of the two rates, so thermal
+    polarisations at millitesla fields keep their digits in `evolve` too.
+- **Quantum sensing with NV centres** (milestone 1.37).
+  - `spin::NvCenter` (`spin.NvCenter` in Python): the electron spin 1 of
+    an NV centre with zero-field splitting, Zeeman term, ¹⁴N (hyperfine
+    and quadrupole) or ¹⁵N and ¹³C nuclei (`A_∥`, `A_⊥`) in the secular
+    approximation, in the frame of the microwave; resonance `lines`,
+    pulsed `odmr`, `signal` and `evolve` of sequences on either
+    transition with ideal pulses or finite ones (rotating-wave
+    approximation, both transitions driven, free periods between pulse
+    centres); JSON.
+  - Sequences `ramsey`, `hahn`, `cpmg`, `xy8` (`NvEvent`).
+  - The microwave phase is the carrier's, the same on both transitions;
+    frequencies are signed (`D + m γ_e B`, negative for `m = −1` above
+    102 mT).
+  - `FieldNoise`: telegraph, Ornstein–Uhlenbeck and 1/f field noise with
+    spectra and correlations; `filter_function` and `decay_exponent`
+    (the Gaussian `χ`, exact in the time domain, in one pass);
+    `signal_with_noise` averages noise trajectories, sampled exactly
+    between pulses and held at their mean over pieces of finite pulses
+    (with standard errors).
+  - Free evolution in blocks of the electron level, one small factor per
+    nucleus: CPMG-16 with ¹⁴N and six ¹³C (dimension 576) takes 0.4 s;
+    `lines` one nucleus at a time. Work beyond the limit is refused.
+  - Validated against the resonance lines `D ± γ_e B ± A_N m_I`, the CPMG
+    closed form of Taminiau et al. for a ¹³C (10⁻¹⁰), an independent
+    NumPy propagation of random states (10⁻¹⁰), the dense propagation, a
+    linearly polarised carrier in the laboratory frame, Klauder and
+    Anderson's Ornstein–Uhlenbeck decays (10⁻⁹), a quadrature of the
+    filter-function integral (10⁻⁵), Kubo–Anderson for telegraph noise,
+    and the robustness of XY-8 to pulse errors.
+  - Tutorial `11_nv_sensing`.
 - **Graphs:** `generators::seidel_switching` (within the size limits of
   the generators, keeping node positions) and the three Chang graphs
   (`generators::chang`, spec `chang:K`), in Python as
