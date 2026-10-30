@@ -1472,6 +1472,7 @@ impl NvCenter {
 }
 
 pub mod bath;
+pub mod optics;
 
 #[cfg(test)]
 mod tests;

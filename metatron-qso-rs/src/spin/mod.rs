@@ -121,6 +121,9 @@ pub use redfield::{MU0_OVER_4PI, axial_csa};
 /// The nuclear-spin bath of an NV centre (cluster-correlation expansion).
 pub use nv::bath;
 pub use nv::bath::{BathSpin, Cce, SpinBath, diamond_bath};
+/// The optical cycle of an NV centre and magnetometer sensitivity.
+pub use nv::optics;
+pub use nv::optics::{OpticalNv, Photophysics, TwoLevelOdmr};
 
 /// Reduced Planck constant (J s, CODATA 2018, exact).
 pub const HBAR: f64 = 1.054_571_817e-34;
