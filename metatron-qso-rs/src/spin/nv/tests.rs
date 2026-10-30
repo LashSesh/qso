@@ -502,11 +502,18 @@ fn gaussian_noise_follows_the_filter_function() {
             (chi / from_spectrum - 1.0).abs() < 1e-5,
             "{chi} vs {from_spectrum}"
         );
-        let (mean, err) = nv
-            .signal_with_noise(&events, &mw, &noise, 20000, 3)
-            .unwrap();
-        let want = (1.0 + (-chi).exp()) / 2.0;
-        assert!((mean - want).abs() < 4.0 * err, "{mean} ± {err} vs {want}");
+        // Both transitions: the noise couples through S_z, m = ∓1 alike.
+        for (mw, seed) in [(mw, 3), (Microwave::resonant(&nv, 1, None), 4)] {
+            let (mean, err) = nv
+                .signal_with_noise(&events, &mw, &noise, 20000, seed)
+                .unwrap();
+            let want = (1.0 + (-chi).exp()) / 2.0;
+            assert!(
+                (mean - want).abs() < 4.0 * err,
+                "{}: {mean} ± {err} vs {want}",
+                mw.transition
+            );
+        }
         assert!(chi > 0.05, "{chi}");
     }
     // Ramsey in closed form: χ = (2π)²σ²τ_c²(T/τ_c − 1 + e^{−T/τ_c}).

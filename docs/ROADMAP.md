@@ -13,9 +13,8 @@ state-vector core at memory bandwidth), 1.12 (noise learning) and 1.13
 finished milestones are released together, not one by one. The third
 (1.14 to 1.17), fourth (1.18 to 1.21), fifth (1.22 to 1.25) and sixth
 (1.26 to 1.28) stages ship together as release 1.7.0. The seventh stage
-(1.29 to 1.33) is delivered (section 4g); of the eighth (1.34 to 1.37),
-magnetic resonance for medical research, in section 4h, 1.34 to 1.36
-are delivered. Up to 1.3
+(1.29 to 1.33) is delivered (section 4g), and so is the eighth (1.34 to
+1.37), magnetic resonance for medical research, in section 4h. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -53,7 +52,7 @@ which withdraws the results of version 1.
 | Boson sampling | exact probabilities and exact sampling (1.1); partial distinguishability, loss and Gaussian boson sampling with hafnians and torontonians (1.14) | mixed Gaussian states with many photons spread over many modes are impractical (10¹² operations at 20 photons in 10 modes) |
 | Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | noise learning for layers of two-qubit Clifford gates only, on density matrices up to 10 qubits and Pauli frames up to 64 (1.12, 1.31), with non-Pauli channels twirled one at a time; mitigation with the learned model above 24 qubits only on matrix-product states, for channels that are mixtures of unitaries (1.31); no leakage; channels on at most four qubits, slow noise as quasi-static and telegraph processes only, and on trajectories only (1.30); virtual distillation (1.17) mitigates only its measured copies' preparation |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18) | time-dependent Hamiltonians and decoherent coined walks without symmetry reduction; pretty good transfer on other graphs |
-| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the nested-commutator bound of product formulas (1.32) is tight for small Hamiltonians only, its tail ignoring which terms commute; spin relaxation, phenomenological (T₁ and T₂) or from dipolar couplings and shielding anisotropy by Redfield theory for isotropic tumbling (1.34), is exact up to about six relaxing spins of one isotope; larger relaxing systems run for short times only (Redfield not at all), and propagations estimated above a minute are refused; chemical exchange needs steady chemistry (no irreversible hydrogenation) and one block of at most 2048 elements over all sites; optimal control with relaxation works in Liouville space of up to six spins ½, and field profiles have many local optima |
+| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the nested-commutator bound of product formulas (1.32) is tight for small Hamiltonians only, its tail ignoring which terms commute; spin relaxation, phenomenological (T₁ and T₂) or from dipolar couplings and shielding anisotropy by Redfield theory for isotropic tumbling (1.34), is exact up to about six relaxing spins of one isotope; larger relaxing systems run for short times only (Redfield not at all), and propagations estimated above a minute are refused; chemical exchange needs steady chemistry (no irreversible hydrogenation) and one block of at most 2048 elements over all sites; optimal control with relaxation works in Liouville space of up to six spins ½, and field profiles have many local optima; NV centres are secular (field along the axis), with classical noise only (no spin bath beyond the explicit nuclei, no optical cycle, so pulsed ODMR only) |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
 | Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22) | circuit distances of hypergraph models are bounds, not always exact |
 | Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9), in the browser build too (1.25) | — |
@@ -2617,7 +2616,7 @@ beyond the work limit ends the run with an error; the cost with
 relaxation grows with rf amplitude times duration; `evolve` resolves
 polarisations below about 10⁻¹² only to 10⁻¹⁷ absolute.
 
-### 1.37 — Quantum sensing with spins in diamond (M)
+### 1.37 — Quantum sensing with spins in diamond (M, delivered)
 
 Use case: nitrogen-vacancy (NV) centres in diamond measure magnetic
 fields at the nanoscale, inside and next to living cells (Le Sage et al.,
@@ -2639,6 +2638,113 @@ form of Taminiau et al. (Phys. Rev. Lett. 109, 137602 (2012)), with its
 dips at the predicted pulse spacings. The coherence under Gaussian
 Ornstein–Uhlenbeck noise follows the filter-function integral, and under
 telegraph noise the exact Kubo–Anderson results of 1.30.
+
+Delivered in `spin/nv.rs`: `NvCenter` (electron spin 1 with `D`, the
+Zeeman term, ¹⁴N with hyperfine and quadrupole couplings or ¹⁵N, and
+¹³C nuclei with `A_∥` and `A_⊥`, in the secular approximation and the
+frame of the microwave), resonance `lines`, pulsed `odmr`, `signal` and
+`evolve` of sequences on either transition with ideal pulses or finite
+ones (rotating-wave approximation, both transitions driven with the
+carrier's phase, free periods between pulse centres); `ramsey`, `hahn`,
+`cpmg`, `xy8`; `FieldNoise` (telegraph, Ornstein–Uhlenbeck, 1/f as a sum
+of fluctuators) with spectra, `filter_function`, `decay_exponent` and
+`signal_with_noise`; `spin.NvCenter`, `spin.FieldNoise` and the sequences
+in Python; tutorial 11. Changes to the plan:
+
+- **Hyperfine tensors.** In the secular approximation only `S_z` couples
+  to a nucleus, and the azimuth of each ¹³C can be rotated away (the
+  nuclei do not couple to each other), so `A_∥` and `A_⊥` are the whole
+  tensor.
+- **ODMR spectra** are the resonance lines with their strengths and
+  pulsed ODMR; continuous-wave ODMR needs the optical cycle, which is not
+  modelled.
+- **A block propagation** was added for speed: the secular Hamiltonian is
+  block diagonal in the electron level and a sum of one term per nucleus
+  within a block, so free evolution applies one 2 × 2 or 3 × 3 factor per
+  nucleus. CPMG-16 with ¹⁴N and six ¹³C (dimension 576) took 36 s dense
+  and takes 0.4 s.
+- **Not done:** fields off the NV axis (the secular approximation needs
+  the field along it), the optical cycle, nuclear spin baths beyond the
+  explicit nuclei (cluster expansions), and pulse errors other than
+  finite duration and off-resonance (amplitude errors can be modelled by
+  the angle).
+
+Measured:
+
+- **Lines.** `D ± γ_e B ± A_N m_I` to 10⁻³ Hz for ¹⁴N and ¹⁵N; pulsed
+  ODMR dips to 2/3 at each ¹⁴N line (within 0.02) and equals one finite
+  pulse of the dense propagation to 10⁻¹⁰; at zero field the degenerate
+  lines of one ¹³C merge at `D ± A/2` with strength ½ each; above 102 mT
+  the line of `m = −1` is negative.
+- **Nuclear-spin detection.** The CPMG-64 signal of a ¹³C (60 and 30 kHz,
+  40 mT, with ¹⁴N) equals Taminiau's closed form to 1.5·10⁻¹³ over 1360
+  spacings, with six dips within 1.5 % of `τ_k`. With 20 MHz pulses XY-8
+  keeps the first three dips within 0.03 of their ideal depth (0.118
+  against 0.131 for the first); CPMG loses more than 0.3 of it (0.64),
+  because the ±2.14 MHz of ¹⁴N makes its pulses imperfect and it corrects
+  pulse errors only along its axis.
+- **Propagation.** An independent NumPy build (¹⁴N and two ¹³C, both
+  transitions, ideal and finite pulses, random states) agrees to 10⁻¹⁰,
+  the block propagation with the dense one (¹⁵N and three ¹³C, ¹⁴N and
+  two, non-Hermitian operators) to 10⁻¹⁰. A linearly polarised carrier
+  simulated in the laboratory frame without the rotating-wave
+  approximation agrees to 8·10⁻⁴ at zero field, 0.5 mT and 2 mT (Hahn,
+  XY-8, phase-shifted Ramsey, 5 MHz pulses); ideal pulses are the limit of
+  selective finite ones to 3·10⁻⁴ (30 MHz at 1 T).
+- **Noise.** Ornstein–Uhlenbeck decay exponents equal the closed forms of
+  Klauder and Anderson to 10⁻¹⁰ (Ramsey) and 10⁻⁹ (Hahn); the
+  filter-function integral of 1/f noise, by quadrature, to 10⁻⁵;
+  trajectories match `e^{−χ}` within four standard errors (2·10⁴
+  trajectories, Ramsey, Hahn, CPMG, XY-8, both transitions), telegraph
+  noise Kubo and Anderson's free decay and echo, where `e^{−χ}` misses by
+  more than 0.05. Noise during finite pulses agrees with 128 pieces per
+  pulse within the statistical error.
+- **Cost.** CPMG-64 with ¹⁴N and one ¹³C: 0.4 ms (ideal pulses), 1.2 ms
+  (20 MHz); a 1360-point CPMG-64 sweep 0.9 s; CPMG-16 at dimension 576
+  0.4 s and 8.5 s; 10⁴ noisy trajectories of CPMG-16 on a bare centre
+  0.05 s (0.15–0.2 s with finite pulses); `lines` at dimension 768
+  0.03 s; `decay_exponent` of XY-8×250 under 1/f noise of 1000
+  fluctuators 0.17 s.
+
+An independent review wrote its own NumPy model and a laboratory-frame
+simulation, and confirmed the Hamiltonian's signs and couplings, the
+block propagation for arbitrary states (to 7·10⁻¹³, up to dimension 768),
+the decay exponents, the exact Ornstein–Uhlenbeck and telegraph sampling
+(with up to 4·10⁶ trajectories) and the 16-piece treatment of noise
+during pulses against 256 pieces. It found:
+
+- **Wrong drive phase at low field.** The drive `cos φ S_x + sin φ S_y`
+  gave the two transitions opposite phases; a carrier gives both the
+  same. With one transition driven the signals are unchanged, but at
+  zero field a Hahn echo gave 0.467 instead of 0.768. The drive is now
+  the co-rotating part of a linearly polarised carrier, tested against
+  the laboratory frame; the NumPy reference now compares the whole state
+  (a population from the pumped state does not see the phase).
+- **Crash.** The dimension of 64 or more carbons wrapped around to zero,
+  passed the check and divided by zero (or tried to allocate 38 GB). It
+  saturates now and is refused.
+- **Wrong results.** `evolve` mirrored the blocks and so was wrong for
+  non-Hermitian operators; it now propagates their Hermitian and
+  anti-Hermitian parts. Filter functions did not check their periods (a
+  negative one gave a value) and refused −90° or 540° pulses; they check
+  and take angles modulo 360° now.
+- **Cost.** Noise sampling was not counted in the work limit (1000
+  fluctuators took 26 s), `decay_exponent` was quadratic in the number of
+  periods (56 s for XY-8×250), every finite pulse under noise took 16
+  full exponentials whatever the correlation time (105 s for 1000
+  trajectories at dimension 36, now 8.5 s), `lines` diagonalised the full
+  Hamiltonian (13.5 s at dimension 768, now 0.03 s), and ODMR, `lines`
+  and noiseless finite pulses had no work limit. All are fixed or
+  counted, with the costs measured.
+- **Smaller issues.** The comment on `γ_e` named `g = 2.0028` for the
+  free electron's value; negative frequencies above 102 mT were not
+  explained; degenerate lines were listed separately with strengths that
+  depended on the basis; one trajectory reported a standard error of
+  zero; static telegraph noise had a NaN spectrum and tiny rates a NaN
+  `χ`; adjacent free periods could be refused next to finite pulses;
+  custom nitrogen couplings were reachable only through JSON, and a
+  transition of 128 raised `OverflowError`; the trajectory tests allowed
+  10⁻³ beyond four standard errors. All are fixed.
 
 ## 5. Order and reasoning
 

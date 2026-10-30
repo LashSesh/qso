@@ -599,9 +599,9 @@ parahydrogen averaged at high field.
   for arbitrary states, Hermitian or not, to 10⁻¹⁰. Against a linearly
   polarised carrier simulated in the laboratory frame (no rotating-wave
   approximation) at zero field, 0.5 mT and 2 mT, Hahn, XY-8 and
-  phase-shifted Ramsey sequences agree to 10⁻² (the rotating-wave error
-  is about `Ω/f`), and ideal pulses are the limit of selective finite ones
-  (2·10⁻³ at 30 MHz and 1 T). Noise during finite pulses agrees with 128
+  phase-shifted Ramsey sequences with 5 MHz pulses agree to 8·10⁻⁴ (the
+  rotating-wave error, about `Ω/f`), and ideal pulses are the limit of
+  selective finite ones (3·10⁻⁴ at 30 MHz and 1 T). Noise during finite pulses agrees with 128
   pieces per pulse within the statistical error. The decay exponents of
   Ornstein–Uhlenbeck noise equal the closed forms of Klauder and
   Anderson for Ramsey and Hahn echoes to 10⁻⁹ and a quadrature of
