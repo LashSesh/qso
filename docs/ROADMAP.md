@@ -3005,7 +3005,7 @@ Measured (four cores):
   - PyCCE's last release needs aliases for names that current NumPy,
     SciPy and pandas removed.
 - **Cost.** A natural bath within 4 nm has 511 ¹³C and 1422 clusters at
-  second order. Thirty baths of 60 echo times take 2 s, and the third
+  second order. Thirty baths of 107 echo times take 2 s, and the third
   order 11 s.
 
 Independent review: no errors in the formulas or the bookkeeping. The
