@@ -482,6 +482,20 @@ one overlap per nucleus. The Gaussian decay exponent sums the exactly
 integrated exponential correlations of every pair of free periods as a
 running sum, in one pass.
 
+The ¹³C bath (`spin/nv/bath.rs`) works with ideal pulses only, so the
+electron is in one of two levels at any moment. A sequence is parsed into
+two branches with their levels per free period and two weights from the
+first and last pulses (π pulses only swap the branches and add phases).
+The bath enters only through `L = Tr(U_m U_0†)/2^N`. Clusters are the
+connected sets of the graph of pairs within the cutoff, grown one spin at
+a time and deduplicated. Each is propagated densely: Hamiltonians built
+by bit operations on the basis states and diagonalised once per level,
+period exponentials from the spectrum and cached by length. The expansion
+divides each cluster's coherence by those of its connected subclusters,
+found as the subsets present in the map of smaller clusters; disconnected
+subsets contribute exactly 1 because their couplings are not kept.
+Clusters of one size are evaluated in parallel.
+
 ## Hamiltonian simulation and chemistry (`algorithms/time_evolution.rs`, `chemistry/`)
 
 Every exponential of a Pauli string becomes `Circuit::pauli_rotation`: a

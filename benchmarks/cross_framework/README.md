@@ -15,6 +15,7 @@ same workloads. The results enter the technical note
 | PyMatching 2.4 | logical error rates (minimum-weight matching, for reference) |
 | PySCF 2.14 | Gaussian integrals, Hartree–Fock and CASCI energies |
 | QuTiP 5.3 | nuclear spin dynamics with relaxation (`liouvillian`, `mesolve`, `bloch_redfield_tensor`) |
+| PyCCE 1.1 | the ¹³C bath of an NV centre by the cluster-correlation expansion (reference only; its last release, imported with aliases for names NumPy, SciPy and pandas removed) |
 
 ProjectQ, which the 2025 note listed, is not included: its last release
 (0.8.0, 2022) does not build on current CPython.
@@ -44,6 +45,11 @@ ProjectQ, which the 2025 note listed, is not included: its last release
   non-secular `bloch_redfield_tensor` with bath operators from an exact
   numerical average over orientations: the rates among I_z, I_+ and
   two-spin orders, and expectations after exact propagation;
+- the Hahn-echo coherence of an NV centre's ¹³C bath (six close ¹³C
+  with every pair, and a natural bath of 206 ¹³C within 3 nm with pairs
+  within 0.8 nm, 50 mT) against PyCCE's conventional CCE to second order
+  on the same positions and hyperfine couplings (3·10⁻⁵: PyCCE keeps the
+  full spin-1 electron, QSO the secular Hamiltonian);
 - detector error models of repetition and surface-code memory experiments
   (exported with `DetectorCircuit.to_stim()`), term by term against Stim's,
   and their detection-event rates against Stim's sampler; QSO's union-find

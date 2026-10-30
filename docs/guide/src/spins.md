@@ -504,6 +504,67 @@ for events in (spin.ramsey(1e-6), spin.hahn(1e-6), spin.cpmg(8, 0.125e-6)):
   one core) are refused before they start; `lines` and `decay_exponent`
   cost little at any size (0.03 s for dimension 768).
 
+### The nuclear-spin bath
+
+In natural diamond an NV centre loses its coherence to the ¹³C around it
+(1.07 % of the carbon), hundreds of nuclei that `NvCenter` cannot hold.
+`spin.SpinBath` takes them all:
+
+- **Baths.** `SpinBath.diamond(field, abundance, radius, seed)` places
+  ¹³C at random on the diamond lattice within `radius` of the vacancy, in
+  the frame of the centre (z from the vacancy to the nitrogen, both left
+  out). Each gets the hyperfine coupling of a point dipole at the vacancy,
+  `A_zj = (μ₀/4π) γ_e γ_C h (3 n_z n_j − δ_zj)/r³` (19.9 kHz on the axis
+  at 1 nm). That is wrong for the nuclei nearest the vacancy, where the
+  contact term dominates: give your own `(position, hyperfine)` pairs to
+  `SpinBath(field, spins)` for those, or leave them out.
+- **The coherence.** With ideal pulses the electron is in `m` or `0` at
+  every moment, and the bath evolves under `H_a = Σ_i [a·A_z·I_i − γ_C B
+  I_z^i] + Σ d_ij [I_i·I_j − 3(I_i·n)(I_j·n)]`. A sequence — a pulse,
+  free periods and π pulses, a pulse — splits the electron's coherence
+  into two branches that swap levels at every π pulse. The population is
+  then `S = |w_m|² + |w_0|² + 2 Re(w_m w̄_0 L)`, which for the standard
+  sequences is `(1 + Re L)/2`. Here `L = Tr(U_m ρ U_0†)` is the overlap
+  of the bath's evolutions along the two branches, from the unpolarised
+  state.
+- **The expansion.** `coherence`, `signal`, `order`, `cutoff`: `L` is a
+  product over clusters of spins connected by pairs closer than `cutoff`
+  (default 0.8 nm), each propagated exactly and divided by the
+  contributions of its subclusters (Yang and Liu, Phys. Rev. B 78, 085315
+  (2008)), up to clusters of `order` spins. Only the couplings of pairs
+  within the cutoff are kept, so the expansion is exact once `order`
+  reaches the largest connected cluster, and `exact_coherence` propagates
+  a bath of up to 10 spins whole.
+- **Noise and ensembles.** `signal_with_noise` adds the classical field
+  noise of `FieldNoise`. Gaussian noise multiplies `L` by `e^{−χ}`
+  exactly; telegraph noise is averaged over sampled paths.
+  `spin.bath_ensemble_signal` averages over random baths, with the
+  standard error over them.
+
+```python
+from metatron_qso import spin
+
+bath = spin.SpinBath.diamond(0.05, radius=3e-9, seed=1)    # 50 mT, 214 ¹³C
+larmor = 1 / (10.7084e6 * 0.05)                            # ¹³C period (s)
+taus = [k * larmor for k in (54, 161, 268)]                # 2τ ≈ 0.2, 0.6, 1.0 ms
+print(bath.signal([spin.hahn(t) for t in taus]).round(3))
+# [0.988 0.85 0.605]: on multiples of the Larmor period the distant
+# nuclei's modulation vanishes and the decay by flip-flops remains
+```
+
+At a few mT the Hahn echo collapses between multiples of the ¹³C Larmor
+period and revives at them (Childress et al., Science 314, 281 (2006)):
+averaged over ten baths at 5 mT it is 0.50 at half periods and 0.999 at
+`τ = T_L`. At 50 mT it decays by pair flip-flops. The decay time, `2τ`
+where `L` falls below `1/e`, has a median of 0.84–0.94 ms over 30 baths,
+with quartiles 0.72 and 1.06 ms. It is the same within that spread for
+bath radii of 3 to 6 nm and cutoffs of 0.8 to 1.2 nm. Zhao, Ho and Liu
+(Phys. Rev. B 85, 115303 (2012)) give about 0.7 ms in this regime, at the
+lower quartile. T₂ scales as the inverse of the abundance: `T₂·p` stays
+within 15 % from 0.3 % to 3 %. A natural bath within 4 nm has about 500
+¹³C and 1300 clusters at second order. Thirty baths take 2 s, and the
+third order (0.94 ms) 12 s.
+
 ## Validation
 
 - **Single spins and pairs, against closed forms.** The FID

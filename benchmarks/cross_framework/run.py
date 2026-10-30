@@ -35,7 +35,7 @@ import frameworks as fw  # noqa: E402
 PACKAGES = [
     "metatron-qso", "qiskit", "qiskit-aer", "qulacs", "cirq-core", "pennylane",
     "pennylane-lightning", "thewalrus", "numpy", "projectq", "stim", "pymatching", "pyscf",
-    "ldpc", "qutip",
+    "ldpc", "qutip", "pycce",
 ]
 
 # ----------------------------------------------------------------------------
@@ -229,6 +229,7 @@ def correctness(quick: bool) -> dict:
         "chemistry_vs_pyscf": chemistry_vs_pyscf(),
         "spins_vs_qutip": spins_vs_qutip(),
         "redfield_vs_qutip": redfield_vs_qutip(),
+        "bath_vs_pycce": bath_vs_pycce(),
     }
 
 
@@ -903,7 +904,12 @@ TOLERANCES = {
     "spin_expectation": 1e-9,
     "spin_mesolve": 1e-3,
     "spin_hamiltonian": 1e-13,
+    # The coherence of an NV centre's ¹³C bath by the cluster-correlation
+    # expansion: PyCCE keeps the full spin-1 electron with D = 2.87 GHz,
+    # QSO the secular Hamiltonian, which differ by about (A/D)·A (measured
+    # 3·10⁻⁵ on a natural bath of 206 spins at 50 mT).
     "redfield_rate": 1e-12,
+    "bath_coherence": 2e-4,
     "redfield_expectation": 1e-7,
     "qaoa_single": 1e-5,
 }
@@ -1088,6 +1094,93 @@ def spins_vs_qutip() -> dict:
     out["max_relative_expectation_difference"] = worst
     out["max_relative_expectation_difference_mesolve"] = worst_mesolve
     out["max_hamiltonian_relative_difference"] = worst_h
+    return out
+
+
+def import_pycce():
+    """PyCCE 1.1.1 (its last release) on current NumPy, SciPy and pandas:
+    aliases for the names they removed, nothing else changed."""
+    import pandas as pd
+    import scipy.sparse._sputils as new
+    import scipy.sparse.sputils as old
+
+    for name, alias in (("unicode_", "str_"), ("float_", "float64"), ("complex_", "complex128")):
+        if not hasattr(np, name):
+            setattr(np, name, getattr(np, alias))
+    old.isintlike = new.isintlike
+    read_csv = pd.read_csv
+
+    def compat(*args, **kw):
+        if kw.pop("delim_whitespace", False):
+            kw["sep"] = r"\s+"
+        return read_csv(*args, **kw)
+
+    pd.read_csv = compat
+    try:
+        import pycce
+    finally:
+        pd.read_csv = read_csv
+    return pycce
+
+
+def bath_vs_pycce() -> dict:
+    """The Hahn-echo coherence of an NV centre's ¹³C bath against PyCCE
+    (Onizhuk and Galli 2021), conventional CCE to second order with the
+    same pair cutoff: six ¹³C close together with every pair kept, and a
+    random natural bath within 3 nm (pairs within 0.8 nm), at 50 mT. Both
+    take QSO's positions and point-dipole hyperfine couplings (the secular
+    row A_z·, kHz in PyCCE); PyCCE propagates the electron as a spin 1 with
+    D = 2.87 GHz, QSO in the secular approximation."""
+    import warnings
+
+    from metatron_qso import spin
+
+    warnings.filterwarnings("ignore", module="pycce")
+    pycce = import_pycce()
+    field = 0.05
+    compact = np.array(
+        [[0.6, 0.2, 0.4], [0.9, 0.1, 0.1], [0.5, 0.6, 0.0], [0.8, 0.5, 0.5], [1.4, -0.3, 0.9], [-0.8, 0.9, 1.1]]
+    ) * 1e-9
+    baths = {
+        "6 13C, all pairs": (
+            spin.SpinBath(field, [(list(p), spin.point_dipole_hyperfine(list(p))) for p in compact]),
+            math.inf,
+        ),
+        "natural bath within 3 nm (seed 3), pairs within 0.8 nm": (
+            spin.SpinBath.diamond(field, radius=3e-9, seed=3),
+            8e-10,
+        ),
+    }
+    times = np.linspace(0.05e-3, 1.5e-3, 10)
+    out = {}
+    for name, (bath, cutoff) in baths.items():
+        start = time.perf_counter()
+        ours = bath.coherence([spin.hahn(t / 2) for t in times], order=2, cutoff=cutoff)
+        ours_time = time.perf_counter() - start
+        spins = bath.spins
+        atoms = pycce.BathArray((len(spins),), names=["13C"] * len(spins))
+        atoms["xyz"] = np.array([p for p, _ in spins]) * 1e10
+        for i, (_, hf) in enumerate(spins):
+            a = np.zeros((3, 3))
+            a[2, :] = np.array(hf) / 1e3
+            a[:, 2] = a[2, :]
+            atoms["A"][i] = a
+        r_dipole = 1e3 if math.isinf(cutoff) else cutoff * 1e10
+        calc = pycce.Simulator(
+            spin=1, position=[0, 0, 0], alpha=[0, 1, 0], beta=[0, 0, 1],
+            magnetic_field=[0, 0, field * 1e4], bath=atoms, r_bath=1e3, r_dipole=r_dipole,
+            order=2, pulses=1, D=2.87e6, gyro=-17608.597050,
+        )
+        start = time.perf_counter()
+        theirs = np.asarray(calc.compute(times * 1e3, method="cce", quantity="coherence"))
+        their_time = time.perf_counter() - start
+        out[name] = {
+            "spins": len(spins),
+            "max_coherence_difference": float(np.abs(ours - theirs).max()),
+            "qso_seconds": ours_time,
+            "pycce_seconds": their_time,
+        }
+    out["max_coherence_difference"] = max(r["max_coherence_difference"] for r in out.values())
     return out
 
 
@@ -1302,6 +1395,9 @@ def check(c: dict) -> list[str]:
         failures.append(f"Redfield dynamics differ from QuTiP's by {rf['max_expectation_difference']:.3g}")
     if not sp["max_hamiltonian_relative_difference"] <= TOLERANCES["spin_hamiltonian"]:
         failures.append(f"spin Hamiltonians differ from QuTiP's by {sp['max_hamiltonian_relative_difference']:.3g}")
+    bath = c["bath_vs_pycce"]
+    if not bath["max_coherence_difference"] <= TOLERANCES["bath_coherence"]:
+        failures.append(f"bath coherences differ from PyCCE by {bath['max_coherence_difference']:.3g}")
     chem = c["chemistry_vs_pyscf"]
     if not chem["integral_max_difference"] <= TOLERANCES["integral"]:
         failures.append(f"integrals differ from PySCF by {chem['integral_max_difference']:.3g}")

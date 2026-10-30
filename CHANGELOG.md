@@ -35,6 +35,24 @@ All notable changes to this project are documented here. The format follows
     `Graph.stabilizer_order`, `Quotient.lift`,
     `DecoherentCoinedWalk.with_coin_labels` and `coin_labels`.
 
+- **The nuclear-spin bath of an NV centre** (1.39, `spin::bath`,
+  `spin.SpinBath`):
+  - ¹³C at random on the diamond lattice around the centre
+    (`diamond_bath`, `diamond_sites`), with point-dipole hyperfine
+    couplings or given ones, and the dipolar couplings between them.
+  - The coherence after any sequence of a pulse, free periods and π
+    pulses, a pulse (ideal pulses) by the cluster-correlation expansion
+    of Yang and Liu, up to clusters of eight spins connected within a
+    cutoff; whole baths of up to ten spins exactly.
+  - Classical field noise on top (exact for Gaussian noise, sampled for
+    telegraph noise) and averages over random baths (`ensemble_signal`).
+  - The Hahn echo collapses and revives with the ¹³C Larmor period at
+    5 mT. At 50 mT its decay time in natural diamond has a median of
+    0.84–0.94 ms over 30 baths and scales as the inverse of the
+    abundance.
+  - It agrees with PyCCE to 3·10⁻⁵, which joins the cross-framework
+    comparison as a reference.
+
 ## [1.8.0] — 2026-10-30
 
 Milestones 1.29 to 1.37 of the [roadmap](docs/ROADMAP.md), its seventh
