@@ -2551,7 +2551,11 @@ Measured:
   `sin(πJT/2)` at `JT` = 0.5 with 100 steps (the ideal sequence of
   Khaneja et al. reaches it exactly), 99.73 % at 0.8 and one at 1.2.
 - **Robustness.** A pulse optimised for rf amplitudes of 80–120 %
-  transfers more than 99.999 % at them and 99.98 % from 75 % to 125 %;
+  transfers more than 99.99 % at and between them and more than 99.9 %
+  out to 75 % and 125 %, where nothing was optimised (99.95–99.98 % over
+  twelve local optima; which one L-BFGS finds depends on rounding, which
+  differs between machines: two Linux runners of the release's CI found
+  99.97 %);
   refocused INEPT gives 0.089 and 0.291 at 80 % and 120 %.
 - **Field cycling.** A profile of 2 s in 40 steps, started at zero field,
   gives −0.8128 on ¹³C: the unitary bound within the blocks of total `M`

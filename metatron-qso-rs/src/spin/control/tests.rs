@@ -292,7 +292,10 @@ fn robust_pulses_keep_their_transfer_where_inept_does_not() {
         .collect();
     let got = best(&sys, &c, 3, 500.0, 1000);
     assert!(got.members.iter().all(|&x| x > 0.9999), "{:?}", got.members);
-    // Between and slightly beyond the training amplitudes as well.
+    // Between the training amplitudes, and slightly beyond them, where
+    // nothing was optimised. Which local optimum L-BFGS finds depends on
+    // rounding, which differs between platforms: over twelve starts the
+    // worst gives 0.99995 between and 0.9995 beyond (INEPT: 0.09 and 0.29).
     for k in 0..=50 {
         let s = 0.75 + 0.01 * k as f64;
         c.ensemble = vec![Member {
@@ -301,7 +304,8 @@ fn robust_pulses_keep_their_transfer_where_inept_does_not() {
             offsets: vec![],
         }];
         let (value, _) = sys.control_transfer(&c, &got.controls).unwrap();
-        assert!(value > 0.9998, "{s}: {value}");
+        let trained = (0.8 - 1e-9..=1.2 + 1e-9).contains(&s);
+        assert!(value > if trained { 0.9999 } else { 0.999 }, "{s}: {value}");
     }
 }
 

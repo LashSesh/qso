@@ -102,6 +102,9 @@ Relaxation times can also follow from the molecule. Give spins positions
 system a rotational correlation time `τ_c` (s) of isotropic tumbling:
 
 ```python
+import metatron_qso as q
+from metatron_qso import spin
+
 sys = q.SpinSystem(9.4)
 c = sys.add_spin("13C", 171.0)
 h = sys.add_spin("1H", 8.4)
@@ -170,6 +173,9 @@ the target's other spins arrive thermal or, for hydrogen, in the singlet
 of parahydrogen. SABRE with a ¹⁵N substrate:
 
 ```python
+import metatron_qso as q
+from metatron_qso import spin
+
 complex_ = q.SpinSystem(1.4e-7, frame="laboratory")  # two hydrides, bound ¹⁵N
 for shift, iso in ((-22.0, "1H"), (-22.0, "1H"), (250.0, "15N")):
     complex_.add_spin(iso, shift)
@@ -257,6 +263,9 @@ channels in the rotating frame, or the field (T) — an initial operator
 with respect to every control are exact up to rounding:
 
 ```python
+import metatron_qso as q
+from metatron_qso import spin
+
 s = q.SpinSystem(9.4)
 s.add_spin("1H", 0.0)
 s.add_spin("13C", 0.0)
@@ -326,6 +335,13 @@ dwell, points)` gives the free induction decay with relaxation, and
 `spin.spectrum(fid, dwell, broadening)` its Fourier transform.
 
 ```python
+import metatron_qso as q
+from metatron_qso import spin
+
+sys = q.SpinSystem(9.4)                    # the system of the first example
+h = sys.add_spin("1H", 4.0)
+c = sys.add_spin("13C", 60.0, t1=2.0, t2=0.5)
+sys.couple(h, c, 140.0)
 eq = sys.thermal_state()
 direct = sys.lines(sys.evolve(eq, [spin.pulse("13C", 90)]), "13C")
 inept = sys.lines(sys.evolve(eq, spin.inept("1H", "13C", 140.0)), "13C")
@@ -346,6 +362,9 @@ the substrate, and polarisation moves from the hydrides to the substrate
 where their levels anti-cross:
 
 ```python
+import metatron_qso as q
+from metatron_qso import spin
+
 cat = q.SpinSystem(0.0)
 for shift in (-22.0, -22.0, 8.0):          # two hydrides and a substrate proton
     cat.add_spin("1H", shift)
@@ -378,6 +397,9 @@ electron starts in `m_s = 0`, the nuclei unpolarised, and every signal is
 the `m_s = 0` population:
 
 ```python
+import metatron_qso as q
+from metatron_qso import spin
+
 nv = spin.NvCenter(0.0403, nitrogen="14N", carbons=[(60e3, 30e3)])
 strong = [line for line in nv.lines() if line[1] > 0.01]
 print(strong[:2])     # (1738.42 MHz, 0.083), (1738.48 MHz, 0.083): weak lines
@@ -452,6 +474,11 @@ p = nv.signal(spin.cpmg(64, 0.541e-6))   # 0.13: the carbon's first dip
   full exponential. One trajectory has no standard error (NaN).
 
 ```python
+import math
+
+import metatron_qso as q
+from metatron_qso import spin
+
 noise = spin.FieldNoise.ornstein_uhlenbeck(2e5, 1e-6)   # 200 kHz, 1 μs
 bare = spin.NvCenter(0.0403)
 for events in (spin.ramsey(1e-6), spin.hahn(1e-6), spin.cpmg(8, 0.125e-6)):
@@ -572,7 +599,8 @@ for events in (spin.ramsey(1e-6), spin.hahn(1e-6), spin.cpmg(8, 0.125e-6)):
   antiphase transfer `2I_zS⁻ → I⁻` 99.4 % of `sin(πJT/2)` at `JT` = 0.5
   (100 steps), 99.7 % at 0.8 and one at 1.2. A pulse optimised for rf
   amplitudes from 80 % to 120 % transfers more than 99.99 % over that
-  range (and more than 99.98 % from 75 % to 125 %), where refocused INEPT
+  range (and more than 99.9 % from 75 % to 125 %, where nothing was
+  optimised and the local optimum found decides), where refocused INEPT
   falls to 0.09 and 0.29. A field profile of 2 s, started at zero field,
   carries parahydrogen order to ¹³C as well as the adiabatic passage of
   50 s: −0.8128, the unitary bound within the blocks of total `M` that a

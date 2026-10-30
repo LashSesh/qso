@@ -234,6 +234,8 @@ sample that would need truncation is an error. With `"mps"` truncation
 at `max_bond` is accepted, not reported, and biases the value.
 
 ```python
+import metatron_qso as q
+
 n = 30
 device = (q.DeviceModel("chain", idle_noise=False)
           .with_rule(gate="cx", depolarizing=0.03,
