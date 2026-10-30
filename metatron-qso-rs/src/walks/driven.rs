@@ -48,7 +48,7 @@ use crate::graph::Graph;
 use crate::linalg::{CsrMatrix, KrylovOptions, expm_multiply, norm};
 use crate::parallel::for_each_mut;
 
-use super::Generator;
+use super::{Generator, Quotient};
 
 /// Steps accepted at the smallest step size before [`DrivenWalk::evolve`]
 /// gives up.
@@ -461,6 +461,137 @@ impl DrivenWalk {
         }
         out.state = psi;
         Ok(out)
+    }
+}
+
+/// A term of a [`QuotientDrivenWalk`], on the cells of a [`Quotient`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum QuotientTerm {
+    /// The graph's Laplacian or minus its adjacency matrix.
+    Graph(Generator),
+    /// The projector onto all nodes of the given cells.
+    Cells(Vec<usize>),
+    /// A potential constant on each cell (one value per cell).
+    Potential(Vec<f64>),
+    /// The projector onto the uniform superposition of all nodes.
+    Uniform,
+}
+
+/// A driven walk `H(t) = Σ_j c_j(t)·H_j` whose terms respect an equitable
+/// partition ([`Quotient`]): reduced to the cells, so that the walk of a
+/// state in the span of the cell states is exact in as many dimensions as
+/// there are cells. Adiabatic search on `K_N` or `Q_d` with a marked node
+/// runs for any `N` this way.
+///
+/// ```
+/// use metatron_qso::walks::Quotient;
+/// use metatron_qso::walks::driven::{MagnusOptions, QuotientDrivenWalk, QuotientTerm};
+///
+/// // Local adiabatic search (Roland and Cerf 2002) on K_N, N = 2³⁰, in two
+/// // dimensions: the node and the others.
+/// let n = (1u64 << 30) as f64;
+/// let q = Quotient::complete(1 << 30).unwrap();
+/// let walk = QuotientDrivenWalk::new(&q, vec![QuotientTerm::Uniform, QuotientTerm::Cells(vec![0])])
+///     .unwrap();
+/// let (eps, rn) = (0.1, (n - 1.0).sqrt());
+/// let total = n / (eps * rn) * rn.atan();
+/// let s = |t: f64| 0.5 * (1.0 + ((2.0 * eps * rn * t / n - rn.atan()).tan()) / rn);
+/// let r = walk
+///     .evolve(&walk.uniform_state(), 0.0, total, |t| Ok(vec![-(1.0 - s(t)), -s(t)]),
+///         &MagnusOptions::default())
+///     .unwrap();
+/// assert!(walk.cell_probabilities(&r.state)[0] > 0.98);
+/// ```
+#[derive(Clone, Debug)]
+pub struct QuotientDrivenWalk {
+    quotient: Quotient,
+    walk: DrivenWalk,
+}
+
+impl QuotientDrivenWalk {
+    /// The walk with the given terms on the cells of `quotient` (at most
+    /// [`super::DENSE_LIMIT`] cells).
+    pub fn new(quotient: &Quotient, terms: Vec<QuotientTerm>) -> Result<Self> {
+        quotient.check_dense()?;
+        let k = quotient.num_cells();
+        let matrices = terms
+            .into_iter()
+            .map(|t| {
+                let triplets: Vec<(usize, usize, f64)> = match t {
+                    QuotientTerm::Graph(generator) => {
+                        let h = quotient.hamiltonian(generator, 1.0);
+                        (0..k)
+                            .flat_map(|i| (0..k).map(move |j| (i, j)))
+                            .filter(|&(i, j)| h[(i, j)] != 0.0)
+                            .map(|(i, j)| (i, j, h[(i, j)]))
+                            .collect()
+                    }
+                    QuotientTerm::Cells(cells) => {
+                        for &c in &cells {
+                            quotient.check_cell(c)?;
+                        }
+                        cells.iter().map(|&c| (c, c, 1.0)).collect()
+                    }
+                    QuotientTerm::Potential(v) => {
+                        quotient.check_len(v.len())?;
+                        if v.iter().any(|x| !x.is_finite()) {
+                            return Err(QsoError::invalid("potential", "values must be finite"));
+                        }
+                        v.iter().enumerate().map(|(c, &x)| (c, c, x)).collect()
+                    }
+                    QuotientTerm::Uniform => {
+                        let s = quotient.uniform_state();
+                        (0..k)
+                            .flat_map(|i| (0..k).map(move |j| (i, j)))
+                            .map(|(i, j)| (i, j, s[i] * s[j]))
+                            .collect()
+                    }
+                };
+                // A cell given twice counts once, so the term stays a projector.
+                let mut triplets = triplets;
+                triplets.sort_by_key(|&(i, j, _)| (i, j));
+                triplets.dedup_by_key(|&mut (i, j, _)| (i, j));
+                CsrMatrix::from_triplets(k, &triplets).map(Term::Matrix)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(QuotientDrivenWalk {
+            quotient: quotient.clone(),
+            walk: DrivenWalk::new(k, matrices)?,
+        })
+    }
+
+    pub fn quotient(&self) -> &Quotient {
+        &self.quotient
+    }
+
+    /// The uniform superposition of all nodes, in the cell basis.
+    pub fn uniform_state(&self) -> Vec<C64> {
+        self.quotient
+            .uniform_state()
+            .into_iter()
+            .map(|x| C64::new(x, 0.0))
+            .collect()
+    }
+
+    /// Evolve the cell amplitudes `c0` from `t0` to `t1`, as
+    /// [`DrivenWalk::evolve`].
+    pub fn evolve<F>(
+        &self,
+        c0: &[C64],
+        t0: f64,
+        t1: f64,
+        coefficients: F,
+        options: &MagnusOptions,
+    ) -> Result<DrivenEvolution>
+    where
+        F: FnMut(f64) -> Result<Vec<f64>>,
+    {
+        self.walk.evolve(c0, t0, t1, coefficients, options)
+    }
+
+    /// The probability of every cell.
+    pub fn cell_probabilities(&self, state: &[C64]) -> Vec<f64> {
+        state.iter().map(|z| z.norm_sqr()).collect()
     }
 }
 

@@ -224,9 +224,42 @@ fn find_mapping(g: &Graph, left: &mut Vec<usize>, right: &mut Vec<usize>) -> Opt
 /// assert_eq!(metatron::fruit_of_life().automorphism_group().order(), Some(12));
 /// ```
 pub fn automorphism_group(g: &Graph) -> AutomorphismGroup {
+    group_fixing(g, Vec::new())
+}
+
+/// The pointwise stabiliser of the nodes `fixed` in the automorphism group
+/// of `g`: the automorphisms that map each of them to itself. Its base
+/// starts with `fixed` (basic orbits of size one).
+///
+/// ```
+/// use metatron_qso::graph::{automorphism::stabilizer, generators};
+///
+/// // A node of the Petersen graph is fixed by 120/10 = 12 automorphisms.
+/// let g = generators::petersen();
+/// assert_eq!(stabilizer(&g, &[0]).unwrap().order(), Some(12));
+/// ```
+pub fn stabilizer(g: &Graph, fixed: &[usize]) -> crate::error::Result<AutomorphismGroup> {
     let n = g.num_nodes();
+    if let Some(&u) = fixed.iter().find(|&&u| u >= n) {
+        return Err(crate::error::QsoError::NodeOutOfRange {
+            node: u,
+            n_nodes: n,
+        });
+    }
     let mut base: Vec<usize> = Vec::new();
-    let mut orbit_sizes = Vec::new();
+    for &u in fixed {
+        if !base.contains(&u) {
+            base.push(u);
+        }
+    }
+    Ok(group_fixing(g, base))
+}
+
+/// The automorphisms fixing every node of `base`, along a stabiliser chain
+/// that starts with it.
+fn group_fixing(g: &Graph, mut base: Vec<usize>) -> AutomorphismGroup {
+    let n = g.num_nodes();
+    let mut orbit_sizes = vec![1; base.len()];
     let mut generators = Vec::new();
     loop {
         let colours = paired_colouring(g, &base, &base).expect("identity pairing is compatible");

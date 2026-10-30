@@ -54,6 +54,7 @@ pub mod interacting;
 pub mod pretty_good;
 pub mod quotient;
 pub mod search;
+pub mod symmetric;
 pub mod transfer;
 
 use num_complex::Complex64 as C64;
@@ -69,11 +70,15 @@ pub use classical::{classical_hitting_times, classical_walk_probabilities};
 pub use decoherent::DecoherentCoinedWalk;
 pub use dephasing::DephasingWalk;
 pub use discrete::{Coin, CoinedWalk, DiscreteSearchResult, LineWalk, SzegedyWalk};
-pub use driven::{DrivenEvolution, DrivenWalk, MagnusOptions};
+pub use driven::{DrivenEvolution, DrivenWalk, MagnusOptions, QuotientDrivenWalk, QuotientTerm};
 pub use interacting::{InteractingWalk, Statistics};
 pub use pretty_good::{PrettyGoodTransfer, TransferDecision};
 pub use quotient::{Quotient, QuotientSearch, QuotientWalk};
 pub use search::{MAX_RESOLUTION, SearchResult, SpatialSearch};
+pub use symmetric::{
+    Dephasing, Orbitals, ProductOpenWalk, SymmetricCoinedWalk, SymmetricOpenWalk,
+    coordinate_permutations,
+};
 pub use transfer::{StateTransfer, TransferResult};
 
 /// Largest graph for which dense eigendecompositions are used.
