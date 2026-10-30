@@ -16,7 +16,7 @@ finished milestones are released together, not one by one. The third
 (1.29 to 1.33, section 4g) and eighth (1.34 to 1.37, magnetic resonance
 for medical research, section 4h) stages ship together as release
 1.8.0. The ninth stage (1.38 to 1.42) is planned in section 4i; 1.38
-and 1.39 are delivered. Up to 1.3
+to 1.40 are delivered. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -3048,7 +3048,7 @@ Fixed:
 - **Stays as is.** Negative integers raise OverflowError from Python, as
   elsewhere in the library.
 
-### 1.40 — The optical cycle and magnetometer sensitivity (M)
+### 1.40 — The optical cycle and magnetometer sensitivity (M, delivered)
 
 Use case: what an NV magnetometer measures, and how fast. The spin is read
 out through its spin-dependent fluorescence; contrast, linewidth and
@@ -3072,6 +3072,126 @@ levels in an off-axis field equal the roots of the characteristic
 polynomial of the spin-1 Hamiltonian (a cubic); with the field along the
 axis everything reduces to 1.37 to rounding; and the eight lines of four
 orientations give back the field that produced them.
+
+Delivered in `spin/nv/optics.rs`:
+
+- `OpticalNv`: the seven-level model with `Photophysics` (the means of
+  Tetienne et al.'s four centres), with `steady_state`, `evolve`,
+  `fluorescence`, `cw_odmr`, `cw_line`, `pulsed_readout` and
+  `polarisation`.
+- `TwoLevelOdmr`: the reduced model of Dréau et al.
+- `ramsey_sensitivity`, `echo_sensitivity`, `best_sensitivity` and
+  `readout_contrast`.
+- `nv_orientations`, `ensemble_lines`, `axial_and_transverse` and
+  `field_from_lines`.
+- All of it in Python (`spin.OpticalNv` and so on).
+
+Changes to the plan:
+
+- **Jumps in the zero-field basis.** The model is a Lindblad equation
+  whose jumps act in the zero-field basis, with the Hamiltonians of both
+  triplets. Where the levels are split by more than the rates it is
+  Tetienne's eigenbasis rate model. It also stays continuous at
+  degeneracies and at the excited-state anticrossing (51 mT), where that
+  model jumps.
+- **The microwave** is treated in the rotating-wave approximation in the
+  ground eigenbasis, every operator kept within the blocks of the
+  rotating frame. It fails within the Rabi frequency of the ground-state
+  anticrossing (102.4 mT), which is documented.
+- **Optical power** enters as the excitation rate, not as a power with a
+  saturation parameter: the conversion depends on the setup.
+- **Pulsed readout** starts from the state the laser leaves. Starting
+  from pure spin states gave about twice the measured contrast.
+- **The bath of 1.39** enters the sensitivity through its coherence (an
+  echo with a natural bath below).
+
+Measured:
+
+- **Closed forms.**
+  - Along the axis the steady state equals the closed-form rate equations
+    to 10⁻¹², and with Γ₁ an independent solve to 10⁻¹¹.
+  - The polarisation is 0.749 for a weak laser, their pump-independent
+    ratio `k₇₁ k₅₇ (k_r + k₄₇)/(k₄₇ k₇₂ (k_r + k₅₇))` over the
+    populations. It falls to 0.48 at `3 k_r`, as population waits in the
+    excited levels and the singlet.
+- **Dréau's reduced model** equals their eq. (17) to 10⁻¹², and its
+  contrast, full width and the sensitivity `4/(3√3) Δν/(γ C √R)` their
+  closed forms (10⁻⁹, 10⁻⁵ and 10⁻⁴ on the grid).
+- **The microwave and the dephasing.**
+  - A pulse of `θ/(360° Ω)` equals the finite pulse of 1.37's `NvCenter`
+    to 10⁻⁹ at 5, 20 and 150 mT, on both transitions.
+  - The low-power line has the full width `Γ₂/π`, `Γ₂ = Γ₂* + 3Γ₁/2 +
+    pump`, to 1 %.
+  - The line's dip sits on `lines()`, and its shift with an axial field
+    equals the numerical derivative of the line to 10⁻⁴.
+- **Fields of any direction.**
+  - The levels equal the roots of the cubic `λ³ − 2Dλ² + (D² − γ²B²)λ +
+    Dγ²B_⊥² = 0` to 10⁻¹² of D for 200 random fields.
+  - Along the axis the Hamiltonian and lines equal 1.37's.
+  - A field of 20 mT at 30° follows Tetienne's eigenbasis rates to 10⁻³.
+  - A nanotesla across the axis changes neither the zero-field linewidth
+    nor the fluorescence at the excited-state anticrossing (10⁻³ and
+    10⁻⁶).
+- **Ensembles.**
+  - Each orientation's `|B_∥|` and `B_⊥` come back exactly from its two
+    lines, by the invariants of the levels.
+  - The field vector comes back from the eight lines to 10⁻¹¹ T, with
+    each pair in either order. Across two axes ([1, −1, 0]) the accuracy
+    is 10⁻⁹ T: their lines depend on `B·n` only quadratically.
+  - A field along a cube axis is fitted with the right size and any of
+    the equivalent axes.
+- **Numbers** (5 mT, 1 % collection):
+  - **CW-ODMR:** the best sensitivity is 1.9 μT/√Hz, at 0.02 `k_r` and
+    Ω = 0.2 MHz (contrast 0.14, width 0.96 MHz); Dréau et al. find about
+    2. It is 3.2 μT/√Hz at 0.1 `k_r` and 14 μT/√Hz at `k_r`.
+  - **Pulsed readout:** about 32 % brighter for `m_s = 0` at its peak.
+    The window is 920 ns at 0.2 `k_r` and 446 ns at `k_r`, with C =
+    0.028.
+  - **Transverse fields:** with 10 and 30 mT across the axis the contrast
+    falls from 0.17 to 0.068 and 0.0025, and the fluorescence by 21 and
+    39 %.
+  - **Echo with a natural ¹³C bath** at 50 mT: 17 nT/√Hz at a total echo
+    time of 0.49 ms (Maze et al. 2008 report tens of nT/√Hz).
+  - **Cost:** a CW spectrum of 401 points takes 16 ms.
+
+Independent review: the seven-level physics was correct. The reviewer
+checked:
+
+- the spin operators and the microwave normalisation (`πΩ`, as in
+  1.37);
+- the rotating frame above 102 mT;
+- the rates and the superoperator;
+- Dréau's eq. (17) and the closed forms;
+- the sensitivities and the inversion of the cubic.
+
+Fixed:
+
+- **Field vector.** `field_from_lines` needed the pairs in an order a
+  measured spectrum cannot give; with ascending pairs it returned wrong
+  fields (by up to 12 mT). It now compares sorted pairs and reports its
+  misfit, and the ambiguity of cube-axis fields is documented.
+- **Level assignment.** Across the axis the same level was taken for +1
+  and −1, so one line was missing and the ensemble inversion went wrong.
+  The levels closest to ±1 are now told apart by their ±1 balance, ties
+  by energy.
+- **Dephasing.** Taken as the diagonal of `S_z` in the eigenbasis, it
+  vanished near degeneracies: a nanotesla across the axis halved the
+  zero-field linewidth. At the excited-state anticrossing such a tilt
+  took 40 % off the fluorescence. Both are fixed by the zero-field-basis
+  model above.
+- **Long durations.** They made the exponential hang (an infinite norm
+  gave 4·10⁹ squarings) or return garbage. They are refused now, and the
+  decay after the laser is a linear solve.
+- **Point counts** are checked before allocation: 10⁹ points aborted the
+  process.
+- **Steady states.** A singular system (no laser and no Γ₁) is refused.
+- **Sensitivity.** It counts the line's actual shift with an axial field,
+  1.35 to 5 times smaller than `γ_e` for tilted fields.
+- **Readout window.** It uses `|N₀ − N₁|`.
+- **Invalid input** (NaN, `|L| > 1`, negative photon numbers, a
+  frequency without a Rabi frequency in Python) is refused.
+- **Tests.** The mutations the reviewer found unseen are now caught: a
+  scaled Rabi coupling, Γ₁ or Γ₂*, an S_y drive and Taylor's factor 2.
 
 ### 1.41 — Relaxation of larger spin systems (M)
 
