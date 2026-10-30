@@ -22,8 +22,8 @@ and eighth stages, released together:
 
 New results are checked against closed forms, published limits,
 permanents and determinants, QuTiP, independent NumPy and SciPy builds
-and extended precision (named below). Every validated result of 1.7.0
-still holds (the validation tests only grew). QSO simulates the physics
+and extended precision (named below). The validation tests of 1.7.0
+still pass; they only grew. QSO simulates the physics
 behind these experiments; it does not simulate images or make clinical
 claims. The public Rust API only grows (`cargo-semver-checks` against
 1.7.0).
