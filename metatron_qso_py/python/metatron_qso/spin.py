@@ -30,13 +30,13 @@ from ._core import (
     inept_cycle,
     inversion_recovery,
     m2s,
+    rf_pulse,
     s2m,
     spin_echo,
     spin_lock,
     unitary_bound,
 )
 from ._core import fid_spectrum as spectrum
-from ._core import spin_control as control
 from ._core import spin_delay as delay
 from ._core import spin_field as set_field
 from ._core import spin_pulse as pulse
@@ -50,7 +50,6 @@ __all__ = [
     "SpinEvent",
     "SpinSystem",
     "axial_csa",
-    "control",
     "delay",
     "gyromagnetic_ratio",
     "inept",
@@ -58,6 +57,7 @@ __all__ = [
     "inversion_recovery",
     "m2s",
     "pulse",
+    "rf_pulse",
     "s2m",
     "set_field",
     "shaped",

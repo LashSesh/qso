@@ -112,21 +112,19 @@ fn shaped(target: &Bound<'_, PyAny>, segments: Vec<(f64, f64, f64)>) -> PyResult
 
 /// Radiofrequency fields on several channels at once (rotating frame):
 /// during step `k` (of `step` s) the amplitudes `amplitudes[k][c] = (x,
-/// y)` (Hz) on `targets[c]`. The pulses of `SpinSystem.optimize_control`.
-#[pyfunction(name = "spin_control")]
-fn control_event(
+/// y)` (Hz) on `targets[c]`, as a nested list or an array of shape
+/// `(steps, channels, 2)`. The pulses of `SpinSystem.optimize_control`.
+#[pyfunction(name = "rf_pulse")]
+fn rf_pulse(
     targets: Vec<Bound<'_, PyAny>>,
     step: f64,
-    amplitudes: Vec<Vec<(f64, f64)>>,
+    amplitudes: Vec<Vec<[f64; 2]>>,
 ) -> PyResult<PyEvent> {
     Ok(PyEvent {
         inner: Event::Control {
             targets: targets.iter().map(target).collect::<PyResult<_>>()?,
             step,
-            amplitudes: amplitudes
-                .into_iter()
-                .map(|row| row.into_iter().map(|(x, y)| [x, y]).collect())
-                .collect(),
+            amplitudes,
         },
     })
 }
@@ -242,9 +240,6 @@ fn gyromagnetic_ratio(isotope_name: &str) -> PyResult<f64> {
     Ok(isotope(isotope_name)?.gamma())
 }
 
-/// A molecule's nuclear spins: isotopes, shifts (ppm), couplings (Hz),
-/// the field (T), the temperature (K) and the frame (`"rotating"` or
-/// `"laboratory"`). States are density matrices (NumPy, complex).
 /// A square complex matrix of any dimension.
 fn any_matrix(name: &str, m: &ComplexMatrixArg<'_>) -> PyResult<CMatrix> {
     let (d, data) = square_complex(name, m)?;
@@ -376,16 +371,20 @@ impl PyControl {
         self.inner.len()
     }
 
-    /// Seeded random controls: amplitudes in a disc of radius `scale` Hz,
-    /// or fields uniform in the range.
+    /// Seeded random controls: amplitudes in a disc of radius `scale` Hz
+    /// (at most 0.9 of the limit), or fields uniform in the inner 96 % of
+    /// the range (`scale` unused).
     #[pyo3(signature = (seed = 0, scale = 100.0))]
     fn random_start<'py>(
         &self,
         py: Python<'py>,
         seed: u64,
         scale: f64,
-    ) -> Bound<'py, PyArray1<f64>> {
-        real_array(py, self.inner.random_start(seed, scale))
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        if !(scale.is_finite() && scale >= 0.0) {
+            return Err(invalid("scale must be finite and ≥ 0"));
+        }
+        Ok(real_array(py, self.inner.random_start(seed, scale)))
     }
 
     fn __repr__(&self) -> String {
@@ -478,6 +477,9 @@ fn options(max_iterations: usize) -> Options {
     }
 }
 
+/// A molecule's nuclear spins: isotopes, shifts (ppm), couplings (Hz),
+/// the field (T), the temperature (K) and the frame (`"rotating"` or
+/// `"laboratory"`). States are density matrices (NumPy, complex).
 #[pyclass(name = "SpinSystem", module = "metatron_qso")]
 #[derive(Clone)]
 pub struct PySpinSystem {
@@ -900,7 +902,6 @@ impl PySpinSystem {
         Ok(self.inner.ppm(self::isotope(isotope)?, frequency))
     }
 
-    /// The system as JSON.
     /// The transfer `Re Tr(C† ρ(T))` (averaged over the ensemble) of the
     /// controls `u` and its exact gradient.
     fn control_transfer<'py>(
@@ -954,6 +955,7 @@ impl PySpinSystem {
         ))
     }
 
+    /// The system as JSON.
     fn to_json(&self) -> String {
         self.inner.to_json()
     }
@@ -997,7 +999,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyExchange>()?;
     m.add_class::<PyControl>()?;
     m.add_class::<PyProfile>()?;
-    m.add_function(wrap_pyfunction!(control_event, m)?)?;
+    m.add_function(wrap_pyfunction!(rf_pulse, m)?)?;
     m.add_function(wrap_pyfunction!(py_unitary_bound, m)?)?;
     Ok(())
 }

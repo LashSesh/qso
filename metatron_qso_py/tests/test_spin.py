@@ -738,7 +738,7 @@ def test_control_matches_an_independent_propagation_and_its_gradient():
     assert len(events) == 1 and "Control" in repr(events[0])
     after = sys.evolve(iz, events)
     assert np.abs(after - rho).max() < 1e-12
-    same = sys.evolve(iz, [spin.control(["1H", "13C"], 0.5e-3, [[(u[4 * k], u[4 * k + 1]), (u[4 * k + 2], u[4 * k + 3])] for k in range(6)])])
+    same = sys.evolve(iz, [spin.rf_pulse(["1H", "13C"], 0.5e-3, np.reshape(u, (6, 2, 2)))])
     assert np.abs(same - rho).max() < 1e-12
 
 
@@ -782,3 +782,96 @@ def test_grape_reaches_the_unitary_bound_and_profiles_bindings():
     assert grad.shape == (4,)
     r = x.optimize_profile(p, fields, max_iterations=5)
     assert r["controls"].shape == (4,) and r["transfer"] >= value - 1e-18
+
+
+def test_grape_with_relaxation_against_scipy():
+    # The Liouville-space engine against an independent build: the
+    # Lindblad generator from T₁ jumps with Boltzmann rates and T₂
+    # dephasing, propagated with scipy.linalg.expm, its derivatives from
+    # expm_frechet (rf), and the field derivative of the thermal rates
+    # written out (field profile).
+    scipy_linalg = pytest.importorskip("scipy.linalg")
+
+    def superop(h):
+        one = np.eye(len(h))
+        return -1j * (np.kron(h, one) - np.kron(one, h.T))
+
+    def dissipator(a):
+        one = np.eye(len(a))
+        ada = a.conj().T @ a
+        return np.kron(a, a.conj()) - 0.5 * np.kron(ada, one) - 0.5 * np.kron(one, ada.T)
+
+    def lindblad(sys, b):
+        d = sys.dimension
+        rates, slopes = np.zeros((d * d, d * d), complex), np.zeros((d * d, d * d), complex)
+        for i, (iso, shift, t1, t2) in enumerate(sys.spins):
+            iz, ip = np.asarray(sys.spin_operator(i, "z")), np.asarray(sys.spin_operator(i, "+"))
+            r1 = 0.0 if t1 is None else 1 / t1
+            if r1:
+                c = 1.054571817e-34 * spin.gyromagnetic_ratio(iso) * (1 + shift * 1e-6) / (1.380649e-23 * sys.temperature)
+                x = c * b
+                up, down = r1 / (1 + np.exp(-x)), r1 / (1 + np.exp(x))
+                rates += up * dissipator(ip) + down * dissipator(ip.conj().T)
+                slope = r1 * np.exp(-x) / (1 + np.exp(-x)) ** 2 * c
+                slopes += slope * (dissipator(ip) - dissipator(ip.conj().T))
+            if t2 is not None and 1 / t2 - r1 / 2 > 0:
+                rates += 2 * (1 / t2 - r1 / 2) * dissipator(iz)
+        return rates, slopes
+
+    sys = q.SpinSystem(9.4, temperature=0.05)
+    sys.add_spin("1H", 0.3, t1=0.02, t2=0.01)
+    sys.add_spin("13C", 0.0, t1=0.05)
+    sys.couple(0, 1, 140.0)
+    rho0, target = sys.thermal_state(), sys.spin_operator(1, "z")
+    c = spin.Control.rf(["1H", "13C"], 4e-3, 6, rho0, target)
+    u = c.random_start(seed=3, scale=400.0)
+    dt = 4e-3 / 6
+    ops = [2 * np.pi * np.asarray(sys.total_operator(iso, w)) for iso in ("1H", "13C") for w in "xy"]
+    rates, _ = lindblad(sys, 9.4)
+    base = superop(np.asarray(sys.hamiltonian())) + rates
+    states, gens = [np.asarray(rho0).reshape(-1)], []
+    for k in range(6):
+        gen = base + sum(u[4 * k + j] * superop(ops[j]) for j in range(4))
+        gens.append(gen)
+        states.append(scipy_linalg.expm(gen * dt) @ states[-1])
+    lam = np.asarray(target).reshape(-1)
+    value = np.vdot(lam, states[-1]).real
+    grad = np.zeros(24)
+    for k in reversed(range(6)):
+        for j in range(4):
+            _, frechet = scipy_linalg.expm_frechet(gens[k] * dt, superop(ops[j]) * dt)
+            grad[4 * k + j] = np.vdot(lam, frechet @ states[k]).real
+        lam = scipy_linalg.expm(gens[k] * dt).conj().T @ lam
+    got, got_grad = sys.control_transfer(c, u)
+    assert got == pytest.approx(value, rel=1e-12)
+    assert np.abs(got_grad - grad).max() < 1e-10 * np.abs(grad).max()
+    # A field profile at room temperature in the rotating frame without
+    # offsets, where the gradient comes from the thermal rates alone.
+    lab = q.SpinSystem(1e-3)
+    lab.add_spin("1H", 0.0, t1=0.1)
+    lab.add_spin("13C", 0.0, t1=0.3, t2=0.1)
+    lab.couple(0, 1, 140.0)
+    start = np.eye(4) / 4
+    total = np.asarray(lab.spin_operator(0, "z")) + np.asarray(lab.spin_operator(1, "z"))
+    f = spin.Control.field(0.0, 1e-3, 0.3, 6, start, total)
+    fields = f.random_start(seed=1)
+    h_at = lambda b: np.asarray(lab.with_field(b).hamiltonian())
+    dh = h_at(1.0) - h_at(0.0)
+    states, gens, slopes = [start.reshape(-1).astype(complex)], [], []
+    for b in fields:
+        rates, slope = lindblad(lab, b)
+        gens.append(superop(h_at(b)) + rates)
+        slopes.append(superop(dh) + slope)
+        states.append(scipy_linalg.expm(gens[-1] * 0.05) @ states[-1])
+    lam = total.reshape(-1).astype(complex)
+    value = np.vdot(lam, states[-1]).real
+    grad = np.zeros(6)
+    for k in reversed(range(6)):
+        p, frechet = scipy_linalg.expm_frechet(gens[k] * 0.05, slopes[k] * 0.05)
+        grad[k] = np.vdot(lam, frechet @ states[k]).real
+        lam = p.conj().T @ lam
+    got, got_grad = lab.control_transfer(f, fields)
+    # The reference propagates ρ itself, so its value carries the rounding
+    # of the identity (about 10⁻¹⁶ against a transfer of 10⁻⁹).
+    assert got == pytest.approx(value, rel=1e-6)
+    assert np.abs(got_grad - grad).max() < 1e-9 * np.abs(grad).max()

@@ -77,7 +77,7 @@ All notable changes to this project are documented here. The format follows
     (eigenvectors of each step) and with it (Liouville space, the Van
     Loan block exponential applied to vectors); the field dependence of
     relaxation by central differences.
-  - `Event::Control` (`spin.control`): rf on several channels at once,
+  - `Event::Control` (`spin.rf_pulse`): rf on several channels at once,
     replaying optimised pulses in `evolve`; `control_events`.
   - `Exchange::optimize_profile` (`spin.Profile`): field profiles through
     chemical exchange, e.g. for SABRE.
@@ -87,6 +87,9 @@ All notable changes to this project are documented here. The format follows
     limits of Khaneja, Brockett and Glaser for two spins, refocused INEPT
     under rf errors, and the adiabatic field cycling of parahydrogen.
   - Tutorial `10_optimal_control`.
+  - The drift of `T₁` relaxation towards equilibrium is computed from
+    `tanh(x/2)/T₁` instead of the difference of the two rates, so thermal
+    polarisations at millitesla fields keep their digits in `evolve` too.
 - **Hyperpolarisation in realistic models** (milestone 1.35).
   - `Exchange` (`spin.Exchange` in Python): chemical sites (spin systems
     with concentrations) and first-order channels that carry some spins'

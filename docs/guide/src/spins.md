@@ -263,33 +263,53 @@ s.add_spin("13C", 0.0)
 s.couple(0, 1, 140.0)
 rho, sz = s.thermal_state(), s.spin_operator(1, "z")
 c = spin.Control.rf(["1H", "13C"], 1.2 / 140.0, 40, rho, sz, limit=5000.0)
-c.ensemble = [(1.0, [0.9, 0.9], []), (1.0, [1.1, 1.1], [])]  # rf errors
+c.ensemble = [(1.0, [k, k], []) for k in (0.9, 1.0, 1.1)]  # rf errors
 r = s.optimize_control(c, seed=0, scale=500.0)
 print(r["transfer"] / spin.unitary_bound(rho, sz))   # close to 1
 pulse = s.control_events(c, r["controls"])           # for evolve
 ```
 
 - **Ensembles.** Members `(weight, rf scales, offsets in Hz)` per
-  channel average the transfer over rf inhomogeneity and offsets;
+  channel average the transfer over rf inhomogeneity and offsets (an
+  offset `Δ` adds `2πΔF_z`: a line at `+Δ` Hz, `−Δ/ν₀` ppm);
   `optimize_control` maximises that average less `power · Σ u²Δt` and
-  `smoothness · Σ (u_{k+1} − u_k)²`. `limit` bounds each channel's
-  amplitude `√(x² + y²)`; fields stay within their range.
+  `smoothness · Σ (u_{k+1} − u_k)²`. A pulse is robust only against
+  what its ensemble contains: one optimised for rf errors alone, with
+  about 1 kHz of rf, loses much of its transfer at 50 Hz offset.
+- **Limits.** `optimize_control` keeps each channel's amplitude
+  `√(x² + y²)` within `limit` and fields within their range (by a sine of
+  free variables, which reaches a bound without a plateau beyond it);
+  starts in the outer 2 % of a range are moved inside, starts outside
+  refused. `control_transfer`, `control_events` and `evolve` take any
+  amplitude.
 - **Relaxation.** If the system relaxes (`T₁`, `T₂`, Redfield theory),
-  the controls are optimised in Liouville space, with the same
-  relaxation as `evolve` (free precession's, during the pulses as well).
-  The field derivative of relaxation and of thermal populations, in
-  field profiles, is taken by central differences (to about 10⁻⁹ of it);
-  everything else is exact.
-- **Replay.** `control_events` gives `spin.control(...)` (rf on several
+  the controls are optimised in Liouville space (up to six spins ½), with
+  the same relaxation as `evolve` (free precession's, during the pulses as
+  well), the state propagated as its deviation from the identity. The
+  field derivative of relaxation and of thermal populations, in field
+  profiles, is taken by Richardson-extrapolated central differences;
+  against the derivative of the Boltzmann rates written out it agrees to
+  10⁻¹⁴ from 1 K to room temperature and from millitesla to 20 T.
+  Everything else is exact.
+- **Replay.** `control_events` gives `spin.rf_pulse(...)` (rf on several
   channels at once) or a field and a delay per step; `evolve` reproduces
   the transfer.
 - **Exchange.** `Exchange.optimize_profile` shapes the field of a
   chemical-exchange model (`spin.Profile`: range, steps, states and one
   target operator per site), e.g. for SABRE.
 - **Local optima.** L-BFGS finds a local optimum from each start: take
-  the best of several seeds. One evaluation costs about 1 ms for two
-  spins and 100 steps, 26 ms for four spins and 200 steps, and with
-  relaxation 24 ms (two spins) to 0.3 s (three spins) for 100 steps.
+  the best of several seeds for pulses. Field profiles are strongly
+  multimodal; start them where the physics starts (parahydrogen at zero
+  field, not a random profile).
+- **Cost.** One evaluation costs about 1 ms for two spins and 100 steps
+  and 26 ms for four spins and 200 steps without relaxation. With
+  relaxation it grows with the rf amplitude times the duration (the
+  Taylor series needs more terms): two spins and 100 steps of up to 2 kHz
+  take 50 ms, three spins 0.7 s, at 10 kHz four times as long. Work and memory
+  beyond the limits are refused before anything is allocated; an
+  evaluation the optimiser tries beyond them, possible with relaxation
+  and no `limit`, ends the run with an error. Ctrl-C reaches Python only
+  when an optimisation ends.
 - **The bound.** `spin.unitary_bound(ρ, C)` is the largest `Tr(C UρU†)`
   over all unitaries (Glaser et al., Science 280, 421 (1998)), the sum of
   the products of the ordered eigenvalues: no pulse sequence exceeds it.
@@ -432,11 +452,15 @@ for b in (2e-3, 5.7e-3, 9e-3):
   antiphase transfer `2I_zS⁻ → I⁻` 99.4 % of `sin(πJT/2)` at `JT` = 0.5
   (100 steps), 99.7 % at 0.8 and one at 1.2. A pulse optimised for rf
   amplitudes from 80 % to 120 % transfers more than 99.99 % over that
-  range, where refocused INEPT falls to 0.09 and 0.29. A field profile of
-  2 s carries parahydrogen order to ¹³C as well as the adiabatic passage
-  of 50 s (−0.8128, against −0.25 for a linear sweep of 2 s). For SABRE
-  build-up over 5 s, the optimised profile is the constant field at the
-  anti-crossing.
+  range (and more than 99.98 % from 75 % to 125 %), where refocused INEPT
+  falls to 0.09 and 0.29. A field profile of 2 s, started at zero field,
+  carries parahydrogen order to ¹³C as well as the adiabatic passage of
+  50 s: −0.8128, the unitary bound within the blocks of total `M` that a
+  field conserves, so no field profile does better (a linear sweep of 2 s
+  gives −0.25). For SABRE build-up over 5 s, the optimised profile is the
+  constant field at the anti-crossing, from its middle or its lower bound.
+  The gradients agree with an independent SciPy build (`expm`,
+  `expm_frechet`) to 10⁻⁹ with relaxation.
 
 On the command line, `qso spins system.json --observe 13C --sequence
 events.json` prints the lines and polarisations after a sequence

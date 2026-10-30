@@ -445,17 +445,19 @@ one backward pass. Without relaxation each step's `H_k` is diagonalised:
 direction `∂H` is `V(G ∘ V†∂HV)V†` with the divided differences
 `G_ab = −iΔt e^{−i(E_a+E_b)Δt/2} sinc((E_a−E_b)Δt/2)`, so that one matrix
 `X = V(Gᵀ ∘ V†(ρU†λ† + ρ†U†λ)V)V†` per step gives every control's
-gradient as `Re Tr(X ∂H_c)`. With relaxation the state is a vector of
-Liouville space under the full generator (the system's dissipators, `−R`,
-and the drift towards equilibrium as a rank-one term in `Tr ρ`); the step
-propagator and its derivative act on vectors only: `e^{LΔt}x` and the
-upper block of `exp([[LΔt, EΔt], [0, LΔt]])[0; x]` (Van Loan) as Taylor
-series in substeps of norm ½, summed until a term falls below rounding.
-Bounded amplitudes and fields are mapped by `tanh` from free variables in
-the same units, and L-BFGS sees the objective divided by its natural size.
-Field profiles of an exchange use the same block exponentials per
-coherence-order block (a field keeps the orders), with the field
-derivative of the whole generator by central differences.
+gradient as `Re Tr(X ∂H_c)`. With relaxation the state is the vector
+`[vec(ρ − Tr ρ/d); Tr ρ]` of Liouville space, as `evolve` propagates it,
+under the full generator (the system's dissipators and `−R`, the drift
+towards equilibrium in the last column); the step propagator and its
+derivative act on vectors only: `e^{LΔt}x` and the upper block of
+`exp([[LΔt, EΔt], [0, LΔt]])[0; x]` (Van Loan) as Taylor series in
+substeps of norm ½, summed until a term falls below rounding. Bounded
+amplitudes and fields are mapped by a sine from free variables (Hz for
+rf, a twentieth of the range for fields), and L-BFGS sees the objective
+divided by its natural size. Field profiles of an exchange use the same
+block exponentials per coherence-order block (a field keeps the orders),
+with the field derivative of the whole generator by Richardson-
+extrapolated central differences.
 
 ## Hamiltonian simulation and chemistry (`algorithms/time_evolution.rs`, `chemistry/`)
 

@@ -448,10 +448,10 @@ fn exchange_input_is_checked() {
 }
 
 #[test]
-fn field_profiles_have_exact_gradients_and_beat_a_constant_field() {
+fn field_profiles_have_exact_gradients_and_find_the_best_constant_field() {
     // SABRE build-up over 10 s from thermal: the transfer and its
-    // gradient against evolve and central differences, then a profile
-    // that polarises the free ¹⁵N more than the best constant field.
+    // gradient against evolve and central differences, then the optimum,
+    // which for this steady exchange is the best constant field.
     let x = sabre(1.4e-7, 2.0, 0.5);
     let start = x.thermal_state().unwrap();
     let mut target: Vec<CMatrix> = x
@@ -535,4 +535,26 @@ fn field_profiles_have_exact_gradients_and_beat_a_constant_field() {
         "{:?}",
         got.controls
     );
+    // From every field at the lower bound as well.
+    let low = x
+        .optimize_profile(
+            &ten,
+            &[0.0; 10],
+            &Options {
+                max_iterations: 300,
+                ..Options::default()
+            },
+        )
+        .unwrap();
+    assert!(low.transfer >= top - 1e-6, "{} vs {top}", low.transfer);
+    // The cost is judged at the strongest field, wherever it is.
+    let strong = Profile {
+        max: 1e-2,
+        steps: 2,
+        ..short.clone()
+    };
+    for fields in [[1e-2, 1e-7], [1e-7, 1e-2]] {
+        let err = x.profile_transfer(&strong, &fields).unwrap_err();
+        assert!(err.to_string().contains("operations"), "{err}");
+    }
 }

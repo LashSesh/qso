@@ -203,7 +203,7 @@ pub(super) struct Relaxation {
     redfield: Option<RedfieldBlocks>,
     pub(super) drift: CMatrix,
     /// A bound on the relaxation rates.
-    rate: f64,
+    pub(super) rate: f64,
 }
 
 impl Relaxation {
@@ -631,17 +631,18 @@ impl SpinSystem {
         out
     }
 
-    /// `(A A† − A†A)/d` of the jumps: `L(1/d)`, diagonal.
-    fn jump_drift(&self, jumps: &[(usize, CMatrix)]) -> Vec<f64> {
+    /// `L(1/d)` of the `T₁` jumps at field `b`, diagonal.
+    fn jump_drift(&self, b: f64) -> Vec<f64> {
+        // Σ_i (k↑ − k↓)[I₊, I₋]/d with [I₊, I₋] = 2I_z and k↑ − k↓ =
+        // tanh(x/2)/T₁, written without the difference of the two rates,
+        // which would lose the thermal polarisation's digits at low field.
         let d = self.dimension();
         let mut out = vec![0.0; d];
-        for (i, a) in jumps {
-            let k = a.nrows();
-            let stride = self.stride(*i);
-            let comm = a * a.adjoint() - a.adjoint() * a;
+        for (i, spin) in self.spins().iter().enumerate() {
+            let Some(t1) = spin.t1 else { continue };
+            let excess = (self.boltzmann(i, b) / 2.0).tanh() / t1;
             for (s, o) in out.iter_mut().enumerate() {
-                let ks = (s / stride) % k;
-                *o += comm[(ks, ks)].re / d as f64;
+                *o += 2.0 * excess * self.m(i, s) / d as f64;
             }
         }
         out
@@ -654,7 +655,7 @@ impl SpinSystem {
         let prepared = self.prepare(&jumps);
         let redfield = self.redfield(b)?;
         let mut drift = CMatrix::zeros(d, d);
-        for (i, x) in self.jump_drift(&jumps).into_iter().enumerate() {
+        for (i, x) in self.jump_drift(b).into_iter().enumerate() {
             drift[(i, i)] = C64::new(x, 0.0);
         }
         // −R(ρ − ρ_eq) = −R(Δ) + R(ρ_eq), as R(1) = 0.
