@@ -15,7 +15,7 @@ finished milestones are released together, not one by one. The third
 (1.26 to 1.28) stages ship together as release 1.7.0. The seventh
 (1.29 to 1.33, section 4g) and eighth (1.34 to 1.37, magnetic resonance
 for medical research, section 4h) stages ship together as release
-1.8.0. A ninth stage (1.38 to 1.42) is proposed in section 4i. Up to 1.3
+1.8.0. The ninth stage (1.38 to 1.42) is planned in section 4i. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -2751,10 +2751,10 @@ during pulses against 256 pieces. It found:
   transition of 128 raised `OverflowError`; the trajectory tests allowed
   10⁻³ beyond four standard errors. All are fixed.
 
-## 4i. Ninth stage (1.38 to 1.42), proposed
+## 4i. Ninth stage (1.38 to 1.42)
 
-Proposed October 2026, after release 1.8.0, from the gaps that remain in
-the table of section 1; the scope is decided before work starts. As
+Planned October 2026, after release 1.8.0, from the gaps that remain in
+the table of section 1. As
 before, the stage starts with walks on graphs, QSO's identity. Two
 milestones then finish what the eighth stage began for quantum sensing:
 the nuclear-spin bath that limits an NV centre's coherence, and the
@@ -2961,10 +2961,10 @@ non-Clifford gates. The GPU track, still parked (section 7).
     sensing (1.37) comes last: it adds a new kind of spin (the electron
     of an NV centre) and builds on the noise of 1.30 and the decoupling
     sequences that optimal control can improve.
-17. **Ninth stage (proposed): walks first again, then the whole
-    sensor.** Symmetry for driven and decoherent walks (1.38) carries the
-    exact reductions of 1.3 to the walks of 1.13. The nuclear-spin bath
-    (1.39) comes before the optical cycle (1.40), because the sensitivity
+17. **Ninth stage: walks first again, then the whole sensor.** Symmetry
+    for driven and decoherent walks (1.38) carries the exact reductions
+    of 1.3 to the walks of 1.13. The nuclear-spin bath (1.39) comes
+    before the optical cycle (1.40), because the sensitivity
     that 1.40 computes needs the coherence time that 1.39 provides.
     Relaxation of larger spin systems (1.41) lifts the six-spin limit of
     1.34 to 1.36, and exact circuit distances (1.42) close the last gap of
@@ -3044,6 +3044,12 @@ Taken (October 2026):
   sensing with NV centres. Quantum algorithms for CT were considered and
   left out: at the size of a real image, loading the data and reading
   out the result undo any speed-up, so a demonstration would mislead.
+* Ninth stage (October 2026, accepted as proposed): symmetry for driven
+  and decoherent walks (1.38), the nuclear-spin bath of NV centres
+  (1.39), the optical cycle and magnetometer sensitivity (1.40),
+  relaxation of larger spin systems (1.41), exact distances of
+  error-correcting circuits (1.42). PyCCE joins QuTiP and Stim as a
+  reference of the cross-validation only; leakage stays out.
 * The browser playground stays, because it costs little to maintain: it
   is plain HTML and JavaScript without dependencies or a build step, it
   uses only the npm package's JSON interface, which the package's tests
