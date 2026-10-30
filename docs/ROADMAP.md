@@ -16,7 +16,7 @@ finished milestones are released together, not one by one. The third
 (1.29 to 1.33, section 4g) and eighth (1.34 to 1.37, magnetic resonance
 for medical research, section 4h) stages ship together as release
 1.8.0. The ninth stage (1.38 to 1.42) is planned in section 4i; 1.38
-is delivered. Up to 1.3
+and 1.39 are delivered. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -2910,7 +2910,7 @@ reproduced the complex-coin case. Fixed:
 - **Stays as is.** The uniform term of `QuotientDrivenWalk` is stored
   densely on the cells (at most 2048), which a rank-one term would avoid.
 
-### 1.39 — The nuclear-spin bath of an NV centre (M–L)
+### 1.39 — The nuclear-spin bath of an NV centre (M–L, delivered)
 
 Use case: an NV centre in natural diamond loses its coherence to the ¹³C
 nuclei around it (1.1 % of the carbon), a bath of hundreds of spins that
@@ -2933,6 +2933,120 @@ Maze, Taylor and Lukin (Phys. Rev. B 78, 094303 (2008)) and of Zhao, Ho
 and Liu (Phys. Rev. B 85, 115303 (2012)) within the spread over bath
 configurations, and scales inversely with the ¹³C abundance. PyCCE
 (Onizhuk and Galli, 2021) joins the cross-validation as a reference only.
+
+Delivered in `spin/nv/bath.rs`:
+
+- `diamond_sites` and `diamond_bath`: ¹³C on the lattice in the frame of
+  the centre, with a draw per site, so that baths nest in the radius.
+- `BathSpin::point_dipole`.
+- `SpinBath` with `clusters`, `coherence`, `exact_coherence`, `signal`,
+  `signal_with_noise` and `without_spins_within`.
+- `Cce` and `ensemble_signal`.
+- `spin.SpinBath` and the functions in Python.
+- PyCCE in the cross-framework comparison.
+
+Changes to the plan:
+
+- **Pulses** are ideal. With ideal pulses the electron is in one of two
+  levels at every moment, so a sequence is two branches whose bath
+  evolutions overlap in `L`. Finite pulses would need the electron and
+  the cluster together for every cluster, which this does not offer.
+- **Couplings within the cutoff only.** The couplings kept are those of
+  pairs within the cutoff, so clusters that are not connected factorise
+  exactly, and the expansion is exact at the size of the largest
+  connected cluster.
+- **Not the 1.37 propagation.** Clusters are propagated densely, not by
+  the block propagation of 1.37: the dipolar couplings between nuclei
+  break its product structure.
+- **Close nuclei.** Hyperfine couplings come from the point dipole. The
+  nuclei nearest the vacancy, whose contact couplings it misses, take
+  given values or are left out. No table of computed contact couplings
+  ships, because none can be checked here.
+- **Divergence.** The expansion can diverge when a subcluster has almost
+  lost its coherence, for example at 10 % ¹³C and third order in one
+  bath of twelve. Results that are not finite or exceed `|L| = 1` are
+  refused. A generalised expansion, which would avoid this, is not part
+  of this milestone.
+
+Measured (four cores):
+
+- **Against exact propagations.**
+  - Without couplings, the bath equals `NvCenter` of 1.37 to 10⁻¹⁰. This
+    covers three ¹³C, both transitions, 3 mT to 0.2 T, Ramsey, Hahn,
+    CPMG, XY-8, odd pulse angles and phases, and 2π, 3π, 4π and
+    back-to-back pulses.
+  - With couplings, an independent dense propagation of the electron and
+    the bath agrees to 10⁻¹⁰, in Rust and in NumPy. In it the bath
+    coherence is complex (Im L up to 2.5·10⁻⁴).
+  - The expansion equals the exact propagation once its order reaches 6
+    and 8 spins (10⁻¹⁰). It matches with a disconnected subset (10⁻¹³)
+    and with two separate groups.
+  - The dipolar levels of a bonded pair are `d·{−½, −½, 0, 1}` with
+    d = 2.062 kHz.
+  - The point dipole is checked component by component (19.885 kHz at
+    1 nm on the axis).
+- **Literature.**
+  - **Collapse and revival** (Childress 2006): over ten baths at 5 mT the
+    Hahn echo revives to 0.999, 0.993, 0.982 and 0.969 at the first four
+    Larmor periods. It collapses to 0.49–0.51 at half periods.
+  - **Decay time at 50 mT:** the median over 30 baths is 0.89 ms, with
+    quartiles 0.71 and 1.00 ms. It is converged in the bath radius
+    (0.902, 0.892, 0.890 and 0.890 ms for 3, 4, 5 and 6 nm), in the cutoff
+    (0.889 ms at 1.2 nm) and in the order (third order 0.91 ms; per bath,
+    the third and fourth orders agree to about 0.5 %). Zhao, Ho and Liu
+    give about 0.7 ms in this regime, at the lower quartile. Maze, Taylor
+    and Lukin report no single value; they fit `exp(−(2τ/T₂)³)`.
+  - **Abundance:** `T₂·p` at 0.3 % and 3 % is 0.91 and 0.95 of its value
+    at 1.07 %. That is the inverse scaling of Maze, Taylor and Lukin.
+- **PyCCE 1.1.1** (conventional CCE, second order, same positions and
+  couplings, 50 mT) agrees to 3·10⁻⁶ on six close ¹³C and to 7·10⁻⁶ on a
+  natural bath of 182 ¹³C. PyCCE keeps the full spin-1 electron.
+  - QSO takes 4 ms and PyCCE 86 ms.
+  - PyCCE's last release needs aliases for names that current NumPy,
+    SciPy and pandas removed.
+- **Cost.** A natural bath within 4 nm has 511 ¹³C and 1422 clusters at
+  second order. Thirty baths of 60 echo times take 2 s, and the third
+  order 11 s.
+
+Independent review: no errors in the formulas or the bookkeeping. The
+reviewer checked:
+
+- the sign of the hyperfine coupling;
+- the units;
+- the lattice and the frame;
+- the branch weights for odd pulses;
+- the recursion, including disconnected subsets;
+- the sign of the noise phase.
+
+Fixed:
+
+- **Divergence.** A divergent expansion was returned silently, with
+  populations as far off as −10²⁷. It is now refused.
+- **Memory.** The cache of exponentials kept every duration of every
+  sequence, up to 4 GB for an exact bath of ten spins. It is now kept per
+  sequence.
+- **Neighbour lists** took O(N²) memory even at first order, 3.6 GB for
+  19 000 spins. They are now found on a cell grid with a pair limit, and
+  skipped at first order.
+- **Telegraph paths** had no work limit. They now share the one of 1.37,
+  and the number of paths is capped.
+- **Batches.** Clusters are evaluated in batches.
+- **Bath size** is checked before the lattice is built. Ensembles build
+  every bath first.
+- **Nesting.** Baths of one seed did not nest in the radius, so the radius
+  convergence above was not possible; they now do. Spins within a radius
+  can be left out (`min_radius` in Python).
+- **Placement.** Spins on the vacancy or the nitrogen are refused, and
+  duplicate positions are found after sorting rather than over all pairs.
+- **Work estimate.** It counts every period.
+- **Python.** The radius limit is stated correctly (30 nm), the default
+  of 1000 telegraph paths is documented, and the duplicate check runs
+  without the GIL.
+- **Tests.** New tests cover the point dipole by component and the
+  dipolar tensor, which the references had copied, and divergence. The
+  existing tests already exercised a complex coherence.
+- **Stays as is.** Negative integers raise OverflowError from Python, as
+  elsewhere in the library.
 
 ### 1.40 — The optical cycle and magnetometer sensitivity (M)
 
