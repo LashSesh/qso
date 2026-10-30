@@ -410,7 +410,7 @@ impl SpinBath {
     }
 
     fn check_cutoff(cutoff: f64) -> Result<()> {
-        if !(cutoff >= 0.0) || cutoff.is_nan() {
+        if cutoff.is_nan() || cutoff < 0.0 {
             return Err(QsoError::invalid(
                 "cutoff",
                 "a distance ≥ 0 (∞ for every pair)",

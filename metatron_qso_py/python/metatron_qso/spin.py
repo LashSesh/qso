@@ -25,10 +25,21 @@ trajectories::
 
     nv = spin.NvCenter(0.04, nitrogen="14N", carbons=[(60e3, 30e3)])
     print(nv.signal(spin.cpmg(64, 0.54e-6)))
+
+``SpinBath`` is the bath of hundreds of 13C around a centre, its coherence
+from the cluster-correlation expansion::
+
+    bath = spin.SpinBath.diamond(0.05, seed=1)
+    print(bath.signal([spin.hahn(t) for t in (100e-6, 300e-6)]))
 """
 
 from ._core import (
+    DIAMOND_LATTICE_CONSTANT,
+    MAX_BATH_SPINS,
+    MAX_CLUSTER_ORDER,
+    MAX_EXACT_BATH,
     MAX_NV_DIMENSION,
+    NATURAL_C13_ABUNDANCE,
     NV_GYROMAGNETIC_RATIO,
     NV_ZERO_FIELD_SPLITTING,
     Control,
@@ -37,11 +48,14 @@ from ._core import (
     NvCenter,
     NvEvent,
     Profile,
+    SpinBath,
     SpinEvent,
     SpinSystem,
     axial_csa,
+    bath_ensemble_signal,
     cpmg,
     decay_exponent,
+    diamond_sites,
     filter_function,
     gyromagnetic_ratio,
     hahn,
@@ -51,6 +65,7 @@ from ._core import (
     m2s,
     nv_free,
     nv_pulse,
+    point_dipole_hyperfine,
     ramsey,
     rf_pulse,
     s2m,
@@ -67,7 +82,12 @@ from ._core import spin_shaped as shaped
 from ._core import spin_sweep as sweep
 
 __all__ = [
+    "DIAMOND_LATTICE_CONSTANT",
+    "MAX_BATH_SPINS",
+    "MAX_CLUSTER_ORDER",
+    "MAX_EXACT_BATH",
     "MAX_NV_DIMENSION",
+    "NATURAL_C13_ABUNDANCE",
     "NV_GYROMAGNETIC_RATIO",
     "NV_ZERO_FIELD_SPLITTING",
     "Control",
@@ -76,12 +96,15 @@ __all__ = [
     "NvCenter",
     "NvEvent",
     "Profile",
+    "SpinBath",
     "SpinEvent",
     "SpinSystem",
     "axial_csa",
+    "bath_ensemble_signal",
     "cpmg",
     "decay_exponent",
     "delay",
+    "diamond_sites",
     "filter_function",
     "gyromagnetic_ratio",
     "hahn",
@@ -91,6 +114,7 @@ __all__ = [
     "m2s",
     "nv_free",
     "nv_pulse",
+    "point_dipole_hyperfine",
     "pulse",
     "ramsey",
     "rf_pulse",

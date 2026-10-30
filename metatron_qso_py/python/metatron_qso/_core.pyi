@@ -2595,6 +2595,70 @@ NV_ZERO_FIELD_SPLITTING: float
 NV_GYROMAGNETIC_RATIO: float
 MAX_NV_DIMENSION: int
 
+@final
+class SpinBath:
+    def __new__(
+        cls,
+        field: float,
+        spins: Sequence[Tuple[Sequence[float], Sequence[float]]],
+        transition: int = -1,
+    ) -> SpinBath: ...
+    @staticmethod
+    def diamond(
+        field: float,
+        abundance: float = 0.0107,
+        radius: float = 4e-9,
+        seed: int = 0,
+        transition: int = -1,
+    ) -> SpinBath: ...
+    @property
+    def field(self) -> float: ...
+    @property
+    def transition(self) -> int: ...
+    @property
+    def num_spins(self) -> int: ...
+    @property
+    def spins(self) -> list[Tuple[list[float], list[float]]]: ...
+    def clusters(self, order: int = 2, cutoff: float = 8e-10) -> list[list[int]]: ...
+    def coherence(
+        self, sequences: Sequence[Sequence[NvEvent]], order: int = 2, cutoff: float = 8e-10
+    ) -> ComplexArray: ...
+    def exact_coherence(
+        self, sequences: Sequence[Sequence[NvEvent]], cutoff: float = ...
+    ) -> ComplexArray: ...
+    def signal(
+        self, sequences: Sequence[Sequence[NvEvent]], order: int = 2, cutoff: float = 8e-10
+    ) -> RealArray: ...
+    def signal_with_noise(
+        self,
+        sequences: Sequence[Sequence[NvEvent]],
+        noise: FieldNoise,
+        trajectories: int = 0,
+        seed: int = 0,
+        order: int = 2,
+        cutoff: float = 8e-10,
+    ) -> Tuple[RealArray, RealArray]: ...
+
+def point_dipole_hyperfine(position: Sequence[float]) -> list[float]: ...
+def diamond_sites(radius: float) -> RealArray: ...
+def bath_ensemble_signal(
+    field: float,
+    sequences: Sequence[Sequence[NvEvent]],
+    configurations: int,
+    abundance: float = 0.0107,
+    radius: float = 4e-9,
+    seed: int = 0,
+    transition: int = -1,
+    order: int = 2,
+    cutoff: float = 8e-10,
+) -> Tuple[RealArray, RealArray]: ...
+
+NATURAL_C13_ABUNDANCE: float
+DIAMOND_LATTICE_CONSTANT: float
+MAX_BATH_SPINS: int
+MAX_CLUSTER_ORDER: int
+MAX_EXACT_BATH: int
+
 def nv_pulse(angle: float, phase: float = 0.0) -> NvEvent: ...
 def nv_free(t: float) -> NvEvent: ...
 def ramsey(tau: float) -> list[NvEvent]: ...

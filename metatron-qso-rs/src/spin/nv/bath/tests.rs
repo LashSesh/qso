@@ -147,10 +147,9 @@ fn dense_signal(bath: &SpinBath, events: &[NvEvent]) -> f64 {
         }
     }
     let mut hm = base.clone();
-    for i in 0..k {
-        for a in 0..3 {
-            hm += embed(k, i, &ops[a])
-                * c(TWO_PI * f64::from(bath.transition) * bath.spins[i].hyperfine[a]);
+    for (i, s) in bath.spins.iter().enumerate() {
+        for (op, a) in ops.iter().zip(s.hyperfine) {
+            hm += embed(k, i, op) * c(TWO_PI * f64::from(bath.transition) * a);
         }
     }
     let pm = CMatrix::from_row_slice(2, 2, &[c(1.0), c(0.0), c(0.0), c(0.0)]);
@@ -435,4 +434,144 @@ fn rejects_invalid_input() {
     assert!(diamond_bath(0.0, 1e-9, 1).is_err());
     assert!(diamond_bath(0.5, 1.0, 1).is_err());
     assert!(ensemble_signal(0.01, -1, 0.01, 1e-9, 0, 1, &[hahn(1e-6)], &cce).is_err());
+}
+
+/// The Larmor period of ¹³C (s) at `field`.
+fn larmor_period(field: f64) -> f64 {
+    1.0 / (gamma_c() * field)
+}
+
+#[test]
+fn the_echo_collapses_and_revives_with_the_larmor_period() {
+    // Childress et al. (Science 314, 281 (2006)): at a few mT the Hahn
+    // echo of a natural bath vanishes between multiples of the ¹³C Larmor
+    // period and revives at them (here to 1 − 10⁻³ at τ = T_L and still
+    // above 0.98 at 4 T_L as the pair flip-flops set in).
+    let field = 0.005;
+    let tl = larmor_period(field);
+    let taus: Vec<f64> = (1..=16).map(|k| k as f64 * tl / 4.0).collect();
+    let seqs: Vec<Vec<NvEvent>> = taus.iter().map(|&t| hahn(t)).collect();
+    let s = ensemble_signal(
+        field,
+        -1,
+        NATURAL_C13_ABUNDANCE,
+        3e-9,
+        10,
+        5,
+        &seqs,
+        &Cce::default(),
+    )
+    .unwrap();
+    for (k, (mean, err)) in s.iter().enumerate() {
+        let quarter = k + 1;
+        if quarter % 4 == 0 {
+            assert!(
+                *mean > 0.98,
+                "τ = {} T_L: {mean} ± {err}",
+                quarter as f64 / 4.0
+            );
+        } else if quarter % 2 == 0 {
+            assert!(
+                *mean < 0.51,
+                "τ = {} T_L: {mean} ± {err}",
+                quarter as f64 / 4.0
+            );
+        } else {
+            assert!(
+                *mean < 0.6,
+                "τ = {} T_L: {mean} ± {err}",
+                quarter as f64 / 4.0
+            );
+        }
+    }
+}
+
+/// The Hahn-echo decay time `T₂` (`2τ` where `L` first falls below 1/e)
+/// of `configurations` baths at abundance `p`, the radius and cutoff
+/// scaled as `p^{−1/3}` from 4 nm and 0.8 nm, sampled at multiples of the
+/// Larmor period (where the modulation by distant nuclei vanishes); sorted.
+fn decay_times(p: f64, field: f64, configurations: u64) -> Vec<f64> {
+    let scale = NATURAL_C13_ABUNDANCE / p;
+    let tl = larmor_period(field);
+    let step = (10e-6 * scale / tl).round().max(1.0) * tl;
+    let taus: Vec<f64> = (1..)
+        .map(|k| k as f64 * step)
+        .take_while(|&t| t < 1e-3 * scale)
+        .collect();
+    let seqs: Vec<Vec<NvEvent>> = taus.iter().map(|&t| hahn(t)).collect();
+    let cce = Cce {
+        order: 2,
+        cutoff: 8e-10 * scale.cbrt(),
+    };
+    let mut out: Vec<f64> = (0..configurations)
+        .map(|seed| {
+            let spins = diamond_bath(p, 4e-9 * scale.cbrt(), 1000 + seed).unwrap();
+            let s = SpinBath::new(field, -1, spins).signal(&seqs, &cce).unwrap();
+            let l: Vec<f64> = s.iter().map(|x| 2.0 * x - 1.0).collect();
+            let target = (-1.0f64).exp();
+            let k = l
+                .iter()
+                .position(|&x| x < target)
+                .expect("decays within the window");
+            assert!(k > 0);
+            let f = (l[k - 1] - target) / (l[k - 1] - l[k]);
+            2.0 * (taus[k - 1] + f * (taus[k] - taus[k - 1]))
+        })
+        .collect();
+    out.sort_by(f64::total_cmp);
+    out
+}
+
+#[test]
+fn the_decay_time_in_natural_diamond_and_its_scaling() {
+    // At 50 mT the echo decays by pair flip-flops (Zhao, Ho and Liu, Phys.
+    // Rev. B 85, 115303 (2012): about 0.7 ms in the strong-field regime).
+    // Over 30 baths the median is 0.88 ms, the quartiles 0.73 and 1.06 ms.
+    let natural = decay_times(NATURAL_C13_ABUNDANCE, 0.05, 30);
+    let median = natural[15];
+    let (low, high) = (natural[7], natural[22]);
+    assert!((0.8e-3..0.95e-3).contains(&median), "{natural:?}");
+    assert!(low < 0.75e-3 && high > 1.0e-3, "{low} {high}");
+    // T₂ scales as the inverse of the abundance (Maze, Taylor and Lukin,
+    // Phys. Rev. B 78, 094303 (2008)): T₂·p within 15 % from 0.3 % to 3 %.
+    for p in [0.003, 0.03] {
+        let t = decay_times(p, 0.05, 30)[15];
+        let ratio = t * p / (median * NATURAL_C13_ABUNDANCE);
+        assert!(
+            (0.85..1.15).contains(&ratio),
+            "p = {p}: T₂ = {t}, ratio {ratio}"
+        );
+    }
+}
+
+#[test]
+fn the_expansion_converges_with_the_order() {
+    // A natural bath at 50 mT: the third order changes the echo by up to a
+    // few 10⁻², the fourth by much less.
+    let bath = SpinBath::new(
+        0.05,
+        -1,
+        diamond_bath(NATURAL_C13_ABUNDANCE, 3e-9, 1003).unwrap(),
+    );
+    let seqs: Vec<Vec<NvEvent>> = (1..=20).map(|k| hahn(k as f64 * 40e-6)).collect();
+    let l: Vec<Vec<C64>> = (2..=4)
+        .map(|order| {
+            bath.coherence(
+                &seqs,
+                &Cce {
+                    order,
+                    cutoff: 8e-10,
+                },
+            )
+            .unwrap()
+        })
+        .collect();
+    let diff = |a: &[C64], b: &[C64]| {
+        a.iter()
+            .zip(b)
+            .map(|(x, y)| (x - y).norm())
+            .fold(0.0, f64::max)
+    };
+    let (d23, d34) = (diff(&l[0], &l[1]), diff(&l[1], &l[2]));
+    assert!(d34 < 0.2 * d23 && d34 < 5e-3, "{d23} {d34}");
 }

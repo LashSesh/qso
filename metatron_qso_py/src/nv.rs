@@ -10,8 +10,14 @@ use metatron_qso::spin::{
 use numpy::{PyArray1, PyArray2};
 use pyo3::prelude::*;
 
+use metatron_qso::spin::bath::{
+    self, BathSpin, Cce, DIAMOND_LATTICE_CONSTANT, MAX_BATH_SPINS, MAX_CLUSTER_ORDER,
+    MAX_EXACT_BATH, NATURAL_C13_ABUNDANCE, SpinBath,
+};
+
 use crate::{
-    ComplexMatrixArg, Raise, RealArg, cmatrix, invalid, real_array, real_vec, square_complex,
+    ComplexMatrixArg, Raise, RealArg, cmatrix, complex_array, invalid, real_array, real_vec,
+    square_complex,
 };
 
 /// One step of an NV sensing sequence (made by `nv_pulse`, `nv_free`,
@@ -529,7 +535,264 @@ impl PyNvCenter {
     }
 }
 
+fn sequences(list: &[Vec<PyRef<'_, PyNvEvent>>]) -> Vec<Vec<NvEvent>> {
+    list.iter().map(|s| events(s)).collect()
+}
+
+fn transition_of(transition: i64) -> PyResult<i8> {
+    match transition {
+        1 => Ok(1),
+        -1 => Ok(-1),
+        other => Err(invalid(format!("transition is −1 or +1, got {other}"))),
+    }
+}
+
+type SpinTuple = ([f64; 3], [f64; 3]);
+
+/// Means and standard errors, one per sequence.
+type MeansAndErrors<'py> = (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>);
+
+/// The ¹³C bath of an NV centre in a field `field` (T) along its axis,
+/// seen by the qubit `{0, transition}`: `spins` are `(position,
+/// hyperfine)` pairs, the position from the vacancy (m, z along the NV
+/// axis) and the secular hyperfine couplings `(A_zx, A_zy, A_zz)` (Hz).
+/// `SpinBath.diamond` places ¹³C at random on the lattice. Its coherence
+/// after a sequence (a pulse, free periods and π pulses, a pulse, with
+/// ideal pulses) comes from the cluster-correlation expansion: clusters
+/// of up to `order` spins connected by pairs closer than `cutoff` (m),
+/// whose dipolar couplings are kept, each propagated exactly.
+#[pyclass(name = "SpinBath", module = "metatron_qso", frozen)]
+pub struct PySpinBath {
+    inner: SpinBath,
+}
+
+#[pymethods]
+impl PySpinBath {
+    #[new]
+    #[pyo3(
+        signature = (field, spins, transition = -1),
+        text_signature = "(field, spins, transition=-1)"
+    )]
+    fn new(field: f64, spins: Vec<SpinTuple>, transition: i64) -> PyResult<Self> {
+        let spins = spins
+            .into_iter()
+            .map(|(position, hyperfine)| BathSpin {
+                position,
+                hyperfine,
+            })
+            .collect();
+        let inner = SpinBath::new(field, transition_of(transition)?, spins);
+        inner.validate().raise()?;
+        Ok(Self { inner })
+    }
+
+    /// A random bath: every carbon site within `radius` (m) of the vacancy
+    /// holds a ¹³C with probability `abundance` (seeded), with
+    /// point-dipole hyperfine couplings.
+    #[staticmethod]
+    #[pyo3(
+        signature = (field, abundance = NATURAL_C13_ABUNDANCE, radius = 4e-9, seed = 0, transition = -1),
+        text_signature = "(field, abundance=0.0107, radius=4e-09, seed=0, transition=-1)"
+    )]
+    fn diamond(
+        py: Python<'_>,
+        field: f64,
+        abundance: f64,
+        radius: f64,
+        seed: u64,
+        transition: i64,
+    ) -> PyResult<Self> {
+        let transition = transition_of(transition)?;
+        let spins = py
+            .detach(|| bath::diamond_bath(abundance, radius, seed))
+            .raise()?;
+        let inner = SpinBath::new(field, transition, spins);
+        inner.validate().raise()?;
+        Ok(Self { inner })
+    }
+
+    #[getter]
+    fn field(&self) -> f64 {
+        self.inner.field
+    }
+
+    #[getter]
+    fn transition(&self) -> i8 {
+        self.inner.transition
+    }
+
+    #[getter]
+    fn num_spins(&self) -> usize {
+        self.inner.spins.len()
+    }
+
+    /// The spins as `(position, hyperfine)` pairs.
+    #[getter]
+    fn spins(&self) -> Vec<SpinTuple> {
+        self.inner
+            .spins
+            .iter()
+            .map(|s| (s.position, s.hyperfine))
+            .collect()
+    }
+
+    /// The connected clusters of up to `order` spins.
+    #[pyo3(signature = (order = 2, cutoff = 8e-10))]
+    fn clusters(&self, py: Python<'_>, order: usize, cutoff: f64) -> PyResult<Vec<Vec<usize>>> {
+        let b = &self.inner;
+        py.detach(|| b.clusters(order, cutoff)).raise()
+    }
+
+    /// The coherence `L = Tr(U_m ρ U_0†)` of the bath after each sequence.
+    #[pyo3(signature = (sequences, order = 2, cutoff = 8e-10))]
+    fn coherence<'py>(
+        &self,
+        py: Python<'py>,
+        sequences: Vec<Vec<PyRef<'_, PyNvEvent>>>,
+        order: usize,
+        cutoff: f64,
+    ) -> PyResult<Bound<'py, PyArray1<C64>>> {
+        let (seqs, b) = (self::sequences(&sequences), &self.inner);
+        let l = py
+            .detach(|| b.coherence(&seqs, &Cce { order, cutoff }))
+            .raise()?;
+        Ok(complex_array(py, l))
+    }
+
+    /// The coherence of the whole bath propagated exactly (at most
+    /// `MAX_EXACT_BATH` spins), with the couplings of pairs closer than
+    /// `cutoff`.
+    #[pyo3(signature = (sequences, cutoff = f64::INFINITY))]
+    fn exact_coherence<'py>(
+        &self,
+        py: Python<'py>,
+        sequences: Vec<Vec<PyRef<'_, PyNvEvent>>>,
+        cutoff: f64,
+    ) -> PyResult<Bound<'py, PyArray1<C64>>> {
+        let (seqs, b) = (self::sequences(&sequences), &self.inner);
+        let l = py.detach(|| b.exact_coherence(&seqs, cutoff)).raise()?;
+        Ok(complex_array(py, l))
+    }
+
+    /// The `m_s = 0` population after each sequence.
+    #[pyo3(signature = (sequences, order = 2, cutoff = 8e-10))]
+    fn signal<'py>(
+        &self,
+        py: Python<'py>,
+        sequences: Vec<Vec<PyRef<'_, PyNvEvent>>>,
+        order: usize,
+        cutoff: f64,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let (seqs, b) = (self::sequences(&sequences), &self.inner);
+        let s = py
+            .detach(|| b.signal(&seqs, &Cce { order, cutoff }))
+            .raise()?;
+        Ok(real_array(py, s))
+    }
+
+    /// The population with classical field noise as well: `(means,
+    /// standard errors)`; exact for Gaussian noise (errors 0), averaged
+    /// over `trajectories` paths (seeded) for telegraph noise.
+    #[pyo3(signature = (sequences, noise, trajectories = 0, seed = 0, order = 2, cutoff = 8e-10))]
+    #[allow(clippy::too_many_arguments)]
+    fn signal_with_noise<'py>(
+        &self,
+        py: Python<'py>,
+        sequences: Vec<Vec<PyRef<'_, PyNvEvent>>>,
+        noise: &PyFieldNoise,
+        trajectories: usize,
+        seed: u64,
+        order: usize,
+        cutoff: f64,
+    ) -> PyResult<MeansAndErrors<'py>> {
+        let (seqs, b, noise) = (self::sequences(&sequences), &self.inner, noise.inner);
+        let r = py
+            .detach(|| {
+                b.signal_with_noise(&seqs, &Cce { order, cutoff }, &noise, trajectories, seed)
+            })
+            .raise()?;
+        let (mean, err): (Vec<f64>, Vec<f64>) = r.into_iter().unzip();
+        Ok((real_array(py, mean), real_array(py, err)))
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "SpinBath({} T, m = {}, {} spins)",
+            self.inner.field,
+            self.inner.transition,
+            self.inner.spins.len()
+        )
+    }
+}
+
+/// The point-dipole hyperfine couplings `(A_zx, A_zy, A_zz)` (Hz) of a ¹³C
+/// at `position` (m from the vacancy, z along the NV axis).
+#[pyfunction(name = "point_dipole_hyperfine")]
+fn py_point_dipole(position: [f64; 3]) -> PyResult<[f64; 3]> {
+    Ok(BathSpin::point_dipole(position).raise()?.hyperfine)
+}
+
+/// The carbon sites of diamond within `radius` (m) of the vacancy, in the
+/// frame of the centre (`k × 3`).
+#[pyfunction(name = "diamond_sites")]
+fn py_diamond_sites<'py>(py: Python<'py>, radius: f64) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let sites = py.detach(|| bath::diamond_sites(radius)).raise()?;
+    let m = metatron_qso::linalg::RMatrix::from_fn(sites.len(), 3, |r, c| sites[r][c]);
+    Ok(crate::rmatrix(py, &m))
+}
+
+/// The population after each sequence averaged over `configurations`
+/// random baths (seeded): `(means, standard errors)`.
+#[pyfunction(name = "bath_ensemble_signal")]
+#[pyo3(
+    signature = (
+        field, sequences, configurations, abundance = NATURAL_C13_ABUNDANCE, radius = 4e-9,
+        seed = 0, transition = -1, order = 2, cutoff = 8e-10,
+    ),
+    text_signature = "(field, sequences, configurations, abundance=0.0107, radius=4e-09, seed=0, transition=-1, order=2, cutoff=8e-10)"
+)]
+#[allow(clippy::too_many_arguments)]
+fn py_ensemble_signal<'py>(
+    py: Python<'py>,
+    field: f64,
+    sequences: Vec<Vec<PyRef<'_, PyNvEvent>>>,
+    configurations: usize,
+    abundance: f64,
+    radius: f64,
+    seed: u64,
+    transition: i64,
+    order: usize,
+    cutoff: f64,
+) -> PyResult<MeansAndErrors<'py>> {
+    let (seqs, transition) = (self::sequences(&sequences), transition_of(transition)?);
+    let r = py
+        .detach(|| {
+            bath::ensemble_signal(
+                field,
+                transition,
+                abundance,
+                radius,
+                configurations,
+                seed,
+                &seqs,
+                &Cce { order, cutoff },
+            )
+        })
+        .raise()?;
+    let (mean, err): (Vec<f64>, Vec<f64>) = r.into_iter().unzip();
+    Ok((real_array(py, mean), real_array(py, err)))
+}
+
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PySpinBath>()?;
+    m.add_function(wrap_pyfunction!(py_point_dipole, m)?)?;
+    m.add_function(wrap_pyfunction!(py_diamond_sites, m)?)?;
+    m.add_function(wrap_pyfunction!(py_ensemble_signal, m)?)?;
+    m.add("NATURAL_C13_ABUNDANCE", NATURAL_C13_ABUNDANCE)?;
+    m.add("DIAMOND_LATTICE_CONSTANT", DIAMOND_LATTICE_CONSTANT)?;
+    m.add("MAX_BATH_SPINS", MAX_BATH_SPINS)?;
+    m.add("MAX_CLUSTER_ORDER", MAX_CLUSTER_ORDER)?;
+    m.add("MAX_EXACT_BATH", MAX_EXACT_BATH)?;
     m.add_class::<PyNvCenter>()?;
     m.add_class::<PyNvEvent>()?;
     m.add_class::<PyFieldNoise>()?;
