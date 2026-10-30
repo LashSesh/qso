@@ -68,6 +68,25 @@ All notable changes to this project are documented here. The format follows
     `pea_layered`, and `max_bond` (for `simulator="mps"` only).
   - Learned rates on 7 to 10 qubits (more than 64 generators) now come
     from the new fit; they agree with 1.30 to rounding (about 10⁻¹⁷).
+- **Optimal control of spin experiments** (milestone 1.36).
+  - GRAPE (`Control`, `SpinSystem::optimize_control`; `spin.Control` in
+    Python): piecewise-constant rf amplitudes on several channels
+    (rotating frame) or field profiles, maximising `Re Tr(C† ρ(T))` over
+    an ensemble of rf scalings and offsets, with amplitude limits and
+    power and smoothness penalties. Exact gradients without relaxation
+    (eigenvectors of each step) and with it (Liouville space, the Van
+    Loan block exponential applied to vectors); the field dependence of
+    relaxation by central differences.
+  - `Event::Control` (`spin.control`): rf on several channels at once,
+    replaying optimised pulses in `evolve`; `control_events`.
+  - `Exchange::optimize_profile` (`spin.Profile`): field profiles through
+    chemical exchange, e.g. for SABRE.
+  - `unitary_bound`: the largest transfer of any unitary (Glaser et al.).
+  - Validated against finite differences, an independent NumPy
+    propagation, the unitary bound (IS and I₂S, 10⁻⁶), the time-optimal
+    limits of Khaneja, Brockett and Glaser for two spins, refocused INEPT
+    under rf errors, and the adiabatic field cycling of parahydrogen.
+  - Tutorial `10_optimal_control`.
 - **Hyperpolarisation in realistic models** (milestone 1.35).
   - `Exchange` (`spin.Exchange` in Python): chemical sites (spin systems
     with concentrations) and first-order channels that carry some spins'

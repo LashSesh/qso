@@ -434,8 +434,28 @@ agree, `k · ρ_fresh(f, f')` at the target element composed of the carried
 levels and the fresh ones `(f, f')`; the fresh state has order 0, so this
 stays within the block. The deviation from `c_s/d_s` is propagated, with
 the relaxation drift and the exchange of `c_s/d_s` in the augmented
-column. Steady states solve the population block with one extra equation
-per site, `Tr Δ_s = 0`, by SVD, and refuse a rank-deficient system.
+column. Steady states replace one population equation per site by
+`Tr Δ_s = 0`, scale rows and columns, and solve by fully pivoted LU,
+refusing pivots below 10⁻¹² of the largest.
+
+Optimal control (`spin/control.rs`) evaluates the transfer `Re Tr(C†
+ρ(T))` of piecewise-constant controls and its gradient in one forward and
+one backward pass. Without relaxation each step's `H_k` is diagonalised:
+`U_k` follows from the eigenvalues, and the derivative of `U_k` in a
+direction `∂H` is `V(G ∘ V†∂HV)V†` with the divided differences
+`G_ab = −iΔt e^{−i(E_a+E_b)Δt/2} sinc((E_a−E_b)Δt/2)`, so that one matrix
+`X = V(Gᵀ ∘ V†(ρU†λ† + ρ†U†λ)V)V†` per step gives every control's
+gradient as `Re Tr(X ∂H_c)`. With relaxation the state is a vector of
+Liouville space under the full generator (the system's dissipators, `−R`,
+and the drift towards equilibrium as a rank-one term in `Tr ρ`); the step
+propagator and its derivative act on vectors only: `e^{LΔt}x` and the
+upper block of `exp([[LΔt, EΔt], [0, LΔt]])[0; x]` (Van Loan) as Taylor
+series in substeps of norm ½, summed until a term falls below rounding.
+Bounded amplitudes and fields are mapped by `tanh` from free variables in
+the same units, and L-BFGS sees the objective divided by its natural size.
+Field profiles of an exchange use the same block exponentials per
+coherence-order block (a field keeps the orders), with the field
+derivative of the whole generator by central differences.
 
 ## Hamiltonian simulation and chemistry (`algorithms/time_evolution.rs`, `chemistry/`)
 

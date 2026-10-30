@@ -42,6 +42,7 @@
 - [Molecules, dynamics and amplitude estimation](tutorials/07_chemistry_dynamics_estimation.md)
 - [Interacting walkers](tutorials/08_interacting_walks.md)
 - [Hyperpolarisation](tutorials/09_hyperpolarisation.md)
+- [Optimal control of spin experiments](tutorials/10_optimal_control.md)
 
 # Rust tutorials
 

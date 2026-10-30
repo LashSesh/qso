@@ -246,6 +246,54 @@ What the model leaves out:
   `spin.sweep`): through the ultra-low fields where the levels come within
   a few hertz slowly, then faster.
 
+## Optimal control
+
+Gradient ascent pulse engineering (GRAPE; Khaneja et al., J. Magn. Reson.
+172, 296 (2005)) designs pulses and field profiles numerically. A
+`spin.Control` holds piecewise-constant controls over `steps` equal steps
+of a fixed duration — the `x` and `y` amplitudes (Hz) of rf fields on
+channels in the rotating frame, or the field (T) — an initial operator
+`ρ(0)` and a target `C`. The transfer `Re Tr(C† ρ(T))` and its gradient
+with respect to every control are exact up to rounding:
+
+```python
+s = q.SpinSystem(9.4)
+s.add_spin("1H", 0.0)
+s.add_spin("13C", 0.0)
+s.couple(0, 1, 140.0)
+rho, sz = s.thermal_state(), s.spin_operator(1, "z")
+c = spin.Control.rf(["1H", "13C"], 1.2 / 140.0, 40, rho, sz, limit=5000.0)
+c.ensemble = [(1.0, [0.9, 0.9], []), (1.0, [1.1, 1.1], [])]  # rf errors
+r = s.optimize_control(c, seed=0, scale=500.0)
+print(r["transfer"] / spin.unitary_bound(rho, sz))   # close to 1
+pulse = s.control_events(c, r["controls"])           # for evolve
+```
+
+- **Ensembles.** Members `(weight, rf scales, offsets in Hz)` per
+  channel average the transfer over rf inhomogeneity and offsets;
+  `optimize_control` maximises that average less `power · Σ u²Δt` and
+  `smoothness · Σ (u_{k+1} − u_k)²`. `limit` bounds each channel's
+  amplitude `√(x² + y²)`; fields stay within their range.
+- **Relaxation.** If the system relaxes (`T₁`, `T₂`, Redfield theory),
+  the controls are optimised in Liouville space, with the same
+  relaxation as `evolve` (free precession's, during the pulses as well).
+  The field derivative of relaxation and of thermal populations, in
+  field profiles, is taken by central differences (to about 10⁻⁹ of it);
+  everything else is exact.
+- **Replay.** `control_events` gives `spin.control(...)` (rf on several
+  channels at once) or a field and a delay per step; `evolve` reproduces
+  the transfer.
+- **Exchange.** `Exchange.optimize_profile` shapes the field of a
+  chemical-exchange model (`spin.Profile`: range, steps, states and one
+  target operator per site), e.g. for SABRE.
+- **Local optima.** L-BFGS finds a local optimum from each start: take
+  the best of several seeds. One evaluation costs about 1 ms for two
+  spins and 100 steps, 26 ms for four spins and 200 steps, and with
+  relaxation 24 ms (two spins) to 0.3 s (three spins) for 100 steps.
+- **The bound.** `spin.unitary_bound(ρ, C)` is the largest `Tr(C UρU†)`
+  over all unitaries (Glaser et al., Science 280, 421 (1998)), the sum of
+  the products of the ordered eigenvalues: no pulse sequence exceeds it.
+
 ## Spectra
 
 `lines(rho, isotope)` gives the exact stick spectrum of a state. Each
@@ -371,6 +419,24 @@ for b in (2e-3, 5.7e-3, 9e-3):
   QuTiP) to 4·10⁻⁴, a lifetime 17.5 times its magnetisation's; without
   the lock 15 % less singlet order is left after half that lifetime
   (0.515 against 0.607).
+
+- **Optimal control.** The gradients agree with central differences
+  (rf and field controls, with and without relaxation, ensembles with
+  rf errors and offsets, complex operators) and the transfer with
+  `evolve` and with an independent NumPy propagation. GRAPE reaches the
+  unitary bound of thermal ¹H → ¹³C transfer (3.976 times carbon's own
+  polarisation) and of I₂S (4.476 times) to 10⁻⁶, and follows the
+  time-optimal limits of Khaneja, Brockett and Glaser (Phys. Rev. A 63,
+  032308 (2001)) for two spins: the in-phase transfer `S⁻ → I⁻` reaches
+  their `η*(T)` to 10⁻⁹ at `JT` = 0.8 and 1.2 and one at 1.7, the
+  antiphase transfer `2I_zS⁻ → I⁻` 99.4 % of `sin(πJT/2)` at `JT` = 0.5
+  (100 steps), 99.7 % at 0.8 and one at 1.2. A pulse optimised for rf
+  amplitudes from 80 % to 120 % transfers more than 99.99 % over that
+  range, where refocused INEPT falls to 0.09 and 0.29. A field profile of
+  2 s carries parahydrogen order to ¹³C as well as the adiabatic passage
+  of 50 s (−0.8128, against −0.25 for a linear sweep of 2 s). For SABRE
+  build-up over 5 s, the optimised profile is the constant field at the
+  anti-crossing.
 
 On the command line, `qso spins system.json --observe 13C --sequence
 events.json` prints the lines and polarisations after a sequence

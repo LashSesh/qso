@@ -64,6 +64,12 @@
 //! spectrum of a state, [`SpinSystem::fid`] the free induction decay and
 //! [`Spectrum::from_fid`] its Fourier transform.
 //!
+//! Chemical exchange between spin systems is modelled by [`Exchange`];
+//! optimal control (GRAPE) of rf pulses and field profiles, with exact
+//! gradients, by [`Control`] and [`SpinSystem::optimize_control`], and
+//! [`unitary_bound`] gives the largest transfer any pulse sequence can
+//! reach.
+//!
 //! ```
 //! use metatron_qso::spin::{Event, Isotope, SpinSystem, Target};
 //!
