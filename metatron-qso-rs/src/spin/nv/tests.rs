@@ -53,6 +53,89 @@ fn odmr_lines_lie_at_d_plus_minus_gamma_b_split_by_the_nitrogen() {
     }
 }
 
+/// The dense propagation that the blocks replace: full Hamiltonian and
+/// pulses, with a static field `bias` (Hz) along the axis throughout.
+fn dense(
+    nv: &NvCenter,
+    rho: &CMatrix,
+    events: &[NvEvent],
+    drive: &Microwave,
+    bias: f64,
+) -> CMatrix {
+    let sz = nv.embed(0, &NvCenter::electron()[0]);
+    let h0 = nv.hamiltonian(drive.frequency).unwrap() + &sz * C64::new(TWO_PI * bias, 0.0);
+    let mut rho = rho.clone();
+    for event in NvCenter::centred(events, drive).unwrap() {
+        let u = match event {
+            NvEvent::Free(t) => expm_hermitian(&h0, t),
+            NvEvent::Pulse { angle, phase } => match drive.rabi {
+                None => nv.embed(0, &NvCenter::ideal_pulse(drive.transition, angle, phase)),
+                Some(rabi) => {
+                    let (duration, phase) = finite(angle, phase, rabi);
+                    expm_hermitian(&(&h0 + nv.drive(rabi, phase)), duration)
+                }
+            },
+        };
+        rho = &u * rho * u.adjoint();
+    }
+    rho
+}
+
+#[test]
+fn blocks_match_the_dense_propagation() {
+    let nv = NvCenter::new(0.031)
+        .with_nitrogen(Nitrogen::n14())
+        .with_carbon(60e3, 30e3)
+        .with_carbon(-20e3, 45e3);
+    let d = nv.dimension();
+    let mut rng = Rng::seed_from_u64(5);
+    let a = CMatrix::from_fn(d, d, |_, _| C64::new(rng.normal(), rng.normal()));
+    let rho = &a * a.adjoint();
+    let rho = &rho / rho.trace();
+    let events = [
+        pulse(90.0, 0.0),
+        NvEvent::Free(0.3e-6),
+        pulse(180.0, 90.0),
+        NvEvent::Free(0.6e-6),
+        pulse(-70.0, 20.0),
+        NvEvent::Free(0.2e-6),
+        pulse(180.0, 90.0),
+        NvEvent::Free(0.3e-6),
+        pulse(90.0, 180.0),
+    ];
+    let noise = FieldNoise::Telegraph {
+        amplitude: 2e5,
+        rate: 0.0,
+    };
+    for transition in [-1, 1] {
+        for rabi in [None, Some(12e6)] {
+            let mut mw = Microwave::resonant(&nv, transition, rabi);
+            mw.frequency += 0.3e6;
+            let want = dense(&nv, &rho, &events, &mw, 0.0);
+            let got = nv.evolve(&rho, &events, &mw).unwrap();
+            let worst = (got - &want).iter().fold(0.0f64, |m, z| m.max(z.norm()));
+            assert!(worst < 1e-10, "{transition} {rabi:?}: {worst}");
+            // Static telegraph noise: each trajectory sees +a or −a
+            // throughout, during finite pulses too.
+            let start = nv.initial_state();
+            let plus = nv.bright(&dense(&nv, &start, &events, &mw, 2e5));
+            let minus = nv.bright(&dense(&nv, &start, &events, &mw, -2e5));
+            assert!((plus - minus).abs() > 1e-3, "{plus} {minus}");
+            let mut seen = [false; 2];
+            for seed in 0..12 {
+                let (p, _) = nv.signal_with_noise(&events, &mw, &noise, 1, seed).unwrap();
+                let k = usize::from((p - plus).abs() > 1e-10);
+                assert!(
+                    (p - [plus, minus][k]).abs() < 1e-10,
+                    "{p} vs {plus}, {minus}"
+                );
+                seen[k] = true;
+            }
+            assert!(seen[0] && seen[1]);
+        }
+    }
+}
+
 /// `M` of Taminiau et al. (PRL 109, 137602 (2012), supplement eqs. 11–13):
 /// nuclear Hamiltonians `ω_L I_z` (m_s = 0) and `(A + ω_L) I_z + B I_x`
 /// (m_s = −1), N π pulses spaced 2τ.
