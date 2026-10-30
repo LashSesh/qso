@@ -54,6 +54,20 @@ All notable changes to this project are documented here. The format follows
     comparison as a reference.
   - Divergent expansions (|L| > 1 or not finite) are refused.
 
+- **The optical cycle of an NV centre and magnetometer sensitivity**
+  (1.40, `spin::optics`, `spin.OpticalNv`):
+  - The seven-level model of Tetienne et al. in a field of any direction
+    as a Lindblad equation, with a microwave, dephasing and spin-lattice
+    relaxation.
+  - Steady states, polarisation and fluorescence; CW-ODMR spectra with
+    contrast, width and shot-noise sensitivity; pulsed readout from the
+    laser-polarised state with the best counting window.
+  - Ramsey and echo sensitivities from a readout and a coherence (the ¹³C
+    bath of 1.39, for example).
+  - Dréau's reduced model (`TwoLevelOdmr`).
+  - Levels and lines in any field; the lines of the four orientations of
+    an ensemble and the field vector from them.
+
 ## [1.8.0] — 2026-10-30
 
 Milestones 1.29 to 1.37 of the [roadmap](docs/ROADMAP.md), its seventh

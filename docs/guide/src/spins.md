@@ -504,6 +504,88 @@ for events in (spin.ramsey(1e-6), spin.hahn(1e-6), spin.cpmg(8, 0.125e-6)):
   one core) are refused before they start; `lines` and `decay_exponent`
   cost little at any size (0.03 s for dimension 768).
 
+### The optical cycle and sensitivity
+
+What a magnetometer measures is fluorescence. `spin.OpticalNv(field)` is
+the seven-level model of Tetienne et al. (New J. Phys. 14, 103033
+(2012)) in a field of any direction (T, frame of the centre): the ground
+and excited triplets (`D` = 2.87 and 1.42 GHz) and one metastable
+singlet. Its default rates are the means of their four centres: `k_r` =
+65.9, `k₄₇` = 7.9, `k₅₇` = 53.3, `k₇₁` = 1.0, `k₇₂` = 0.7 μs⁻¹.
+
+- **The model.** Excitation at `pump` (1/s) and radiative decay conserve
+  `m_s` along the axis. The excited `±1` cross to the singlet seven times
+  faster than `0`, and the singlet returns preferentially to `0`. In a
+  field the rates between eigenstates are
+  `Σ |⟨i|p⟩|² |⟨j|q⟩|² k⁰_pq`.
+- **A Lindblad equation.** The model is solved as a Lindblad equation on
+  the seven levels. It includes a microwave of `frequency` and `rabi` in
+  the ground state (rotating-wave approximation in the ground eigenbasis,
+  frequencies signed as in `lines`), dephasing `Γ₂*` and spin-lattice
+  relaxation `Γ₁`. The signal is `collection · k_r` times the excited
+  population (1 % detected by default).
+- **Polarisation.** `polarisation(pump)` is the ground population of `0`
+  the laser leaves. With these rates it is 0.749 for a weak laser, the
+  closed form of the rate equations, and falls to 0.48 at three times
+  `k_r` as more population waits in the excited and singlet levels.
+- **CW-ODMR.** `cw_odmr` gives the photon rate at each frequency.
+  `cw_line(centre, span, rabi, pump)` gives the line's contrast, full
+  width, steepest slope and the shot-noise sensitivity
+  `√R/(γ_e max|∂I/∂ν|)`, with `R` the off-resonance rate as in Dréau et
+  al. (Phys. Rev. B 84, 195204 (2011)). The width is NaN when the span
+  does not hold both half-depth points.
+- **Pulsed readout.** `pulsed_readout(pump, duration)` starts from the
+  state the laser leaves, as it is (`bright`) and after an ideal π pulse
+  (`dark`). It returns the fluorescence of both, the counting window that
+  best tells them apart and the readout contrast `C = [1 + 2(N₀ +
+  N₁)/(N₀ − N₁)²]^{−1/2}` of Taylor et al. (Nature Phys. 4, 810
+  (2008)).
+- **Ramsey and echo.** `ramsey_sensitivity`, `echo_sensitivity` and
+  `best_sensitivity` combine `C` with a coherence, for example the Hahn
+  echo of a `SpinBath`. For an AC field of the echo's period in its best
+  phase, the echo is `π/2` times the Ramsey expression `√(τ + t_o)/(2π
+  γ_e τ C |L|)`.
+- **Ensembles.** `spin.ensemble_lines(field)` gives the eight lines of
+  the four orientations for a field in the cubic frame.
+  `spin.field_from_lines(lines)` gives the field back, up to its sign.
+  `axial_and_transverse` inverts one orientation exactly: the levels are
+  the roots of `λ³ − 2Dλ² + (D² − γ²B²)λ + Dγ²B_⊥² = 0`.
+- **`TwoLevelOdmr`** is Dréau's reduced model, with its closed forms.
+
+```python
+from metatron_qso import spin
+
+nv = spin.OpticalNv((0, 0, 0.005))
+f, _ = nv.lines()[0]                                      # m_s = −1 line
+line = nv.cw_line(f, 10e6, 0.2e6, 0.02 * 65.9e6)
+print(round(line["contrast"], 3), round(line["sensitivity"] * 1e6, 2))
+# 0.143 1.9: 1.9 μT/√Hz at 9.5 kcounts/s, as Dréau et al. (about 2)
+readout = nv.pulsed_readout(65.9e6, 2e-6, 2000)
+print(round(readout["window"] * 1e9), round(readout["readout_contrast"], 4))
+# 446 0.0279: a 30 % brighter m_s = 0 over the first few hundred ns
+
+field = (0.004, -0.002, 0.003)
+back = spin.field_from_lines(spin.ensemble_lines(field))
+assert max(abs(a - b) for a, b in zip(back, field)) < 1e-11
+```
+
+The best CW sensitivity comes at a weak laser and a weak microwave. With
+1 % collection, 1.9 μT/√Hz at 0.02 `k_r` and 0.2 MHz, 3.2 μT/√Hz at 0.1
+`k_r`, and much worse near saturation, where the width grows faster than
+the photon rate. Dréau et al. find about 2 μT/√Hz. Pulsed readout from the
+laser-polarised state is about 30 % brighter for `m_s = 0` at its peak;
+the best window is 920 ns at 0.2 `k_r` and 446 ns at `k_r`, with `C` ≈
+0.028.
+
+A field across the axis mixes the states, and the fluorescence and the
+contrast fall: at 5 mT along the axis the contrast is 0.17 without a
+transverse field, 0.068 with 10 mT across it and 0.003 with 30 mT. That
+is the contrast Tetienne et al. image with.
+
+A single centre in natural diamond at 50 mT combines the Hahn echo of its
+¹³C bath with this readout, 1 μs of initialisation and the 446 ns window.
+Its best AC sensitivity is 17 nT/√Hz, at a total echo time of 0.49 ms.
+
 ### The nuclear-spin bath
 
 In natural diamond an NV centre loses its coherence to the ¹³C around it
