@@ -812,7 +812,7 @@ impl SpinSystem {
             "relaxation",
             format!(
                 "{what} over {t} s with relaxation at dimension {} needs about {work:.1e} operations \
-                 (limit {:.0e}); use the rotating frame, fewer spins, shorter times or no relaxation",
+                 (limit {:.1e}); use the rotating frame, fewer spins, shorter times or no relaxation",
                 self.dimension(),
                 super::MAX_RELAXATION_WORK
             ),

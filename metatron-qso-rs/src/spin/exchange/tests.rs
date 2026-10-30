@@ -319,6 +319,91 @@ fn sabre_polarises_the_free_substrate_at_the_level_anti_crossing() {
 }
 
 #[test]
+fn steady_states_hold_in_the_laboratory_frame_at_high_field() {
+    // Zero-quantum frequencies of the laboratory frame exceed the rates by
+    // 10⁸ and more; the steady state must not depend on that scale. Two
+    // sites exchanging both spins relax to the thermal state.
+    for b in [0.1, 1.0, 9.4] {
+        for frame in [Frame::Laboratory, Frame::Rotating] {
+            let mut s = SpinSystem::new(b).with_frame(frame);
+            s.add_spin(Isotope::H1, 1.0).unwrap();
+            s.add_spin(Isotope::C13, 30.0).unwrap();
+            s.couple(0, 1, 140.0).unwrap();
+            s.set_relaxation(0, Some(2.0), None).unwrap();
+            s.set_relaxation(1, Some(5.0), None).unwrap();
+            let thermal = s.thermal_state().unwrap();
+            let mut x = Exchange::new();
+            x.add_site(s.clone(), 1.0).unwrap();
+            x.add_site(s.clone(), 3.0).unwrap();
+            for (from, to, rate) in [(0, 1, 3.0), (1, 0, 1.0)] {
+                x.add_channel(Channel {
+                    from,
+                    to,
+                    rate,
+                    carried: vec![(0, 0), (1, 1)],
+                    fresh: Fresh::Thermal,
+                })
+                .unwrap();
+            }
+            let steady = x.steady_state().unwrap();
+            for site in 0..2 {
+                for spin in 0..2 {
+                    let p = x.polarization(&steady, site, spin).unwrap();
+                    let want = s.polarization(&thermal, spin).unwrap();
+                    assert!(
+                        (p / want - 1.0).abs() < 1e-6,
+                        "{b} {frame:?}: {p} vs {want}"
+                    );
+                }
+            }
+        }
+    }
+    // SABRE at 9.4 T: the laboratory frame's steady state is the rotating
+    // frame's and stays.
+    let lab = sabre(9.4, 2.0, 0.5);
+    let steady = lab.steady_state().unwrap();
+    let p = lab.polarization(&steady, 1, 0).unwrap();
+    let mut rot = lab.clone();
+    for site in &mut rot.sites {
+        site.system = site.system.clone().with_frame(Frame::Rotating);
+    }
+    let want = rot
+        .polarization(&rot.steady_state().unwrap(), 1, 0)
+        .unwrap();
+    assert!((p / want - 1.0).abs() < 1e-6, "{p} vs {want}");
+    let later = lab.evolve(&steady, &[Event::Delay(1.0)]).unwrap();
+    let q = lab.polarization(&later, 1, 0).unwrap();
+    assert!((q / p - 1.0).abs() < 1e-6, "{q} vs {p}");
+    // Without relaxation of the free substrate nothing is unique.
+    let mut none = sabre(9.4, 2.0, 0.5);
+    none.sites[1].system.set_relaxation(0, None, None).unwrap();
+    assert!(none.steady_state().is_err());
+}
+
+#[test]
+fn long_sweeps_are_refused_before_they_start() {
+    // Four relaxing protons in the laboratory frame: a block of 70
+    // elements per step, so a million steps are far too many.
+    let mut s = SpinSystem::new(1e-6).with_frame(Frame::Laboratory);
+    for k in 0..4 {
+        s.add_spin(Isotope::H1, k as f64).unwrap();
+        s.set_relaxation(k, Some(2.0), None).unwrap();
+    }
+    s.couple(0, 1, 7.0).unwrap();
+    let mut x = Exchange::new();
+    x.add_site(s, 1.0).unwrap();
+    let start = x.thermal_state().unwrap();
+    let sweep = |steps| Event::Sweep {
+        to: 1e-3,
+        duration: 10.0,
+        steps,
+    };
+    let err = x.evolve(&start, &[sweep(1 << 20)]).unwrap_err();
+    assert!(err.to_string().contains("operations"), "{err}");
+    assert!(x.evolve(&start, &[sweep(100)]).is_ok());
+}
+
+#[test]
 fn exchange_input_is_checked() {
     let mut x = two_sites(1.0, 2.0, 0.5, 0.5, 10.0, None);
     // Unbalanced: site 0 loses more than it gains.

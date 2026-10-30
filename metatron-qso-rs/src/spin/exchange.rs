@@ -17,7 +17,8 @@
 //! ensemble average of molecules that change site at random, exponentially
 //! distributed times. Concentrations must be a chemical steady state (every
 //! site gains as many molecules per second as it loses), so bimolecular
-//! steps enter with pseudo-first-order rates.
+//! steps enter with pseudo-first-order rates, and only the source of a
+//! channel keeps its spins' state: a partner's arrive fresh.
 //!
 //! The equations are linear and keep every isotope's coherence order (or
 //! the total one in the laboratory frame), as carried spins keep theirs,
@@ -28,13 +29,18 @@
 
 use std::collections::BTreeMap;
 
+use nalgebra::DVector;
 use num_complex::Complex64 as C64;
 use serde::{Deserialize, Serialize};
 
 use super::blocks::{Liouville, LiouvilleBlock, Sparse};
-use super::{Event, Frame, Isotope, SpinSystem, Target, ZERO, check_field, check_time};
+use super::{Event, Frame, Isotope, ONE, SpinSystem, Target, ZERO, check_field, check_time};
 use crate::error::{QsoError, Result};
 use crate::linalg::CMatrix;
+
+/// Smallest pivot, relative to the largest, of the scaled steady-state
+/// equations that counts as nonzero.
+const SINGULAR: f64 = 1e-12;
 
 /// A chemical site: a spin system and its concentration (any unit, the
 /// same for all sites).
@@ -631,15 +637,7 @@ impl Exchange {
         }
         let (joint, blocks) = self.generators(b, t, None)?;
         let work: f64 = blocks.iter().map(LiouvilleBlock::work).sum();
-        if work > super::MAX_RELAXATION_WORK {
-            return Err(QsoError::invalid(
-                "exchange",
-                format!(
-                    "exchange over {t} s needs about {work:.1e} operations (limit {:.0e})",
-                    super::MAX_RELAXATION_WORK
-                ),
-            ));
-        }
+        check_work(&format!("exchange over {t} s"), work)?;
         let mut out: Vec<CMatrix> = deviations
             .iter()
             .map(|x| CMatrix::zeros(x.nrows(), x.ncols()))
@@ -677,7 +675,8 @@ impl Exchange {
                     let Target::Isotope(isotope) = target else {
                         return Err(QsoError::invalid(
                             "pulse",
-                            "pulses in an exchange act on an isotope of every site",
+                            "a pulse in an exchange acts on an isotope (its spins in every \
+                             site), not on single spins",
                         ));
                     };
                     let mut any = false;
@@ -719,9 +718,15 @@ impl Exchange {
                     }
                     let from = b;
                     let dt = duration / *steps as f64;
+                    let at = |k: usize| from + (to - from) * (k as f64 + 0.5) / *steps as f64;
+                    // Every step is as costly as the one at the strongest
+                    // field, or less.
+                    let strongest = if to.abs() > from.abs() { *steps - 1 } else { 0 };
+                    let (_, blocks) = self.generators(at(strongest), dt, None)?;
+                    let work: f64 = blocks.iter().map(LiouvilleBlock::work).sum();
+                    check_work(&format!("a sweep of {steps} steps"), work * *steps as f64)?;
                     for k in 0..*steps {
-                        let bk = from + (to - from) * (k as f64 + 0.5) / *steps as f64;
-                        x = self.delay(&x, dt, bk)?;
+                        x = self.delay(&x, dt, at(k))?;
                     }
                     b = *to;
                 }
@@ -752,50 +757,101 @@ impl Exchange {
             .iter()
             .map(|s| CMatrix::zeros(s.system.dimension(), s.system.dimension()))
             .collect();
+        let refuse = || {
+            QsoError::invalid(
+                "steady state",
+                "no unique steady state: some populations neither exchange nor relax",
+            )
+        };
         for ((_, parts, n), block) in joint.blocks.iter().zip(&blocks) {
             let n = *n;
-            // G x = −drift, with Tr Δ_s = 0 for every site: the amounts of
-            // the sites are conserved by the chemistry, so G alone is
-            // singular.
-            let sites = self.sites.len();
-            let mut a = CMatrix::zeros(n + sites, n);
-            a.view_mut((0, 0), (n, n))
-                .copy_from(&block.generator.view((0, 0), (n, n)));
-            let mut rhs = CMatrix::zeros(n + sites, 1);
-            for i in 0..n {
-                rhs[(i, 0)] = -block.generator[(i, n)];
-            }
+            let g = block.generator.view((0, 0), (n, n));
+            let want = DVector::from_iterator(n, (0..n).map(|i| -block.generator[(i, n)]));
+            // G x = −drift is singular, as the chemistry conserves the
+            // amounts of the sites. The populations of a site sum to a
+            // combination of the sites' traces, so one of its equations
+            // is replaced by Tr Δ_s = 0 without losing any.
+            let mut diagonal: Vec<Vec<usize>> = vec![Vec::new(); self.sites.len()];
             let mut i = 0;
             for &(s, k, _) in parts {
                 for &(r, c) in &joint.liouvilles[s].blocks[k].1 {
                     if r == c {
-                        a[(n + s, i)] = C64::new(1.0, 0.0);
+                        diagonal[s].push(i);
                     }
                     i += 1;
                 }
             }
-            let scale = a.iter().fold(0.0f64, |m, z| m.max(z.norm()));
-            let svd = a.clone().svd(true, true);
-            let tol = 1e-12 * scale * (n as f64);
-            let unique = svd.rank(tol) == n;
-            let x = svd
-                .solve(&rhs, tol)
-                .map_err(|e| QsoError::invalid("steady state", e))?;
-            let residual = (&a * &x - &rhs).iter().fold(0.0f64, |m, z| m.max(z.norm()));
-            let size = rhs.iter().fold(0.0f64, |m, z| m.max(z.norm()));
-            if !unique || residual > 1e-8 * size.max(f64::MIN_POSITIVE) {
-                return Err(QsoError::invalid(
-                    "steady state",
-                    "no unique steady state: some populations neither exchange nor relax",
-                ));
+            let mut a = g.into_owned();
+            let mut rhs = want.clone();
+            for rows in &diagonal {
+                if let Some(&first) = rows.first() {
+                    a.row_mut(first).fill(ZERO);
+                    for &j in rows {
+                        a[(first, j)] = ONE;
+                    }
+                    rhs[first] = ZERO;
+                }
+            }
+            // Rows and then columns scaled to 1: laboratory-frame
+            // frequencies exceed the rates by ten orders of magnitude.
+            for i in 0..n {
+                let m = a.row(i).iter().fold(0.0f64, |m, z| m.max(z.norm()));
+                if m == 0.0 {
+                    return Err(refuse());
+                }
+                a.row_mut(i).scale_mut(1.0 / m);
+                rhs[i] /= m;
+            }
+            let columns: Vec<f64> = (0..n)
+                .map(|j| a.column(j).iter().fold(0.0f64, |m, z| m.max(z.norm())))
+                .collect();
+            for (j, &m) in columns.iter().enumerate() {
+                if m == 0.0 {
+                    return Err(refuse());
+                }
+                a.column_mut(j).scale_mut(1.0 / m);
+            }
+            let lu = a.full_piv_lu();
+            let pivots: Vec<f64> = lu.u().diagonal().iter().map(|z| z.norm()).collect();
+            let largest = pivots.iter().fold(0.0f64, |m, &p| m.max(p));
+            let smallest = pivots.iter().fold(f64::INFINITY, |m, &p| m.min(p));
+            if smallest.is_nan() || smallest <= SINGULAR * largest {
+                return Err(refuse());
+            }
+            let mut x = lu.solve(&rhs).ok_or_else(refuse)?;
+            for (v, &m) in x.iter_mut().zip(&columns) {
+                *v /= m;
+            }
+            // The equations replaced hold too (the chemistry balances to
+            // 10⁻⁹ of its rates), relative to the generator applied to
+            // the whole state, deviation and `c_s/d_s`: the drift is the
+            // small difference of such terms.
+            let max_norm = |v: &DVector<C64>| v.iter().fold(0.0f64, |m, z| m.max(z.norm()));
+            let residual = max_norm(&(g * &x - &want));
+            let norm = g
+                .row_iter()
+                .map(|r| r.iter().map(|z| z.norm()).sum::<f64>())
+                .fold(0.0, f64::max);
+            let level = self
+                .sites
+                .iter()
+                .map(|s| s.concentration / s.system.dimension() as f64)
+                .fold(0.0, f64::max);
+            let scale = norm * (max_norm(&x) + level) + max_norm(&want);
+            if residual.is_nan() || residual > 1e-8 * scale {
+                return Err(refuse());
             }
             let mut i = 0;
             for &(s, k, _) in parts {
                 for &(a2, b2) in &joint.liouvilles[s].blocks[k].1 {
-                    out[s][(a2, b2)] = x[(i, 0)];
+                    out[s][(a2, b2)] = x[i];
                     i += 1;
                 }
             }
+        }
+        // Hermitian up to rounding.
+        for x in &mut out {
+            *x = (&*x + x.adjoint()) * C64::new(0.5, 0.0);
         }
         Ok(self.states(out))
     }
@@ -837,6 +893,11 @@ impl Exchange {
             ));
         }
         let (joint, blocks) = self.generators(self.field(), dwell, Some(&order))?;
+        let work: f64 = blocks
+            .iter()
+            .map(|block| block.work() + 8.0 * (points * block.generator.len()) as f64)
+            .sum();
+        check_work(&format!("an exchange FID of {points} points"), work)?;
         let x = self.deviations(states);
         let mut out = vec![ZERO; points];
         for ((_, parts, n), block) in joint.blocks.iter().zip(&blocks) {
@@ -869,6 +930,21 @@ impl Exchange {
         }
         Ok(out)
     }
+}
+
+/// Refuse `what` above the work limit.
+fn check_work(what: &str, work: f64) -> Result<()> {
+    if work > super::MAX_RELAXATION_WORK {
+        return Err(QsoError::invalid(
+            "exchange",
+            format!(
+                "{what} needs about {work:.1e} operations (limit {:.1e}); use fewer spins, \
+                 fewer steps or the rotating frame",
+                super::MAX_RELAXATION_WORK
+            ),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

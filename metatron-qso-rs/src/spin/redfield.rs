@@ -346,7 +346,7 @@ impl SpinSystem {
                 "redfield",
                 format!(
                     "the Redfield superoperator at dimension {} needs about {work:.1e} \
-                     operations to build (limit {:.0e})",
+                     operations to build (limit {:.1e})",
                     self.dimension(),
                     super::MAX_RELAXATION_WORK
                 ),

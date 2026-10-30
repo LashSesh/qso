@@ -2279,7 +2279,7 @@ class Exchange:
         rate: float,
         carried: Sequence[Tuple[int, int]] = ...,
         parahydrogen: Optional[Tuple[int, int]] = None,
-        fraction: float = 1.0,
+        fraction: Optional[float] = None,
     ) -> None: ...
     def validate(self) -> None: ...
     @property

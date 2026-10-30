@@ -14,8 +14,8 @@ finished milestones are released together, not one by one. The third
 (1.14 to 1.17), fourth (1.18 to 1.21), fifth (1.22 to 1.25) and sixth
 (1.26 to 1.28) stages ship together as release 1.7.0. The seventh stage
 (1.29 to 1.33) is delivered (section 4g); of the eighth (1.34 to 1.37),
-magnetic resonance for medical research, in section 4h, 1.34 is
-delivered. Up to 1.3
+magnetic resonance for medical research, in section 4h, 1.34 and 1.35
+are delivered. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -53,7 +53,7 @@ which withdraws the results of version 1.
 | Boson sampling | exact probabilities and exact sampling (1.1); partial distinguishability, loss and Gaussian boson sampling with hafnians and torontonians (1.14) | mixed Gaussian states with many photons spread over many modes are impractical (10¹² operations at 20 photons in 10 modes) |
 | Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | noise learning for layers of two-qubit Clifford gates only, on density matrices up to 10 qubits and Pauli frames up to 64 (1.12, 1.31), with non-Pauli channels twirled one at a time; mitigation with the learned model above 24 qubits only on matrix-product states, for channels that are mixtures of unitaries (1.31); no leakage; channels on at most four qubits, slow noise as quasi-static and telegraph processes only, and on trajectories only (1.30); virtual distillation (1.17) mitigates only its measured copies' preparation |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18) | time-dependent Hamiltonians and decoherent coined walks without symmetry reduction; pretty good transfer on other graphs |
-| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the nested-commutator bound of product formulas (1.32) is tight for small Hamiltonians only, its tail ignoring which terms commute; spin relaxation, phenomenological (T₁ and T₂) or from dipolar couplings and shielding anisotropy by Redfield theory for isotropic tumbling (1.34), is exact up to about six relaxing spins of one isotope; larger relaxing systems run for short times only (Redfield not at all), and propagations estimated above a minute are refused |
+| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the nested-commutator bound of product formulas (1.32) is tight for small Hamiltonians only, its tail ignoring which terms commute; spin relaxation, phenomenological (T₁ and T₂) or from dipolar couplings and shielding anisotropy by Redfield theory for isotropic tumbling (1.34), is exact up to about six relaxing spins of one isotope; larger relaxing systems run for short times only (Redfield not at all), and propagations estimated above a minute are refused; chemical exchange needs steady chemistry (no irreversible hydrogenation) and one block of at most 2048 elements over all sites |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
 | Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22) | circuit distances of hypergraph models are bounds, not always exact |
 | Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9), in the browser build too (1.25) | — |
@@ -2341,7 +2341,7 @@ Left as is: the laboratory frame loses about `ε·Δω·t` over long delays
 (3·10⁻⁵ after 1000 s at 9.4 T); each step of a field sweep rebuilds the
 superoperator; Python accepts `True` as a number, as Python does.
 
-### 1.35 — Hyperpolarisation in realistic models (M–L)
+### 1.35 — Hyperpolarisation in realistic models (M–L, delivered)
 
 Use case: the chemistry and storage of hyperpolarisation. In SABRE,
 substrate and parahydrogen bind and leave the catalyst all the time;
@@ -2365,6 +2365,124 @@ their fields. The field-cycling transfer of a three-spin PHIP system
 matches its closed form. M2S and S2M reach the conversion efficiencies
 of Pileio et al. The singlet lifetime of a near-equivalent pair exceeds
 T₁ by the factor Redfield theory predicts.
+
+Delivered in `spin/exchange.rs`: chemical sites (spin systems with
+concentrations) and first-order channels that carry chosen spins with
+their state, trace out the source's others and bring the target's others
+in thermal or as parahydrogen (with a singlet fraction); the
+Bloch–McConnell equations in Liouville space, propagated exactly block by
+block of coherence order over all sites, with each site's `T₁`, `T₂` and
+Redfield relaxation; pulses on isotopes, delays, field jumps and sweeps,
+steady states and FIDs (`spin.Exchange` in Python). For storage and
+transfer, `m2s`, `s2m` and `spin_lock`, and field cycling with the sweeps
+of 1.33; tutorial 09 shows SABRE with exchange and field cycling. Changes
+to the plan:
+
+- **No published SABRE simulations reproduced.** Lindale et al. and
+  Pravdivtsev et al. do not give every coupling and rate constant their
+  figures need. Instead a Monte Carlo of exchange events (written with
+  NumPy alone) and the position of the level anti-crossing test the
+  exchange, and an independent dense implementation of the equations
+  tests the bookkeeping. Lindale et al. sample event times uniformly and
+  argue that ensemble-averaged equations fail in their regime; QSO's
+  equations are exact for exponentially distributed events.
+- **Not implemented:** PH-INEPT and its relatives as named sequences
+  (they can be written from pulses and delays), the irreversible
+  chemistry of PHIP-SAH (exchange needs steady amounts; the hydrogenated
+  product is simulated as a spin system), helpers for
+  temperature-dependent rates (rates are inputs), field cycling for
+  singlet storage (shown with spin locks only).
+- **References.** The field-cycling transfer is compared with
+  sudden-adiabatic theory evaluated numerically, not a closed form; the
+  singlet lifetime under a spin lock with the Redfield rate of `I₁·I₂`
+  from 1.34 (validated against QuTiP there), not an independent theory.
+
+Measured:
+
+- **Bloch–McConnell.** One proton exchanging between two sites gives the
+  closed-form FID to 10⁻¹⁰ and coalescence at `πΔν/√2` (two maxima at
+  0.85 times that rate, one at 1.15). Renewal at rate `k` relaxes as
+  `e^{−kt}`, slow renewal with parahydrogen tends to the time average
+  of 1.33.
+- **Dense reference.** An independent NumPy implementation of the
+  homogeneous equations (partial traces by `einsum`, spin orders by axis
+  permutations) agrees for three systems — three sites with different
+  isotopes and channels that reorder spins, parahydrogen on spins that
+  are not neighbours between carried ones, ²H in the laboratory frame —
+  with delays, sweeps, FIDs and pulses on some of the sites to 10⁻¹⁰ and
+  with steady states (rotating frame) to 10⁻⁹.
+  SABRE's steady state in the laboratory frame from 1 mT to 9.4 T agrees
+  with a 40-digit solution to 3·10⁻¹⁵.
+- **Monte Carlo.** 4000 SABRE complexes with exponentially distributed
+  hydrogen and ligand exchange agree with `Exchange` within their
+  statistical error (z = 1.15, 0.27, −0.73).
+- **SABRE.** The free ¹⁵N is polarised most within 3 % of the level
+  anti-crossing (0.139 μT): 0.739 at `k_d = 2/s`, 0.832 at 10/s, 0.551
+  at 40/s with the maximum moved to 0.172 μT; the build-up rises
+  monotonically and reaches the steady state to 10⁻⁶ after 400 s.
+- **Singlet order.** M2S and S2M return 99.5, 97.2 and 99.9 % of the
+  2/3 bound for three near-equivalent pairs (inverted magnetisation).
+  Under a 1 kHz spin lock the singlet order of a near-equivalent proton
+  pair with a third proton decays at its Redfield rate to 4·10⁻⁴, a
+  lifetime 17.5 times its magnetisation's; without the lock 0.515
+  instead of 0.607 is left after half that lifetime.
+- **Field cycling.** Parahydrogen order carried from zero field to
+  50 μT puts −0.8127 polarisation on the ¹³C of an AA'X system, against
+  −0.8128 from sudden-adiabatic theory; a sudden jump transfers none.
+- **Cost.** For a SABRE complex of six spins with a free substrate of
+  four in the laboratory frame (one block of 994 elements), the steady
+  state takes 1.1 s and a one-second delay 16 s; a sweep of 20 steps is
+  refused before it starts (7·10¹² operations).
+
+An independent review rederived the model, wrote its own dense
+Liouville-space implementation and compared four systems (with
+permuting and self channels, channels at rate 0, parahydrogen pairs
+reversed and interleaved, ²H, the laboratory frame and relaxation):
+delays to 2·10⁻¹³, steady states and FIDs to rounding, sweeps to
+2·10⁻¹². Redfield sites inside an exchange match single systems, the
+M2S/S2M sequences match Pileio et al., and no levels of one total `M`
+cross up to 50 μT, so the sudden-adiabatic mapping holds. It found:
+
+- **Steady states refused.** The residual test was not scale-invariant:
+  in the laboratory frame at 1 T and 9.4 T, where zero-quantum
+  frequencies exceed the rates by 10⁸, valid and well-posed systems
+  (smallest singular value 0.22) were refused, among them SABRE at 1 T.
+  Now one population equation per site is replaced by its amount, rows
+  and columns are scaled, and a fully pivoted LU solves the square
+  system; singular systems show pivot ratios of 10⁻¹⁸, a `T₁` of 10⁶ s
+  3·10⁻⁹ (threshold 10⁻¹²). It agrees with 40 digits and is eight times
+  faster than the SVD before.
+- **Cost.** Sweeps had no total limit (20 steps of the system above took
+  255 s, Python's default of 1000 about 3.5 hours) and FIDs no check;
+  both are now estimated before they start.
+- **Tests.** No test exercised the parts of the index mapping where
+  errors hide (strides, reordered and interleaved spins, parahydrogen on
+  distant spins, isotopes of only some sites, spin 1, sweeps, pulses on
+  some sites): the dense reference now does, and fails if the target's
+  strides are replaced by the source's. Nothing tested steady states in
+  the laboratory frame at high field (now from 0.1 to 9.4 T). The M2S
+  test took the absolute value; S2M returns the magnetisation inverted,
+  now asserted and documented. The spin-lock ratio was asserted only to
+  exceed 3.
+- **Docs.** "Without the lock, 15 % faster" meant 15 % less singlet
+  order left; the guide claimed `Exchange` computes what Lindale et al.
+  sample; "exchange keeps thermal states thermal" holds for equal shifts
+  only; the README called numerical references closed forms; the
+  tutorial's exchange times and fields were wrong. Missing caveats are
+  now stated: steady chemistry, one source per channel (a partner's spins
+  arrive fresh), fresh states as products of single-spin populations, the
+  size limit, no shaped pulses during exchange, free-precession
+  relaxation during a spin lock, the cost of sweeps and the precision
+  next to parahydrogen order (10⁻¹⁵ absolute).
+- **Python.** A singlet `fraction` without `parahydrogen` was ignored; it
+  is an error now.
+
+Left as is: the steady-chemistry requirement (irreversible chemistry
+would make the amounts dynamic variables) and one source per channel;
+every sweep step rebuilds the whole generator; long delays in the
+laboratory frame lose `ε·ω·t` (10⁻⁹ after 600 s at 1 T); the Monte
+Carlo test resolves errors above about 4 %, the dense reference the
+rest.
 
 ### 1.36 — Optimal control of spin experiments (M)
 

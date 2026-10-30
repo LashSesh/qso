@@ -195,9 +195,35 @@ isotope's coherence order, and are propagated exactly over all sites;
 `steady_state` solves for the stationary state (an error when it is not
 unique, as without relaxation), and `fid` sums the sites weighted by
 concentration. Each site relaxes by its own `T₁`, `T₂` and Redfield
-relaxation. This is the average over molecules that change site at random,
-exponentially distributed times, which is what Monte Carlo simulations of
-SABRE (Lindale et al., Nat. Commun. 10, 395 (2019)) sample.
+relaxation. This is exact for the average over molecules that change site
+at independent, exponentially distributed times (Poisson events), as a
+Monte Carlo of such events in the tests confirms. Lindale et al. (Nat.
+Commun. 10, 395 (2019)) simulate SABRE by sampling a fixed number of
+dissociation events uniformly in time and argue that ensemble-averaged
+equations fail in their regime; QSO has not been compared with their
+simulations.
+
+What the model leaves out:
+
+- **Irreversible chemistry.** The amounts of the sites must be steady, so
+  a hydrogenation that consumes its substrate (PHIP, PHIP-SAH) is not a
+  channel; simulate the product as a `SpinSystem` from the moment it
+  forms, or as a site that is formed and removed at the same rate.
+- **Partners.** A channel has one source: in a bimolecular step only the
+  spins of that source keep their state, the partner's arrive fresh (a
+  mean-field picture of the partner).
+- **Fresh spins** arrive thermal as a product of single-spin Boltzmann
+  populations, or as the parahydrogen singlet.
+- **Events.** Pulses act on an isotope in every site; there are no
+  selective or shaped pulses or spin locks during exchange.
+- **Size and cost.** One block of coherence order over all sites holds at
+  most 2048 elements (about six plus four spins ½ in the laboratory
+  frame); every step of a sweep rebuilds and exponentiates all blocks,
+  and sweeps beyond the work limit are refused before they start.
+- **Precision.** Next to parahydrogen order of 1, thermal polarisation
+  (10⁻¹⁰ at a millitesla) is resolved to about 10⁻¹⁵ by `steady_state`
+  (checked against a 40-digit solution); long delays in the laboratory
+  frame lose about `ε·ω·t`, 10⁻⁹ after 600 s at 1 T.
 
 ## Long-lived states and transfer
 
@@ -207,11 +233,14 @@ SABRE (Lindale et al., Nat. Commun. 10, 395 (2019)) sample.
   `90°(−y) − [τ − 180° − τ]^{n₁} − 90°x − τ − [τ − 180° − τ]^{n₂}` with
   `τ = 1/(4J)`, `n₁ = round(π/(2 arctan(Δν/J)))`, `n₂ = ⌊n₁/2⌋`, and S2M in
   reverse order. Stored as singlet order, at most 2/3 of the magnetisation
-  comes back (at high temperature).
+  comes back (at high temperature), inverted: S2M after M2S gives about
+  −2/3 of the initial `I_z`.
 - **Spin locks.** `spin.spin_lock(isotope, ν₁, duration)` irradiates
   continuously; with `ν₁ ≫ Δν` the singlet stays an eigenstate, and its
   order lives for the Redfield lifetime `T_S` of `I₁·I₂` instead of mixing
-  with the triplets.
+  with the triplets. Relaxation during the lock is that of free
+  precession (the Redfield superoperator is not transformed into the
+  frame of the lock).
 - **Field cycling.** Parahydrogen order moves to a heteronucleus when the
   field is raised adiabatically from near zero (`spin.set_field` and
   `spin.sweep`): through the ultra-low fields where the levels come within
@@ -314,21 +343,34 @@ for b in (2e-3, 5.7e-3, 9e-3):
   between two sites follows the closed-form Bloch–McConnell equations to
   10⁻¹⁰ (equal and unequal populations, with and without `T₂`), and the
   lines coalesce at `k = πΔν/√2` (two maxima at 0.85 times that rate, one
-  at 1.15). Exchange keeps thermal states thermal; renewal at rate `k`
-  relaxes like `e^{−kt}`; slow renewal with parahydrogen tends to the time
-  average of 1.33. A SABRE complex agrees with a Monte Carlo of random
-  exchange events (written with NumPy alone, 4000 molecules) within its
-  statistical error, and the free ¹⁵N substrate is polarised most within
-  3 % of the level anti-crossing.
+  at 1.15). Exchange between sites of equal shifts keeps thermal states
+  thermal; renewal at rate `k` relaxes like `e^{−kt}`; slow renewal with
+  parahydrogen tends to the time average of 1.33. A SABRE complex agrees
+  with a Monte Carlo of exponentially distributed exchange events
+  (written with NumPy alone, 4000 molecules) within its statistical error
+  (about 1 % of the values), and the free ¹⁵N substrate is polarised most
+  within 3 % of the level anti-crossing.
+- **Exchange against a dense reference.** An independent NumPy
+  implementation of the homogeneous equations (partial traces by
+  `einsum`, spin orders by axis permutations) agrees with delays, sweeps,
+  FIDs and pulses on an isotope that not every site has to 10⁻¹⁰ and with
+  steady states (rotating frame) to 10⁻⁹, for three sites with different
+  isotopes, channels that reorder spins or swap protons within a site,
+  parahydrogen on spins that are not neighbours, ²H, and the laboratory
+  frame. SABRE's steady state in the laboratory frame from
+  1 mT to 9.4 T agrees with a 40-digit solution to 10⁻¹⁴.
 - **Transfer and storage.** M2S followed by S2M through stored singlet
-  order returns 97–99.9 % of the 2/3 bound for three pairs, among them
-  Pileio's ¹⁵N₂O. Parahydrogen order carried adiabatically from zero
-  field puts −0.8127 polarisation on ¹³C in an AA'X system, against
-  −0.8128 from sudden-adiabatic theory (the zero-field eigenstates'
-  populations go to the eigenstates of the same rank and total M); a
-  sudden jump transfers none. Under a 1 kHz spin lock the singlet order of
-  a near-equivalent pair decays at its Redfield rate to 4·10⁻⁴, 17.5
-  times slower than its magnetisation; without the lock, 15 % faster.
+  order returns 97–99.9 % of the 2/3 bound (inverted) for three pairs,
+  among them the J and Δν of Pileio's ¹⁵N₂O. Parahydrogen order carried
+  adiabatically from zero field puts −0.8127 polarisation on ¹³C in an
+  AA'X system, against −0.8128 from sudden-adiabatic theory (the
+  zero-field eigenstates' populations, computed numerically, go to the
+  eigenstates of the same rank and total M); a sudden jump transfers
+  none. Under a 1 kHz spin lock the singlet order of a near-equivalent
+  pair decays at its Redfield rate (the rates of 1.34, validated against
+  QuTiP) to 4·10⁻⁴, a lifetime 17.5 times its magnetisation's; without
+  the lock 15 % less singlet order is left after half that lifetime
+  (0.515 against 0.607).
 
 On the command line, `qso spins system.json --observe 13C --sequence
 events.json` prints the lines and polarisations after a sequence

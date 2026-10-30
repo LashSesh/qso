@@ -397,6 +397,264 @@ def test_exchange_matches_a_monte_carlo_of_exchange_events():
     assert abs(mean[-1]) > 20 * error[-1]  # the polarisation is resolved
 
 
+# An independent dense reference for Exchange: the homogeneous equations
+# dσ_B/dt = L_B σ_B − Σ k σ_B + Σ k ρ_fresh ⊗ Tr_traced(σ_A) for σ_s = c_s ρ_s
+# of all sites as one vector (row-major), with partial traces by einsum
+# and spin orders by axis permutations. Only the Hamiltonian of each site
+# comes from QSO.
+_SPIN = {"1H": 0.5, "2H": 1.0, "13C": 0.5, "15N": 0.5}
+
+
+def _ladder(i):
+    m = np.arange(i, -i - 1, -1)
+    return np.diag(m).astype(complex), np.diag(np.sqrt(i * (i + 1) - m[1:] * (m[1:] + 1)), 1).astype(complex)
+
+
+class _Site:
+    def __init__(self, spins, couplings, conc, field, frame="rotating"):
+        self.spins, self.couplings, self.conc, self.field, self.frame = spins, couplings, conc, field, frame
+        self.levels = [int(2 * _SPIN[s[0]] + 1) for s in spins]
+        self.dim = int(np.prod(self.levels))
+
+    def system(self, b=None):
+        s = q.SpinSystem(self.field if b is None else b, frame=self.frame)
+        for iso, shift, t1, t2 in self.spins:
+            s.add_spin(iso, shift, t1=t1, t2=t2)
+        for i, j, jh in self.couplings:
+            s.couple(i, j, jh)
+        return s
+
+    def embed(self, i, m):
+        out = np.eye(1)
+        for k, n in enumerate(self.levels):
+            out = np.kron(out, m if k == i else np.eye(n))
+        return out
+
+    def boltzmann(self, i, b):
+        iso, shift = self.spins[i][:2]
+        x = 1.054571817e-34 * q.spin.gyromagnetic_ratio(iso) * b * (1 + shift * 1e-6) / (1.380649e-23 * 298.15)
+        m = np.arange(_SPIN[iso], -_SPIN[iso] - 1, -1)
+        w = np.exp(x * m - np.max(x * m))
+        return w / w.sum(), x
+
+    def liouvillian(self, b):
+        h = np.asarray(self.system(b).hamiltonian())
+        e = np.eye(self.dim)
+        out = -1j * (np.kron(h, e) - np.kron(e, h.T))
+        for i, (iso, _, t1, t2) in enumerate(self.spins):
+            iz, ip = _ladder(_SPIN[iso])
+            jumps = []
+            r1 = 0.0 if t1 is None else 1 / t1
+            if r1 > 0:
+                _, x = self.boltzmann(i, b)
+                jumps += [math.sqrt(r1 / (1 + math.exp(-x))) * ip, math.sqrt(r1 / (1 + math.exp(x))) * ip.conj().T]
+            if t2 is not None and 1 / t2 - r1 / 2 > 0:
+                jumps.append(math.sqrt(2 * (1 / t2 - r1 / 2)) * iz)
+            for a in (self.embed(i, j) for j in jumps):
+                ada = a.conj().T @ a
+                out += np.kron(a, a.conj()) - 0.5 * np.kron(ada, e) - 0.5 * np.kron(e, ada.T)
+        return out
+
+
+def _reorder(m, dims, order, target):
+    """`m` over the spins `order` (with `dims`) as over the spins `target`."""
+    n = len(order)
+    perm = [order.index(s) for s in target]
+    t = m.reshape(dims + dims).transpose(perm + [p + n for p in perm])
+    return t.reshape(m.shape)
+
+
+def _keep(m, dims, keep):
+    n = len(dims)
+    letters = "abcdefghijklmnopqrstuvwxyz"
+    cols = [letters[i + n] if i in keep else letters[i] for i in range(n)]
+    out = [letters[i] for i in keep] + [letters[i + n] for i in keep]
+    d = int(np.prod([dims[i] for i in keep]))
+    return np.einsum(letters[:n] + "".join(cols) + "->" + "".join(out), m.reshape(dims + dims)).reshape(d, d)
+
+
+def _gains(a, b, carried, para, fraction, field):
+    """Superoperator from σ_A to the gain of σ_B."""
+    to = dict(carried)
+    keep = sorted(to)
+    fresh = [j for j in range(len(b.levels)) if j not in to.values()]
+    factors, order = np.eye(1), []
+    if para:
+        singlet = np.array([0, 1, -1, 0]) / math.sqrt(2)
+        s = np.outer(singlet, singlet)
+        factors = fraction * s + (1 - fraction) / 3 * (np.eye(4) - s)
+        order = list(para)
+    for j in fresh:
+        if j not in order:
+            factors = np.kron(factors, np.diag(b.boltzmann(j, field)[0]))
+            order.append(j)
+    state = _reorder(factors, [b.levels[j] for j in order], order, fresh) if fresh else factors
+    out = np.zeros((b.dim**2, a.dim**2), complex)
+    for col in range(a.dim**2):
+        e = np.zeros(a.dim**2, complex)
+        e[col] = 1
+        m = np.kron(_keep(e.reshape(a.dim, a.dim), a.levels, keep), state)
+        spins = [to[i] for i in keep] + fresh
+        out[:, col] = _reorder(m, [b.levels[j] for j in spins], spins, list(range(len(b.levels)))).reshape(-1)
+    return out
+
+
+def _generator(sites, channels, field):
+    offsets = np.cumsum([0] + [s.dim**2 for s in sites])
+    g = np.zeros((offsets[-1], offsets[-1]), complex)
+    block = lambda s: slice(offsets[s], offsets[s + 1])
+    for s, site in enumerate(sites):
+        g[block(s), block(s)] += site.liouvillian(field)
+    for f, t, k, carried, para, fraction in channels:
+        g[block(f), block(f)] -= k * np.eye(sites[f].dim ** 2)
+        g[block(t), block(f)] += k * _gains(sites[f], sites[t], carried, para, fraction, field)
+    return g, offsets
+
+
+def _expm(a):
+    s = max(0, int(np.ceil(np.log2(max(np.abs(a).sum(axis=0).max(), 1e-300) / 0.25))))
+    a = a / 2.0**s
+    out = term = np.eye(len(a), dtype=complex)
+    for k in range(1, 18):
+        term = term @ a / k
+        out = out + term
+    for _ in range(s):
+        out = out @ out
+    return out
+
+
+def _exchange_cases():
+    def balanced(sites, a, b, k, there, back):
+        return [(a, b, k, there, None, 1.0), (b, a, k * sites[a].conc / sites[b].conc, back, None, 1.0)]
+
+    # Rotating frame, three sites with different isotopes; channels that
+    # reorder spins, a channel within a site that swaps its protons, and
+    # channels at rate 0.
+    s = [
+        _Site([("1H", 1.0, 2.0, 0.5), ("13C", 30.0, 5.0, None), ("1H", 3.0, None, None)], [(0, 1, 140.0), (0, 2, 7.0), (1, 2, -5.0)], 0.7, 2.0),
+        _Site([("13C", 35.0, None, None), ("1H", 2.0, None, None), ("15N", 100.0, 3.0, None), ("1H", 4.5, None, 0.3)], [(0, 1, 150.0), (1, 3, 6.0), (2, 3, -90.0)], 1.3, 2.0),
+        _Site([("15N", 120.0, None, None), ("1H", 8.0, 1.5, 1.0)], [(0, 1, -90.0)], 0.5, 2.0),
+    ]
+    ch = balanced(s, 0, 1, 7.0, [(2, 1), (1, 0)], [(0, 1), (3, 0)]) + balanced(s, 1, 2, 3.0, [(2, 0)], [(0, 2), (1, 1)])
+    ch += [(0, 0, 1.5, [(1, 1), (2, 0), (0, 2)], None, 1.0), (0, 1, 0.0, [], None, 1.0), (1, 0, 0.0, [], None, 1.0)]
+    yield "three sites", s, ch, "1H"
+    # Parahydrogen on two spins that are not neighbours, in reverse order,
+    # between carried spins, with fractions 0.8 and 1.
+    s = [
+        _Site([("15N", 200.0, 4.0, None), ("13C", 10.0, None, None)], [(0, 1, 12.0)], 2.0, 1.0),
+        _Site([("1H", -20.0, None, 0.5), ("15N", 250.0, None, None), ("1H", -24.0, None, None), ("13C", 15.0, 10.0, None)], [(0, 2, -7.0), (0, 1, -20.0), (1, 2, 3.0), (2, 3, 4.0), (1, 3, 15.0)], 0.5, 1.0),
+    ]
+    ch = [(0, 1, 1.0, [(1, 3), (0, 1)], (2, 0), 0.8), (1, 0, 4.0, [(3, 1), (1, 0)], None, 1.0), (1, 1, 2.5, [(1, 1), (3, 3)], (0, 2), 1.0)]
+    yield "parahydrogen", s, ch, "1H"
+    # Laboratory frame at 0.3 mT, deuterium carried and fresh, a ¹³C only
+    # in the second site.
+    s = [
+        _Site([("2H", 2.0, 1.0, None), ("1H", 1.0, None, None)], [(0, 1, 1.5)], 1.0, 3e-4, "laboratory"),
+        _Site([("1H", 4.0, 3.0, None), ("2H", 2.5, None, 0.7), ("13C", 50.0, None, None)], [(0, 1, 2.0), (1, 2, 20.0), (0, 2, 140.0)], 3.0, 3e-4, "laboratory"),
+    ]
+    yield "laboratory", s, balanced(s, 0, 1, 5.0, [(0, 1), (1, 0)], [(1, 0), (0, 1)]), "13C"
+
+
+def _build(sites, channels):
+    x = spin.Exchange()
+    for site in sites:
+        x.add_site(site.system(), site.conc)
+    for f, t, k, carried, para, fraction in channels:
+        x.add_channel(f, t, k, carried=carried, parahydrogen=para, fraction=fraction if para else None)
+    return x
+
+
+@pytest.mark.parametrize("case", range(3))
+def test_exchange_matches_a_dense_reference(case):
+    name, sites, channels, isotope = list(_exchange_cases())[case]
+    x = _build(sites, channels)
+    field = sites[0].field
+    g, offsets = _generator(sites, channels, field)
+    pack = lambda states: np.concatenate([s.conc * np.asarray(r).reshape(-1) for s, r in zip(sites, states)])
+    unpack = lambda v: [v[offsets[i] : offsets[i + 1]].reshape(s.dim, s.dim) / s.conc for i, s in enumerate(sites)]
+    rng = np.random.default_rng(case)
+    start = []
+    for site in sites:
+        m = rng.normal(size=(site.dim, site.dim)) + 1j * rng.normal(size=(site.dim, site.dim))
+        m = m @ m.conj().T
+        start.append(m / np.trace(m))
+
+    def close(got, want, tol):
+        scale = max(np.abs(w - np.trace(w) / len(w) * np.eye(len(w))).max() for w in want)
+        diff = max(np.abs(np.asarray(a) - b).max() for a, b in zip(got, want))
+        assert diff <= tol * scale + 1e-14, (name, diff, scale)
+
+    want = unpack(_expm(g * 0.13) @ pack(start))
+    close(x.evolve(start, [spin.delay(0.13)]), want, 1e-10)
+    # A pulse on an isotope that not every site has, then a delay.
+    pulsed = {"three sites": "15N", "parahydrogen": "1H", "laboratory": "13C"}[name]
+    rotated = []
+    for site, rho in zip(sites, start):
+        f = sum((site.embed(i, _ladder(_SPIN[iso])[1]) for i, (iso, *_) in enumerate(site.spins) if iso == pulsed), np.zeros((site.dim, site.dim)))
+        phase = math.radians(30)
+        values, vectors = np.linalg.eigh((np.exp(-1j * phase) * f + np.exp(1j * phase) * f.conj().T) / 2)
+        u = vectors @ np.diag(np.exp(-1j * math.radians(90) * values)) @ vectors.conj().T
+        rotated.append(u @ rho @ u.conj().T)
+    want = unpack(_expm(g * 0.01) @ pack(rotated))
+    close(x.evolve(start, [spin.pulse(pulsed, 90, 30), spin.delay(0.01)]), want, 1e-10)
+    # A sweep: steps at the field of their middle, then a delay.
+    v = pack(start)
+    for k in range(7):
+        v = _expm(_generator(sites, channels, field * (1 - 0.7 * (k + 0.5) / 7))[0] * (0.2 / 7)) @ v
+    v = _expm(_generator(sites, channels, 0.3 * field)[0] * 0.05) @ v
+    close(x.evolve(start, [spin.sweep(0.3 * field, 0.2, 7), spin.delay(0.05)]), unpack(v), 1e-10)
+    # The FID of a state with coherences of the isotope.
+    fplus = [sum((site.embed(i, _ladder(_SPIN[iso])[1]) for i, (iso, *_) in enumerate(site.spins) if iso == isotope), np.zeros((site.dim, site.dim))) for site in sites]
+    step, v, fid = _expm(g * 1e-3), pack(start), []
+    for k in range(40):
+        fid.append(sum(np.trace(r * s.conc @ f) for r, s, f in zip(unpack(v), sites, fplus)))
+        v = step @ v
+    got = np.asarray(x.fid(start, isotope, 1e-3, 40))
+    assert np.abs(got - fid).max() < 1e-11 * np.abs(fid).max(), name
+    if sites[0].frame == "rotating":
+        # The steady state: the population equation of each site replaced
+        # by its amount.
+        a, rhs = g.copy(), np.zeros(len(g), complex)
+        for s, site in enumerate(sites):
+            first = offsets[s]
+            a[first] = 0
+            a[first, [offsets[s] + i * (site.dim + 1) for i in range(site.dim)]] = 1
+            rhs[first] = site.conc
+        close(x.steady_state(), unpack(np.linalg.solve(a, rhs)), 1e-9)
+
+
+def test_exchange_steady_state_in_extended_precision():
+    # SABRE in the laboratory frame from millitesla to 9.4 T, where
+    # zero-quantum frequencies exceed the rates by up to 10⁹: the
+    # homogeneous equations solved with 40 digits.
+    mp = pytest.importorskip("mpmath")
+    mp.mp.dps = 40
+    for field in (1e-3, 1.0, 9.4):
+        sites = [
+            _Site([("1H", -22.0, None, None), ("1H", -22.0, None, None), ("15N", 250.0, None, None)], [(0, 1, -7.0), (0, 2, -2.0)], 1.0, field, "laboratory"),
+            _Site([("15N", 310.0, 30.0, None)], [], 10.0, field, "laboratory"),
+        ]
+        channels = [(0, 1, 2.0, [(2, 0)], None, 1.0), (1, 0, 0.2, [(0, 2)], (0, 1), 1.0), (0, 0, 0.5, [(2, 2)], (0, 1), 1.0)]
+        g, offsets = _generator(sites, channels, field)
+        a = mp.matrix([[mp.mpc(z.real, z.imag) for z in row] for row in g])
+        rhs = mp.matrix(len(g), 1)
+        for s, site in enumerate(sites):
+            first = int(offsets[s])
+            for j in range(len(g)):
+                a[first, j] = 0
+            for i in range(site.dim):
+                a[first, first + i * (site.dim + 1)] = 1
+            rhs[first, 0] = site.conc
+        v = mp.lu_solve(a, rhs)
+        free = int(offsets[1])
+        want = float(mp.re(v[free, 0] - v[free + 3, 0])) / 10.0
+        x = _build(sites, channels)
+        got = x.polarization(x.steady_state(), 1, 0)
+        # To 10⁻¹⁴ of the hydrides' parahydrogen order: at 1 mT that is
+        # 10⁻⁵ of the nitrogen's polarisation (precision, not physics).
+        assert abs(got - want) < 1e-14, (field, got, want)
+
+
 def test_exchange_and_singlet_bindings():
     a = q.SpinSystem(9.4)
     a.add_spin("1H", 1.0, t1=2.0)
@@ -433,6 +691,8 @@ def test_exchange_and_singlet_bindings():
         y.validate()
     with pytest.raises(ValueError):
         x.evolve(eq[:1], [])
+    with pytest.raises(ValueError, match="parahydrogen"):
+        x.add_channel(0, 1, 1.0, carried=[(0, 0)], fraction=0.5)
     pair = q.SpinSystem(1.0)
     pair.add_spin("1H", 0.0)
     pair.add_spin("1H", 0.02)

@@ -7,6 +7,7 @@ use metatron_qso::spin::{
     axial_csa, inept, inept_cycle, inversion_recovery, m2s, s2m, spin_echo, spin_lock,
 };
 use numpy::{IntoPyArray, PyArray1, PyArray2};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict};
 
@@ -747,8 +748,9 @@ impl PyExchange {
     /// the fraction of the source converted per second), carrying the
     /// spin pairs `carried` `[(spin of source, spin of target)]`; the
     /// target's other spins arrive thermal, or two of them
-    /// (`parahydrogen=(i, j)`) in the singlet with probability `fraction`.
-    #[pyo3(signature = (source, target, rate, carried = Vec::new(), parahydrogen = None, fraction = 1.0))]
+    /// (`parahydrogen=(i, j)`) in the singlet with probability `fraction`
+    /// (default 1).
+    #[pyo3(signature = (source, target, rate, carried = Vec::new(), parahydrogen = None, fraction = None))]
     fn add_channel(
         &mut self,
         source: usize,
@@ -756,13 +758,18 @@ impl PyExchange {
         rate: f64,
         carried: Vec<(usize, usize)>,
         parahydrogen: Option<(usize, usize)>,
-        fraction: f64,
+        fraction: Option<f64>,
     ) -> PyResult<()> {
-        let fresh = match parahydrogen {
-            None => Fresh::Thermal,
-            Some((i, j)) => Fresh::Parahydrogen {
+        let fresh = match (parahydrogen, fraction) {
+            (None, None) => Fresh::Thermal,
+            (None, Some(_)) => {
+                return Err(PyValueError::new_err(
+                    "fraction: only with parahydrogen=(i, j)",
+                ));
+            }
+            (Some((i, j)), fraction) => Fresh::Parahydrogen {
                 spins: [i, j],
-                fraction,
+                fraction: fraction.unwrap_or(1.0),
             },
         };
         self.inner

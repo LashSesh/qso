@@ -40,7 +40,8 @@ fn m2s_and_s2m_reach_two_thirds() {
         let back = sys
             .evolve(&stored, &s2m(Isotope::H1, j, dnu).unwrap())
             .unwrap();
-        let efficiency = (sys.expectation(&back, &fz).unwrap().re / m0).abs();
+        // The magnetisation comes back inverted.
+        let efficiency = -sys.expectation(&back, &fz).unwrap().re / m0;
         assert!(efficiency <= 2.0 / 3.0 + 1e-9, "{j} {dnu}: {efficiency}");
         assert!(efficiency > 0.97 * 2.0 / 3.0, "{j} {dnu}: {efficiency}");
     }
@@ -146,7 +147,12 @@ fn a_spin_lock_stores_singlet_order_for_its_redfield_lifetime() {
     let fz = sys.iz(0).unwrap() + sys.iz(1).unwrap();
     let g = sys.relaxation_rates(&[q.clone(), fz]).unwrap();
     let (rate_s, rate_1) = (g[(0, 0)], g[(1, 1)]);
-    assert!(rate_1 / rate_s > 3.0, "T_S/T_1 = {}", rate_1 / rate_s);
+    // 17.5 by the Redfield rates (validated against QuTiP in 1.34).
+    assert!(
+        (rate_1 / rate_s - 17.5).abs() < 0.05,
+        "T_S/T_1 = {}",
+        rate_1 / rate_s
+    );
     let rho = sys.parahydrogen_state(0, 1, 1.0).unwrap();
     let s0 = sys.expectation(&rho, &q).unwrap().re;
     let t = 0.5 / rate_s;
@@ -160,5 +166,5 @@ fn a_spin_lock_stores_singlet_order_for_its_redfield_lifetime() {
     // faster-relaxing triplet.
     let free = sys.evolve(&rho, &[Event::Delay(t)]).unwrap();
     let unlocked = sys.expectation(&free, &q).unwrap().re / s0;
-    assert!(unlocked < 0.95 * want, "{unlocked} vs {want}");
+    assert!(unlocked < 0.9 * want, "{unlocked} vs {want}");
 }
