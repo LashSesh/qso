@@ -2,12 +2,14 @@
 //! groups, walks with dephasing on them, product walks and driven walks on
 //! quotients.
 
+use std::sync::Arc;
+
 use metatron_qso::C64;
 use metatron_qso::linalg::CMatrix;
 use metatron_qso::walks::driven::{MagnusOptions, QuotientDrivenWalk, QuotientTerm};
 use metatron_qso::walks::symmetric::{
-    Dephasing, Orbitals, ProductOpenWalk, SymmetricCoinedWalk, SymmetricOpenWalk,
-    coordinate_permutations,
+    Dephasing, HypercubeOpenWalk, Orbitals, ProductOpenWalk, SymmetricCoinedWalk,
+    SymmetricOpenWalk, coordinate_permutations,
 };
 use numpy::{PyArray1, PyArray2};
 use pyo3::prelude::*;
@@ -28,7 +30,7 @@ use crate::{
 /// entries an invariant operator has in common. At most 8192 points.
 #[pyclass(name = "Orbitals", module = "metatron_qso", frozen)]
 pub struct PyOrbitals {
-    inner: Orbitals,
+    inner: Arc<Orbitals>,
 }
 
 #[pymethods]
@@ -38,7 +40,7 @@ impl PyOrbitals {
     fn new(py: Python<'_>, n: usize, generators: Vec<Vec<usize>>) -> PyResult<Self> {
         py.detach(|| Orbitals::new(n, &generators))
             .raise()
-            .map(|inner| Self { inner })
+            .map(|o| Self { inner: Arc::new(o) })
     }
 
     #[getter]
@@ -133,9 +135,10 @@ fn dephasing(terms: Vec<(f64, Vec<usize>)>) -> Vec<Dephasing> {
 /// `dephasing` is a list of `(rate, block)` pairs, `block[u]` the block of
 /// node `u` in that term's partition: `(κ, list(range(n)))` is site
 /// dephasing, `(κ, [(u >> k) & 1 for u in range(n)])` dephasing of
-/// coordinate `k` of a hypercube. The symmetries must be automorphisms
-/// that preserve every partition's pairs of blocks; `graph.stabilizer`
-/// and `coordinate_permutations` give some.
+/// coordinate `k` of a hypercube. The symmetries must be automorphisms of
+/// the graph under which the total decay rate of every entry is invariant;
+/// `graph.stabilizer_generators` and `coordinate_permutations` give some
+/// (prefer small generating sets: the work grows with their number).
 #[pyclass(name = "SymmetricOpenWalk", module = "metatron_qso", frozen)]
 pub struct PySymmetricOpenWalk {
     inner: SymmetricOpenWalk,
@@ -175,7 +178,7 @@ impl PySymmetricOpenWalk {
     #[getter]
     fn orbitals(&self) -> PyOrbitals {
         PyOrbitals {
-            inner: self.inner.orbitals().clone(),
+            inner: Arc::clone(self.inner.orbitals()),
         }
     }
 
@@ -246,7 +249,7 @@ impl PySymmetricCoinedWalk {
     #[getter]
     fn orbitals(&self) -> PyOrbitals {
         PyOrbitals {
-            inner: self.inner.orbitals().clone(),
+            inner: Arc::clone(self.inner.orbitals()),
         }
     }
 
@@ -334,7 +337,14 @@ fn quotient_term(spec: &Bound<'_, PyAny>) -> PyResult<QuotientTerm> {
         .extract()
         .map_err(|_| invalid("each term is a pair (kind, argument)"))?;
     match kind.to_ascii_lowercase().as_str() {
-        "laplacian" | "adjacency" => Ok(QuotientTerm::Graph(generator(&kind)?)),
+        "laplacian" | "adjacency" => {
+            if !arg.is_none() {
+                return Err(invalid(format!(
+                    "a {kind} term takes None: the graph is the quotient's"
+                )));
+            }
+            Ok(QuotientTerm::Graph(generator(&kind)?))
+        }
         "cells" => Ok(QuotientTerm::Cells(arg.extract::<Indices>()?.into_vec())),
         "potential" => Ok(QuotientTerm::Potential(arg.extract()?)),
         "uniform" => Ok(QuotientTerm::Uniform),
@@ -416,8 +426,13 @@ impl PyQuotientDrivenWalk {
         &self,
         py: Python<'py>,
         state: ComplexArg<'_>,
-    ) -> Bound<'py, PyArray1<f64>> {
-        real_array(py, self.inner.cell_probabilities(&complex_vec(&state)))
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        Ok(real_array(
+            py,
+            self.inner
+                .cell_probabilities(&complex_vec(&state))
+                .raise()?,
+        ))
     }
 }
 
@@ -426,10 +441,89 @@ impl PyQuotientDrivenWalk {
 /// without a search).
 #[pyfunction(name = "coordinate_permutations")]
 fn coordinate_permutations_py(d: usize) -> PyResult<Vec<Vec<usize>>> {
-    if d > 13 {
-        return Err(invalid("at most d = 13 (8192 nodes)"));
+    coordinate_permutations(d).raise()
+}
+
+/// The walk on the hypercube `Q_d` (up to d = 230) with site dephasing at
+/// `site_rate` and dephasing of every coordinate at `coordinate_rate`, on
+/// the `C(d + 3, 3)` orbitals of the coordinate permutations, without
+/// building the graph. Coefficients are those of ρ in the orthonormal
+/// basis of the orbitals, so `Σ|x|² = Tr ρ²`; the probability of distance
+/// k carries a rounding error of about `1e-16·√C(d, k)`.
+#[pyclass(name = "HypercubeOpenWalk", module = "metatron_qso", frozen)]
+pub struct PyHypercubeOpenWalk {
+    inner: HypercubeOpenWalk,
+}
+
+#[pymethods]
+impl PyHypercubeOpenWalk {
+    #[new]
+    #[pyo3(signature = (d, gamma = 1.0, site_rate = 0.0, coordinate_rate = 0.0))]
+    fn new(
+        py: Python<'_>,
+        d: usize,
+        gamma: f64,
+        site_rate: f64,
+        coordinate_rate: f64,
+    ) -> PyResult<Self> {
+        py.detach(|| HypercubeOpenWalk::new(d, gamma, site_rate, coordinate_rate))
+            .raise()
+            .map(|inner| Self { inner })
     }
-    Ok(coordinate_permutations(d))
+
+    #[getter]
+    fn dimension(&self) -> usize {
+        self.inner.dimension()
+    }
+
+    #[getter]
+    fn num_orbitals(&self) -> usize {
+        self.inner.num_orbitals()
+    }
+
+    /// Index of the orbital with `n01`, `n10` and `n11` coordinates of bits
+    /// 01, 10 and 11.
+    fn orbital(&self, n01: usize, n10: usize, n11: usize) -> PyResult<usize> {
+        self.inner.orbital(n01, n10, n11).raise()
+    }
+
+    /// The walker at node 0…0.
+    fn localized<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<C64>> {
+        complex_array(py, self.inner.localized())
+    }
+
+    /// The uniform superposition of all nodes.
+    fn uniform<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<C64>> {
+        complex_array(py, self.inner.uniform())
+    }
+
+    /// The coefficients after time `t ≥ 0` from `x0`.
+    fn evolve<'py>(
+        &self,
+        py: Python<'py>,
+        x0: ComplexArg<'_>,
+        t: f64,
+    ) -> PyResult<Bound<'py, PyArray1<C64>>> {
+        let (x0, w) = (complex_vec(&x0), &self.inner);
+        Ok(complex_array(py, py.detach(|| w.evolve(&x0, t)).raise()?))
+    }
+
+    /// The entry ρ_uv of any pair of the orbital `(n01, n10, n11)`.
+    fn entry(&self, x: ComplexArg<'_>, n01: usize, n10: usize, n11: usize) -> PyResult<C64> {
+        self.inner.entry(&complex_vec(&x), n01, n10, n11).raise()
+    }
+
+    /// The probability of every distance from 0…0.
+    fn distance_distribution<'py>(
+        &self,
+        py: Python<'py>,
+        x: ComplexArg<'_>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        Ok(real_array(
+            py,
+            self.inner.distance_distribution(&complex_vec(&x)).raise()?,
+        ))
+    }
 }
 
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -437,6 +531,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySymmetricOpenWalk>()?;
     m.add_class::<PySymmetricCoinedWalk>()?;
     m.add_class::<PyProductOpenWalk>()?;
+    m.add_class::<PyHypercubeOpenWalk>()?;
     m.add_class::<PyQuotientDrivenWalk>()?;
     m.add_function(wrap_pyfunction!(coordinate_permutations_py, m)?)?;
     Ok(())

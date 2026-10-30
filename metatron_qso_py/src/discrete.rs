@@ -212,6 +212,25 @@ impl PyDecoherentCoinedWalk {
         self.inner.coin_dephasing()
     }
 
+    /// The coin register's label of every arc (in the order of
+    /// `CoinedWalk.arcs`).
+    #[getter]
+    fn coin_labels(&self) -> Vec<usize> {
+        self.inner.coin_labels().to_vec()
+    }
+
+    /// The same walk with coin labels `labels` (distinct among the arcs
+    /// leaving each node): coin dephasing measures the label. On a
+    /// hypercube, label each arc by the coordinate it flips to make coin
+    /// dephasing invariant under the coordinate permutations.
+    fn with_coin_labels(&self, labels: Vec<usize>) -> PyResult<Self> {
+        self.inner
+            .clone()
+            .with_coin_labels(labels)
+            .raise()
+            .map(|inner| Self { inner })
+    }
+
     #[getter]
     fn position_dephasing(&self) -> f64 {
         self.inner.position_dephasing()

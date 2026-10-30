@@ -76,8 +76,8 @@ pub use pretty_good::{PrettyGoodTransfer, TransferDecision};
 pub use quotient::{Quotient, QuotientSearch, QuotientWalk};
 pub use search::{MAX_RESOLUTION, SearchResult, SpatialSearch};
 pub use symmetric::{
-    Dephasing, Orbitals, ProductOpenWalk, SymmetricCoinedWalk, SymmetricOpenWalk,
-    coordinate_permutations,
+    Dephasing, HypercubeOpenWalk, Orbitals, ProductOpenWalk, SymmetricCoinedWalk,
+    SymmetricOpenWalk, coordinate_permutations,
 };
 pub use transfer::{StateTransfer, TransferResult};
 

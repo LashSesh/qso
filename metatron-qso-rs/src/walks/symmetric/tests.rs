@@ -47,7 +47,7 @@ fn orbital_counts() {
 fn coordinate_permutations_generate_the_stabiliser() {
     for d in 1..=6 {
         let g = generators::hypercube(d);
-        let gens = coordinate_permutations(d);
+        let gens = coordinate_permutations(d).unwrap();
         assert!(gens.iter().all(|p| is_automorphism(&g, p) && p[0] == 0));
         let a = Orbitals::new(1 << d, &gens).unwrap();
         let b = Orbitals::new(1 << d, &stabilizer_of_zero(&g)).unwrap();
@@ -141,7 +141,7 @@ fn without_dephasing_q12_matches_the_quotient_walk() {
         Generator::Laplacian,
         1.0,
         &[],
-        &coordinate_permutations(d),
+        &coordinate_permutations(d).unwrap(),
     )
     .unwrap();
     assert_eq!(walk.num_orbitals(), 455);
@@ -179,7 +179,7 @@ fn per_coordinate_dephasing_on_q12_is_binomial() {
         Generator::Laplacian,
         gamma,
         &dephasing,
-        &coordinate_permutations(d),
+        &coordinate_permutations(d).unwrap(),
     )
     .unwrap();
     let p = walk
@@ -433,7 +433,7 @@ fn driven_quotient_walks_match_the_full_walk() {
         .map(|(a, b)| (a - b).norm())
         .fold(0.0, f64::max);
     assert!(err < 1e-10, "{err:e}");
-    let p = reduced.cell_probabilities(&small.state);
+    let p = reduced.cell_probabilities(&small.state).unwrap();
     assert!((p.iter().sum::<f64>() - 1.0).abs() < 1e-10);
     // Errors.
     assert!(QuotientDrivenWalk::new(&q, vec![QuotientTerm::Cells(vec![9])]).is_err());
@@ -471,6 +471,274 @@ fn adiabatic_search_on_a_hypercube_of_a_billion_nodes() {
             &MagnusOptions::default(),
         )
         .unwrap();
-    let p = walk.cell_probabilities(&r.state);
+    let p = walk.cell_probabilities(&r.state).unwrap();
     assert!(p[0] > 0.98, "{}", p[0]);
+}
+
+/// The coordinate every arc of `Q_d` flips.
+fn direction_labels(walk: &CoinedWalk) -> Vec<usize> {
+    walk.arcs()
+        .iter()
+        .map(|&(u, v)| (u ^ v).trailing_zeros() as usize)
+        .collect()
+}
+
+#[test]
+fn coin_dephasing_with_direction_labels_reduces_on_hypercubes() {
+    let g = generators::hypercube(4);
+    let walk = CoinedWalk::new(&g, Coin::Grover).unwrap();
+    let labels = direction_labels(&walk);
+    let full = DecoherentCoinedWalk::new(walk, 0.3, 0.2)
+        .unwrap()
+        .with_coin_labels(labels)
+        .unwrap();
+    for symmetries in [stabilizer_of_zero(&g), coordinate_permutations(4).unwrap()] {
+        let reduced = SymmetricCoinedWalk::new(&full, &symmetries).unwrap();
+        assert!(reduced.num_orbitals() * 8 < 64 * 64);
+        let x = reduced.evolve(&reduced.localized(0).unwrap(), 9).unwrap();
+        let p = reduced.node_probabilities(&x).unwrap();
+        assert!(max_diff(&p, &full.probabilities(0, 9).unwrap()) < 1e-12);
+    }
+}
+
+#[test]
+fn full_coin_dephasing_is_the_classical_chain_on_arcs() {
+    // With the coin measured every step the arc populations follow the
+    // Markov chain P(a → b) = |U_ba|², here on Q₇ (896 arcs).
+    let d = 7;
+    let g = generators::hypercube(d);
+    let walk = CoinedWalk::new(&g, Coin::Grover).unwrap();
+    let m = walk.num_arcs();
+    let mut chain = vec![vec![0.0; m]; m];
+    let mut e = vec![C64::new(0.0, 0.0); m];
+    for a in 0..m {
+        e[a] = C64::new(1.0, 0.0);
+        for (b, z) in walk.step(&e).unwrap().into_iter().enumerate() {
+            chain[a][b] = z.norm_sqr();
+        }
+        e[a] = C64::new(0.0, 0.0);
+    }
+    let labels = direction_labels(&walk);
+    let tails: Vec<usize> = walk.arcs().iter().map(|a| a.0).collect();
+    let open = DecoherentCoinedWalk::new(walk, 1.0, 0.0)
+        .unwrap()
+        .with_coin_labels(labels)
+        .unwrap();
+    let reduced = SymmetricCoinedWalk::new(&open, &coordinate_permutations(d).unwrap()).unwrap();
+    // The first step starts from a pure coin state; from then on the
+    // coherences between different coin states are gone.
+    let mut x = reduced.evolve(&reduced.localized(0).unwrap(), 1).unwrap();
+    let o = reduced.orbitals();
+    let mut p: Vec<f64> = (0..m).map(|a| x[o.of(a, a)].re).collect();
+    assert!((p.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+    for step in 2..=12 {
+        x = reduced.evolve(&x, 1).unwrap();
+        let mut next = vec![0.0; m];
+        for a in 0..m {
+            for b in 0..m {
+                next[b] += p[a] * chain[a][b];
+            }
+        }
+        p = next;
+        let mut nodes = vec![0.0; 1 << d];
+        for a in 0..m {
+            nodes[tails[a]] += p[a];
+        }
+        let err = max_diff(&reduced.node_probabilities(&x).unwrap(), &nodes);
+        assert!(err < 1e-12, "step {step}: {err:e}");
+    }
+}
+
+#[test]
+fn orbitals_match_the_orbit_closure() {
+    // Random permutations of up to 9 points: orbitals by breadth-first
+    // closure of every pair under the generators.
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = |m: usize| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed % m as u64) as usize
+    };
+    for _ in 0..200 {
+        let n = 1 + next(9);
+        let gens: Vec<Vec<usize>> = (0..next(3))
+            .map(|_| {
+                let mut p: Vec<usize> = (0..n).collect();
+                for i in (1..n).rev() {
+                    p.swap(i, next(i + 1));
+                }
+                p
+            })
+            .collect();
+        let o = Orbitals::new(n, &gens).unwrap();
+        let mut label = vec![usize::MAX; n * n];
+        let mut count = 0;
+        for start in 0..n * n {
+            if label[start] != usize::MAX {
+                continue;
+            }
+            let mut stack = vec![start];
+            label[start] = count;
+            while let Some(p) = stack.pop() {
+                for g in &gens {
+                    let q = g[p / n] * n + g[p % n];
+                    if label[q] == usize::MAX {
+                        label[q] = count;
+                        stack.push(q);
+                    }
+                }
+            }
+            count += 1;
+        }
+        assert_eq!(o.len(), count);
+        for (p, &l) in label.iter().enumerate() {
+            // Both number orbitals by their first pair.
+            assert_eq!(o.of(p / n, p % n), l);
+        }
+    }
+}
+
+#[test]
+fn complex_coins_match_the_full_density_matrix() {
+    // A coin invariant under exchanging the two arcs, on C₈ with the
+    // reflection u ↦ −u, compared coefficient by coefficient.
+    let s = std::f64::consts::FRAC_1_SQRT_2;
+    let coin = CMatrix::from_row_slice(
+        2,
+        2,
+        &[
+            C64::new(s, 0.0),
+            C64::new(0.0, s),
+            C64::new(0.0, s),
+            C64::new(s, 0.0),
+        ],
+    );
+    let g = generators::cycle(8);
+    let reflection: Vec<usize> = (0..8).map(|u| (8 - u) % 8).collect();
+    let full =
+        DecoherentCoinedWalk::new(CoinedWalk::new(&g, Coin::Unitary(coin)).unwrap(), 0.0, 0.15)
+            .unwrap();
+    let reduced = SymmetricCoinedWalk::new(&full, &[reflection]).unwrap();
+    let x0 = reduced.localized(0).unwrap();
+    let o = reduced.orbitals();
+    let mut rho = o.operator(&x0).unwrap();
+    let mut complex = false;
+    for steps in 1..=7 {
+        rho = full.step(&rho).unwrap();
+        let x = reduced.evolve(&x0, steps).unwrap();
+        let y = o.coefficients(&rho, 1e-12).unwrap();
+        let err = x
+            .iter()
+            .zip(&y)
+            .map(|(a, b)| (a - b).norm())
+            .fold(0.0, f64::max);
+        assert!(err < 1e-14, "step {steps}: {err:e}");
+        complex |= x.iter().any(|z| z.im.abs() > 1e-3);
+    }
+    // The coin makes the coefficients complex, so a missing conjugate
+    // would show.
+    assert!(complex);
+}
+
+#[test]
+fn coins_that_are_not_invariant_are_rejected() {
+    let g = generators::petersen();
+    let sym = stabilizer_of_zero(&g);
+    let fourier =
+        DecoherentCoinedWalk::new(CoinedWalk::new(&g, Coin::Fourier).unwrap(), 0.0, 0.0).unwrap();
+    assert!(SymmetricCoinedWalk::new(&fourier, &sym).is_err());
+    let marked = |node: usize| {
+        let walk = CoinedWalk::new(&g, Coin::Grover)
+            .unwrap()
+            .with_marked(&[node])
+            .unwrap();
+        DecoherentCoinedWalk::new(walk, 0.0, 0.2).unwrap()
+    };
+    assert!(SymmetricCoinedWalk::new(&marked(1), &sym).is_err());
+    let full = marked(0);
+    let reduced = SymmetricCoinedWalk::new(&full, &sym).unwrap();
+    let p = reduced
+        .node_probabilities(&reduced.evolve(&reduced.localized(0).unwrap(), 8).unwrap())
+        .unwrap();
+    assert!(max_diff(&p, &full.probabilities(0, 8).unwrap()) < 1e-12);
+    let mut nan = reduced.localized(0).unwrap();
+    nan[0] = C64::new(f64::NAN, 0.0);
+    assert!(reduced.evolve(&nan, 1).is_err());
+}
+
+#[test]
+fn limits_and_invalid_input() {
+    let g = generators::petersen();
+    let sym = stabilizer_of_zero(&g);
+    let walk = SymmetricOpenWalk::new(
+        &g,
+        Generator::Laplacian,
+        1.0,
+        &[Dephasing::sites(10, 0.1)],
+        &sym,
+    )
+    .unwrap();
+    // The work guard.
+    assert!(walk.evolve(&walk.localized(0).unwrap(), 1e6).is_err());
+    let o = walk.orbitals();
+    let m = o.operator(&walk.uniform()).unwrap();
+    assert!(o.coefficients(&m, f64::NAN).is_err());
+    assert!(o.coefficients(&m, -1.0).is_err());
+    assert!(coordinate_permutations(14).is_err());
+    assert_eq!(Dephasing::coordinate(4, 70, 1.0).block, vec![0; 4]);
+    // Marginals that are not populations.
+    let edge =
+        DephasingWalk::new(&generators::complete(2), Generator::Laplacian, 1.0, 0.0).unwrap();
+    let product = ProductOpenWalk::new(vec![(edge, 3)]).unwrap();
+    assert!(product.count_distribution(&[vec![0.0, 2.0]], &[1]).is_err());
+    assert!(product.count_distribution(&[vec![0.5]], &[0]).is_err());
+    assert!(product.count_distribution(&[], &[]).is_err());
+}
+
+#[test]
+fn of_panics_outside_the_points() {
+    let o = Orbitals::new(3, &[]).unwrap();
+    assert!(std::panic::catch_unwind(|| o.of(0, 3)).is_err());
+}
+
+#[test]
+fn driven_adjacency_walks_on_quotients() {
+    let g = generators::petersen();
+    let q = Quotient::with_singletons(&g, &[0]).unwrap();
+    let reduced = QuotientDrivenWalk::new(
+        &q,
+        vec![
+            QuotientTerm::Graph(Generator::Adjacency),
+            QuotientTerm::Cells(vec![0, 0]),
+        ],
+    )
+    .unwrap();
+    let full = DrivenWalk::new(
+        10,
+        vec![
+            Term::graph(&g, Generator::Adjacency),
+            Term::projector(10, &[0]).unwrap(),
+        ],
+    )
+    .unwrap();
+    let c = |t: f64| Ok(vec![1.0 + 0.3 * t, (2.0 * t).cos()]);
+    let opts = MagnusOptions {
+        fixed_step: Some(0.01),
+        ..MagnusOptions::default()
+    };
+    let mut c0 = vec![C64::new(0.0, 0.0); q.num_cells()];
+    c0[q.cell_of().unwrap()[0]] = C64::new(1.0, 0.0);
+    let small = reduced.evolve(&c0, 0.0, 2.5, c, &opts).unwrap();
+    let mut psi0 = vec![C64::new(0.0, 0.0); 10];
+    psi0[0] = C64::new(1.0, 0.0);
+    let large = full.evolve(&psi0, 0.0, 2.5, c, &opts).unwrap();
+    let lifted = q.lift(&small.state).unwrap();
+    let err = lifted
+        .iter()
+        .zip(&large.state)
+        .map(|(a, b)| (a - b).norm())
+        .fold(0.0, f64::max);
+    assert!(err < 1e-10, "{err:e}");
+    assert!(reduced.cell_probabilities(&small.state[1..]).is_err());
 }

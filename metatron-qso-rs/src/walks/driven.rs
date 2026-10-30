@@ -500,7 +500,7 @@ pub enum QuotientTerm {
 ///     .evolve(&walk.uniform_state(), 0.0, total, |t| Ok(vec![-(1.0 - s(t)), -s(t)]),
 ///         &MagnusOptions::default())
 ///     .unwrap();
-/// assert!(walk.cell_probabilities(&r.state)[0] > 0.98);
+/// assert!(walk.cell_probabilities(&r.state).unwrap()[0] > 0.98);
 /// ```
 #[derive(Clone, Debug)]
 pub struct QuotientDrivenWalk {
@@ -590,8 +590,9 @@ impl QuotientDrivenWalk {
     }
 
     /// The probability of every cell.
-    pub fn cell_probabilities(&self, state: &[C64]) -> Vec<f64> {
-        state.iter().map(|z| z.norm_sqr()).collect()
+    pub fn cell_probabilities(&self, state: &[C64]) -> Result<Vec<f64>> {
+        self.quotient.check_len(state.len())?;
+        Ok(state.iter().map(|z| z.norm_sqr()).collect())
     }
 }
 

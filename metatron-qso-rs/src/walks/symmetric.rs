@@ -21,13 +21,22 @@
 //!   decays at `Σ_m κ_m [u, v in different blocks of m]`.
 //! * [`SymmetricCoinedWalk`] — the coined walks with decoherence of
 //!   [`super::DecoherentCoinedWalk`], on orbitals of pairs of arcs.
+//! * [`HypercubeOpenWalk`] — the hypercube with site and coordinate
+//!   dephasing on the `C(d + 3, 3)` orbitals of the coordinate
+//!   permutations, written down without building the graph (any `d` up to
+//!   230).
 //! * [`ProductOpenWalk`] — walks on Cartesian products whose factors
 //!   dephase independently: from a product state the state stays a
 //!   product, so every factor evolves on its own, at any number of factors.
 //!
 //! Orbitals are found by union–find on all `n²` pairs, so the graph may
-//! have at most `√`[`MAX_ORBITAL_PAIRS`] (8192) nodes or arcs; the reduced
-//! state is what stays small.
+//! have at most `√`[`MAX_ORBITAL_PAIRS`] (8192) nodes, and the work grows
+//! with the number of generators: give a small generating set (two
+//! permutations generate the coordinate permutations of a hypercube,
+//! [`coordinate_permutations`]) rather than every automorphism. Coined
+//! walks have at most [`super::decoherent::MAX_DECOHERENT_ARCS`] (2048)
+//! arcs, as their full counterpart. The reduced generator is limited to
+//! [`MAX_ORBITAL_ENTRIES`] entries; the reduced state is what stays small.
 //!
 //! ```
 //! use metatron_qso::graph::generators;
@@ -46,6 +55,8 @@
 //! assert!((p.iter().sum::<f64>() - 1.0).abs() < 1e-12);
 //! ```
 
+use std::sync::Arc;
+
 use num_complex::Complex64 as C64;
 
 use super::{DecoherentCoinedWalk, DephasingWalk, Generator};
@@ -55,9 +66,15 @@ use crate::graph::automorphism::is_automorphism;
 use crate::linalg::CMatrix;
 use crate::parallel::for_each_mut;
 
-/// Most ordered pairs (`n²`) whose orbitals are computed: 2²⁶, two 4-byte
-/// words each while they are found.
+/// Most ordered pairs (`n²`) whose orbitals are computed: 2²⁶, a 4-byte
+/// word each, and 8 bytes per orbital (256 MiB and at most 512 MiB more).
 pub const MAX_ORBITAL_PAIRS: usize = 1 << 26;
+
+/// Most union–find steps (generators times pairs) while orbitals are found.
+pub const MAX_ORBITAL_STEPS: usize = 1 << 34;
+
+/// Most entries of a reduced generator (20 bytes each, 1.25 GiB).
+pub const MAX_ORBITAL_ENTRIES: usize = 1 << 26;
 
 /// Most operations (estimated) of one evolution on orbitals.
 pub const MAX_ORBITAL_WORK: f64 = 2e11;
@@ -71,9 +88,9 @@ pub struct Orbitals {
     n: usize,
     /// Orbital of pair `(u, v)` at `u·n + v`.
     of: Vec<u32>,
-    /// The first pair of every orbital (in the order `u·n + v`).
-    representatives: Vec<(usize, usize)>,
-    sizes: Vec<usize>,
+    /// The first pair `u·n + v` of every orbital.
+    representatives: Vec<u32>,
+    sizes: Vec<u32>,
 }
 
 fn check_permutation(n: usize, p: &[usize], k: usize) -> Result<()> {
@@ -115,6 +132,16 @@ impl Orbitals {
         for (k, g) in generators.iter().enumerate() {
             check_permutation(n, g, k)?;
         }
+        if generators.len().saturating_mul(pairs) > MAX_ORBITAL_STEPS {
+            return Err(QsoError::invalid(
+                "generators",
+                format!(
+                    "{} generators on {pairs} pairs exceed {MAX_ORBITAL_STEPS} steps: give a \
+                     smaller generating set",
+                    generators.len()
+                ),
+            ));
+        }
         // Union–find in which every root is the smallest pair of its set, so
         // that every pointer goes down: parent[p] ≤ p.
         let mut parent: Vec<u32> = (0..pairs as u32).collect();
@@ -144,13 +171,13 @@ impl Orbitals {
         for p in 0..pairs {
             let up = parent[p];
             parent[p] = if up as usize == p {
-                representatives.push((p / n, p % n));
+                representatives.push(p as u32);
                 (representatives.len() as u32 - 1) | LABEL
             } else {
                 parent[up as usize]
             };
         }
-        let mut sizes = vec![0usize; representatives.len()];
+        let mut sizes = vec![0u32; representatives.len()];
         for x in parent.iter_mut() {
             *x &= !LABEL;
             sizes[*x as usize] += 1;
@@ -177,19 +204,26 @@ impl Orbitals {
         self.sizes.is_empty()
     }
 
-    /// The orbital of the pair `(u, v)`.
+    /// The orbital of the pair `(u, v)` (panics if `u` or `v` is not a
+    /// point).
     pub fn of(&self, u: usize, v: usize) -> usize {
+        assert!(
+            u < self.n && v < self.n,
+            "pair ({u}, {v}) of {} points",
+            self.n
+        );
         self.of[u * self.n + v] as usize
     }
 
     /// The first pair of orbital `o`.
     pub fn representative(&self, o: usize) -> (usize, usize) {
-        self.representatives[o]
+        let p = self.representatives[o] as usize;
+        (p / self.n, p % self.n)
     }
 
     /// Number of pairs in orbital `o`.
     pub fn size(&self, o: usize) -> usize {
-        self.sizes[o]
+        self.sizes[o] as usize
     }
 
     /// The coefficients of an operator on the orbitals, if it is constant
@@ -202,10 +236,17 @@ impl Orbitals {
                 actual: m.nrows(),
             });
         }
-        let x: Vec<C64> = self
-            .representatives
-            .iter()
-            .map(|&(a, b)| m[(a, b)])
+        if !(tol.is_finite() && tol >= 0.0) {
+            return Err(QsoError::invalid(
+                "tol",
+                "the tolerance must be finite and ≥ 0",
+            ));
+        }
+        let x: Vec<C64> = (0..self.len())
+            .map(|o| {
+                let (a, b) = self.representative(o);
+                m[(a, b)]
+            })
             .collect();
         let scale = m
             .iter()
@@ -252,11 +293,25 @@ struct OrbitalMap {
 impl OrbitalMap {
     /// From the entries of each row, merging repeated columns.
     fn from_rows(rows: Vec<Vec<(u32, C64)>>) -> Self {
-        let mut indptr = vec![0];
-        let (mut cols, mut vals) = (Vec::new(), Vec::new());
-        for mut row in rows {
+        let mut rows = rows.into_iter();
+        Self::build(rows.len(), 0, |_, row| row.extend(rows.next().unwrap()))
+    }
+
+    /// `num_rows` rows, `fill(r, row)` pushing the entries of row `r`
+    /// (columns may repeat); `capacity` entries are reserved.
+    fn build<F>(num_rows: usize, capacity: usize, mut fill: F) -> Self
+    where
+        F: FnMut(usize, &mut Vec<(u32, C64)>),
+    {
+        let mut indptr = Vec::with_capacity(num_rows + 1);
+        indptr.push(0);
+        let (mut cols, mut vals) = (Vec::with_capacity(capacity), Vec::with_capacity(capacity));
+        let mut row = Vec::new();
+        for r in 0..num_rows {
+            row.clear();
+            fill(r, &mut row);
             row.sort_by_key(|e| e.0);
-            for (c, v) in row {
+            for &(c, v) in &row {
                 if cols.len() > *indptr.last().unwrap() && *cols.last().unwrap() == c {
                     *vals.last_mut().unwrap() += v;
                 } else {
@@ -341,8 +396,15 @@ impl OrbitalMap {
 /// `Q_d`, as permutations of its `2^d` nodes: the swap of the first two
 /// coordinates and the cycle of all of them (none for `d = 1`). They
 /// generate the stabiliser of node `0`, without the search of
-/// [`Graph::stabilizer`], which takes seconds from `Q₁₂` on.
-pub fn coordinate_permutations(d: usize) -> Vec<Vec<usize>> {
+/// [`Graph::stabilizer`], which takes seconds from `Q₁₂` on. At most
+/// `d = 13` (8192 nodes, the most [`Orbitals`] take).
+pub fn coordinate_permutations(d: usize) -> Result<Vec<Vec<usize>>> {
+    if d > 13 {
+        return Err(QsoError::invalid(
+            "d",
+            "at most 13 coordinates (8192 nodes)",
+        ));
+    }
     let n = 1usize << d;
     let permute = |image: &dyn Fn(usize) -> usize| -> Vec<usize> {
         (0..n)
@@ -354,14 +416,14 @@ pub fn coordinate_permutations(d: usize) -> Vec<Vec<usize>> {
             })
             .collect()
     };
-    match d {
+    Ok(match d {
         0 | 1 => Vec::new(),
         2 => vec![permute(&|k| 1 - k)],
         _ => vec![
             permute(&|k| if k < 2 { 1 - k } else { k }),
             permute(&|k| (k + 1) % d),
         ],
-    }
+    })
 }
 
 /// Dephasing of a continuous-time walk at `rate` between the blocks of a
@@ -387,16 +449,37 @@ impl Dephasing {
     pub fn coordinate(n: usize, k: usize, rate: f64) -> Self {
         Dephasing {
             rate,
-            block: (0..n).map(|u| (u >> k) & 1).collect(),
+            block: (0..n)
+                .map(|u| u.checked_shr(k as u32).unwrap_or(0) & 1)
+                .collect(),
         }
     }
+}
+
+/// The number of entries of a reduced generator, from the entries of each
+/// row, if it is within [`MAX_ORBITAL_ENTRIES`].
+fn check_entries(rows: impl Iterator<Item = usize>) -> Result<usize> {
+    let mut total = 0usize;
+    for r in rows {
+        total = total.saturating_add(r);
+        if total > MAX_ORBITAL_ENTRIES {
+            return Err(QsoError::invalid(
+                "symmetries",
+                format!(
+                    "the reduced generator would have more than {MAX_ORBITAL_ENTRIES} entries: \
+                     use more symmetries or a smaller graph"
+                ),
+            ));
+        }
+    }
+    Ok(total)
 }
 
 /// A continuous-time walk with dephasing, on the orbitals of a group of
 /// symmetries (see the module documentation).
 #[derive(Clone, Debug)]
 pub struct SymmetricOpenWalk {
-    orbitals: Orbitals,
+    orbitals: Arc<Orbitals>,
     generator: OrbitalMap,
 }
 
@@ -459,27 +542,30 @@ impl SymmetricOpenWalk {
             Generator::Adjacency => graph.adjacency_csr().scaled(-gamma),
         };
         let i = C64::new(0.0, 1.0);
-        let rows = (0..orbitals.len())
-            .map(|o| {
-                let (a, b) = orbitals.representative(o);
-                let mut row: Vec<(u32, C64)> = vec![(o as u32, C64::new(-decay(a, b), 0.0))];
-                // (Hρ)_ab = Σ_w H_aw ρ_wb and (ρH)_ab = Σ_w ρ_aw H_wb.
-                for (w, x) in h.row(a) {
-                    row.push((orbitals.of(w, b) as u32, -i * x));
-                }
-                for (w, x) in h.row(b) {
-                    row.push((orbitals.of(a, w) as u32, i * x));
-                }
-                row
-            })
-            .collect();
+        let entries = check_entries((0..orbitals.len()).map(|o| {
+            let (a, b) = orbitals.representative(o);
+            1 + h.row(a).count() + h.row(b).count()
+        }))?;
+        let generator = OrbitalMap::build(orbitals.len(), entries, |o, row| {
+            let (a, b) = orbitals.representative(o);
+            row.push((o as u32, C64::new(-decay(a, b), 0.0)));
+            // (Hρ)_ab = Σ_w H_aw ρ_wb and (ρH)_ab = Σ_w ρ_aw H_wb.
+            for (w, x) in h.row(a) {
+                row.push((orbitals.of(w, b) as u32, -i * x));
+            }
+            for (w, x) in h.row(b) {
+                row.push((orbitals.of(a, w) as u32, i * x));
+            }
+        });
         Ok(SymmetricOpenWalk {
-            orbitals,
-            generator: OrbitalMap::from_rows(rows),
+            orbitals: Arc::new(orbitals),
+            generator,
         })
     }
 
-    pub fn orbitals(&self) -> &Orbitals {
+    /// The orbitals the state lives on (shared, so that it can be kept
+    /// without a copy).
+    pub fn orbitals(&self) -> &Arc<Orbitals> {
         &self.orbitals
     }
 
@@ -540,7 +626,7 @@ fn localized(orbitals: &Orbitals, points: &[usize]) -> Result<Vec<C64>> {
     if count
         .iter()
         .zip(&orbitals.sizes)
-        .any(|(&c, &s)| c != 0 && c != s)
+        .any(|(&c, &s)| c != 0 && c != s as usize)
     {
         return Err(QsoError::invalid(
             "node",
@@ -554,7 +640,7 @@ fn localized(orbitals: &Orbitals, points: &[usize]) -> Result<Vec<C64>> {
 /// orbitals of a group of symmetries of its graph, acting on the arcs.
 #[derive(Clone, Debug)]
 pub struct SymmetricCoinedWalk {
-    orbitals: Orbitals,
+    orbitals: Arc<Orbitals>,
     /// `x ↦` the coefficients of `UρU†`.
     conjugation: OrbitalMap,
     /// The dephasing factor of every orbital.
@@ -568,8 +654,9 @@ impl SymmetricCoinedWalk {
     /// `walk` reduced by the group generated by `symmetries` (automorphisms
     /// of its graph, as node permutations). The coin and the dephasing must
     /// be invariant: the Grover coin always is, the dephasing of the coin
-    /// register only under symmetries that keep the order of the arcs at
-    /// every node.
+    /// register only under symmetries that permute its labels
+    /// ([`DecoherentCoinedWalk::with_coin_labels`]; on a hypercube, label
+    /// every arc by the coordinate it flips).
     pub fn new(walk: &DecoherentCoinedWalk, symmetries: &[Vec<usize>]) -> Result<Self> {
         let coined = walk.walk();
         let n = coined.num_nodes();
@@ -632,7 +719,7 @@ impl SymmetricCoinedWalk {
         }
         let orbitals = Orbitals::new(m, &arc_symmetries)?;
         let tails: Vec<usize> = arcs.iter().map(|a| a.0).collect();
-        let labels: Vec<usize> = (0..m).map(|a| a - first[tails[a]]).collect();
+        let labels = walk.coin_labels();
         let (keep_x, keep_c) = (1.0 - walk.position_dephasing(), 1.0 - walk.coin_dephasing());
         let f = |a: usize, b: usize| -> f64 {
             let mut f = 1.0;
@@ -663,21 +750,21 @@ impl SymmetricCoinedWalk {
             })
             .collect();
         // (UρU†)_ab = Σ_cd U_ac ρ_cd conj(U_bd).
-        let map_rows = (0..orbitals.len())
-            .map(|o| {
-                let (a, b) = orbitals.representative(o);
-                let mut row = Vec::with_capacity(rows[a].len() * rows[b].len());
-                for &(c, x) in &rows[a] {
-                    for &(d, y) in &rows[b] {
-                        row.push((orbitals.of(c, d) as u32, x * y.conj()));
-                    }
+        let entries = check_entries((0..orbitals.len()).map(|o| {
+            let (a, b) = orbitals.representative(o);
+            rows[a].len() * rows[b].len()
+        }))?;
+        let conjugation = OrbitalMap::build(orbitals.len(), entries, |o, row| {
+            let (a, b) = orbitals.representative(o);
+            for &(c, x) in &rows[a] {
+                for &(d, y) in &rows[b] {
+                    row.push((orbitals.of(c, d) as u32, x * y.conj()));
                 }
-                row
-            })
-            .collect();
+            }
+        });
         Ok(SymmetricCoinedWalk {
-            orbitals,
-            conjugation: OrbitalMap::from_rows(map_rows),
+            orbitals: Arc::new(orbitals),
+            conjugation,
             factor,
             tails,
             num_nodes: n,
@@ -685,7 +772,9 @@ impl SymmetricCoinedWalk {
         })
     }
 
-    pub fn orbitals(&self) -> &Orbitals {
+    /// The orbitals the state lives on (shared, so that it can be kept
+    /// without a copy).
+    pub fn orbitals(&self) -> &Arc<Orbitals> {
         &self.orbitals
     }
 
@@ -717,6 +806,9 @@ impl SymmetricCoinedWalk {
     /// The coefficients after `steps` steps from `x0`.
     pub fn evolve(&self, x0: &[C64], steps: usize) -> Result<Vec<C64>> {
         self.orbitals.check_len(x0.len())?;
+        if x0.iter().any(|z| !z.is_finite()) {
+            return Err(QsoError::invalid("x0", "coefficients must be finite"));
+        }
         let mut x = x0.to_vec();
         let mut next = x.clone();
         for _ in 0..steps {
@@ -788,21 +880,41 @@ impl ProductOpenWalk {
         marginals: &[Vec<f64>],
         targets: &[usize],
     ) -> Result<Vec<f64>> {
-        if marginals.len() != self.factors.len() || targets.len() != self.factors.len() {
-            return Err(QsoError::DimensionMismatch {
-                expected: self.factors.len(),
-                actual: targets.len().min(marginals.len()),
-            });
+        for len in [marginals.len(), targets.len()] {
+            if len != self.factors.len() {
+                return Err(QsoError::DimensionMismatch {
+                    expected: self.factors.len(),
+                    actual: len,
+                });
+            }
+        }
+        for ((walk, _), p) in self.factors.iter().zip(marginals) {
+            if p.len() != walk.num_nodes() {
+                return Err(QsoError::DimensionMismatch {
+                    expected: walk.num_nodes(),
+                    actual: p.len(),
+                });
+            }
+            if p.iter().any(|&q| !(-1e-12..=1.0 + 1e-12).contains(&q)) {
+                return Err(QsoError::invalid(
+                    "marginals",
+                    "populations must lie in [0, 1]",
+                ));
+            }
         }
         let total: usize = self.factors.iter().map(|f| f.1).sum();
         let mut dist = vec![0.0; total + 1];
         dist[0] = 1.0;
         let mut reached = 0;
         for ((_, copies), (p, &target)) in self.factors.iter().zip(marginals.iter().zip(targets)) {
-            let q = *p.get(target).ok_or(QsoError::NodeOutOfRange {
-                node: target,
-                n_nodes: p.len(),
-            })?;
+            let q = p
+                .get(target)
+                .copied()
+                .ok_or(QsoError::NodeOutOfRange {
+                    node: target,
+                    n_nodes: p.len(),
+                })?
+                .clamp(0.0, 1.0);
             for _ in 0..*copies {
                 reached += 1;
                 for k in (0..=reached).rev() {
@@ -814,6 +926,9 @@ impl ProductOpenWalk {
         Ok(dist)
     }
 }
+
+mod hypercube;
+pub use hypercube::{HypercubeOpenWalk, MAX_HYPERCUBE_ORBITALS};
 
 #[cfg(test)]
 mod tests;

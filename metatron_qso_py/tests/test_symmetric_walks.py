@@ -41,10 +41,14 @@ def test_site_dephasing_matches_the_density_matrix():
         symmetries=g.stabilizer_generators([0]),
     )
     assert walk.num_orbitals < 25
-    p = walk.populations(walk.evolve(walk.localized(0), 2.3))
-    assert np.abs(p - full.populations(0, 2.3)).max() < 1e-9
-    rho = walk.orbitals.operator(walk.evolve(walk.localized(0), 2.3))
-    assert abs(np.trace(rho) - 1) < 1e-12
+    x = walk.evolve(walk.localized(0), 2.3)
+    assert np.abs(walk.populations(x) - full.populations(0, 2.3)).max() < 1e-9
+    # The whole state, coherences included (a wrong commutator sign would
+    # conjugate it and leave the populations alone).
+    o = walk.orbitals
+    rho = full.evolve(o.operator(walk.localized(0)), 2.3)
+    assert np.abs(o.coefficients(rho, 1e-8) - x).max() < 1e-9
+    assert np.abs(x.imag).max() > 1e-3
 
 
 def test_coordinate_dephasing_is_binomial():
@@ -145,3 +149,46 @@ def test_errors():
         q.SymmetricOpenWalk(g, generator="bogus")
     with pytest.raises(ValueError):
         q.coordinate_permutations(14)
+    with pytest.raises(ValueError):
+        q.QuotientDrivenWalk(q.Quotient.complete(5), [("laplacian", q.Graph.complete(5))])
+    with pytest.raises(ValueError):
+        walk.orbitals.coefficients(np.eye(10), float("nan"))
+
+
+def bloch(gamma: float, kappa: float, t: float) -> float:
+    return (1 - bloch_z(gamma, kappa, t)) / 2
+
+
+def test_hypercube_open_walk():
+    d = 40
+    walk = q.HypercubeOpenWalk(d, gamma=0.7, coordinate_rate=0.9)
+    assert walk.num_orbitals == math.comb(d + 3, 3) and walk.dimension == d
+    p = walk.distance_distribution(walk.evolve(walk.localized(), 1.3))
+    flip = bloch(0.7, 0.9, 1.3)
+    expected = np.array([math.comb(d, k) * flip**k * (1 - flip) ** (d - k) for k in range(d + 1)])
+    assert np.abs(p - expected).max() < 1e-9
+    # Moore and Russell: uniform mixing at γt = π/4 without dephasing.
+    coherent = q.HypercubeOpenWalk(d)
+    x = coherent.evolve(coherent.localized(), math.pi / 4)
+    assert abs(np.vdot(x, x).real - 1) < 1e-12
+    assert abs(abs(coherent.entry(x, 3, 4, 5)) - 2.0**-d) < 1e-20
+    u = coherent.uniform()
+    assert np.abs(coherent.evolve(u, 1.0) - u).max() < 1e-12
+    with pytest.raises(ValueError):
+        q.HypercubeOpenWalk(231)
+    with pytest.raises(ValueError):
+        walk.orbital(30, 30, 0)
+
+
+def test_coin_labels():
+    d = 4
+    g = q.Graph.hypercube(d)
+    walk = q.CoinedWalk(g, "grover")
+    labels = [(u ^ v).bit_length() - 1 for u, v in walk.arcs()]
+    full = q.DecoherentCoinedWalk(walk, 0.3, 0.2).with_coin_labels(labels)
+    assert full.coin_labels == labels
+    reduced = q.SymmetricCoinedWalk(full, q.coordinate_permutations(d))
+    p = reduced.node_probabilities(reduced.evolve(reduced.localized(0), 7))
+    assert np.abs(p - full.probabilities(0, 7)).max() < 1e-12
+    with pytest.raises(ValueError):
+        full.with_coin_labels([0] * len(labels))

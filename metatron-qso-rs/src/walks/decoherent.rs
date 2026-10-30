@@ -89,6 +89,37 @@ impl DecoherentCoinedWalk {
         })
     }
 
+    /// The same walk with the coin register's states given by `labels`,
+    /// one per arc (in the order of [`CoinedWalk::arcs`]) and different
+    /// for the arcs leaving each node: coin dephasing then measures the
+    /// label. The default is the index of the arc at its node; on a
+    /// hypercube the coordinate an arc flips makes the coin dephasing
+    /// invariant under permutations of the coordinates.
+    pub fn with_coin_labels(mut self, labels: Vec<usize>) -> Result<Self> {
+        if labels.len() != self.tails.len() {
+            return Err(QsoError::DimensionMismatch {
+                expected: self.tails.len(),
+                actual: labels.len(),
+            });
+        }
+        let mut seen = std::collections::HashSet::new();
+        for (&u, &l) in self.tails.iter().zip(&labels) {
+            if !seen.insert((u, l)) {
+                return Err(QsoError::invalid(
+                    "labels",
+                    format!("two arcs leaving node {u} have the label {l}"),
+                ));
+            }
+        }
+        self.labels = labels;
+        Ok(self)
+    }
+
+    /// The coin register's state of every arc.
+    pub fn coin_labels(&self) -> &[usize] {
+        &self.labels
+    }
+
     /// The underlying coherent walk.
     pub fn walk(&self) -> &CoinedWalk {
         &self.walk
@@ -397,6 +428,10 @@ mod tests {
         assert!(open.localized_mixed(4).is_err());
         assert!(open.step(&CMatrix::zeros(3, 3)).is_err());
         assert!(open.pure(&[C64::new(1.0, 0.0)]).is_err());
+        assert!(open.clone().with_coin_labels(vec![0; 8]).is_err());
+        assert!(open.clone().with_coin_labels(vec![0, 1]).is_err());
+        let relabelled = open.with_coin_labels(vec![1, 0, 1, 0, 1, 0, 1, 0]).unwrap();
+        assert_eq!(relabelled.coin_labels()[0], 1);
         let big = CoinedWalk::new(&generators::complete(64), Coin::Grover).unwrap();
         assert!(DecoherentCoinedWalk::new(big, 0.0, 0.0).is_err());
     }
