@@ -36,6 +36,7 @@ from the cluster-correlation expansion::
 from ._core import (
     DIAMOND_LATTICE_CONSTANT,
     MAX_BATH_SPINS,
+    MAX_BATH_TRAJECTORIES,
     MAX_CLUSTER_ORDER,
     MAX_EXACT_BATH,
     MAX_NV_DIMENSION,
@@ -84,6 +85,7 @@ from ._core import spin_sweep as sweep
 __all__ = [
     "DIAMOND_LATTICE_CONSTANT",
     "MAX_BATH_SPINS",
+    "MAX_BATH_TRAJECTORIES",
     "MAX_CLUSTER_ORDER",
     "MAX_EXACT_BATH",
     "MAX_NV_DIMENSION",

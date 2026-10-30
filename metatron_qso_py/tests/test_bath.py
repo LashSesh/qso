@@ -123,6 +123,13 @@ def test_lattice_and_point_dipole():
     bath = spin.SpinBath.diamond(0.05, radius=3e-9, seed=2)
     assert bath.num_spins > 100 and len(bath.spins) == bath.num_spins
     assert len(bath.clusters(1)) == bath.num_spins
+    # Baths nest in the radius; the nearest nuclei can be left out.
+    small = spin.SpinBath.diamond(0.05, radius=2e-9, seed=2)
+    inner = [p for p, _ in bath.spins if np.linalg.norm(p) <= 2e-9]
+    assert inner == [p for p, _ in small.spins]
+    far = spin.SpinBath.diamond(0.05, radius=3e-9, seed=2, min_radius=1e-9)
+    assert all(np.linalg.norm(p) >= 1e-9 for p, _ in far.spins)
+    assert far.num_spins == bath.without_spins_within(1e-9).num_spins
 
 
 def test_the_echo_revives_at_the_larmor_period():

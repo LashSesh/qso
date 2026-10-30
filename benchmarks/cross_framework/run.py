@@ -907,7 +907,7 @@ TOLERANCES = {
     # The coherence of an NV centre's ¹³C bath by the cluster-correlation
     # expansion: PyCCE keeps the full spin-1 electron with D = 2.87 GHz,
     # QSO the secular Hamiltonian, which differ by about (A/D)·A (measured
-    # 3·10⁻⁵ on a natural bath of 206 spins at 50 mT).
+    # 7·10⁻⁶ on a natural bath of 182 spins at 50 mT).
     "redfield_rate": 1e-12,
     "bath_coherence": 2e-4,
     "redfield_expectation": 1e-7,

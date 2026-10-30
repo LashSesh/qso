@@ -2610,7 +2610,9 @@ class SpinBath:
         radius: float = 4e-9,
         seed: int = 0,
         transition: int = -1,
+        min_radius: float = 0.0,
     ) -> SpinBath: ...
+    def without_spins_within(self, radius: float) -> SpinBath: ...
     @property
     def field(self) -> float: ...
     @property
@@ -2633,7 +2635,7 @@ class SpinBath:
         self,
         sequences: Sequence[Sequence[NvEvent]],
         noise: FieldNoise,
-        trajectories: int = 0,
+        trajectories: int = 1000,
         seed: int = 0,
         order: int = 2,
         cutoff: float = 8e-10,
@@ -2658,6 +2660,7 @@ DIAMOND_LATTICE_CONSTANT: float
 MAX_BATH_SPINS: int
 MAX_CLUSTER_ORDER: int
 MAX_EXACT_BATH: int
+MAX_BATH_TRAJECTORIES: int
 
 def nv_pulse(angle: float, phase: float = 0.0) -> NvEvent: ...
 def nv_free(t: float) -> NvEvent: ...

@@ -517,7 +517,9 @@ In natural diamond an NV centre loses its coherence to the ¹³C around it
   `A_zj = (μ₀/4π) γ_e γ_C h (3 n_z n_j − δ_zj)/r³` (19.9 kHz on the axis
   at 1 nm). That is wrong for the nuclei nearest the vacancy, where the
   contact term dominates: give your own `(position, hyperfine)` pairs to
-  `SpinBath(field, spins)` for those, or leave them out.
+  `SpinBath(field, spins)` for those, or leave them out (`min_radius`,
+  `without_spins_within`). Each site's draw depends only on the seed, so
+  baths of one seed nest in the radius.
 - **The coherence.** With ideal pulses the electron is in `m` or `0` at
   every moment, and the bath evolves under `H_a = Σ_i [a·A_z·I_i − γ_C B
   I_z^i] + Σ d_ij [I_i·I_j − 3(I_i·n)(I_j·n)]`. A sequence — a pulse,
@@ -544,26 +546,36 @@ In natural diamond an NV centre loses its coherence to the ¹³C around it
 ```python
 from metatron_qso import spin
 
-bath = spin.SpinBath.diamond(0.05, radius=3e-9, seed=1)    # 50 mT, 214 ¹³C
+bath = spin.SpinBath.diamond(0.05, radius=3e-9, seed=1)    # 50 mT, 233 ¹³C
 larmor = 1 / (10.7084e6 * 0.05)                            # ¹³C period (s)
 taus = [k * larmor for k in (54, 161, 268)]                # 2τ ≈ 0.2, 0.6, 1.0 ms
 print(bath.signal([spin.hahn(t) for t in taus]).round(3))
-# [0.988 0.85 0.605]: on multiples of the Larmor period the distant
+# [0.993 0.805 0.622]: on multiples of the Larmor period the distant
 # nuclei's modulation vanishes and the decay by flip-flops remains
 ```
 
 At a few mT the Hahn echo collapses between multiples of the ¹³C Larmor
 period and revives at them (Childress et al., Science 314, 281 (2006)):
-averaged over ten baths at 5 mT it is 0.50 at half periods and 0.999 at
-`τ = T_L`. At 50 mT it decays by pair flip-flops. The decay time, `2τ`
-where `L` falls below `1/e`, has a median of 0.84–0.94 ms over 30 baths,
-with quartiles 0.72 and 1.06 ms. It is the same within that spread for
-bath radii of 3 to 6 nm and cutoffs of 0.8 to 1.2 nm. Zhao, Ho and Liu
-(Phys. Rev. B 85, 115303 (2012)) give about 0.7 ms in this regime, at the
-lower quartile. T₂ scales as the inverse of the abundance: `T₂·p` stays
-within 15 % from 0.3 % to 3 %. A natural bath within 4 nm has about 500
-¹³C and 1300 clusters at second order. Thirty baths take 2 s, and the
-third order (0.94 ms) 12 s.
+averaged over ten baths at 5 mT it is 0.49–0.51 at half periods and
+0.999, 0.993, 0.982 and 0.969 at the first four periods. At 50 mT it
+decays by pair flip-flops. The decay time is `2τ` where `L` falls below
+`1/e`. Over 30 baths its median is 0.89 ms, with quartiles 0.71 and
+1.00 ms. Baths nest in the radius (each site's draw depends only on the
+seed), so the same baths grow with it, and the median converges: 0.902,
+0.892, 0.890 and 0.890 ms for 3, 4, 5 and 6 nm, and 0.889 ms with a
+cutoff of 1.2 nm instead of 0.8. Zhao, Ho and Liu (Phys. Rev. B 85,
+115303 (2012)) give about 0.7 ms in this regime, at the lower quartile.
+T₂ scales as the inverse of the abundance: `T₂·p` at 0.3 % and 3 % is
+0.91 and 0.95 of its value at 1.07 %. A natural bath within 4 nm has 511
+¹³C and 1422 clusters at second order. Thirty baths take 2 s, and the
+third order (0.91 ms) 11 s.
+
+The expansion can diverge. A cluster whose subclusters have almost lost
+their coherence divides by nearly zero: a bonded pair at high abundance,
+large cutoffs, high orders, free decays. Results that are not finite, or
+with `|L| > 1`, are refused with an error; a lower order or a smaller
+cutoff usually helps. At 10 % ¹³C the third order diverged in one bath
+of twelve, the second in none.
 
 ## Validation
 

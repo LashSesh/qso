@@ -46,10 +46,10 @@ ProjectQ, which the 2025 note listed, is not included: its last release
   numerical average over orientations: the rates among I_z, I_+ and
   two-spin orders, and expectations after exact propagation;
 - the Hahn-echo coherence of an NV centre's ¹³C bath (six close ¹³C
-  with every pair, and a natural bath of 206 ¹³C within 3 nm with pairs
+  with every pair, and a natural bath of 182 ¹³C within 3 nm with pairs
   within 0.8 nm, 50 mT) against PyCCE's conventional CCE to second order
-  on the same positions and hyperfine couplings (3·10⁻⁵: PyCCE keeps the
-  full spin-1 electron, QSO the secular Hamiltonian);
+  on the same positions and hyperfine couplings (3·10⁻⁶ and 7·10⁻⁶:
+  PyCCE keeps the full spin-1 electron, QSO the secular Hamiltonian);
 - detector error models of repetition and surface-code memory experiments
   (exported with `DetectorCircuit.to_stim()`), term by term against Stim's,
   and their detection-event rates against Stim's sampler; QSO's union-find

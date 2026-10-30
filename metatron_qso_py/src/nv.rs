@@ -573,7 +573,7 @@ impl PySpinBath {
         signature = (field, spins, transition = -1),
         text_signature = "(field, spins, transition=-1)"
     )]
-    fn new(field: f64, spins: Vec<SpinTuple>, transition: i64) -> PyResult<Self> {
+    fn new(py: Python<'_>, field: f64, spins: Vec<SpinTuple>, transition: i64) -> PyResult<Self> {
         let spins = spins
             .into_iter()
             .map(|(position, hyperfine)| BathSpin {
@@ -582,17 +582,22 @@ impl PySpinBath {
             })
             .collect();
         let inner = SpinBath::new(field, transition_of(transition)?, spins);
-        inner.validate().raise()?;
+        py.detach(|| inner.validate()).raise()?;
         Ok(Self { inner })
     }
 
     /// A random bath: every carbon site within `radius` (m) of the vacancy
-    /// holds a ¹³C with probability `abundance` (seeded), with
-    /// point-dipole hyperfine couplings.
+    /// holds a ¹³C with probability `abundance` (seeded; each site's draw
+    /// depends only on the seed, so baths nest in the radius), with
+    /// point-dipole hyperfine couplings; none closer than `min_radius`
+    /// (m), where contact terms dominate.
     #[staticmethod]
     #[pyo3(
-        signature = (field, abundance = NATURAL_C13_ABUNDANCE, radius = 4e-9, seed = 0, transition = -1),
-        text_signature = "(field, abundance=0.0107, radius=4e-09, seed=0, transition=-1)"
+        signature = (
+            field, abundance = NATURAL_C13_ABUNDANCE, radius = 4e-9, seed = 0, transition = -1,
+            min_radius = 0.0,
+        ),
+        text_signature = "(field, abundance=0.0107, radius=4e-09, seed=0, transition=-1, min_radius=0.0)"
     )]
     fn diamond(
         py: Python<'_>,
@@ -601,13 +606,16 @@ impl PySpinBath {
         radius: f64,
         seed: u64,
         transition: i64,
+        min_radius: f64,
     ) -> PyResult<Self> {
         let transition = transition_of(transition)?;
         let spins = py
             .detach(|| bath::diamond_bath(abundance, radius, seed))
             .raise()?;
-        let inner = SpinBath::new(field, transition, spins);
-        inner.validate().raise()?;
+        let inner = SpinBath::new(field, transition, spins).without_spins_within(min_radius);
+        if !inner.field.is_finite() {
+            return Err(invalid("the field must be finite"));
+        }
         Ok(Self { inner })
     }
 
@@ -619,6 +627,13 @@ impl PySpinBath {
     #[getter]
     fn transition(&self) -> i8 {
         self.inner.transition
+    }
+
+    /// The bath without the spins closer than `radius` (m) to the vacancy.
+    fn without_spins_within(&self, radius: f64) -> Self {
+        Self {
+            inner: self.inner.clone().without_spins_within(radius),
+        }
     }
 
     #[getter]
@@ -691,9 +706,10 @@ impl PySpinBath {
     }
 
     /// The population with classical field noise as well: `(means,
-    /// standard errors)`; exact for Gaussian noise (errors 0), averaged
-    /// over `trajectories` paths (seeded) for telegraph noise.
-    #[pyo3(signature = (sequences, noise, trajectories = 0, seed = 0, order = 2, cutoff = 8e-10))]
+    /// standard errors)`; exact for Gaussian noise (errors 0, `trajectories`
+    /// unused), averaged over `trajectories` paths (seeded) for telegraph
+    /// noise (errors NaN for one path).
+    #[pyo3(signature = (sequences, noise, trajectories = 1000, seed = 0, order = 2, cutoff = 8e-10))]
     #[allow(clippy::too_many_arguments)]
     fn signal_with_noise<'py>(
         &self,
@@ -793,6 +809,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("MAX_BATH_SPINS", MAX_BATH_SPINS)?;
     m.add("MAX_CLUSTER_ORDER", MAX_CLUSTER_ORDER)?;
     m.add("MAX_EXACT_BATH", MAX_EXACT_BATH)?;
+    m.add("MAX_BATH_TRAJECTORIES", bath::MAX_BATH_TRAJECTORIES)?;
     m.add_class::<PyNvCenter>()?;
     m.add_class::<PyNvEvent>()?;
     m.add_class::<PyFieldNoise>()?;

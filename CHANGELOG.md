@@ -48,10 +48,11 @@ All notable changes to this project are documented here. The format follows
     telegraph noise) and averages over random baths (`ensemble_signal`).
   - The Hahn echo collapses and revives with the ¹³C Larmor period at
     5 mT. At 50 mT its decay time in natural diamond has a median of
-    0.84–0.94 ms over 30 baths and scales as the inverse of the
-    abundance.
-  - It agrees with PyCCE to 3·10⁻⁵, which joins the cross-framework
+    0.89 ms over 30 baths, converged in the bath radius and the cutoff,
+    and scales as the inverse of the abundance.
+  - It agrees with PyCCE to 7·10⁻⁶, which joins the cross-framework
     comparison as a reference.
+  - Divergent expansions (|L| > 1 or not finite) are refused.
 
 ## [1.8.0] — 2026-10-30
 

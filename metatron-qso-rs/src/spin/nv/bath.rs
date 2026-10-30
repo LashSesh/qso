@@ -62,8 +62,15 @@ pub const MAX_CLUSTERS: usize = 1 << 21;
 /// Most spins of an exact propagation of the whole bath.
 pub const MAX_EXACT_BATH: usize = 10;
 
-/// Most operations (estimated) of one coherence calculation.
-pub const MAX_BATH_WORK: f64 = 2e12;
+/// Most operations (estimated) of one coherence calculation: a few
+/// minutes on one core.
+pub const MAX_BATH_WORK: f64 = 5e11;
+
+/// Most sampled noise paths per sequence.
+pub const MAX_BATH_TRAJECTORIES: usize = 1 << 24;
+
+/// Clusters evaluated together (bounds the memory of one batch).
+const CLUSTER_BATCH: usize = 1 << 14;
 
 /// Most lattice sites searched for a bath.
 const MAX_SITES: f64 = 2e7;
@@ -117,28 +124,32 @@ impl BathSpin {
     }
 }
 
-/// The carbon sites of diamond within `radius` (m) of the vacancy, in the
-/// frame of the centre (the vacancy at a lattice site, the nitrogen at its
-/// neighbour along [111], both left out), in a fixed order.
-pub fn diamond_sites(radius: f64) -> Result<Vec<[f64; 3]>> {
-    let a = DIAMOND_LATTICE_CONSTANT;
-    // 8 atoms per cubic cell.
-    let sites = 8.0 * 4.0 / 3.0 * std::f64::consts::PI * (radius / a).powi(3);
+/// Estimated number of lattice sites within `radius` (8 atoms per cubic
+/// cell), checked against the search limit.
+fn site_count(radius: f64) -> Result<f64> {
+    let sites =
+        8.0 * 4.0 / 3.0 * std::f64::consts::PI * (radius / DIAMOND_LATTICE_CONSTANT).powi(3);
     if !(radius.is_finite() && radius > 0.0) || sites > MAX_SITES {
         return Err(QsoError::invalid(
             "radius",
-            format!("a positive radius with at most {MAX_SITES:.0e} sites (about 24 nm)"),
+            format!("a positive radius with at most {MAX_SITES:.0e} sites (about 30 nm)"),
         ));
     }
+    Ok(sites)
+}
+
+/// Visit every carbon site within `radius` with its lattice coordinates
+/// (units of a/4) and its position in the frame of the centre.
+fn lattice(radius: f64, mut visit: impl FnMut([i64; 3], [f64; 3])) -> Result<()> {
+    site_count(radius)?;
     let (s2, s3, s6) = (2f64.sqrt(), 3f64.sqrt(), 6f64.sqrt());
     let (ex, ey, ez) = (
         [1.0 / s6, 1.0 / s6, -2.0 / s6],
         [-1.0 / s2, 1.0 / s2, 0.0],
         [1.0 / s3, 1.0 / s3, 1.0 / s3],
     );
-    let q = a / 4.0;
+    let q = DIAMOND_LATTICE_CONSTANT / 4.0;
     let reach = (radius / q).ceil() as i64;
-    let mut out = Vec::new();
     for i in -reach..=reach {
         for j in -reach..=reach {
             for k in -reach..=reach {
@@ -158,38 +169,67 @@ pub fn diamond_sites(radius: f64) -> Result<Vec<[f64; 3]>> {
                     continue;
                 }
                 let dot = |e: [f64; 3]| e[0] * p[0] + e[1] * p[1] + e[2] * p[2];
-                out.push([dot(ex), dot(ey), dot(ez)]);
+                visit([i, j, k], [dot(ex), dot(ey), dot(ez)]);
             }
         }
     }
+    Ok(())
+}
+
+/// The carbon sites of diamond within `radius` (m) of the vacancy, in the
+/// frame of the centre (the vacancy at a lattice site, the nitrogen at its
+/// neighbour along [111], both left out), in a fixed order.
+pub fn diamond_sites(radius: f64) -> Result<Vec<[f64; 3]>> {
+    let mut out = Vec::new();
+    lattice(radius, |_, p| out.push(p))?;
     Ok(out)
+}
+
+/// A uniform number in [0, 1) for one lattice site and seed (SplitMix64
+/// over the seed and the coordinates), so that every site's draw does not
+/// depend on the radius.
+fn site_draw(seed: u64, site: [i64; 3]) -> f64 {
+    let mix = |mut z: u64| {
+        z = z.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    };
+    let x = site.iter().fold(mix(seed), |x, &c| mix(x ^ c as u64));
+    (x >> 11) as f64 / (1u64 << 53) as f64
 }
 
 /// A random bath: every site of [`diamond_sites`] within `radius` (m)
 /// holds a ¹³C with probability `abundance`, with point-dipole hyperfine
-/// couplings (nuclei much closer than about 0.5 nm have contact terms the
-/// point dipole misses; replace their [`BathSpin::hyperfine`] with given
-/// values, or leave them out).
+/// couplings. Each site's draw depends only on the seed and the site, so
+/// the bath within a smaller radius is the same for the same seed. Nuclei
+/// much closer than about 0.5 nm have contact terms the point dipole
+/// misses: replace their [`BathSpin::hyperfine`] with given values, or
+/// leave them out ([`SpinBath::without_spins_within`]).
 pub fn diamond_bath(abundance: f64, radius: f64, seed: u64) -> Result<Vec<BathSpin>> {
     if !(abundance > 0.0 && abundance <= 1.0) {
         return Err(QsoError::invalid("abundance", "a fraction in (0, 1]"));
     }
-    let sites = diamond_sites(radius)?;
-    if abundance * sites.len() as f64 > 1.2 * MAX_BATH_SPINS as f64 {
+    let expected = abundance * site_count(radius)?;
+    if expected > MAX_BATH_SPINS as f64 {
         return Err(QsoError::invalid(
             "radius",
-            format!(
-                "about {:.0} spins exceed {MAX_BATH_SPINS}",
-                abundance * sites.len() as f64
-            ),
+            format!("about {expected:.0} spins exceed {MAX_BATH_SPINS}"),
         ));
     }
-    let mut rng = Rng::seed_from_u64(seed);
-    let spins: Vec<BathSpin> = sites
-        .into_iter()
-        .filter(|_| rng.uniform() < abundance)
-        .map(BathSpin::point_dipole)
-        .collect::<Result<_>>()?;
+    let mut spins = Vec::new();
+    let mut error = None;
+    lattice(radius, |site, p| {
+        if site_draw(seed, site) < abundance {
+            match BathSpin::point_dipole(p) {
+                Ok(s) => spins.push(s),
+                Err(e) => error = Some(e),
+            }
+        }
+    })?;
+    if let Some(e) = error {
+        return Err(e);
+    }
     if spins.len() > MAX_BATH_SPINS {
         return Err(QsoError::invalid(
             "radius",
@@ -385,6 +425,7 @@ impl SpinBath {
                 format!("at most {MAX_BATH_SPINS} spins"),
             ));
         }
+        let nitrogen = [0.0, 0.0, DIAMOND_LATTICE_CONSTANT * 3f64.sqrt() / 4.0];
         for (k, s) in self.spins.iter().enumerate() {
             if s.position
                 .iter()
@@ -396,17 +437,41 @@ impl SpinBath {
                     format!("spin {k} needs a finite position and hyperfine coupling"),
                 ));
             }
-            for other in &self.spins[..k] {
-                let d = [0, 1, 2].map(|c| s.position[c] - other.position[c]);
-                if norm(d) < 1e-12 {
+            let to_n = [0, 1, 2].map(|c| s.position[c] - nitrogen[c]);
+            if norm(s.position) < 1e-12 || norm(to_n) < 1e-12 {
+                return Err(QsoError::invalid(
+                    "spins",
+                    format!("spin {k} sits on the vacancy or the nitrogen"),
+                ));
+            }
+        }
+        // Two spins at one place: neighbours in x within 10⁻¹² m, after
+        // sorting.
+        let mut order: Vec<usize> = (0..self.spins.len()).collect();
+        order.sort_by(|&i, &j| self.spins[i].position[0].total_cmp(&self.spins[j].position[0]));
+        for (a, &i) in order.iter().enumerate() {
+            let p = self.spins[i].position;
+            for &j in &order[a + 1..] {
+                let q = self.spins[j].position;
+                if q[0] - p[0] >= 1e-12 {
+                    break;
+                }
+                if norm([p[0] - q[0], p[1] - q[1], p[2] - q[2]]) < 1e-12 {
                     return Err(QsoError::invalid(
                         "spins",
-                        format!("spin {k} sits on another spin"),
+                        format!("spins {} and {} sit at one place", i.min(j), i.max(j)),
                     ));
                 }
             }
         }
         Ok(())
+    }
+
+    /// The bath without the spins closer than `radius` (m) to the vacancy,
+    /// whose contact couplings the point dipole misses.
+    pub fn without_spins_within(mut self, radius: f64) -> Self {
+        self.spins.retain(|s| norm(s.position) >= radius);
+        self
     }
 
     fn check_cutoff(cutoff: f64) -> Result<()> {
@@ -419,20 +484,68 @@ impl SpinBath {
         Ok(())
     }
 
-    /// The spins closer than `cutoff` to each spin.
-    fn neighbours(&self, cutoff: f64) -> Vec<Vec<usize>> {
+    /// The spins closer than `cutoff` to each spin, found on a grid of
+    /// cells of that size; at most [`MAX_CLUSTERS`] pairs.
+    fn neighbours(&self, cutoff: f64) -> Result<Vec<Vec<usize>>> {
         let n = self.spins.len();
         let mut out = vec![Vec::new(); n];
-        for i in 0..n {
-            for j in i + 1..n {
-                let (p, q) = (self.spins[i].position, self.spins[j].position);
-                if norm([p[0] - q[0], p[1] - q[1], p[2] - q[2]]) < cutoff {
+        let too_many = || {
+            QsoError::invalid(
+                "cutoff",
+                format!("more than {MAX_CLUSTERS} pairs within the cutoff: lower it"),
+            )
+        };
+        let close = |i: usize, j: usize| {
+            let (p, q) = (self.spins[i].position, self.spins[j].position);
+            norm([p[0] - q[0], p[1] - q[1], p[2] - q[2]]) < cutoff
+        };
+        let mut pairs = 0usize;
+        if cutoff == 0.0 {
+            return Ok(out);
+        }
+        if !cutoff.is_finite() {
+            if n * n.saturating_sub(1) / 2 > MAX_CLUSTERS {
+                return Err(too_many());
+            }
+            for i in 0..n {
+                for j in i + 1..n {
                     out[i].push(j);
                     out[j].push(i);
                 }
             }
+            return Ok(out);
         }
-        out
+        let cell = |p: [f64; 3]| p.map(|x| (x / cutoff).floor() as i64);
+        let mut grid: HashMap<[i64; 3], Vec<usize>> = HashMap::new();
+        for (i, s) in self.spins.iter().enumerate() {
+            grid.entry(cell(s.position)).or_default().push(i);
+        }
+        for (i, s) in self.spins.iter().enumerate() {
+            let c = cell(s.position);
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for dz in -1..=1 {
+                        let Some(others) = grid.get(&[c[0] + dx, c[1] + dy, c[2] + dz]) else {
+                            continue;
+                        };
+                        for &j in others {
+                            if j > i && close(i, j) {
+                                out[i].push(j);
+                                out[j].push(i);
+                                pairs += 1;
+                                if pairs > MAX_CLUSTERS {
+                                    return Err(too_many());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for list in &mut out {
+            list.sort_unstable();
+        }
+        Ok(out)
     }
 
     /// The connected clusters of up to `order` spins (pairs closer than
@@ -446,7 +559,10 @@ impl SpinBath {
                 format!("clusters of 1 to {MAX_CLUSTER_ORDER} spins"),
             ));
         }
-        let neighbours = self.neighbours(cutoff);
+        if order == 1 {
+            return Ok((0..self.spins.len()).map(|i| vec![i]).collect());
+        }
+        let neighbours = self.neighbours(cutoff)?;
         let mut all: Vec<Vec<usize>> = (0..self.spins.len()).map(|i| vec![i]).collect();
         let mut current = all.clone();
         for _ in 1..order {
@@ -538,25 +654,26 @@ impl SpinBath {
 
     /// `L_C = Tr(U_m U_0†)/2^k` of the spins `members` for every sequence.
     fn cluster_coherence(&self, members: &[usize], branches: &[Branches], cutoff: f64) -> Vec<C64> {
-        let [hm, h0] = self.spectra(members, cutoff);
+        let spectra = self.spectra(members, cutoff);
         let d = 1usize << members.len();
+        // The exponentials of the distinct periods of one sequence at a
+        // time, so that memory stays at a few matrices per sequence.
         let mut cache: [HashMap<u64, CMatrix>; 2] = [HashMap::new(), HashMap::new()];
-        let mut exp = |level: usize, t: f64| -> CMatrix {
-            let (values, vectors) = if level == 0 { &hm } else { &h0 };
-            cache[level]
-                .entry(t.to_bits())
-                .or_insert_with(|| from_spectrum(values, vectors, |e| C64::from_polar(1.0, -e * t)))
-                .clone()
-        };
         branches
             .iter()
             .map(|b| {
+                cache.iter_mut().for_each(HashMap::clear);
                 let (mut um, mut u0) = (CMatrix::identity(d, d), CMatrix::identity(d, d));
                 for &(t, in_m) in &b.periods {
+                    for (level, (values, vectors)) in spectra.iter().enumerate() {
+                        cache[level].entry(t.to_bits()).or_insert_with(|| {
+                            from_spectrum(values, vectors, |e| C64::from_polar(1.0, -e * t))
+                        });
+                    }
                     // Level index 0 is m, 1 is 0.
                     let (lm, l0) = if in_m { (0, 1) } else { (1, 0) };
-                    um = cmul(&exp(lm, t), &um);
-                    u0 = cmul(&exp(l0, t), &u0);
+                    um = cmul(&cache[lm][&t.to_bits()], &um);
+                    u0 = cmul(&cache[l0][&t.to_bits()], &u0);
                 }
                 um.iter()
                     .zip(u0.iter())
@@ -571,13 +688,15 @@ impl SpinBath {
         sequences.iter().map(|s| branches(s)).collect()
     }
 
-    /// Operations (estimated) for clusters of the given sizes.
+    /// Operations (estimated) for clusters of the given sizes: two
+    /// diagonalisations per cluster, and per free period two exponentials
+    /// and two products, with a fixed cost per period.
     fn check_work(sizes: impl Iterator<Item = usize>, branches: &[Branches]) -> Result<()> {
         let periods: usize = branches.iter().map(|b| b.periods.len()).sum();
         let work: f64 = sizes
             .map(|k| {
                 let d = (1u64 << k) as f64;
-                d * d * d * (40.0 + 16.0 * periods as f64)
+                60.0 * d * d * d + periods as f64 * (64.0 * d * d * d + 400.0)
             })
             .sum();
         if work > MAX_BATH_WORK {
@@ -592,7 +711,12 @@ impl SpinBath {
     }
 
     /// The coherence `L` of the bath after each sequence, by the
-    /// cluster-correlation expansion `cce`.
+    /// cluster-correlation expansion `cce`. The expansion can diverge: a
+    /// cluster whose subclusters have almost lost their coherence divides
+    /// by nearly zero (strongly coupled pairs, at high abundance, with a
+    /// large cutoff or a high order, and for free decays). A result that is
+    /// not finite or whose modulus exceeds 1 (by more than 10⁻⁶) is
+    /// refused; a lower order or a smaller cutoff usually helps.
     pub fn coherence(&self, sequences: &[Vec<NvEvent>], cce: &Cce) -> Result<Vec<C64>> {
         let branches = Self::parse(sequences)?;
         let clusters = self.clusters(cce.order, cce.cutoff)?;
@@ -601,29 +725,44 @@ impl SpinBath {
         let mut reduced: HashMap<Vec<usize>, Vec<C64>> = HashMap::new();
         for size in 1..=cce.order {
             let list: Vec<&Vec<usize>> = clusters.iter().filter(|c| c.len() == size).collect();
-            let raw = crate::parallel::map_tasks(list.len(), |k| {
-                self.cluster_coherence(list[k], &branches, cce.cutoff)
-            });
-            for (members, mut l) in list.into_iter().zip(raw) {
-                // Divide by every connected proper subcluster.
-                for mask in 1..(1u32 << size) - 1 {
-                    let sub: Vec<usize> = (0..size)
-                        .filter(|&b| mask >> b & 1 == 1)
-                        .map(|b| members[b])
-                        .collect();
-                    if let Some(s) = reduced.get(&sub) {
-                        for (x, y) in l.iter_mut().zip(s) {
-                            *x /= y;
+            for batch in list.chunks(CLUSTER_BATCH) {
+                let raw = crate::parallel::map_tasks(batch.len(), |k| {
+                    self.cluster_coherence(batch[k], &branches, cce.cutoff)
+                });
+                for (&members, mut l) in batch.iter().zip(raw) {
+                    // Divide by every connected proper subcluster.
+                    for mask in 1..(1u32 << size) - 1 {
+                        let sub: Vec<usize> = (0..size)
+                            .filter(|&b| mask >> b & 1 == 1)
+                            .map(|b| members[b])
+                            .collect();
+                        if let Some(s) = reduced.get(&sub) {
+                            for (x, y) in l.iter_mut().zip(s) {
+                                *x /= y;
+                            }
                         }
                     }
-                }
-                for (t, x) in total.iter_mut().zip(&l) {
-                    *t *= x;
-                }
-                if size < cce.order {
-                    reduced.insert(members.clone(), l);
+                    for (t, x) in total.iter_mut().zip(&l) {
+                        *t *= x;
+                    }
+                    if size < cce.order {
+                        reduced.insert(members.clone(), l);
+                    }
                 }
             }
+        }
+        if let Some((k, l)) = total
+            .iter()
+            .enumerate()
+            .find(|(_, l)| !(l.is_finite() && l.norm() <= 1.0 + 1e-6))
+        {
+            return Err(QsoError::invalid(
+                "cce",
+                format!(
+                    "the expansion diverges at sequence {k} (|L| = {:.3e}): lower the order or the cutoff",
+                    l.norm()
+                ),
+            ));
         }
         Ok(total)
     }
@@ -683,9 +822,24 @@ impl SpinBath {
                 .map(|((s, b), &l)| Ok((b.signal(l * (-decay_exponent(s, noise)?).exp()), 0.0)))
                 .collect();
         }
-        if trajectories == 0 {
-            return Err(QsoError::invalid("trajectories", "at least one"));
+        if !(1..=MAX_BATH_TRAJECTORIES).contains(&trajectories) {
+            return Err(QsoError::invalid(
+                "trajectories",
+                format!("1 to {MAX_BATH_TRAJECTORIES} paths"),
+            ));
         }
+        // Sampling: a fixed cost per period and component and one per flip.
+        let rates: Vec<f64> = noise.components().iter().map(|c| c.1 / 2.0).collect();
+        let mut work = 0.0;
+        for seq in sequences {
+            for (t0, t1, _) in segments(seq)? {
+                work += rates
+                    .iter()
+                    .map(|r| super::SAMPLE_WORK * (1.0 + r * (t1 - t0)))
+                    .sum::<f64>();
+            }
+        }
+        super::check_work(work * trajectories as f64)?;
         let root = Rng::seed_from_u64(seed);
         sequences
             .iter()
@@ -736,16 +890,23 @@ pub fn ensemble_signal(
         return Err(QsoError::invalid("configurations", "at least one"));
     }
     let root = Rng::seed_from_u64(seed);
-    let mut runs = Vec::with_capacity(configurations);
-    for k in 0..configurations {
-        let bath_seed = root.fork(k as u64).next_u64();
-        let bath = SpinBath::new(
-            field,
-            transition,
-            diamond_bath(abundance, radius, bath_seed)?,
-        );
-        runs.push(bath.signal(sequences, cce)?);
-    }
+    // Every bath first, so that one out of range fails before any work.
+    let baths = (0..configurations)
+        .map(|k| {
+            let bath_seed = root.fork(k as u64).next_u64();
+            let bath = SpinBath::new(
+                field,
+                transition,
+                diamond_bath(abundance, radius, bath_seed)?,
+            );
+            bath.validate()?;
+            Ok(bath)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let runs = baths
+        .iter()
+        .map(|bath| bath.signal(sequences, cce))
+        .collect::<Result<Vec<_>>>()?;
     let n = configurations as f64;
     Ok((0..sequences.len())
         .map(|j| {
