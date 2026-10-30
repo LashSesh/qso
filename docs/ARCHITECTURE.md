@@ -16,7 +16,7 @@ algorithms  │ VQE · QAOA (+ mixers, QUBO) · Grover · QFT/QPE ·   │
 optimize    │ L-BFGS · Adam · GD · Nelder–Mead · SPSA            │
 walks       │ CTQW · quotients · transfer · coined/Szegedy ·     │
             │ search · walk circuits · dephasing · classical ·   │
-            │ interacting walkers                                │
+            │ interacting walkers · orbitals (open walks)        │
 mitigation  │ readout calibration · ZNE · PEC · Pauli twirling    │
 estimation  │ estimates with errors · shot allocation · shadows   │
 backend     │ statevector / density-matrix / device backends      │
@@ -662,6 +662,22 @@ agree with brute force on random graphs.
   hypercubes, Hamming, Johnson, complete and complete multipartite graphs
   have closed-form distance partitions, so their walks never build the
   graph.
+* Driven walks on quotients (`walks/driven.rs`, `QuotientDrivenWalk`)
+  reduce every term to the cells (the uniform projector to `s sᵀ` with
+  `s_i = √(|C_i|/N)`) and hand the `k × k` problem to `DrivenWalk`.
+* Open walks on orbitals (`walks/symmetric.rs`): an operator invariant
+  under a permutation group is constant on its orbits on ordered pairs.
+  The orbits come from union–find over the `n²` pairs, with every root the
+  smallest pair of its set, so one pass relabels them in order. The
+  Lindblad generator maps invariant operators to invariant ones, so row
+  `O` of the reduced map is read off at one representative pair of `O`;
+  it is applied by a Taylor series in substeps of ∞-norm ½. The coined
+  walk's step is the conjugation `Σ_cd U_ac conj(U_bd)` followed by the
+  dephasing factor of each orbital. `HypercubeOpenWalk` indexes the
+  orbitals of the coordinate permutations by the counts of bit pairs
+  (ranked in closed form) and works in the orthonormal basis `B_O/√|O|`,
+  where the moves of one coordinate between classes have entries
+  `γ√(n_c (n_c' + 1))`, the same structure as boson hopping.
 * State transfer (`walks/transfer.rs`) works on the quotient in which the
   source is a singleton: perfect transfer needs the target to be a
   singleton too, strong cospectrality (`E_θ e_v = ±E_θ e_u`) and eigenvalue

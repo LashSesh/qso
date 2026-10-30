@@ -15,7 +15,8 @@ finished milestones are released together, not one by one. The third
 (1.26 to 1.28) stages ship together as release 1.7.0. The seventh
 (1.29 to 1.33, section 4g) and eighth (1.34 to 1.37, magnetic resonance
 for medical research, section 4h) stages ship together as release
-1.8.0. The ninth stage (1.38 to 1.42) is planned in section 4i. Up to 1.3
+1.8.0. The ninth stage (1.38 to 1.42) is planned in section 4i; 1.38
+is delivered. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -2767,7 +2768,7 @@ tools in the cross-validation only. QSO stays a tool for the physicists
 who design these experiments; image simulation and clinical claims stay
 out.
 
-### 1.38 — Symmetry for driven and decoherent walks (M)
+### 1.38 — Symmetry for driven and decoherent walks (M, delivered)
 
 Use case: adiabatic and time-dependent search, and walks under
 decoherence, on graphs far beyond what a state vector holds. Symmetry
@@ -2791,6 +2792,123 @@ times of Moore and Russell (RANDOM 2002); with dephasing on every
 coordinate the walk factorises, and its distribution follows the product
 of the two-level closed forms at any dimension. Full coin decoherence
 gives the classical walk on arcs, as in 1.13.
+
+Delivered in `walks/symmetric.rs` and `walks/driven.rs`:
+
+- `QuotientDrivenWalk` with terms on the cells of a `Quotient`: the graph,
+  projectors onto cells, potentials per cell and the uniform projector.
+- `Quotient::lift`.
+- `Orbitals`, the orbits of a permutation group on ordered pairs.
+- `SymmetricOpenWalk`, with dephasing between the blocks of node
+  partitions (`Dephasing::sites`, `Dephasing::coordinate`).
+- `HypercubeOpenWalk`.
+- `SymmetricCoinedWalk` and `DecoherentCoinedWalk::with_coin_labels`.
+- `ProductOpenWalk`.
+- `Graph::stabilizer` and `coordinate_permutations`.
+- All of them in Python.
+
+Changes to the plan:
+
+- **Jump operators.** The open walks take dephasing in node partitions:
+  site dephasing, dephasing per coordinate, or any sum of them. That
+  covers the planned walks. Other jump operators would need their own
+  invariance check and are not offered.
+- **Coin dephasing** measures the label of each arc. By default that is
+  the arc's index among those leaving its node, and the symmetries of a
+  hypercube do not preserve it. `with_coin_labels` lets the label be the
+  coordinate an arc flips, and then coin dephasing reduces under the
+  coordinate permutations. A reduction is refused when the labels are not
+  permuted.
+- **Size of coined walks.** `SymmetricCoinedWalk` reduces a
+  `DecoherentCoinedWalk`, which holds at most 2048 arcs (Q₈, not Q₁₀ as
+  this section said). The gain is speed, not size: twenty steps on Q₈ take
+  1 ms instead of 4.9 s.
+- **An implicit hypercube** was added. `HypercubeOpenWalk` indexes the
+  `C(d + 3, 3)` orbitals of the coordinate permutations by the counts of
+  bit pairs, so the explicit union–find over `n²` pairs (at most 8192
+  nodes) is not needed, up to d = 230. It works in the orthonormal basis
+  of the orbitals. There the Hamiltonian part is unitary and errors stay
+  at rounding in the Hilbert–Schmidt norm, so a population summed over
+  `C(d, k)` nodes carries an error of about `10⁻¹⁶·√C(d, k)`. The basis of
+  plain entries, tried first, multiplied rounding by `C(d, k)` and was
+  useless beyond d ≈ 50.
+- **Product graphs.** `ProductOpenWalk` propagates each factor's
+  `DephasingWalk` and combines the target probabilities of all copies
+  into the distribution of how many copies are at their target (the
+  distance travelled, on a hypercube).
+
+Measured (four cores):
+
+- **Against the full evolution.**
+  - Site dephasing on Petersen and Q₆ under the stabiliser of a node
+    equals `DephasingWalk` coefficient by coefficient to 10⁻⁹ (its RK4
+    tolerance), with both generators.
+  - Without dephasing, Q₁₂ (455 orbitals) equals `QuotientWalk` to
+    10⁻¹¹.
+  - Coined walks equal `DecoherentCoinedWalk` to 10⁻¹² on Q₄, Petersen
+    and K₅ (Grover coin, position dephasing), on Petersen with a marked
+    node, and on Q₄ with direction labels and coin and position
+    dephasing. A complex coin on C₈ with its reflection agrees
+    coefficient by coefficient to 10⁻¹⁴.
+  - `QuotientDrivenWalk`, lifted, equals `DrivenWalk` to 10⁻¹⁰ on Q₈
+    (graph, marked node, uniform projector and a potential by weight, all
+    with time-dependent coefficients) and on Petersen with the adjacency
+    matrix.
+  - `HypercubeOpenWalk` equals the explicit reduction of Q₆ entry by
+    entry to 10⁻¹².
+  - The orbitals equal a breadth-first orbit closure on 200 random
+    groups.
+- **Closed forms.**
+  - **Coordinate dephasing.** On Q₁₂ (explicit) and Q₆₀ (implicit) the
+    distribution is the binomial of the two-level closed form
+    `z(t) = e^{−κt/2}[cos ωt + (κ/2ω) sin ωt]`: 10⁻¹² per node on Q₁₂,
+    `10⁻¹⁵·√C(d, k)` per distance on Q₆₀. `ProductOpenWalk` reproduces it
+    at d = 1000.
+  - **Uniform mixing.** Without dephasing Q₆₄ mixes uniformly at
+    γt = π/4 (Moore and Russell): every distance to `10⁻¹⁵·√C(d, k)`, and
+    sampled entries have modulus `2^{−64}`.
+  - **Roland–Cerf.** Local adiabatic search on K_N with N = 2³⁰ succeeds
+    with probability 0.999999 in 0.02 s, after a running time within
+    2·10⁻⁵ of `(π/2ε)√N`.
+  - **Full coin dephasing** with direction labels on Q₇ follows the
+    classical chain on arcs, `|U_ba|²`, to 10⁻¹² over twelve steps.
+- **Size and time.**
+  - Q₁₂ with site dephasing: 455 orbitals instead of 1.7·10⁷ entries,
+    0.26 s to set up and 16 ms to evolve.
+  - `HypercubeOpenWalk` evolves for γt = 1 with site dephasing in 3.3 s on
+    Q₆₀ (39 711 orbitals) and in 15 s on Q₁₀₀ (176 851).
+  - `Graph::stabilizer` of Q₁₂ takes 15 s and returns 66 generators;
+    `coordinate_permutations` gives two at once.
+
+Independent review: no errors in the reductions. The reviewer checked the
+representative-row argument, the signs of the commutator, the coined
+conjugation and its order, the invariance checks and the union–find, and
+reproduced the complex-coin case. Fixed:
+
+- **Memory.** The reduced generator was built row by row before any limit,
+  so the trivial group at 8192 nodes would have needed 16–32 GB and
+  aborted. Its entries are now counted first and limited to 2²⁶. It is
+  built in place, and the orbitals take 4 bytes per pair and 8 per
+  orbital instead of 28.
+- **Steps.** The union–find steps (generators times pairs) are limited
+  too, and the documentation recommends small generating sets.
+- **Validation.** Inputs that were silently accepted are now rejected:
+  - a NaN tolerance in `Orbitals::coefficients`;
+  - pairs out of range in `of`, which aliased others;
+  - non-finite coined states;
+  - marginals outside [0, 1] or of the wrong length;
+  - `coordinate_permutations` beyond d = 13;
+  - Python terms with a stray argument;
+  - unchecked state lengths.
+- **Sharing.** Orbitals are shared, not copied, by the Python getters.
+- **Documentation.** The documentation of the limits and of what the
+  invariance check requires was corrected.
+- **Tests.** The tests now include the complex coin, the rejection of
+  non-invariant coins, the work guard, adjacency driven walks, the orbit
+  closure and full-state comparisons in Python, which see a sign error
+  that populations miss.
+- **Stays as is.** The uniform term of `QuotientDrivenWalk` is stored
+  densely on the cells (at most 2048), which a rank-one term would avoid.
 
 ### 1.39 — The nuclear-spin bath of an NV centre (M–L)
 

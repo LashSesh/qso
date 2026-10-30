@@ -6,6 +6,35 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Symmetry for driven and decoherent walks** (1.38, `walks::symmetric`,
+  `walks::driven::QuotientDrivenWalk`):
+  - `QuotientDrivenWalk` integrates time-dependent Hamiltonians whose terms
+    respect an equitable partition (graph, cells, per-cell potential,
+    uniform projector) on the quotient; `Quotient::lift` returns node
+    amplitudes. Local adiabatic search on K_N with N = 2³⁰ reaches the
+    marked node with probability 0.999999 in 0.02 s.
+  - `Orbitals`, the orbits of a permutation group on ordered pairs, and
+    `SymmetricOpenWalk`, continuous-time walks with dephasing between the
+    blocks of node partitions (site or per-coordinate dephasing) on
+    orbital coefficients. Q₁₂ with site dephasing has 455 orbitals.
+  - `HypercubeOpenWalk`: the hypercube with site and coordinate dephasing
+    on the `C(d + 3, 3)` orbitals of the coordinate permutations, up to
+    d = 230, without building the graph.
+  - `SymmetricCoinedWalk`, coined walks with coin and position dephasing on
+    orbitals of pairs of arcs, and `DecoherentCoinedWalk::with_coin_labels`,
+    so that coin dephasing on hypercubes can be labelled by direction.
+  - `ProductOpenWalk`: Cartesian products with independent dephasing per
+    factor, with the distribution of the number of factors at a target.
+  - `Graph::stabilizer` (automorphisms fixing given nodes),
+    `coordinate_permutations`, `DephasingWalk::num_nodes`.
+  - Python: `Orbitals`, `SymmetricOpenWalk`, `HypercubeOpenWalk`,
+    `SymmetricCoinedWalk`, `ProductOpenWalk`, `QuotientDrivenWalk`,
+    `coordinate_permutations`, `Graph.stabilizer_generators`,
+    `Graph.stabilizer_order`, `Quotient.lift`,
+    `DecoherentCoinedWalk.with_coin_labels` and `coin_labels`.
+
 ## [1.8.0] — 2026-10-30
 
 Milestones 1.29 to 1.37 of the [roadmap](docs/ROADMAP.md), its seventh

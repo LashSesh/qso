@@ -69,6 +69,9 @@ classical search. The technical note checks this for N up to 1024.
 reproduces the coherent walk. For strong dephasing the populations follow
 the classical master equation dp/dt = −(2γ²/κ)·L·p. This is the quantum
 Zeno regime: the walk becomes classical and slows down as κ grows.
+On symmetric graphs the density matrix reduces to the orbitals of the
+symmetry group, which reaches hypercubes of any dimension up to 230 (see
+[Symmetry and state transfer](symmetry.md)).
 
 ```python
 import numpy as np

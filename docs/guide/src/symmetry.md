@@ -55,6 +55,126 @@ best = q.QuotientSearch.optimize(q.Quotient.hypercube(20), 0, t_max=3000, resolu
 print(best)       # success probability ≈ 0.93 at t ≈ 1670
 ```
 
+## Driven and decoherent walks reduced by symmetry
+
+The same reduction carries over to time-dependent Hamiltonians and to
+density matrices.
+
+**Driven walks on quotients.** `QuotientDrivenWalk` takes a `Quotient` and
+terms that respect its partition — `("laplacian", None)`,
+`("adjacency", None)`, `("cells", cells)` (the projector onto those cells),
+`("potential", values)` (one value per cell) and `("uniform", None)` — and
+integrates `H(t) = Σ_j c_j(t)·H_j` on the cells with the Magnus integrator
+of `DrivenWalk`. `Quotient.lift` turns cell amplitudes into node
+amplitudes for a partition of an explicit graph. The local adiabatic
+search of Roland and Cerf on K_N with N = 2³⁰ is a two-dimensional
+problem; it runs in 0.02 s and ends at the marked node with probability
+0.999999, after a time within 10⁻⁴ of the closed form `(π/2ε)√N`:
+
+```python
+import math
+import metatron_qso as q
+
+n = float(1 << 30)
+walk = q.QuotientDrivenWalk(q.Quotient.complete(1 << 30), [("uniform", None), ("cells", [0])])
+eps, rn = 0.1, math.sqrt(n - 1)
+total = n / (eps * rn) * math.atan(rn)
+
+def s(t: float) -> float:
+    return 0.5 * (1 + math.tan(2 * eps * rn * t / n - math.atan(rn)) / rn)
+
+r = walk.evolve(walk.uniform_state(), 0.0, total, lambda t: [-(1 - s(t)), -s(t)])
+assert walk.cell_probabilities(r["state"])[0] > 0.999
+```
+
+**Open walks on orbitals.** If the Hamiltonian, the dephasing and the start
+are invariant under a group of automorphisms, so is the density matrix at
+every time, and it is constant on each *orbital*, an orbit of the group on
+ordered pairs of nodes. `SymmetricOpenWalk` evolves one coefficient per
+orbital. Dephasing is given as `(rate, block)` pairs:
+`(κ, list(range(n)))` is the site dephasing of `DephasingWalk`, and
+`(κ, [(u >> k) & 1 for u in range(n)])` dephases coordinate `k` of a
+hypercube. The symmetries come from `graph.stabilizer_generators(nodes)`
+or, for hypercubes, `coordinate_permutations(d)`: two permutations that
+generate all permutations of the coordinates. Small generating sets keep
+the union–find over the `n²` pairs fast. With site dephasing, Q₁₂ from a
+node has 455 orbitals instead of 1.7·10⁷ entries: 0.26 s to set up and
+16 ms to evolve.
+
+```python
+import numpy as np
+import metatron_qso as q
+
+g = q.Graph.petersen()
+walk = q.SymmetricOpenWalk(g, gamma=0.8, dephasing=[(0.6, list(range(10)))],
+                           symmetries=g.stabilizer_generators([0]))
+x = walk.evolve(walk.localized(0), 2.3)
+full = q.DephasingWalk(g, gamma=0.8, rate=0.6)
+assert np.abs(walk.populations(x) - full.populations(0, 2.3)).max() < 1e-9
+print(walk.num_orbitals)                            # 15 instead of 100
+```
+
+`HypercubeOpenWalk(d, gamma, site_rate, coordinate_rate)` does the same for
+the hypercube without building it. A pair of nodes is characterised by how
+many coordinates have bits 00, 01, 10 and 11, which gives `C(d + 3, 3)`
+orbitals for 2^d nodes, up to d = 230. Its coefficients are those of ρ in
+the orthonormal basis of the orbitals, where the Hamiltonian part is
+unitary, so they are accurate to rounding in the Hilbert–Schmidt norm. The
+probability of distance k from the start carries an error of about
+`10⁻¹⁶·√C(d, k)`. On four cores, Q₆₀ with site dephasing (39 711
+orbitals) evolves for γt = 1 in 3.3 s, and Q₁₀₀ (176 851 orbitals) in
+15 s. With dephasing on every coordinate the walk is a product of
+two-level systems, and the distance follows a binomial law. Without
+dephasing it mixes uniformly at γt = π/4 (Moore and Russell):
+
+```python
+import math
+import numpy as np
+import metatron_qso as q
+
+d, gamma, kappa, t = 40, 0.7, 0.9, 1.3
+walk = q.HypercubeOpenWalk(d, gamma=gamma, coordinate_rate=kappa)
+p = walk.distance_distribution(walk.evolve(walk.localized(), t))
+w = math.sqrt(4 * gamma**2 - kappa**2 / 4)
+z = math.exp(-kappa * t / 2) * (math.cos(w * t) + kappa / (2 * w) * math.sin(w * t))
+flip = (1 - z) / 2
+binom = np.array([math.comb(d, k) * flip**k * (1 - flip) ** (d - k) for k in range(d + 1)])
+assert np.abs(p - binom).max() < 1e-9
+
+coherent = q.HypercubeOpenWalk(d)
+x = coherent.evolve(coherent.localized(), math.pi / 4)
+assert abs(abs(coherent.entry(x, 0, 0, 7)) - 2.0**-d) < 1e-20   # every node 2^-d
+```
+
+`ProductOpenWalk` takes this to any number of factors. A walk on a
+Cartesian product whose factors dephase independently stays a product
+state, so each factor evolves on its own: `[(DephasingWalk(edge, …), 1000)]`
+is Q₁₀₀₀ with coordinate dephasing, and `count_distribution` gives the
+distribution of the distance travelled.
+
+**Coined walks.** `SymmetricCoinedWalk` reduces a `DecoherentCoinedWalk` to
+the orbitals of pairs of arcs. The coin must be invariant under the
+symmetries; the Grover coin always is. Coin dephasing measures each arc's
+label, by default its index among the arcs leaving its node, and that
+label is rarely invariant. On a hypercube, label every arc by the
+coordinate it flips (`with_coin_labels`) and coin dephasing reduces under
+the coordinate permutations. Q₈ with position dephasing (2048 arcs, the
+limit of the full walk) has 1824 orbitals: twenty steps take 1 ms instead
+of 4.9 s on the full density matrix.
+
+```python
+import numpy as np
+import metatron_qso as q
+
+g = q.Graph.hypercube(4)
+walk = q.CoinedWalk(g, "grover")
+labels = [(u ^ v).bit_length() - 1 for u, v in walk.arcs()]
+full = q.DecoherentCoinedWalk(walk, 0.3, 0.2).with_coin_labels(labels)
+reduced = q.SymmetricCoinedWalk(full, q.coordinate_permutations(4))
+p = reduced.node_probabilities(reduced.evolve(reduced.localized(0), 7))
+assert np.abs(p - full.probabilities(0, 7)).max() < 1e-12
+```
+
 ## Perfect state transfer
 
 A walk has *perfect state transfer* (PST) from u to v at time τ if
@@ -159,6 +279,33 @@ fn main() -> Result<()> {
     assert!((p[30] - 1.0).abs() < 1e-10);
     let pst = StateTransfer::from_quotient(&q, Generator::Laplacian, 1.0, 0, 30)?;
     assert!(pst.perfect_transfer_time().is_some());
+    Ok(())
+}
+```
+
+The open walks of this chapter in Rust:
+
+```rust
+use metatron_qso::prelude::*;
+use metatron_qso::walks::symmetric::{HypercubeOpenWalk, coordinate_permutations};
+use metatron_qso::walks::{Dephasing, SymmetricOpenWalk};
+
+fn main() -> Result<()> {
+    let g = metatron_qso::graph::generators::hypercube(10);
+    let walk = SymmetricOpenWalk::new(
+        &g,
+        Generator::Laplacian,
+        1.0,
+        &[Dephasing::sites(1024, 0.5)],
+        &coordinate_permutations(10)?,
+    )?;
+    assert_eq!(walk.num_orbitals(), 286);
+    let p = walk.populations(&walk.evolve(&walk.localized(0)?, 1.0)?)?;
+    assert!((p.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+
+    let big = HypercubeOpenWalk::new(50, 1.0, 0.5, 0.0)?;
+    let d = big.distance_distribution(&big.evolve(&big.localized(), 0.5)?)?;
+    assert!((d.iter().sum::<f64>() - 1.0).abs() < 1e-10);
     Ok(())
 }
 ```
