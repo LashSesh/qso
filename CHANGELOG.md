@@ -68,6 +68,29 @@ All notable changes to this project are documented here. The format follows
     `pea_layered`, and `max_bond` (for `simulator="mps"` only).
   - Learned rates on 7 to 10 qubits (more than 64 generators) now come
     from the new fit; they agree with 1.30 to rounding (about 10⁻¹⁷).
+- **Quantum sensing with NV centres** (milestone 1.37).
+  - `spin::NvCenter` (`spin.NvCenter` in Python): the electron spin 1 of
+    an NV centre with zero-field splitting, Zeeman term, ¹⁴N (hyperfine
+    and quadrupole) or ¹⁵N and ¹³C nuclei (`A_∥`, `A_⊥`) in the secular
+    approximation, in the frame of the microwave; resonance `lines`,
+    pulsed `odmr`, `signal` and `evolve` of sequences on either
+    transition with ideal pulses or finite ones (rotating-wave
+    approximation, both transitions driven, free periods between pulse
+    centres); JSON.
+  - Sequences `ramsey`, `hahn`, `cpmg`, `xy8` (`NvEvent`).
+  - `FieldNoise`: telegraph, Ornstein–Uhlenbeck and 1/f field noise with
+    spectra and correlations; `filter_function` and `decay_exponent`
+    (the Gaussian `χ`, exact in the time domain); `signal_with_noise`
+    averages exactly sampled noise trajectories (with standard errors).
+  - Free evolution in blocks of the electron level, one small factor per
+    nucleus: CPMG-16 with ¹⁴N and six ¹³C (dimension 576) takes 0.3 s.
+  - Validated against the resonance lines `D ± γ_e B ± A_N m_I`, the CPMG
+    closed form of Taminiau et al. for a ¹³C (10⁻¹⁰), an independent
+    NumPy propagation (10⁻¹⁰), the dense propagation, Klauder and
+    Anderson's Ornstein–Uhlenbeck decays (10⁻⁹), a quadrature of the
+    filter-function integral (10⁻⁵), Kubo–Anderson for telegraph noise,
+    and the robustness of XY-8 to pulse errors.
+  - Tutorial `11_nv_sensing`.
 - **Optimal control of spin experiments** (milestone 1.36).
   - GRAPE (`Control`, `SpinSystem::optimize_control`; `spin.Control` in
     Python): piecewise-constant rf amplitudes on several channels

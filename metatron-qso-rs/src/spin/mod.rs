@@ -68,7 +68,9 @@
 //! optimal control (GRAPE) of rf pulses and field profiles, with exact
 //! gradients, by [`Control`] and [`SpinSystem::optimize_control`], and
 //! [`unitary_bound`] gives the largest transfer any pulse sequence can
-//! reach.
+//! reach. [`NvCenter`] is the electron spin of an NV centre in diamond
+//! with its nitrogen and ¹³C nuclei, for sensing sequences (Ramsey,
+//! echoes, CPMG, XY-8) under classical [`FieldNoise`].
 //!
 //! ```
 //! use metatron_qso::spin::{Event, Isotope, SpinSystem, Target};

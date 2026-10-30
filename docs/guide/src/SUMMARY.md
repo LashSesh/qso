@@ -43,6 +43,7 @@
 - [Interacting walkers](tutorials/08_interacting_walks.md)
 - [Hyperpolarisation](tutorials/09_hyperpolarisation.md)
 - [Optimal control of spin experiments](tutorials/10_optimal_control.md)
+- [Quantum sensing with NV centres](tutorials/11_nv_sensing.md)
 
 # Rust tutorials
 

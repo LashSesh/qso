@@ -357,6 +357,99 @@ for b in (2e-3, 5.7e-3, 9e-3):
     print(b, at.polarization(rho, 2))     # −0.009, −0.495, −0.017: largest near 5.7 mT
 ```
 
+## NV centres
+
+A nitrogen-vacancy centre in diamond is an electron spin 1 that is
+pumped into `m_s = 0` and read out optically, coupled to its nitrogen
+nucleus and to nearby ¹³C nuclei. `spin.NvCenter(field, nitrogen,
+carbons)` holds it in a field (T) along its axis, with `"14N"`, `"15N"` or
+no nitrogen and ¹³C couplings `(A_∥, A_⊥)` in Hz, in the secular
+approximation (`D = 2.87 GHz` far above every coupling):
+
+```text
+H/2π = (D − f) S_z² + γ_e B S_z + A_N S_z I_z^N + P (I_z^N)² − γ_N B I_z^N
+     + Σ_k [S_z (A_∥ I_z + A_⊥ I_x)_k − γ_C B I_z^k]
+```
+
+in the frame rotating at the microwave frequency `f`. Only `S_z`
+couples to the nuclei, so a carbon's hyperfine tensor reduces to `A_∥`
+and `A_⊥` (its azimuth can be rotated away, one nucleus at a time). The
+electron starts in `m_s = 0`, the nuclei unpolarised, and every signal is
+the `m_s = 0` population:
+
+```python
+nv = spin.NvCenter(0.0403, nitrogen="14N", carbons=[(60e3, 30e3)])
+print(nv.lines()[:2])       # (1738.42 MHz, 0.083), (1738.48 MHz, 0.083), …
+p = nv.signal(spin.cpmg(64, 0.541e-6))   # 0.13: the carbon's first dip
+```
+
+- **Pulses.** Sequences are lists of `spin.nv_pulse(angle, phase)` and
+  `spin.nv_free(t)`; `ramsey`, `hahn`, `cpmg(n, τ)` and `xy8(n, τ)` build
+  the usual ones, π pulses spaced `2τ`, the last π/2 about `−x` so that
+  the signal is `(1 + coherence)/2`. A pulse drives the transition
+  `0 ↔ transition` (`−1`, the default, or `+1`) at `frequency` (default:
+  on resonance with the bare line, `D ± γ_e B`). With `rabi=None` pulses
+  are ideal: instantaneous and on that transition alone. With a Rabi
+  frequency `Ω` (Hz) the microwave `2π(Ω/√2)(cos φ S_x + sin φ S_y)`
+  (rotating-wave approximation) drives both transitions for `θ/(360°·Ω)`
+  seconds while everything else evolves, and free periods count between
+  pulse centres, as in experiments; a negative angle is the positive one
+  about the opposite axis.
+- **Pulse errors are physical.** Finite pulses are off resonance for the
+  other ¹⁴N lines (±2.14 MHz) and slightly drive the other transition.
+  At 20 MHz the first carbon dip above keeps its depth under XY-8 (0.12)
+  but not under CPMG (0.64): CPMG corrects pulse errors only for coherence
+  along its pulse axis, not for the electron–carbon terms the resonance
+  builds up.
+- **ODMR.** `lines()` gives the resonance lines with their strengths
+  averaged over the nuclei; `odmr(frequencies, rabi, duration)` the
+  `m_s = 0` population after one pulse at each frequency (pulsed ODMR).
+  Continuous-wave ODMR, which needs the optical cycle, is not modelled.
+- **Field noise.** `spin.FieldNoise.telegraph(amplitude, rate)`,
+  `.ornstein_uhlenbeck(sigma, correlation_time)` and `.pink(sigma,
+  lowest, highest, fluctuators)` describe classical noise `b(t)` (Hz)
+  along the axis, coupling as `2π b(t) S_z`; 1/f noise is a sum of
+  Ornstein–Uhlenbeck fluctuators with corners spaced evenly in their
+  logarithm. `spectrum(ω)` and `correlation(τ)` give its spectrum and
+  correlation function.
+- **Filter functions.** For ideal pulses `spin.filter_function(events, ω)`
+  is `|Y(ω)|²` (s²), `Y` the Fourier transform of the sign of the
+  coherence (Cywiński et al., Phys. Rev. B 77, 174509 (2008)), and
+  `spin.decay_exponent(events, noise)` is `χ = ½⟨φ²⟩ = 2π∫₀^∞ S(ω)|Y(ω)|²
+  dω`, computed exactly in the time domain. The coherence of Gaussian
+  noise decays as `e^{−χ}`; telegraph noise is not Gaussian, and its
+  `χ` is only the second-order term.
+- **Exact trajectories.** `signal_with_noise(events, noise, trajectories,
+  seed)` averages the signal over sampled noise paths and returns the
+  mean and its standard error. Between pulses `S_z` commutes with the
+  Hamiltonian, so a path enters as the phase `2π∫b dt` of each period,
+  sampled exactly (jointly Gaussian with the end value for
+  Ornstein–Uhlenbeck noise, from the flip times for telegraph noise).
+  During finite pulses the noise is held at its exact mean over each of
+  16 pieces.
+
+```python
+noise = spin.FieldNoise.ornstein_uhlenbeck(2e5, 1e-6)   # 200 kHz, 1 μs
+bare = spin.NvCenter(0.0403)
+for events in (spin.ramsey(1e-6), spin.hahn(1e-6), spin.cpmg(8, 0.125e-6)):
+    chi = spin.decay_exponent(events, noise)
+    mean, err = bare.signal_with_noise(events, noise, 20000, seed=1)
+    print((1 + math.exp(-chi)) / 2, mean, err)
+# 0.7797 0.7791 0.0017 / 0.7940 0.7929 0.0016 / 0.99193 0.99195 0.00008
+```
+
+- **Cost.** In the secular approximation the Hamiltonian is block
+  diagonal in the electron level and, within a block, a sum of one term
+  per nucleus, so free evolution applies one 2 × 2 or 3 × 3 factor per
+  nucleus to each block; equal periods and pulses are computed once.
+  CPMG-64 with ¹⁴N and one ¹³C (dimension 18) takes 0.5 ms with ideal
+  pulses and 1.2 ms with finite ones; CPMG-16 with ¹⁴N and six ¹³C
+  (dimension 576, the largest with ¹⁴N) 0.3 s and 8.5 s (a finite pulse
+  is a full matrix exponential). 10⁴ noisy trajectories of CPMG-16 on a
+  bare centre take 0.05 s (1.4 s with finite pulses); each finite pulse
+  under noise costs sixteen full exponentials, and trajectories beyond the
+  work limit are refused before they start.
+
 ## Validation
 
 - **Single spins and pairs, against closed forms.** The FID
@@ -466,3 +559,20 @@ On the command line, `qso spins system.json --observe 13C --sequence
 events.json` prints the lines and polarisations after a sequence
 (`metatron-qso-rs/examples/spins`). `--initial pasadena:0,1` starts from
 parahydrogen averaged at high field.
+
+- **NV centres.** The lines lie at `D ± γ_e B` split by `A_N m_I` to
+  10⁻³ Hz, and pulsed ODMR dips to 2/3 at each ¹⁴N line. The CPMG signal
+  of a ¹³C (A_∥ = 60 kHz, A_⊥ = 30 kHz, 40 mT, with ¹⁴N) follows the
+  closed form of Taminiau et al. (Phys. Rev. Lett. 109, 137602 (2012))
+  to 10⁻¹⁰ over 1360 spacings, with six dips within 1.5 % of
+  `τ_k = (2k − 1)π/(2ω_L + A_∥)`. An independent NumPy propagation
+  (¹⁴N and two ¹³C, both transitions, ideal and finite pulses, a
+  negative angle) agrees to 10⁻¹⁰, and the block propagation agrees with
+  the dense one for arbitrary states to 10⁻¹⁰. The decay exponents of
+  Ornstein–Uhlenbeck noise equal the closed forms of Klauder and
+  Anderson for Ramsey and Hahn echoes to 10⁻⁹ and a quadrature of
+  `S(ω)|Y(ω)|²` for 1/f noise to 10⁻⁵; trajectories match `e^{−χ}` within
+  their statistical error, and telegraph noise the exact Kubo–Anderson
+  results of 1.30. With 20 MHz pulses, XY-8 keeps the first three carbon
+  dips within 0.03 of the ideal ones; CPMG loses more than 0.3 of their
+  depth.

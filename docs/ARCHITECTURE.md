@@ -459,6 +459,23 @@ block exponentials per coherence-order block (a field keeps the orders),
 with the field derivative of the whole generator by Richardson-
 extrapolated central differences.
 
+NV centres (`spin/nv.rs`) use the secular Hamiltonian, which is block
+diagonal in the electron level `a` (`m = +1, 0, −1`) and, within a block,
+a sum of one term per nucleus (`S_z` alone couples to the nuclei, and
+they do not couple to each other): `e^{−iHt} = ⊕_a e^{−iE_a t} ⊗_k
+e^{−i h_a^k t}`. The density matrix is kept as its 3 × 3 blocks; a free
+period multiplies each block above the diagonal by the factors of its two
+levels, one 2 × 2 or 3 × 3 matrix per nucleus applied along that
+nucleus's index (`apply_factors`), and mirrors the rest; an ideal pulse
+combines blocks with the electron's 3 × 3 unitary; a finite pulse, which
+mixes the levels while the nuclei evolve, is the exponential of the full
+Hamiltonian (`cmul` on the whole matrix). A `Plan` computes each distinct
+period and pulse once. Noise trajectories add `exp(−2πi I S_z)` to each
+period, a phase per block, with `I = ∫b dt` sampled exactly; during
+finite pulses the noise is held at its exact mean over 16 pieces. The
+Gaussian decay exponent sums the exactly integrated exponential
+correlations of every pair of free periods.
+
 ## Hamiltonian simulation and chemistry (`algorithms/time_evolution.rs`, `chemistry/`)
 
 Every exponential of a Pauli string becomes `Circuit::pauli_rotation`: a
