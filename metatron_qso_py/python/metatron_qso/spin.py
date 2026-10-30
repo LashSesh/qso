@@ -19,7 +19,9 @@ sequences are lists of events::
 """
 
 from ._core import (
+    Control,
     Exchange,
+    Profile,
     SpinEvent,
     SpinSystem,
     axial_csa,
@@ -31,8 +33,10 @@ from ._core import (
     s2m,
     spin_echo,
     spin_lock,
+    unitary_bound,
 )
 from ._core import fid_spectrum as spectrum
+from ._core import spin_control as control
 from ._core import spin_delay as delay
 from ._core import spin_field as set_field
 from ._core import spin_pulse as pulse
@@ -40,10 +44,13 @@ from ._core import spin_shaped as shaped
 from ._core import spin_sweep as sweep
 
 __all__ = [
+    "Control",
     "Exchange",
+    "Profile",
     "SpinEvent",
     "SpinSystem",
     "axial_csa",
+    "control",
     "delay",
     "gyromagnetic_ratio",
     "inept",
@@ -58,4 +65,5 @@ __all__ = [
     "spin_echo",
     "spin_lock",
     "sweep",
+    "unitary_bound",
 ]

@@ -446,3 +446,93 @@ fn exchange_input_is_checked() {
     let s = sabre(1e-6, 2.0, 0.5);
     assert_eq!(Exchange::from_json(&s.to_json()).unwrap(), s);
 }
+
+#[test]
+fn field_profiles_have_exact_gradients_and_beat_a_constant_field() {
+    // SABRE build-up over 10 s from thermal: the transfer and its
+    // gradient against evolve and central differences, then a profile
+    // that polarises the free ¹⁵N more than the best constant field.
+    let x = sabre(1.4e-7, 2.0, 0.5);
+    let start = x.thermal_state().unwrap();
+    let mut target: Vec<CMatrix> = x
+        .sites
+        .iter()
+        .map(|s| CMatrix::zeros(s.system.dimension(), s.system.dimension()))
+        .collect();
+    target[1] = x.sites[1].system.iz(0).unwrap() * C64::new(2.0, 0.0);
+    let p = Profile {
+        min: 0.0,
+        max: 4e-7,
+        duration: 10.0,
+        steps: 8,
+        initial: start.clone(),
+        target: target.clone(),
+        smoothness: 0.0,
+    };
+    let fields: Vec<f64> = (0..8).map(|k| 1e-7 + 2e-8 * k as f64).collect();
+    let (value, grad) = x.profile_transfer(&p, &fields).unwrap();
+    let events: Vec<Event> = fields
+        .iter()
+        .flat_map(|&b| [Event::Field(b), Event::Delay(10.0 / 8.0)])
+        .collect();
+    let want = x
+        .polarization(&x.evolve(&start, &events).unwrap(), 1, 0)
+        .unwrap();
+    assert!((value - want).abs() < 1e-10, "{value} vs {want}");
+    let h = 1e-11;
+    for k in 0..8 {
+        let mut up = fields.clone();
+        up[k] += h;
+        let mut down = fields.clone();
+        down[k] -= h;
+        let fd = (x.profile_transfer(&p, &up).unwrap().0
+            - x.profile_transfer(&p, &down).unwrap().0)
+            / (2.0 * h);
+        let scale = grad.iter().fold(0.0f64, |m, g| m.max(g.abs()));
+        assert!(
+            (fd - grad[k]).abs() < 1e-6 * scale,
+            "{k}: {fd} vs {}",
+            grad[k]
+        );
+    }
+    // Over 5 s the best constant field (on a 1 nT grid) is the
+    // anti-crossing, 0.138 μT; optimising ten steps from 0.1 μT finds it
+    // and gains nothing beyond it (the exchange is steady).
+    let short = Profile {
+        duration: 5.0,
+        steps: 1,
+        ..p.clone()
+    };
+    let (best, top) = (0..=60)
+        .map(|k| {
+            let b = 0.10e-6 + 1e-9 * k as f64;
+            (b, x.profile_transfer(&short, &[b]).unwrap().0)
+        })
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .unwrap();
+    assert!((best - 0.138e-6).abs() < 1.5e-9, "{best}");
+    let ten = Profile {
+        steps: 10,
+        ..short.clone()
+    };
+    let got = x
+        .optimize_profile(
+            &ten,
+            &[0.1e-6; 10],
+            &Options {
+                max_iterations: 300,
+                ..Options::default()
+            },
+        )
+        .unwrap();
+    assert!(
+        got.transfer >= top - 1e-6 && got.transfer <= top + 1e-5,
+        "{} vs {top}",
+        got.transfer
+    );
+    assert!(
+        got.controls.iter().all(|b| (b / best - 1.0).abs() < 0.03),
+        "{:?}",
+        got.controls
+    );
+}

@@ -101,7 +101,7 @@ mod tests;
 mod transfer_tests;
 
 pub use control::{Control, Drive, Member, Optimized, unitary_bound};
-pub use exchange::{Channel, Exchange, Fresh, Site};
+pub use exchange::{Channel, Exchange, Fresh, Profile, Site};
 pub use redfield::{MU0_OVER_4PI, axial_csa};
 
 /// Reduced Planck constant (J s, CODATA 2018, exact).

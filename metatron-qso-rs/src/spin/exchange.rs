@@ -34,9 +34,11 @@ use num_complex::Complex64 as C64;
 use serde::{Deserialize, Serialize};
 
 use super::blocks::{Liouville, LiouvilleBlock, Sparse};
+use super::control::{Control, Entries, Generator, Optimized, expmv, frechet, substeps};
 use super::{Event, Frame, Isotope, ONE, SpinSystem, Target, ZERO, check_field, check_time};
 use crate::error::{QsoError, Result};
 use crate::linalg::CMatrix;
+use crate::optimize::{GradObjective, Method, Options, minimize};
 
 /// Smallest pivot, relative to the largest, of the scaled steady-state
 /// equations that counts as nonzero.
@@ -929,6 +931,286 @@ impl Exchange {
             }
         }
         Ok(out)
+    }
+}
+
+/// A field profile for an [`Exchange`]: the field (T) constant over
+/// `steps` equal steps of `duration` s and between `min` and `max`, taking
+/// the states `initial` (normalised, one per site) towards the largest
+/// `Σ_s Re Tr(C_s† ρ_s(T))` with `C_s = target[s]`, less `smoothness ·
+/// Σ (B_{k+1} − B_k)²`. See [`Exchange::optimize_profile`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct Profile {
+    pub min: f64,
+    pub max: f64,
+    pub duration: f64,
+    pub steps: usize,
+    pub initial: Vec<CMatrix>,
+    pub target: Vec<CMatrix>,
+    pub smoothness: f64,
+}
+
+impl Profile {
+    /// The equivalent control problem of one system, for its mapping of
+    /// bounded fields and its penalty.
+    fn shape(&self) -> Control {
+        let mut c = Control::field(
+            self.min,
+            self.max,
+            self.duration,
+            self.steps,
+            CMatrix::zeros(1, 1),
+            CMatrix::zeros(1, 1),
+        );
+        c.smoothness = self.smoothness;
+        c
+    }
+}
+
+impl Exchange {
+    fn check_profile(&self, p: &Profile, fields: &[f64]) -> Result<()> {
+        self.validate()?;
+        self.check_states(&p.initial)?;
+        if p.target.len() != self.sites.len()
+            || p.target.iter().zip(&self.sites).any(|(c, s)| {
+                c.nrows() != s.system.dimension() || c.ncols() != s.system.dimension()
+            })
+        {
+            return Err(QsoError::invalid(
+                "target",
+                "one operator per site, of its dimension",
+            ));
+        }
+        check_time("duration", p.duration)?;
+        if p.duration == 0.0 || p.steps == 0 || p.steps > super::MAX_SEGMENTS {
+            return Err(QsoError::invalid(
+                "profile",
+                format!("a positive duration in 1..={} steps", super::MAX_SEGMENTS),
+            ));
+        }
+        if !(p.min.is_finite() && p.max.is_finite() && 0.0 <= p.min && p.min < p.max) {
+            return Err(QsoError::invalid("field", "0 ≤ min < max"));
+        }
+        if !(p.smoothness.is_finite() && p.smoothness >= 0.0) {
+            return Err(QsoError::invalid("smoothness", "finite and ≥ 0"));
+        }
+        if fields.len() != p.steps {
+            return Err(QsoError::DimensionMismatch {
+                expected: p.steps,
+                actual: fields.len(),
+            });
+        }
+        if fields
+            .iter()
+            .any(|b| !(b.is_finite() && p.min <= *b && *b <= p.max))
+        {
+            return Err(QsoError::invalid("fields", "finite and within [min, max]"));
+        }
+        Ok(())
+    }
+
+    /// The generator blocks at field `b` (unscaled, unshifted) and their
+    /// derivatives with respect to the field: exact for the Hamiltonian,
+    /// which is linear in it, by central differences for relaxation and
+    /// thermal populations, which are not.
+    fn blocks_at(
+        &self,
+        b: f64,
+        span: f64,
+        keep: &[bool],
+    ) -> Result<Vec<Option<(CMatrix, Entries)>>> {
+        let full = |b: f64| -> Result<Vec<CMatrix>> {
+            let (_, blocks) = self.generators(b, 1.0, None)?;
+            Ok(blocks
+                .into_iter()
+                .map(|block| {
+                    // Undo the shift by the mean precession (zero for the
+                    // augmented block of populations).
+                    let mut g = block.generator;
+                    for i in 0..g.nrows() {
+                        g[(i, i)] += block.shift;
+                    }
+                    g
+                })
+                .collect())
+        };
+        let h = 1e-5 * b.abs().max(span);
+        let (centre, plus, minus) = (full(b)?, full(b + h)?, full(b - h)?);
+        Ok(centre
+            .into_iter()
+            .zip(plus.into_iter().zip(minus))
+            .zip(keep)
+            .map(|((g, (p, m)), &k)| {
+                k.then(|| {
+                    let d = (p - m) * C64::new(0.5 / h, 0.0);
+                    (g, Entries::from_dense(&d))
+                })
+            })
+            .collect())
+    }
+
+    /// `Σ_s Re Tr(C_s† ρ_s(T))` under the field profile `fields` and its
+    /// gradient with respect to the fields: exact up to rounding for the
+    /// coherent part, the field dependence of relaxation and fresh thermal
+    /// states by central differences (about 10⁻⁹ of it).
+    pub fn profile_transfer(&self, p: &Profile, fields: &[f64]) -> Result<(f64, Vec<f64>)> {
+        self.check_profile(p, fields)?;
+        let dt = p.duration / p.steps as f64;
+        let joint = self.joint(None);
+        let x0 = self.deviations(&p.initial);
+        let mut constant = 0.0;
+        for (c, site) in p.target.iter().zip(&self.sites) {
+            constant += c.trace().re / site.system.dimension() as f64;
+        }
+        // Initial vectors and targets per block; blocks the target does
+        // not see are skipped.
+        let mut starts = Vec::new();
+        let mut targets = Vec::new();
+        let mut keep = Vec::new();
+        for (order, parts, n) in &joint.blocks {
+            let augmented = order.iter().all(|&q| q == 0);
+            let size = n + usize::from(augmented);
+            let mut x = DVector::zeros(size);
+            let mut l = DVector::zeros(size);
+            let mut i = 0;
+            for &(s, k, _) in parts {
+                let c = self.sites[s].concentration;
+                for &(a, b) in &joint.liouvilles[s].blocks[k].1 {
+                    x[i] = x0[s][(a, b)];
+                    l[i] = p.target[s][(a, b)] / c;
+                    i += 1;
+                }
+            }
+            if augmented {
+                x[*n] = C64::new(1.0, 0.0);
+            }
+            keep.push(l.iter().any(|z| *z != ZERO));
+            starts.push(x);
+            targets.push(l);
+        }
+        let span = p.max;
+        // Cost of one evaluation, from the first step's blocks.
+        let first = self.blocks_at(fields[0], span, &keep)?;
+        let mut work = 0.0;
+        for block in first.iter().flatten() {
+            let n = block.0.nrows() as f64;
+            let norm = crate::linalg::dense::one_norm(&block.0);
+            work += (substeps(norm * dt) * 20 * 6) as f64 * 8.0 * n * n + 30.0 * n * n * n;
+        }
+        check_work(
+            &format!("a field profile of {} steps", p.steps),
+            work * p.steps as f64,
+        )?;
+        let no_ops: [Entries; 0] = [];
+        let mut states: Vec<Vec<DVector<C64>>> = vec![starts];
+        for &b in fields {
+            let blocks = self.blocks_at(b, span, &keep)?;
+            let last = states.last().expect("start");
+            let next = blocks
+                .iter()
+                .zip(last)
+                .map(|(block, x)| match block {
+                    Some((g, _)) => {
+                        let forward = Generator {
+                            dense: g,
+                            ops: &no_ops,
+                            u: &[],
+                            adjoint: false,
+                        };
+                        expmv(&forward, x, dt, crate::linalg::dense::one_norm(g))
+                    }
+                    None => x.clone(),
+                })
+                .collect();
+            states.push(next);
+        }
+        let end = states.last().expect("end");
+        let value = constant
+            + end
+                .iter()
+                .zip(&targets)
+                .map(|(x, l)| l.dotc(x).re)
+                .sum::<f64>();
+        let mut grad = vec![0.0; p.steps];
+        let mut lambdas = targets;
+        for k in (0..p.steps).rev() {
+            let blocks = self.blocks_at(fields[k], span, &keep)?;
+            for ((block, x), lambda) in blocks.iter().zip(&states[k]).zip(lambdas.iter_mut()) {
+                let Some((g, d)) = block else { continue };
+                let norm = crate::linalg::dense::one_norm(g);
+                let forward = Generator {
+                    dense: g,
+                    ops: &no_ops,
+                    u: &[],
+                    adjoint: false,
+                };
+                grad[k] += frechet(&forward, &[d], x, lambda, dt, norm)[0];
+                let back = Generator {
+                    dense: g,
+                    ops: &no_ops,
+                    u: &[],
+                    adjoint: true,
+                };
+                *lambda = expmv(&back, lambda, dt, norm);
+            }
+        }
+        Ok((value, grad))
+    }
+
+    /// Optimise a field profile from `start` (fields within the limits)
+    /// with L-BFGS.
+    pub fn optimize_profile(
+        &self,
+        p: &Profile,
+        start: &[f64],
+        options: &Options,
+    ) -> Result<Optimized> {
+        self.check_profile(p, start)?;
+        let shape = p.shape();
+        let (first, _) = self.profile_transfer(p, &shape.physical(&shape.free(start)).0)?;
+        // The optimiser sees the transfer in units of its starting size.
+        let norm: f64 = p
+            .target
+            .iter()
+            .map(|c| c.iter().map(|z| z.norm_sqr()).sum::<f64>())
+            .sum::<f64>()
+            .sqrt();
+        let size = if first.abs() > 1e-12 * norm {
+            first.abs()
+        } else {
+            norm.max(1e-300)
+        };
+        let failure = std::sync::Mutex::new(None);
+        let objective = GradObjective::new(p.steps, |v: &[f64]| {
+            let (u, jac) = shape.physical(v);
+            match self.profile_transfer(p, &u) {
+                Ok((value, grad)) => {
+                    let (pen, pg) = shape.penalty(&u);
+                    let g: Vec<f64> = grad.iter().zip(&pg).map(|(a, b)| (b - a) / size).collect();
+                    ((pen - value) / size, shape.chain(&jac, &g))
+                }
+                Err(e) => {
+                    *failure.lock().expect("unpoisoned") = Some(e);
+                    (f64::INFINITY, vec![0.0; v.len()])
+                }
+            }
+        });
+        let result = minimize(&objective, &shape.free(start), &Method::lbfgs(), options)?;
+        if let Some(e) = failure.into_inner().expect("unpoisoned") {
+            return Err(e);
+        }
+        let (controls, _) = shape.physical(&result.x);
+        let (transfer, _) = self.profile_transfer(p, &controls)?;
+        Ok(Optimized {
+            objective: transfer - shape.penalty(&controls).0,
+            members: vec![transfer],
+            controls,
+            transfer,
+            iterations: result.iterations,
+            evaluations: result.evaluations,
+            converged: result.converged,
+            message: result.message,
+        })
     }
 }
 

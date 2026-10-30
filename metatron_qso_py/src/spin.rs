@@ -2,9 +2,11 @@
 
 use metatron_qso::C64;
 use metatron_qso::linalg::CMatrix;
+use metatron_qso::optimize::Options;
 use metatron_qso::spin::{
-    Channel, Event, Exchange, Frame, Fresh, Isotope, Segment, Spectrum, SpinSystem, Target,
-    axial_csa, inept, inept_cycle, inversion_recovery, m2s, s2m, spin_echo, spin_lock,
+    Channel, Control, Drive, Event, Exchange, Frame, Fresh, Isotope, Member, Optimized, Profile,
+    Segment, Spectrum, SpinSystem, Target, axial_csa, inept, inept_cycle, inversion_recovery, m2s,
+    s2m, spin_echo, spin_lock, unitary_bound,
 };
 use numpy::{IntoPyArray, PyArray1, PyArray2};
 use pyo3::exceptions::PyValueError;
@@ -13,7 +15,8 @@ use pyo3::types::{PyBool, PyDict};
 
 use crate::graph::PyGraph;
 use crate::{
-    ComplexArg, ComplexMatrixArg, Raise, cmatrix, complex_vec, invalid, pydict, square_complex,
+    ComplexArg, ComplexMatrixArg, Raise, RealArg, cmatrix, complex_vec, invalid, pydict,
+    real_array, real_vec, square_complex,
 };
 
 fn isotope(name: &str) -> PyResult<Isotope> {
@@ -102,6 +105,27 @@ fn shaped(target: &Bound<'_, PyAny>, segments: Vec<(f64, f64, f64)>) -> PyResult
                     amplitude,
                     phase,
                 })
+                .collect(),
+        },
+    })
+}
+
+/// Radiofrequency fields on several channels at once (rotating frame):
+/// during step `k` (of `step` s) the amplitudes `amplitudes[k][c] = (x,
+/// y)` (Hz) on `targets[c]`. The pulses of `SpinSystem.optimize_control`.
+#[pyfunction(name = "spin_control")]
+fn control_event(
+    targets: Vec<Bound<'_, PyAny>>,
+    step: f64,
+    amplitudes: Vec<Vec<(f64, f64)>>,
+) -> PyResult<PyEvent> {
+    Ok(PyEvent {
+        inner: Event::Control {
+            targets: targets.iter().map(target).collect::<PyResult<_>>()?,
+            step,
+            amplitudes: amplitudes
+                .into_iter()
+                .map(|row| row.into_iter().map(|(x, y)| [x, y]).collect())
                 .collect(),
         },
     })
@@ -221,6 +245,239 @@ fn gyromagnetic_ratio(isotope_name: &str) -> PyResult<f64> {
 /// A molecule's nuclear spins: isotopes, shifts (ppm), couplings (Hz),
 /// the field (T), the temperature (K) and the frame (`"rotating"` or
 /// `"laboratory"`). States are density matrices (NumPy, complex).
+/// A square complex matrix of any dimension.
+fn any_matrix(name: &str, m: &ComplexMatrixArg<'_>) -> PyResult<CMatrix> {
+    let (d, data) = square_complex(name, m)?;
+    Ok(CMatrix::from_row_slice(d, d, &data))
+}
+
+/// The largest `Re Tr(C ρ')` over all `ρ' = UρU†` (Hermitian `ρ` and
+/// `C`): the sum of products of their ordered eigenvalues (Glaser et al.
+/// 1998).
+#[pyfunction(name = "unitary_bound")]
+fn py_unitary_bound(rho: ComplexMatrixArg<'_>, target: ComplexMatrixArg<'_>) -> PyResult<f64> {
+    unitary_bound(&any_matrix("rho", &rho)?, &any_matrix("target", &target)?).raise()
+}
+
+/// An optimal-control problem (GRAPE): controls constant over `steps`
+/// equal steps of `duration` s, maximising `Re Tr(C† ρ(T))` from
+/// `initial` to `target`. Made by `Control.rf` or `Control.field`.
+#[pyclass(name = "Control", module = "metatron_qso")]
+#[derive(Clone)]
+pub struct PyControl {
+    inner: Control,
+}
+
+#[pymethods]
+impl PyControl {
+    /// rf controls on `targets` (isotope names or spin indices): an x and
+    /// a y amplitude (Hz) per channel and step, each pair at most `limit`
+    /// Hz if given (rotating frame).
+    #[staticmethod]
+    #[pyo3(signature = (targets, duration, steps, initial, target, limit = None))]
+    fn rf(
+        targets: Vec<Bound<'_, PyAny>>,
+        duration: f64,
+        steps: usize,
+        initial: ComplexMatrixArg<'_>,
+        target: ComplexMatrixArg<'_>,
+        limit: Option<f64>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            inner: Control::rf(
+                targets.iter().map(self::target).collect::<PyResult<_>>()?,
+                limit,
+                duration,
+                steps,
+                any_matrix("initial", &initial)?,
+                any_matrix("target", &target)?,
+            ),
+        })
+    }
+
+    /// A field profile (T) between `minimum` and `maximum`.
+    #[staticmethod]
+    fn field(
+        minimum: f64,
+        maximum: f64,
+        duration: f64,
+        steps: usize,
+        initial: ComplexMatrixArg<'_>,
+        target: ComplexMatrixArg<'_>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            inner: Control::field(
+                minimum,
+                maximum,
+                duration,
+                steps,
+                any_matrix("initial", &initial)?,
+                any_matrix("target", &target)?,
+            ),
+        })
+    }
+
+    /// Members `(weight, rf scales per channel, offsets per channel in
+    /// Hz)`; empty lists mean 1 and 0. Empty: the ideal member alone.
+    #[getter]
+    fn ensemble(&self) -> Vec<(f64, Vec<f64>, Vec<f64>)> {
+        self.inner
+            .ensemble
+            .iter()
+            .map(|m| (m.weight, m.scales.clone(), m.offsets.clone()))
+            .collect()
+    }
+
+    #[setter]
+    fn set_ensemble(&mut self, members: Vec<(f64, Vec<f64>, Vec<f64>)>) {
+        self.inner.ensemble = members
+            .into_iter()
+            .map(|(weight, scales, offsets)| Member {
+                weight,
+                scales,
+                offsets,
+            })
+            .collect();
+    }
+
+    /// Weight of `Σ u² Δt` subtracted from the transfer.
+    #[getter]
+    fn power(&self) -> f64 {
+        self.inner.power
+    }
+
+    #[setter]
+    fn set_power(&mut self, value: f64) {
+        self.inner.power = value;
+    }
+
+    /// Weight of `Σ (u_{k+1} − u_k)²` subtracted from the transfer.
+    #[getter]
+    fn smoothness(&self) -> f64 {
+        self.inner.smoothness
+    }
+
+    #[setter]
+    fn set_smoothness(&mut self, value: f64) {
+        self.inner.smoothness = value;
+    }
+
+    #[getter]
+    fn steps(&self) -> usize {
+        self.inner.steps
+    }
+
+    #[getter]
+    fn duration(&self) -> f64 {
+        self.inner.duration
+    }
+
+    fn __len__(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Seeded random controls: amplitudes in a disc of radius `scale` Hz,
+    /// or fields uniform in the range.
+    #[pyo3(signature = (seed = 0, scale = 100.0))]
+    fn random_start<'py>(
+        &self,
+        py: Python<'py>,
+        seed: u64,
+        scale: f64,
+    ) -> Bound<'py, PyArray1<f64>> {
+        real_array(py, self.inner.random_start(seed, scale))
+    }
+
+    fn __repr__(&self) -> String {
+        let what = match &self.inner.drive {
+            Drive::Rf { targets, .. } => format!("rf on {} channels", targets.len()),
+            Drive::Field { .. } => "field".to_string(),
+        };
+        format!(
+            "Control({what}, {} s in {} steps)",
+            self.inner.duration, self.inner.steps
+        )
+    }
+}
+
+/// A field profile for an `Exchange`: the field constant over `steps`
+/// steps of `duration` s between `minimum` and `maximum` (T), from
+/// `initial` (one state per site) towards the largest `Σ_s Re Tr(C_s†
+/// ρ_s(T))`, `C_s = target[s]`, less `smoothness · Σ (ΔB)²`.
+#[pyclass(name = "Profile", module = "metatron_qso")]
+#[derive(Clone)]
+pub struct PyProfile {
+    inner: Profile,
+}
+
+#[pymethods]
+impl PyProfile {
+    #[new]
+    #[pyo3(signature = (minimum, maximum, duration, steps, initial, target, smoothness = 0.0))]
+    fn new(
+        minimum: f64,
+        maximum: f64,
+        duration: f64,
+        steps: usize,
+        initial: Vec<ComplexMatrixArg<'_>>,
+        target: Vec<ComplexMatrixArg<'_>>,
+        smoothness: f64,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            inner: Profile {
+                min: minimum,
+                max: maximum,
+                duration,
+                steps,
+                initial: initial
+                    .iter()
+                    .map(|m| any_matrix("initial", m))
+                    .collect::<PyResult<_>>()?,
+                target: target
+                    .iter()
+                    .map(|m| any_matrix("target", m))
+                    .collect::<PyResult<_>>()?,
+                smoothness,
+            },
+        })
+    }
+
+    #[getter]
+    fn steps(&self) -> usize {
+        self.inner.steps
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Profile({}..{} T, {} s in {} steps)",
+            self.inner.min, self.inner.max, self.inner.duration, self.inner.steps
+        )
+    }
+}
+
+/// The outcome of an optimisation as a dict.
+fn optimized<'py>(py: Python<'py>, r: Optimized) -> PyResult<Bound<'py, PyDict>> {
+    Ok(pydict!(py, {
+        "controls" => real_array(py, r.controls),
+        "transfer" => r.transfer,
+        "members" => r.members,
+        "objective" => r.objective,
+        "iterations" => r.iterations,
+        "evaluations" => r.evaluations,
+        "converged" => r.converged,
+        "message" => r.message,
+    }))
+}
+
+fn options(max_iterations: usize) -> Options {
+    Options {
+        max_iterations,
+        g_tol: 1e-10,
+        record_history: false,
+        ..Options::default()
+    }
+}
+
 #[pyclass(name = "SpinSystem", module = "metatron_qso")]
 #[derive(Clone)]
 pub struct PySpinSystem {
@@ -644,6 +901,59 @@ impl PySpinSystem {
     }
 
     /// The system as JSON.
+    /// The transfer `Re Tr(C† ρ(T))` (averaged over the ensemble) of the
+    /// controls `u` and its exact gradient.
+    fn control_transfer<'py>(
+        &self,
+        py: Python<'py>,
+        control: PyRef<'_, PyControl>,
+        u: RealArg<'_>,
+    ) -> PyResult<(f64, Bound<'py, PyArray1<f64>>)> {
+        let u = real_vec(&u);
+        let (sys, c) = (&self.inner, &control.inner);
+        let (value, grad) = py.detach(|| sys.control_transfer(c, &u)).raise()?;
+        Ok((value, real_array(py, grad)))
+    }
+
+    /// Optimise the controls with L-BFGS from `start` (default: random of
+    /// `scale` Hz, or uniform fields, seeded): a dict with `controls`,
+    /// `transfer`, `members`, `objective`, `iterations`, `evaluations`,
+    /// `converged` and `message`.
+    #[pyo3(signature = (control, start = None, seed = 0, scale = 100.0, max_iterations = 500))]
+    fn optimize_control<'py>(
+        &self,
+        py: Python<'py>,
+        control: PyRef<'_, PyControl>,
+        start: Option<RealArg<'_>>,
+        seed: u64,
+        scale: f64,
+        max_iterations: usize,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let c = &control.inner;
+        let start = match start {
+            Some(s) => real_vec(&s),
+            None => c.random_start(seed, scale),
+        };
+        let sys = &self.inner;
+        let r = py
+            .detach(|| sys.optimize_control(c, &start, &options(max_iterations)))
+            .raise()?;
+        optimized(py, r)
+    }
+
+    /// The events that apply controls `u` in `evolve`.
+    fn control_events(
+        &self,
+        control: PyRef<'_, PyControl>,
+        u: RealArg<'_>,
+    ) -> PyResult<Vec<PyEvent>> {
+        Ok(wrap(
+            self.inner
+                .control_events(&control.inner, &real_vec(&u))
+                .raise()?,
+        ))
+    }
+
     fn to_json(&self) -> String {
         self.inner.to_json()
     }
@@ -685,6 +995,10 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_s2m, m)?)?;
     m.add_function(wrap_pyfunction!(py_spin_lock, m)?)?;
     m.add_class::<PyExchange>()?;
+    m.add_class::<PyControl>()?;
+    m.add_class::<PyProfile>()?;
+    m.add_function(wrap_pyfunction!(control_event, m)?)?;
+    m.add_function(wrap_pyfunction!(py_unitary_bound, m)?)?;
     Ok(())
 }
 
@@ -870,6 +1184,38 @@ impl PyExchange {
     ) -> PyResult<f64> {
         let states = self.states(&states)?;
         self.inner.polarization(&states, site, spin).raise()
+    }
+
+    /// `Σ_s Re Tr(C_s† ρ_s(T))` under the field profile `fields` (T per
+    /// step) and its gradient.
+    fn profile_transfer<'py>(
+        &self,
+        py: Python<'py>,
+        profile: PyRef<'_, PyProfile>,
+        fields: RealArg<'_>,
+    ) -> PyResult<(f64, Bound<'py, PyArray1<f64>>)> {
+        let b = real_vec(&fields);
+        let (x, p) = (&self.inner, &profile.inner);
+        let (value, grad) = py.detach(|| x.profile_transfer(p, &b)).raise()?;
+        Ok((value, real_array(py, grad)))
+    }
+
+    /// Optimise a field profile with L-BFGS from `start` (fields within
+    /// the range): a dict as `SpinSystem.optimize_control` returns.
+    #[pyo3(signature = (profile, start, max_iterations = 500))]
+    fn optimize_profile<'py>(
+        &self,
+        py: Python<'py>,
+        profile: PyRef<'_, PyProfile>,
+        start: RealArg<'_>,
+        max_iterations: usize,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let start = real_vec(&start);
+        let (x, p) = (&self.inner, &profile.inner);
+        let r = py
+            .detach(|| x.optimize_profile(p, &start, &options(max_iterations)))
+            .raise()?;
+        optimized(py, r)
     }
 
     fn to_json(&self) -> String {

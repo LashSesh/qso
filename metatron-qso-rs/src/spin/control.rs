@@ -229,7 +229,7 @@ impl Control {
     /// units of the controls, and the map is the identity near zero
     /// amplitude (or the middle of the field range), so that the
     /// optimiser's steps keep their scale.
-    fn physical(&self, v: &[f64]) -> (Vec<f64>, Vec<f64>) {
+    pub(super) fn physical(&self, v: &[f64]) -> (Vec<f64>, Vec<f64>) {
         match &self.drive {
             Drive::Rf { limit: None, .. } => (v.to_vec(), Vec::new()),
             Drive::Rf { limit: Some(l), .. } => {
@@ -273,7 +273,7 @@ impl Control {
     }
 
     /// Free variables of physical controls (inside the limits).
-    fn free(&self, u: &[f64]) -> Vec<f64> {
+    pub(super) fn free(&self, u: &[f64]) -> Vec<f64> {
         match &self.drive {
             Drive::Rf { limit: None, .. } => u.to_vec(),
             Drive::Rf { limit: Some(l), .. } => {
@@ -300,7 +300,7 @@ impl Control {
 
     /// Gradient with respect to the free variables from that with respect
     /// to the physical controls.
-    fn chain(&self, jac: &[f64], g: &[f64]) -> Vec<f64> {
+    pub(super) fn chain(&self, jac: &[f64], g: &[f64]) -> Vec<f64> {
         match &self.drive {
             Drive::Rf { limit: None, .. } => g.to_vec(),
             Drive::Rf { limit: Some(_), .. } => {
@@ -319,10 +319,10 @@ impl Control {
 
 /// A sparse matrix as `(row, column, value)` entries.
 #[derive(Clone, Debug, Default)]
-struct Entries(Vec<(usize, usize, C64)>);
+pub(super) struct Entries(Vec<(usize, usize, C64)>);
 
 impl Entries {
-    fn from_dense(m: &CMatrix) -> Self {
+    pub(super) fn from_dense(m: &CMatrix) -> Self {
         let mut out = Vec::new();
         for c in 0..m.ncols() {
             for r in 0..m.nrows() {
@@ -341,7 +341,7 @@ impl Entries {
         }
     }
 
-    fn one_norm(&self, n: usize) -> f64 {
+    pub(super) fn one_norm(&self, n: usize) -> f64 {
         let mut col = vec![0.0; n];
         for &(_, c, v) in &self.0 {
             col[c] += v.norm();
@@ -372,12 +372,12 @@ fn commutator(a: &CMatrix) -> Entries {
 }
 
 /// A linear generator `L = dense + Σ_j u_j ops_j`, applied to vectors.
-struct Generator<'a> {
-    dense: &'a CMatrix,
-    ops: &'a [Entries],
-    u: &'a [f64],
+pub(super) struct Generator<'a> {
+    pub(super) dense: &'a CMatrix,
+    pub(super) ops: &'a [Entries],
+    pub(super) u: &'a [f64],
     /// `L†` instead of `L`.
-    adjoint: bool,
+    pub(super) adjoint: bool,
 }
 
 impl Generator<'_> {
@@ -419,13 +419,13 @@ fn max_abs(v: &DVector<C64>) -> f64 {
 }
 
 /// Substeps for a Taylor series of an exponential of 1-norm `norm`.
-fn substeps(norm: f64) -> usize {
+pub(super) fn substeps(norm: f64) -> usize {
     (norm / 0.5).ceil().max(1.0) as usize
 }
 
 /// `e^{tL} x` by Taylor series in `substeps(t‖L‖)` pieces, each summed to
 /// rounding.
-fn expmv(g: &Generator<'_>, x: &DVector<C64>, t: f64, norm: f64) -> DVector<C64> {
+pub(super) fn expmv(g: &Generator<'_>, x: &DVector<C64>, t: f64, norm: f64) -> DVector<C64> {
     let s = substeps(t * norm);
     let h = t / s as f64;
     let mut v = x.clone();
@@ -447,7 +447,7 @@ fn expmv(g: &Generator<'_>, x: &DVector<C64>, t: f64, norm: f64) -> DVector<C64>
 /// `Re λ† ∂(e^{tL} x)/∂u_j` for every direction `E_j = ∂L/∂u_j`: the
 /// upper block of `exp(t[[L, E_j], [0, L]])` applied to `[0; x]`. That
 /// block is linear in `E_j`, so the substeps follow `t‖L‖` alone.
-fn frechet(
+pub(super) fn frechet(
     g: &Generator<'_>,
     directions: &[&Entries],
     x: &DVector<C64>,

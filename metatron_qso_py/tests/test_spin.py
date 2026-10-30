@@ -701,3 +701,84 @@ def test_exchange_and_singlet_bindings():
     assert len(spin.s2m("1H", 8.0, 0.85)) == len(events)
     lock = spin.spin_lock("1H", 1000.0, 0.01)
     assert "Shaped" in repr(lock)
+
+
+def _expm_hermitian(h, t):
+    values, vectors = np.linalg.eigh(h)
+    return vectors @ np.diag(np.exp(-1j * values * t)) @ vectors.conj().T
+
+
+def test_control_matches_an_independent_propagation_and_its_gradient():
+    # rf on ¹H and ¹³C with an offset member: the transfer from NumPy's own
+    # propagation of H_k = H₀ + 2π Σ (x F_x + y F_y), and the gradient
+    # against central differences.
+    sys = q.SpinSystem(9.4)
+    sys.add_spin("1H", 0.5)
+    sys.add_spin("13C", 0.0)
+    sys.couple(0, 1, 140.0)
+    iz, sz = sys.spin_operator(0, "z"), sys.spin_operator(1, "z")
+    c = spin.Control.rf(["1H", "13C"], 3e-3, 6, iz, sz, limit=2000.0)
+    u = c.random_start(seed=4, scale=800.0)
+    value, grad = sys.control_transfer(c, u)
+    h0 = np.asarray(sys.hamiltonian())
+    ops = [sys.spin_operator(0, "x"), sys.spin_operator(0, "y"), sys.spin_operator(1, "x"), sys.spin_operator(1, "y")]
+    rho = iz.copy()
+    for k in range(6):
+        h = h0 + 2 * np.pi * sum(a * o for a, o in zip(u[4 * k : 4 * k + 4], ops))
+        w = _expm_hermitian(h, 0.5e-3)
+        rho = w @ rho @ w.conj().T
+    assert value == pytest.approx(np.trace(sz.conj().T @ rho).real, abs=1e-12)
+    for i in range(len(u)):
+        up, down = u.copy(), u.copy()
+        up[i] += 1e-3
+        down[i] -= 1e-3
+        fd = (sys.control_transfer(c, up)[0] - sys.control_transfer(c, down)[0]) / 2e-3
+        assert abs(fd - grad[i]) < 1e-7 * np.abs(grad).max()
+    events = sys.control_events(c, u)
+    assert len(events) == 1 and "Control" in repr(events[0])
+    after = sys.evolve(iz, events)
+    assert np.abs(after - rho).max() < 1e-12
+    same = sys.evolve(iz, [spin.control(["1H", "13C"], 0.5e-3, [[(u[4 * k], u[4 * k + 1]), (u[4 * k + 2], u[4 * k + 3])] for k in range(6)])])
+    assert np.abs(same - rho).max() < 1e-12
+
+
+def test_grape_reaches_the_unitary_bound_and_profiles_bindings():
+    sys = q.SpinSystem(9.4)
+    sys.add_spin("1H", 0.0)
+    sys.add_spin("13C", 0.0)
+    sys.couple(0, 1, 140.0)
+    rho = sys.thermal_state()
+    sz = sys.spin_operator(1, "z")
+    bound = spin.unitary_bound(rho, sz)
+    eig_rho = np.sort(np.linalg.eigvalsh(rho))[::-1]
+    eig_sz = np.sort(np.linalg.eigvalsh(sz))[::-1]
+    assert bound == pytest.approx(float(eig_rho @ eig_sz), rel=1e-12)
+    c = spin.Control.rf(["1H", "13C"], 1.2 / 140, 40, rho, sz, limit=5000.0)
+    best = max((sys.optimize_control(c, seed=s, scale=500.0, max_iterations=400) for s in range(3)), key=lambda r: r["transfer"])
+    assert bound * (1 - 1e-6) <= best["transfer"] <= bound * (1 + 1e-9)
+    assert best["controls"].shape == (160,) and isinstance(best["converged"], bool)
+    c.ensemble = [(1.0, [0.9, 0.9], []), (1.0, [1.1, 1.1], [])]
+    c.power, c.smoothness = 1e-12, 1e-12
+    assert len(c.ensemble) == 2 and c.power == 1e-12 and len(c) == 160
+    with pytest.raises(ValueError):
+        sys.control_transfer(c, np.zeros(3))
+    with pytest.raises(ValueError):
+        spin.unitary_bound(np.eye(2), np.eye(3))
+    # Field profiles of an exchange against evolve.
+    a = q.SpinSystem(1e-6, frame="laboratory")
+    a.add_spin("1H", 1.0, t1=2.0)
+    a.add_spin("13C", 30.0, t1=5.0)
+    a.couple(0, 1, 140.0)
+    x = spin.Exchange()
+    x.add_site(a, 1.0)
+    start = [a.thermal_state()]
+    target = [a.spin_operator(1, "z")]
+    p = spin.Profile(0.0, 2e-6, 0.4, 4, start, target)
+    fields = np.array([0.5e-6, 1e-6, 1.5e-6, 0.2e-6])
+    value, grad = x.profile_transfer(p, fields)
+    events = [e for b in fields for e in (spin.set_field(b), spin.delay(0.1))]
+    want = np.trace(x.evolve(start, events)[0] @ target[0]).real
+    assert value == pytest.approx(want, abs=1e-15)
+    assert grad.shape == (4,)
+    r = x.optimize_profile(p, fields, max_iterations=5)
+    assert r["controls"].shape == (4,) and r["transfer"] >= value - 1e-18
