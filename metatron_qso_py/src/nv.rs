@@ -553,6 +553,9 @@ fn transition_of(transition: i64) -> PyResult<i8> {
 
 type SpinTuple = ([f64; 3], [f64; 3]);
 
+/// Energies and eigenvectors.
+type Levels<'py> = (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray2<C64>>);
+
 /// Means and standard errors, one per sequence.
 type MeansAndErrors<'py> = (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>);
 
@@ -925,19 +928,13 @@ impl PyOpticalNv {
 
     /// Energies (Hz, ascending) and eigenvectors (columns) of the ground
     /// triplet.
-    fn ground_levels<'py>(
-        &self,
-        py: Python<'py>,
-    ) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray2<C64>>)> {
+    fn ground_levels<'py>(&self, py: Python<'py>) -> PyResult<Levels<'py>> {
         let (e, v) = self.inner.ground_levels().raise()?;
         Ok((real_array(py, e), cmatrix(py, &v)))
     }
 
     /// Energies and eigenvectors of the excited triplet.
-    fn excited_levels<'py>(
-        &self,
-        py: Python<'py>,
-    ) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray2<C64>>)> {
+    fn excited_levels<'py>(&self, py: Python<'py>) -> PyResult<Levels<'py>> {
         let (e, v) = self.inner.excited_levels().raise()?;
         Ok((real_array(py, e), cmatrix(py, &v)))
     }
