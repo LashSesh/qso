@@ -1471,5 +1471,7 @@ impl NvCenter {
     }
 }
 
+pub mod bath;
+
 #[cfg(test)]
 mod tests;

@@ -118,6 +118,10 @@ pub use nv::{
 };
 pub use redfield::{MU0_OVER_4PI, axial_csa};
 
+/// The nuclear-spin bath of an NV centre (cluster-correlation expansion).
+pub use nv::bath;
+pub use nv::bath::{BathSpin, Cce, SpinBath, diamond_bath};
+
 /// Reduced Planck constant (J s, CODATA 2018, exact).
 pub const HBAR: f64 = 1.054_571_817e-34;
 /// Boltzmann constant (J/K, exact).
