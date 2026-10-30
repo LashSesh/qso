@@ -30,6 +30,8 @@ def test_rates_and_steady_state_against_numpy():
     want = np.linalg.solve(a, b)
     assert np.abs(np.diag(rho).real - want).max() < 1e-12
     photons = nv.fluorescence(pump)
+    with pytest.raises(ValueError):
+        nv.fluorescence(pump, 2.84e9)
     assert abs(photons - 0.01 * KR * want[3:6].sum()) < 1e-6
 
 
@@ -69,7 +71,11 @@ def test_field_vector_from_four_orientations():
     for _ in range(10):
         b = rng.normal(size=3) * 0.01
         lines = spin.ensemble_lines(tuple(b))
-        back = np.array(spin.field_from_lines(lines))
+        # Each pair in either order.
+        shuffled = [pair[::-1] if k % 2 else pair for k, pair in enumerate(lines)]
+        back, rms = spin.field_from_lines(shuffled)
+        back = np.array(back)
+        assert rms < 1e-3
         sign = 1 if np.dot(b, spin.nv_orientations()[0]) >= 0 else -1
         assert np.abs(back - sign * b).max() < 1e-11
     axis = spin.nv_orientations()[0]
@@ -111,3 +117,22 @@ def test_invalid_input():
         nv.pulsed_readout(1e6, 1e-6, transition=0)
     with pytest.raises(ValueError):
         spin.ramsey_sensitivity(1e-6, 0.5, 0.0)
+    with pytest.raises(ValueError):
+        spin.readout_contrast(-1.0, 0.0)
+    with pytest.raises(ValueError):
+        spin.TwoLevelOdmr(1e6, 0.0, 0.0, 0.0, 1.0, 0.5)
+
+
+def test_a_pi_pulse_and_the_shift():
+    # Without the laser a pulse of 1/(2 Omega) empties m_s = 0, as the
+    # finite pi pulse of NvCenter does.
+    nv = spin.OpticalNv((0, 0, 0.005), dephasing=0.0, spin_lattice=0.0)
+    f = nv.lines()[0][0]
+    rho = np.zeros((7, 7), complex)
+    rho[0, 0] = 1.0
+    out = nv.evolve(rho, 0.5e-6, 0.0, frequency=f, rabi=1e6)
+    bare = spin.NvCenter(0.005)
+    assert abs(out[0, 0].real - bare.signal([spin.nv_pulse(180)], rabi=1e6)) < 1e-9
+    tilted = spin.OpticalNv((0.03, 0, 0.005))
+    line = tilted.cw_line(tilted.lines()[0][0], 20e6, 1e6, 5e6, points=101)
+    assert 0 < abs(line["shift"]) < spin.NV_GYROMAGNETIC_RATIO

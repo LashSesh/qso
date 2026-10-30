@@ -814,6 +814,7 @@ fn cw_dict<'py>(py: Python<'py>, line: CwOdmr) -> PyResult<Bound<'py, PyDict>> {
     d.set_item("contrast", line.contrast)?;
     d.set_item("linewidth", line.linewidth)?;
     d.set_item("slope", line.slope)?;
+    d.set_item("shift", line.shift)?;
     d.set_item("sensitivity", line.sensitivity)?;
     Ok(d)
 }
@@ -828,6 +829,18 @@ fn readout_dict<'py>(py: Python<'py>, r: PulsedReadout) -> PyResult<Bound<'py, P
     d.set_item("photons_bright", r.photons_bright)?;
     d.set_item("photons_dark", r.photons_dark)?;
     Ok(d)
+}
+
+/// A microwave `(frequency, rabi)` from optional Python arguments: both or
+/// neither.
+fn optical_drive(frequency: Option<f64>, rabi: Option<f64>) -> PyResult<Option<(f64, f64)>> {
+    match (frequency, rabi) {
+        (Some(f), Some(r)) => Ok(Some((f, r))),
+        (None, None) => Ok(None),
+        _ => Err(invalid(
+            "a microwave needs both its frequency and its Rabi frequency",
+        )),
+    }
 }
 
 /// The electron spin of an NV centre in its optical cycle: the
@@ -945,28 +958,53 @@ impl PyOpticalNv {
         Ok(self.inner.lines().raise()?.to_vec())
     }
 
-    /// The steady state (7 × 7: ground levels, excited levels, singlet).
-    #[pyo3(signature = (pump, frequency = None, rabi = 0.0))]
+    /// The steady state (7 × 7: ground levels, excited levels, singlet;
+    /// ground coherences in the rotating frame when driven).
+    #[pyo3(signature = (pump, frequency = None, rabi = None))]
     fn steady_state<'py>(
         &self,
         py: Python<'py>,
         pump: f64,
         frequency: Option<f64>,
-        rabi: f64,
+        rabi: Option<f64>,
     ) -> PyResult<Bound<'py, PyArray2<C64>>> {
-        let rho = self
-            .inner
-            .steady_state(pump, frequency.map(|f| (f, rabi)))
-            .raise()?;
+        let drive = optical_drive(frequency, rabi)?;
+        let rho = self.inner.steady_state(pump, drive).raise()?;
         Ok(cmatrix(py, &rho))
     }
 
+    /// The state after `duration` (s) from `rho` (7 × 7) under `pump` and
+    /// an optional microwave.
+    #[pyo3(signature = (rho, duration, pump, frequency = None, rabi = None))]
+    fn evolve<'py>(
+        &self,
+        py: Python<'py>,
+        rho: ComplexMatrixArg<'_>,
+        duration: f64,
+        pump: f64,
+        frequency: Option<f64>,
+        rabi: Option<f64>,
+    ) -> PyResult<Bound<'py, PyArray2<C64>>> {
+        let (d, data) = square_complex("rho", &rho)?;
+        if d != 7 {
+            return Err(invalid(format!(
+                "a state of the optical cycle is 7×7, got {d}×{d}"
+            )));
+        }
+        let rho = CMatrix::from_row_slice(7, 7, &data);
+        let (nv, drive) = (&self.inner, optical_drive(frequency, rabi)?);
+        let out = py
+            .detach(|| nv.evolve(&rho, duration, pump, drive))
+            .raise()?;
+        Ok(cmatrix(py, &out))
+    }
+
     /// The detected photon rate (1/s) in the steady state.
-    #[pyo3(signature = (pump, frequency = None, rabi = 0.0))]
-    fn fluorescence(&self, pump: f64, frequency: Option<f64>, rabi: f64) -> PyResult<f64> {
+    #[pyo3(signature = (pump, frequency = None, rabi = None))]
+    fn fluorescence(&self, pump: f64, frequency: Option<f64>, rabi: Option<f64>) -> PyResult<f64> {
         let rho = self
             .inner
-            .steady_state(pump, frequency.map(|f| (f, rabi)))
+            .steady_state(pump, optical_drive(frequency, rabi)?)
             .raise()?;
         Ok(self.inner.fluorescence(&rho))
     }
@@ -1060,17 +1098,17 @@ impl PyTwoLevelOdmr {
         dephasing: f64,
         bright: f64,
         dark: f64,
-    ) -> Self {
-        Self {
-            inner: TwoLevelOdmr {
-                polarisation,
-                coherence,
-                spin_lattice,
-                dephasing,
-                bright,
-                dark,
-            },
-        }
+    ) -> PyResult<Self> {
+        let inner = TwoLevelOdmr {
+            polarisation,
+            coherence,
+            spin_lattice,
+            dephasing,
+            bright,
+            dark,
+        };
+        inner.validate().raise()?;
+        Ok(Self { inner })
     }
 
     /// The steady-state population of |1⟩ at detuning `ω₀ − ω_m` (rad/s).
@@ -1093,7 +1131,8 @@ impl PyTwoLevelOdmr {
         rabi: f64,
         points: usize,
     ) -> PyResult<Bound<'py, PyDict>> {
-        cw_dict(py, self.inner.line(span, points, rabi).raise()?)
+        let m = self.inner;
+        cw_dict(py, py.detach(|| m.line(span, points, rabi)).raise()?)
     }
 }
 
@@ -1128,8 +1167,8 @@ fn py_best_sensitivity(
 
 /// `[1 + 2(a + b)/(a − b)²]^{−1/2}` for mean photon numbers `a`, `b`.
 #[pyfunction(name = "readout_contrast")]
-fn py_readout_contrast(a: f64, b: f64) -> f64 {
-    optics::readout_contrast(a, b)
+fn py_readout_contrast(a: f64, b: f64) -> PyResult<f64> {
+    optics::readout_contrast(a, b).raise()
 }
 
 /// The NV axes of the four orientations in the cubic frame.
@@ -1151,14 +1190,15 @@ fn py_ensemble_lines(
 }
 
 /// The field vector (T, cubic frame, up to its sign) from the lines of the
-/// four orientations.
+/// four orientations (in the order of `nv_orientations`, each pair in
+/// either order), with the root-mean-square misfit of the eight lines (Hz).
 #[pyfunction(name = "field_from_lines")]
 #[pyo3(signature = (lines, zero_field_splitting = NV_ZERO_FIELD_SPLITTING, gyromagnetic_ratio = NV_GYROMAGNETIC_RATIO))]
 fn py_field_from_lines(
     lines: [[f64; 2]; 4],
     zero_field_splitting: f64,
     gyromagnetic_ratio: f64,
-) -> PyResult<[f64; 3]> {
+) -> PyResult<([f64; 3], f64)> {
     optics::field_from_lines(lines, zero_field_splitting, gyromagnetic_ratio).raise()
 }
 

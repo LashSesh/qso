@@ -515,14 +515,21 @@ singlet. Its default rates are the means of their four centres: `k_r` =
 
 - **The model.** Excitation at `pump` (1/s) and radiative decay conserve
   `m_s` along the axis. The excited `±1` cross to the singlet seven times
-  faster than `0`, and the singlet returns preferentially to `0`. In a
-  field the rates between eigenstates are
-  `Σ |⟨i|p⟩|² |⟨j|q⟩|² k⁰_pq`.
+  faster than `0`, and the singlet returns preferentially to `0`.
 - **A Lindblad equation.** The model is solved as a Lindblad equation on
-  the seven levels. It includes a microwave of `frequency` and `rabi` in
-  the ground state (rotating-wave approximation in the ground eigenbasis,
-  frequencies signed as in `lines`), dephasing `Γ₂*` and spin-lattice
-  relaxation `Γ₁`. The signal is `collection · k_r` times the excited
+  the seven levels. The jumps act in the zero-field basis, together with
+  the Hamiltonians of both triplets, so that:
+  - where the levels are split by more than the rates, it is Tetienne's
+    rate model between eigenstates, `k_ij = Σ |⟨i|p⟩|² |⟨j|q⟩|² k⁰_pq`;
+  - it stays continuous at zero field and at the excited-state
+    anticrossing near 51 mT.
+
+  It includes a microwave of `frequency` and `rabi` in the ground state
+  (rotating-wave approximation, frequencies signed as in `lines`; not
+  valid within the Rabi frequency of the ground-state anticrossing at
+  102.4 mT), dephasing `Γ₂*` through `S_z` and spin-lattice relaxation
+  `Γ₁`. `evolve` propagates a state, and `steady_state` gives the
+  stationary one. The signal is `collection · k_r` times the excited
   population (1 % detected by default).
 - **Polarisation.** `polarisation(pump)` is the ground population of `0`
   the laser leaves. With these rates it is 0.749 for a weak laser, the
@@ -531,9 +538,11 @@ singlet. Its default rates are the means of their four centres: `k_r` =
 - **CW-ODMR.** `cw_odmr` gives the photon rate at each frequency.
   `cw_line(centre, span, rabi, pump)` gives the line's contrast, full
   width, steepest slope and the shot-noise sensitivity
-  `√R/(γ_e max|∂I/∂ν|)`, with `R` the off-resonance rate as in Dréau et
-  al. (Phys. Rev. B 84, 195204 (2011)). The width is NaN when the span
-  does not hold both half-depth points.
+  `√R/(|∂ν/∂B| max|∂I/∂ν|)`, with `R` the off-resonance rate as in Dréau
+  et al. (Phys. Rev. B 84, 195204 (2011)) and `∂ν/∂B` the line's shift
+  with a field along the axis (`shift`: `γ_e` along the axis, less for a
+  tilted field). The width is NaN when the span does not hold both
+  half-depth points.
 - **Pulsed readout.** `pulsed_readout(pump, duration)` starts from the
   state the laser leaves, as it is (`bright`) and after an ideal π pulse
   (`dark`). It returns the fluorescence of both, the counting window that
@@ -547,9 +556,13 @@ singlet. Its default rates are the means of their four centres: `k_r` =
   γ_e τ C |L|)`.
 - **Ensembles.** `spin.ensemble_lines(field)` gives the eight lines of
   the four orientations for a field in the cubic frame.
-  `spin.field_from_lines(lines)` gives the field back, up to its sign.
-  `axial_and_transverse` inverts one orientation exactly: the levels are
-  the roots of `λ³ − 2Dλ² + (D² − γ²B²)λ + Dγ²B_⊥² = 0`.
+  `spin.field_from_lines(lines)` gives the field back, up to its sign,
+  with the misfit of the eight lines. The pairs come in the order of
+  `nv_orientations`, each in either order. A field along a cube axis
+  gives the same lines for all four orientations, so it cannot be told
+  from the other cube axes. `axial_and_transverse` inverts one
+  orientation exactly: the levels are the roots of
+  `λ³ − 2Dλ² + (D² − γ²B²)λ + Dγ²B_⊥² = 0`.
 - **`TwoLevelOdmr`** is Dréau's reduced model, with its closed forms.
 
 ```python
@@ -565,8 +578,8 @@ print(round(readout["window"] * 1e9), round(readout["readout_contrast"], 4))
 # 446 0.0279: a 30 % brighter m_s = 0 over the first few hundred ns
 
 field = (0.004, -0.002, 0.003)
-back = spin.field_from_lines(spin.ensemble_lines(field))
-assert max(abs(a - b) for a, b in zip(back, field)) < 1e-11
+back, misfit = spin.field_from_lines(spin.ensemble_lines(field))
+assert max(abs(a - b) for a, b in zip(back, field)) < 1e-11 and misfit < 1e-3
 ```
 
 The best CW sensitivity comes at a weak laser and a weak microwave. With
@@ -579,7 +592,7 @@ the best window is 920 ns at 0.2 `k_r` and 446 ns at `k_r`, with `C` ≈
 
 A field across the axis mixes the states, and the fluorescence and the
 contrast fall: at 5 mT along the axis the contrast is 0.17 without a
-transverse field, 0.068 with 10 mT across it and 0.003 with 30 mT. That
+transverse field, 0.068 with 10 mT across it and 0.0025 with 30 mT. That
 is the contrast Tetienne et al. image with.
 
 A single centre in natural diamond at 50 mT combines the Hahn echo of its

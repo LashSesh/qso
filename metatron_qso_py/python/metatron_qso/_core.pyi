@@ -2603,6 +2603,7 @@ class CwLine(TypedDict):
     contrast: float
     linewidth: float
     slope: float
+    shift: float
     sensitivity: float
 
 @type_check_only
@@ -2640,10 +2641,18 @@ class OpticalNv:
     def excited_levels(self) -> Tuple[RealArray, ComplexArray]: ...
     def lines(self) -> list[Tuple[float, float]]: ...
     def steady_state(
-        self, pump: float, frequency: Optional[float] = None, rabi: float = 0.0
+        self, pump: float, frequency: Optional[float] = None, rabi: Optional[float] = None
+    ) -> ComplexArray: ...
+    def evolve(
+        self,
+        rho: ArrayLike,
+        duration: float,
+        pump: float,
+        frequency: Optional[float] = None,
+        rabi: Optional[float] = None,
     ) -> ComplexArray: ...
     def fluorescence(
-        self, pump: float, frequency: Optional[float] = None, rabi: float = 0.0
+        self, pump: float, frequency: Optional[float] = None, rabi: Optional[float] = None
     ) -> float: ...
     def cw_odmr(self, frequencies: ArrayLike, rabi: float, pump: float) -> RealArray: ...
     def cw_line(
@@ -2693,7 +2702,7 @@ def field_from_lines(
     lines: Sequence[Sequence[float]],
     zero_field_splitting: float = ...,
     gyromagnetic_ratio: float = ...,
-) -> list[float]: ...
+) -> Tuple[list[float], float]: ...
 def axial_and_transverse(
     lines: Sequence[float],
     zero_field_splitting: float = ...,

@@ -67,6 +67,9 @@ All notable changes to this project are documented here. The format follows
   - Dréau's reduced model (`TwoLevelOdmr`).
   - Levels and lines in any field; the lines of the four orientations of
     an ensemble and the field vector from them.
+  - Jumps in the zero-field basis with the Hamiltonians of both triplets:
+    Tetienne's eigenbasis rates where levels are split, continuous at
+    degeneracies and the excited-state anticrossing.
 
 ## [1.8.0] — 2026-10-30
 

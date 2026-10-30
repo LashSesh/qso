@@ -483,15 +483,23 @@ integrated exponential correlations of every pair of free periods as a
 running sum, in one pass.
 
 The optical cycle (`spin/nv/optics.rs`) is a Lindblad equation on seven
-levels: ground eigenstates, excited eigenstates, singlet. Its generator
-is assembled on `vec ρ` from single-element jumps (`|b⟩⟨a|`: a gain on
-`ρ_bb`, half-rate losses on row and column `a`) and diagonal dephasing.
-The steady state is an LU solve with one equation replaced by the trace.
-Readouts propagate with one `expm` per time step. Without a microwave the
-Hamiltonian is left out: the ground energies, GHz apart, carry no
-coherence and would only inflate the exponential's norm. With one, the
-two non-reference levels rotate at the signed frequency, as the `S_z²`
-frame of 1.37 does along the axis. The ensemble inversion uses the
+levels: ground eigenstates, excited eigenstates, singlet. The jump
+operators are the zero-field ones (`|e_p⟩⟨g_p|` and so on, one per spin
+projection) written in the eigenbases, with both triplets' Hamiltonians
+in the laboratory frame (from their means). Their generator is assembled
+on `vec ρ` as `L̄ ⊗ L − ½(1 ⊗ K + Kᵀ ⊗ 1)`, `K = Σ L†L`. With a
+microwave, the two ground levels other than the one closest to
+`m_s = 0` rotate at the signed frequency, as the `S_z²` frame of 1.37
+does along the axis. Every operator then keeps only its parts within the
+blocks {that level} and {the other two}: the parts between blocks rotate
+at the microwave frequency.
+
+The steady state is an LU solve with one equation replaced by the trace,
+checked to be a state. Readouts propagate with one `expm` per time step,
+and steps or durations whose norm would need too many squarings are
+refused. After the laser, the population that the excited levels and the
+singlet hand to the ground state is one linear solve, `M_go (−M_oo)⁻¹
+x_o`, the integral of the inflow, not a long exponential. The ensemble inversion uses the
 symmetric functions of the three levels of each orientation, which give
 `B²` and `B_⊥²` without solving the cubic. The signs of the projections
 come from `Σ_k B·n_k = 0`, and Gauss–Newton on the eight lines refines
