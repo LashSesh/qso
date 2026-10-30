@@ -92,6 +92,7 @@ use crate::graph::Graph;
 use crate::linalg::{CMatrix, expm_hermitian};
 
 mod blocks;
+mod control;
 mod exchange;
 mod redfield;
 #[cfg(test)]
@@ -99,6 +100,7 @@ mod tests;
 #[cfg(test)]
 mod transfer_tests;
 
+pub use control::{Control, Drive, Member, Optimized, unitary_bound};
 pub use exchange::{Channel, Exchange, Fresh, Site};
 pub use redfield::{MU0_OVER_4PI, axial_csa};
 
@@ -123,6 +125,7 @@ pub const MAX_SEGMENTS: usize = 1 << 20;
 
 const ZERO: C64 = C64::new(0.0, 0.0);
 const ONE: C64 = C64::new(1.0, 0.0);
+const TWO_PI: f64 = 2.0 * std::f64::consts::PI;
 
 /// A magnetic nucleus.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -287,6 +290,16 @@ pub enum Event {
     Shaped {
         target: Target,
         segments: Vec<Segment>,
+    },
+    /// Radiofrequency fields on several channels at once, constant over
+    /// steps of `step` s: during step `k` the free evolution plus
+    /// `Σ_c 2π(x F_x + y F_y)` on target `c` with `[x, y] =
+    /// amplitudes[k][c]` (Hz; rotating frame only, as [`Event::Shaped`]).
+    /// The pulses of [`SpinSystem::optimize_control`].
+    Control {
+        targets: Vec<Target>,
+        step: f64,
+        amplitudes: Vec<Vec<[f64; 2]>>,
     },
     /// Free evolution (with relaxation) for a time in s.
     Delay(f64),
@@ -1048,6 +1061,46 @@ impl SpinSystem {
                             h += self.embed(i, &op)?;
                         }
                         rho = self.propagate(&rho, &h, seg.duration, b, None, &mut relaxation)?;
+                    }
+                }
+                Event::Control {
+                    targets,
+                    step,
+                    amplitudes,
+                } => {
+                    if self.frame != Frame::Rotating {
+                        return Err(QsoError::invalid(
+                            "frame",
+                            "rf controls need the rotating frame",
+                        ));
+                    }
+                    check_time("step", *step)?;
+                    if amplitudes.len() > MAX_SEGMENTS {
+                        return Err(QsoError::invalid("control", "too many steps"));
+                    }
+                    let channels = targets
+                        .iter()
+                        .map(|&t| self.channel(t))
+                        .collect::<Result<Vec<_>>>()?;
+                    let h0 = self.hamiltonian_at(b);
+                    for row in amplitudes {
+                        if row.len() != targets.len() {
+                            return Err(QsoError::invalid(
+                                "control",
+                                "one [x, y] per channel and step",
+                            ));
+                        }
+                        let mut h = h0.clone();
+                        for ([fx, fy, _], &[x, y]) in channels.iter().zip(row) {
+                            if !(x.is_finite() && y.is_finite()) {
+                                return Err(QsoError::invalid(
+                                    "control",
+                                    "amplitudes must be finite",
+                                ));
+                            }
+                            h += fx * C64::new(TWO_PI * x, 0.0) + fy * C64::new(TWO_PI * y, 0.0);
+                        }
+                        rho = self.propagate(&rho, &h, *step, b, None, &mut relaxation)?;
                     }
                 }
                 Event::Delay(t) => {

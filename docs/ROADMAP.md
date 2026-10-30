@@ -2498,12 +2498,16 @@ optimisers (1.26).
 | Field profiles | the same for the field of SABRE and field-cycling experiments |
 | Constraints | amplitude and power limits, a fixed duration, smooth shapes |
 
-Validation: the gradients agree with finite differences. For two coupled
-spins the optimised transfer reaches the unitary bound on polarisation
-transfer (Glaser et al., Science 280, 421 (1998)) and needs no less than
-the time-optimal `1/(2J)` (Khaneja, Brockett and Glaser, Phys. Rev. A 63,
-032308 (2001)). Pulses optimised for a range of field errors keep their
-transfer over that range, where INEPT does not.
+Validation: the gradients agree with finite differences. The optimised
+transfer reaches the unitary bound (Glaser et al., Science 280, 421
+(1998)): the largest `Tr(C U ρ U†)` over all unitaries, the sum of the
+products of the ordered eigenvalues of `ρ` and `C`. For two heteronuclear
+spins it follows the time-optimal limits of Khaneja, Brockett and Glaser
+(Phys. Rev. A 63, 032308 (2001)): the antiphase transfer `2I_zS⁻ → I⁻`
+reaches at most `sin(πJT/2)` in a time `T ≤ 1/J`, and the in-phase
+transfer `S⁻ → I⁻` reaches one only at `3/(2J)`. Pulses optimised for a
+range of field errors keep their transfer over that range, where INEPT
+does not.
 
 ### 1.37 — Quantum sensing with spins in diamond (M)
 
