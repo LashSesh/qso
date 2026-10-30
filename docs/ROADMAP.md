@@ -15,7 +15,7 @@ finished milestones are released together, not one by one. The third
 (1.26 to 1.28) stages ship together as release 1.7.0. The seventh
 (1.29 to 1.33, section 4g) and eighth (1.34 to 1.37, magnetic resonance
 for medical research, section 4h) stages ship together as release
-1.8.0. Up to 1.3
+1.8.0. A ninth stage (1.38 to 1.42) is proposed in section 4i. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -2751,6 +2751,145 @@ during pulses against 256 pieces. It found:
   transition of 128 raised `OverflowError`; the trajectory tests allowed
   10⁻³ beyond four standard errors. All are fixed.
 
+## 4i. Ninth stage (1.38 to 1.42), proposed
+
+Proposed October 2026, after release 1.8.0, from the gaps that remain in
+the table of section 1; the scope is decided before work starts. As
+before, the stage starts with walks on graphs, QSO's identity. Two
+milestones then finish what the eighth stage began for quantum sensing:
+the nuclear-spin bath that limits an NV centre's coherence, and the
+optical cycle that turns its spin into a signal, so that QSO can say what
+a sensor detects and how fast. Relaxation of larger spin systems and exact
+distances of error-correcting circuits close the remaining gaps of the
+physics and error-correction rows. The rules stay: no new dependency of
+the crate, an independent reference for every deliverable, reference
+tools in the cross-validation only. QSO stays a tool for the physicists
+who design these experiments; image simulation and clinical claims stay
+out.
+
+### 1.38 — Symmetry for driven and decoherent walks (M)
+
+Use case: adiabatic and time-dependent search, and walks under
+decoherence, on graphs far beyond what a state vector holds. Symmetry
+reduction (1.3) makes static walks on the 30-dimensional hypercube exact
+in 31 dimensions, but driven walks and decoherent coined walks (1.13) run
+on the full graph: for a density matrix of a coined walk, the hypercube
+Q₁₀ is about the limit.
+
+| Deliverable | Detail |
+|---|---|
+| Driven walks on quotients | time-dependent Hamiltonians `Σ_k f_k(t) H_k` whose terms all respect an equitable partition (a marked vertex and a schedule, for example), integrated on the quotient with the Magnus integrator of 1.13, and the state lifted back to the graph |
+| Decoherent walks on quotients | Lindblad evolution whose Hamiltonian and jump operators commute with a symmetry group, propagated on the operators the group leaves invariant: continuous-time walks with dephasing, coined walks with coin and position decoherence |
+| Product graphs | walks on Cartesian products with independent decoherence on each factor, propagated factor by factor (the hypercube is the n-fold product of an edge) |
+
+Validation: the reduced evolution equals the full one where both run
+(states, densities and hitting probabilities, to rounding). The local
+adiabatic search of Roland and Cerf (Phys. Rev. A 65, 042308 (2002))
+reaches its closed-form running time on complete graphs far beyond the
+full simulation. Without decoherence the hypercube mixes uniformly at the
+times of Moore and Russell (RANDOM 2002); with dephasing on every
+coordinate the walk factorises, and its distribution follows the product
+of the two-level closed forms at any dimension. Full coin decoherence
+gives the classical walk on arcs, as in 1.13.
+
+### 1.39 — The nuclear-spin bath of an NV centre (M–L)
+
+Use case: an NV centre in natural diamond loses its coherence to the ¹³C
+nuclei around it (1.1 % of the carbon), a bath of hundreds of spins that
+1.37 cannot hold (at most eight explicit nuclei). The coherence time sets
+the sensitivity to AC fields and to nuclear spins outside the diamond,
+and decoupling sequences are designed against it.
+
+| Deliverable | Detail |
+|---|---|
+| Diamond baths | ¹³C placed at random on the diamond lattice at a given abundance around the centre; hyperfine couplings from the point dipole beyond a given radius, given values closer in; ¹³C–¹³C dipolar couplings |
+| Cluster-correlation expansion | the coherence under Ramsey, Hahn, CPMG and XY-8 by the cluster-correlation expansion of Yang and Liu (Phys. Rev. B 78, 085315 (2008)) up to a chosen cluster size, each cluster propagated exactly by the block propagation of 1.37; averages over bath configurations with standard errors |
+| Bath and classical noise | the bath and the classical field noise of 1.37 together |
+
+Validation: the expansion equals the exact propagation once its order
+reaches the size of the bath (baths of up to eight spins), and it
+converges with the order. The Hahn echo collapses and revives with the
+¹³C Larmor period (Childress et al., Science 314, 281 (2006)). Its decay
+time in natural diamond agrees with the cluster-expansion results of
+Maze, Taylor and Lukin (Phys. Rev. B 78, 094303 (2008)) and of Zhao, Ho
+and Liu (Phys. Rev. B 85, 115303 (2012)) within the spread over bath
+configurations, and scales inversely with the ¹³C abundance. PyCCE
+(Onizhuk and Galli, 2021) joins the cross-validation as a reference only.
+
+### 1.40 — The optical cycle and magnetometer sensitivity (M)
+
+Use case: what an NV magnetometer measures, and how fast. The spin is read
+out through its spin-dependent fluorescence; contrast, linewidth and
+photon rate set the sensitivity (Taylor et al., Nature Phys. 4, 810
+(2008); Barry et al., Rev. Mod. Phys. 92, 015004 (2020)). Fields off the
+NV axis mix the levels and change both the lines and the contrast, and
+ensembles, with their four orientations, measure the field as a vector.
+
+| Deliverable | Detail |
+|---|---|
+| Optical cycle | the ground and excited triplets and the metastable singlet as a Lindblad model with published rates (optical pumping, spontaneous decay, spin-dependent intersystem crossing), with microwave driving in the ground state; the fluorescence as the detected signal |
+| Readout | continuous-wave ODMR spectra with optical and microwave power broadening; pulsed readout (polarisation, contrast, the best counting window); photon shot noise |
+| Sensitivity | the shot-noise-limited sensitivity (T/√Hz) of CW-ODMR, Ramsey and echo magnetometry from the computed contrast, photon rate and coherence time, including the bath of 1.39 |
+| Off-axis fields | the full electron Zeeman term `γ_e B·S` for any field direction; the four orientations of an ensemble; the field vector from their lines |
+
+Validation: steady state and spin polarisation follow the closed-form
+solution of the rate equations. CW-ODMR contrast and linewidth follow the
+expressions of Dréau et al. (Phys. Rev. B 84, 195204 (2011)) for the same
+reduced model, and the shot-noise sensitivity their closed form. The
+levels in an off-axis field equal the roots of the characteristic
+polynomial of the spin-1 Hamiltonian (a cubic); with the field along the
+axis everything reduces to 1.37 to rounding; and the eight lines of four
+orientations give back the field that produced them.
+
+### 1.41 — Relaxation of larger spin systems (M)
+
+Use case: hyperpolarised molecules and proton networks with more than six
+relaxing spins: the ¹³C-labelled metabolites of 1.35 with all their
+protons, methyl groups, long-lived states in larger molecules. Today such
+systems propagate for short times only, and Redfield relaxation not at
+all.
+
+| Deliverable | Detail |
+|---|---|
+| Krylov propagation in Liouville space | each coherence-order block of the relaxation superoperator applied to vectors as a sparse matrix and propagated by its action (Krylov or Taylor), without forming its exponential, for blocks far beyond the dense limit; Redfield relaxation as a sparse superoperator |
+| Equivalent spins | groups of equivalent spins (CH₂, CH₃) split by the symmetry that the Hamiltonian and the relaxation share (the threefold rotation of a methyl group, for example), which reduces the dimension |
+| Limits | work and memory estimated before anything is allocated, as in 1.35 and 1.36 |
+
+Validation: equal to the dense propagation up to six spins (10⁻¹⁰ of the
+deviation from equilibrium); the symmetry reduction equal to the full
+space where both run; the cross-correlated dipolar relaxation of an AX₃
+(methyl) system follows the closed forms of Werbelow and Grant (Adv.
+Magn. Reson. 9, 189 (1977)); thermal equilibrium stays stationary. QuTiP's
+Bloch–Redfield solver for seven and eight spins in the cross-validation.
+
+### 1.42 — Exact distances of error-correcting circuits (M)
+
+Use case: the circuit-level distance of a code under an error model with
+hyperedges (colour codes, bivariate bicycle codes, any model whose errors
+flip more than two detectors), which decides how far a design protects.
+1.22 computes it exactly for graphlike models and bounds it otherwise.
+
+| Deliverable | Detail |
+|---|---|
+| Exact distance | the smallest set of error mechanisms that flips no detector and some logical observable, by the Brouwer–Zimmermann algorithm for the minimum distance of linear codes (as described by Grassl, 2006), adapted to the undetectable-logical condition; a time limit returns the bounds reached so far |
+| Logical errors | the minimal error sets themselves, as error-model terms and circuit locations |
+
+Validation: equal to the exact graphlike distance of 1.22 where the
+model is graphlike, and to enumeration on small circuits; the known
+minimum distances of classical codes (the Golay codes [23, 12, 7] and
+[24, 12, 8], Reed–Muller codes) and the code-capacity distances of colour
+and bivariate bicycle codes ([[72, 12, 6]], [[144, 12, 12]]); Stim's
+`search_for_undetectable_logical_errors` on the same circuits in the
+cross-validation, with parameters at which its search is exhaustive.
+
+### Not in this stage
+
+Leakage out of the qubit space, which needs qudits in every simulator.
+Pretty good state transfer outside the cyclotomic families, which has no
+exact reference. Mixed Gaussian states with many photons in many modes,
+whose exact methods stay exponential. Noise learning for layers of
+non-Clifford gates. The GPU track, still parked (section 7).
+
 ## 5. Order and reasoning
 
 1. **1.2 first:** small, made every later release safer, and documentation
@@ -2822,6 +2961,14 @@ during pulses against 256 pieces. It found:
     sensing (1.37) comes last: it adds a new kind of spin (the electron
     of an NV centre) and builds on the noise of 1.30 and the decoupling
     sequences that optimal control can improve.
+17. **Ninth stage (proposed): walks first again, then the whole
+    sensor.** Symmetry for driven and decoherent walks (1.38) carries the
+    exact reductions of 1.3 to the walks of 1.13. The nuclear-spin bath
+    (1.39) comes before the optical cycle (1.40), because the sensitivity
+    that 1.40 computes needs the coherence time that 1.39 provides.
+    Relaxation of larger spin systems (1.41) lifts the six-spin limit of
+    1.34 to 1.36, and exact circuit distances (1.42) close the last gap of
+    the error-correction row; neither depends on the others.
 
 ## 6. Measures of success
 
