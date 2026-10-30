@@ -3,11 +3,7 @@ use super::*;
 const PI: f64 = std::f64::consts::PI;
 
 fn on(nv: &NvCenter, rabi: Option<f64>) -> Microwave {
-    Microwave {
-        frequency: nv.zero_field_splitting - nv.gyromagnetic_ratio * nv.field,
-        transition: -1,
-        rabi,
-    }
+    Microwave::resonant(nv, -1, rabi)
 }
 
 #[test]
@@ -311,6 +307,31 @@ fn nv_input_is_checked() {
     let nv = NvCenter::new(0.01)
         .with_nitrogen(Nitrogen::n15())
         .with_carbon(1e4, 2e3);
-    let text = serde_json::to_string(&nv).unwrap();
-    assert_eq!(serde_json::from_str::<NvCenter>(&text).unwrap(), nv);
+    assert_eq!(NvCenter::from_json(&nv.to_json()).unwrap(), nv);
+    assert!(NvCenter::from_json(&big.to_json()).is_err());
+    assert!(NvCenter::from_json("{\"field\": 1}").is_err());
+    // A finite pulse of negative angle is the positive one about the
+    // opposite axis (forward in time), also under noise.
+    let finite = on(&nv, Some(10e6));
+    let noise = FieldNoise::OrnsteinUhlenbeck {
+        sigma: 1e5,
+        correlation_time: 1e-6,
+    };
+    let minus = [pulse(-60.0, 30.0), NvEvent::Free(1e-6), pulse(90.0, 0.0)];
+    let plus = [pulse(60.0, 210.0), NvEvent::Free(1e-6), pulse(90.0, 0.0)];
+    let (a, b) = (
+        nv.signal(&minus, &finite).unwrap(),
+        nv.signal(&plus, &finite).unwrap(),
+    );
+    assert!((a - b).abs() < 1e-12 && (a - 1.0).abs() > 0.1, "{a} vs {b}");
+    let (a, b) = (
+        nv.signal_with_noise(&minus, &finite, &noise, 50, 3)
+            .unwrap(),
+        nv.signal_with_noise(&plus, &finite, &noise, 50, 3).unwrap(),
+    );
+    assert!((a.0 - b.0).abs() < 1e-12, "{a:?} vs {b:?}");
+    // Pulses of zero angle do nothing, also under noise.
+    let zero = [pulse(0.0, 0.0), NvEvent::Free(1e-6)];
+    let (p, _) = nv.signal_with_noise(&zero, &finite, &noise, 5, 1).unwrap();
+    assert!((p - 1.0).abs() < 1e-12, "{p}");
 }

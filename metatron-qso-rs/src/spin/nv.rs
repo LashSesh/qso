@@ -147,8 +147,27 @@ pub struct Microwave {
     pub rabi: Option<f64>,
 }
 
+impl Microwave {
+    /// On resonance with the bare transition `0 ↔ m` (`D + m γ_e B`).
+    pub fn resonant(nv: &NvCenter, transition: i8, rabi: Option<f64>) -> Self {
+        Microwave {
+            frequency: nv.zero_field_splitting
+                + f64::from(transition) * nv.gyromagnetic_ratio * nv.field,
+            transition,
+            rabi,
+        }
+    }
+}
+
 fn pulse(angle: f64, phase: f64) -> NvEvent {
     NvEvent::Pulse { angle, phase }
+}
+
+/// Duration (s) and phase (degrees) of a finite pulse: a negative angle is
+/// the positive one about the opposite axis.
+fn finite(angle: f64, phase: f64, rabi: f64) -> (f64, f64) {
+    let phase = if angle < 0.0 { phase + 180.0 } else { phase };
+    (angle.abs() / 360.0 / rabi, phase)
 }
 
 /// Ramsey: `π/2 − τ − π/2` (the last about `−x`, so that the signal is
@@ -219,6 +238,19 @@ impl NvCenter {
             perpendicular,
         });
         self
+    }
+
+    /// A centre from JSON (checked).
+    pub fn from_json(text: &str) -> Result<Self> {
+        let nv: NvCenter = serde_json::from_str(text)
+            .map_err(|e| QsoError::invalid("json", format!("not an NV centre: {e}")))?;
+        nv.validate()?;
+        Ok(nv)
+    }
+
+    /// The centre as JSON.
+    pub fn to_json(&self) -> String {
+        serde_json::to_string_pretty(self).expect("NV centres serialise")
     }
 
     /// Levels of each factor: electron, nitrogen, carbons.
@@ -464,7 +496,8 @@ impl NvCenter {
                 NvEvent::Pulse { angle, phase } => match drive.rabi {
                     None => self.ideal_pulse(drive.transition, angle, phase),
                     Some(rabi) => {
-                        expm_hermitian(&(&h0 + self.drive(rabi, phase)), angle / 360.0 / rabi)
+                        let (duration, phase) = finite(angle, phase, rabi);
+                        expm_hermitian(&(&h0 + self.drive(rabi, phase)), duration)
                     }
                 },
             };
@@ -887,11 +920,11 @@ impl NvCenter {
                     NvEvent::Pulse { angle, phase } => match drive.rabi {
                         None => self.ideal_pulse(drive.transition, angle, phase),
                         Some(rabi) => {
-                            let duration = angle / 360.0 / rabi;
+                            let (duration, phase) = finite(angle, phase, rabi);
                             let piece = duration / 16.0;
                             let h = &h0 + self.drive(rabi, phase);
                             let mut u = CMatrix::identity(d, d);
-                            for _ in 0..16 {
+                            for _ in 0..if piece > 0.0 { 16 } else { 0 } {
                                 let mean = path.integral(piece, &mut rng) / piece;
                                 let mut hk = h.clone();
                                 for (r, &m) in sz_diag.iter().enumerate() {

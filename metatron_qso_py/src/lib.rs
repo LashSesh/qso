@@ -21,6 +21,7 @@ mod learning;
 mod mitigation;
 mod mps;
 mod noise;
+mod nv;
 mod optimization;
 mod photonics;
 mod qec;
@@ -209,5 +210,6 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     qec::register(m)?;
     mps::register(m)?;
     spin::register(m)?;
+    nv::register(m)?;
     Ok(())
 }
