@@ -14,7 +14,7 @@ finished milestones are released together, not one by one. The third
 (1.14 to 1.17), fourth (1.18 to 1.21), fifth (1.22 to 1.25) and sixth
 (1.26 to 1.28) stages ship together as release 1.7.0. The seventh stage
 (1.29 to 1.33) is delivered (section 4g); of the eighth (1.34 to 1.37),
-magnetic resonance for medical research, in section 4h, 1.34 and 1.35
+magnetic resonance for medical research, in section 4h, 1.34 to 1.36
 are delivered. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
@@ -53,7 +53,7 @@ which withdraws the results of version 1.
 | Boson sampling | exact probabilities and exact sampling (1.1); partial distinguishability, loss and Gaussian boson sampling with hafnians and torontonians (1.14) | mixed Gaussian states with many photons spread over many modes are impractical (10¹² operations at 20 photons in 10 modes) |
 | Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | noise learning for layers of two-qubit Clifford gates only, on density matrices up to 10 qubits and Pauli frames up to 64 (1.12, 1.31), with non-Pauli channels twirled one at a time; mitigation with the learned model above 24 qubits only on matrix-product states, for channels that are mixtures of unitaries (1.31); no leakage; channels on at most four qubits, slow noise as quasi-static and telegraph processes only, and on trajectories only (1.30); virtual distillation (1.17) mitigates only its measured copies' preparation |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18) | time-dependent Hamiltonians and decoherent coined walks without symmetry reduction; pretty good transfer on other graphs |
-| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the nested-commutator bound of product formulas (1.32) is tight for small Hamiltonians only, its tail ignoring which terms commute; spin relaxation, phenomenological (T₁ and T₂) or from dipolar couplings and shielding anisotropy by Redfield theory for isotropic tumbling (1.34), is exact up to about six relaxing spins of one isotope; larger relaxing systems run for short times only (Redfield not at all), and propagations estimated above a minute are refused; chemical exchange needs steady chemistry (no irreversible hydrogenation) and one block of at most 2048 elements over all sites |
+| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the nested-commutator bound of product formulas (1.32) is tight for small Hamiltonians only, its tail ignoring which terms commute; spin relaxation, phenomenological (T₁ and T₂) or from dipolar couplings and shielding anisotropy by Redfield theory for isotropic tumbling (1.34), is exact up to about six relaxing spins of one isotope; larger relaxing systems run for short times only (Redfield not at all), and propagations estimated above a minute are refused; chemical exchange needs steady chemistry (no irreversible hydrogenation) and one block of at most 2048 elements over all sites; optimal control with relaxation works in Liouville space of up to six spins ½, and field profiles have many local optima |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
 | Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22) | circuit distances of hypergraph models are bounds, not always exact |
 | Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9), in the browser build too (1.25) | — |
@@ -2484,7 +2484,7 @@ laboratory frame lose `ε·ω·t` (10⁻⁹ after 600 s at 1 T); the Monte
 Carlo test resolves errors above about 4 %, the dense reference the
 rest.
 
-### 1.36 — Optimal control of spin experiments (M)
+### 1.36 — Optimal control of spin experiments (M, delivered)
 
 Use case: designing the sequence, not only simulating it. Shaped pulses
 and field profiles that move the most polarisation to ¹³C in the
@@ -2508,6 +2508,114 @@ reaches at most `sin(πJT/2)` in a time `T ≤ 1/J`, and the in-phase
 transfer `S⁻ → I⁻` reaches one only at `3/(2J)`. Pulses optimised for a
 range of field errors keep their transfer over that range, where INEPT
 does not.
+
+Delivered in `spin/control.rs`: GRAPE for piecewise-constant rf
+amplitudes on several channels (rotating frame) or field profiles, with
+the transfer `Re Tr(C† ρ(T))` averaged over an ensemble of rf scalings
+and offsets, amplitude limits, power and smoothness penalties and a
+fixed duration; exact gradients without relaxation (eigenvectors of each
+step) and with it (Liouville space, the Van Loan block exponential
+applied to vectors); `Event::Control` to replay the pulses in `evolve`;
+`unitary_bound`; field profiles through the exchange model of 1.35
+(`Exchange::optimize_profile`); `spin.Control`, `spin.Profile` and
+`spin.rf_pulse` in Python; tutorial 10. Changes to the plan:
+
+- **Time-optimal target corrected.** The plan asked for "no less than
+  `1/(2J)`"; Khaneja, Brockett and Glaser give `sin(πJT/2)` for the
+  antiphase transfer `2I_zS⁻ → I⁻` up to `T = 1/J`, and `3/(2J)` for the
+  in-phase transfer `S⁻ → I⁻`. Those are the limits tested.
+- **Field profiles.** The field derivative of relaxation and of thermal
+  populations is taken by Richardson-extrapolated differences (the rest
+  of the gradient is exact). For SABRE build-up in the exchange model the
+  optimum is the constant anti-crossing field: modulating the field gains
+  nothing there.
+- **Not done:** rf pulses through chemical exchange (field profiles
+  only), control with relaxation beyond six spins ½, and a comparison
+  with QuTiP's optimal-control package (independent NumPy and SciPy
+  builds instead).
+
+Measured:
+
+- **Gradients.** Against central differences for rf and field controls,
+  with and without relaxation, Redfield relaxation, a spin 1, ensembles
+  with rf errors and offsets and complex operators: to 10⁻⁷–10⁻⁸ (the
+  differences' own error). Against an independent SciPy build (`expm`,
+  `expm_frechet`) with relaxation: 10⁻¹⁰ (rf) and 10⁻⁹ (field). The
+  transfer equals `evolve` to 10⁻¹⁰ and an independent NumPy propagation
+  to 10⁻¹².
+- **Unitary bound.** Thermal ¹H → ¹³C transfer reaches 3.976 times
+  carbon's own polarisation, I₂S 4.476 times, both the bound to 10⁻⁹;
+  with `T₂` = 20 ms the optimum is 0.74 of it.
+- **Time-optimal limits.** In-phase `S⁻ → I⁻` reaches `η*(T)` to
+  3·10⁻¹⁰ at `JT` = 0.8 and 1.2 and one at 1.7; antiphase `2I_zS⁻ → I⁻` 99.39 % of
+  `sin(πJT/2)` at `JT` = 0.5 with 100 steps (the ideal sequence of
+  Khaneja et al. reaches it exactly), 99.73 % at 0.8 and one at 1.2.
+- **Robustness.** A pulse optimised for rf amplitudes of 80–120 %
+  transfers more than 99.999 % at them and 99.98 % from 75 % to 125 %;
+  refocused INEPT gives 0.089 and 0.291 at 80 % and 120 %.
+- **Field cycling.** A profile of 2 s in 40 steps, started at zero field,
+  gives −0.8128 on ¹³C: the unitary bound within the blocks of total `M`
+  a field conserves, so no field profile does better; the adiabatic
+  passage needs 50 s for it, a linear sweep of 2 s gives −0.249.
+- **SABRE.** Over 5 s of build-up the best constant field is 0.138 μT
+  (0.33294); optimised ten-step profiles from 0.1 μT or from zero field
+  end there.
+- **Cost** of one evaluation, 100 steps: 0.5 ms for two spins without
+  relaxation (27 ms for four spins and 200 steps); with relaxation 50 ms
+  for two spins and 0.7 s for three at rf up to 2 kHz, about four times
+  that at 10 kHz.
+
+An independent review wrote its own SciPy implementation and compared
+values and gradients in both engines (rf with ensembles, spin-index
+channels, non-Hermitian operators, `T₁`/`T₂`, Redfield relaxation, a spin
+1, field drives in both frames, large norms, degenerate spectra): to
+5·10⁻¹⁴, and 4·10⁻¹¹ for thermal starts at room temperature. It confirmed
+the in-phase limit by a direct maximisation over the reachable
+propagators, the unitary bound, the fairness of the INEPT comparison and
+the SABRE optimum. It found:
+
+- **Out of memory.** The dense Liouville generator was allocated before
+  the work check (eight relaxing spins aborted the process), and the work
+  checks did not bound memory: the propagators of every step, a cache of
+  field-step generators and members running in parallel (a 5-spin field
+  profile took 9.8 GB). Now memory (at most 2 GB) and work are estimated
+  before anything is allocated, Liouville space is limited to 4096
+  elements, no generators are cached and propagators are recomputed from
+  the stored eigenvectors; the work estimates were 15 and 5 times too
+  low and are calibrated now, for the whole ensemble.
+- **Converged on a bound.** The `tanh` map of bounded controls saturated
+  and the optimiser's first step (one unit: 1 T for a field) threw every
+  field onto a bound, where the gradient vanished: from zero field the
+  PHIP profile stopped at 0.40 and SABRE at 0.005, both reported as
+  converged. Bounds are now kept by a sine (no plateau beyond them),
+  field variables count twentieths of the range, and starts on a bound
+  are moved inside: both now reach their optimum. The PHIP value the
+  milestone first reported from random starts came from that lucky first
+  step; field profiles are strongly multimodal (random starts stop at
+  0.08–0.38), which the guide now says.
+- **Accuracy.** The field derivative of relaxation, claimed to 10⁻⁹, was
+  off by up to 1.7·10⁻³ at room temperature and millitesla fields: the
+  drift towards equilibrium was the small difference of two large rates.
+  It is now `tanh(x/2)/T₁` (in `evolve` as well), with Richardson
+  extrapolation: 2·10⁻¹⁴ against the rates written out. The Liouville
+  engine propagated `ρ` itself and lost digits of thermal polarisation;
+  it now propagates the deviation as `evolve` does.
+- **Smaller issues.** The cost of a field profile was estimated at its
+  first field; a maximally mixed start gave a degenerate normalisation
+  and stopped after one iteration; non-finite operators and overflowing
+  weights were accepted; out-of-range starts were silently projected;
+  Python docstrings were displaced, `spin.control` (now `spin.rf_pulse`)
+  took only tuples and was easily confused with `spin.Control`; the
+  guide's timings, the scope of `limit`, the offset sign, the scope of
+  robustness and an exchange test's name were wrong or missing. All are
+  fixed, with tests (bound and mixed starts, refusals, JSON, precision at
+  low polarisation, Redfield and spin-1 gradients, the SciPy reference).
+
+Left as is: Ctrl-C reaches Python only when an optimisation ends; with
+relaxation and no amplitude limit, an evaluation the optimiser tries
+beyond the work limit ends the run with an error; the cost with
+relaxation grows with rf amplitude times duration; `evolve` resolves
+polarisations below about 10⁻¹² only to 10⁻¹⁷ absolute.
 
 ### 1.37 — Quantum sensing with spins in diamond (M)
 
