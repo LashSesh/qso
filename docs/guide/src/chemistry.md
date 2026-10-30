@@ -104,6 +104,16 @@ Gaussians by the McMurchie–Davidson scheme, for shells up to g:
   computed per quartet of shells, the columns of a general contraction
   together; 64 functions with three chlorines in cc-pVDZ take about 3 s
   on four cores and 0.35 GB (`benchmark_report`).
+- **Screening.** A quartet of shells is skipped when the Schwarz bound
+  `√((ab|ab)(cd|cd))` of all its integrals is below `screening` (10⁻¹²
+  Hartree by default; `screening=0` computes everything).
+  `screened_quartets` counts the quartets skipped and computed. For a
+  chain of 32 hydrogens 1 Å apart in 6-31G (64 functions) screening skips
+  86 % of the quartets and cuts the time from 1.5 s to 0.2 s; the RHF
+  energy moves by 5·10⁻¹³ Ha and still agrees with PySCF to 2·10⁻¹¹ Ha.
+  Compact molecules gain less: butane in 6-31G, 5 % of the quartets.
+  Every skipped Cartesian integral is below the threshold; spherical
+  functions combine Cartesian ones and stay within a small multiple.
 - **Order.** Functions come in PySCF's order.
 - **Harmonics.** d and higher shells are spherical by default: real
   solid harmonics, `m = −l, …, l`, with PySCF's signs. With

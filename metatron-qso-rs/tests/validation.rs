@@ -239,6 +239,133 @@ fn shrikhande_and_rook_graph_are_cospectral_but_not_isomorphic() {
     assert_eq!(r.automorphism_group().order(), Some(1152));
 }
 
+#[test]
+fn interacting_bosons_tell_cospectral_strongly_regular_graphs_apart() {
+    use metatron_qso::walks::interacting::certificate_distance;
+    use metatron_qso::walks::{InteractingWalk, Statistics};
+    // T(8) and the three Chang graphs, all (28, 12, 6, 4), and the
+    // Shrikhande and 4 × 4 rook's graphs, both (16, 6, 2, 2), pairwise not
+    // isomorphic: two free bosons see no difference (Gamble et al.,
+    // Phys. Rev. A 81, 052313 (2010)), two interacting ones tell every
+    // pair apart.
+    let walk = |g: &Graph, u: f64| {
+        InteractingWalk::new(g, Generator::Adjacency, 1.0, Statistics::Bosons, 2)
+            .unwrap()
+            .with_interaction(u, 0.0)
+            .unwrap()
+    };
+    let mut chang = vec![generators::johnson(8, 2).unwrap()];
+    chang.extend((1..=3).map(|k| generators::chang(k).unwrap()));
+    let srg16 = vec![generators::shrikhande(), generators::rook(4, 4).unwrap()];
+    for (family, range) in [(chang, 1.7e-4..3.5e-4), (srg16, 5e-3..6e-3)] {
+        let free: Vec<_> = family
+            .iter()
+            .map(|g| walk(g, 0.0).certificate(&[1.0]).unwrap())
+            .collect();
+        let hubbard: Vec<_> = family
+            .iter()
+            .map(|g| walk(g, 1.0).certificate(&[1.0]).unwrap())
+            .collect();
+        let tolerance = walk(&family[0], 1.0).certificate_tolerance(&[1.0]).unwrap();
+        for a in 0..family.len() {
+            for b in a + 1..family.len() {
+                assert!(!family[a].is_isomorphic(&family[b]));
+                let d0 = certificate_distance(&free[a], &free[b]);
+                let d1 = certificate_distance(&hubbard[a], &hubbard[b]);
+                assert!(d0 < 1e-12, "{a} {b}: {d0:e}");
+                // T(8)/Chang: 1.7·10⁻⁴ to 3.4·10⁻⁴; Shrikhande/rook:
+                // 5.4·10⁻³ (README).
+                assert!(range.contains(&d1), "{a} {b}: {d1:e}");
+                assert!(d1 > 1e6 * tolerance);
+            }
+        }
+    }
+}
+
+#[test]
+fn slow_noise_follows_ramsey_and_echo_closed_forms() {
+    use metatron_qso::noise::{
+        DeviceModel, GateRule, QubitProperties, Spread, Telegraph, TrajectorySimulator,
+    };
+    // One qubit: H, wait (an `id` gate with a duration), H; with an echo,
+    // X halfway. ⟨Z⟩ over 8000 trajectories against the closed forms.
+    let z: PauliSum = "Z0".parse().unwrap();
+    let run = |qubit: QubitProperties, t: f64, echo: bool| {
+        let wait = if echo { t / 2.0 } else { t };
+        let device = DeviceModel::new("slow")
+            .with_default_qubit(qubit)
+            .with_rule(GateRule::for_gate("id").with_duration(wait));
+        let mut c = Circuit::new(1);
+        c.h(0).id(0);
+        if echo {
+            c.x(0).id(0);
+        }
+        c.h(0);
+        TrajectorySimulator::new(device, 8000, 41)
+            .unwrap()
+            .expectation(&c, &[], &z)
+            .unwrap()
+    };
+    let mut worst = 0.0f64;
+    let mut check = |e: metatron_qso::estimation::Estimate, exact: f64| {
+        worst = worst.max((e.value - exact).abs() / e.std_error.max(1e-15));
+    };
+    // Gaussian quasi-static detuning: exp(−σ²t²/2), and a perfect echo.
+    let sigma = 0.8;
+    let gauss = QubitProperties::new().with_detuning(Spread::Gaussian { sigma });
+    for t in [0.5, 1.0, 2.0, 3.0] {
+        check(
+            run(gauss.clone(), t, false),
+            (-(sigma * t).powi(2) / 2.0).exp(),
+        );
+        let e = run(gauss.clone(), t, true);
+        assert!((e.value - 1.0).abs() < 1e-12);
+    }
+    // Telegraph noise (amplitude ν, flip rate γ): Kubo–Anderson decay
+    // e^{−γt}(cosh μt + (γ/μ) sinh μt), μ = √(γ² − ν²), and the echo from
+    // the same two-state equations, for slow and fast switching.
+    let free = |nu: f64, g: f64, t: f64| {
+        let m2 = g * g - nu * nu;
+        let (c, s) = if m2 > 0.0 {
+            let m = m2.sqrt();
+            ((m * t).cosh(), g * (m * t).sinh() / m)
+        } else {
+            let w = (-m2).sqrt();
+            ((w * t).cos(), g * (w * t).sin() / w)
+        };
+        (-g * t).exp() * (c + s)
+    };
+    let echo = |nu: f64, g: f64, t: f64| {
+        // f' = A f, A = [[±iν − γ, γ], [γ, ∓iν − γ]], f(0) = (½, ½); the
+        // sign of ν flips at t/2. exp(Bτ) = cosh(μτ) + B sinh(μτ)/μ.
+        use num_complex::Complex64 as Z;
+        let half = t / 2.0;
+        let mu = Z::new(g * g - nu * nu, 0.0).sqrt();
+        let step = |f: [Z; 2], sign: f64| {
+            let k = (mu * half).sinh() / mu;
+            let i = Z::new(0.0, nu * sign);
+            let gg = Z::new(g, 0.0);
+            let ch = (mu * half).cosh();
+            let decay = (-g * half).exp();
+            [
+                (ch * f[0] + k * (i * f[0] + gg * f[1])) * decay,
+                (ch * f[1] + k * (gg * f[0] - i * f[1])) * decay,
+            ]
+        };
+        let f = step(step([Z::new(0.5, 0.0); 2], 1.0), -1.0);
+        (f[0] + f[1]).re
+    };
+    for (nu, g) in [(1.0, 0.2), (1.0, 5.0)] {
+        let q = QubitProperties::new().with_telegraph(Telegraph::new(nu, g));
+        for t in [0.5, 1.5, 3.0, 6.0] {
+            check(run(q.clone(), t, false), free(nu, g, t));
+            check(run(q.clone(), t, true), echo(nu, g, t));
+        }
+    }
+    // Every estimate within four standard errors (README).
+    assert!(worst < 4.0, "worst deviation {worst} standard errors");
+}
+
 /// The toy device of `examples/devices/toy_device.json`.
 fn toy_device() -> metatron_qso::noise::DeviceModel {
     metatron_qso::noise::DeviceModel::from_json(include_str!("../examples/devices/toy_device.json"))
@@ -1462,4 +1589,307 @@ fn single_precision_states_follow_double_precision() {
     assert!((single.norm() - 1.0).abs() < 3e-5);
     let h: PauliSum = "Z0 Z1 + 0.5 X3 X4 - 0.2 Y7".parse().unwrap();
     assert!((single.expectation(&h).unwrap() - h.expectation(&exact).unwrap()).abs() < 1e-6);
+}
+
+/// A heavy-hex patch of 53 qubits: three rows of 15 (qubit `15r + c`) and
+/// eight bridge qubits (45..53), between rows 0 and 1 at columns 0, 4, 8
+/// and 12 and between rows 1 and 2 at columns 2, 6, 10 and 14. Returns
+/// the edges and, per bridge, the bridge and its two row qubits.
+#[allow(clippy::type_complexity)]
+fn heavy_hex() -> (Vec<(usize, usize)>, Vec<(usize, usize, usize)>) {
+    let mut edges = Vec::new();
+    for r in 0..3 {
+        for c in 0..14 {
+            edges.push((15 * r + c, 15 * r + c + 1));
+        }
+    }
+    let mut bridges = Vec::new();
+    for (i, (row, col)) in [
+        (0, 0),
+        (0, 4),
+        (0, 8),
+        (0, 12),
+        (1, 2),
+        (1, 6),
+        (1, 10),
+        (1, 14),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (b, top, bottom) = (45 + i, 15 * row + col, 15 * (row + 1) + col);
+        edges.push((top, b));
+        edges.push((b, bottom));
+        bridges.push((b, top, bottom));
+    }
+    (edges, bridges)
+}
+
+#[test]
+fn learning_on_a_heavy_hex_layer_recovers_the_twirled_rates() {
+    use std::collections::BTreeMap;
+
+    use metatron_qso::noise::learning::{LearningOptions, learn_layer};
+    use metatron_qso::noise::{ChannelSpec, DeviceModel, GateRule, QubitProperties};
+    // Layer: cx(c, c + 1) for even c < 14 in every row (21 gates); bridges
+    // and the last column idle. Every cx: two-qubit depolarising
+    // (p = 0.012), a coherent Z rotation of the control (θ = 0.1), and a
+    // ZZ crosstalk error (q = 0.01) between the control and a bridge
+    // qubit next to it. Twirled, the exact rates are
+    // λ = −ln(1 − 16p/15)/16 on the 15 Paulis of each gate pair,
+    // −ln(cos θ)/2 more on Z of the control, −ln(1 − 2q)/2 on each
+    // crosstalk ZZ, and 0 elsewhere.
+    let (p, theta, q) = (0.012, 0.1, 0.01);
+    let (edges, bridges) = heavy_hex();
+    assert_eq!(edges.len(), 58);
+    let mut layer = Circuit::new(53);
+    let mut device = DeviceModel::new("heavy-hex")
+        .with_default_qubit(QubitProperties::new().with_readout(0.02, 0.04))
+        .with_idle_noise(false);
+    let mut gates = Vec::new();
+    let mut crosstalk = Vec::new();
+    for r in 0..3 {
+        for c in (0..14).step_by(2) {
+            let (a, b) = (15 * r + c, 15 * r + c + 1);
+            layer.cx(a, b);
+            gates.push((a, b));
+            let mut rule = GateRule::for_gate("cx")
+                .on_qubits(&[a, b])
+                .with_depolarizing(p)
+                .with_channel(ChannelSpec::Rotation {
+                    pauli: "ZI".into(),
+                    angle: theta,
+                });
+            for &(bridge, top, bottom) in &bridges {
+                if top == a || bottom == a {
+                    let zz: BTreeMap<String, f64> = [("ZZ".to_string(), q)].into();
+                    rule = rule.with_spectator(&[a, bridge], ChannelSpec::Pauli(zz));
+                    crosstalk.push((a, bridge));
+                }
+            }
+            device = device.with_rule(rule);
+        }
+    }
+    assert_eq!((gates.len(), crosstalk.len()), (21, 14));
+    let options = LearningOptions {
+        edges: Some(edges),
+        ..LearningOptions::default()
+    };
+    let learned = learn_layer(&layer, &device, &options).unwrap();
+    let model = &learned.model;
+    assert_eq!(model.generators.len(), 53 * 3 + 58 * 9);
+    let depolarising = -(1.0 - 16.0 * p / 15.0).ln() / 16.0;
+    let phase = -theta.cos().ln() / 2.0;
+    let zz = -(1.0 - 2.0 * q).ln() / 2.0;
+    let (mut worst, mut sum_sq, mut nonzero) = (0.0f64, 0.0, 0);
+    for ((g, rate), se) in model
+        .generators
+        .iter()
+        .zip(&model.rates)
+        .zip(&learned.std_errors)
+    {
+        let support = g.x_mask() | g.z_mask();
+        let mask = |a: usize, b: usize| (1u64 << a) | (1u64 << b);
+        let mut expected = 0.0;
+        for &(a, b) in &gates {
+            if support & !mask(a, b) == 0 {
+                expected += depolarising;
+                if g.x_mask() == 0 && support == 1 << a {
+                    expected += phase;
+                }
+            }
+        }
+        if g.x_mask() == 0 && crosstalk.iter().any(|&(a, b)| support == mask(a, b)) {
+            expected += zz;
+        }
+        let z = (rate - expected) / se;
+        worst = worst.max(z.abs());
+        assert!(z.abs() < 4.0, "{g}: {rate} ± {se}, expected {expected}");
+        if expected > 0.0 {
+            sum_sq += z * z;
+            nonzero += 1;
+        }
+    }
+    // The standard errors are honest: over the 329 nonzero rates the
+    // deviations have unit spread. (Most zero rates sit at the constraint
+    // λ ≥ 0, closer to the truth than their errors say.)
+    assert_eq!(nonzero, 21 * 15 + 14);
+    let rms = (sum_sq / nonzero as f64).sqrt();
+    assert!((0.8..1.2).contains(&rms), "rms {rms}, worst {worst}");
+}
+
+#[test]
+fn layered_mitigation_beyond_trajectories_runs_on_matrix_product_states() {
+    use metatron_qso::mitigation::zne::Extrapolation;
+    use metatron_qso::mps::{Mps, MpsOptions};
+    use metatron_qso::noise::learning::{LearningOptions, learn_layer, pea_layered, pec_layered};
+    use metatron_qso::noise::{ChannelSpec, DeviceModel, GateRule, QubitProperties};
+    // 30 qubits: learned on Pauli frames, mitigated on one sampled
+    // matrix-product state per sample (more than trajectories handle).
+    // The layer has a gate between distant qubits, and the blocks entangle
+    // neighbours among the first six with cz (noiseless on this device).
+    let n = 30;
+    let device = DeviceModel::new("chain")
+        .with_rule(
+            GateRule::for_gate("cx")
+                .with_depolarizing(0.03)
+                .with_channel(ChannelSpec::Rotation {
+                    pauli: "ZI".into(),
+                    angle: 0.2,
+                }),
+        )
+        .with_default_qubit(QubitProperties::new().with_readout(0.02, 0.04))
+        .with_idle_noise(false);
+    let mut layer = Circuit::new(n);
+    layer.cx(0, 1).cx(2, 9);
+    let learned = learn_layer(&layer, &device, &LearningOptions::default()).unwrap();
+    assert_eq!(learned.model.generators.len(), 3 * n + 9 * n);
+    let mut rng = Rng::seed_from_u64(23);
+    let blocks: Vec<Circuit> = (0..4)
+        .map(|i| {
+            let mut b = Circuit::new(n);
+            for q in 0..n {
+                b.ry(q, rng.uniform_range(-3.0, 3.0))
+                    .rz(q, rng.uniform_range(-3.0, 3.0));
+            }
+            for q in (i % 2..5).step_by(2) {
+                b.cz(q, q + 1);
+            }
+            b
+        })
+        .collect();
+    let mut joined = Circuit::new(n);
+    for (i, b) in blocks.iter().enumerate() {
+        if i > 0 {
+            joined.append(&layer).unwrap();
+        }
+        joined.append(b).unwrap();
+    }
+    let h: PauliSum = "Z0 Z1 + 0.5 X0 + Z2 Z9 + 0.5 X2 + 0.3 Z29".parse().unwrap();
+    let exact = Mps::from_circuit(&joined, &[], MpsOptions::exact())
+        .unwrap()
+        .expectation_sum(&h)
+        .unwrap();
+    let pec = pec_layered(&blocks, &layer, &learned.model, &device, &h, 6000, 3).unwrap();
+    let zne = pea_layered(
+        &blocks,
+        &layer,
+        &learned.model,
+        &device,
+        &h,
+        &[1.0, 2.0],
+        6000,
+        Extrapolation::Linear,
+        4,
+    )
+    .unwrap();
+    let noisy = &zne.values[0];
+    // The noisy value is far off; error cancellation is unbiased, and
+    // amplification moves the extrapolation towards the exact value.
+    let off = (noisy.value - exact).abs();
+    assert!(
+        off > 8.0 * noisy.std_error,
+        "noisy {noisy:?}, exact {exact}"
+    );
+    assert!(
+        (pec.estimate.value - exact).abs() < 4.0 * pec.estimate.std_error,
+        "PEC {:?}, exact {exact}",
+        pec.estimate
+    );
+    assert!((zne.values[1].value - exact).abs() > off);
+    assert!(
+        (zne.estimate.value - exact).abs() < off,
+        "PEA {:?}, exact {exact}",
+        zne.estimate
+    );
+}
+
+#[test]
+fn screened_integrals_keep_the_energy_of_a_long_chain() {
+    use metatron_qso::chemistry::integrals::{AoIntegrals, Basis, Harmonics, Molecule};
+    use metatron_qso::chemistry::scf::{ScfOptions, rhf};
+    // 32 hydrogens 1 Å apart in 6-31G: 64 functions, the size limit.
+    // Schwarz screening at 10⁻¹² skips most shell quartets.
+    let chain: Vec<String> = (0..32).map(|i| format!("H 0 0 {i}")).collect();
+    let mol = Molecule::from_atoms(&chain.join("; "), 0, 1).unwrap();
+    let screened = AoIntegrals::compute(&mol, Basis::SixThirtyOneG).unwrap();
+    let full = AoIntegrals::compute_screened(&mol, Basis::SixThirtyOneG, Harmonics::Spherical, 0.0)
+        .unwrap();
+    assert_eq!(screened.n_functions(), 64);
+    let (skipped, computed) = screened.screened_quartets();
+    assert!(skipped as f64 > 0.85 * (skipped + computed) as f64);
+    let options = ScfOptions::default();
+    let e = rhf(&mol, &screened, &options).unwrap().energy;
+    let e_full = rhf(&mol, &full, &options).unwrap().energy;
+    assert!((e - e_full).abs() < 1e-11, "{e} vs {e_full}");
+    // PySCF 2.14 RHF (geometry in ångström; its bohr differs, see 1.23).
+    assert!((e - (-17.121_863_274_403)).abs() < 1e-10, "{e}");
+}
+
+#[test]
+fn nested_commutator_bounds_of_higher_orders_hold_and_fall_as_the_error() {
+    use metatron_qso::algorithms::time_evolution::{trotter_circuit, trotter_error_bounds};
+    use metatron_qso::linalg::expm_hermitian;
+    let n = 4;
+    let mut rng = Rng::seed_from_u64(3);
+    let letters = [Pauli::X, Pauli::Y, Pauli::Z];
+    let mut random = PauliSum::new();
+    for _ in 0..8 {
+        let mut factors: Vec<(usize, Pauli)> = Vec::new();
+        for q in 0..n {
+            if rng.uniform() < 0.6 {
+                factors.push((q, letters[rng.below(3) as usize]));
+            }
+        }
+        if !factors.is_empty() {
+            random.add_term(
+                rng.uniform_range(-1.0, 1.0),
+                PauliString::new(&factors).unwrap(),
+            );
+        }
+    }
+    let hamiltonians = [
+        ("Heisenberg", models::heisenberg_xxz(n, 1.0, 0.5, false)),
+        ("Ising", models::transverse_field_ising(n, 1.0, 0.7, false)),
+        ("random", random),
+    ];
+    for (name, h) in &hamiltonians {
+        let exact = expm_hermitian(&h.to_dense(n).unwrap(), 1.0);
+        let error = |steps: usize, order: usize| {
+            let c = trotter_circuit(h, n, 1.0, steps, order).unwrap();
+            let mut u = metatron_qso::linalg::CMatrix::zeros(1 << n, 1 << n);
+            for col in 0..1 << n {
+                let mut psi = StateVector::basis(n, col).unwrap();
+                psi.apply_circuit(&c, &[]).unwrap();
+                for (row, a) in psi.amplitudes().iter().enumerate() {
+                    u[(row, col)] = *a;
+                }
+            }
+            (u - &exact).singular_values().max()
+        };
+        for order in [4usize, 6] {
+            let mut previous: Option<(f64, f64)> = None;
+            for steps in [1usize, 2, 4, 8, 16, 32] {
+                let e = error(steps, order);
+                let b = trotter_error_bounds(h, 1.0, steps, order).unwrap();
+                // Every bound holds (all these errors are far above rounding).
+                for v in [b.bound, b.nested, b.stages, b.taylor] {
+                    assert!(v >= e, "{name} order {order}, {steps} steps: {v} < {e}");
+                }
+                if steps >= 8 {
+                    // The new bound beats the old one by far, and falls
+                    // as r^{−p}.
+                    assert!(b.nested < 0.05 * b.stages, "{name} {order} {steps}");
+                }
+                if steps >= 16
+                    && let Some((nb, _)) = previous
+                {
+                    let rate = nb / b.nested;
+                    let want = 2f64.powi(order as i32);
+                    assert!((rate / want - 1.0).abs() < 0.25, "{name} {order}: {rate}");
+                }
+                previous = Some((b.nested, e));
+            }
+        }
+    }
 }

@@ -201,6 +201,65 @@ noise, a coherent phase error and readout errors is learned. All 39 rates
 lie within three standard errors of their exact values, and PEC with the
 learned model gives 0.534 ± 0.005 for a value of 0.533 (raw 0.492).
 
+### Beyond ten qubits
+
+Density matrices stop at ten qubits. The learning circuits, however, are
+Clifford circuits whose noiseless outcome is fixed: the basis changes
+and the layers cancel, and the twirl and readout Paulis only flip bits.
+So every shot can carry a Pauli frame instead of a state. The frame is
+the error the noise has put in, conjugated through the rest of the
+circuit, and its X part flips the measured bits. Above ten qubits
+`learn_layer` runs on these frames, up to 64 qubits
+(`simulator="frames"` forces them, `"density_matrix"` the exact
+simulation). Each channel of the device enters through its Pauli twirl.
+That is exact for Pauli noise (depolarising, dephasing, Pauli channels,
+crosstalk) and readout errors. Coherent and damping errors are twirled
+one channel at a time, while the experiment twirls whole layers. The two
+agree unless non-Pauli channels on overlapping qubits fall between the
+same two twirls (two over-rotations of one qubit, whose angles add). Slow noise (quasi-static detunings, telegraph noise) is
+refused. Hundreds of rates are fitted by coordinate descent on the
+normal equations, then polished by an active-set method on the support
+it found.
+
+The circuits PEC and PEA run are not Clifford. Their samples run on
+density matrices up to 10 qubits, on one quantum trajectory each up to
+24, and above on one matrix-product state each, up to 64 qubits
+(`simulator="auto"`; or `"density_matrix"`, `"trajectories"`, `"mps"`
+with `max_bond`, 256 by default). Samples of 20 qubits or more on
+trajectories run one after another, so that one large state vector is
+alive at a time; the first failing sample stops the others. A matrix-product sample replaces every channel by one
+of its unitaries, drawn with its weight. That needs channels that are
+mixtures of unitaries, so damping and T₁ are refused. In `"auto"` a
+sample that would need truncation is an error. With `"mps"` truncation
+at `max_bond` is accepted, not reported, and biases the value.
+
+```python
+import metatron_qso as q
+
+n = 30
+device = (q.DeviceModel("chain", idle_noise=False)
+          .with_rule(gate="cx", depolarizing=0.03,
+                     channels=[q.Channel.rotation("ZI", 0.2)]))
+layer = q.Circuit(n).cx(0, 1).cx(2, 3)
+learned = q.learn_layer(layer, device)          # Pauli frames
+blocks = [q.Circuit(n).ry(0, 0.7).ry(2, -0.4), q.Circuit(n).ry(1, 1.1).ry(3, 0.5)]
+obs = q.PauliSum("Z0 Z1 + Z2 Z3")
+pec = q.pec_layered(blocks, layer, learned["model"], device, obs, 4000)  # MPS
+```
+
+In the validation suite a heavy-hex layer of 53 qubits is learned: 21
+`cx` gates with two-qubit depolarising noise, a coherent phase error on
+each control and a ZZ crosstalk error between 14 controls and their
+bridge qubits, plus readout errors. All 681 rates lie within 4 standard
+errors of the exact rates of the twirled noise (largest 2.9), and over
+the 329 nonzero rates the deviations have a spread of 0.94 standard
+errors. Most zero rates sit exactly at the constraint λ ≥ 0. On 30 qubits,
+with a layer gate between qubits 2 and 9 and blocks that entangle,
+PEC with a model learned on frames gives 0.200 ± 0.004 on
+matrix-product states, for an exact value of 0.197 (raw 0.179). On four
+qubits, frames and density matrices learn the same rates within their
+standard errors.
+
 ## Virtual distillation
 
 Virtual distillation needs no noise model (Huggins et al., Phys. Rev. X 11,

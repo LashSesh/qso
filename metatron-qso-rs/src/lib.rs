@@ -66,6 +66,7 @@ pub(crate) mod pool;
 pub mod qec;
 pub mod quantum;
 pub mod rng;
+pub mod spin;
 pub mod stabilizer;
 pub mod walks;
 

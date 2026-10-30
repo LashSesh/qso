@@ -29,6 +29,7 @@ use nalgebra::DMatrix;
 use num_complex::Complex64 as C64;
 
 use crate::error::{QsoError, Result};
+use crate::linalg::dense::cmul;
 use crate::quantum::gates::{matrix_1q, matrix_2q};
 use crate::quantum::{Circuit, GateKind, Instruction, Pauli, PauliSum, StateVector};
 use crate::rng::Rng;
@@ -132,23 +133,6 @@ pub struct Mps {
     truncations: usize,
     /// A measurement after a truncation voids the fidelity bound.
     bound_void: bool,
-}
-
-/// Complex matrix product through three real products (Gauss), which
-/// run on nalgebra's optimised real kernels: several times faster than
-/// its generic complex product.
-fn cmul(a: &DMatrix<C64>, b: &DMatrix<C64>) -> DMatrix<C64> {
-    let (ar, ai) = (a.map(|z| z.re), a.map(|z| z.im));
-    let (br, bi) = (b.map(|z| z.re), b.map(|z| z.im));
-    let p1 = &ar * &br;
-    let p2 = &ai * &bi;
-    let p3 = (ar + ai) * (br + bi);
-    DMatrix::from_fn(p1.nrows(), p1.ncols(), |i, j| {
-        C64::new(
-            p1[(i, j)] - p2[(i, j)],
-            p3[(i, j)] - p1[(i, j)] - p2[(i, j)],
-        )
-    })
 }
 
 /// Row-major `m × k` times `k × n`.
@@ -618,6 +602,23 @@ impl Mps {
     /// Apply a unitary (row-major, dimension `2^qubits.len()`, `qubits[0]`
     /// most significant) to distinct qubits.
     pub fn apply_matrix(&mut self, matrix: &[C64], qubits: &[usize]) -> Result<()> {
+        self.check_matrix(matrix, qubits)?;
+        if !is_unitary(matrix, 1usize << qubits.len(), 1e-9) {
+            return Err(QsoError::invalid("matrix", "the matrix is not unitary"));
+        }
+        self.apply_unitary(matrix, qubits)
+    }
+
+    /// [`Mps::apply_matrix`] without the unitarity check, for matrices
+    /// unitary by construction (the terms of compiled unitary mixtures,
+    /// classified by their own test).
+    pub(crate) fn apply_trusted_unitary(&mut self, matrix: &[C64], qubits: &[usize]) -> Result<()> {
+        self.check_matrix(matrix, qubits)?;
+        self.apply_unitary(matrix, qubits)
+    }
+
+    /// Distinct valid qubits, a matrix of their dimension, finite entries.
+    fn check_matrix(&self, matrix: &[C64], qubits: &[usize]) -> Result<()> {
         let k = qubits.len();
         if k == 0 || k > MAX_GATE_QUBITS {
             return Err(QsoError::invalid(
@@ -644,11 +645,10 @@ impl Mps {
         if matrix
             .iter()
             .any(|z| !z.re.is_finite() || !z.im.is_finite())
-            || !is_unitary(matrix, d, 1e-9)
         {
             return Err(QsoError::invalid("matrix", "the matrix is not unitary"));
         }
-        self.apply_unitary(matrix, qubits)
+        Ok(())
     }
 
     fn apply_unitary(&mut self, matrix: &[C64], qubits: &[usize]) -> Result<()> {

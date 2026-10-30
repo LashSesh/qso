@@ -392,6 +392,22 @@ impl PyGraph {
         wrap(generators::shrikhande())
     }
 
+    /// Chang graph `which` (1, 2 or 3): strongly regular (28, 12, 6, 4)
+    /// like `Graph.johnson(8, 2)`, but not isomorphic to it.
+    #[staticmethod]
+    fn chang(which: usize) -> PyResult<Self> {
+        generators::chang(which).raise().map(wrap)
+    }
+
+    /// Seidel switching with respect to the node set `nodes`: pairs with
+    /// one node inside and one outside the set swap adjacency (unweighted
+    /// graphs).
+    fn seidel_switching(&self, nodes: Vec<usize>) -> PyResult<Self> {
+        generators::seidel_switching(&self.inner, &nodes)
+            .raise()
+            .map(wrap)
+    }
+
     /// Cartesian product: node (g, h) has index g·|H| + h.
     fn cartesian_product(&self, other: &PyGraph) -> PyResult<Self> {
         self.inner.cartesian_product(&other.inner).raise().map(wrap)

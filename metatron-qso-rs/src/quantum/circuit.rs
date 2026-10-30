@@ -384,6 +384,31 @@ impl Circuit {
 }
 
 impl Instruction {
+    /// Whether this is a one-qubit identity ([`Circuit::id`]): an
+    /// uncontrolled custom unitary equal to the identity.
+    pub fn is_identity(&self) -> bool {
+        self.kind == GateKind::Unitary
+            && self.controls.is_empty()
+            && self.targets.len() == 1
+            && self.matrix.as_deref().is_some_and(|m| {
+                let one = C64::new(1.0, 0.0);
+                m.len() == 4
+                    && (m[0] - one).norm() < 1e-12
+                    && (m[3] - one).norm() < 1e-12
+                    && m[1].norm() < 1e-12
+                    && m[2].norm() < 1e-12
+            })
+    }
+
+    /// The gate's name as in [`Circuit::gate_counts`]: one `c` per control
+    /// and the kind (`"cx"`, `"crz"`), and `"id"` for an identity.
+    pub fn name(&self) -> String {
+        if self.is_identity() {
+            return "id".to_string();
+        }
+        format!("{}{}", "c".repeat(self.controls.len()), self.kind.name())
+    }
+
     /// Check arity, parameter count, qubit range and distinctness, finite
     /// angles, and (for custom unitaries) shape and unitarity of the matrix.
     pub fn validate(&self, n_qubits: usize) -> Result<()> {
@@ -689,6 +714,19 @@ impl Circuit {
         Ok(self)
     }
 
+    /// Append an identity on qubit `q`: it changes nothing, but a device
+    /// rule for the gate `"id"` gives it a duration, so that the qubit
+    /// waits (relaxes and dephases) for that time.
+    ///
+    /// # Panics
+    /// If `q` is out of range, like the other builder methods.
+    pub fn id(&mut self, q: usize) -> &mut Self {
+        let one = C64::new(1.0, 0.0);
+        let zero = C64::new(0.0, 0.0);
+        self.unitary(vec![one, zero, zero, one], &[q], &[])
+            .expect("identity on a qubit of the circuit")
+    }
+
     /// Append an arbitrary unitary (row-major, dimension `2^targets.len()`)
     /// with optional controls. `targets[0]` is the most significant local bit.
     pub fn unitary(
@@ -825,8 +863,7 @@ impl Circuit {
     pub fn gate_counts(&self) -> BTreeMap<String, usize> {
         let mut counts = BTreeMap::new();
         for inst in &self.instructions {
-            let name = format!("{}{}", "c".repeat(inst.controls.len()), inst.kind.name());
-            *counts.entry(name).or_insert(0) += 1;
+            *counts.entry(inst.name()).or_insert(0) += 1;
         }
         counts
     }

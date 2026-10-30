@@ -12,7 +12,10 @@ state-vector core at memory bandwidth), 1.12 (noise learning) and 1.13
 (walks beyond static Hamiltonians) — ship together as release 1.6.0;
 finished milestones are released together, not one by one. The third
 (1.14 to 1.17), fourth (1.18 to 1.21), fifth (1.22 to 1.25) and sixth
-(1.26 to 1.28) stages ship together as release 1.7.0. Up to 1.3
+(1.26 to 1.28) stages ship together as release 1.7.0. The seventh
+(1.29 to 1.33, section 4g) and eighth (1.34 to 1.37, magnetic resonance
+for medical research, section 4h) stages ship together as release
+1.8.0. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -48,9 +51,9 @@ which withdraws the results of version 1.
 |---|---|---|
 | Statevector speed | specialised kernels (1.1); gate fusion and cache blocking (1.3.0): 16-qubit layers 4.7× and 18–24-qubit layers 1.6–2.6× faster than in 1.2; batched evaluation; AVX and NEON kernels close to memory bandwidth and a blocked adjoint pass (1.11); single precision, one more qubit and about twice the speed on large registers (1.20); a worker pool that stays awake between short simulations (1.24) | spinning workers cost CPU time between simulations (`QSO_POOL_SPIN_US=0` turns it off) |
 | Boson sampling | exact probabilities and exact sampling (1.1); partial distinguishability, loss and Gaussian boson sampling with hafnians and torontonians (1.14) | mixed Gaussian states with many photons spread over many modes are impractical (10¹² operations at 20 photons in 10 modes) |
-| Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | noise learning for layers of two-qubit Clifford gates only, on density matrices (1.12); no leakage or non-Markovian noise, channels on at most two qubits; virtual distillation (1.17) mitigates only its measured copies' preparation |
+| Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | noise learning for layers of two-qubit Clifford gates only, on density matrices up to 10 qubits and Pauli frames up to 64 (1.12, 1.31), with non-Pauli channels twirled one at a time; mitigation with the learned model above 24 qubits only on matrix-product states, for channels that are mixtures of unitaries (1.31); no leakage; channels on at most four qubits, slow noise as quasi-static and telegraph processes only, and on trajectories only (1.30); virtual distillation (1.17) mitigates only its measured copies' preparation |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18) | time-dependent Hamiltonians and decoherent coined walks without symmetry reduction; pretty good transfer on other graphs |
-| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5) | Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23) | no integral screening (every integral is computed, seconds at the 64-function limit), no tight commutator bound for product formulas of order 4 and higher |
+| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the nested-commutator bound of product formulas (1.32) is tight for small Hamiltonians only, its tail ignoring which terms commute; spin relaxation, phenomenological (T₁ and T₂) or from dipolar couplings and shielding anisotropy by Redfield theory for isotropic tumbling (1.34), is exact up to about six relaxing spins of one isotope; larger relaxing systems run for short times only (Redfield not at all), and propagations estimated above a minute are refused; chemical exchange needs steady chemistry (no irreversible hydrogenation) and one block of at most 2048 elements over all sites; optimal control with relaxation works in Liouville space of up to six spins ½, and field profiles have many local optima; NV centres are secular (field along the axis), with classical noise only (no spin bath beyond the explicit nuclei, no optical cycle, so pulsed ODMR only) |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
 | Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22) | circuit distances of hypergraph models are bounds, not always exact |
 | Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9), in the browser build too (1.25) | — |
@@ -245,7 +248,7 @@ the release.
 
 | Deliverable | Delivered | Not done, and why |
 |---|---|---|
-| Hamiltonian simulation | `Circuit::pauli_rotation`; product formulas of order 1, 2, 4, 6, …; `trotter_error_bound` with the commutator bounds of Childs et al. (2021) for orders 1 and 2 and the smaller of a stage-wise and a Taylor-remainder bound above; qDRIFT with Campbell's bound | a tight commutator bound for order ≥ 4 (the paper's Appendix J is heuristic in its constants); the bound QSO gives there is rigorous but loose |
+| Hamiltonian simulation | `Circuit::pauli_rotation`; product formulas of order 1, 2, 4, 6, …; `trotter_error_bound` with the commutator bounds of Childs et al. (2021) for orders 1 and 2 and the smaller of a stage-wise and a Taylor-remainder bound above; qDRIFT with Campbell's bound | a tight commutator bound for order ≥ 4 (the paper's Appendix J is heuristic in its constants); the bound QSO gives there is rigorous but loose (1.32 adds a bound from the exact nested commutators, tight for small Hamiltonians) |
 | Fermions | `FermionOperator` with normal ordering; Jordan–Wigner, parity and Bravyi–Kitaev mappings as binary transforms; two-qubit reduction; `MolecularIntegrals` from FCIDUMP files with Hartree–Fock states and energies and full CI; UCCSD, k-UpCCGSD, ADAPT-VQE; FCIDUMP files of H₂, LiH and BeH₂ with PySCF reference energies | computing integrals (that needs a quantum-chemistry code; FCIDUMP is the exchange format, as OpenQASM is for circuits); unrestricted orbitals |
 | Excited states and geometry | VQD, weighted SSVQE; exact state derivatives, quantum Fisher information, quantum natural gradient; McLachlan imaginary-time evolution (RK4) | — |
 | Optimisation problems | `Qubo`/`Ising` with exact enumeration; QAOA for any diagonal cost with X, ring and complete XY mixers from Dicke states, and the warm-start mixer | a built-in continuous relaxation for warm starts: the user supplies `c ∈ [0, 1]ⁿ` |
@@ -1713,6 +1716,1041 @@ A GPU backend: it needs hardware to test on and a dependency (`wgpu`),
 neither available now (1.28 restates the decision with the CPU numbers).
 Multi-node simulation, which the use case does not need below 30 qubits.
 
+## 4g. Seventh stage (1.29 to 1.33)
+
+Planned October 2026, after release 1.7.0, from the gaps that remain in
+the table of section 1. The stage starts with QSO's identity, walks on
+graphs, then closes three gaps of the noise and physics rows, and ends
+with spin dynamics for magnetic resonance (1.33, added on request). The
+rules stay: no new dependency of the crate, an independent reference for
+every deliverable, reference tools in the cross-validation only.
+
+### 1.29 — Interacting walkers (M, delivered)
+
+Use case: walks of several particles on a graph, the many-body side of
+graph-structured quantum computing. This covers Bose– and Fermi–Hubbard
+dynamics on lattices and graphs, two-particle interference (the
+Hong–Ou–Mandel effect on a graph), and telling graphs apart where one
+walker cannot. On a strongly regular graph one walker's propagator is a
+combination of `I`, `A` and `J − I − A` with coefficients fixed by the
+parameters, so strongly regular graphs with the same parameters look
+alike to it. Gamble,
+Friesen, Zhou, Joynt and Coppersmith (Phys. Rev. A 81, 052313 (2010))
+found that two non-interacting particles still fail on strongly regular
+graphs, while two interacting bosons distinguished every pair they
+tested.
+
+| Deliverable | Detail |
+|---|---|
+| Multi-particle walks | N bosons, fermions or distinguishable particles on a graph: hopping along the edges (adjacency or Laplacian generator, edge weights), on-site interaction U (Bose–Hubbard) and interaction V between neighbours; exact evolution in the occupation basis (dense below the dense limit, Krylov above), site densities, pair correlations `⟨n_i n_j⟩` and configuration probabilities |
+| Graph certificates | the sorted two-particle transition probabilities at given times, as a graph invariant, with a comparison that tells graphs apart up to a stated tolerance |
+| Graphs | Seidel switching, and the three Chang graphs (switchings of the triangular graph T(8)), so that four strongly regular graphs with the same parameters (28, 12, 6, 4) are at hand next to the Shrikhande and 4×4 rook graphs |
+| Bindings | Python, CLI, guide page and tutorial |
+
+Validation:
+
+- **Non-interacting particles.** Amplitudes equal the permanents (bosons)
+  and determinants (fermions) of submatrices of the single-walker
+  propagator, using QSO's permanent code from boson sampling.
+  Distinguishable particles equal the tensor product of single walkers.
+- **Interacting particles.** The two-site Hubbard model against its
+  closed-form spectrum. Small graphs against the full tensor-product
+  space, with the interaction applied there and the result restricted to
+  the symmetric or antisymmetric subspace.
+- **Certificates.** Equal for isomorphic graphs under random
+  relabellings. Without interaction they are equal for the Shrikhande
+  and rook graphs and for T(8) and the Chang graphs (Gamble et al.).
+  With interaction they tell all of them apart; the canonical labelling
+  confirms that the graphs are not isomorphic.
+
+Delivered as planned: `walks::InteractingWalk` (Python
+`InteractingWalk`, CLI `qso particles`) with `certificate`,
+`certificate_tolerance` and `certificate_distance`;
+`generators::seidel_switching` and `generators::chang`; a section of the
+walks chapter and the tutorial `08_interacting_walks`. Measured:
+
+- **References.** Amplitudes equal the permanents and determinants of
+  the single-walker propagator to 10⁻¹². With interaction, they equal the
+  Hamiltonian of the tensor-product space restricted to the symmetric or
+  antisymmetric subspace to 10⁻¹². That holds up to four particles on
+  `K₅` with weights of both signs.
+- **Krylov propagation** (2744 to 3003 configurations, with U and V)
+  equals an independent Taylor integration to 10⁻¹⁰.
+- **The Hubbard dimer** follows its closed-form spectrum.
+- **Certificates.** Without interaction all pairs among `T(8)` and the
+  Chang graphs, and the Shrikhande and rook's graphs, agree to 10⁻¹².
+  With `U = 1` they differ by 1.7–3.4·10⁻⁴ and 5.4·10⁻³ respectively.
+  The canonical labelling confirms that the graphs are not isomorphic,
+  and their automorphism groups have orders 8!, 384, 96 and 360.
+
+An independent review compared the code with its own references. It
+built the Hamiltonian on the tensor-product space for 40 random graphs
+of up to six nodes, with weights of both signs, up to four particles and
+both generators. It ran a second-quantised Krylov builder against
+SciPy, and checked the Chang graphs with networkx. It found no error in
+the physics, the ranking or the documented numbers. It found:
+
+- **No limits on the resources.** The particle count, the stored sites,
+  the Hamiltonian's nonzeros and the length of a certificate had no
+  bound, so some inputs aborted the process (100 000 bosons on an edge,
+  two fermions on `K₁₅₀₀`). They are refused now, with checked
+  arithmetic.
+- **A fixed threshold for certificates.** 10⁻⁹ called a relabelled copy
+  of a graph "not isomorphic" at `t = 10⁶`, because rounding grows with
+  the time. The threshold is now `certificate_tolerance`,
+  `10⁻¹² · max(1, |t|·‖H‖)`, and a test pins the relabelled rook's graph
+  at `t = 10⁶` far below it.
+- **Quadratic costs.** One search per rank when listing the
+  configurations, now a successor function. One walker on 2²⁰ nodes
+  takes 0.7 s, where the old code needed minutes. Two fermions on 2000
+  nodes (2 million configurations) take 1.8 s with the Hamiltonian. Two eigendecompositions per walk (now one, on
+  first use). The neighbour interaction summed over all edges for every
+  configuration (now over pairs of occupied sites).
+- **Seidel switching** ignored the edge limit of the generators and took
+  `O(n²)` time. It now checks the limit first and keeps node positions.
+- **Smaller faults.** NaN in a certificate distance read as "equal". The
+  CLI printed `null` distances and "1 bosons", and failed by default with
+  more bosons than nodes. The dense-limit error of walks spoke of qubits.
+- **Docs.** The argument why one walker cannot tell strongly regular
+  graphs apart was a non-sequitur; it is now that the propagator lies in
+  the span of `I`, `A` and `J − I − A`. The Shrikhande pair was claimed
+  for the validation suite, which now checks it.
+- **Weak tests.** The tensor-product test now covers hops over three
+  fermions and negative weights, and there is a Krylov test with
+  interaction for fermions and distinguishable particles.
+
+### 1.30 — Correlated and non-Markovian noise (M, delivered)
+
+Use case: noise on devices that the channels of 1.4 cannot express.
+That is crosstalk and correlated errors on more than two qubits, and
+slow noise whose correlations last longer than a gate, such as 1/f flux
+noise and charge noise switching between two values.
+
+| Deliverable | Detail |
+|---|---|
+| Channels on more qubits | Kraus and Pauli channels on up to four qubits, in density matrices and trajectories, and in device models (correlated errors after a gate, crosstalk on spectator qubits) |
+| Quasi-static noise | over-rotations and detunings drawn once per trajectory from a given distribution (Gaussian or uniform), constant during it |
+| Telegraph noise | a frequency shift that switches between ±ν at a given rate, simulated exactly per trajectory (switching times drawn from the exponential distribution) |
+
+Validation: channels on three and four qubits match the explicit
+superoperator on density matrices and the average over trajectories.
+Ramsey decay under Gaussian quasi-static noise equals `exp(−σ²t²/2)`,
+and a Hahn echo removes it exactly. Telegraph noise matches the closed
+forms of the decay of coherence for free evolution and the echo (Paladino,
+Galperin, Falci and Altshuler, Rev. Mod. Phys. 86, 361 (2014)), in both
+the fast- and the slow-switching regime.
+
+Delivered as planned, with one addition: `Circuit::id`, which a rule for
+the gate `"id"` turns into a wait of given duration. Spectator qubits
+wait for the gate whose crosstalk they receive. Turns by slow noise
+during a gate are split, half before and half after it. Density matrices
+and PEC refuse slow noise instead of ignoring it. Measured:
+
+- **Channels on three and four qubits.** On density matrices they equal
+  `Σ K ρ K†` with explicitly embedded operators to 10⁻¹³, also for
+  non-product, non-unitary channels. Trajectories (20 000) average to the
+  density matrix within `4/√N` for general three- and four-qubit
+  crosstalk channels.
+- **Slow noise.** A Gaussian detuning follows `exp(−σ²t²/2)` and a uniform
+  one `sin(at)/(at)`. The echo of a static detuning is exact in every
+  trajectory. Telegraph noise follows the Kubo–Anderson decay and its
+  echo for slow (γ = 0.2ν) and fast (γ = 5ν) switching. A quasi-static
+  over-rotation gives `cos(θ(1+ε)) e^{−θ²σ²/2}`. All of these are within
+  four standard errors at 8000 trajectories; the largest deviation of the
+  20 validation estimates is 1.5.
+- **Unchanged Markovian trajectories.** Devices without slow noise draw
+  no extra random numbers, so existing trajectories and their tests are
+  unchanged.
+
+An independent review built its own hybrid master-equation model:
+classical telegraph states times a density matrix, with T₁/T₂ Lindblad
+terms, Gaussian detunings by Gauss–Hermite quadrature, and its own
+scheduler. Against it, QSO's trajectories on two- and three-qubit
+circuits (gate durations, waits, spectators, `idle_noise` on and off)
+gave z-scores with mean about 0 and standard deviation about 1. The
+same model reproduced QSO's Markovian density matrices to 5·10⁻¹⁶. The
+review also compared every trajectory output of Markovian devices with
+the previous build and found them identical bit for bit. It confirmed the
+closed forms of the tests (also against the textbook form of the
+telegraph echo) and found no error in the physics. It found:
+
+- **A NoiseModel dropped channels silently.** A three-qubit channel after
+  a two-qubit gate was ignored, and such a model could not be converted
+  to a device. Both now report an error, and conversion works for
+  circuits whose gates are large enough.
+- **PEC refused three- and four-qubit Pauli noise.** It now inverts Pauli
+  channels on up to four qubits; a test cancels ZZZ and XIX crosstalk.
+- **`id` did not survive OpenQASM**, and the stabilizer simulator
+  rejected it. `id q;` now reads and writes `Circuit::id`,
+  `gate_counts` names it `"id"`, and the stabilizer simulator treats it as
+  a Clifford no-op.
+- **Composing four-qubit channels took 20 s** (all products of up to
+  256 × 256 Kraus operators). On three and four qubits the composition
+  now multiplies the superoperators and diagonalises the Choi matrix.
+- **A pulse in the middle of an echo broke the echo.** The turn during a
+  gate of finite duration was applied entirely after it, giving 0.948
+  where the exact pulse gives 0.994. The turn is now split around the
+  gate, and the echo refocuses exactly (test).
+- **Smaller faults.** Rules without a known gate size refused large
+  channels with a misleading message; they are now checked when a circuit
+  is compiled. `DeviceBackend::density_matrix` accepted slow noise and
+  failed only when run; it now fails when it is created. There were stale
+  comments and a misplaced doc comment. The wide kernel duplicated the
+  narrow one and is now one function with a buffer size as a constant
+  parameter.
+- **Docs.** Spectators also delay the gate; `is_markovian` looks at the
+  whole device; telegraph noise costs time in proportion to its number
+  of jumps. A claim in this section about an external check had no
+  artifact in the repository and was removed.
+- **Weak tests.** A test that only checked determinism now checks that
+  Markovian programs draw no extra random numbers. The eight-target
+  kernel test now covers several groups and a control. The four-qubit
+  trajectory test now uses different damping per qubit. The Python test
+  of channels on three and four qubits compares with explicit matrices.
+
+Left as is: a four-qubit channel on a density matrix costs 16 times a
+two-qubit one (applying few-Kraus channels as `K ρ K†` would be cheaper),
+and slow-noise sampling scans the steps once per trajectory.
+
+### 1.31 — Noise learning beyond ten qubits (M, delivered)
+
+Use case: learning the sparse Pauli–Lindblad model of a layer on a
+device with 20 to 100 qubits, as on hardware. 1.12 learns on density
+matrices, which stop at ten qubits. Twirled noise on a Clifford layer is
+a Pauli channel, and the learning circuits are Clifford circuits, so the
+Pauli-frame sampler of 1.8 simulates them exactly at any width.
+
+| Deliverable | Detail |
+|---|---|
+| Learning at scale | `learn_layer` on the frame sampler, for layers of `cx`, `cy`, `cz` and `swap` on any coupling graph, including the correlated two-qubit errors and crosstalk of 1.30 once twirled |
+| Mitigation at scale | PEC and PEA with the learned model on circuits simulated by trajectories or MPS |
+
+Validation: on a 4-qubit device the learned rates on the frame sampler
+agree with those on density matrices within their standard errors. On a
+heavy-hex layer of about 50 qubits all rates lie within three standard
+errors of the exact rates of the twirled noise.
+
+Delivered with two changes to the plan. First, the frames do not run on
+the detector-circuit sampler of 1.8 but directly through the compiled
+device program, so device rules, spectators and readout errors apply as
+on density matrices. Second, the bound is four standard errors, not
+three: with 681 rates, about two would lie beyond three by chance alone.
+Measured:
+
+- **Frames.** On four qubits, the outcome distribution of a learning
+  circuit with depolarising, Pauli and crosstalk noise matches the
+  density matrix within 1.5 standard errors per outcome (400 000 shots).
+  Rates learned on frames and on density matrices differ by at most 2.0
+  combined standard errors.
+- **Heavy hex, 53 qubits.** 21 `cx` gates with two-qubit depolarising
+  noise, a coherent phase error on the control and a ZZ crosstalk error
+  with 14 bridge qubits, plus readout errors: all 681 rates lie within 4
+  standard errors of the exact rates of the twirled noise. The largest
+  deviation is 2.9; over six seeds the largest is 3.5. Over the 329
+  nonzero rates the deviations have a spread of 0.94 standard errors, so
+  the errors are honest. Most zero rates are fitted exactly as 0. Learning
+  takes about 2 s.
+- **Large fits.** Above 64 generators the non-negative least squares
+  starts from coordinate descent on the normal equations and finishes
+  with the active-set iteration on Cholesky factors. For the 681 rates
+  it needs one factorisation; a collinear system falls back to the SVD
+  path.
+- **Mitigation at scale.** Samples run on density matrices (up to 10
+  qubits), trajectories (up to 24) or matrix-product states (up to 64),
+  each channel replaced by one of its unitaries. On 30 qubits, with a
+  layer gate between qubits 2 and 9 and entangling blocks, PEC gives
+  0.200 ± 0.004 for an exact value of 0.197 (raw 0.179), and PEA moves
+  towards it. On 12 qubits PEC on trajectories gives the exact value
+  within 4 standard errors; the raw value is 25 standard errors off.
+
+An independent review checked the frame rules of every gate by hand,
+the Pauli index conventions, the geometric sampling of errors and the
+termination of the warm-started active set. It confirmed that results on
+density matrices are unchanged bit for bit up to ten qubits, and that
+learning matrices are well conditioned. It found:
+
+- **Memory.** Frames of all shots of a task were held at once, up to
+  0.8 GB per task at the shot limit; they now run in blocks of 4096 shots
+  that update the parities directly. Trajectory samples of 20 to 24
+  qubits ran on all threads at once (17 GB at 24 qubits on 64 threads);
+  they now run one after another, as in the trajectory simulator.
+- **Failures surfaced late.** A device that matrix-product samples cannot
+  use, or a sample that `Auto` must refuse, failed only after every
+  sample had run. The first failure now stops the others, and a strict
+  matrix-product sample stops at the first truncation.
+- **A test that missed its target.** The test of the fallback for
+  collinear columns never reached it; it now uses a column the solution
+  needs.
+- **Edge cases of the error sampling.** The guard on the geometric gaps
+  relied on a NaN that cannot occur; the gap now uses `ln(1 − p)` via
+  `ln_1p` and stops on any non-finite gap, and a channel whose Pauli
+  probabilities round to zero is skipped.
+- **Docs and messages.** The condition for frames (the gates other than
+  Paulis multiply to the identity) and for exact per-channel twirling
+  (no overlapping non-Pauli channels between two twirls) are stated
+  precisely; the truncation bias is stated per sample, before PEC's
+  factor. Size errors of the mitigation named noise learning instead of
+  the simulator, and the strict refusal advised a Rust-only option.
+- **Python.** `max_bond` was silently ignored unless `simulator="mps"`,
+  and a negative value raised `OverflowError`; both are now `ValueError`.
+- **Tests.** New: every frame gate against its conjugation, PEC agreeing
+  on density matrices, trajectories and matrix-product states, learning
+  on 64 qubits, the choice of strict matrix-product samples above 24
+  qubits, and entangling blocks with a distant layer gate at 30 qubits.
+- **Smaller.** Matrix-product samples no longer re-check the unitarity
+  of mixture terms that are unitary by construction, which could reject
+  a term trajectories accept. The twirl is computed once per used
+  channel.
+
+Left as is: learned rates on 7 to 10 qubits now come from the new fit
+and differ from 1.30 by about 10⁻¹⁷. A trajectory sample builds its
+simulator for each sample. `LayeredSimulator` has no serde form, because
+`MpsOptions` has none.
+
+### 1.32 — Faster integrals and tighter bounds (S–M, delivered)
+
+Use case: molecules at the size limit of 1.23, and step counts for
+product formulas of order four and higher.
+
+| Deliverable | Detail |
+|---|---|
+| Integral screening | Schwarz screening of the electron-repulsion integrals by shell quartets, with a stated threshold |
+| Bounds of commutator type | the bound of Childs, Su, Tran, Wiebe and Zhu (Phys. Rev. X 11, 011020 (2021)) for orders 2k ≥ 4, from the nested commutators of order 2k + 1 computed in the Pauli algebra, alongside the bounds of 1.5 |
+
+Validation: screened energies equal unscreened ones to the threshold and
+PySCF's as in 1.23, with the time saved measured. The new bound exceeds
+the exact error of small Heisenberg, Ising and random Hamiltonians at
+every step count tested, falls as `r^{−2k}`, and is stated against the
+old one.
+
+Delivered with one change to the plan: instead of the explicit constant
+of Childs et al., the bound uses their error representation,
+`‖S(τ) − e^{−iHτ}‖ ≤ ∫₀^τ ‖T‖`, and computes the Taylor coefficients of
+the error generator `T` exactly as Pauli operators: the nested
+commutators of order p + 1 and higher, up to a degree that grows until a
+rigorous multinomial tail is below 1 % of the rest. This is tighter than
+a sum of commutator norms, and it applies to every order. Measured:
+
+- **Screening.** Quartets of shells are skipped when their Schwarz bound
+  is below 10⁻¹² Ha (by default). A chain of 32 hydrogens in 6-31G (64
+  functions) skips 86 % of the quartets and takes 0.2 s instead of 1.5 s;
+  its RHF energy moves by 5·10⁻¹³ Ha and agrees with PySCF to
+  2·10⁻¹¹ Ha. Butane gains 5 %. Every skipped Cartesian integral lies
+  below the threshold (test), spherical d functions within 0.98 of it
+  (review), and all the PySCF comparisons of 1.15 and 1.23 pass with
+  screening on.
+- **Bounds.** On 4-qubit Heisenberg, Ising and random Hamiltonians, the
+  new bound is never below the exact error, and from 8 to 32 steps it is
+  7 to 11 times the error at order 4 and 8 to 24 times at order 6. It
+  falls as `r^{−p}` (16 and 64 per doubling, within 25 %). The old
+  stage-by-stage bound, which falls as `r⁻²`, is 780 to 10⁹ times the
+  error there. `trotter_error_bound` returns the smallest bound, so no
+  result got worse.
+
+An independent review rederived the bound step by step (the error
+representation, the Horner recursion, the factor 2 of the commutators,
+the integration of the tail) and checked about 36 000 random cases
+(2 to 5 qubits, coefficients up to 30, positive and negative times,
+orders 1 to 8, up to 400 steps). None fell below the exact error beyond
+the simulator's own rounding. It confirmed the Schwarz argument for
+grouped contractions, the diagonal entries used, exact zeros and
+bit-identical computed integrals. It found:
+
+- **Units.** The series was built in the units of H and overflowed for
+  coefficients beyond about 10⁷ to 10¹², losing the bound. It is now
+  built for `H/λ` and evaluated at `λτ`; a test checks scales from 10⁻⁶
+  to 10⁴⁰.
+- **Cost.** When the series is out of budget, every call still spent
+  most of the budget (0.15 to 0.35 s, a hundred times the old bound). The
+  series does not depend on the steps or the time and is now cached per
+  Hamiltonian and order (a second call takes no time, test).
+- **Docs.** The agreement with the old bound at orders 1 and 2 holds
+  only from about 16 steps; the factors (780, not 800), the cost, and the
+  cases in which the nested bound is infinite are now stated as
+  measured. The bound is tight for small Hamiltonians only: for 8 to 16
+  spins its tail, which ignores which terms commute, dominates.
+- **Smaller.** A test comment claimed that errors near rounding are left
+  out; the error named `threshold` instead of Python's `screening`; a
+  test asserted that a large series fails, which only held because of
+  the current speed; reformatting of unrelated Python tests was undone.
+
+Left as is: rounding in the vanishing coefficients sets a floor of about
+10⁻¹⁵ per step, below which the Taylor bound takes over; a tail aware of
+commutation would tighten the bound for larger Hamiltonians.
+
+### 1.33 — Spin dynamics and magnetic resonance (M–L, delivered)
+
+Use case: designing and understanding magnetic resonance experiments on
+small molecules, above all hyperpolarisation. Hyperpolarised
+[1-¹³C]pyruvate (dissolution DNP, Ardenkjær-Larsen et al., PNAS 100,
+10158 (2003)) makes tumour metabolism visible in MRI, and was first used
+in patients with prostate cancer by Nelson et al. (Sci. Transl. Med. 5,
+198ra108 (2013)). Parahydrogen methods (PASADENA, Bowers and Weitekamp 1986–1987;
+ALTADENA, Pravica and Weitekamp 1988; SABRE, Adams et al., Science 323,
+1708 (2009))
+polarise molecules chemically. Each method moves polarisation through a
+network of coupled nuclear spins with pulses, fields and relaxation.
+These dynamics are a quantum simulation in the literal sense: a spin-½
+nucleus is a qubit, and a molecule's spin system has 2 to about 12 of
+them.
+
+QSO already has most of what this needs:
+
+- density matrices up to 14 qubits and trajectories beyond;
+- T₁/T₂ relaxation and Lindblad dynamics (1.4);
+- time-dependent Hamiltonians with a fourth-order Magnus integrator
+  (1.13);
+- the Pauli algebra (1.5);
+- the slow noise and echoes of 1.30.
+
+The coupling network of a molecule is a weighted graph, so polarisation
+transfer through it is state transfer on a graph (1.3, 1.18).
+
+| Deliverable | Detail |
+|---|---|
+| Spin systems | nuclei by isotope (gyromagnetic ratios of ¹H, ²H, ¹³C, ¹⁵N, ¹⁹F, ³¹P), chemical shifts, scalar (J) couplings and the field; the Hamiltonian in the laboratory and in the rotating frame, with the coupling graph as a QSO graph |
+| Pulses and sequences | hard and shaped pulses on chosen isotopes, delays and free evolution, phase cycles; free induction decay and spectra by Fourier transform |
+| Relaxation | phenomenological T₁ and T₂ per spin, relaxation towards thermal equilibrium at a given field and temperature; cross-relaxation and Redfield theory left for later |
+| Polarisation transfer | INEPT; parahydrogen singlet order turned into magnetisation (PASADENA, ALTADENA); SABRE transfer at level anti-crossings while the field is swept |
+| Bindings | Python, CLI, a guide page and a tutorial on hyperpolarisation |
+
+Validation:
+
+- **Two spins in closed form.** Free induction decay, spin echo, and the
+  INEPT gain of γ(¹H)/γ(¹³C) ≈ 3.98 over direct excitation.
+- **Parahydrogen.** The PASADENA and ALTADENA line patterns of a two-spin
+  product in closed form.
+- **Level anti-crossings.** For the smallest SABRE models, at the fields
+  given by the couplings and shifts.
+- **Larger spin systems.** Cross-validated against QuTiP's master-equation
+  solver, a reference in the cross-validation only, like PySCF and Stim.
+
+Not part of the milestone: MRI image simulation (classical Bloch equations
+per voxel, served by MRI simulators), quantum algorithms for CT, and any
+clinical claim. QSO is a tool for physicists who design these
+experiments, not medical software.
+
+Delivered as planned, as the module `spin` (`SpinSystem`), with the
+Python module `metatron_qso.spin`, `qso spins`, a guide page and the
+tutorial `09_hyperpolarisation`. The Magnus integrator and the Pauli
+algebra were not needed: `H` conserves `M` of every isotope in the
+rotating frame and the total `M` in the laboratory frame, and the
+Lindblad equation conserves the matching coherence orders, so free
+evolution, spectra and time averages diagonalise each block of `H`, and
+relaxation exponentiates each block of the superoperator exactly.
+Measured:
+
+- **Closed forms.** The FID of one spin `−(iP/2)e^{iΩt − t/T₂}` holds to
+  10⁻¹⁴, the spin echo refocuses every offset and is modulated as
+  `cos(2πJτ)` for coupled protons, inversion recovery follows
+  `P(1 − 2e^{−t/T₁})`, and every state relaxes to the thermal one. The
+  phase-cycled INEPT gain is `P_H/P_C` = 3.976 at 9.4 T to 10⁻⁸.
+  PASADENA lines agree to 0.3 % and ALTADENA lines (a 20 s sweep to 1 T)
+  to 0.2 %, the rest being strong coupling. SABRE transfer to a proton
+  and to ¹⁵N (SABRE-SHEATH, laboratory frame) peaks within 2 % of the
+  anti-crossing fields.
+- **QuTiP.** Five systems built independently with QuTiP's spin
+  operators, four of them at 9.4 T and 298 K, where polarisations are
+  10⁻⁵: QSO agrees with the exact exponential of QuTiP's Liouvillian to
+  7·10⁻¹² of the largest expectation in the rotating frame and 2·10⁻¹⁰ in
+  the laboratory frame, and with `mesolve` to 4·10⁻⁶ and 2.5·10⁻⁴, the
+  error of its adaptive steps.
+- **Cost.** One second of five relaxing protons takes 0.2 s in either
+  frame, of six about ten seconds; a free induction decay needs only the
+  coherences of order −1. Eleven spins without relaxation take 1.8 s for
+  a time average, 2.6 s for a spectrum and 2.7 s for a delay.
+
+An independent review confirmed the gyromagnetic ratios, the operators
+and Hamiltonians (against an independent construction), both frames,
+the thermal state, pulses, shaped pulses and sweeps, the signal and
+Fourier conventions, the parahydrogen state, the fixed points and the
+exact T₁ and T₂ of the Lindblad operators for spin ½, and the closed
+forms of INEPT, PASADENA, ALTADENA and the anti-crossings. It found:
+
+- **Relaxation at real polarisations.** The first version integrated ρ
+  by Dormand–Prince steps with an absolute error of 10⁻¹², while thermal
+  states deviate from `1/d` by 10⁻⁶: four protons at 9.4 T after one
+  second were 0.94 % off, and took 32 s. The laboratory frame and large
+  systems were out of reach without a warning. Now the deviation is
+  propagated, by block exponentials (10⁻¹¹ of it, against an independent
+  full superoperator; 11 ms), or by Dormand–Prince steps with an error
+  relative to it when those are cheaper; propagations estimated above
+  1.5·10¹² operations are refused at once (test).
+- **Time averages.** They kept coherences between different `M` of an
+  isotope in the rotating frame, which precess at its Larmor frequency,
+  so the result depended on the frame; and their tolerance, 10⁻⁹ of the
+  largest energy, was 10 rad/s in the laboratory frame. Energies are now
+  compared as in the laboratory frame, block by block, to the rounding
+  of the eigendecomposition (tests in both frames).
+- **Spectra.** Lines were merged within 10⁻⁶ Hz, finer than the
+  precision of laboratory-frame energies, against the first line of a
+  group, which split chains; and rounding produced lines of 10⁻¹⁷. Lines
+  are now clustered by single linkage within the rounding of the
+  energies, and those below 10⁻¹³ of the state's largest entry dropped.
+- **Input.** `set_relaxation` stored invalid times before checking them,
+  which made later assertions of a test vacuous; INEPT accepted J = 0,
+  NaN and one isotope; events accepted unknown JSON fields; the thermal
+  state overflowed at extreme fields and temperatures; Python took a bool
+  for a spin index; `qso spins` showed lines at the starting field after
+  a field change. All fixed, with tests; `field_after`,
+  `with_temperature` and `carrier` were added to Python.
+- **QuTiP.** The comparison used QSO's own Hamiltonian and operators,
+  low temperatures and absolute differences. It now builds everything in
+  QuTiP, runs at room temperature, and compares relative differences
+  against both the exact Liouvillian exponential and `mesolve`.
+- **Smaller.** `parahydrogen_state` multiplied dense matrices and every
+  call diagonalised the whole `H` (2048 × 2048 at eleven spins); the FFT
+  accumulated its twiddle factors; the Python bindings held the GIL. The
+  docs now state the spin-1 relaxation correctly (T₁ and T₂ exact at high
+  temperature, test), that `T₂ ≤ 2T₁` for every spin, the `(1 + δ)` of
+  the Boltzmann factor, NaN shifts at zero field, the rotating-wave
+  approximation of shaped pulses, and that laboratory-frame pulse phases
+  refer to the laboratory axes.
+
+Left as is: one evaluation of the Lindblad equation costs about 30 μs at
+four spins, and Dormand–Prince needs 10⁵ steps of six per second at
+9.4 T, so long shaped pulses with relaxation are slow; the laboratory frame at high field loses `ε·ωt` (2·10⁻¹⁰ after
+a millisecond at 9.4 T), which is the conditioning of the problem.
+
+### Not in this stage
+
+Leakage out of the qubit space, which needs qutrits throughout the
+simulators. Exact circuit distances of hypergraph error models. Pretty
+good state transfer outside the cyclotomic families.
+
+## 4h. Eighth stage (1.34 to 1.37): magnetic resonance for medical research
+
+Planned October 2026, on request, after 1.33. QSO's strength in medicine
+is the exact simulation of small quantum systems: nuclear spins in
+hyperpolarised agents and the spins of quantum sensors. This stage takes
+1.33 from textbook experiments to the questions of groups that develop
+hyperpolarised MRI agents and quantum sensors for biology: how long
+polarisation lives, how much of it reaches the molecule, which sequence
+moves it best, and what a sensor near a cell detects. The rules of the
+seventh stage stay. Every number has an independent reference, with
+closed forms and published results first and QuTiP (including its
+Bloch–Redfield solver) in the cross-validation only. The crate takes no
+new dependency.
+
+Not in this stage, as in 1.33: image simulation, the kinetics of
+metabolism (pyruvate to lactate) and other classical models, quantum
+algorithms for CT, which have no demonstrable advantage at the size of a
+real image (loading and reading out 10⁶ to 10⁹ values undoes it), and
+any clinical claim. QSO stays a tool for physicists and chemists who
+design these experiments, not medical software.
+
+### 1.34 — Relaxation from first principles (M, delivered)
+
+Use case: predicting relaxation times instead of taking them as input.
+For example, whether deuteration lengthens the T₁ of a ¹³C agent, or how
+long a singlet state survives. 1.33 takes T₁ and T₂ as phenomenological
+inputs.
+
+| Deliverable | Detail |
+|---|---|
+| Interactions | dipolar couplings from the nuclear positions, chemical-shift anisotropy tensors, isotropic rotational diffusion with a correlation time (spectral densities `J(ω) = (2/5) τ_c/(1 + ω²τ_c²)`) |
+| Redfield theory | the Bloch–Wangsness–Redfield relaxation superoperator (Redfield, IBM J. Res. Dev. 1, 19 (1957)), with cross-correlations between mechanisms, relaxing to thermal equilibrium at the given field and temperature |
+| Use | relaxation of any state in `SpinSystem.evolve`, together with or instead of the phenomenological T₁ and T₂; relaxation rates of chosen observables (T₁, T₂, singlet order) as numbers |
+
+Validation: two dipolar-coupled spins follow Solomon's equations (Phys.
+Rev. 99, 559 (1955)). The steady-state nuclear Overhauser enhancement
+of ¹³C under ¹H saturation is `1 + γ_H/(2γ_C) ≈ 2.99` in the extreme
+narrowing limit. CSA relaxation grows with B². Singlet order of two
+spins is immune to their mutual dipolar relaxation (Carravetta and Levitt,
+J. Am. Chem. Soc. 126, 6228 (2004)). For three to five spins every rate
+matches QuTiP's Bloch–Redfield solver (`brmesolve`) in the
+cross-validation.
+
+Delivered as planned in `spin/redfield.rs`: positions and shielding
+tensors per spin, a rotational correlation time per system, the
+non-secular Bloch–Wangsness–Redfield superoperator with all
+cross-correlations (secular with respect to the carriers in the rotating
+frame) relaxing towards the thermal state, in every propagation path
+together with the T₁ and T₂ of 1.33, and `relaxation_rates` for any
+observables (`qso spins --rates`). Writing the spatial tensors in an
+orthonormal basis makes the isotropic average a sum of 30 independent
+terms, built entry by entry for each coherence-order block. One change to
+the plan: QuTiP's Bloch–Redfield tensor is compared directly (exactly
+propagated) rather than through its `brmesolve` integrator, for two to
+four spins. Measured:
+
+- **Solomon and BPP.** Auto-, cross- and transverse rates of ¹H–¹H and
+  ¹³C–¹H pairs at three correlation times, in both frames, to 10⁻⁹; the
+  total rate of two equivalent protons to 10⁻⁹ of Bloembergen, Purcell and
+  Pound.
+- **Overhauser enhancement.** 2.988 for ¹³C under proton saturation in
+  extreme narrowing (`1 + γ_H/(2γ_C)`); the transient after inverting the
+  proton follows Solomon's equations to 10⁻⁷.
+- **Shielding anisotropy.** `R₁` and `R₂` of a general tensor to 10⁻⁹,
+  four times faster per doubling of the field; the interference with the
+  dipolar coupling (the TROSY rate) to 10⁻⁹ of its closed form, with the
+  sign of the shielding convention.
+- **Singlet order** of two equivalent protons does not relax by their
+  dipolar coupling (below 10⁻¹² of the magnetisation's rate) and lives on
+  over twenty magnetisation lifetimes; a third proton or anisotropy
+  relaxes it.
+- **Equilibrium and deuteration.** Every state relaxes to the thermal one
+  (exactly in the rotating frame, to `J/Δν` in the laboratory frame);
+  deuteration slows the dipolar relaxation of carbon 15.9 times.
+- **QuTiP.** With bath operators from an exact numerical average over
+  orientations, QuTiP's `bloch_redfield_tensor` gives the same rates for a
+  ¹³C–¹H₂, a ¹³CH₃ and an amide ¹⁵N–¹H with anisotropy to 4·10⁻¹⁵, and the
+  same expectations after exact propagation to 3·10⁻⁹.
+- **Cost.** Building the superoperator takes 0.04 s for five spins and
+  0.5 s for six; one second of five relaxing protons with it costs
+  0.2 s.
+
+An independent review rederived the theory (the isotropic correlation,
+the factor 1/5, the weights, the signs, the spectral densities at
+laboratory frequencies) and wrote its own superoperator as a direct
+Cartesian sum: QSO's agrees to 2·10⁻¹⁵ in six systems and both frames,
+conserves the coherence orders exactly, and its dynamics agree in every
+path (delays, FIDs, shaped pulses, Dormand–Prince steps, field jumps).
+It found:
+
+- **NaN after long delays.** Coherence blocks were shifted by their mean
+  diagonal including the mean decay, so after about 10³ s (Redfield) or
+  10⁴ s (laboratory frame, 1.33) `exp` overflowed while `e^{shift}`
+  underflowed. The shift now carries only the mean precession (test: 20
+  minutes and twice a singlet lifetime).
+- **Validity and limits.** Any correlation time was accepted, so τ_c = 1 ms
+  gave meaningless rates and extreme inputs NaN; the superoperator was
+  rebuilt for every delay and shaped-pulse segment, outside the work
+  limit (a 200-segment pulse on five spins took 13 s, against 0.6 s
+  without Redfield relaxation). Now
+  `|A|·τ_c > 1` and non-finite superoperators are refused, the build is
+  counted, and `evolve` reuses it while the field stays (2.2 s).
+- **Output.** Spins without relaxation printed `T1 -inf`; the rates are
+  now never −0 and the CLI prints "none".
+- **Tests.** Nothing pinned the sign of the shielding term relative to
+  the dipolar one (the QuTiP comparison rebuilds the same Hamiltonian),
+  and Redfield was not tested with FIDs, shaped pulses, Dormand–Prince
+  steps, field jumps or the rotating-frame projection. All are tested
+  now.
+- **Docs.** The thermal correction was said to hold "at any
+  temperature"; it is semiclassical, first order in `ħω/k_BT` away from
+  equilibrium, and can give unphysical states near full polarisation.
+  The guide now states this, the shielding convention (a chemical-shift
+  tensor is `−σ`), the validity condition, the mechanisms not modelled
+  (scalar, quadrupolar, spin-rotation, paramagnetic, intermolecular,
+  exchange), the size limits, and that `--rates` prints auto-relaxation
+  times; the tutorial's deuteration gain is stated for its field and
+  model.
+
+Left as is: the laboratory frame loses about `ε·Δω·t` over long delays
+(3·10⁻⁵ after 1000 s at 9.4 T); each step of a field sweep rebuilds the
+superoperator; Python accepts `True` as a number, as Python does.
+
+### 1.35 — Hyperpolarisation in realistic models (M–L, delivered)
+
+Use case: the chemistry and storage of hyperpolarisation. In SABRE,
+substrate and parahydrogen bind and leave the catalyst all the time;
+1.33 replaces this exchange by a time average. Parahydrogen-induced
+polarisation by side-arm hydrogenation (PHIP-SAH, Reineri, Boi and Aime,
+Nat. Commun. 6, 5858 (2015)) polarises [1-¹³C]pyruvate, the agent used
+in patients. Long-lived states keep polarisation beyond T₁ on its way to
+the patient.
+
+| Deliverable | Detail |
+|---|---|
+| Chemical exchange | several chemical sites (free substrate, catalyst complex, free hydrogen) with rate constants, in Liouville space (Bloch–McConnell equations, McConnell, J. Chem. Phys. 28, 430 (1958)); SABRE polarisation as it builds up over time and with the field, temperature-dependent rates as input |
+| Spin-order transfer | ¹H → ¹³C transfer for PHIP and PHIP-SAH by field cycling (Jóhannesson, Axelsson and Karlsson, C. R. Physique 5, 315 (2004)) and by pulse sequences (PH-INEPT and its relatives) |
+| Long-lived states | singlet order of near-equivalent spins, M2S and S2M conversion (Pileio, Carravetta and Levitt, PNAS 107, 17135 (2010)), spin locking and field cycling for storage, lifetimes from 1.34 |
+
+Validation: two-site exchange gives the Bloch–McConnell lineshapes, with
+coalescence at `k = πΔν/√2`. The SABRE build-up of the smallest models
+matches the published simulations of Lindale et al. (Nat. Commun. 10,
+395 (2019)) and Pravdivtsev et al. (ChemPhysChem 14, 3327 (2013)) at
+their fields. The field-cycling transfer of a three-spin PHIP system
+matches its closed form. M2S and S2M reach the conversion efficiencies
+of Pileio et al. The singlet lifetime of a near-equivalent pair exceeds
+T₁ by the factor Redfield theory predicts.
+
+Delivered in `spin/exchange.rs`: chemical sites (spin systems with
+concentrations) and first-order channels that carry chosen spins with
+their state, trace out the source's others and bring the target's others
+in thermal or as parahydrogen (with a singlet fraction); the
+Bloch–McConnell equations in Liouville space, propagated exactly block by
+block of coherence order over all sites, with each site's `T₁`, `T₂` and
+Redfield relaxation; pulses on isotopes, delays, field jumps and sweeps,
+steady states and FIDs (`spin.Exchange` in Python). For storage and
+transfer, `m2s`, `s2m` and `spin_lock`, and field cycling with the sweeps
+of 1.33; tutorial 09 shows SABRE with exchange and field cycling. Changes
+to the plan:
+
+- **No published SABRE simulations reproduced.** Lindale et al. and
+  Pravdivtsev et al. do not give every coupling and rate constant their
+  figures need. Instead a Monte Carlo of exchange events (written with
+  NumPy alone) and the position of the level anti-crossing test the
+  exchange, and an independent dense implementation of the equations
+  tests the bookkeeping. Lindale et al. sample event times uniformly and
+  argue that ensemble-averaged equations fail in their regime; QSO's
+  equations are exact for exponentially distributed events.
+- **Not implemented:** PH-INEPT and its relatives as named sequences
+  (they can be written from pulses and delays), the irreversible
+  chemistry of PHIP-SAH (exchange needs steady amounts; the hydrogenated
+  product is simulated as a spin system), helpers for
+  temperature-dependent rates (rates are inputs), field cycling for
+  singlet storage (shown with spin locks only).
+- **References.** The field-cycling transfer is compared with
+  sudden-adiabatic theory evaluated numerically, not a closed form; the
+  singlet lifetime under a spin lock with the Redfield rate of `I₁·I₂`
+  from 1.34 (validated against QuTiP there), not an independent theory.
+
+Measured:
+
+- **Bloch–McConnell.** One proton exchanging between two sites gives the
+  closed-form FID to 10⁻¹⁰ and coalescence at `πΔν/√2` (two maxima at
+  0.85 times that rate, one at 1.15). Renewal at rate `k` relaxes as
+  `e^{−kt}`, slow renewal with parahydrogen tends to the time average
+  of 1.33.
+- **Dense reference.** An independent NumPy implementation of the
+  homogeneous equations (partial traces by `einsum`, spin orders by axis
+  permutations) agrees for three systems — three sites with different
+  isotopes and channels that reorder spins, parahydrogen on spins that
+  are not neighbours between carried ones, ²H in the laboratory frame —
+  with delays, sweeps, FIDs and pulses on some of the sites to 10⁻¹⁰ and
+  with steady states (rotating frame) to 10⁻⁹.
+  SABRE's steady state in the laboratory frame from 1 mT to 9.4 T agrees
+  with a 40-digit solution to 3·10⁻¹⁵.
+- **Monte Carlo.** 4000 SABRE complexes with exponentially distributed
+  hydrogen and ligand exchange agree with `Exchange` within their
+  statistical error (z = 1.15, 0.27, −0.73).
+- **SABRE.** The free ¹⁵N is polarised most within 3 % of the level
+  anti-crossing (0.139 μT): 0.739 at `k_d = 2/s`, 0.832 at 10/s, 0.551
+  at 40/s with the maximum moved to 0.172 μT; the build-up rises
+  monotonically and reaches the steady state to 10⁻⁶ after 400 s.
+- **Singlet order.** M2S and S2M return 99.5, 97.2 and 99.9 % of the
+  2/3 bound for three near-equivalent pairs (inverted magnetisation).
+  Under a 1 kHz spin lock the singlet order of a near-equivalent proton
+  pair with a third proton decays at its Redfield rate to 4·10⁻⁴, a
+  lifetime 17.5 times its magnetisation's; without the lock 0.515
+  instead of 0.607 is left after half that lifetime.
+- **Field cycling.** Parahydrogen order carried from zero field to
+  50 μT puts −0.8127 polarisation on the ¹³C of an AA'X system, against
+  −0.8128 from sudden-adiabatic theory; a sudden jump transfers none.
+- **Cost.** For a SABRE complex of six spins with a free substrate of
+  four in the laboratory frame (one block of 994 elements), the steady
+  state takes 1.1 s and a one-second delay 16 s; a sweep of 20 steps is
+  refused before it starts (7·10¹² operations).
+
+An independent review rederived the model, wrote its own dense
+Liouville-space implementation and compared four systems (with
+permuting and self channels, channels at rate 0, parahydrogen pairs
+reversed and interleaved, ²H, the laboratory frame and relaxation):
+delays to 2·10⁻¹³, steady states and FIDs to rounding, sweeps to
+2·10⁻¹². Redfield sites inside an exchange match single systems, the
+M2S/S2M sequences match Pileio et al., and no levels of one total `M`
+cross up to 50 μT, so the sudden-adiabatic mapping holds. It found:
+
+- **Steady states refused.** The residual test was not scale-invariant:
+  in the laboratory frame at 1 T and 9.4 T, where zero-quantum
+  frequencies exceed the rates by 10⁸, valid and well-posed systems
+  (smallest singular value 0.22) were refused, among them SABRE at 1 T.
+  Now one population equation per site is replaced by its amount, rows
+  and columns are scaled, and a fully pivoted LU solves the square
+  system; singular systems show pivot ratios of 10⁻¹⁸, a `T₁` of 10⁶ s
+  3·10⁻⁹ (threshold 10⁻¹²). It agrees with 40 digits and is eight times
+  faster than the SVD before.
+- **Cost.** Sweeps had no total limit (20 steps of the system above took
+  255 s, Python's default of 1000 about 3.5 hours) and FIDs no check;
+  both are now estimated before they start.
+- **Tests.** No test exercised the parts of the index mapping where
+  errors hide (strides, reordered and interleaved spins, parahydrogen on
+  distant spins, isotopes of only some sites, spin 1, sweeps, pulses on
+  some sites): the dense reference now does, and fails if the target's
+  strides are replaced by the source's. Nothing tested steady states in
+  the laboratory frame at high field (now from 0.1 to 9.4 T). The M2S
+  test took the absolute value; S2M returns the magnetisation inverted,
+  now asserted and documented. The spin-lock ratio was asserted only to
+  exceed 3.
+- **Docs.** "Without the lock, 15 % faster" meant 15 % less singlet
+  order left; the guide claimed `Exchange` computes what Lindale et al.
+  sample; "exchange keeps thermal states thermal" holds for equal shifts
+  only; the README called numerical references closed forms; the
+  tutorial's exchange times and fields were wrong. Missing caveats are
+  now stated: steady chemistry, one source per channel (a partner's spins
+  arrive fresh), fresh states as products of single-spin populations, the
+  size limit, no shaped pulses during exchange, free-precession
+  relaxation during a spin lock, the cost of sweeps and the precision
+  next to parahydrogen order (10⁻¹⁵ absolute).
+- **Python.** A singlet `fraction` without `parahydrogen` was ignored; it
+  is an error now.
+
+Left as is: the steady-chemistry requirement (irreversible chemistry
+would make the amounts dynamic variables) and one source per channel;
+every sweep step rebuilds the whole generator; long delays in the
+laboratory frame lose `ε·ω·t` (10⁻⁹ after 600 s at 1 T); the Monte
+Carlo test resolves errors above about 4 %, the dense reference the
+rest.
+
+### 1.36 — Optimal control of spin experiments (M, delivered)
+
+Use case: designing the sequence, not only simulating it. Shaped pulses
+and field profiles that move the most polarisation to ¹³C in the
+shortest time, robust to errors in the radiofrequency field and the
+offsets. 1.33 has shaped pulses, and QSO has exact gradients and
+optimisers (1.26).
+
+| Deliverable | Detail |
+|---|---|
+| GRAPE | gradient ascent in pulse engineering (Khaneja et al., J. Magn. Reson. 172, 296 (2005)): exact gradients of a transfer or of a target state with respect to piecewise-constant amplitudes and phases, with relaxation (Liouville space) and with ensembles of field and offset errors for robustness |
+| Field profiles | the same for the field of SABRE and field-cycling experiments |
+| Constraints | amplitude and power limits, a fixed duration, smooth shapes |
+
+Validation: the gradients agree with finite differences. The optimised
+transfer reaches the unitary bound (Glaser et al., Science 280, 421
+(1998)): the largest `Tr(C U ρ U†)` over all unitaries, the sum of the
+products of the ordered eigenvalues of `ρ` and `C`. For two heteronuclear
+spins it follows the time-optimal limits of Khaneja, Brockett and Glaser
+(Phys. Rev. A 63, 032308 (2001)): the antiphase transfer `2I_zS⁻ → I⁻`
+reaches at most `sin(πJT/2)` in a time `T ≤ 1/J`, and the in-phase
+transfer `S⁻ → I⁻` reaches one only at `3/(2J)`. Pulses optimised for a
+range of field errors keep their transfer over that range, where INEPT
+does not.
+
+Delivered in `spin/control.rs`: GRAPE for piecewise-constant rf
+amplitudes on several channels (rotating frame) or field profiles, with
+the transfer `Re Tr(C† ρ(T))` averaged over an ensemble of rf scalings
+and offsets, amplitude limits, power and smoothness penalties and a
+fixed duration; exact gradients without relaxation (eigenvectors of each
+step) and with it (Liouville space, the Van Loan block exponential
+applied to vectors); `Event::Control` to replay the pulses in `evolve`;
+`unitary_bound`; field profiles through the exchange model of 1.35
+(`Exchange::optimize_profile`); `spin.Control`, `spin.Profile` and
+`spin.rf_pulse` in Python; tutorial 10. Changes to the plan:
+
+- **Time-optimal target corrected.** The plan asked for "no less than
+  `1/(2J)`"; Khaneja, Brockett and Glaser give `sin(πJT/2)` for the
+  antiphase transfer `2I_zS⁻ → I⁻` up to `T = 1/J`, and `3/(2J)` for the
+  in-phase transfer `S⁻ → I⁻`. Those are the limits tested.
+- **Field profiles.** The field derivative of relaxation and of thermal
+  populations is taken by Richardson-extrapolated differences (the rest
+  of the gradient is exact). For SABRE build-up in the exchange model the
+  optimum is the constant anti-crossing field: modulating the field gains
+  nothing there.
+- **Not done:** rf pulses through chemical exchange (field profiles
+  only), control with relaxation beyond six spins ½, and a comparison
+  with QuTiP's optimal-control package (independent NumPy and SciPy
+  builds instead).
+
+Measured:
+
+- **Gradients.** Against central differences for rf and field controls,
+  with and without relaxation, Redfield relaxation, a spin 1, ensembles
+  with rf errors and offsets and complex operators: to 10⁻⁷–10⁻⁸ (the
+  differences' own error). Against an independent SciPy build (`expm`,
+  `expm_frechet`) with relaxation: 10⁻¹⁰ (rf) and 10⁻⁹ (field). The
+  transfer equals `evolve` to 10⁻¹⁰ and an independent NumPy propagation
+  to 10⁻¹².
+- **Unitary bound.** Thermal ¹H → ¹³C transfer reaches 3.976 times
+  carbon's own polarisation, I₂S 4.476 times, both the bound to 10⁻⁹;
+  with `T₂` = 20 ms the optimum is 0.74 of it.
+- **Time-optimal limits.** In-phase `S⁻ → I⁻` reaches `η*(T)` to
+  3·10⁻¹⁰ at `JT` = 0.8 and 1.2 and one at 1.7; antiphase `2I_zS⁻ → I⁻` 99.39 % of
+  `sin(πJT/2)` at `JT` = 0.5 with 100 steps (the ideal sequence of
+  Khaneja et al. reaches it exactly), 99.73 % at 0.8 and one at 1.2.
+- **Robustness.** A pulse optimised for rf amplitudes of 80–120 %
+  transfers more than 99.99 % at and between them and more than 99.9 %
+  out to 75 % and 125 %, where nothing was optimised (99.95–99.98 % over
+  twelve local optima; which one L-BFGS finds depends on rounding, which
+  differs between machines: two Linux runners of the release's CI found
+  99.97 %);
+  refocused INEPT gives 0.089 and 0.291 at 80 % and 120 %.
+- **Field cycling.** A profile of 2 s in 40 steps, started at zero field,
+  gives −0.8128 on ¹³C: the unitary bound within the blocks of total `M`
+  a field conserves, so no field profile does better; the adiabatic
+  passage needs 50 s for it, a linear sweep of 2 s gives −0.249.
+- **SABRE.** Over 5 s of build-up the best constant field is 0.138 μT
+  (0.33294); optimised ten-step profiles from 0.1 μT or from zero field
+  end there.
+- **Cost** of one evaluation, 100 steps: 0.5 ms for two spins without
+  relaxation (27 ms for four spins and 200 steps); with relaxation 50 ms
+  for two spins and 0.7 s for three at rf up to 2 kHz, about four times
+  that at 10 kHz.
+
+An independent review wrote its own SciPy implementation and compared
+values and gradients in both engines (rf with ensembles, spin-index
+channels, non-Hermitian operators, `T₁`/`T₂`, Redfield relaxation, a spin
+1, field drives in both frames, large norms, degenerate spectra): to
+5·10⁻¹⁴, and 4·10⁻¹¹ for thermal starts at room temperature. It confirmed
+the in-phase limit by a direct maximisation over the reachable
+propagators, the unitary bound, the fairness of the INEPT comparison and
+the SABRE optimum. It found:
+
+- **Out of memory.** The dense Liouville generator was allocated before
+  the work check (eight relaxing spins aborted the process), and the work
+  checks did not bound memory: the propagators of every step, a cache of
+  field-step generators and members running in parallel (a 5-spin field
+  profile took 9.8 GB). Now memory (at most 2 GB) and work are estimated
+  before anything is allocated, Liouville space is limited to 4096
+  elements, no generators are cached and propagators are recomputed from
+  the stored eigenvectors; the work estimates were 15 and 5 times too
+  low and are calibrated now, for the whole ensemble.
+- **Converged on a bound.** The `tanh` map of bounded controls saturated
+  and the optimiser's first step (one unit: 1 T for a field) threw every
+  field onto a bound, where the gradient vanished: from zero field the
+  PHIP profile stopped at 0.40 and SABRE at 0.005, both reported as
+  converged. Bounds are now kept by a sine (no plateau beyond them),
+  field variables count twentieths of the range, and starts on a bound
+  are moved inside: both now reach their optimum. The PHIP value the
+  milestone first reported from random starts came from that lucky first
+  step; field profiles are strongly multimodal (random starts stop at
+  0.08–0.38), which the guide now says.
+- **Accuracy.** The field derivative of relaxation, claimed to 10⁻⁹, was
+  off by up to 1.7·10⁻³ at room temperature and millitesla fields: the
+  drift towards equilibrium was the small difference of two large rates.
+  It is now `tanh(x/2)/T₁` (in `evolve` as well), with Richardson
+  extrapolation: 2·10⁻¹⁴ against the rates written out. The Liouville
+  engine propagated `ρ` itself and lost digits of thermal polarisation;
+  it now propagates the deviation as `evolve` does.
+- **Smaller issues.** The cost of a field profile was estimated at its
+  first field; a maximally mixed start gave a degenerate normalisation
+  and stopped after one iteration; non-finite operators and overflowing
+  weights were accepted; out-of-range starts were silently projected;
+  Python docstrings were displaced, `spin.control` (now `spin.rf_pulse`)
+  took only tuples and was easily confused with `spin.Control`; the
+  guide's timings, the scope of `limit`, the offset sign, the scope of
+  robustness and an exchange test's name were wrong or missing. All are
+  fixed, with tests (bound and mixed starts, refusals, JSON, precision at
+  low polarisation, Redfield and spin-1 gradients, the SciPy reference).
+
+Left as is: Ctrl-C reaches Python only when an optimisation ends; with
+relaxation and no amplitude limit, an evaluation the optimiser tries
+beyond the work limit ends the run with an error; the cost with
+relaxation grows with rf amplitude times duration; `evolve` resolves
+polarisations below about 10⁻¹² only to 10⁻¹⁷ absolute.
+
+### 1.37 — Quantum sensing with spins in diamond (M, delivered)
+
+Use case: nitrogen-vacancy (NV) centres in diamond measure magnetic
+fields at the nanoscale, inside and next to living cells (Le Sage et al.,
+Nature 496, 486 (2013); Schirhagl et al., Annu. Rev. Phys. Chem. 65, 83
+(2014)), and detect single nuclear spins. An NV centre is an electron
+spin 1 coupled to its nitrogen nucleus and to nearby ¹³C nuclei. Its
+coherence against noise decides what it can sense. This combines the
+spins of 1.33 with the slow noise and echoes of 1.30.
+
+| Deliverable | Detail |
+|---|---|
+| NV centres | electron spin 1 with zero-field splitting `D = 2.87 GHz`, Zeeman term, ¹⁴N or ¹⁵N with hyperfine and quadrupole couplings, ¹³C nuclei with hyperfine tensors, in the secular approximation |
+| Sequences | optically detected magnetic resonance (ODMR) spectra, Ramsey, Hahn echo, CPMG and XY-8 dynamical decoupling with finite pulses |
+| Noise | classical field noise of a given spectrum (telegraph, Ornstein–Uhlenbeck, 1/f), the filter-function description of decoupling (Cywiński et al., Phys. Rev. B 77, 174509 (2008)) against exact trajectories |
+
+Validation: the ODMR lines lie at `D ± γ_e B` and split by the hyperfine
+coupling. The CPMG signal of one weakly coupled ¹³C follows the closed
+form of Taminiau et al. (Phys. Rev. Lett. 109, 137602 (2012)), with its
+dips at the predicted pulse spacings. The coherence under Gaussian
+Ornstein–Uhlenbeck noise follows the filter-function integral, and under
+telegraph noise the exact Kubo–Anderson results of 1.30.
+
+Delivered in `spin/nv.rs`: `NvCenter` (electron spin 1 with `D`, the
+Zeeman term, ¹⁴N with hyperfine and quadrupole couplings or ¹⁵N, and
+¹³C nuclei with `A_∥` and `A_⊥`, in the secular approximation and the
+frame of the microwave), resonance `lines`, pulsed `odmr`, `signal` and
+`evolve` of sequences on either transition with ideal pulses or finite
+ones (rotating-wave approximation, both transitions driven with the
+carrier's phase, free periods between pulse centres); `ramsey`, `hahn`,
+`cpmg`, `xy8`; `FieldNoise` (telegraph, Ornstein–Uhlenbeck, 1/f as a sum
+of fluctuators) with spectra, `filter_function`, `decay_exponent` and
+`signal_with_noise`; `spin.NvCenter`, `spin.FieldNoise` and the sequences
+in Python; tutorial 11. Changes to the plan:
+
+- **Hyperfine tensors.** In the secular approximation only `S_z` couples
+  to a nucleus, and the azimuth of each ¹³C can be rotated away (the
+  nuclei do not couple to each other), so `A_∥` and `A_⊥` are the whole
+  tensor.
+- **ODMR spectra** are the resonance lines with their strengths and
+  pulsed ODMR; continuous-wave ODMR needs the optical cycle, which is not
+  modelled.
+- **A block propagation** was added for speed: the secular Hamiltonian is
+  block diagonal in the electron level and a sum of one term per nucleus
+  within a block, so free evolution applies one 2 × 2 or 3 × 3 factor per
+  nucleus. CPMG-16 with ¹⁴N and six ¹³C (dimension 576) took 36 s dense
+  and takes 0.4 s.
+- **Not done:** fields off the NV axis (the secular approximation needs
+  the field along it), the optical cycle, nuclear spin baths beyond the
+  explicit nuclei (cluster expansions), and pulse errors other than
+  finite duration and off-resonance (amplitude errors can be modelled by
+  the angle).
+
+Measured:
+
+- **Lines.** `D ± γ_e B ± A_N m_I` to 10⁻³ Hz for ¹⁴N and ¹⁵N; pulsed
+  ODMR dips to 2/3 at each ¹⁴N line (within 0.02) and equals one finite
+  pulse of the dense propagation to 10⁻¹⁰; at zero field the degenerate
+  lines of one ¹³C merge at `D ± A/2` with strength ½ each; above 102 mT
+  the line of `m = −1` is negative.
+- **Nuclear-spin detection.** The CPMG-64 signal of a ¹³C (60 and 30 kHz,
+  40 mT, with ¹⁴N) equals Taminiau's closed form to 1.5·10⁻¹³ over 1360
+  spacings, with six dips within 1.5 % of `τ_k`. With 20 MHz pulses XY-8
+  keeps the first three dips within 0.03 of their ideal depth (0.118
+  against 0.131 for the first); CPMG loses more than 0.3 of it (0.64),
+  because the ±2.14 MHz of ¹⁴N makes its pulses imperfect and it corrects
+  pulse errors only along its axis.
+- **Propagation.** An independent NumPy build (¹⁴N and two ¹³C, both
+  transitions, ideal and finite pulses, random states) agrees to 10⁻¹⁰,
+  the block propagation with the dense one (¹⁵N and three ¹³C, ¹⁴N and
+  two, non-Hermitian operators) to 10⁻¹⁰. A linearly polarised carrier
+  simulated in the laboratory frame without the rotating-wave
+  approximation agrees to 8·10⁻⁴ at zero field, 0.5 mT and 2 mT (Hahn,
+  XY-8, phase-shifted Ramsey, 5 MHz pulses); ideal pulses are the limit of
+  selective finite ones to 3·10⁻⁴ (30 MHz at 1 T).
+- **Noise.** Ornstein–Uhlenbeck decay exponents equal the closed forms of
+  Klauder and Anderson to 10⁻¹⁰ (Ramsey) and 10⁻⁹ (Hahn); the
+  filter-function integral of 1/f noise, by quadrature, to 10⁻⁵;
+  trajectories match `e^{−χ}` within four standard errors (2·10⁴
+  trajectories, Ramsey, Hahn, CPMG, XY-8, both transitions), telegraph
+  noise Kubo and Anderson's free decay and echo, where `e^{−χ}` misses by
+  more than 0.05. Noise during finite pulses agrees with 128 pieces per
+  pulse within the statistical error.
+- **Cost.** CPMG-64 with ¹⁴N and one ¹³C: 0.4 ms (ideal pulses), 1.2 ms
+  (20 MHz); a 1360-point CPMG-64 sweep 0.9 s; CPMG-16 at dimension 576
+  0.4 s and 8.5 s; 10⁴ noisy trajectories of CPMG-16 on a bare centre
+  0.05 s (0.15–0.2 s with finite pulses); `lines` at dimension 768
+  0.03 s; `decay_exponent` of XY-8×250 under 1/f noise of 1000
+  fluctuators 0.17 s.
+
+An independent review wrote its own NumPy model and a laboratory-frame
+simulation, and confirmed the Hamiltonian's signs and couplings, the
+block propagation for arbitrary states (to 7·10⁻¹³, up to dimension 768),
+the decay exponents, the exact Ornstein–Uhlenbeck and telegraph sampling
+(with up to 4·10⁶ trajectories) and the 16-piece treatment of noise
+during pulses against 256 pieces. It found:
+
+- **Wrong drive phase at low field.** The drive `cos φ S_x + sin φ S_y`
+  gave the two transitions opposite phases; a carrier gives both the
+  same. With one transition driven the signals are unchanged, but at
+  zero field a Hahn echo gave 0.467 instead of 0.768. The drive is now
+  the co-rotating part of a linearly polarised carrier, tested against
+  the laboratory frame; the NumPy reference now compares the whole state
+  (a population from the pumped state does not see the phase).
+- **Crash.** The dimension of 64 or more carbons wrapped around to zero,
+  passed the check and divided by zero (or tried to allocate 38 GB). It
+  saturates now and is refused.
+- **Wrong results.** `evolve` mirrored the blocks and so was wrong for
+  non-Hermitian operators; it now propagates their Hermitian and
+  anti-Hermitian parts. Filter functions did not check their periods (a
+  negative one gave a value) and refused −90° or 540° pulses; they check
+  and take angles modulo 360° now.
+- **Cost.** Noise sampling was not counted in the work limit (1000
+  fluctuators took 26 s), `decay_exponent` was quadratic in the number of
+  periods (56 s for XY-8×250), every finite pulse under noise took 16
+  full exponentials whatever the correlation time (105 s for 1000
+  trajectories at dimension 36, now 8.5 s), `lines` diagonalised the full
+  Hamiltonian (13.5 s at dimension 768, now 0.03 s), and ODMR, `lines`
+  and noiseless finite pulses had no work limit. All are fixed or
+  counted, with the costs measured.
+- **Smaller issues.** The comment on `γ_e` named `g = 2.0028` for the
+  free electron's value; negative frequencies above 102 mT were not
+  explained; degenerate lines were listed separately with strengths that
+  depended on the basis; one trajectory reported a standard error of
+  zero; static telegraph noise had a NaN spectrum and tiny rates a NaN
+  `χ`; adjacent free periods could be refused next to finite pulses;
+  custom nitrogen couplings were reachable only through JSON, and a
+  transition of 128 raised `OverflowError`; the trajectory tests allowed
+  10⁻³ beyond four standard errors. All are fixed.
+
 ## 5. Order and reasoning
 
 1. **1.2 first:** small, made every later release safer, and documentation
@@ -1768,6 +2806,22 @@ Multi-node simulation, which the use case does not need below 30 qubits.
     memory or a GPU matter, so cheaper gradients come first (1.26), then
     single precision for the memory (1.27), then the use case end to end,
     which also decides what a GPU would still add (1.28).
+15. **Seventh stage: walks first again.** Interacting walkers (1.29)
+    extend QSO's walks to many particles and to graphs that one walker
+    cannot tell apart, with permanents and determinants as references.
+    Correlated and slow noise (1.30) comes before learning at scale
+    (1.31), because the larger learning experiments should include it.
+    Screening and tighter bounds (1.32) close two small, long-standing
+    gaps. Spin dynamics (1.33) comes last, because it builds on the echoes
+    and slow noise of 1.30.
+16. **Eighth stage: magnetic resonance for medical research.** Relaxation
+    from first principles (1.34) comes first, because exchange models and
+    long-lived states (1.35) need relaxation times that follow from the
+    molecule rather than from input. Optimal control (1.36) comes after
+    them, so that it optimises sequences on realistic models. Quantum
+    sensing (1.37) comes last: it adds a new kind of spin (the electron
+    of an NV centre) and builds on the noise of 1.30 and the decoupling
+    sequences that optimal control can improve.
 
 ## 6. Measures of success
 
@@ -1826,6 +2880,23 @@ Taken (October 2026):
   until a machine with a GPU is available to test on, and would then be a
   single-precision `wgpu` backend for the QAOA layer, with the CPU's single
   precision as reference (1.28).
+* Seventh stage (October 2026): interacting walkers (1.29), correlated
+  and non-Markovian noise (1.30), noise learning beyond ten qubits on the
+  Pauli-frame sampler (1.31), integral screening and commutator bounds
+  for higher orders (1.32). Leakage stays out: it needs qutrits in every
+  simulator.
+* Spin dynamics and magnetic resonance (1.33, added October 2026): the
+  quantum dynamics of nuclear spins behind hyperpolarised MRI, built on
+  the density-matrix, relaxation and Magnus tools QSO already has. Image
+  simulation, quantum algorithms for CT and clinical claims stay out of
+  scope; QuTiP joins the cross-validation as a reference only.
+* Eighth stage (1.34 to 1.37, added October 2026 on request): magnetic
+  resonance for medical research. It covers relaxation from first
+  principles, realistic hyperpolarisation (chemical exchange, PHIP-SAH,
+  long-lived states), optimal control of spin experiments, and quantum
+  sensing with NV centres. Quantum algorithms for CT were considered and
+  left out: at the size of a real image, loading the data and reading
+  out the result undo any speed-up, so a demonstration would mislead.
 * The browser playground stays, because it costs little to maintain: it
   is plain HTML and JavaScript without dependencies or a build step, it
   uses only the npm package's JSON interface, which the package's tests

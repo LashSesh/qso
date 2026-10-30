@@ -1,0 +1,10 @@
+{
+  "spins": [
+    {"isotope": "13C", "shift": 171.0, "position": [0.0, 0.0, 0.0],
+     "csa": [[-75.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 65.0]]},
+    {"isotope": "1H", "shift": 8.4, "position": [1.10, 0.0, 0.0]}
+  ],
+  "couplings": [[0, 1, 195.0]],
+  "field": 9.4,
+  "correlation_time": 2e-11
+}

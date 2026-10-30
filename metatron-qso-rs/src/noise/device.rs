@@ -24,8 +24,21 @@
 //! A qubit that waits for others relaxes with its T₁ and T₂ for the waiting
 //! time, and every qubit of a gate relaxes for the gate's duration. After
 //! each gate come, in this order, the rule's depolarising error, its further
-//! channels and the relaxation during the gate. Durations, T₁ and T₂ share
-//! one unit of time, whichever the description uses.
+//! channels, its channels on spectator qubits (which wait for the gate) and
+//! the relaxation during the gate. Durations, T₁ and T₂ share one unit of
+//! time, whichever the description uses; a rule for the gate `"id"`
+//! ([`Circuit::id`]) makes explicit waits.
+//!
+//! Some noise is correlated in time: quasi-static detunings
+//! ([`QubitProperties::detuning`]), telegraph noise
+//! ([`QubitProperties::telegraph`]) and over-rotation spreads
+//! ([`GateRule::over_rotation_spread`]). Each trajectory of a
+//! [`TrajectorySimulator`](super::TrajectorySimulator) draws them once and
+//! turns a qubit by `RZ` of its accumulated phase for every time it spends
+//! in gates or waiting (during a gate, half before and half after it).
+//! Density matrices
+//! cannot represent this and refuse such devices
+//! ([`DeviceModel::is_markovian`]).
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -97,6 +110,92 @@ impl From<&Channel> for ChannelSpec {
     }
 }
 
+/// Distribution of a quasi-static parameter: drawn once per trajectory and
+/// constant during it (JSON `{"gaussian": {"sigma": 0.1}}` or
+/// `{"uniform": {"half_width": 0.1}}`).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[non_exhaustive]
+pub enum Spread {
+    /// Normal with mean 0 and standard deviation `sigma`.
+    Gaussian { sigma: f64 },
+    /// Uniform on `[−half_width, half_width]`.
+    Uniform { half_width: f64 },
+}
+
+impl Spread {
+    pub(crate) fn sample(&self, rng: &mut crate::rng::Rng) -> f64 {
+        match *self {
+            Spread::Gaussian { sigma } => sigma * rng.normal(),
+            Spread::Uniform { half_width } => half_width * (2.0 * rng.uniform() - 1.0),
+        }
+    }
+
+    fn validate(&self, what: &str) -> Result<()> {
+        let width = match *self {
+            Spread::Gaussian { sigma } => sigma,
+            Spread::Uniform { half_width } => half_width,
+        };
+        if !(width >= 0.0 && width.is_finite()) {
+            return Err(QsoError::invalid(
+                "spread",
+                format!("{what}: the width must be finite and non-negative"),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Random telegraph noise on a qubit's frequency: a shift that jumps
+/// between `+amplitude` and `−amplitude` (angular frequency) at the random
+/// times of a Poisson process with `rate` jumps per unit time, starting in
+/// either state with probability ½.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct Telegraph {
+    pub amplitude: f64,
+    pub rate: f64,
+}
+
+impl Telegraph {
+    pub fn new(amplitude: f64, rate: f64) -> Self {
+        Self { amplitude, rate }
+    }
+
+    fn validate(&self, what: &str) -> Result<()> {
+        if !self.amplitude.is_finite() || !(self.rate >= 0.0 && self.rate.is_finite()) {
+            return Err(QsoError::invalid(
+                "telegraph",
+                format!(
+                    "{what}: the amplitude must be finite and the rate finite and non-negative"
+                ),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// A channel on fixed qubits after the gates of a rule; they may include
+/// qubits the gate does not act on (crosstalk on spectator qubits), which
+/// then wait for the gate.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct SpectatorChannel {
+    pub qubits: Vec<usize>,
+    pub channel: ChannelSpec,
+}
+
+impl SpectatorChannel {
+    pub fn new(qubits: &[usize], channel: ChannelSpec) -> Self {
+        Self {
+            qubits: qubits.to_vec(),
+            channel,
+        }
+    }
+}
+
 /// Properties of one qubit. In [`DeviceModel::qubits`], fields left unset
 /// take the value of [`DeviceModel::default_qubit`].
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -110,6 +209,13 @@ pub struct QubitProperties {
     pub t2: Option<f64>,
     /// Readout errors `(P(read 1 | 0), P(read 0 | 1))`.
     pub readout: Option<(f64, f64)>,
+    /// Quasi-static frequency offset δ (angular frequency): drawn once per
+    /// trajectory, it turns the qubit by `RZ(δ·t)` over every time `t` it
+    /// spends in gates or waiting.
+    pub detuning: Option<Spread>,
+    /// Random telegraph noise on the frequency, turning the qubit by
+    /// `RZ(∫ν(t) dt)`.
+    pub telegraph: Option<Telegraph>,
 }
 
 impl QubitProperties {
@@ -129,6 +235,23 @@ impl QubitProperties {
     pub fn with_readout(mut self, p01: f64, p10: f64) -> Self {
         self.readout = Some((p01, p10));
         self
+    }
+
+    /// Set a quasi-static frequency offset.
+    pub fn with_detuning(mut self, spread: Spread) -> Self {
+        self.detuning = Some(spread);
+        self
+    }
+
+    /// Set random telegraph noise on the frequency.
+    pub fn with_telegraph(mut self, telegraph: Telegraph) -> Self {
+        self.telegraph = Some(telegraph);
+        self
+    }
+
+    /// Whether the qubit has noise correlated in time.
+    fn slow(&self) -> bool {
+        self.detuning.is_some() || self.telegraph.is_some()
     }
 
     /// `(T₁, T₂)` if the qubit relaxes at all.
@@ -161,6 +284,12 @@ impl QubitProperties {
             check_probability("readout", p01)?;
             check_probability("readout", p10)?;
         }
+        if let Some(d) = &self.detuning {
+            d.validate(what)?;
+        }
+        if let Some(t) = &self.telegraph {
+            t.validate(what)?;
+        }
         Ok(())
     }
 }
@@ -186,9 +315,14 @@ pub struct GateRule {
     /// Relative error of rotation angles (`rx`, `ry`, `rz`, `p`, `rxx`,
     /// `ryy`, `rzz` and their controlled forms): θ ↦ θ·(1 + ε).
     pub over_rotation: f64,
+    /// A quasi-static spread of the relative error: η drawn once per
+    /// trajectory for the rule, θ ↦ θ·(1 + ε + η).
+    pub over_rotation_spread: Option<Spread>,
     /// Further channels after the gate: one-qubit channels act on every
-    /// qubit of the gate, two-qubit channels on consecutive pairs.
+    /// qubit of the gate, k-qubit channels on every k consecutive qubits.
     pub channels: Vec<ChannelSpec>,
+    /// Channels on fixed qubits after the gate (crosstalk on spectators).
+    pub spectators: Vec<SpectatorChannel>,
 }
 
 impl GateRule {
@@ -237,6 +371,18 @@ impl GateRule {
         self
     }
 
+    /// Spread the over-rotation quasi-statically.
+    pub fn with_over_rotation_spread(mut self, spread: Spread) -> Self {
+        self.over_rotation_spread = Some(spread);
+        self
+    }
+
+    /// A channel on fixed `qubits` after every matching gate.
+    pub fn with_spectator(mut self, qubits: &[usize], channel: ChannelSpec) -> Self {
+        self.spectators.push(SpectatorChannel::new(qubits, channel));
+        self
+    }
+
     /// Whether the rule applies to `inst`.
     pub fn matches(&self, inst: &Instruction) -> bool {
         let n = inst.controls.len() + inst.targets.len();
@@ -278,17 +424,45 @@ impl GateRule {
         }
         for spec in &self.channels {
             let ch = spec.to_channel()?;
+            // Gates of unknown size are checked when a circuit is compiled.
             let smallest = self
                 .qubits
                 .as_ref()
                 .map(Vec::len)
                 .or(self.num_qubits)
-                .or_else(|| self.gate.as_deref().and_then(name_arity))
-                .unwrap_or(2);
-            if ch.n_qubits() == 2 && smallest < 2 {
+                .or_else(|| self.gate.as_deref().and_then(name_arity));
+            if let Some(smallest) = smallest
+                && ch.n_qubits() > smallest
+            {
                 return Err(QsoError::invalid(
                     "channels",
-                    format!("{what}: two-qubit channel on one-qubit gates"),
+                    format!(
+                        "{what}: {}-qubit channel on {smallest}-qubit gates",
+                        ch.n_qubits()
+                    ),
+                ));
+            }
+        }
+        if let Some(spread) = &self.over_rotation_spread {
+            spread.validate(&what)?;
+        }
+        for spectator in &self.spectators {
+            let ch = spectator.channel.to_channel()?;
+            let qs = &spectator.qubits;
+            if ch.n_qubits() != qs.len() {
+                return Err(QsoError::invalid(
+                    "spectators",
+                    format!(
+                        "{what}: a {}-qubit channel on {} qubits",
+                        ch.n_qubits(),
+                        qs.len()
+                    ),
+                ));
+            }
+            if (1..qs.len()).any(|k| qs[..k].contains(&qs[k])) {
+                return Err(QsoError::invalid(
+                    "spectators",
+                    format!("{what}: repeated qubit"),
                 ));
             }
         }
@@ -310,9 +484,10 @@ fn name_arity(name: &str) -> Option<usize> {
     Some(controls + targets)
 }
 
-/// Name of an instruction as in [`Circuit::gate_counts`].
+/// Name of an instruction as in [`Circuit::gate_counts`] (`"id"` for a
+/// one-qubit identity, [`Circuit::id`], which a rule can give a duration).
 pub(crate) fn gate_name(inst: &Instruction) -> String {
-    format!("{}{}", "c".repeat(inst.controls.len()), inst.kind.name())
+    inst.name()
 }
 
 /// A device: qubit properties and gate rules (see the module documentation).
@@ -401,8 +576,20 @@ impl DeviceModel {
                 t1: p.t1.or(d.t1),
                 t2: p.t2.or(d.t2),
                 readout: p.readout.or(d.readout),
+                detuning: p.detuning.or(d.detuning),
+                telegraph: p.telegraph.or(d.telegraph),
             },
         }
+    }
+
+    /// Whether every noise of the device is a channel applied at one point
+    /// of the circuit. Quasi-static detunings, telegraph noise and spreads
+    /// of over-rotations are correlated in time; only trajectories simulate
+    /// them, density matrices refuse them.
+    pub fn is_markovian(&self) -> bool {
+        !(self.default_qubit.slow()
+            || self.qubits.iter().any(QubitProperties::slow)
+            || self.gates.iter().any(|r| r.over_rotation_spread.is_some()))
     }
 
     /// The first rule matching `inst`.
@@ -591,8 +778,25 @@ impl CompiledChannel {
 pub(crate) enum Op {
     /// Ideal gates with bound angles.
     Gates(Circuit),
-    /// A channel (index into [`Program::channels`]) on one or two qubits.
+    /// A channel (index into [`Program::channels`]) on one to four qubits.
     Channel { channel: usize, qubits: Vec<usize> },
+    /// The turn `RZ(φ)` of `qubit` by its slow noise between times `from`
+    /// and `to` (sampled per trajectory).
+    Phase { qubit: usize, from: f64, to: f64 },
+    /// A rotation gate (angles bound without over-rotation) whose angles a
+    /// trajectory scales by `base + η`, with η drawn for `rule`.
+    SpreadGate {
+        inst: Instruction,
+        base: f64,
+        rule: usize,
+    },
+}
+
+/// Noise of one qubit that is correlated in time.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct SlowNoise {
+    pub detuning: Option<Spread>,
+    pub telegraph: Option<Telegraph>,
 }
 
 /// A circuit compiled against a device: ideal gate segments and channels.
@@ -602,6 +806,10 @@ pub(crate) struct Program {
     pub ops: Vec<Op>,
     pub channels: Vec<CompiledChannel>,
     pub readout: Vec<(f64, f64)>,
+    /// Slow noise of every qubit (all `None` on Markovian devices).
+    pub slow: Vec<SlowNoise>,
+    /// Over-rotation spreads of the device's rules.
+    pub spreads: Vec<Option<Spread>>,
 }
 
 pub(crate) fn rotation_kind(kind: GateKind) -> bool {
@@ -679,6 +887,32 @@ impl Compiler<'_> {
         Ok(())
     }
 
+    /// Qubit `q` from time `from` to `to` (waiting or in a gate):
+    /// relaxation, and the turn by its slow noise.
+    fn pass(&mut self, q: usize, from: f64, to: f64) -> Result<()> {
+        self.relax(q, to - from)?;
+        self.turn(q, from, to);
+        Ok(())
+    }
+
+    /// The turn of qubit `q` by its slow noise from `from` to `to`.
+    fn turn(&mut self, q: usize, from: f64, to: f64) {
+        let slow = self.program.slow[q];
+        if to > from && (slow.detuning.is_some() || slow.telegraph.is_some()) {
+            // Consecutive times of one qubit join into one turn.
+            if let Some(Op::Phase {
+                qubit, to: last_to, ..
+            }) = self.program.ops.last_mut()
+                && *qubit == q
+                && *last_to == from
+            {
+                *last_to = to;
+            } else {
+                self.program.ops.push(Op::Phase { qubit: q, from, to });
+            }
+        }
+    }
+
     /// Relaxation of qubit `q` for `time`.
     fn relax(&mut self, q: usize, time: f64) -> Result<()> {
         if time <= 0.0 {
@@ -720,29 +954,22 @@ impl Compiler<'_> {
         Ok(list)
     }
 
-    /// Apply channel `i` to `qubits`: per qubit for one-qubit channels, on
-    /// consecutive pairs for two-qubit channels.
+    /// Apply channel `i` to `qubits`: a k-qubit channel to every k
+    /// consecutive qubits (per qubit for one-qubit channels).
     fn spread(&mut self, i: usize, qubits: &[usize]) -> Result<()> {
-        match self.program.channels[i].channel.n_qubits() {
-            1 => {
-                for &q in qubits {
-                    self.push_channel(i, vec![q])?;
-                }
-            }
-            _ => {
-                if qubits.len() < 2 {
-                    return Err(QsoError::invalid(
-                        "channels",
-                        format!(
-                            "two-qubit channel {} after a one-qubit gate",
-                            self.program.channels[i].channel.name()
-                        ),
-                    ));
-                }
-                for pair in qubits.windows(2) {
-                    self.push_channel(i, pair.to_vec())?;
-                }
-            }
+        let k = self.program.channels[i].channel.n_qubits();
+        if qubits.len() < k {
+            return Err(QsoError::invalid(
+                "channels",
+                format!(
+                    "{k}-qubit channel {} after a {}-qubit gate",
+                    self.program.channels[i].channel.name(),
+                    qubits.len()
+                ),
+            ));
+        }
+        for window in qubits.windows(k) {
+            self.push_channel(i, window.to_vec())?;
         }
         Ok(())
     }
@@ -769,6 +996,20 @@ impl Program {
                 ops: Vec::new(),
                 channels: Vec::new(),
                 readout: device.readout_errors(n),
+                slow: (0..n)
+                    .map(|q| {
+                        let p = device.qubit(q);
+                        SlowNoise {
+                            detuning: p.detuning,
+                            telegraph: p.telegraph,
+                        }
+                    })
+                    .collect(),
+                spreads: device
+                    .gates
+                    .iter()
+                    .map(|r| r.over_rotation_spread)
+                    .collect(),
             },
             cache: HashMap::new(),
             rule_channels: vec![None; device.gates.len()],
@@ -779,26 +1020,62 @@ impl Program {
             let qubits: Vec<usize> = inst.qubits().collect();
             let rule = device.gates.iter().position(|r| r.matches(inst));
             let duration = rule.map_or(0.0, |r| device.gates[r].duration);
-            let start = qubits.iter().map(|&q| clock[q]).fold(0.0, f64::max);
-            if device.idle_noise {
-                for &q in &qubits {
-                    if touched[q] {
-                        cc.relax(q, start - clock[q])?;
+            // The gate's qubits and the spectators of its rule, which
+            // wait for the gate.
+            let mut busy = qubits.clone();
+            if let Some(r) = rule {
+                for spectator in &device.gates[r].spectators {
+                    for &q in &spectator.qubits {
+                        if q >= n {
+                            return Err(QsoError::QubitOutOfRange {
+                                qubit: q,
+                                n_qubits: n,
+                            });
+                        }
+                        if !busy.contains(&q) {
+                            busy.push(q);
+                        }
                     }
                 }
             }
-            let mut angles = inst.angles(theta);
-            if let Some(r) = rule {
-                let eps = device.gates[r].over_rotation;
-                if eps != 0.0 && rotation_kind(inst.kind) {
-                    for a in &mut angles {
-                        *a *= 1.0 + eps;
+            let start = busy.iter().map(|&q| clock[q]).fold(0.0, f64::max);
+            if device.idle_noise {
+                for &q in &busy {
+                    if touched[q] {
+                        cc.pass(q, clock[q], start)?;
                     }
+                }
+            }
+            // Slow noise turns the qubits during the gate: half of the
+            // turn before it and half after (symmetric splitting, so that a
+            // gate in the middle of an echo still refocuses).
+            let mid = start + duration / 2.0;
+            for &q in &busy {
+                cc.turn(q, start, mid);
+            }
+            let mut angles = inst.angles(theta);
+            let spread = rule.filter(|&r| {
+                device.gates[r].over_rotation_spread.is_some() && rotation_kind(inst.kind)
+            });
+            let base = rule.map_or(1.0, |r| 1.0 + device.gates[r].over_rotation);
+            if spread.is_none() && base != 1.0 && rotation_kind(inst.kind) {
+                for a in &mut angles {
+                    *a *= base;
                 }
             }
             let mut bound = inst.clone();
             bound.params = angles.into_iter().map(Param::Value).collect();
-            cc.push_gate(bound)?;
+            match spread {
+                Some(r) => {
+                    bound.validate(n)?;
+                    cc.program.ops.push(Op::SpreadGate {
+                        inst: bound,
+                        base,
+                        rule: r,
+                    });
+                }
+                None => cc.push_gate(bound)?,
+            }
             if let Some(r) = rule {
                 if let Some(p) = device.gates[r].depolarizing
                     && p > 0.0
@@ -819,11 +1096,19 @@ impl Program {
                 for i in cc.rule_channels(r)? {
                     cc.spread(i, &qubits)?;
                 }
-                for &q in &qubits {
+                let spectators = device.gates[r].spectators.clone();
+                for (j, spectator) in spectators.iter().enumerate() {
+                    let i = cc.add_channel(format!("spectator:{r}:{j}"), || {
+                        spectator.channel.to_channel()
+                    })?;
+                    cc.push_channel(i, spectator.qubits.clone())?;
+                }
+                for &q in &busy {
                     cc.relax(q, duration)?;
+                    cc.turn(q, mid, start + duration);
                 }
             }
-            for &q in &qubits {
+            for &q in &busy {
                 clock[q] = start + duration;
                 touched[q] = true;
             }
@@ -832,7 +1117,7 @@ impl Program {
             let end = clock.iter().copied().fold(0.0, f64::max);
             for q in 0..n {
                 if touched[q] {
-                    cc.relax(q, end - clock[q])?;
+                    cc.pass(q, clock[q], end)?;
                 }
             }
         }
@@ -1181,7 +1466,8 @@ mod tests {
         let long =
             r#"{"gates":[{"channels":[{"rotation":{"pauli":"ZZZZZZZZZZZZZZZZ","angle":0.1}}]}]}"#;
         assert!(DeviceModel::from_json(long).is_err());
-        assert!(Channel::rotation("ZZZ", 0.1).is_err());
+        assert!(Channel::rotation("ZZZZZ", 0.1).is_err());
+        assert_eq!(Channel::rotation("ZZZ", 0.1).unwrap().n_qubits(), 3);
         // Gate names match regardless of case.
         let dev =
             DeviceModel::from_json(r#"{"gates":[{"gate":"CX","depolarizing":0.5}]}"#).unwrap();

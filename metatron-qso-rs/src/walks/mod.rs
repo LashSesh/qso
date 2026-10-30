@@ -27,6 +27,9 @@
 //!   driven walks), by a fourth-order commutator-free Magnus integrator.
 //! * [`decoherent`] — coined walks with coin and position dephasing, on
 //!   density matrices.
+//! * [`interacting`] — walks of several bosons, fermions or
+//!   distinguishable particles with on-site and neighbour interaction, and
+//!   graph certificates from them.
 //! * [`classical`] — classical random-walk baselines.
 //!
 //! ```
@@ -47,6 +50,7 @@ pub mod decoherent;
 pub mod dephasing;
 pub mod discrete;
 pub mod driven;
+pub mod interacting;
 pub mod pretty_good;
 pub mod quotient;
 pub mod search;
@@ -66,6 +70,7 @@ pub use decoherent::DecoherentCoinedWalk;
 pub use dephasing::DephasingWalk;
 pub use discrete::{Coin, CoinedWalk, DiscreteSearchResult, LineWalk, SzegedyWalk};
 pub use driven::{DrivenEvolution, DrivenWalk, MagnusOptions};
+pub use interacting::{InteractingWalk, Statistics};
 pub use pretty_good::{PrettyGoodTransfer, TransferDecision};
 pub use quotient::{Quotient, QuotientSearch, QuotientWalk};
 pub use search::{MAX_RESOLUTION, SearchResult, SpatialSearch};
@@ -236,10 +241,14 @@ impl ContinuousWalk {
     }
 
     fn require_dense(&self) -> Result<&(Vec<f64>, RMatrix)> {
-        self.spectral.as_ref().ok_or(QsoError::TooManyQubits {
-            what: "dense walk analysis (nodes)",
-            max: DENSE_LIMIT,
-            requested: self.n,
+        self.spectral.as_ref().ok_or_else(|| {
+            QsoError::invalid(
+                "graph",
+                format!(
+                    "{} nodes; dense walk analysis needs at most {DENSE_LIMIT}",
+                    self.n
+                ),
+            )
         })
     }
 

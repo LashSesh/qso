@@ -221,6 +221,9 @@ pub(crate) fn emit_instruction(
             let a = if inst.kind == SX { PI / 2.0 } else { -PI / 2.0 };
             let _ = writeln!(out, "rx({}) q[{}];", real(a), t[0]);
         }
+        (Unitary, 0) if inst.is_identity() => {
+            let _ = writeln!(out, "id q[{}];", t[0]);
+        }
         (Unitary, 0) if t.len() == 1 => {
             let m: [C64; 4] = inst.matrix.as_ref().expect("matrix")[..]
                 .try_into()

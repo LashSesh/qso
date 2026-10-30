@@ -105,8 +105,16 @@ pub struct DeviceBackend {
 }
 
 impl DeviceBackend {
-    /// Exact density-matrix simulation of `device`.
+    /// Exact density-matrix simulation of `device` (Markovian devices only:
+    /// noise correlated in time needs trajectories).
     pub fn density_matrix(device: DeviceModel) -> Result<Self> {
+        if !device.is_markovian() {
+            return Err(QsoError::invalid(
+                "device",
+                "noise correlated in time (detunings, telegraph noise, over-rotation \
+                 spreads) needs trajectories, not density matrices",
+            ));
+        }
         Self::new(device, NoisyMethod::DensityMatrix)
     }
 

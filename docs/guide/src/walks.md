@@ -134,6 +134,119 @@ and a linear schedule over the same time with 0.765, 0.525 and 0.315.
 All six values agree to 10⁻⁶ with an independent integration of the
 two-dimensional subspace (SciPy).
 
+## Several particles
+
+`InteractingWalk` puts `N` particles on a graph: bosons, fermions or
+distinguishable particles. They hop with the walk Hamiltonian and
+interact with each other:
+
+```text
+H = Σ_ij h_ij a†_i a_j + (U/2) Σ_i n_i (n_i − 1) + V Σ_{edges ij} n_i n_j
+```
+
+The default hopping is `"adjacency"` (`h = −γA`), so bosons give the
+Bose–Hubbard model on the graph. States are vectors over the
+configurations, which are multisets of sites for bosons, sets for
+fermions, and the site of each particle for distinguishable particles.
+Up to 2048 configurations the walk is diagonalised once; above that it
+propagates by Krylov.
+
+Two bosons that start on the two ends of an edge leave together. A
+quarter period later they are never found apart, which is the
+Hong–Ou–Mandel effect. Distinguishable particles are found apart half of
+the time:
+
+```python
+import math
+import metatron_qso as q
+
+edge = q.Graph.path(2)
+bosons = q.InteractingWalk(edge, 2)
+p = bosons.probabilities([0, 1], math.pi / 4)
+print(p[bosons.index_of([0, 1])] < 1e-15, p[bosons.index_of([0, 0])])
+# True 0.4999999999999996
+labelled = q.InteractingWalk(edge, 2, "distinguishable")
+p = labelled.probabilities([0, 1], math.pi / 4)
+print(round(p[labelled.index_of([0, 1])] + p[labelled.index_of([1, 0])], 12))
+# 0.5
+```
+
+A strong on-site interaction binds two bosons on the same site into a
+pair, even though the interaction is repulsive: the pair cannot shed the
+energy `U` (Winkler et al., Nature 441, 853 (2006)). On a cycle of 12
+sites the two bosons are still found together with probability 0.92 at
+`t = 5` for `U = 10`, against 0.19 without interaction:
+
+```python
+import numpy as np
+import metatron_qso as q
+
+ring = q.Graph.cycle(12)
+for u in [0.0, 10.0]:
+    walk = q.InteractingWalk(ring, 2, on_site=u)
+    probs = np.abs(walk.evolve(walk.basis_state([0, 0]), 5.0)) ** 2
+    print(u, round(sum(probs[walk.index_of([i, i])] for i in range(12)), 4))
+# 0.0 0.1892
+# 10.0 0.9244
+```
+
+`densities` and `pair_correlations` give `⟨n_i⟩` and `⟨n_i n_j⟩` of any
+state.
+
+### Telling graphs apart
+
+On a strongly regular graph the walk propagator `exp(−iAt)` is a
+combination of `I`, `A` and `J − I − A` whose coefficients depend only on
+the graph's parameters. So one walker cannot tell apart strongly regular
+graphs with the same parameters, and two free particles cannot either.
+Two interacting bosons can (Gamble, Friesen, Zhou, Joynt and
+Coppersmith, Phys. Rev. A 81, 052313 (2010)), though not on every pair
+of non-isomorphic graphs (Smith, arXiv:1004.0206 (2010)).
+
+`certificate(times)` lists the transition probabilities between all
+configurations, sorted, at each time. Isomorphic graphs give the same
+list up to rounding, which grows with the time.
+`certificate_tolerance(times)` is `10⁻¹² · max(1, |t| · ‖H‖)`, a thousand
+times the rounding measured on isomorphic graphs up to `t = 10⁶`. A
+larger distance shows, up to floating-point error, that two graphs are
+not isomorphic:
+
+```python
+import metatron_qso as q
+
+def certificate(graph, u):
+    return q.InteractingWalk(graph, 2, on_site=u).certificate([1.0])
+
+t8, chang = q.Graph.johnson(8, 2), q.Graph.chang(1)   # both (28, 12, 6, 4)
+for u in [0.0, 1.0]:
+    d = q.interacting_certificate_distance(certificate(t8, u), certificate(chang, u))
+    tolerance = q.InteractingWalk(t8, 2, on_site=u).certificate_tolerance([1.0])
+    print(u, d > tolerance)
+# 0.0 False
+# 1.0 True
+```
+
+The validation suite checks this for all six pairs among `T(8)` and
+the three Chang graphs (`Graph.chang(1)` to `Graph.chang(3)`, obtained
+from `T(8)` by `seidel_switching`), and for the Shrikhande and 4 × 4
+rook's graphs. Without interaction the certificates of every pair agree
+to 10⁻¹². With `U = 1` they differ by 1.7·10⁻⁴ to 3.4·10⁻⁴ (`T(8)` and
+the Chang graphs) and by 5.4·10⁻³ (Shrikhande and rook), at least a
+million times the tolerance. The same comparison runs from the command
+line with `qso particles --graph shrikhande --compare rook:4x4 --on-site 1`.
+
+The amplitudes are checked in the tests against independent references:
+
+- without interaction, against permanents (bosons) and determinants
+  (fermions) of the single-walker propagator, also for 2925
+  configurations propagated by Krylov; with interaction, the Krylov
+  propagation of 3003 fermion and 2744 distinguishable configurations
+  against an independent Taylor integration;
+- against the Hamiltonian built on the full tensor-product space and
+  restricted to the symmetric or antisymmetric subspace, up to four
+  particles on a complete graph with weights of both signs;
+- against the closed-form spectrum of the Hubbard dimer.
+
 ## In Rust
 
 ```rust

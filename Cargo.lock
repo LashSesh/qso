@@ -515,7 +515,7 @@ checksum = "f52b00d39961fc5b2736ea853c9cc86238e165017a493d1d5c8eac6bdc4cc273"
 
 [[package]]
 name = "metatron-qso-rs"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "clap",
  "criterion",
@@ -530,7 +530,7 @@ dependencies = [
 
 [[package]]
 name = "metatron_qso_py"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "metatron-qso-rs",
  "num-complex",
@@ -540,7 +540,7 @@ dependencies = [
 
 [[package]]
 name = "metatron_qso_wasm"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "metatron-qso-rs",
  "serde_json",

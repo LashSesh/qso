@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use metatron_qso::algorithms::ansatz::{self, Entanglement};
 use metatron_qso::algorithms::qaoa::{MaxCutQaoa, QaoaConfig, optimize_layerwise_at};
-use metatron_qso::algorithms::time_evolution::{trotter_circuit, trotter_error_bound};
+use metatron_qso::algorithms::time_evolution::{trotter_circuit, trotter_error_bounds};
 use metatron_qso::algorithms::{grover, models, vqe::Vqe};
 use metatron_qso::backend::{Backend, DensityMatrixBackend, DeviceBackend, StatevectorBackend};
 use metatron_qso::chemistry::adapt::{AdaptOptions, adapt_vqe_molecule};
@@ -29,11 +29,13 @@ use metatron_qso::quantum::{
     Circuit, PauliSum, Precision, Program, bitstring, from_qasm2, record_bitstring, to_qasm2,
 };
 use metatron_qso::rng::Rng;
+use metatron_qso::spin::{Event as SpinEvent, Isotope, SpinSystem, Target as SpinTarget};
 use metatron_qso::stabilizer::StabilizerState;
 use metatron_qso::stabilizer::program::{is_clifford_program, sample_program};
 use metatron_qso::walks::{
-    Coin, CoinedWalk, ContinuousWalk, Generator, PrettyGoodTransfer, Quotient, QuotientWalk,
-    SpatialSearch, StateTransfer, SzegedyWalk, circuits, classical_hitting_times,
+    Coin, CoinedWalk, ContinuousWalk, Generator, InteractingWalk, PrettyGoodTransfer, Quotient,
+    QuotientWalk, SpatialSearch, StateTransfer, Statistics, SzegedyWalk, circuits,
+    classical_hitting_times, interacting,
 };
 use metatron_qso::{QsoError, Result};
 
@@ -177,6 +179,37 @@ enum Command {
         gamma: f64,
         #[arg(long, value_enum, default_value_t = GeneratorArg::Laplacian)]
         generator: GeneratorArg,
+    },
+    /// Walk of several bosons, fermions or distinguishable particles with
+    /// on-site (U) and neighbour (V) interaction (hopping by the adjacency
+    /// matrix unless --generator laplacian); with --compare, the
+    /// certificate distance to a second graph against its tolerance.
+    Particles {
+        #[arg(long, default_value = "shrikhande")]
+        graph: String,
+        #[arg(long, default_value_t = 2)]
+        particles: usize,
+        /// bosons, fermions or distinguishable.
+        #[arg(long, default_value = "bosons")]
+        statistics: String,
+        /// Comma-separated start sites (default: 0, 1, …).
+        #[arg(long, value_delimiter = ',')]
+        start: Option<Vec<usize>>,
+        #[arg(long, default_value_t = 1.0)]
+        time: f64,
+        #[arg(long, default_value_t = 1.0)]
+        gamma: f64,
+        #[arg(long, value_enum, default_value_t = GeneratorArg::Adjacency)]
+        generator: GeneratorArg,
+        /// On-site interaction U.
+        #[arg(long, default_value_t = 0.0)]
+        on_site: f64,
+        /// Interaction V between neighbours.
+        #[arg(long, default_value_t = 0.0)]
+        neighbour: f64,
+        /// Second graph whose certificate (at --time) is compared.
+        #[arg(long)]
+        compare: Option<String>,
     },
     /// Quantum-walk spatial search (Childs–Goldstone).
     Search {
@@ -379,6 +412,31 @@ enum Command {
         /// Number of full-CI roots to report.
         #[arg(long, default_value_t = 1)]
         roots: usize,
+    },
+    /// Nuclear spin dynamics: a spin system (JSON) from thermal
+    /// equilibrium or parahydrogen, a pulse sequence (JSON events, or one
+    /// pulse on the observed isotope), and the stick spectrum and
+    /// polarisations after it.
+    Spins {
+        /// JSON file with the spin system.
+        system: std::path::PathBuf,
+        /// Isotope to observe (1H, 13C, 15N, …).
+        #[arg(long, default_value = "1H")]
+        observe: String,
+        /// JSON file with a list of events (default: --pulse on --observe).
+        #[arg(long)]
+        sequence: Option<std::path::PathBuf>,
+        /// Angle (degrees) of the default pulse.
+        #[arg(long, default_value_t = 90.0)]
+        pulse: f64,
+        /// thermal, parahydrogen:I,J (singlet on spins I and J) or
+        /// pasadena:I,J (the singlet averaged over free evolution).
+        #[arg(long, default_value = "thermal")]
+        initial: String,
+        /// Also print the auto-relaxation times T1 and T2 (1/Γ of I_z and
+        /// I₊) of every spin, from T1/T2 inputs and Redfield relaxation.
+        #[arg(long)]
+        rates: bool,
     },
     /// Trotter–Suzuki circuit for exp(−iHt) with its error bound.
     Trotter {
@@ -895,6 +953,98 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 json!({"graph": g.name(), "time": time, "probabilities": p, "limiting_distribution": limit}),
                 text,
             ))
+        }
+        Command::Particles {
+            graph: spec,
+            particles,
+            statistics,
+            start,
+            time,
+            gamma,
+            generator,
+            on_site,
+            neighbour,
+            compare,
+        } => {
+            let statistics = match statistics.to_ascii_lowercase().as_str() {
+                "bosons" => Statistics::Bosons,
+                "fermions" => Statistics::Fermions,
+                "distinguishable" => Statistics::Distinguishable,
+                other => {
+                    return Err(QsoError::invalid(
+                        "statistics",
+                        format!("'{other}' (expected bosons, fermions or distinguishable)"),
+                    ));
+                }
+            };
+            let make = |g: &Graph| {
+                InteractingWalk::new(g, (*generator).into(), *gamma, statistics, *particles)?
+                    .with_interaction(*on_site, *neighbour)
+            };
+            let g = graph(spec)?;
+            let walk = make(&g)?;
+            // Default start: particle k on node k (wrapping around for
+            // more bosons or distinguishable particles than nodes).
+            let sites: Vec<usize> = start
+                .clone()
+                .unwrap_or_else(|| (0..*particles).map(|k| k % g.num_nodes()).collect());
+            let psi = walk.evolve(&walk.basis_state(&sites)?, *time)?;
+            let densities = walk.densities(&psi)?;
+            let kind = match (statistics, *particles == 1) {
+                (Statistics::Bosons, true) => "boson",
+                (Statistics::Fermions, true) => "fermion",
+                (Statistics::Distinguishable, true) => "particle",
+                (Statistics::Distinguishable, false) => "distinguishable particles",
+                (s, false) => s.name(),
+            };
+            let mut text = format!(
+                "{particles} {kind} on {} ({} configurations, U = {on_site}, V = {neighbour}), \
+                 from sites {sites:?}\n⟨n_i⟩ at t = {time}:\n  {}",
+                g.name(),
+                walk.dimension(),
+                vector(&densities)
+            );
+            let mut out = json!({"graph": g.name(), "statistics": statistics.name(),
+                "particles": particles, "configurations": walk.dimension(), "start": sites,
+                "time": time, "on_site": on_site, "neighbour": neighbour, "densities": densities});
+            if let Some(other) = compare {
+                let h = graph(other)?;
+                let second = make(&h)?;
+                let times = [*time];
+                if walk.dimension() != second.dimension() {
+                    // Different numbers of nodes: nothing to compare.
+                    text.push_str(&format!(
+                        "\n{} has {} configurations, {} has {}: not isomorphic",
+                        g.name(),
+                        walk.dimension(),
+                        h.name(),
+                        second.dimension()
+                    ));
+                    out["compare"] = json!({"graph": h.name(), "distance": null,
+                        "tolerance": null, "distinguished": true});
+                } else {
+                    let distance = interacting::certificate_distance(
+                        &walk.certificate(&times)?,
+                        &second.certificate(&times)?,
+                    );
+                    let tolerance = walk
+                        .certificate_tolerance(&times)?
+                        .max(second.certificate_tolerance(&times)?);
+                    let distinguished = distance > tolerance;
+                    text.push_str(&format!(
+                        "\ncertificate distance to {}: {distance:.3e}, tolerance {tolerance:.1e} ({})",
+                        h.name(),
+                        if distinguished {
+                            "not isomorphic"
+                        } else {
+                            "not distinguished"
+                        }
+                    ));
+                    out["compare"] = json!({"graph": h.name(), "distance": distance,
+                        "tolerance": tolerance, "distinguished": distinguished});
+                }
+            }
+            Ok((out, text))
         }
         Command::Search {
             graph: spec,
@@ -1608,6 +1758,114 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             }
             Ok((json!(rows), lines.join("\n")))
         }
+        Command::Spins {
+            system,
+            observe,
+            sequence,
+            pulse,
+            initial,
+            rates,
+        } => {
+            let sys = SpinSystem::from_json(&read_text(system)?)?;
+            let isotope = Isotope::from_name(observe)?;
+            let pair = |text: &str| -> Result<(usize, usize)> {
+                let v: Vec<&str> = text.split(',').collect();
+                match v.as_slice() {
+                    [a, b] => Ok((
+                        a.trim()
+                            .parse()
+                            .map_err(|_| QsoError::Parse(format!("spin '{a}'")))?,
+                        b.trim()
+                            .parse()
+                            .map_err(|_| QsoError::Parse(format!("spin '{b}'")))?,
+                    )),
+                    _ => Err(QsoError::Parse(format!("'{text}' is not two spins I,J"))),
+                }
+            };
+            let rho = match initial.split_once(':') {
+                None if initial == "thermal" => sys.thermal_state()?,
+                Some(("parahydrogen", spins)) => {
+                    let (i, j) = pair(spins)?;
+                    sys.parahydrogen_state(i, j, 1.0)?
+                }
+                Some(("pasadena", spins)) => {
+                    let (i, j) = pair(spins)?;
+                    sys.time_average(&sys.parahydrogen_state(i, j, 1.0)?)?
+                }
+                _ => {
+                    return Err(QsoError::invalid(
+                        "initial",
+                        format!("'{initial}' (thermal, parahydrogen:I,J or pasadena:I,J)"),
+                    ));
+                }
+            };
+            let events: Vec<SpinEvent> = match sequence {
+                Some(path) => serde_json::from_str(&read_text(path)?)
+                    .map_err(|e| QsoError::Parse(format!("{}: {e}", path.display())))?,
+                None => vec![SpinEvent::pulse(SpinTarget::Isotope(isotope), *pulse, 0.0)],
+            };
+            let after = sys.evolve(&rho, &events)?;
+            // Observed at the field the sequence ends at.
+            let end = sys.clone().with_field(sys.field_after(&events))?;
+            let lines = end.lines(&after, isotope)?;
+            let polarizations = (0..sys.spins().len())
+                .map(|i| sys.polarization(&after, i))
+                .collect::<Result<Vec<f64>>>()?;
+            let mut text = format!(
+                "{} spins at {} T ({:?} frame), {} events; {} lines of {}:",
+                sys.spins().len(),
+                end.field(),
+                sys.frame(),
+                events.len(),
+                lines.len(),
+                isotope.name()
+            );
+            for l in &lines {
+                text.push_str(&format!(
+                    "\n  {:>12.4} Hz  {:>9.4} ppm  {:+.4e} {:+.4e}i",
+                    l.frequency, l.ppm, l.amplitude.re, l.amplitude.im
+                ));
+            }
+            let shown: Vec<String> = polarizations.iter().map(|p| format!("{p:+.4e}")).collect();
+            text.push_str(&format!("\npolarisations: {}", shown.join(" ")));
+            let mut times = Vec::new();
+            if *rates {
+                // Auto-relaxation times 1/Γ_ii of I_z and I₊ (with
+                // cross-relaxation the recovery has several rates).
+                let n = sys.spins().len();
+                let mut ops = Vec::with_capacity(2 * n);
+                for i in 0..n {
+                    ops.push(sys.iz(i)?);
+                    ops.push(sys.iplus(i)?);
+                }
+                let g = sys.relaxation_rates(&ops)?;
+                let time = |rate: f64| (rate > 0.0).then(|| 1.0 / rate);
+                let show = |t: Option<f64>| t.map_or("none".to_string(), |t| format!("{t:.4e}"));
+                text.push_str("\nauto-relaxation times (s):");
+                for i in 0..n {
+                    let (t1, t2) = (time(g[(2 * i, 2 * i)]), time(g[(2 * i + 1, 2 * i + 1)]));
+                    text.push_str(&format!(
+                        "\n  spin {i} ({}): T1 {}  T2 {}",
+                        sys.spins()[i].isotope.name(),
+                        show(t1),
+                        show(t2)
+                    ));
+                    times.push(json!({"spin": i, "t1": t1, "t2": t2}));
+                }
+            }
+            let rows: Vec<serde_json::Value> = lines
+                .iter()
+                .map(|l| {
+                    json!({"frequency": l.frequency, "ppm": l.ppm,
+                    "amplitude": [l.amplitude.re, l.amplitude.im]})
+                })
+                .collect();
+            Ok((
+                json!({"lines": rows, "polarizations": polarizations, "events": events.len(),
+                       "field": end.field(), "relaxation_times": times}),
+                text,
+            ))
+        }
         Command::Trotter {
             hamiltonian,
             qubits,
@@ -1619,7 +1877,8 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             let h: PauliSum = hamiltonian.parse()?;
             let n = qubits.unwrap_or(h.min_qubits().max(1));
             let c = trotter_circuit(&h, n, *time, *steps, *order)?;
-            let bound = trotter_error_bound(&h, *time, *steps, *order)?;
+            let bounds = trotter_error_bounds(&h, *time, *steps, *order)?;
+            let bound = bounds.bound;
             // The actual error when the unitary is small enough to form.
             let actual = if n <= 10 {
                 let traceless = PauliSum::from_terms(
@@ -1656,7 +1915,19 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 ))
             );
             Ok((
-                json!({"qubits": n, "gates": c.len(), "depth": c.depth(), "error_bound": bound, "column_error": actual}),
+                json!({
+                    "qubits": n,
+                    "gates": c.len(),
+                    "depth": c.depth(),
+                    "error_bound": bound,
+                    // Infinite bounds (out of reach) are null.
+                    "bounds": {
+                        "nested": bounds.nested.is_finite().then_some(bounds.nested),
+                        "stages": bounds.stages.is_finite().then_some(bounds.stages),
+                        "taylor": bounds.taylor.is_finite().then_some(bounds.taylor),
+                    },
+                    "column_error": actual
+                }),
                 text,
             ))
         }

@@ -103,3 +103,16 @@ def test_d_functions_and_open_shells() -> None:
         q.AoIntegrals(h2o, "6-31g*", "pure")  # type: ignore[arg-type]
     with pytest.raises(ValueError):
         q.hartree_fock(h2o, "6-31g*", integrals=q.AoIntegrals(h2o, "6-31g*", "cartesian"))
+
+
+def test_schwarz_screening():
+    chain = q.Molecule("; ".join(f"H 0 0 {1.1 * i}" for i in range(10)))
+    full = q.AoIntegrals(chain, "6-31g", screening=0.0)
+    screened = q.AoIntegrals(chain, "6-31g")
+    assert full.screened_quartets[0] == 0 and screened.screening == 1e-12
+    skipped, computed = screened.screened_quartets
+    assert skipped > 0 and skipped + computed == full.screened_quartets[1]
+    loose = q.AoIntegrals(chain, "6-31g", screening=1e-6)
+    assert np.abs(loose.eri - full.eri).max() < 1e-6
+    with pytest.raises(ValueError, match="screening"):
+        q.AoIntegrals(chain, "6-31g", screening=-1.0)

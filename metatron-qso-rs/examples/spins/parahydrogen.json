@@ -1,0 +1,8 @@
+{
+  "spins": [
+    {"isotope": "1H", "shift": 1.0},
+    {"isotope": "1H", "shift": 11.0}
+  ],
+  "couplings": [[0, 1, 7.0]],
+  "field": 14.1
+}

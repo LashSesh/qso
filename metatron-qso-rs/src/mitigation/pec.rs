@@ -74,10 +74,10 @@ fn anticommute(mut a: usize, mut b: usize) -> bool {
 /// and `χ = ±1` for commuting/anticommuting strings.
 pub fn inverse_pauli_quasi_probabilities(p: &[f64]) -> Result<Vec<f64>> {
     let m = p.len();
-    if m != 4 && m != 16 {
+    if ![4, 16, 64, 256].contains(&m) {
         return Err(QsoError::invalid(
             "probabilities",
-            "Pauli channels on one or two qubits have 4 or 16 probabilities",
+            "Pauli channels on one to four qubits have 4, 16, 64 or 256 probabilities",
         ));
     }
     let chi = |a: usize, b: usize| if anticommute(a, b) { -1.0 } else { 1.0 };
@@ -113,6 +113,12 @@ struct Plan {
 impl Plan {
     fn new(circuit: &Circuit, theta: &[f64], device: &DeviceModel) -> Result<Self> {
         device.validate()?;
+        if !device.is_markovian() {
+            return Err(QsoError::invalid(
+                "device",
+                "PEC cannot cancel noise correlated in time (quasi-static or telegraph noise)",
+            ));
+        }
         // Over-rotations change the gates themselves, not a channel after
         // them, so PEC cannot see them.
         if circuit.instructions().iter().any(|inst| {

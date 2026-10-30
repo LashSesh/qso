@@ -16,8 +16,9 @@ QUBO/Ising problems with QAOA mixers; amplitude estimation; stabilizer
 simulation and graph states; and quantum error correction (detector
 circuits, Pauli-frame sampling, detector error models, union-find and
 minimum-weight matching and BP+OSD decoding, repetition, surface,
-colour and bivariate bicycle code memory experiments); and matrix-product
-states for circuits with little entanglement on many qubits.
+colour and bivariate bicycle code memory experiments); matrix-product
+states for circuits with little entanglement on many qubits; and nuclear
+spin dynamics for magnetic resonance (``metatron_qso.spin``).
 
 Conventions: qubit 0 is the least significant bit of a basis index; bit
 strings print qubit n-1 first; time evolution is exp(-iHt); rotations are
@@ -52,6 +53,7 @@ from ._core import (
     GraphClassifier,
     HartreeFock,
     ImperfectBosonSampler,
+    InteractingWalk,
     LineWalk,
     LogicalErrorRate,
     MAX_DENSITY_QUBITS,
@@ -81,6 +83,7 @@ from ._core import (
     CircuitDistance,
     SparsePauliLindblad,
     SpatialSearch,
+    SpinSystem,
     StabilizerState,
     StateTransfer,
     StateVector,
@@ -123,6 +126,7 @@ from ._core import (
     hartree_fock,
     heisenberg_xxz,
     imaginary_time_evolution,
+    interacting_certificate_distance,
     inverse_qft,
     is_clifford,
     iterative_amplitude_estimation,
@@ -158,6 +162,7 @@ from ._core import (
     transverse_field_ising,
     trotter_circuit,
     trotter_error_bound,
+    trotter_error_bounds,
     trotter_walk_circuit,
     twirl,
     twirled_average,
@@ -194,6 +199,7 @@ __all__ = [
     "GraphClassifier",
     "HartreeFock",
     "ImperfectBosonSampler",
+    "InteractingWalk",
     "LineWalk",
     "LogicalErrorRate",
     "MAX_DENSITY_QUBITS",
@@ -223,6 +229,7 @@ __all__ = [
     "CircuitDistance",
     "SparsePauliLindblad",
     "SpatialSearch",
+    "SpinSystem",
     "StabilizerState",
     "StateTransfer",
     "StateVector",
@@ -265,6 +272,7 @@ __all__ = [
     "hartree_fock",
     "heisenberg_xxz",
     "imaginary_time_evolution",
+    "interacting_certificate_distance",
     "inverse_qft",
     "is_clifford",
     "iterative_amplitude_estimation",
@@ -300,6 +308,7 @@ __all__ = [
     "transverse_field_ising",
     "trotter_circuit",
     "trotter_error_bound",
+    "trotter_error_bounds",
     "trotter_walk_circuit",
     "twirl",
     "twirled_average",
@@ -307,3 +316,5 @@ __all__ = [
     "vqd",
     "zne",
 ]
+
+from . import spin  # noqa: E402  (the spin-dynamics names live in metatron_qso.spin)

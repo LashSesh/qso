@@ -38,7 +38,7 @@ fn trotter_circuit(
 }
 
 /// Upper bound on ‖U − exp(−iHt)‖ for `trotter_circuit` with the same
-/// arguments (commutator bounds for orders 1 and 2).
+/// arguments: the smallest of `trotter_error_bounds`.
 #[pyfunction]
 #[pyo3(signature = (hamiltonian, t, steps = 1, order = 2))]
 fn trotter_error_bound(
@@ -51,6 +51,33 @@ fn trotter_error_bound(
     let h = &hamiltonian.inner;
     py.detach(|| time_evolution::trotter_error_bound(h, t, steps, order))
         .raise()
+}
+
+/// The bounds on ‖U − exp(−iHt)‖ for `trotter_circuit` with the same
+/// arguments: a dict with `nested` (from the nested commutators of the
+/// step's error, computed exactly up to a degree, infinite when out of
+/// reach), `stages` (commutator bounds of orders 1 and 2, stage by stage
+/// above), `taylor` (Taylor remainder) and `bound`, the smallest (at most
+/// 2).
+#[pyfunction]
+#[pyo3(signature = (hamiltonian, t, steps = 1, order = 2))]
+fn trotter_error_bounds<'py>(
+    py: Python<'py>,
+    hamiltonian: &PyPauliSum,
+    t: f64,
+    steps: usize,
+    order: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let h = &hamiltonian.inner;
+    let b = py
+        .detach(|| time_evolution::trotter_error_bounds(h, t, steps, order))
+        .raise()?;
+    Ok(pydict!(py, {
+        "bound" => b.bound,
+        "nested" => b.nested,
+        "stages" => b.stages,
+        "taylor" => b.taylor,
+    }))
 }
 
 /// One random qDRIFT circuit for exp(−iHt) with `samples` rotations.
@@ -260,6 +287,7 @@ fn ssvqe<'py>(
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(trotter_circuit, m)?)?;
     m.add_function(wrap_pyfunction!(trotter_error_bound, m)?)?;
+    m.add_function(wrap_pyfunction!(trotter_error_bounds, m)?)?;
     m.add_function(wrap_pyfunction!(qdrift_circuit, m)?)?;
     m.add_function(wrap_pyfunction!(qdrift_error_bound, m)?)?;
     m.add_function(wrap_pyfunction!(quantum_fisher_information, m)?)?;

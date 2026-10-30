@@ -824,6 +824,9 @@ pub(crate) fn apply_clifford<T: CliffordTarget>(
     theta: &[f64],
 ) -> Result<()> {
     use GateKind::*;
+    if inst.is_identity() {
+        return Ok(());
+    }
     let a = inst.angles(theta);
     let t = &inst.targets;
     let name = inst.kind.name();

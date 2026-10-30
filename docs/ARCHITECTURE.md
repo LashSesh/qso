@@ -15,7 +15,8 @@ algorithms  │ VQE · QAOA (+ mixers, QUBO) · Grover · QFT/QPE ·   │
             │ gradients (adjoint / parameter shift / FD)         │
 optimize    │ L-BFGS · Adam · GD · Nelder–Mead · SPSA            │
 walks       │ CTQW · quotients · transfer · coined/Szegedy ·     │
-            │ search · walk circuits · dephasing · classical     │
+            │ search · walk circuits · dephasing · classical ·   │
+            │ interacting walkers                                │
 mitigation  │ readout calibration · ZNE · PEC · Pauli twirling    │
 estimation  │ estimates with errors · shot allocation · shadows   │
 backend     │ statevector / density-matrix / device backends      │
@@ -296,11 +297,13 @@ A panic aborts the module; the wrapper then replaces the instance.
 ## Device models and trajectories (`noise/`)
 
 A `DeviceModel` is compiled per circuit into a program of ideal gate
-segments and channels on one or two qubits (`noise/device.rs`). The
+segments and channels on one to four qubits (`noise/device.rs`). The
 compiler does four things:
 
-* it schedules gates as soon as their qubits are free, inserting
-  relaxation for waiting qubits and for each gate's duration;
+* it schedules gates as soon as their qubits (and the spectators of
+  their rule) are free, inserting relaxation for waiting qubits and for
+  each gate's duration, and, for qubits with slow noise, a phase step
+  for the same time (consecutive ones of a qubit joined);
 * it applies the first matching gate rule;
 * it splits thermal relaxation into amplitude damping and a phase flip
   (the same channel);
@@ -309,7 +312,18 @@ compiler does four things:
   minimal Kraus set from the Choi matrix.
 
 Density matrices apply the program with the state-vector kernels on the
-vectorised ρ and multiply consecutive superoperators first.
+vectorised ρ and multiply consecutive superoperators first. A k-qubit
+channel is a `4ᵏ × 4ᵏ` superoperator on the k row and k column bits; four
+qubits need eight targets, which `apply_kq` handles with a larger buffer
+than gates use. Programs with slow noise do not run on density matrices.
+
+Slow noise is part of a trajectory's random choices, drawn before it
+runs: the over-rotation spread of every rule, the detuning of every
+qubit, and a telegraph process per qubit, integrated exactly (exponential
+waiting times) over the phase steps in time order. A phase step becomes
+an `RZ` of that angle and a spread gate its rotation with scaled angles,
+inside the fused blocks. Markovian programs draw nothing extra, so their
+trajectories are unchanged.
 
 Trajectories (`noise/trajectories.rs`) use the waiting-time form of the
 Monte-Carlo wave-function method.
@@ -350,6 +364,124 @@ Each mitigation method returns its estimate with a propagated error:
   program, and evaluates each sample with a density matrix or one
   trajectory.
 
+Noise learning (`noise/learning.rs`) runs its circuits on density
+matrices up to ten qubits and on Pauli frames above. A learning circuit
+is Clifford, and without noise it returns a fixed outcome, because the
+basis changes and the self-inverse layers cancel. So a shot only needs
+its frame: Pauli gates and sampled errors flip X and Z bits, other
+Clifford gates conjugate them. The frames run through the compiled
+program, with every channel replaced by its Pauli twirl and errors
+placed by geometric gaps over the shots. The rate fit is non-negative
+least squares. Up to 64 generators it is Lawson–Hanson with an SVD per
+subproblem. Above, it starts from coordinate descent on the normal
+equations and finishes with the same active-set iteration on the
+support found, with Cholesky factors of the Gram matrix. The samples of
+layered PEC and PEA are density matrices, trajectories, or
+matrix-product states on which every channel, a mixture of unitaries,
+is one of its unitaries.
+
+## Spin dynamics (`spin/`)
+
+A `SpinSystem` works on dense density matrices over the product basis of
+its spins (local dimension 2 or 3). Hamiltonians are built entry by entry
+from the basis states (Zeeman and `I_z I_z` terms on the diagonal,
+flip-flop terms off it), so building one costs `O(d · couplings)`. Pulses
+act spin by spin: a local `k × k` rotation is applied to the rows and
+columns of ρ without forming the `d × d` operator.
+
+Everything else uses the block structure (`spin/blocks.rs`). Every basis
+state carries a label, `2M` of each isotope in the rotating frame or the
+total `2M` in the laboratory frame, which `H` conserves. Each block of `H`
+is shifted by its mean diagonal and diagonalised on its own; spectra take
+the pairs of blocks that `F₊` connects, time averages compare energies
+with the carriers added back, and free evolution conjugates block by
+block (complex products as three real GEMMs). With relaxation, every jump
+acts on one spin and keeps the coherence order `label(a) − label(b)` of
+`|a⟩⟨b|`, so the Lindblad superoperator splits into blocks by order. They
+are built entry by entry from the sparse `H` and the local jumps and
+exponentiated (Taylor degree 16 by Paterson–Stockmeyer, scaling and
+squaring, in `linalg::dense::expm`). The state is propagated as its
+deviation from `1/d`, with `L(1/d)` as an augmented column of the
+population block; coherence blocks are shifted by their mean diagonal
+first. FIDs need only the block of order `−1`, one exponential for the
+dwell time and a matrix-vector product per point. The work of the block
+exponentials is compared with an estimate for Dormand–Prince 5(4) steps
+(sparse `H`, jumps applied in place, error relative to the deviation), the
+cheaper one runs, and more than `MAX_RELAXATION_WORK` is refused before
+anything is computed. Shaped pulses mix the orders and use one block.
+Sweeps are piecewise constant, with the field at the middle of each piece.
+
+Redfield relaxation (`spin/redfield.rs`) works on the same blocks. The
+spatial tensors of the interactions (dipolar `b(1 − 3nnᵀ)`, anisotropic
+shielding `γBσ`) are expanded in an orthonormal basis `E_μ` of traceless
+symmetric tensors; the isotropic average of their correlations makes the
+superoperator a sum of 30 independent terms `[𝒬, [Y(𝒬), ·]]`, with
+`𝒬 = Σ_k (A^k : E_μ) Q^k,S_ab` and `Y` the multiplication by `J(ω_mn)` in
+the eigenbasis of the laboratory-frame `H` (its blocks by total `M`).
+`R` is assembled entry by entry for each coherence-order block of the
+frame's labels, which in the rotating frame is the secular projection,
+and added to the Lindblad blocks. `R(ρ_eq)` joins `L(1/d)` in the drift
+of the deviation's equation. Dormand–Prince steps apply `R` block by block
+as matrix-vector products.
+
+Chemical exchange (`spin/exchange.rs`) joins the coherence-order blocks
+of all sites: labels are written over the isotopes of all sites, each
+site's Liouville block of order `q` is placed at an offset in the joint
+block `q`, and `generator_entries` (shared with the single system) fills
+each site's evolution and relaxation. A channel adds `−k` on the source's
+diagonal and, for every element `(a, a')` of the source whose traced spins
+agree, `k · ρ_fresh(f, f')` at the target element composed of the carried
+levels and the fresh ones `(f, f')`; the fresh state has order 0, so this
+stays within the block. The deviation from `c_s/d_s` is propagated, with
+the relaxation drift and the exchange of `c_s/d_s` in the augmented
+column. Steady states replace one population equation per site by
+`Tr Δ_s = 0`, scale rows and columns, and solve by fully pivoted LU,
+refusing pivots below 10⁻¹² of the largest.
+
+Optimal control (`spin/control.rs`) evaluates the transfer `Re Tr(C†
+ρ(T))` of piecewise-constant controls and its gradient in one forward and
+one backward pass. Without relaxation each step's `H_k` is diagonalised:
+`U_k` follows from the eigenvalues, and the derivative of `U_k` in a
+direction `∂H` is `V(G ∘ V†∂HV)V†` with the divided differences
+`G_ab = −iΔt e^{−i(E_a+E_b)Δt/2} sinc((E_a−E_b)Δt/2)`, so that one matrix
+`X = V(Gᵀ ∘ V†(ρU†λ† + ρ†U†λ)V)V†` per step gives every control's
+gradient as `Re Tr(X ∂H_c)`. With relaxation the state is the vector
+`[vec(ρ − Tr ρ/d); Tr ρ]` of Liouville space, as `evolve` propagates it,
+under the full generator (the system's dissipators and `−R`, the drift
+towards equilibrium in the last column); the step propagator and its
+derivative act on vectors only: `e^{LΔt}x` and the upper block of
+`exp([[LΔt, EΔt], [0, LΔt]])[0; x]` (Van Loan) as Taylor series in
+substeps of norm ½, summed until a term falls below rounding. Bounded
+amplitudes and fields are mapped by a sine from free variables (Hz for
+rf, a twentieth of the range for fields), and L-BFGS sees the objective
+divided by its natural size. Field profiles of an exchange use the same
+block exponentials per coherence-order block (a field keeps the orders),
+with the field derivative of the whole generator by Richardson-
+extrapolated central differences.
+
+NV centres (`spin/nv.rs`) use the secular Hamiltonian, which is block
+diagonal in the electron level `a` (`m = +1, 0, −1`) and, within a block,
+a sum of one term per nucleus (`S_z` alone couples to the nuclei, and
+they do not couple to each other): `e^{−iHt} = ⊕_a e^{−iE_a t} ⊗_k
+e^{−i h_a^k t}`. The density matrix is kept as its 3 × 3 blocks; a free
+period multiplies each block above the diagonal by the factors of its two
+levels, one 2 × 2 or 3 × 3 matrix per nucleus applied along that
+nucleus's index (`apply_factors`), and mirrors the rest; an ideal pulse
+combines blocks with the electron's 3 × 3 unitary; a finite pulse, which
+mixes the levels while the nuclei evolve, is the exponential of the full
+Hamiltonian (`cmul` on the whole matrix). A `Plan` computes each distinct
+period and pulse once. The drive is `e^{−iφS_z²} S_x e^{iφS_z²}`, the
+co-rotating part of a linearly polarised carrier, so both transitions see
+one phase. Noise trajectories add `exp(−2πi I S_z)` to each period, a
+phase per block, with `I = ∫b dt` sampled exactly from coefficients
+computed once per period length; during a finite pulse the noise is held
+at its exact mean over pieces of at most `1/(16θ)`, up to 16. Resonance
+lines use the product structure too: the levels of each block are
+products of one state per nucleus, so a line's strength is a product of
+one overlap per nucleus. The Gaussian decay exponent sums the exactly
+integrated exponential correlations of every pair of free periods as a
+running sum, in one pass.
+
 ## Hamiltonian simulation and chemistry (`algorithms/time_evolution.rs`, `chemistry/`)
 
 Every exponential of a Pauli string becomes `Circuit::pauli_rotation`: a
@@ -361,6 +493,21 @@ one step, merge adjacent equal strings (also across steps) and repeat.
 The error bounds are computed in the Pauli algebra with `QubitOperator`
 (a `BTreeMap` from string to complex coefficient, deterministic in order):
 nested commutators of suffix sums, bounded by the coefficient one-norm.
+
+The nested error bound of a product formula follows one step through
+its exponentials by Horner's scheme, `Y_j = B_j + exp(τ ad_{B_j}) Y_{j−1}`,
+on power series in τ whose coefficients are Pauli operators in hash maps
+keyed by the two masks. One pass up to degree D costs about D²/2
+commutator operations per exponential and string; the degree grows
+until the multinomial tail is small, and a budget of operations ends the
+attempt early (the bound is then infinite and the stage-by-stage one
+applies).
+
+The repulsion integrals are screened before they are computed: one pass
+over the diagonal quartets `(ab|ab)` gives the Schwarz factor of every
+pair of shell groups, and the list of quartets keeps only those whose
+product of factors reaches the threshold. Skipped quartets stay zero in
+the tensor.
 
 The three fermion mappings are one algorithm. An encoding is a lower
 unitriangular binary matrix `A` with `b = A n`; `a_j† = X_F Z_P (1 + Z_N)/2`
@@ -536,6 +683,16 @@ agree with brute force on random graphs.
   the measurement time.
 * Dephasing walks integrate the Lindblad equation with adaptive RK4 (step
   doubling, Richardson extrapolation).
+* Interacting walkers (`walks/interacting.rs`) work in the occupation
+  basis. Configurations of bosons and fermions are sorted site lists,
+  ranked in colex order by the combinatorial number system (a boson
+  multiset `s₁ ≤ … ≤ s_N` as the set `s_k + k`), so a configuration's
+  index is computed, not looked up. Distinguishable particles are base-n
+  tuples. The Hamiltonian is built once as a sparse matrix from the
+  single-particle `h` (hopping amplitudes `√(n_j (n_i + 1))` for bosons,
+  the Jordan–Wigner sign of the sites in between for fermions). Up to
+  2048 configurations it is diagonalised; beyond that it propagates by
+  Krylov.
 
 ## Error handling
 

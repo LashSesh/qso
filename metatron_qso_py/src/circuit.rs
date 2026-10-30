@@ -241,6 +241,17 @@ impl PyCircuit {
         Ok(slf)
     }
 
+    /// Identity on qubit `q`: a device rule for the gate "id" gives it a
+    /// duration, so the qubit waits (relaxes and dephases) for that time.
+    fn id(mut slf: Slf<'_>, q: usize) -> PyResult<Slf<'_>> {
+        let n = slf.inner.n_qubits();
+        if q >= n {
+            return Err(invalid(format!("qubit {q} out of range for {n} qubits")));
+        }
+        slf.inner.id(q);
+        Ok(slf)
+    }
+
     /// √X.
     fn sx(mut slf: Slf<'_>, q: usize) -> PyResult<Slf<'_>> {
         slf.push(GateKind::SX, &[q], &[], &[])?;

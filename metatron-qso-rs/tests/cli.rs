@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
@@ -132,6 +132,48 @@ fn walks_reduction_and_transfer() {
     assert_eq!(c["steps"], 6);
     let h = qso(&["hitting", "--graph", "cycle:16"]);
     assert!(f(&h["quantum"]) < f(&h["classical"]));
+
+    // Two bosons: the Shrikhande and rook's graph look alike without
+    // interaction and differ with it.
+    let free = qso(&["particles", "--compare", "rook:4x4"]);
+    assert_eq!(free["configurations"], 136);
+    assert_eq!(free["compare"]["distinguished"], false);
+    let d: Vec<f64> = serde_json::from_value(free["densities"].clone()).unwrap();
+    close(d.iter().sum(), 2.0, 1e-12);
+    let hub = qso(&["particles", "--on-site", "1", "--compare", "rook:4x4"]);
+    assert_eq!(hub["compare"]["distinguished"], true);
+    let fermions = qso(&[
+        "particles",
+        "--graph",
+        "path:2",
+        "--statistics",
+        "fermions",
+        "--neighbour",
+        "0.5",
+    ]);
+    assert_eq!(fermions["configurations"], 1);
+    assert!(qso_fails(&["particles", "--statistics", "anyons"]).contains("statistics"));
+    // Different sizes; isomorphic graphs at a large time stay below the
+    // tolerance; more bosons than nodes start wrapped around.
+    let sizes = qso(&["particles", "--graph", "cycle:5", "--compare", "cycle:6"]);
+    assert_eq!(sizes["compare"]["distinguished"], true);
+    let late = qso(&[
+        "particles",
+        "--graph",
+        "rook:4x4",
+        "--compare",
+        "hamming:2,4",
+        "--on-site",
+        "1",
+        "--time",
+        "1e6",
+    ]);
+    assert_eq!(late["compare"]["distinguished"], false);
+    let wrapped = qso(&["particles", "--graph", "path:2", "--particles", "3"]);
+    assert_eq!(wrapped["start"], json!([0, 1, 0]));
+    assert!(
+        qso_text(&["particles", "--graph", "path:3", "--particles", "1"]).contains("1 boson on")
+    );
 }
 
 #[test]
@@ -326,10 +368,76 @@ fn chemistry_and_dynamics() {
         out.path(),
     ]);
     assert!(f(&t["column_error"]) <= f(&t["error_bound"]));
+    // Order 4 at 20 steps: the nested bound is the smallest.
+    assert_eq!(f(&t["bounds"]["nested"]), f(&t["error_bound"]));
+    assert!(f(&t["bounds"]["stages"]) > 10.0 * f(&t["error_bound"]));
     assert!(
         std::fs::read_to_string(&out.0)
             .unwrap()
             .starts_with("OPENQASM 2.0")
+    );
+}
+
+#[test]
+fn spin_dynamics() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let ch = format!("{root}/examples/spins/ch.json");
+    let inept = format!("{root}/examples/spins/inept.json");
+    let r = qso(&["spins", &ch, "--observe", "13C", "--sequence", &inept]);
+    let lines = r["lines"].as_array().unwrap();
+    assert_eq!(lines.len(), 2);
+    // INEPT: antiphase lines of about γ_H/γ_C ± 1 times the direct ones.
+    let direct = qso(&["spins", &ch, "--observe", "13C"]);
+    let im = |v: &serde_json::Value| f(&v["amplitude"][1]);
+    let d = im(&direct["lines"][0]).abs();
+    assert!((im(&lines[0]).abs() / d - 4.976).abs() < 0.01);
+    assert!((im(&lines[1]).abs() / d - 2.976).abs() < 0.01);
+    let para = format!("{root}/examples/spins/parahydrogen.json");
+    let p = qso(&["spins", &para, "--initial", "pasadena:0,1", "--pulse", "45"]);
+    let lines = p["lines"].as_array().unwrap();
+    assert_eq!(lines.len(), 4);
+    for l in lines {
+        close(im(l).abs(), 0.125, 4e-4);
+    }
+    // A sequence that ends at another field is observed there.
+    let jump = Scratch::new("jump.json");
+    std::fs::write(
+        jump.path(),
+        r#"[{"field": 4.7}, {"pulse": {"target": {"isotope": "13C"}, "angle": 90.0, "phase": 0.0}}]"#,
+    )
+    .unwrap();
+    let at = qso(&["spins", &ch, "--observe", "13C", "--sequence", jump.path()]);
+    assert_eq!(f(&at["field"]), 4.7);
+    let freq: Vec<f64> = at["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| f(&l["frequency"]))
+        .collect();
+    assert_eq!(freq.len(), 2);
+    // ¹³C at 60 ppm and 4.7 T: −γB·60·10⁻⁶/2π, split by J = 140 Hz.
+    let nu = -6.728_284e7 * 4.7 * 60e-6 / (2.0 * std::f64::consts::PI);
+    assert!(((freq[0] + freq[1]) / 2.0 - nu).abs() < 1e-6, "{freq:?}");
+    assert!((freq[1] - freq[0] - 140.0).abs() < 1e-6, "{freq:?}");
+    // Redfield relaxation of formate: T1 of ¹³C from its dipolar coupling
+    // to the proton (Solomon) and its shielding anisotropy.
+    let formate = format!("{root}/examples/spins/formate.json");
+    let r = qso(&["spins", &formate, "--observe", "13C", "--rates"]);
+    let t1 = f(&r["relaxation_times"][0]["t1"]);
+    // Without relaxation there is no time.
+    let none = qso(&["spins", &ch, "--observe", "13C", "--rates"]);
+    assert!(none["relaxation_times"][0]["t1"].is_null());
+    let (gc, gh, tau, field) = (6.728_284e7, 26.752_212_8e7, 2e-11, 9.4);
+    let j = |w: f64| tau / (1.0 + w * w * tau * tau);
+    let b = 1.000_000_000_55e-7 * gc * gh * 1.054_571_817e-34 / 1.10e-10f64.powi(3);
+    let (wc, wh) = (gc * field * (1.0 + 171e-6), gh * field * (1.0 + 8.4e-6));
+    let dipolar = b * b / 10.0 * (j(wh - wc) + 3.0 * j(wc) + 6.0 * j(wh + wc));
+    let w0 = gc * field;
+    let csa = w0 * w0 / 5.0 * 9950e-12 * j(wc);
+    assert!(
+        (t1 * (dipolar + csa) - 1.0).abs() < 1e-8,
+        "{t1} vs {}",
+        1.0 / (dipolar + csa)
     );
 }
 

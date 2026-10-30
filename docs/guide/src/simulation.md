@@ -20,14 +20,31 @@ ladder and one `rz`.
 | 2k ≥ 4 (Suzuki) | `S₂ₖ(τ) = S₂ₖ₋₂(uτ)² S₂ₖ₋₂((1 − 4u)τ) S₂ₖ₋₂(uτ)²`, `u = 1/(4 − 4^{1/(2k−1)})` |
 
 `trotter_error_bound` returns an upper bound on the spectral-norm distance
-between the circuit and `exp(−iHt)`. The commutators in the bound are
-computed exactly in the Pauli algebra:
+between the circuit and `exp(−iHt)`: the smallest of three bounds, which
+`trotter_error_bounds` returns one by one. The commutators in them are
+computed exactly in the Pauli algebra.
 
-- order 1: `τ²/2 · Σ_γ ‖[Σ_{γ'>γ} H_γ', H_γ]‖` (Childs, Su, Tran, Wiebe
-  and Zhu, Phys. Rev. X 11, 011020 (2021), Proposition 15);
-- order 2: the nested-commutator bound of their Proposition 16;
-- order 4 and higher: the smaller of a stage-by-stage second-order bound
-  and a Taylor-remainder bound.
+- **`nested`**, for every order p. One step `S(τ)` is a product of
+  exponentials, and `S' = (−iH + T) S` defines its error generator `T`;
+  then `‖S(τ) − exp(−iHτ)‖ ≤ ∫₀^τ ‖T‖` (the error representation of
+  Childs, Su, Tran, Wiebe and Zhu, Phys. Rev. X 11, 011020 (2021)). The
+  Taylor coefficients of `T` vanish below `τ^p`. From `τ^p` on they are
+  nested commutators of order p + 1 and higher, computed as Pauli
+  operators up to a degree that grows until the bound on the rest is
+  below 1 % of the computed part. The rest is bounded by the multinomial
+  theorem, which ignores which terms commute. Few steps can put this
+  bound out of reach (it is then infinite), and for larger Hamiltonians
+  (8 to 16 spins) a fixed budget of work stops the degree early, so the
+  bound, still valid, is much looser there. The budget keeps a call
+  below about a third of a second; the series does not depend on the
+  steps or the time and is cached, so a loop over step counts pays once.
+  It is computed for `H/λ` (`λ = Σ|h_γ|`), so the units of `H` do not
+  matter.
+- **`stages`**: order 1, `τ²/2 · Σ_γ ‖[Σ_{γ'>γ} H_γ', H_γ]‖` (Proposition
+  15 there); order 2, the nested-commutator bound of their Proposition 16;
+  order 4 and higher, the order-2 bound summed over the second-order
+  stages, of third order only.
+- **`taylor`**: the Taylor remainder of a formula exact to order p.
 
 Each bound is multiplied by the number of steps.
 
@@ -59,11 +76,12 @@ for order in (1, 2, 4):
 
 The identity term of `H` only adds a global phase, so circuits leave it
 out. In the tests (Heisenberg, Ising and random four-qubit Hamiltonians),
-the first- and second-order bounds are 3.5 to 13 times the actual error.
-The bound for order 4 and higher is valid but loose: it shrinks only as
-`r⁻²` with the number of steps `r` until the steps are short, while the
-actual error shrinks as `r⁻⁴`. Doubling the steps divides the actual error
-by `2^order`, and the tests check this.
+the first- and second-order bounds are 2 to 13 times the actual error.
+From 8 to 32 steps the nested bound is 7 to 11 times the actual error at
+order 4 and 8 to 24 times at order 6, and it falls as `r^{−p}` like the
+error. The stage-by-stage bound of these orders falls only as `r⁻²` and
+is 780 to 10⁹ times the error. Doubling the steps divides the actual
+error by `2^order`, and the tests check this.
 
 ## qDRIFT
 

@@ -980,8 +980,18 @@ impl Lower {
                     vec![Prim::Phase(p[0])]
                 }
                 "id" => {
+                    // An identity that device rules can give a duration
+                    // (a wait), as `Circuit::id`.
                     arity(1, 0)?;
-                    vec![]
+                    let one = C64::new(1.0, 0.0);
+                    let zero = C64::new(0.0, 0.0);
+                    vec![Prim::Gate(Instruction {
+                        kind: Unitary,
+                        targets: q.to_vec(),
+                        controls: Vec::new(),
+                        params: Vec::new(),
+                        matrix: Some(std::sync::Arc::new(vec![one, zero, zero, one])),
+                    })]
                 }
                 "u0" => {
                     arity(1, 1)?;
@@ -1783,6 +1793,7 @@ impl Program {
             }
             (U, 0) => ("U".into(), a.clone()),
             (U, _) => (format!("{}cu", ctrl(k - 1)), vec![a[0], a[1], a[2], 0.0]),
+            (Unitary, 0) if inst.is_identity() => ("id".into(), vec![]),
             (Unitary, _) => {
                 let m = inst.matrix.as_ref().expect("unitary carries a matrix");
                 if inst.targets.len() != 1 {

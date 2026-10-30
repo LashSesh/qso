@@ -91,3 +91,43 @@ def test_invalid_layers():
         q.learn_layer(layer(), device, depths=[2, 3])
     with pytest.raises(ValueError):
         q.pea_layered(blocks(), layer(), model(), device, q.PauliSum("Z0"), [1.0], 10)
+
+
+def test_learning_and_mitigation_beyond_ten_qubits():
+    # Twelve qubits: learning on Pauli frames, mitigation on trajectories
+    # and on matrix-product states.
+    n = 12
+    dev = q.DeviceModel("wide", idle_noise=False).with_rule(
+        gate="cx", channels=[q.Channel.depolarizing_2q(0.04)]
+    )
+    wide = q.Circuit(n).cx(0, 1)
+    with pytest.raises(ValueError):
+        q.learn_layer(wide, dev, simulator="density_matrix")
+    with pytest.raises(ValueError, match="simulator"):
+        q.learn_layer(wide, dev, simulator="tableau")
+    r = q.learn_layer(wide, dev, depths=[2, 8, 16], twirls=8, simulator="frames")
+    assert len(r["model"].generators) == 12 * 3 + 11 * 9
+    blocks = [q.Circuit(n).ry(0, 0.4).ry(1, -0.8), q.Circuit(n).ry(0, 1.1)]
+    obs = q.PauliSum("Z0 Z1 + 0.5*Z0")
+    c = q.Circuit(n)
+    c.append(blocks[0])
+    c.append(wide)
+    c.append(blocks[1])
+    want = q.simulate(c).expectation(obs)
+    for simulator in ["trajectories", "mps"]:
+        pec = q.pec_layered(blocks, wide, r["model"], dev, obs, 2000, seed=1, simulator=simulator)
+        assert abs(pec["estimate"].value - want) < 4 * pec["estimate"].std_error
+        zne = q.pea_layered(
+            blocks, wide, r["model"], dev, obs, [1.0, 2.0], 500, method="linear", simulator=simulator
+        )
+        assert len(zne["values"]) == 2
+    with pytest.raises(ValueError, match="simulator"):
+        q.pec_layered(blocks, wide, r["model"], dev, obs, 10, simulator="tableau")
+    with pytest.raises(ValueError, match="max_bond"):
+        q.pec_layered(blocks, wide, r["model"], dev, obs, 10, max_bond=8)
+    with pytest.raises(ValueError, match="max_bond"):
+        q.pec_layered(blocks, wide, r["model"], dev, obs, 10, simulator="mps", max_bond=-1)
+    small = q.pec_layered(blocks, wide, r["model"], dev, obs, 10, simulator="mps", max_bond=2)
+    assert small["noisy_operations"] == 1
+    with pytest.raises(ValueError):
+        q.pec_layered(blocks, wide, r["model"], dev, obs, 10, simulator="density_matrix")

@@ -27,6 +27,7 @@
 - [Symmetry and state transfer](symmetry.md)
 - [Discrete-time walks and circuits](discrete.md)
 - [Boson sampling](photonics.md)
+- [Spin dynamics and magnetic resonance](spins.md)
 - [WebAssembly and JavaScript](webassembly.md)
 - [Command line](cli.md)
 
@@ -39,6 +40,10 @@
 - [Symmetry, state transfer and discrete walks](tutorials/05_symmetry_transfer_discrete.md)
 - [Noisy devices and error mitigation](tutorials/06_noise_mitigation.md)
 - [Molecules, dynamics and amplitude estimation](tutorials/07_chemistry_dynamics_estimation.md)
+- [Interacting walkers](tutorials/08_interacting_walks.md)
+- [Hyperpolarisation](tutorials/09_hyperpolarisation.md)
+- [Optimal control of spin experiments](tutorials/10_optimal_control.md)
+- [Quantum sensing with NV centres](tutorials/11_nv_sensing.md)
 
 # Rust tutorials
 
