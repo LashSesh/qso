@@ -565,6 +565,28 @@ block exponentials per coherence-order block (a field keeps the orders),
 with the field derivative of the whole generator by Richardson-
 extrapolated central differences.
 
+Rf controls with relaxation (`spin/control/sparse.rs`) keep that
+generator sparse: one block of all `d² + 1` elements from the column
+builder of the relaxation blocks (`blocks.rs`, with the drift column),
+its adjoint, and the directions `E_j = −i[2πF_{x,y}, ·]` as compressed
+rows, built once per optimisation and shared by the members (an offset is
+a diagonal, an rf scaling multiplies the controls). A step applies
+`base + diag + Σ c_j E_j` to a vector in one pass over the rows; the
+adjoint uses `−E_j` (Hermitian controls) or, on orbits, explicit
+adjoints. The gradient of a step is `Re ∫₀^Δt ⟨λ(τ), E_j x(τ)⟩ dτ`: per
+substep of `‖hL‖ ≤ 2` (`‖L‖ = max(‖L‖₁, ‖L‖∞)`) the state's Taylor terms
+are summed by Horner at ten Gauss–Legendre nodes, the costate's likewise
+backwards, and every direction is paired with them at the nodes. That
+takes three products per term (forwards, forwards again, backwards)
+instead of the `3 + directions` of the augmented exponentials, and the
+rule's error stays below 10⁻¹⁸ of the integrand's scale. On the orbits
+of declared symmetries (when the Hamiltonian, the channels and the
+initial state are invariant, and the built block equals its images) the
+reduced matrices `M_OP = Σ_{c∈P} L_{o,c}` give an ordinary linear system
+whose transfer pairs the state with the target summed over each orbit.
+Work and memory are estimated from bounds on the entries; when a bound
+exceeds a limit the entries are counted column by column first.
+
 NV centres (`spin/nv.rs`) use the secular Hamiltonian, which is block
 diagonal in the electron level `a` (`m = +1, 0, −1`) and, within a block,
 a sum of one term per nucleus (`S_z` alone couples to the nuclei, and

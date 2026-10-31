@@ -190,21 +190,62 @@ impl SparseBlock {
 
     /// `y = A x`, rows in parallel once the entries are many.
     pub fn apply(&self, x: &[C64], y: &mut [C64]) {
-        let row = |r: usize| {
-            let mut acc = C64::new(0.0, 0.0);
-            for k in self.indptr[r]..self.indptr[r + 1] {
-                acc += self.vals[k] * x[self.cols[k] as usize];
-            }
-            acc
-        };
-        // About 2¹⁶ entries per task.
-        let per_row = self.nnz().div_ceil(self.n.max(1)).max(1);
-        let rows = (16 * CHUNK / per_row).max(64);
+        let rows = rows_per_task(self.nnz(), self.n);
         for_each_block(y, rows, |k, chunk| {
             for (i, out) in chunk.iter_mut().enumerate() {
-                *out = row(k * rows + i);
+                let (cols, vals) = self.row_parts(k * rows + i);
+                *out = row_dot(cols, vals, x);
             }
         });
+    }
+
+    /// `y += s·A x`, rows in parallel once the entries are many.
+    pub fn apply_add(&self, x: &[C64], s: C64, y: &mut [C64]) {
+        let rows = rows_per_task(self.nnz(), self.n);
+        for_each_block(y, rows, |k, chunk| {
+            for (i, out) in chunk.iter_mut().enumerate() {
+                let (cols, vals) = self.row_parts(k * rows + i);
+                *out += s * row_dot(cols, vals, x);
+            }
+        });
+    }
+
+    /// The conjugate transpose.
+    pub fn adjoint(&self) -> SparseBlock {
+        let mut indptr = vec![0usize; self.n + 1];
+        for &c in &self.cols {
+            indptr[c as usize + 1] += 1;
+        }
+        for r in 0..self.n {
+            indptr[r + 1] += indptr[r];
+        }
+        let mut next = indptr.clone();
+        let mut cols = vec![0u32; self.nnz()];
+        let mut vals = vec![C64::new(0.0, 0.0); self.nnz()];
+        // Rows in order: every row of the transpose comes out sorted.
+        for r in 0..self.n {
+            for k in self.indptr[r]..self.indptr[r + 1] {
+                let c = self.cols[k] as usize;
+                cols[next[c]] = r as u32;
+                vals[next[c]] = self.vals[k].conj();
+                next[c] += 1;
+            }
+        }
+        SparseBlock {
+            n: self.n,
+            indptr,
+            cols,
+            vals,
+        }
+    }
+
+    /// The largest absolute column sum.
+    pub fn norm_one(&self) -> f64 {
+        let mut sums = vec![0.0f64; self.n];
+        for (&c, v) in self.cols.iter().zip(&self.vals) {
+            sums[c as usize] += v.norm();
+        }
+        sums.into_iter().fold(0.0, f64::max)
     }
 
     /// The largest absolute entry.
@@ -233,6 +274,23 @@ impl SparseBlock {
         }
         m
     }
+}
+
+/// Rows per parallel task for products with `nnz` entries in `n` rows:
+/// about 2¹⁶ entries per task.
+pub(crate) fn rows_per_task(nnz: usize, n: usize) -> usize {
+    let per_row = nnz.div_ceil(n.max(1)).max(1);
+    (16 * CHUNK / per_row).max(64)
+}
+
+/// `Σ_k vals[k]·x[cols[k]]`: one row of a sparse product.
+#[inline]
+pub(crate) fn row_dot(cols: &[u32], vals: &[C64], x: &[C64]) -> C64 {
+    let mut acc = C64::new(0.0, 0.0);
+    for (&c, v) in cols.iter().zip(vals) {
+        acc += v * x[c as usize];
+    }
+    acc
 }
 
 /// The columns `0..n` of a block split into ranges for parallel tasks,

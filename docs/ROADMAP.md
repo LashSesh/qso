@@ -55,7 +55,7 @@ which withdraws the results of version 1.
 | Boson sampling | exact probabilities and exact sampling (1.1); partial distinguishability, loss and Gaussian boson sampling with hafnians and torontonians (1.14) | mixed Gaussian states with many photons spread over many modes are impractical (10¹² operations at 20 photons in 10 modes) |
 | Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4) | noise learning for layers of two-qubit Clifford gates only, on density matrices up to 10 qubits and Pauli frames up to 64 (1.12, 1.31), with non-Pauli channels twirled one at a time; mitigation with the learned model above 24 qubits only on matrix-product states, for channels that are mixtures of unitaries (1.31); no leakage; channels on at most four qubits, slow noise as quasi-static and telegraph processes only, and on trajectories only (1.30); virtual distillation (1.17) mitigates only its measured copies' preparation |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18); interacting bosons, fermions and distinguishable particles with certificates for graph isomorphism (1.29); symmetry for driven walks, open walks on orbitals, coined walks with dephasing, hypercubes with dephasing up to d = 230 (1.38) | interacting walkers stop at 2²² configurations, without symmetry reduction; open walks on orbitals stop at 8192 nodes; pretty good transfer on other graphs has no exact reference |
-| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37); the ¹³C bath of an NV centre by the cluster-correlation expansion (1.39); the optical cycle, ODMR, pulsed readout and magnetometer sensitivity in fields of any direction, and ensembles (1.40); sparse relaxation blocks propagated by Krylov steps, Redfield relaxation from sparse terms and equivalent spins: seven and eight relaxing protons for seconds (1.41) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the nested-commutator bound of product formulas (1.32) is tight for small Hamiltonians only, its tail ignoring which terms commute; Redfield relaxation assumes isotropic tumbling (1.34), and propagations beyond 1.5·10¹² operations or 2 GiB are refused (eleven protons with dipolar relaxation, nine for 100 s; 1.41); chemical exchange needs steady chemistry (no irreversible hydrogenation) and one block of at most 2048 elements over all sites; optimal control with relaxation works in Liouville space of up to six spins ½, and field profiles have many local optima; the NV bath takes ideal pulses only, its expansion can diverge (results beyond `|L| = 1` are refused), and the nuclei next to the vacancy need given contact couplings (1.39); the optical model's rotating-wave approximation fails near the ground-state anticrossing (1.40) |
+| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37); the ¹³C bath of an NV centre by the cluster-correlation expansion (1.39); the optical cycle, ODMR, pulsed readout and magnetometer sensitivity in fields of any direction, and ensembles (1.40); sparse relaxation blocks propagated by Krylov steps, Redfield relaxation from sparse terms and equivalent spins: seven and eight relaxing protons for seconds (1.41); optimal control with relaxation on sparse blocks and on the orbits of equivalent spins, seven and eight spins (1.46) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the nested-commutator bound of product formulas (1.32) is tight for small Hamiltonians only, its tail ignoring which terms commute; Redfield relaxation assumes isotropic tumbling (1.34), and propagations beyond 1.5·10¹² operations or 2 GiB are refused (eleven protons with dipolar relaxation, nine for 100 s; 1.41); chemical exchange needs steady chemistry (no irreversible hydrogenation) and one block of at most 2048 elements over all sites; field profiles with relaxation are optimised in a dense Liouville space of up to six spins ½, and have many local optima; an evaluation of eight relaxing spins takes tens of seconds (1.46); the NV bath of 1.39 takes ideal pulses only (finite ones: the generalised expansion, 1.45), its expansion can diverge (results beyond `|L| = 1` are refused), and the nuclei next to the vacancy need given contact couplings (1.39); the optical model's rotating-wave approximation fails near the ground-state anticrossing (1.40) |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
 | Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22); exact circuit distances of any model by a parallel search or the Brouwer–Zimmermann enumeration, with the lightest logical error as circuit locations (1.42) | exact circuit distances need time exponential in the distance: the circuit of [[144, 12, 12]] gets bounds only |
 | Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9), in the browser build too (1.25) | — |
@@ -4086,7 +4086,7 @@ eleven smaller ones; all are fixed or documented.
   - Every configuration of an ensemble sampled the same bath states;
     each now draws its own.
 
-### 1.46 — Optimal control of larger spin systems (M–L)
+### 1.46 — Optimal control of larger spin systems (M–L, delivered)
 
 Use case: optimal pulses for the spin systems 1.41 can propagate:
 ¹³C-labelled metabolites with all their protons, polarisation transfer
@@ -4104,6 +4104,120 @@ central differences beyond; with relaxation off, transfer stays below
 the unitary bound and reaches it where 1.36 does; optimised pulses
 propagated afterwards by the dense or the Krylov propagation give the
 objective that the optimiser reported.
+
+Delivered in `spin/control/sparse.rs`, with `spin/control.rs`,
+`spin/blocks.rs` and `spin/krylov.rs`:
+
+- **Sparse blocks.** With rf and relaxation, `control_transfer` and
+  `optimize_control` keep the Liouville generator of 1.41 as one sparse
+  block of all `d² + 1` elements: `−i[H₀, ·]`, the Lindblad dissipators,
+  `−R`, and the drift towards equilibrium in a last column. Its adjoint
+  and the directions `−i[2πF_{x,y}, ·]` of every channel are kept beside
+  it. They are built once per optimisation and shared by the members of
+  an ensemble: an offset adds the diagonal of `−i[2πΔF_z, ·]`, an rf error
+  scales the controls. A step's generator is never formed; its terms are
+  applied to a vector in one pass over the rows.
+- **Exact gradients.** The derivative of a step is
+  `Re ∫₀^Δt ⟨λ(τ), E_j x(τ)⟩ dτ`. In every substep of `‖hL‖ ≤ 2` a
+  ten-point Gauss–Legendre rule takes the integral, with the state and
+  the costate at its nodes summed by Horner from the Taylor terms of the
+  substep's exponentials. The rule's error stays below 10⁻¹⁸ of the
+  integrand's scale. Three generator products per Taylor term (forwards,
+  forwards again, backwards) replace the `3 + directions` of the
+  augmented exponentials, which remain as the tested alternative.
+- **Symmetry.** The controls are optimised on the orbits of the elements
+  when four things hold: the Hamiltonian, every rf channel (whole
+  isotopes) and the initial state are invariant under the declared
+  permutations (`set_symmetries`, 1.41), and the built block equals its
+  images. On the orbits the matrices are `M_OP = Σ_{c∈P} L_{o,c}` with
+  explicit adjoints, the state holds one value per orbit, and the target
+  is summed over each orbit, so it need not be symmetric.
+- **Limits.** `SpinSystem::control_cost` (Python `control_cost`)
+  estimates one evaluation before anything is built: its operations, its
+  bytes and the coefficients each member propagates. The estimate comes
+  from bounds on the entries; when a bound exceeds a limit, the entries
+  are counted column by column first. Memory counts the build of the
+  full block (as columns and rows), the reduction next to it, and what
+  stays. Evaluations beyond 1.5·10¹² operations or 2 GiB are refused,
+  with the substeps of every step taken from the controls tried. Field
+  profiles with relaxation keep the dense generator and its limit of six
+  spins ½.
+- In Python: `SpinSystem.control_cost`.
+
+Changes to the plan:
+
+- **Taylor series and Gauss–Legendre nodes instead of Krylov steps on
+  augmented matrices.** The plan named the derivative from the
+  exponential of an augmented block matrix applied by Krylov steps
+  (Goodwin and Kuprov). That takes one augmented propagation of twice
+  the size per direction and step. The quadrature over a substep needs
+  the forward and backward Taylor terms once for all directions. It was
+  5.6 to 7 times faster than the augmented exponentials (summed as
+  Taylor series, as in 1.36) on five to seven spins, to the same digits.
+  At `‖hL‖ ≤ 2` the series need 9 to 11 terms on average.
+- **The cost estimate is public** (`control_cost`). The plan asked for
+  estimates before anything is built; users can now see them too.
+- **Field profiles stay dense** (see below).
+
+Not done, and why:
+
+- **Field profiles on sparse blocks.** Their generator changes with the
+  field at every step, and its field derivative takes four more
+  relaxation superoperators per step (Richardson differences, 1.36). For
+  seven and eight spins that rebuilding, not the propagation, would
+  dominate. An analytic field derivative of the Redfield rates would be
+  needed first.
+- **Reduction without the full block.** The orbits are formed from the
+  full block, so eight spins with dipolar relaxation hold 1.4 GB while
+  it is built (31 million entries). Building only the representative
+  rows would need a lumpability check that sees every row.
+- **Krylov steps.** Arnoldi's process would take substeps of tens of
+  radians where the Taylor series takes two, but the Gauss rule would
+  then need many more nodes. Not tried.
+
+Measured (four cores; ten steps over 1 ms with rf of up to 2.5 kHz on
+¹H and ¹³C; a ¹³C methyl group with Redfield relaxation (dipolar
+couplings, the carbon's shielding anisotropy) and `T₁`, `T₂`, with one to
+four protons below it; seconds per evaluation, coefficients in
+brackets):
+
+| Spins | Orbits | Full | Augmented exponentials (orbits, full) |
+|---|---|---|---|
+| 5 | 0.11 (385) | 0.34 (1025) | 0.62, 2.38 |
+| 6 | 0.63 (1537) | 1.42 (4097) | 3.74, 8.86 |
+| 7 | 3.0 (6145) | 8.6 (16 385) | 18.8, refused |
+| 8 | 24.6 (24 577) | 105 (65 537) | refused |
+
+- **The dense generator of 1.36** refuses this problem from five spins
+  on (1.9·10¹² operations; six spins: 3.5·10¹³).
+- **Building** takes 0.5 s for seven spins and 3.5–4.4 s for eight: 31
+  million entries of `L₀`, 1.3 GB of matrices in full, 0.32 GB on the
+  orbits.
+- **Estimates.** Evaluations ran at 9.4 to 13 GFlop/s of the operations
+  estimated from the blocks, so the limit of 1.5·10¹² is about two to
+  three minutes. The estimate before building exceeds the one from the
+  blocks by 1.2 to 2.3 times: the bound on the Redfield entries, and
+  every control at its peak.
+- **Accuracy.** Transfer and gradient equal the dense generator's to
+  4·10⁻¹⁵ on two to six spins (`T₁`/`T₂`, Redfield, a spin 1, thermal
+  states at 50 mK, two members with offsets and rf errors), with both
+  gradients. On the orbits of the five-spin methyl group they equal the
+  full blocks to 1.1·10⁻¹³, with a target that breaks the symmetry, and
+  SciPy's `expm` and `expm_frechet` on the full Lindblad generator of a
+  four-spin methyl group to 3·10⁻¹³ (97 of 257 coefficients).
+  Seven spins agree with central differences along random directions to
+  2·10⁻⁹. Without relaxation, ¹H → ¹³C in a pair and in I₂S reach the
+  unitary bound to 10⁻⁹.
+- **GRAPE against refocused INEPT** (thermal ¹H polarisation onto the
+  methyl carbon, 5.57 ms, the duration of refocused INEPT with
+  `τ = 1/(4J)` and the refocusing optimal for three protons). Seven spins
+  (50 steps, rf up to 5 kHz, from a random start of 1 kHz): 60 iterations
+  of L-BFGS (83 evaluations, 11 s each, 15 min) reach 4.49 times the
+  carbon's own polarisation, against 4.43 for INEPT with ideal pulses and
+  7.77 for the unitary bound without relaxation; the optimiser had not
+  converged. `evolve` reproduces the transfer to 5·10⁻¹². Eight spins: the
+  same problem is refused before anything is built (6.7·10¹² operations
+  per evaluation at 5 kHz); INEPT gives 4.42 there.
 
 ### 1.47 — Circuit distances by symmetry (M)
 

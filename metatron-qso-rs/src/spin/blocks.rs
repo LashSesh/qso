@@ -46,7 +46,7 @@ const DP_PENALTY: f64 = 4.0;
 /// A block and a state are invariant under a symmetry when every entry
 /// equals its image within this fraction of their largest entry (of the
 /// whole deviation, for a state).
-const SYMMETRY_TOLERANCE: f64 = 1e-11;
+pub(super) const SYMMETRY_TOLERANCE: f64 = 1e-11;
 /// Blocks of the deviation below this fraction of its largest entry are
 /// rounding, and left empty.
 const NEGLIGIBLE: f64 = 1e-15;
@@ -266,7 +266,7 @@ impl Relaxation {
 
     /// Entries (at most) of the Redfield blocks of `liouville`'s block
     /// `k` (all its blocks for `None`), and the work of building them.
-    fn redfield_entries(&self, liouville: &Liouville, k: Option<usize>) -> (f64, f64) {
+    pub(super) fn redfield_entries(&self, liouville: &Liouville, k: Option<usize>) -> (f64, f64) {
         let Some(r) = &self.redfield else {
             return (0.0, 0.0);
         };
@@ -932,7 +932,7 @@ impl SpinSystem {
     /// dissipators on block `k` of `liouville`, the mean of its diagonal,
     /// and the largest absolute off-diagonal row sum with the diagonal's
     /// largest distance from that mean: without building the block.
-    fn block_estimate(
+    pub(super) fn block_estimate(
         &self,
         liouville: &Liouville,
         k: usize,
@@ -964,22 +964,20 @@ impl SpinSystem {
         (count, mean, norm)
     }
 
-    /// Block `k` of the generator on `liouville` (as
-    /// [`SpinSystem::generator_entries`]) as a sparse matrix, its diagonal
-    /// less `shift`; with `drift`, augmented by a last column of the drift
-    /// times `drift` (and an empty last row).
-    fn sparse_block(
+    /// Every column of block `k` of the generator on `liouville` (as
+    /// [`SpinSystem::generator_entries`]), its diagonal less `shift`, as
+    /// `(row, value)` by ascending row, handed to `keep` (in parallel).
+    fn block_columns<T: Send>(
         &self,
         liouville: &Liouville,
         k: usize,
         h: &Sparse,
         relaxation: &Relaxation,
         shift: C64,
-        drift: Option<C64>,
-    ) -> SparseBlock {
+        keep: impl Fn(Vec<(u32, C64)>) -> T + Sync,
+    ) -> Vec<T> {
         let elements = &liouville.blocks[k].1;
         let n = elements.len();
-        let size = n + usize::from(drift.is_some());
         let locals = self.local_jumps(relaxation);
         let redfield = relaxation.redfield.as_ref();
         let targets: Vec<Vec<Option<u32>>> = redfield.map_or(Vec::new(), |r| {
@@ -988,8 +986,8 @@ impl SpinSystem {
                 .collect()
         });
         let ranges = column_ranges(n);
-        let parts: Vec<Vec<Vec<(u32, C64)>>> = map_tasks(ranges.len(), |c| {
-            let mut acc = Accumulator::new(size);
+        let parts: Vec<Vec<T>> = map_tasks(ranges.len(), |c| {
+            let mut acc = Accumulator::new(n);
             ranges[c]
                 .clone()
                 .map(|j| {
@@ -1007,11 +1005,29 @@ impl SpinSystem {
                     if shift != ZERO {
                         acc.add(j, -shift);
                     }
-                    acc.take()
+                    keep(acc.take())
                 })
                 .collect()
         });
-        let mut columns: Vec<Vec<(u32, C64)>> = parts.into_iter().flatten().collect();
+        parts.into_iter().flatten().collect()
+    }
+
+    /// Block `k` of the generator on `liouville` (as
+    /// [`SpinSystem::generator_entries`]) as a sparse matrix, its diagonal
+    /// less `shift`; with `drift`, augmented by a last column of the drift
+    /// times `drift` (and an empty last row).
+    pub(super) fn sparse_block(
+        &self,
+        liouville: &Liouville,
+        k: usize,
+        h: &Sparse,
+        relaxation: &Relaxation,
+        shift: C64,
+        drift: Option<C64>,
+    ) -> SparseBlock {
+        let elements = &liouville.blocks[k].1;
+        let size = elements.len() + usize::from(drift.is_some());
+        let mut columns = self.block_columns(liouville, k, h, relaxation, shift, |c| c);
         if let Some(factor) = drift {
             columns.push(
                 elements
@@ -1025,6 +1041,32 @@ impl SpinSystem {
             );
         }
         SparseBlock::from_columns(size, &columns)
+    }
+
+    /// The entries of [`SpinSystem::sparse_block`] (with `drift`), counted
+    /// column by column without keeping them.
+    pub(super) fn sparse_block_entries(
+        &self,
+        liouville: &Liouville,
+        k: usize,
+        h: &Sparse,
+        relaxation: &Relaxation,
+        drift: bool,
+    ) -> usize {
+        let columns: usize = self
+            .block_columns(liouville, k, h, relaxation, ZERO, |c| c.len())
+            .into_iter()
+            .sum();
+        let drift = if drift {
+            liouville.blocks[k]
+                .1
+                .iter()
+                .filter(|&&(a, b)| relaxation.drift[(a, b)] != ZERO)
+                .count()
+        } else {
+            0
+        };
+        columns + drift
     }
 
     /// `‖A y‖` for the block [`SpinSystem::sparse_block`] would build,
@@ -1557,7 +1599,7 @@ impl SpinSystem {
 
     /// Bytes held through a propagation: the index of the elements and the
     /// Redfield terms.
-    fn held_bytes(&self, relaxation: &Relaxation) -> f64 {
+    pub(super) fn held_bytes(&self, relaxation: &Relaxation) -> f64 {
         let d = self.dimension() as f64;
         24.0 * d * d
             + relaxation

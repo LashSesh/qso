@@ -178,7 +178,7 @@ fn lattice(radius: f64, mut visit: impl FnMut([i64; 3], [f64; 3])) -> Result<()>
 
 /// The carbon sites of diamond within `radius` (m) of the vacancy, in the
 /// frame of the centre (the vacancy at a lattice site, the nitrogen at its
-/// neighbour along [111], both left out), in a fixed order.
+/// neighbour along \[111\], both left out), in a fixed order.
 pub fn diamond_sites(radius: f64) -> Result<Vec<[f64; 3]>> {
     let mut out = Vec::new();
     lattice(radius, |_, p| out.push(p))?;

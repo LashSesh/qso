@@ -118,7 +118,7 @@ mod tests;
 #[cfg(test)]
 mod transfer_tests;
 
-pub use control::{Control, Drive, Member, Optimized, unitary_bound};
+pub use control::{Control, ControlCost, Drive, Member, Optimized, unitary_bound};
 pub use exchange::{Channel, Exchange, Fresh, Profile, Site};
 pub use nv::{
     Carbon, FieldNoise, MAX_NV_DIMENSION, Microwave, NV_GYROMAGNETIC_RATIO,

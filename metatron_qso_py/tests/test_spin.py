@@ -819,6 +819,61 @@ def test_grape_reaches_the_unitary_bound_and_profiles_bindings():
     assert r["controls"].shape == (4,) and r["transfer"] >= value - 1e-18
 
 
+def _superop(h):
+    one = np.eye(len(h))
+    return -1j * (np.kron(h, one) - np.kron(one, h.T))
+
+
+def _dissipator(a):
+    one = np.eye(len(a))
+    ada = a.conj().T @ a
+    return np.kron(a, a.conj()) - 0.5 * np.kron(ada, one) - 0.5 * np.kron(one, ada.T)
+
+
+def _lindblad(sys, b):
+    # The Lindblad generator of T₁ (jumps with Boltzmann rates) and T₂
+    # (dephasing), and its field derivative, row-major.
+    d = sys.dimension
+    rates, slopes = np.zeros((d * d, d * d), complex), np.zeros((d * d, d * d), complex)
+    for i, (iso, shift, t1, t2) in enumerate(sys.spins):
+        iz, ip = np.asarray(sys.spin_operator(i, "z")), np.asarray(sys.spin_operator(i, "+"))
+        r1 = 0.0 if t1 is None else 1 / t1
+        if r1:
+            c = 1.054571817e-34 * spin.gyromagnetic_ratio(iso) * (1 + shift * 1e-6) / (1.380649e-23 * sys.temperature)
+            x = c * b
+            up, down = r1 / (1 + np.exp(-x)), r1 / (1 + np.exp(x))
+            rates += up * _dissipator(ip) + down * _dissipator(ip.conj().T)
+            slope = r1 * np.exp(-x) / (1 + np.exp(-x)) ** 2 * c
+            slopes += slope * (_dissipator(ip) - _dissipator(ip.conj().T))
+        if t2 is not None and 1 / t2 - r1 / 2 > 0:
+            rates += 2 * (1 / t2 - r1 / 2) * _dissipator(iz)
+    return rates, slopes
+
+
+def _rf_reference(sys, rho0, target, u, steps, duration):
+    # The transfer and its gradient of rf on ¹H and ¹³C from scipy.linalg
+    # (expm, expm_frechet) on the full Lindblad generator.
+    scipy_linalg = pytest.importorskip("scipy.linalg")
+    dt = duration / steps
+    ops = [2 * np.pi * np.asarray(sys.total_operator(iso, w)) for iso in ("1H", "13C") for w in "xy"]
+    rates, _ = _lindblad(sys, sys.field)
+    base = _superop(np.asarray(sys.hamiltonian())) + rates
+    states, gens = [np.asarray(rho0).reshape(-1).astype(complex)], []
+    for k in range(steps):
+        gen = base + sum(u[4 * k + j] * _superop(ops[j]) for j in range(4))
+        gens.append(gen)
+        states.append(scipy_linalg.expm(gen * dt) @ states[-1])
+    lam = np.asarray(target).reshape(-1).astype(complex)
+    value = np.vdot(lam, states[-1]).real
+    grad = np.zeros(4 * steps)
+    for k in reversed(range(steps)):
+        for j in range(4):
+            _, frechet = scipy_linalg.expm_frechet(gens[k] * dt, _superop(ops[j]) * dt)
+            grad[4 * k + j] = np.vdot(lam, frechet @ states[k]).real
+        lam = scipy_linalg.expm(gens[k] * dt).conj().T @ lam
+    return value, grad
+
+
 def test_grape_with_relaxation_against_scipy():
     # The Liouville-space engine against an independent build: the
     # Lindblad generator from T₁ jumps with Boltzmann rates and T₂
@@ -826,33 +881,7 @@ def test_grape_with_relaxation_against_scipy():
     # expm_frechet (rf), and the field derivative of the thermal rates
     # written out (field profile).
     scipy_linalg = pytest.importorskip("scipy.linalg")
-
-    def superop(h):
-        one = np.eye(len(h))
-        return -1j * (np.kron(h, one) - np.kron(one, h.T))
-
-    def dissipator(a):
-        one = np.eye(len(a))
-        ada = a.conj().T @ a
-        return np.kron(a, a.conj()) - 0.5 * np.kron(ada, one) - 0.5 * np.kron(one, ada.T)
-
-    def lindblad(sys, b):
-        d = sys.dimension
-        rates, slopes = np.zeros((d * d, d * d), complex), np.zeros((d * d, d * d), complex)
-        for i, (iso, shift, t1, t2) in enumerate(sys.spins):
-            iz, ip = np.asarray(sys.spin_operator(i, "z")), np.asarray(sys.spin_operator(i, "+"))
-            r1 = 0.0 if t1 is None else 1 / t1
-            if r1:
-                c = 1.054571817e-34 * spin.gyromagnetic_ratio(iso) * (1 + shift * 1e-6) / (1.380649e-23 * sys.temperature)
-                x = c * b
-                up, down = r1 / (1 + np.exp(-x)), r1 / (1 + np.exp(x))
-                rates += up * dissipator(ip) + down * dissipator(ip.conj().T)
-                slope = r1 * np.exp(-x) / (1 + np.exp(-x)) ** 2 * c
-                slopes += slope * (dissipator(ip) - dissipator(ip.conj().T))
-            if t2 is not None and 1 / t2 - r1 / 2 > 0:
-                rates += 2 * (1 / t2 - r1 / 2) * dissipator(iz)
-        return rates, slopes
-
+    superop, lindblad = _superop, _lindblad
     sys = q.SpinSystem(9.4, temperature=0.05)
     sys.add_spin("1H", 0.3, t1=0.02, t2=0.01)
     sys.add_spin("13C", 0.0, t1=0.05)
@@ -910,3 +939,75 @@ def test_grape_with_relaxation_against_scipy():
     # of the identity (about 10⁻¹⁶ against a transfer of 10⁻⁹).
     assert got == pytest.approx(value, rel=1e-6)
     assert np.abs(got_grad - grad).max() < 1e-9 * np.abs(grad).max()
+
+
+def _methyl(extra=0, temperature=None):
+    # A ¹³C methyl group (T₁ and T₂ of the protons, T₁ of the carbon) with
+    # `extra` protons coupled equally to its three, declared threefold
+    # symmetric.
+    sys = q.SpinSystem(9.4) if temperature is None else q.SpinSystem(9.4, temperature=temperature)
+    sys.add_spin("13C", 20.0, t1=0.05)
+    for _ in range(3):
+        sys.add_spin("1H", 1.2, t1=0.02, t2=0.01)
+    for k in (1, 2, 3):
+        sys.couple(0, k, 125.0)
+    for i, j in ((1, 2), (2, 3), (1, 3)):
+        sys.couple(i, j, -12.0)
+    for e in range(extra):
+        k = sys.add_spin("1H", 2.0 + 0.6 * e, t1=1.0, t2=0.5)
+        for m in (1, 2, 3):
+            sys.couple(m, k, 3.0 + e)
+    sys.set_symmetries([[0, 2, 3, 1] + list(range(4, 4 + extra))])
+    return sys
+
+
+def test_grape_on_the_orbits_of_a_methyl_group_against_scipy():
+    # With its threefold symmetry declared, QSO propagates 97 orbits of the
+    # 257 coefficients on sparse blocks. SciPy's expm and expm_frechet on
+    # the full Lindblad generator give the same transfer and gradient,
+    # also for a target that breaks the symmetry.
+    sys = _methyl(temperature=0.05)
+    rho0 = sys.thermal_state()
+    for target in (sys.spin_operator(0, "z"), sys.spin_operator(1, "z")):
+        c = spin.Control.rf(["1H", "13C"], 4e-3, 6, rho0, target, limit=3000.0)
+        cost = sys.control_cost(c, 3000.0)
+        assert cost["method"] == "sparse" and cost["coefficients"] == 97
+        u = c.random_start(seed=5, scale=1500.0)
+        value, grad = _rf_reference(sys, rho0, target, u, 6, 4e-3)
+        got, got_grad = sys.control_transfer(c, u)
+        assert got == pytest.approx(value, rel=1e-11)
+        assert np.abs(got_grad - grad).max() < 1e-10 * np.abs(grad).max()
+
+
+def test_grape_beyond_six_relaxing_spins():
+    # Seven relaxing spins (the methyl group and three protons below it):
+    # 6145 orbits of 16 385 coefficients; the gradient against central
+    # differences along a direction, and the optimised pulse replayed by
+    # evolve.
+    sys = _methyl(extra=3)
+    rho0, target = sys.thermal_state(), sys.spin_operator(0, "z")
+    c = spin.Control.rf(["1H", "13C"], 2e-3, 8, rho0, target, limit=2000.0)
+    cost = sys.control_cost(c, 2000.0)
+    assert cost["method"] == "sparse" and cost["coefficients"] == 6145
+    assert cost["operations"] < 1.5e12 and cost["bytes"] < 2**31
+    u = c.random_start(seed=2, scale=1000.0)
+    value, grad = sys.control_transfer(c, u)
+    v = np.random.default_rng(0).uniform(-1.0, 1.0, len(u))
+    h = 1e-2
+    fd = (sys.control_transfer(c, u + h * v)[0] - sys.control_transfer(c, u - h * v)[0]) / (2 * h)
+    assert fd == pytest.approx(grad @ v, rel=1e-6)
+    r = sys.optimize_control(c, start=u, max_iterations=5)
+    assert r["transfer"] > value
+    after = sys.evolve(rho0, sys.control_events(c, r["controls"]))
+    assert np.trace(after @ target).real == pytest.approx(r["transfer"], rel=1e-9)
+    # Without relaxation the controls stay in Hilbert space; field profiles
+    # with relaxation within six spins.
+    plain = q.SpinSystem(9.4)
+    plain.add_spin("1H", 0.0)
+    plain.add_spin("13C", 0.0)
+    plain.couple(0, 1, 140.0)
+    rf = spin.Control.rf(["1H", "13C"], 1e-3, 4, plain.thermal_state(), plain.spin_operator(1, "z"))
+    assert plain.control_cost(rf, 1000.0)["method"] == "hilbert"
+    f = spin.Control.field(9.0, 9.4, 1e-3, 2, rho0, target)
+    with pytest.raises(ValueError, match="Liouville"):
+        sys.control_cost(f, 9.4)

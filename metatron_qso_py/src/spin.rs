@@ -960,6 +960,28 @@ impl PySpinSystem {
         optimized(py, r)
     }
 
+    /// The estimated cost of one evaluation (transfer and gradient) with rf
+    /// of at most `peak` Hz or fields of at most `peak` T, as it is checked
+    /// against the limits before anything is built: a dict with `method`
+    /// (`"hilbert"`, `"sparse"` or `"dense"`), `coefficients` (per member;
+    /// the orbits of declared symmetries when they apply), `operations` and
+    /// `bytes`.
+    fn control_cost<'py>(
+        &self,
+        py: Python<'py>,
+        control: PyRef<'_, PyControl>,
+        peak: f64,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let (sys, c) = (&self.inner, &control.inner);
+        let r = py.detach(|| sys.control_cost(c, peak)).raise()?;
+        Ok(pydict!(py, {
+            "method" => r.method,
+            "coefficients" => r.coefficients,
+            "operations" => r.operations,
+            "bytes" => r.bytes,
+        }))
+    }
+
     /// The events that apply controls `u` in `evolve`.
     fn control_events(
         &self,

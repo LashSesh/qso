@@ -138,6 +138,22 @@ All notable changes to this project are documented here. The format follows
   averages over random baths; PyCCE's `gcce` agrees to 5·10⁻⁸. In Python:
   `GeneralisedBath`, `generalised_ensemble_signal`, `point_dipole_tensor`.
 
+- **Optimal control of larger spin systems** (1.46, `spin`): GRAPE with
+  relaxation on sparse blocks. Rf controls keep the Liouville generator
+  (the master equation and the drift towards equilibrium) as sparse
+  matrices, built once per optimisation, shared by the members of an
+  ensemble (offsets as diagonals, rf errors as factors) and applied to
+  vectors only: seven and eight relaxing spins, where 1.36 stopped at
+  six. The gradient is exact to rounding: Gauss–Legendre nodes in every
+  substep, with the state and costate at the nodes from the Taylor terms
+  of the substep's exponentials. With declared symmetries
+  (`set_symmetries`), rf on whole isotopes and an initial state that
+  respect them, the controls are optimised on the orbits of the elements
+  (a methyl group's 16 385 coefficients with three more protons: 6145).
+  `SpinSystem::control_cost` estimates the operations and memory of one
+  evaluation, and the coefficients it propagates, before anything is
+  built. In Python: `SpinSystem.control_cost`.
+
 - **Slow noise, averaged exactly** (1.44, `noise::slow`): classical
   Markov processes with finitely many states (`MarkovProcess`: telegraph
   noise, Ornstein–Uhlenbeck noise as the Ehrenfest chain of `K`
@@ -151,6 +167,12 @@ All notable changes to this project are documented here. The format follows
   `StochasticLiouville`.
 
 ### Changed
+
+- **Rf control with relaxation beyond six spins** (1.46):
+  `control_transfer` and `optimize_control` with rf and relaxation run on
+  sparse blocks at every size, up to the work and memory limits, instead
+  of refusing more than six spins ½. Field profiles with relaxation keep
+  the dense generator and its limit.
 
 - **Density matrices average slow noise** (1.44):
   `DensityMatrix::apply_device`, `DensityMatrix.simulate` with a device

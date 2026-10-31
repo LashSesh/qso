@@ -25,6 +25,13 @@
 //! profiles with relaxation take the derivative of the relaxation with
 //! respect to the field (thermal populations, spectral densities) by
 //! Richardson-extrapolated central differences; the rest is exact.
+//!
+//! Rf controls with relaxation keep the generator as sparse matrices,
+//! built once per optimisation and applied to vectors only, and propagate
+//! on the orbits of declared equivalent spins when the system, the rf
+//! channels and the initial state respect them (see the `sparse` source);
+//! field profiles with relaxation use the dense generator, up to six
+//! spins ½.
 
 use nalgebra::DVector;
 use num_complex::Complex64 as C64;
@@ -35,6 +42,10 @@ use super::{Event, Frame, SpinSystem, TWO_PI, Target, ZERO, check_time};
 use crate::error::{QsoError, Result};
 use crate::linalg::CMatrix;
 use crate::optimize::{GradObjective, Method, Options, minimize};
+
+mod sparse;
+
+use sparse::{Amplitudes, SparseControl};
 
 /// What the controls drive.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -93,6 +104,24 @@ pub struct Control {
     /// Weight of `Σ (u_{k+1} − u_k)²` (Hz² or T²) subtracted from the
     /// transfer.
     pub smoothness: f64,
+}
+
+/// The estimated cost of one evaluation of a control problem: the transfer
+/// and its gradient ([`SpinSystem::control_cost`]).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ControlCost {
+    /// How the state propagates: `"hilbert"` (without relaxation),
+    /// `"sparse"` (rf with relaxation: sparse blocks) or `"dense"` (field
+    /// profiles with relaxation).
+    pub method: String,
+    /// Coefficients each member propagates: `d²` in Hilbert space, `d² + 1`
+    /// in Liouville space (with the trace), or the orbits of the declared
+    /// symmetries when they apply.
+    pub coefficients: usize,
+    /// Floating-point operations.
+    pub operations: f64,
+    /// Bytes held at once.
+    pub bytes: f64,
 }
 
 /// The outcome of [`SpinSystem::optimize_control`].
@@ -375,7 +404,7 @@ impl Entries {
     }
 
     /// `y += s·M x`.
-    fn apply_add(&self, x: &DVector<C64>, s: C64, y: &mut DVector<C64>) {
+    fn add_to(&self, x: &DVector<C64>, s: C64, y: &mut DVector<C64>) {
         for &(r, c, v) in &self.0 {
             y[r] += s * v * x[c];
         }
@@ -411,6 +440,31 @@ fn commutator(a: &CMatrix) -> Entries {
     Entries(out)
 }
 
+/// A linear generator applied to vectors, for the exponential series of
+/// [`expmv`] and [`frechet`].
+pub(super) trait Linear {
+    /// `y = t·L x`.
+    fn apply(&self, x: &DVector<C64>, t: f64) -> DVector<C64>;
+}
+
+/// A direction `E` of a derivative of `e^{tL}`, for [`frechet`].
+pub(super) trait Direction {
+    /// `y += s·E x`.
+    fn apply_add(&self, x: &DVector<C64>, s: C64, y: &mut DVector<C64>);
+}
+
+impl<T: Direction + ?Sized> Direction for &T {
+    fn apply_add(&self, x: &DVector<C64>, s: C64, y: &mut DVector<C64>) {
+        (**self).apply_add(x, s, y);
+    }
+}
+
+impl Direction for Entries {
+    fn apply_add(&self, x: &DVector<C64>, s: C64, y: &mut DVector<C64>) {
+        self.add_to(x, s, y);
+    }
+}
+
 /// A linear generator `L = dense + Σ_j u_j ops_j`, applied to vectors.
 pub(super) struct Generator<'a> {
     pub(super) dense: &'a CMatrix,
@@ -420,8 +474,7 @@ pub(super) struct Generator<'a> {
     pub(super) adjoint: bool,
 }
 
-impl Generator<'_> {
-    /// `y = t·L x`.
+impl Linear for Generator<'_> {
     fn apply(&self, x: &DVector<C64>, t: f64) -> DVector<C64> {
         let mut y = if self.adjoint {
             self.dense.ad_mul(x)
@@ -438,12 +491,14 @@ impl Generator<'_> {
                     y[c] += v.conj() * x[r] * (u * t);
                 }
             } else {
-                op.apply_add(x, C64::new(u * t, 0.0), &mut y);
+                op.add_to(x, C64::new(u * t, 0.0), &mut y);
             }
         }
         y
     }
+}
 
+impl Generator<'_> {
     fn one_norm(&self, norms: &[f64], dense_norm: f64) -> f64 {
         dense_norm
             + norms
@@ -454,7 +509,7 @@ impl Generator<'_> {
     }
 }
 
-fn max_abs(v: &DVector<C64>) -> f64 {
+pub(super) fn max_abs(v: &DVector<C64>) -> f64 {
     v.iter().fold(0.0f64, |m, z| m.max(z.norm()))
 }
 
@@ -465,7 +520,7 @@ pub(super) fn substeps(norm: f64) -> usize {
 
 /// `e^{tL} x` by Taylor series in `substeps(t‖L‖)` pieces, each summed to
 /// rounding.
-pub(super) fn expmv(g: &Generator<'_>, x: &DVector<C64>, t: f64, norm: f64) -> DVector<C64> {
+pub(super) fn expmv<G: Linear>(g: &G, x: &DVector<C64>, t: f64, norm: f64) -> DVector<C64> {
     let s = substeps(t * norm);
     let h = t / s as f64;
     let mut v = x.clone();
@@ -487,9 +542,9 @@ pub(super) fn expmv(g: &Generator<'_>, x: &DVector<C64>, t: f64, norm: f64) -> D
 /// `Re λ† ∂(e^{tL} x)/∂u_j` for every direction `E_j = ∂L/∂u_j`: the
 /// upper block of `exp(t[[L, E_j], [0, L]])` applied to `[0; x]`. That
 /// block is linear in `E_j`, so the substeps follow `t‖L‖` alone.
-pub(super) fn frechet(
-    g: &Generator<'_>,
-    directions: &[&Entries],
+pub(super) fn frechet<G: Linear, D: Direction>(
+    g: &G,
+    directions: &[D],
     x: &DVector<C64>,
     lambda: &DVector<C64>,
     t: f64,
@@ -548,13 +603,52 @@ fn augment(m: &CMatrix) -> DVector<C64> {
     v
 }
 
-/// Largest Liouville space (`d²` elements) for control with relaxation:
-/// six spins ½. Its dense generator takes 270 MB.
+/// Largest Liouville space (`d²` elements) for field profiles with
+/// relaxation, whose generator is dense: six spins ½. It takes 270 MB.
 pub const MAX_CONTROL_LIOUVILLE: usize = 4096;
+
+/// How the evaluations of a control problem propagate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Path {
+    /// Hilbert space (without relaxation).
+    Hilbert,
+    /// The dense Liouville generator (up to six spins ½).
+    Dense,
+    /// Sparse blocks (rf), on the orbits of the declared symmetries when
+    /// `symmetric` and they apply.
+    Sparse { symmetric: bool },
+}
+
+/// What the evaluations of a control problem share.
+enum Prepared {
+    /// Nothing: every evaluation builds what it needs.
+    Each(Path),
+    Sparse(Box<SparseControl>),
+}
 
 /// Most memory (bytes) one evaluation of a control problem may keep:
 /// states and eigenvectors of every step, of every member at once.
 pub const MAX_CONTROL_MEMORY: f64 = 2.0 * (1u64 << 30) as f64;
+
+/// Refuse controls of the wrong length, not finite or outside the field
+/// range.
+fn check_controls(c: &Control, u: &[f64]) -> Result<()> {
+    if u.len() != c.len() {
+        return Err(QsoError::DimensionMismatch {
+            expected: c.len(),
+            actual: u.len(),
+        });
+    }
+    if u.iter().any(|x| !x.is_finite()) {
+        return Err(QsoError::invalid("controls", "must be finite"));
+    }
+    if let Drive::Field { min, max } = c.drive
+        && u.iter().any(|&b| b < min || b > max)
+    {
+        return Err(QsoError::invalid("controls", "fields outside [min, max]"));
+    }
+    Ok(())
+}
 
 /// Refuse `what` above the work or memory limit.
 fn check_cost(what: &str, work: f64, memory: f64) -> Result<()> {
@@ -672,12 +766,33 @@ impl SpinSystem {
                 "weights ≥ 0 with a finite, positive sum",
             ));
         }
-        if self.relaxes() && d * d > MAX_CONTROL_LIOUVILLE {
+        Ok(())
+    }
+
+    /// The path of [`SpinSystem::control_transfer`]: Hilbert space without
+    /// relaxation; with it, sparse blocks for rf and the dense generator
+    /// for field profiles.
+    fn control_path(&self, c: &Control) -> Path {
+        match c.drive {
+            _ if !self.relaxes() => Path::Hilbert,
+            Drive::Rf { .. } => Path::Sparse { symmetric: true },
+            Drive::Field { .. } => Path::Dense,
+        }
+    }
+
+    /// Refuse a dense Liouville generator beyond [`MAX_CONTROL_LIOUVILLE`].
+    fn check_dense(&self, c: &Control) -> Result<()> {
+        let d = self.dimension();
+        if d * d > MAX_CONTROL_LIOUVILLE {
+            let what = match c.drive {
+                Drive::Field { .. } => "field profiles with relaxation work",
+                Drive::Rf { .. } => "the dense generator works",
+            };
             return Err(QsoError::invalid(
                 "control",
                 format!(
-                    "control with relaxation works in Liouville space of at most {MAX_CONTROL_LIOUVILLE} \
-                     elements (six spins ½); this system has {}",
+                    "{what} in Liouville space of at most {MAX_CONTROL_LIOUVILLE} elements (six \
+                     spins ½); this system has {}",
                     d * d
                 ),
             ));
@@ -777,22 +892,59 @@ impl SpinSystem {
         Ok(narrow * C64::new(4.0 / 3.0, 0.0) - wide * C64::new(1.0 / 3.0, 0.0))
     }
 
-    /// Estimated operations and memory of one evaluation, with rf of at
-    /// most `peak` Hz or fields of at most `peak` T.
-    fn control_cost(&self, c: &Control, peak: f64) -> Result<(f64, f64)> {
+    /// The estimated cost of one evaluation (the transfer and its
+    /// gradient) with rf of at most `peak` Hz or fields of at most `peak`
+    /// T, as it is checked against the limits before anything is built.
+    pub fn control_cost(&self, c: &Control, peak: f64) -> Result<ControlCost> {
+        self.check_control(c)?;
+        if !peak.is_finite() {
+            return Err(QsoError::invalid("peak", "must be finite"));
+        }
+        let path = self.control_path(c);
+        let d = self.dimension();
+        let rf = Amplitudes::Peak(peak.abs());
+        let (method, (operations, bytes, coefficients)) = match path {
+            Path::Sparse { symmetric } => ("sparse", self.sparse_estimate(c, rf, symmetric)?),
+            Path::Hilbert | Path::Dense => {
+                let (work, memory) = self.path_cost(c, rf, path)?;
+                match path {
+                    Path::Hilbert => ("hilbert", (work, memory, d * d)),
+                    _ => ("dense", (work, memory, d * d + 1)),
+                }
+            }
+        };
+        Ok(ControlCost {
+            method: method.to_string(),
+            coefficients,
+            operations,
+            bytes,
+        })
+    }
+
+    /// Estimated operations and memory of one evaluation on `path`, with
+    /// the controls `rf` (Hz, or the field in T: its peak counts).
+    fn path_cost(&self, c: &Control, rf: Amplitudes<'_>, path: Path) -> Result<(f64, f64)> {
+        if let Path::Sparse { symmetric } = path {
+            return self.sparse_cost(c, rf, symmetric);
+        }
+        let peak = match rf {
+            Amplitudes::Peak(peak) => peak,
+            Amplitudes::Controls(u) => u.iter().fold(0.0f64, |m, x| m.max(x.abs())),
+        };
         let d = self.dimension() as f64;
         let members = match c.drive {
             Drive::Rf { .. } => c.members().len() as f64,
             Drive::Field { .. } => 1.0,
         };
         let steps = c.steps as f64;
-        if !self.relaxes() {
+        if path == Path::Hilbert {
             // Measured: about 600 d³ operations per step (eigenvectors and
             // products); ρ and the eigenvectors of every step are kept.
             let work = 600.0 * d * d * d * steps * members;
             let memory = (32.0 * d * d + 8.0 * d) * (steps + 1.0) * members;
             return Ok((work, memory));
         }
+        self.check_dense(c)?;
         let n = d * d + 1.0;
         let per_step = c.per_step() as f64;
         // ‖L‖₁ ≤ 2‖H‖₁ + 2·(the relaxation's rate bound), without building
@@ -840,24 +992,47 @@ impl SpinSystem {
 
     /// Transfer, gradient and the transfer of each member.
     fn control_members(&self, c: &Control, u: &[f64]) -> Result<(f64, Vec<f64>, Vec<f64>)> {
+        self.control_members_on(c, u, self.control_path(c))
+    }
+
+    /// [`SpinSystem::control_members`] on `path`.
+    pub(super) fn control_members_on(
+        &self,
+        c: &Control,
+        u: &[f64],
+        path: Path,
+    ) -> Result<(f64, Vec<f64>, Vec<f64>)> {
         self.check_control(c)?;
-        if u.len() != c.len() {
-            return Err(QsoError::DimensionMismatch {
-                expected: c.len(),
-                actual: u.len(),
-            });
-        }
-        if u.iter().any(|x| !x.is_finite()) {
-            return Err(QsoError::invalid("controls", "must be finite"));
-        }
-        if let Drive::Field { min, max } = c.drive
-            && u.iter().any(|&b| b < min || b > max)
-        {
-            return Err(QsoError::invalid("controls", "fields outside [min, max]"));
-        }
-        let peak = u.iter().fold(0.0f64, |m, x| m.max(x.abs()));
-        let (work, memory) = self.control_cost(c, peak)?;
+        check_controls(c, u)?;
+        let (work, memory) = self.path_cost(c, Amplitudes::Controls(u), path)?;
         check_cost("this control problem", work, memory)?;
+        let prepared = self.prepare_control(c, path)?;
+        self.evaluate_control(c, u, &prepared)
+    }
+
+    /// What every evaluation on `path` shares: the sparse blocks.
+    fn prepare_control(&self, c: &Control, path: Path) -> Result<Prepared> {
+        Ok(match path {
+            Path::Sparse { symmetric } => {
+                Prepared::Sparse(Box::new(self.sparse_control(c, symmetric)?))
+            }
+            other => Prepared::Each(other),
+        })
+    }
+
+    /// Transfer, gradient and the transfer of each member with what
+    /// `prepared` holds.
+    fn evaluate_control(
+        &self,
+        c: &Control,
+        u: &[f64],
+        prepared: &Prepared,
+    ) -> Result<(f64, Vec<f64>, Vec<f64>)> {
+        check_controls(c, u)?;
+        if let Prepared::Sparse(blocks) = prepared {
+            let (work, memory) = blocks.cost(c, u);
+            check_cost("this control problem", work, memory)?;
+        }
         let members = c.members();
         let total: f64 = members.iter().map(|m| m.weight).sum();
         // Field profiles of one system: the members differ by weight only.
@@ -865,12 +1040,10 @@ impl SpinSystem {
             Drive::Rf { .. } => members.len(),
             Drive::Field { .. } => 1,
         };
-        let results = crate::parallel::map_tasks(distinct, |k| {
-            if self.relaxes() {
-                self.member_liouville(c, &members[k], u)
-            } else {
-                self.member_hilbert(c, &members[k], u)
-            }
+        let results = crate::parallel::map_tasks(distinct, |k| match prepared {
+            Prepared::Each(Path::Hilbert) => self.member_hilbert(c, &members[k], u),
+            Prepared::Each(_) => self.member_liouville(c, &members[k], u),
+            Prepared::Sparse(blocks) => Ok(blocks.member(c, &members[k], u)),
         });
         let mut results = results.into_iter().collect::<Result<Vec<_>>>()?;
         if distinct == 1 && members.len() > 1 {
@@ -1081,6 +1254,17 @@ impl SpinSystem {
         start: &[f64],
         options: &Options,
     ) -> Result<Optimized> {
+        self.optimize_control_on(c, start, options, self.control_path(c))
+    }
+
+    /// [`SpinSystem::optimize_control`] on `path`.
+    pub(super) fn optimize_control_on(
+        &self,
+        c: &Control,
+        start: &[f64],
+        options: &Options,
+        path: Path,
+    ) -> Result<Optimized> {
         self.check_control(c)?;
         if start.len() != c.len() {
             return Err(QsoError::DimensionMismatch {
@@ -1095,9 +1279,11 @@ impl SpinSystem {
             Drive::Field { max, .. } => *max,
             Drive::Rf { limit: None, .. } => start.iter().fold(0.0f64, |m, x| m.max(x.abs())),
         };
-        let (work, memory) = self.control_cost(c, worst)?;
+        let (work, memory) = self.path_cost(c, Amplitudes::Peak(worst), path)?;
         check_cost("this control problem", work, memory)?;
-        let (first, _) = self.control_transfer(c, &start)?;
+        // Built once for every evaluation.
+        let prepared = self.prepare_control(c, path)?;
+        let (first, _, _) = self.evaluate_control(c, &start, &prepared)?;
         // The optimiser sees the objective in units of its natural size:
         // the transfer at the start, or `‖C‖‖ρ(0) − Tr ρ(0)/d‖` if larger.
         let frobenius = |m: &CMatrix| m.iter().map(|z| z.norm_sqr()).sum::<f64>().sqrt();
@@ -1120,8 +1306,8 @@ impl SpinSystem {
         let failure = std::sync::Mutex::new(None);
         let objective = GradObjective::new(c.len(), |v: &[f64]| {
             let (u, jac) = c.physical(v);
-            match self.control_transfer(c, &u) {
-                Ok((value, grad)) => {
+            match self.evaluate_control(c, &u, &prepared) {
+                Ok((value, grad, _)) => {
                     let (p, pg) = c.penalty(&u);
                     let g: Vec<f64> = grad.iter().zip(&pg).map(|(a, b)| (b - a) / size).collect();
                     ((p - value) / size, c.chain(&jac, &g))
@@ -1137,7 +1323,7 @@ impl SpinSystem {
             return Err(e);
         }
         let (controls, _) = c.physical(&result.x);
-        let (transfer, _, members) = self.control_members(c, &controls)?;
+        let (transfer, _, members) = self.evaluate_control(c, &controls, &prepared)?;
         let objective = transfer - c.penalty(&controls).0;
         Ok(Optimized {
             controls,
@@ -1206,3 +1392,6 @@ pub fn unitary_bound(rho: &CMatrix, target: &CMatrix) -> Result<f64> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod sparse_tests;

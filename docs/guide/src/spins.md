@@ -365,14 +365,51 @@ pulse = s.control_events(c, r["controls"])           # for evolve
   refused. `control_transfer`, `control_events` and `evolve` take any
   amplitude.
 - **Relaxation.** If the system relaxes (`T₁`, `T₂`, Redfield theory),
-  the controls are optimised in Liouville space (up to six spins ½), with
-  the same relaxation as `evolve` (free precession's, during the pulses as
-  well), the state propagated as its deviation from the identity. The
-  field derivative of relaxation and of thermal populations, in field
-  profiles, is taken by Richardson-extrapolated central differences;
-  against the derivative of the Boltzmann rates written out it agrees to
-  10⁻¹⁴ from 1 K to room temperature and from millitesla to 20 T.
-  Everything else is exact.
+  the controls are optimised in Liouville space, with the same relaxation
+  as `evolve` (free precession's, during the pulses as well), the state
+  propagated as its deviation from the identity. Rf controls keep the
+  generator as sparse matrices (see below); field profiles keep it dense,
+  up to six spins ½. The field derivative of relaxation and of thermal
+  populations, in field profiles, is taken by Richardson-extrapolated
+  central differences; against the derivative of the Boltzmann rates
+  written out it agrees to 10⁻¹⁴ from 1 K to room temperature and from
+  millitesla to 20 T. Everything else is exact.
+- **Larger systems.** With rf and relaxation, the generator of the
+  master equation (with the drift towards equilibrium) and the rf
+  directions `−i[2πF_{x,y}, ·]` are sparse matrices, built once per
+  optimisation, shared by the members of an ensemble, and only applied to
+  vectors; seven and eight relaxing spins fit. Each step's gradient is
+  the integral of `⟨λ(τ), E x(τ)⟩` over the step, taken by a ten-point
+  Gauss–Legendre rule in every substep of `‖hL‖ ≤ 2`, with the state and
+  costate at the nodes from the Taylor terms of the substep's
+  exponentials: exact to rounding (it equals the dense gradient to
+  4·10⁻¹⁵), at a sixth of the cost of the augmented exponentials.
+  Declared symmetries (`set_symmetries`) apply when the Hamiltonian, the
+  channels (whole isotopes) and the initial state respect them (thermal
+  equilibrium does); the target need not. The controls are then optimised
+  on the orbits of the elements, a third of them for a methyl group.
+  `control_cost` estimates one evaluation before anything is built:
+
+```python
+import metatron_qso as q
+from metatron_qso import spin
+
+sys = q.SpinSystem(9.4)                   # a ¹³C methyl group with T₁, T₂
+sys.add_spin("13C", 20.0, t1=2.0)
+for _ in range(3):
+    sys.add_spin("1H", 1.2, t1=2.0, t2=0.8)
+for h in (1, 2, 3):
+    sys.couple(0, h, 125.0)
+for e in range(3):                         # three protons coupled to them
+    k = sys.add_spin("1H", 2.0 + 0.6 * e, t1=1.0, t2=0.5)
+    for h in (1, 2, 3):
+        sys.couple(h, k, 3.0 + e)
+sys.set_symmetries([[0, 2, 3, 1, 4, 5, 6]])
+c = spin.Control.rf(["1H", "13C"], 1e-3, 10, sys.thermal_state(),
+                    sys.spin_operator(0, "z"), limit=5000.0)
+cost = sys.control_cost(c, 5000.0)
+print(cost["method"], cost["coefficients"])  # sparse 6145 (of 16 385)
+```
 - **Replay.** `control_events` gives `spin.rf_pulse(...)` (rf on several
   channels at once) or a field and a delay per step; `evolve` reproduces
   the transfer.
@@ -385,10 +422,16 @@ pulse = s.control_events(c, r["controls"])           # for evolve
   field, not a random profile).
 - **Cost.** One evaluation costs about 1 ms for two spins and 100 steps
   and 26 ms for four spins and 200 steps without relaxation. With
-  relaxation it grows with the rf amplitude times the duration (the
-  Taylor series needs more terms): two spins and 100 steps of up to 2 kHz
-  take 50 ms, three spins 0.7 s, at 10 kHz four times as long. Work and memory
-  beyond the limits are refused before anything is allocated; an
+  relaxation it grows with the rf amplitude times the duration (more
+  substeps) and with the entries of the generator. On four cores, ten
+  steps over 1 ms with rf of up to 2.5 kHz and Redfield relaxation take
+  0.11 s for a methyl group with one proton below it (five spins, on
+  385 orbits), 0.6 s with two, 3 s with three (6145 orbits) and 25 s
+  with four (eight spins, 24 577 orbits, 7·10⁶ entries); without the
+  symmetry 0.34 s, 1.4 s, 8.5 s and 105 s. `control_cost` returns the
+  method, the coefficients per member, the operations (about 10⁹ per
+  0.1 s) and the bytes. Work and memory beyond the limits (1.5·10¹²
+  operations, 2 GiB) are refused before anything is allocated; an
   evaluation the optimiser tries beyond them, possible with relaxation
   and no `limit`, ends the run with an error. Ctrl-C reaches Python only
   when an optimisation ends.
