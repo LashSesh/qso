@@ -1694,6 +1694,10 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             }
             let mut rows = Vec::new();
             let mut lines = Vec::new();
+            // The circuit distance depends on which faults can happen, not
+            // on how likely they are: one per distance for all p > 0.
+            let mut distances: std::collections::HashMap<usize, (serde_json::Value, String)> =
+                std::collections::HashMap::new();
             for &prob in p {
                 for &d in distance {
                     let noise = qec::CircuitNoise::uniform(prob);
@@ -1736,7 +1740,16 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                         })?;
                     }
                     let rate = qec::logical_error_rate_using(&circuit, *shots, *seed, kind)?;
-                    let (distance_json, distance_text) = bound(&circuit)?;
+                    let (distance_json, distance_text) = match distances.get(&d) {
+                        Some(known) if prob > 0.0 => known.clone(),
+                        _ => {
+                            let computed = bound(&circuit)?;
+                            if prob > 0.0 {
+                                distances.insert(d, computed.clone());
+                            }
+                            computed
+                        }
+                    };
                     lines.push(format!(
                         "p = {prob}, {label}, {r} rounds: {} qubits, {} detectors; logical error rate {:.3e} ± {:.1e} ({} of {} shots, {}){distance_text}",
                         circuit.n_qubits(),

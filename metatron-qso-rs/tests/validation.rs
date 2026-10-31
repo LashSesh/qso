@@ -1498,7 +1498,7 @@ fn bicycle_cycle_reaches_the_published_circuit_distances() {
     // [[90, 8, 10]], [[108, 8, 10]] and [[144, 12, 12]] with the depth-8
     // cycle, under noise that also strikes idle qubits. Three cycles of
     // QSO's circuit noise (no idle errors): the first two have circuit
-    // distance 8 exactly (11 s and 98 s on four cores). For the third,
+    // distance 8 exactly (12 s and 97 s on four cores). For the third,
     // BP+OSD with 256 searches per observable finds a logical error of 11
     // faults, and the exhaustive search proves that none has fewer than 7.
     let noise = CircuitNoise::uniform(0.001);

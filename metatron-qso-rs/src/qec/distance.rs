@@ -31,7 +31,7 @@ use crate::parallel::{map_tasks, threads};
 use crate::rng::Rng;
 
 mod zimmermann;
-use zimmermann::Zimmermann;
+use zimmermann::{Enumeration, Zimmermann};
 
 /// Most BP+OSD searches per observable.
 pub const MAX_BPOSD_TRIALS: usize = 1 << 16;
@@ -43,9 +43,10 @@ pub struct DistanceOptions {
     /// The exhaustive search stops after proving that no logical error of
     /// this weight exists.
     pub max_weight: usize,
-    /// Most sets of errors the exhaustive search visits (it checks after
-    /// each first error, and every 4096 sets; some 10⁷ a second per
-    /// thread).
+    /// Most sets of errors the exhaustive search visits, as the search
+    /// over first errors in index order counts them (some 10⁷ a second
+    /// per thread). The threads search ahead of that order, which costs
+    /// time but changes neither the bounds nor the witness.
     pub max_work: u64,
     /// BP+OSD searches per observable (at most [`MAX_BPOSD_TRIALS`]):
     /// first each observable alone with equal priors, then random sets of
@@ -368,25 +369,33 @@ pub fn circuit_distance(
     }
     let mut best = upper_bound(n, &errors, cycle, options.bposd_trials, options.seed, None)?;
     // Exhaustive search below the best found.
-    let budget = Budget::new(options.max_work, None);
     let search = Search::new(n, &errors);
     let ceiling = best
         .as_ref()
         .map_or(options.max_weight, |b| options.max_weight.min(b.len() - 1));
-    let mut lower = 2;
+    let (mut lower, mut used, mut exhausted) = (2, 0u64, false);
     for w in 2..=ceiling {
-        match search.run(w, &budget) {
+        let (outcome, spent) = search.run(w, options.max_work - used, None);
+        used += spent;
+        match outcome {
             Outcome::Found(set) => {
                 consider(set, &mut best);
                 lower = w;
                 break;
             }
-            Outcome::NotFound => lower = w + 1,
+            Outcome::NotFound { exhausted: e } => {
+                lower = w + 1;
+                exhausted = e;
+                if e {
+                    break;
+                }
+            }
             Outcome::OutOfWork => break,
         }
     }
-    // Nothing found: decide by linear algebra whether anything exists.
-    let proven_none = best.is_none() && logical_exists(n, &errors) == Some(false);
+    // Nothing found: the search ran out of errors to add, or linear
+    // algebra decides whether anything exists.
+    let proven_none = best.is_none() && (exhausted || logical_exists(n, &errors) == Some(false));
     Ok(match best {
         Some(set) => {
             let (w, obs) = witness(&errors, &set);
@@ -546,7 +555,7 @@ pub fn exact_circuit_distance(
         let entries: usize = errors.iter().map(|e| e.detectors.len()).sum();
         (entries as f64 / n.max(1) as f64).max(2.0)
     };
-    let mut enumeration: Option<Option<Zimmermann>> = None;
+    let mut enumeration: Option<Enumeration> = None;
     let mut levels = 0;
     // A single error is detectable or harmless (checked above).
     let mut lower = 2;
@@ -600,27 +609,32 @@ pub fn exact_circuit_distance(
                     let k = cols.saturating_sub(n).max(1);
                     let optimistic = optimistic_enumeration(cols, k, lower);
                     if optimistic * ENUMERATION_NANOS < search_cost {
-                        enumeration = Some(Zimmermann::new(n, &errors, &budget));
+                        enumeration = Some(Zimmermann::build(n, &errors, &budget));
                     }
                 }
                 match &enumeration {
-                    Some(Some(z)) => enumeration_cost(z) < search_cost,
+                    Some(Enumeration::Ready(z)) => enumeration_cost(z) < search_cost,
+                    Some(Enumeration::NoLogicalError) => true,
                     _ => false,
                 }
             }
         };
         if use_enumeration {
-            if enumeration.is_none() {
-                enumeration = Some(Zimmermann::new(n, &errors, &budget));
-            }
-            let Some(Some(z)) = &enumeration else {
-                if budget.stopped() {
+            let built = enumeration.get_or_insert_with(|| Zimmermann::build(n, &errors, &budget));
+            let z = match built {
+                Enumeration::Ready(z) => &*z,
+                Enumeration::NoLogicalError => {
+                    lower = usize::MAX;
                     break;
                 }
-                return Err(QsoError::invalid(
-                    "method",
-                    "the undetectable errors are too many for the Brouwer–Zimmermann enumeration",
-                ));
+                Enumeration::Stopped => break,
+                Enumeration::TooLarge => {
+                    return Err(QsoError::invalid(
+                        "method",
+                        "the detectors or the undetectable errors are too many for the \
+                         Brouwer–Zimmermann enumeration",
+                    ));
+                }
             };
             let w = levels + 1;
             if w > z.dimension() {
@@ -636,17 +650,20 @@ pub fn exact_circuit_distance(
             levels = w;
             lower = lower.max(z.bound(w));
         } else {
-            let (before, weight) = (budget.used(), lower);
-            match search.run(weight, &budget) {
+            let weight = lower;
+            let (outcome, spent) = search.run(weight, u64::MAX, deadline);
+            match outcome {
                 Outcome::Found(set) => {
                     // Nothing lighter exists: this is the distance.
                     consider(set, &mut best);
                     break;
                 }
-                Outcome::NotFound => lower += 1,
+                // The search ran out of errors to add: nothing exists.
+                Outcome::NotFound { exhausted: true } => lower = usize::MAX,
+                Outcome::NotFound { exhausted: false } => lower += 1,
                 Outcome::OutOfWork => break,
             }
-            history.push((weight, budget.used() - before));
+            history.push((weight, spent));
             if history.len() > 2 {
                 history.remove(0);
             }
@@ -788,8 +805,21 @@ fn is_logical(n: usize, errors: &[Error], set: &[usize]) -> bool {
 
 enum Outcome {
     Found(Vec<usize>),
-    NotFound,
+    /// No logical error of the weight searched; `exhausted` when the
+    /// weight cut no branch, so that none exists at any weight.
+    NotFound {
+        exhausted: bool,
+    },
     OutOfWork,
+}
+
+/// What the search met from one first error.
+enum Tally {
+    /// No logical error: the sets visited, and whether the weight cut a
+    /// branch.
+    Done { work: u64, cut: bool },
+    /// A logical error, at this many sets.
+    Found { at: u64, set: Vec<usize> },
 }
 
 /// Limits shared by the threads of a search: units of work (sets
@@ -825,10 +855,6 @@ impl Budget {
         true
     }
 
-    fn used(&self) -> u64 {
-        self.work.load(Ordering::Relaxed)
-    }
-
     pub(super) fn stopped(&self) -> bool {
         self.stopped.load(Ordering::Relaxed) || self.deadline.is_some_and(|d| Instant::now() >= d)
     }
@@ -842,10 +868,13 @@ impl Budget {
 /// index that flip the lowest detector still fired (one of them must),
 /// until no detector fires. A set whose prefix already fires no detector
 /// and flips no observable is never the lightest (dropping the prefix
-/// leaves a lighter logical error), so the search stops there. The first
-/// errors are shared out between threads; the set found from the lowest
-/// first error is reported, so the result does not depend on the threads
-/// (unless the budget stops the search).
+/// leaves a lighter logical error), so the search stops there.
+///
+/// The first errors are shared out between threads, which search ahead of
+/// index order. The answer is that of the search over first errors in
+/// index order: the set found from the lowest first error, with the sets
+/// counted up to it, so neither the answer nor the count depends on the
+/// threads, the work limit included (the deadline aside).
 struct Search<'a> {
     errors: &'a [Error],
     detectors: Vec<Vec<u32>>,
@@ -877,59 +906,113 @@ impl<'a> Search<'a> {
         }
     }
 
-    /// Whether some undetectable logical error has at most `weight` errors.
-    fn run(&self, weight: usize, budget: &Budget) -> Outcome {
+    /// Whether some undetectable logical error has at most `weight` errors
+    /// within `allowance` sets visited (and the deadline), and the sets
+    /// that count: those the search in index order visits up to its
+    /// answer.
+    fn run(&self, weight: usize, allowance: u64, deadline: Option<Instant>) -> (Outcome, u64) {
         let n = self.errors.len();
         if weight == 0 || n == 0 {
-            return Outcome::NotFound;
+            return (Outcome::NotFound { exhausted: n == 0 }, 0);
         }
+        // The threads stop soon after visiting `allowance` sets together.
+        let budget = Budget::new(allowance, deadline);
         let per = n.div_ceil(16 * threads()).max(1);
         // The lowest first error from which a set was found: later first
         // errors need not be searched.
         let lowest = AtomicUsize::new(usize::MAX);
-        let results: Vec<(Option<Vec<usize>>, bool)> = map_tasks(n.div_ceil(per), |t| {
-            let mut walker = Walker {
-                search: self,
-                levels: vec![Vec::with_capacity(4 * self.widest.max(1)); weight],
-                chosen: Vec::with_capacity(weight),
-                pending: 0,
-            };
-            let (mut found, mut done) = (None, true);
+        let tallies: Vec<Vec<Tally>> = map_tasks(n.div_ceil(per), |t| {
+            let mut walker = Walker::new(self, weight);
+            let mut out = Vec::new();
             for first in t * per..((t + 1) * per).min(n) {
                 if first > lowest.load(Ordering::Relaxed) {
                     break;
                 }
-                match walker.start(first as u32, weight, budget) {
+                match walker.start(first as u32, weight, &budget) {
                     Some(true) => {
                         lowest.fetch_min(first, Ordering::Relaxed);
-                        found = Some(walker.chosen.iter().map(|&k| k as usize).collect());
+                        out.push(Tally::Found {
+                            at: walker.nodes,
+                            set: walker.set(),
+                        });
                         break;
                     }
-                    // Count the work after every first error, so that the
-                    // budget stops the search within a first error's sets.
-                    Some(false) if budget.spend(std::mem::take(&mut walker.pending)) => {}
-                    _ => {
-                        done = false;
-                        break;
+                    Some(false) => out.push(Tally::Done {
+                        work: walker.nodes,
+                        cut: walker.cut,
+                    }),
+                    None => break,
+                }
+                if !budget.spend(std::mem::take(&mut walker.pending)) {
+                    break;
+                }
+            }
+            out
+        });
+        // The account of the search in index order, first error by first
+        // error, up to the first one the threads did not finish.
+        let (mut spent, mut cut) = (0u64, false);
+        for (t, tally) in tallies.iter().enumerate() {
+            for entry in tally {
+                match entry {
+                    Tally::Found { at, set } => {
+                        return if spent.saturating_add(*at) <= allowance {
+                            (Outcome::Found(set.clone()), spent + at)
+                        } else {
+                            (Outcome::OutOfWork, allowance)
+                        };
+                    }
+                    Tally::Done { work, cut: c } => {
+                        spent = spent.saturating_add(*work);
+                        cut |= c;
+                        if spent > allowance {
+                            return (Outcome::OutOfWork, allowance);
+                        }
                     }
                 }
             }
-            // A set was found: its work is done, and counts later.
-            budget.spend(walker.pending);
-            (found, done)
-        });
-        let mut complete = true;
-        for (found, done) in results {
-            if let Some(set) = found {
-                return Outcome::Found(set);
+            let next = t * per + tally.len();
+            if next < ((t + 1) * per).min(n) {
+                return self.sequential(next, weight, allowance, deadline, spent, cut);
             }
-            complete &= done;
         }
-        if complete {
-            Outcome::NotFound
-        } else {
-            Outcome::OutOfWork
+        (Outcome::NotFound { exhausted: !cut }, spent)
+    }
+
+    /// The search in index order from first error `from` on, on one
+    /// thread, after `spent` sets (`cut`: whether the weight cut a branch
+    /// before).
+    fn sequential(
+        &self,
+        from: usize,
+        weight: usize,
+        allowance: u64,
+        deadline: Option<Instant>,
+        mut spent: u64,
+        mut cut: bool,
+    ) -> (Outcome, u64) {
+        let budget = Budget::new(allowance - spent, deadline);
+        let mut walker = Walker::new(self, weight);
+        for first in from..self.errors.len() {
+            match walker.start(first as u32, weight, &budget) {
+                Some(true) => {
+                    return if spent.saturating_add(walker.nodes) <= allowance {
+                        (Outcome::Found(walker.set()), spent + walker.nodes)
+                    } else {
+                        (Outcome::OutOfWork, allowance)
+                    };
+                }
+                Some(false) => {
+                    spent = spent.saturating_add(walker.nodes);
+                    cut |= walker.cut;
+                    if spent > allowance {
+                        return (Outcome::OutOfWork, allowance);
+                    }
+                }
+                None => return (Outcome::OutOfWork, allowance),
+            }
         }
+        (Outcome::NotFound { exhausted: !cut }, spent)
     }
 }
 
@@ -941,13 +1024,35 @@ struct Walker<'s, 'a> {
     chosen: Vec<u32>,
     /// Sets visited and not yet counted in the budget.
     pending: u64,
+    /// Sets visited from the current first error.
+    nodes: u64,
+    /// Whether the weight cut a branch from the current first error.
+    cut: bool,
 }
 
-impl Walker<'_, '_> {
+impl<'s, 'a> Walker<'s, 'a> {
+    fn new(search: &'s Search<'a>, weight: usize) -> Self {
+        Walker {
+            search,
+            levels: vec![Vec::with_capacity(4 * search.widest.max(1)); weight],
+            chosen: Vec::with_capacity(weight),
+            pending: 0,
+            nodes: 0,
+            cut: false,
+        }
+    }
+
+    /// The errors chosen, by index.
+    fn set(&self) -> Vec<usize> {
+        self.chosen.iter().map(|&k| k as usize).collect()
+    }
+
     /// Whether error `first` extends by errors of higher index to a
     /// logical error of at most `weight` errors (`None`: out of budget).
     fn start(&mut self, first: u32, weight: usize, budget: &Budget) -> Option<bool> {
         let search = self.search;
+        self.nodes = 0;
+        self.cut = false;
         self.chosen.clear();
         self.chosen.push(first);
         self.levels[0].clear();
@@ -968,6 +1073,7 @@ impl Walker<'_, '_> {
         budget: &Budget,
     ) -> Option<bool> {
         let search = self.search;
+        self.nodes += 1;
         self.pending += 1;
         if self.pending >= 1 << 12 {
             if !budget.spend(self.pending) {
@@ -980,8 +1086,10 @@ impl Walker<'_, '_> {
             return Some(observables != 0);
         }
         if remaining == 0 || fired > remaining * search.widest {
+            self.cut = true;
             return Some(false);
         }
+        let lowest = self.levels[depth][0] as usize;
         if remaining == 1 {
             // The last error must flip exactly the fired detectors.
             if let Some(ks) = search.by_effect.get(self.levels[depth].as_slice()) {
@@ -995,9 +1103,12 @@ impl Walker<'_, '_> {
                     }
                 }
             }
+            // Longer extensions, if any, were not tried.
+            self.cut |= search.by_detector[lowest]
+                .iter()
+                .any(|&k| k > first && !self.chosen.contains(&k));
             return Some(false);
         }
-        let lowest = self.levels[depth][0] as usize;
         for &k in &search.by_detector[lowest] {
             if k <= first || self.chosen.contains(&k) {
                 continue;

@@ -476,11 +476,123 @@ fn exact_distance_ends_when_nothing_is_logical() {
     // errors, and at once when no error flips an observable.
     let n = MAX_EXISTENCE_DETECTORS + 10;
     let unlimited = ExactDistanceOptions::default().with_max_seconds(f64::INFINITY);
-    for errors in [
-        vec![error(&[0, 1, 2], 1), error(&[0], 0)],
-        vec![error(&[0, 1, 2], 0), error(&[0], 0), error(&[1, 2], 0)],
+    for method in [
+        DistanceMethod::Auto,
+        DistanceMethod::Search,
+        DistanceMethod::BrouwerZimmermann,
     ] {
-        let r = exact_circuit_distance(&model(n, errors), &unlimited).unwrap();
-        assert_eq!((r.lower_bound, r.witness), (usize::MAX, None));
+        for errors in [
+            vec![error(&[0, 1, 2], 1), error(&[0], 0)],
+            vec![error(&[0, 1, 2], 0), error(&[0], 0), error(&[1, 2], 0)],
+        ] {
+            let dem = model(n, errors);
+            let r = exact_circuit_distance(&dem, &unlimited.with_method(method)).unwrap();
+            assert_eq!((r.lower_bound, r.witness), (usize::MAX, None), "{method:?}");
+        }
     }
+    // Disjoint triples of detectors: no error can follow another, so the
+    // search runs out of errors to add at once, with or without a limit
+    // on its work.
+    let triples = model(
+        n,
+        (0..1000)
+            .map(|i| error(&[3 * i, 3 * i + 1, 3 * i + 2], u64::from(i % 2 == 0)))
+            .collect(),
+    );
+    let r = exact_circuit_distance(&triples, &unlimited.with_bposd_trials(0)).unwrap();
+    assert_eq!((r.lower_bound, r.witness.clone()), (usize::MAX, None));
+    let options = DistanceOptions {
+        bposd_trials: 0,
+        ..DistanceOptions::default()
+    };
+    let r = circuit_distance(&triples, &options).unwrap();
+    assert_eq!((r.lower_bound, r.witness), (usize::MAX, None));
+}
+
+/// Errors that each flip `width` distinct random detectors of `n`, a
+/// quarter of them an observable.
+fn wide_model(rng: &mut Rng, n: usize, m: usize, width: usize) -> DetectorErrorModel {
+    let errors = (0..m)
+        .map(|_| {
+            let mut dets: Vec<usize> = Vec::new();
+            while dets.len() < width {
+                let d = rng.below(n as u64) as usize;
+                if !dets.contains(&d) {
+                    dets.push(d);
+                }
+            }
+            dets.sort_unstable();
+            error(&dets, u64::from(rng.below(4) == 0))
+        })
+        .collect();
+    model(n, errors)
+}
+
+#[cfg(feature = "parallel")]
+#[test]
+fn bounds_and_witnesses_do_not_depend_on_the_threads() {
+    // The work limit stops the search at different points on different
+    // numbers of threads; the answer is that of the search in index
+    // order on any number. The colour code of distance 7 over two rounds
+    // has circuit distance 4.
+    let c = css_code_memory(
+        &CssCode::color_code(7).unwrap(),
+        2,
+        &CircuitNoise::uniform(0.001),
+        MemoryBasis::Z,
+    )
+    .unwrap();
+    let dem = detector_error_model(&c, false).unwrap();
+    let on = |threads: usize, max_work: u64| {
+        let options = DistanceOptions {
+            max_work,
+            bposd_trials: 0,
+            ..DistanceOptions::default()
+        };
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| circuit_distance(&dem, &options).unwrap())
+    };
+    let mut exact = Vec::new();
+    for max_work in [1 << 6, 1 << 10, 1 << 12, 1 << 14, 1 << 16, 1 << 18, 1 << 20] {
+        let one = on(1, max_work);
+        check_witness(&dem, &one);
+        for threads in [2, 3, 4] {
+            assert_eq!(on(threads, max_work), one, "{threads} threads, {max_work}");
+        }
+        exact.push(one.distance().is_some());
+    }
+    // 64 sets do not cover the first errors; 2²⁰ finish the search.
+    assert!(!exact[0] && exact[exact.len() - 1], "{exact:?}");
+    assert_eq!(on(1, 1 << 20).distance(), Some(4));
+    // Without a limit the exact distance agrees.
+    let unlimited = ExactDistanceOptions::default()
+        .with_method(DistanceMethod::Search)
+        .with_bposd_trials(0);
+    for threads in [1, 4] {
+        let r = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| exact_circuit_distance(&dem, &unlimited).unwrap());
+        assert_eq!(r, on(1, 1 << 20));
+    }
+}
+
+#[test]
+fn the_enumeration_keeps_the_time_limit() {
+    // Level 2 alone is 7·10⁷ sums of 188 words; the deadline stops it.
+    let mut rng = Rng::seed_from_u64(7);
+    let dem = wide_model(&mut rng, 300, 12_000, 6);
+    let options = ExactDistanceOptions::default()
+        .with_method(DistanceMethod::BrouwerZimmermann)
+        .with_max_seconds(0.3)
+        .with_bposd_trials(0);
+    let start = std::time::Instant::now();
+    let r = exact_circuit_distance(&dem, &options).unwrap();
+    let seconds = start.elapsed().as_secs_f64();
+    assert!(seconds < 2.0, "{seconds} s");
+    assert!(r.lower_bound >= 2 && r.distance().is_none(), "{r:?}");
 }

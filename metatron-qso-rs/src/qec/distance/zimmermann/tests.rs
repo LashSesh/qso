@@ -1,15 +1,23 @@
-use super::super::{Budget, errors};
+use super::super::{Budget, Error, errors};
 use super::*;
 use crate::qec::dem::{DetectorErrorModel, ErrorMechanism};
 use crate::qec::gf2;
 use crate::rng::Rng;
+
+/// The generator matrices of a model's errors, if they were built.
+fn built(n: usize, errs: &[Error]) -> Option<Zimmermann> {
+    match Zimmermann::build(n, errs, &Budget::new(u64::MAX, None)) {
+        Enumeration::Ready(z) => Some(z),
+        _ => None,
+    }
+}
 
 /// The lightest logical word, level by level until the bound reaches it
 /// (`None`: no logical word).
 fn minimum(dem: &DetectorErrorModel) -> Option<usize> {
     let errs = errors(dem).unwrap();
     let budget = Budget::new(u64::MAX, None);
-    let z = Zimmermann::new(dem.n_detectors, &errs, &budget)?;
+    let z = built(dem.n_detectors, &errs)?;
     let mut best = usize::MAX;
     for w in 1..=z.dimension() {
         let level = z.level(w, best, &budget);
@@ -128,7 +136,7 @@ fn information_sets_are_disjoint_and_span_the_code() {
             errors: errors_list,
         };
         let errs = errors(&dem).unwrap();
-        let Some(z) = Zimmermann::new(n, &errs, &Budget::new(u64::MAX, None)) else {
+        let Some(z) = built(n, &errs) else {
             continue;
         };
         let (k, words) = (z.k, z.words);
@@ -227,12 +235,7 @@ fn bounds_grow_with_the_ranks_of_the_information_sets() {
     // level w no word lighter than 2(w + 1) is left.
     let (rows, n) = golay(true);
     let dem = classical(&rows, n);
-    let z = Zimmermann::new(
-        dem.n_detectors,
-        &errors(&dem).unwrap(),
-        &Budget::new(u64::MAX, None),
-    )
-    .unwrap();
+    let z = built(dem.n_detectors, &errors(&dem).unwrap()).unwrap();
     assert_eq!(z.dimension(), 12);
     assert_eq!(z.matrices.len(), 2);
     assert!(z.matrices.iter().all(|g| g.rank == 12));
@@ -283,12 +286,7 @@ fn deficient_information_sets_do_not_skip_light_words() {
             (&[4], 0),
         ],
     );
-    let z = Zimmermann::new(
-        dem.n_detectors,
-        &errors(&dem).unwrap(),
-        &Budget::new(u64::MAX, None),
-    )
-    .unwrap();
+    let z = built(dem.n_detectors, &errors(&dem).unwrap()).unwrap();
     assert_eq!(z.dimension(), 8);
     assert_eq!(z.matrices[1].rank, 6);
     assert_eq!(z.bound(2), 4);
@@ -301,7 +299,7 @@ fn every_level_meets_the_words_below_its_bound() {
     // sets are mostly deficient: after every level, the lightest logical
     // word (from all 2^k words) has been met or weighs at least the bound.
     let mut rng = Rng::seed_from_u64(2);
-    let mut deficient = 0;
+    let (mut checked, mut deficient) = (0, 0);
     for _ in 0..1500 {
         let n = 3 + rng.below(8) as usize;
         let m = n + 4 + rng.below(10) as usize;
@@ -328,13 +326,12 @@ fn every_level_meets_the_words_below_its_bound() {
         if distinct.iter().any(|e| e.detectors.is_empty()) {
             continue;
         }
-        let Some(z) = Zimmermann::new(n, &distinct, &Budget::new(u64::MAX, None)) else {
+        let Some(z) = built(n, &distinct) else {
             continue;
         };
         if z.k > 12 {
             continue;
         }
-        deficient += usize::from(z.matrices.iter().any(|g| g.rank < z.k));
         let (g, words) = (&z.matrices[0], z.words);
         let Some(want) = (1u32..1 << z.k)
             .filter_map(|u| {
@@ -352,6 +349,8 @@ fn every_level_meets_the_words_below_its_bound() {
         else {
             continue;
         };
+        checked += 1;
+        deficient += usize::from(z.matrices.iter().any(|g| g.rank < z.k));
         let budget = Budget::new(u64::MAX, None);
         let mut best = usize::MAX;
         for w in 1..=z.k {
@@ -368,5 +367,5 @@ fn every_level_meets_the_words_below_its_bound() {
         }
         assert_eq!(best, want);
     }
-    assert!(deficient > 500, "{deficient}");
+    assert!(checked > 1400 && deficient > 1300, "{checked}, {deficient}");
 }

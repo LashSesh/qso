@@ -79,17 +79,30 @@ fn get(row: &[u64], c: usize) -> bool {
     row[c / 64] >> (c % 64) & 1 == 1
 }
 
+/// What [`Zimmermann::build`] made of the errors.
+pub(super) enum Enumeration {
+    /// The generator matrices, ready for the levels.
+    Ready(Zimmermann),
+    /// No set of errors flips an observable and no detector.
+    NoLogicalError,
+    /// The matrices would exceed [`MAX_GENERATOR_BITS`].
+    TooLarge,
+    /// The budget stopped the construction.
+    Stopped,
+}
+
 impl Zimmermann {
-    /// The code of the undetectable errors and its generator matrices;
-    /// `None` when no combination of errors is undetectable, when one
-    /// generator matrix would exceed [`MAX_GENERATOR_BITS`] (further ones
-    /// stop at that limit), or when the budget stops (checked at every
-    /// pivot).
-    pub fn new(n_detectors: usize, errors: &[Error], budget: &Budget) -> Option<Self> {
+    /// The code of the undetectable errors and its generator matrices,
+    /// further ones while they fit in [`MAX_GENERATOR_BITS`] together. The
+    /// budget is checked at every pivot. At the limits the detectors'
+    /// matrix and the first generator matrix are held at once, each up to
+    /// [`MAX_GENERATOR_BITS`]; the detectors' matrix is freed before the
+    /// further ones are built.
+    pub fn build(n_detectors: usize, errors: &[Error], budget: &Budget) -> Enumeration {
         let n = errors.len();
         let words = n.div_ceil(64);
         if n_detectors.saturating_mul(64 * words) > MAX_GENERATOR_BITS {
-            return None;
+            return Enumeration::TooLarge;
         }
         // H in reduced row echelon form: one row per detector.
         let mut h = vec![0u64; n_detectors * words];
@@ -109,7 +122,7 @@ impl Zimmermann {
                 continue;
             };
             if budget.stopped() {
-                return None;
+                return Enumeration::Stopped;
             }
             if p != r {
                 for w in 0..words {
@@ -131,8 +144,11 @@ impl Zimmermann {
         // of the rows that hold f.
         let free: Vec<usize> = (0..n).filter(|&c| pivot_of[c] == usize::MAX).collect();
         let k = free.len();
-        if k == 0 || k.saturating_mul(64 * words) > MAX_GENERATOR_BITS {
-            return None;
+        if k == 0 {
+            return Enumeration::NoLogicalError;
+        }
+        if k.saturating_mul(64 * words) > MAX_GENERATOR_BITS {
+            return Enumeration::TooLarge;
         }
         let mut row_of = vec![usize::MAX; n];
         for (t, &f) in free.iter().enumerate() {
@@ -154,17 +170,27 @@ impl Zimmermann {
                 }
             }
         }
+        drop(h);
+        // Every word flips the observables of the rows it sums.
+        if observables.iter().all(|&o| o == 0) {
+            return Enumeration::NoLogicalError;
+        }
         let mut matrices = vec![Generator {
-            rows: rows.clone(),
-            observables: observables.clone(),
-            columns: free.clone(),
+            rows,
+            observables,
+            columns: free,
             rank: k,
         }];
         // Further information sets among the columns not used yet, each
-        // systematic on the columns it can pivot on.
+        // systematic on the columns it can pivot on; fewer than
+        // `k − MAX_DEFICIT` columns cannot make one.
+        let bits = |m: usize| (m as u64) * (k as u64) * 64 * (words as u64);
         let mut candidates = pivots;
-        while !candidates.is_empty() {
-            let (mut g, mut obs) = (rows.clone(), observables.clone());
+        while !candidates.is_empty()
+            && candidates.len() + MAX_DEFICIT >= k
+            && bits(matrices.len() + 1) <= MAX_GENERATOR_BITS as u64
+        {
+            let (mut g, mut obs) = (matrices[0].rows.clone(), matrices[0].observables.clone());
             let mut used = 0;
             let mut chosen = Vec::new();
             let mut rest = Vec::new();
@@ -174,7 +200,7 @@ impl Zimmermann {
                     continue;
                 };
                 if budget.stopped() {
-                    return None;
+                    return Enumeration::Stopped;
                 }
                 if p != used {
                     for w in 0..words {
@@ -195,10 +221,7 @@ impl Zimmermann {
                 chosen.push(c);
                 used += 1;
             }
-            if used == 0
-                || k - used > MAX_DEFICIT
-                || (matrices.len() + 1) * k * 64 * words > MAX_GENERATOR_BITS
-            {
+            if used == 0 || k - used > MAX_DEFICIT {
                 break;
             }
             matrices.push(Generator {
@@ -209,7 +232,7 @@ impl Zimmermann {
             });
             candidates = rest;
         }
-        Some(Zimmermann { k, words, matrices })
+        Enumeration::Ready(Zimmermann { k, words, matrices })
     }
 
     /// Dimension of the code of undetectable errors.
@@ -291,10 +314,17 @@ impl Zimmermann {
         if w == 0 || w > k {
             return (None, true);
         }
+        if budget.stopped() {
+            return (None, false);
+        }
         // The lightest weight found by any task (or the limit, exclusive):
         // others skip heavier words but keep equally light ones.
         let shared = AtomicUsize::new(limit.saturating_sub(1));
         let results: Vec<Result<Option<Word>, ()>> = map_tasks(k - w + 1, |first| {
+            // A task that starts after the deadline does nothing.
+            if budget.stopped() {
+                return Err(());
+            }
             let mut walk = Walk {
                 g,
                 k,
@@ -370,8 +400,10 @@ impl Walk<'_> {
 
     /// A full sum: kept when logical and lighter than the best so far.
     fn leaf(&mut self, budget: &Budget) -> bool {
-        self.pending += 1;
-        if self.pending >= 1 << 14 {
+        // Counted in word operations, so that the budget is checked about
+        // every millisecond whatever the length of the words.
+        self.pending += self.words as u64 + 4;
+        if self.pending >= 1 << 20 {
             if !budget.spend(self.pending) {
                 return false;
             }
