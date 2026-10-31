@@ -20,6 +20,7 @@ use std::sync::OnceLock;
 
 use num_complex::Complex64 as C64;
 
+use super::symmetric::MAX_ORBIT_ENTRIES;
 use super::{Statistics, propagate};
 use crate::error::{QsoError, Result};
 use crate::linalg::{CsrMatrix, RMatrix, eigh_real};
@@ -34,6 +35,19 @@ pub const MAX_HYPERCUBE_COMPOSITIONS: usize = 1 << 25;
 
 const SIGN: u32 = 1 << 31;
 const DEAD: u32 = SIGN - 1;
+
+/// The error for a Hamiltonian of `states` states (at least, if
+/// `at_least`) with up to `per_state` entries each.
+fn too_many_entries(states: usize, per_state: usize, at_least: bool) -> QsoError {
+    let prefix = if at_least { "at least " } else { "" };
+    QsoError::invalid(
+        "d",
+        format!(
+            "{prefix}{states} states with up to {per_state} entries each exceed the \
+             {MAX_ORBIT_ENTRIES} entries of a reduced Hamiltonian"
+        ),
+    )
+}
 
 /// `C(m, k)` for `m ≤ top`, `k ≤ kmax`, saturating.
 fn binomials(top: usize, kmax: usize) -> Vec<Vec<usize>> {
@@ -67,14 +81,16 @@ impl Compositions {
     }
 }
 
-/// The permutations of `0..n`, by Heap's algorithm, with their signs.
+/// The permutations of `0..n`, by Heap's algorithm, each with whether it
+/// is odd. Every swap is a transposition, so one flag shared by all levels
+/// of the recursion follows the parity of the array (a flag per level
+/// would miss the swaps made by the levels below it).
 fn permutations(n: usize) -> Vec<(Vec<usize>, bool)> {
-    fn heap(k: usize, a: &mut Vec<usize>, odd: bool, out: &mut Vec<(Vec<usize>, bool)>) {
+    fn heap(k: usize, a: &mut Vec<usize>, odd: &mut bool, out: &mut Vec<(Vec<usize>, bool)>) {
         if k <= 1 {
-            out.push((a.clone(), odd));
+            out.push((a.clone(), *odd));
             return;
         }
-        let mut odd = odd;
         for i in 0..k {
             heap(k - 1, a, odd, out);
             if i + 1 < k {
@@ -83,12 +99,12 @@ fn permutations(n: usize) -> Vec<(Vec<usize>, bool)> {
                 } else {
                     a.swap(0, k - 1);
                 }
-                odd = !odd;
+                *odd = !*odd;
             }
         }
     }
     let mut out = Vec::new();
-    heap(n, &mut (0..n).collect(), false, &mut out);
+    heap(n, &mut (0..n).collect(), &mut false, &mut out);
     out
 }
 
@@ -138,6 +154,10 @@ pub struct HypercubeParticles {
 impl HypercubeParticles {
     /// `particles` (1 to [`MAX_HYPERCUBE_PARTICLES`]) particles of the
     /// given statistics on `Q_d` with hopping rate `gamma`, no interaction.
+    /// At most [`MAX_HYPERCUBE_COMPOSITIONS`] compositions are enumerated,
+    /// and the Hamiltonian may have at most [`MAX_ORBIT_ENTRIES`] entries
+    /// (bounded before it is built); fermions without an invariant state
+    /// (four on `Q₂`) are refused.
     pub fn new(
         d: usize,
         statistics: Statistics,
@@ -162,6 +182,15 @@ impl HypercubeParticles {
         }
         if d > u16::MAX as usize {
             return Err(QsoError::invalid("d", "at most 65 535 coordinates"));
+        }
+        if statistics == Statistics::Fermions && d < usize::BITS as usize && particles > 1 << d {
+            return Err(QsoError::invalid(
+                "particles",
+                format!(
+                    "{particles} fermions do not fit on the {} nodes of Q{d}",
+                    1 << d
+                ),
+            ));
         }
         let patterns = 1usize << particles;
         let top = d + patterns;
@@ -188,6 +217,17 @@ impl HypercubeParticles {
         } else {
             permutations(particles)
         };
+        // Every class holds at most one composition per permutation: a
+        // first bound on the entries of the Hamiltonian, before the
+        // compositions are enumerated (exact for distinguishable particles).
+        let per_state = 1 + patterns * particles;
+        if (total / perms.len()).saturating_mul(per_state) > MAX_ORBIT_ENTRIES {
+            return Err(too_many_entries(
+                total / perms.len(),
+                per_state,
+                perms.len() > 1,
+            ));
+        }
         let moved: Vec<(Vec<usize>, bool)> = perms
             .iter()
             .map(|(pi, odd)| {
@@ -270,6 +310,18 @@ impl HypercubeParticles {
                     break;
                 }
             }
+        }
+        if images.is_empty() {
+            return Err(QsoError::invalid(
+                "particles",
+                format!(
+                    "no state of {particles} fermions on Q{d} is invariant under the \
+                     coordinate permutations"
+                ),
+            ));
+        }
+        if images.len().saturating_mul(per_state) > MAX_ORBIT_ENTRIES {
+            return Err(too_many_entries(images.len(), per_state, false));
         }
         let mut walk = HypercubeParticles {
             d,
@@ -372,7 +424,7 @@ impl HypercubeParticles {
                 actual: counts.len(),
             });
         }
-        if counts.iter().sum::<usize>() != self.d {
+        if counts.iter().any(|&c| c > self.d) || counts.iter().sum::<usize>() != self.d {
             return Err(QsoError::invalid(
                 "counts",
                 format!("the counts must add up to d = {}", self.d),
@@ -537,5 +589,27 @@ impl HypercubeParticles {
         self.hamiltonian = CsrMatrix::from_triplets(classes, &triplets)?;
         self.spectral = OnceLock::new();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::permutations;
+
+    #[test]
+    fn permutations_with_their_parities() {
+        for n in 1..=6 {
+            let perms = permutations(n);
+            assert_eq!(perms.len(), (1..=n).product::<usize>());
+            let mut seen = std::collections::HashSet::new();
+            for (pi, odd) in &perms {
+                assert!(seen.insert(pi.clone()));
+                let inversions = (0..n)
+                    .flat_map(|i| (i + 1..n).map(move |j| (i, j)))
+                    .filter(|&(i, j)| pi[i] > pi[j])
+                    .count();
+                assert_eq!(*odd, inversions % 2 == 1, "{pi:?}");
+            }
+        }
     }
 }

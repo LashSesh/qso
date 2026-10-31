@@ -328,6 +328,9 @@ impl Terms {
 
     /// Whether the node permutation `g` keeps the hopping, the potential
     /// and the neighbours (an automorphism of the graph, weights included).
+    /// The hopping must match exactly; the diagonal up to the rounding of
+    /// a sum over the row (the Laplacian's weighted degree is added up in
+    /// the order of the neighbours, which differs between nodes).
     pub(crate) fn is_symmetry(&self, g: &[usize]) -> bool {
         let sorted = |row: Vec<(usize, f64)>| {
             let mut row = row;
@@ -336,7 +339,9 @@ impl Terms {
         };
         (0..self.n).all(|u| {
             let v = g[u];
-            self.diagonal[u] == self.diagonal[v]
+            let scale =
+                self.diagonal[u].abs() + self.hopping[u].iter().map(|&(_, h)| h.abs()).sum::<f64>();
+            (self.diagonal[u] - self.diagonal[v]).abs() <= 64.0 * f64::EPSILON * scale
                 && sorted(self.hopping[u].iter().map(|&(w, h)| (g[w], h)).collect())
                     == sorted(self.hopping[v].clone())
         })
@@ -747,21 +752,20 @@ impl InteractingWalk {
     }
 
     /// Tolerance for comparing certificates at `times`:
-    /// `10⁻¹² · max(1, |t|max · ‖H‖)`, with `‖H‖` from the eigenvalues or,
-    /// above [`DENSE_LIMIT`] configurations, bounded by the largest absolute
-    /// row sum. The rounding of the eigenvalues turns into phase errors that
-    /// grow linearly with the time; measured distances between certificates
-    /// of isomorphic graphs stay below 10⁻¹⁵ · |t| · ‖H‖, a thousandth of
-    /// this tolerance.
+    /// `10⁻¹² · max(1, |t|max · ‖H‖)`, with `‖H‖` bounded by the largest
+    /// absolute row sum (no diagonalisation, so that it costs less than
+    /// [`certificate_by_orbits`](Self::certificate_by_orbits)). The rounding
+    /// of the eigenvalues turns into phase errors that grow linearly with
+    /// the time; measured distances between certificates of isomorphic
+    /// graphs stay below 10⁻¹⁵ · |t| · ‖H‖, a thousandth of this tolerance
+    /// or less.
     pub fn certificate_tolerance(&self, times: &[f64]) -> Result<f64> {
         self.check_times(times)?;
-        // Above the dense limit, the largest absolute row sum bounds ‖H‖.
-        let norm = match self.spectral() {
-            Some((values, _)) => values.iter().fold(0.0f64, |m, v| m.max(v.abs())),
-            None => (0..self.dimension())
-                .map(|r| self.hamiltonian.row(r).map(|(_, v)| v.abs()).sum::<f64>())
-                .fold(0.0, f64::max),
-        };
+        // The largest absolute row sum bounds ‖H‖ without diagonalising
+        // (which would cost more than a certificate by orbits).
+        let norm = (0..self.dimension())
+            .map(|r| self.hamiltonian.row(r).map(|(_, v)| v.abs()).sum::<f64>())
+            .fold(0.0, f64::max);
         let t = times.iter().fold(0.0f64, |m, t| m.max(t.abs()));
         Ok(1e-12 * (t * norm).max(1.0))
     }

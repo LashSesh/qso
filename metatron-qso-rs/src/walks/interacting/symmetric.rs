@@ -26,7 +26,9 @@
 //! (`2²⁷`, a 4-byte word each) are allowed, and the work grows with the
 //! number of generators: give a small generating set, such as
 //! [`Graph::stabilizer`]'s. Every configuration is mapped once by every
-//! generator, about a microsecond each.
+//! generator, a few tens of nanoseconds each. The sites of the orbits'
+//! representatives, at most [`MAX_ORBIT_ENTRIES`] of them, are counted
+//! before they are stored.
 //!
 //! ```
 //! use metatron_qso::graph::generators;
@@ -228,11 +230,25 @@ impl ConfigurationOrbits {
         for a in 0..total {
             find(&mut parent, a);
         }
+        // The representatives' sites, counted before they are stored.
+        let live = (0..total)
+            .filter(|&a| parent[a] & !SIGN == a as u32 && dead[a / 64] >> (a % 64) & 1 == 0)
+            .count();
+        if live.saturating_mul(particles) > MAX_ORBIT_ENTRIES {
+            return Err(QsoError::invalid(
+                "generators",
+                format!(
+                    "{live} orbits of {particles} particles ({}): their representatives \
+                     exceed {MAX_ORBIT_ENTRIES} sites (a larger group leaves fewer orbits)",
+                    statistics.name()
+                ),
+            ));
+        }
         // Number the orbits in the order of their first configuration.
         // Every configuration now points at its root, which comes first and
         // is relabelled before it.
-        let mut representatives = Vec::new();
-        let mut sizes: Vec<u32> = Vec::new();
+        let mut representatives = Vec::with_capacity(live * particles);
+        let mut sizes: Vec<u32> = Vec::with_capacity(live);
         ranking.for_each(total, |a, sites| {
             let word = parent[a];
             let root = (word & !SIGN) as usize;
@@ -400,6 +416,15 @@ impl SymmetricInteractingWalk {
             }
         }
         let orbits = ConfigurationOrbits::new(n, statistics, particles, symmetries)?;
+        if orbits.is_empty() {
+            return Err(QsoError::invalid(
+                "symmetries",
+                format!(
+                    "no state of {particles} fermions is invariant under these symmetries: \
+                     every orbit holds a configuration that one of them maps to minus itself"
+                ),
+            ));
+        }
         let max_degree = (0..n).map(|u| graph.neighbors(u).len()).max().unwrap_or(0);
         let entries = particles
             .checked_mul(max_degree)
@@ -435,6 +460,13 @@ impl SymmetricInteractingWalk {
         statistics: Statistics,
         start: &[usize],
     ) -> Result<Self> {
+        if statistics == Statistics::Fermions {
+            let mut sites = start.to_vec();
+            sites.sort_unstable();
+            if sites.windows(2).any(|w| w[0] == w[1]) {
+                return Err(QsoError::invalid("start", "fermions cannot share a site"));
+            }
+        }
         let group = graph.stabilizer(start)?;
         Self::new(
             graph,

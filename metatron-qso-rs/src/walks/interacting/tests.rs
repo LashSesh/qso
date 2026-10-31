@@ -638,6 +638,30 @@ fn certificates_from_orbit_representatives() {
             }
         }
     }
+    // Weighted graphs with the Laplacian: the weighted degree is summed in
+    // the order of the neighbours, so it differs between the nodes of one
+    // orbit in the last bit, which must not reject the symmetry.
+    let mut edges = Vec::new();
+    for (jump, weight) in [(1, 1.0), (2, 0.45), (4, -0.3)] {
+        for u in 0..8 {
+            let v = (u + jump) % 8;
+            if jump < 4 || u < v {
+                edges.push((u, v, weight));
+            }
+        }
+    }
+    let weighted = Graph::from_weighted_edges(8, &edges).unwrap();
+    let group = weighted.automorphism_group();
+    assert!(!group.generators().is_empty());
+    for statistics in ALL {
+        let w = InteractingWalk::new(&weighted, Generator::Laplacian, 1.0, statistics, 2)
+            .unwrap()
+            .with_interaction(0.8, -0.2)
+            .unwrap();
+        let full = w.certificate(&times).unwrap();
+        let reduced = w.certificate_by_orbits(&times, group.generators()).unwrap();
+        assert!(certificate_distance(&full, &reduced) < w.certificate_tolerance(&times).unwrap());
+    }
     // Beyond the dense limit: two bosons on Q₆ (2080 configurations) and a
     // relabelled copy agree, where the dense certificate is refused.
     let q6 = generators::hypercube(6);

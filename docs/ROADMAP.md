@@ -3565,7 +3565,7 @@ crate, an independent reference for every deliverable, reference tools
 in the cross-validation only. The ninth and tenth stages ship together
 as one release.
 
-### 1.43 — Interacting walkers on symmetric graphs (M)
+### 1.43 — Interacting walkers on symmetric graphs (M, delivered)
 
 Use case: few-body dynamics on graphs too large for the occupation
 basis of 1.29, which stops at 2²² configurations: Bose–Hubbard pairs and
@@ -3591,6 +3591,119 @@ permanents and determinants of the single-walker propagator, on `Q_d`
 from its closed form; two bosons on a ring follow the closed-form
 dispersion of bound pairs, `E(K) = ±√(U² + 16J²cos²(K/2))` (Winkler et
 al., Nature 441, 853 (2006)); certificates equal those of 1.29.
+
+Delivered in `walks/interacting/symmetric.rs`,
+`walks/interacting/hypercube.rs` and `walks/interacting.rs`:
+
+- **Orbits of configurations.** `ConfigurationOrbits` runs a union–find
+  over the ranks of all configurations (at most 2²⁷), linking each to its
+  images under the generators and carrying the sign `ψ(g·c) = s(g, c)ψ(c)`
+  in the top bit of every 4-byte word. Fermionic configurations that a
+  symmetry maps to minus themselves close a cycle of sign −1, and their
+  orbit drops out.
+- **Reduced walks.** `SymmetricInteractingWalk` builds
+  `⟨O′|H|O⟩ = √(|O|/|O′|) Σ φ(c′)⟨c′|H|r⟩` from the terms at each
+  representative, with the hopping and interactions of 1.29, and gives
+  densities, pair correlations, configuration probabilities and the lift
+  to all configurations. `from_start` reduces by the automorphisms that
+  fix each occupied node (`Graph::stabilizer`).
+- **Hypercubes.** `HypercubeParticles` holds up to four particles on
+  `Q_d` as compositions of `d` into `2^N` bit patterns; particle
+  permutations act on the patterns, with the sign of the permutation for
+  fermions.
+- **Certificates.** `InteractingWalk::certificate_by_orbits` computes
+  one row per orbit of the automorphisms and repeats it.
+- The Hamiltonian terms and the ranking of 1.29 are shared, so the full
+  and the reduced walks build their matrices from the same code. In
+  Python: `SymmetricInteractingWalk`, `HypercubeParticles`,
+  `InteractingWalk.certificate_by_orbits`.
+
+Changes to the plan:
+
+- **Pointwise stabilisers.** `from_start` takes the automorphisms that
+  fix every occupied node, not those that permute them among themselves.
+  The setwise stabiliser can be larger, but for fermions it acts on the
+  start by a sign, and it needs a search of its own. Any group can still
+  be given explicitly.
+- **Certificates from Krylov rows.** Each row is propagated by Krylov
+  steps unless the walk was diagonalised already: a handful of rows costs
+  far less than the eigendecomposition that `certificate` needs, so the
+  orbits pay off below the dense limit too.
+- **A fault in the Krylov propagation, found on the way.** Two free
+  bosons on `Q₄₀` reached the antipode with probability 0 at perfect
+  transfer, where the closed form gives 1. `linalg::expm_multiply`
+  started every step at the whole remaining interval and trusted its a
+  posteriori error estimate, which on the equally spaced spectrum of the
+  hypercube was small by accident for a step far outside the range where
+  the approximation converges. Steps now stay below `m` divided by the
+  spread of the Ritz values (Hochbruck and Lubich), and estimates at the
+  level of rounding count as converged (a tolerance of 10⁻¹⁴ had shrunk
+  the steps forever). Continuous, driven and interacting walks above the
+  dense limit use this propagation; the whole test suite passes
+  unchanged, and the hypercube test now runs up to perfect transfer.
+
+Measured (four cores):
+
+- **Against the unreduced walk.** On the Petersen graph, the 4 × 4 rook's
+  graph, `Q₄` and `C₈`, for bosons, fermions and distinguishable
+  particles, two and three of them, both generators and `U` and `V` on,
+  the lifted reduced walk equals `InteractingWalk` to 10⁻¹⁰; under the
+  whole automorphism group too, orbit by orbit.
+- **Closed forms.** Free particles from node 0 of `Q₃₀` and `Q₄₀` (two),
+  `Q₁₂` (three) and `Q₆` (four) follow the single walker to 10⁻¹⁰, up to
+  perfect transfer. Two bosons on a ring of 101 sites have their bound
+  pair at `±√(U² + 16J²)` to 10⁻¹² (`U` = 3, −2, 7.5).
+- **Size and time.** Two bosons at a corner of the 4 × 4 rook's graph: 11
+  orbits of 136 configurations. Three bosons on `Q₈`: 1324 orbits of
+  2 829 056 (2.2 s to build); on `Q₉`: 2284 of 22 500 864 (16 s); four
+  on `Q₇`: 9343 of 11 716 640 (5.6 s). `HypercubeParticles` with two
+  bosons on `Q₄₀` has 6391 states (built in 0.01 s, propagated for unit
+  time in 0.12 s), on `Q₁₀₀` 89 726 (3 s); three on `Q₂₀` 156 240 (1.1 s
+  and 3.3 s), on `Q₃₀` 1 763 074 (16 s and 98 s); four on `Q₁₂` 787 586
+  (25 s and 35 s).
+- **Certificates.** Two bosons with `U = 1`: by orbits 0.20 s instead of
+  7.7 s on the Paley graph of order 61 and 0.07 s instead of 2.0 s on the
+  7 × 7 rook's graph, equal to the full certificate to 3·10⁻¹⁴ (tolerance
+  6·10⁻¹¹). Beyond the dense limit `Q₆` (2080 configurations, 0.19 s),
+  the 9 × 9 rook's graph (3321, 0.62 s) and the Paley graph of order 101
+  (5151, 1.6 s) give the same certificate as a relabelled copy to
+  5·10⁻¹⁵.
+
+Review: an independent review found one serious fault and six smaller
+ones; all are fixed.
+
+- **Fermion signs on the hypercube.** Heap's algorithm handed the parity
+  of the permutations down its recursion by value, so the swaps made
+  further down never reached it: 2 of the 6 permutations of three
+  particles and 12 of the 24 of four had the wrong sign. Three and four
+  fermions on `Q_d` got wrong numbers of states (21 instead of 8 for
+  three on `Q₃`) and wrong dynamics, without any warning; one flag shared
+  by the whole recursion now follows every swap. The tests had only two
+  fermions; now three and four are compared with the generic reduction,
+  and two free fermions with their Slater determinant.
+- **Weighted Laplacians.** The weighted degree is added up in the order
+  of the neighbours, so the nodes of one orbit could differ in the last
+  bit and `certificate_by_orbits` refused true automorphisms. The
+  diagonal is now compared to the rounding of its row sum.
+- **Walks without a state.** Under the whole automorphism group of a
+  distance-transitive graph no state of two fermions is invariant. Such
+  walks panicked at their first propagation; they are now refused when
+  they are built.
+- **Memory.** The representatives of the orbits (8 bytes per site) and
+  the Hamiltonian of `HypercubeParticles` (24 bytes per entry while it
+  is built) could exhaust memory before any limit applied, and the
+  process aborted. Both are now bounded before they are stored: two
+  bosons reach `Q₄₄₄`, three `Q₃₂` and four `Q₁₂`.
+- **Smaller faults.** `HypercubeParticles.state_of` checks every count
+  before adding them up (a wrapped sum indexed out of bounds),
+  `from_start` refuses fermions on one site, and `certificate_tolerance`
+  bounds `‖H‖` by the largest row sum instead of diagonalising, which on
+  the Paley graph of order 61 took 7 s, more than the certificate by
+  orbits itself. The union–find step takes tens of nanoseconds, not a
+  microsecond as the documentation said.
+- **Validation the plan named but the tests lacked:** random weighted
+  graphs closed under a permutation, by that permutation and by their
+  whole group, and two particles on `Q₈` against the full walk of 1.29.
 
 ### 1.44 — Slow noise, exactly averaged (M)
 

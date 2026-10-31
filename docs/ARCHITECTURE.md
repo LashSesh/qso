@@ -839,15 +839,21 @@ agree with brute force on random graphs.
   so a scan in rank order meets every orbit's representative first and
   relabels the words in place as orbit numbers; a cycle of signs that
   multiplies to −1 marks the orbit as carrying no invariant state. The
-  reduced Hamiltonian is read off at the representatives,
+  surviving roots are counted before their sites are stored (at most
+  2²⁶ sites), and a walk without any is refused. The reduced Hamiltonian
+  is read off at the representatives,
   `⟨O′|H|O⟩ = √(|O|/|O′|) Σ φ(c′)⟨c′|H|r⟩`.
 * On the hypercube (`walks/interacting/hypercube.rs`) the orbits of the
   coordinate permutations are compositions of `d` into `2^N` bit
   patterns, ranked by their bars in colex order; the particle
   permutations act on the patterns, and each composition's word holds
   its class (the lowest-ranked image) and the sign of the permutation to
-  it. A hop changes one pattern `p` into `p ⊕ e_j`, with weight
-  `−γ √(n_p (n_q + 1) k_n / k_m)` (`k`: compositions per class).
+  it. Heap's algorithm lists the permutations with one parity flag shared
+  by its whole recursion (every swap is a transposition). A hop changes
+  one pattern `p` into `p ⊕ e_j`, with weight
+  `−γ √(n_p (n_q + 1) k_n / k_m)` (`k`: compositions per class); the
+  entries are bounded before the matrix is built, by compositions over
+  permutations first and by the classes once they are known.
 * Certificates by orbits (`InteractingWalk::certificate_by_orbits`): one
   row of transition probabilities per orbit of the automorphisms, by
   Krylov steps to 10⁻¹⁴ per unit time unless the walk was diagonalised

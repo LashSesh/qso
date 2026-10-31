@@ -209,8 +209,9 @@ of non-isomorphic graphs (Smith, arXiv:1004.0206 (2010)).
 `certificate(times)` lists the transition probabilities between all
 configurations, sorted, at each time. Isomorphic graphs give the same
 list up to rounding, which grows with the time.
-`certificate_tolerance(times)` is `10⁻¹² · max(1, |t| · ‖H‖)`, a thousand
-times the rounding measured on isomorphic graphs up to `t = 10⁶`. A
+`certificate_tolerance(times)` is `10⁻¹² · max(1, |t| · ‖H‖)`, with `‖H‖`
+bounded by the largest absolute row sum: a thousand times the rounding
+measured on isomorphic graphs up to `t = 10⁶`, or more. A
 larger distance shows, up to floating-point error, that two graphs are
 not isomorphic:
 
@@ -277,11 +278,13 @@ States are vectors over the orbits, one unit vector per orbit:
 `|O⟩ = |O|^{−1/2} Σ_{c∈O} ±|c⟩`. For fermions the sign is that of sorting
 their sites after the permutation; a configuration that some
 automorphism maps to minus itself has no symmetric state, and its orbit
-drops out (`state_of` refuses it). `densities`, `pair_correlations`,
-`probability_of`, `orbit_probabilities` and `lift` (the amplitudes on all
-configurations, in `InteractingWalk`'s order) read the state. The
-orbits are found by union–find over all configurations, so at most
-2²⁷ of them; give a small set of generators.
+drops out (`state_of` refuses it); when every orbit drops out, as for two
+fermions under the whole group of a distance-transitive graph, the walk
+is refused. `densities`, `pair_correlations`, `probability_of`,
+`orbit_probabilities` and `lift` (the amplitudes on all configurations,
+in `InteractingWalk`'s order) read the state. The orbits are found by
+union–find over all configurations, so at most 2²⁷ of them; give a small
+set of generators. The reduced Hamiltonian may have 2²⁶ entries.
 
 On the hypercube the orbits of the coordinate permutations need not be
 found: `HypercubeParticles(d, particles)` writes them down as the numbers
@@ -306,7 +309,8 @@ for u in [0.0, 1.0, 10.0]:
 
 `weights` gives the expected number of particles at each Hamming
 weight, `pair_distances` the distribution of the distance between two
-particles.
+particles. With the same 2²⁶ entries, two bosons reach `Q₄₄₄`, three
+`Q₃₂` and four `Q₁₂`.
 
 Certificates need every configuration as a start, but the
 automorphisms of the graph map starts onto starts with the same
@@ -320,17 +324,20 @@ on the Paley graph of order 101, 5151 configurations, in 1.3 s).
 The checks:
 
 - The reduced walks equal `InteractingWalk` on the Petersen graph, the
-  4 × 4 rook's graph, `Q₄` and `C₈`, for all three statistics, two and
-  three particles, both generators and `U` and `V` both on; under the
-  whole automorphism group too, orbit by orbit, with the fermionic signs.
+  4 × 4 rook's graph, `Q₄`, `C₈` and random weighted graphs closed under
+  a permutation, for all three statistics, two and three particles, both
+  generators and `U` and `V` both on; under the whole automorphism group
+  too, orbit by orbit, with the fermionic signs.
 - `HypercubeParticles` equals the reduction of the graph `Q₃` and `Q₄` by
-  the stabiliser of node 0, for bosons, fermions and distinguishable
-  particles.
+  the stabiliser of node 0, for bosons and distinguishable particles (two
+  and three) and fermions (two to four), and the full walk on `Q₈` for
+  two particles of each kind.
 - Free particles from node 0 of `Q_d` follow the single walker: the
   weights are `N·Bin(d, sin²γt)`, two particles differ in a coordinate
   with probability `2q(1 − q)`, and all are at the antipode with
   probability `q^{dN}`, up to perfect transfer (`Q₃₀` and `Q₄₀` with two
-  particles, `Q₁₂` with three, `Q₆` with four).
+  particles, `Q₁₂` with three, `Q₆` with four). Two free fermions follow
+  their Slater determinant on `Q₅` and `Q₃₀`.
 - Two bosons on a ring of 101 sites with `U` have the bound pair of zero
   momentum at `E = ±√(U² + 16J²)` (Winkler et al. 2006) to 10⁻¹², and
   the rest of their spectrum in the band `[−4J, 4J]`.

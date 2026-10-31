@@ -123,8 +123,9 @@ All notable changes to this project are documented here. The format follows
 ### Changed
 
 - **The Hamiltonian of interacting walkers** is built one configuration
-  at a time by shared code (1.43); `certificate_tolerance` bounds `‖H‖` by
-  the largest absolute row sum above the dense limit instead of refusing.
+  at a time by shared code (1.43). `certificate_tolerance` bounds `‖H‖` by
+  the largest absolute row sum instead of diagonalising (above the dense
+  limit it used to refuse); the tolerance can only grow.
 
 - **A faster exhaustive search** (1.42): `circuit_distance`'s search for
   logical errors now runs on all threads and reuses its buffers. The

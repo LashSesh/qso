@@ -82,15 +82,22 @@ fn reduced_walks_equal_the_full_walk() {
 
 #[test]
 fn whole_automorphism_groups_and_fermion_signs() {
-    // Under the whole group of the graph, every orbit state that survives
-    // evolves as in the full walk; fermionic configurations that a
-    // symmetry maps to minus themselves carry no state.
-    for g in [
-        generators::petersen(),
-        generators::cycle(7),
-        generators::hypercube(3),
+    // Under the whole group of the graph (or the rotations of C₇), every
+    // orbit state that survives evolves as in the full walk; fermionic
+    // configurations that a symmetry maps to minus themselves carry no
+    // state.
+    let c7 = generators::cycle(7);
+    let rotation: Vec<usize> = (0..7).map(|u| (u + 1) % 7).collect();
+    // (graph, its rotations only instead of the whole group)
+    for (g, rotations) in [
+        (generators::petersen(), None),
+        (c7.clone(), None),
+        (generators::hypercube(3), None),
+        (c7, Some(vec![rotation])),
     ] {
+        let whole = rotations.is_none();
         let group = g.automorphism_group();
+        let generators = rotations.unwrap_or_else(|| group.generators().to_vec());
         for statistics in ALL {
             let walk = SymmetricInteractingWalk::new(
                 &g,
@@ -98,11 +105,19 @@ fn whole_automorphism_groups_and_fermion_signs() {
                 1.1,
                 statistics,
                 2,
-                group.generators(),
-            )
-            .unwrap()
-            .with_interaction(0.7, 0.3)
-            .unwrap();
+                &generators,
+            );
+            if statistics == Statistics::Fermions && whole {
+                // These graphs are distance-transitive: a symmetry swaps the
+                // ends of every pair, so no state of two fermions is
+                // invariant under the whole group.
+                assert!(walk.is_err());
+                let orbits =
+                    ConfigurationOrbits::new(g.num_nodes(), statistics, 2, &generators).unwrap();
+                assert!(orbits.is_empty());
+                continue;
+            }
+            let walk = walk.unwrap().with_interaction(0.7, 0.3).unwrap();
             let full = InteractingWalk::new(&g, Generator::Adjacency, 1.1, statistics, 2)
                 .unwrap()
                 .with_interaction(0.7, 0.3)
@@ -116,8 +131,9 @@ fn whole_automorphism_groups_and_fermion_signs() {
                 agrees_with_the_full_walk(&walk, &full, &x0);
             }
             if statistics == Statistics::Fermions {
-                // A cycle's reflection through an edge swaps its two ends.
-                assert!(live < full.dimension());
+                // The rotations of C₇ fix no pair: every orbit lives, with
+                // the signs of the pairs that wrap around.
+                assert_eq!((walk.num_orbits(), live), (3, full.dimension()));
             }
         }
     }
@@ -149,6 +165,129 @@ fn whole_automorphism_groups_and_fermion_signs() {
 }
 
 #[test]
+fn random_graphs_with_automorphisms() {
+    // Random weighted graphs closed under a random permutation σ of cycle
+    // type (3)(3)(2)(1) on nine nodes, reduced by ⟨σ⟩ and by their whole
+    // automorphism group, against the full walk.
+    let mut rng = crate::rng::Rng::seed_from_u64(43);
+    let n = 9;
+    for _ in 0..3 {
+        let mut nodes: Vec<usize> = (0..n).collect();
+        rng.shuffle(&mut nodes);
+        let mut sigma = vec![0; n];
+        for cycle in [&nodes[0..3], &nodes[3..6], &nodes[6..8], &nodes[8..9]] {
+            for (k, &u) in cycle.iter().enumerate() {
+                sigma[u] = cycle[(k + 1) % cycle.len()];
+            }
+        }
+        let mut edges: std::collections::BTreeMap<(usize, usize), f64> = Default::default();
+        for u in 0..n {
+            for v in u + 1..n {
+                if edges.contains_key(&(u, v)) || rng.uniform() > 0.4 {
+                    continue;
+                }
+                // The edge's orbit under σ (whose order divides 6), with
+                // one weight.
+                let w = rng.uniform_range(0.3, 1.5);
+                let (mut a, mut b) = (u, v);
+                for _ in 0..6 {
+                    edges.insert((a.min(b), a.max(b)), w);
+                    (a, b) = (sigma[a], sigma[b]);
+                }
+            }
+        }
+        let list: Vec<(usize, usize, f64)> = edges.iter().map(|(&(u, v), &w)| (u, v, w)).collect();
+        let g = Graph::from_weighted_edges(n, &list).unwrap();
+        assert!(is_automorphism(&g, &sigma));
+        let whole = g.automorphism_group();
+        for statistics in ALL {
+            for particles in [2, 3] {
+                let full =
+                    InteractingWalk::new(&g, Generator::Laplacian, 0.9, statistics, particles)
+                        .unwrap()
+                        .with_interaction(1.1, -0.5)
+                        .unwrap();
+                for group in [vec![sigma.clone()], whole.generators().to_vec()] {
+                    let Ok(walk) = SymmetricInteractingWalk::new(
+                        &g,
+                        Generator::Laplacian,
+                        0.9,
+                        statistics,
+                        particles,
+                        &group,
+                    ) else {
+                        // Only fermions can be left without a state.
+                        assert_eq!(statistics, Statistics::Fermions);
+                        continue;
+                    };
+                    let walk = walk.with_interaction(1.1, -0.5).unwrap();
+                    for o in 0..walk.num_orbits().min(5) {
+                        let mut x0 = vec![C64::new(0.0, 0.0); walk.num_orbits()];
+                        x0[o] = C64::new(1.0, 0.0);
+                        agrees_with_the_full_walk(&walk, &full, &x0);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn hypercube_particles_on_q8_equal_the_full_walk() {
+    // Two particles on Q₈ (up to 65 536 configurations) with U and V:
+    // weights, pair distances and the antipode from the full walk of 1.29.
+    let d = 8;
+    let g = generators::hypercube(d);
+    for statistics in ALL {
+        let full = InteractingWalk::new(&g, Generator::Adjacency, 0.7, statistics, 2)
+            .unwrap()
+            .with_interaction(1.3, -0.6)
+            .unwrap();
+        let cube = HypercubeParticles::new(d, statistics, 2, Generator::Adjacency, 0.7)
+            .unwrap()
+            .with_interaction(1.3, -0.6)
+            .unwrap();
+        // Both at node 0, or fermions in the invariant state of 0 and e_k.
+        let (psi0, x0) = if statistics == Statistics::Fermions {
+            let mut psi = vec![C64::new(0.0, 0.0); full.dimension()];
+            for k in 0..d {
+                for (a, b) in psi.iter_mut().zip(full.basis_state(&[0, 1 << k]).unwrap()) {
+                    *a += b / (d as f64).sqrt();
+                }
+            }
+            (psi, cube.state_of(&[d - 1, 0, 1, 0]).unwrap())
+        } else {
+            (
+                full.basis_state(&[0, 0]).unwrap(),
+                cube.localized().unwrap(),
+            )
+        };
+        let t = 0.9;
+        let psi = full.evolve(&psi0, t).unwrap();
+        let x = cube.evolve(&x0, t).unwrap();
+        let mut weights = vec![0.0; d + 1];
+        let mut distances = vec![0.0; d + 1];
+        let mut antipode = 0.0;
+        for (k, a) in psi.iter().enumerate() {
+            let p = a.norm_sqr();
+            let c = full.configuration(k).unwrap();
+            weights[c[0].count_ones() as usize] += p;
+            weights[c[1].count_ones() as usize] += p;
+            distances[(c[0] ^ c[1]).count_ones() as usize] += p;
+            if c[0] == (1 << d) - 1 && c[1] == (1 << d) - 1 {
+                antipode += p;
+            }
+        }
+        assert!(
+            close(&cube.weights(&x).unwrap(), &weights, 1e-10),
+            "{statistics:?}"
+        );
+        assert!(close(&cube.pair_distances(&x).unwrap(), &distances, 1e-10));
+        assert!((cube.antipode_probability(&x).unwrap() - antipode).abs() < 1e-12);
+    }
+}
+
+#[test]
 fn hypercube_particles_equal_the_generic_reduction() {
     for d in [3, 4] {
         let g = generators::hypercube(d);
@@ -156,7 +295,10 @@ fn hypercube_particles_equal_the_generic_reduction() {
             (Statistics::Bosons, 2),
             (Statistics::Bosons, 3),
             (Statistics::Distinguishable, 2),
+            (Statistics::Distinguishable, 3),
             (Statistics::Fermions, 2),
+            (Statistics::Fermions, 3),
+            (Statistics::Fermions, 4),
         ] {
             for generator in [Generator::Adjacency, Generator::Laplacian] {
                 let cube = HypercubeParticles::new(d, statistics, particles, generator, 0.7)
@@ -176,13 +318,18 @@ fn hypercube_particles_equal_the_generic_reduction() {
                 .unwrap()
                 .with_interaction(1.3, -0.6)
                 .unwrap();
-                // The same states: fermions start at nodes 0 and 1.
+                // The same states: fermions start at nodes that no odd
+                // permutation of the particles maps to a coordinate
+                // permutation of themselves (in increasing order, where
+                // both walks give them a positive amplitude).
                 let (x0, c0) = if statistics == Statistics::Fermions {
+                    let sites = &[0, 1, 6, 7][..particles];
                     let mut counts = vec![0; 1 << particles];
-                    counts[0] = d - 1;
-                    counts[2] = 1;
+                    for k in 0..d {
+                        counts[(0..particles).fold(0, |p, j| p | (sites[j] >> k & 1) << j)] += 1;
+                    }
                     (
-                        walk.state_of(&[0, 1]).unwrap(),
+                        walk.state_of(sites).unwrap(),
                         cube.state_of(&counts).unwrap(),
                     )
                 } else {
@@ -277,6 +424,153 @@ fn free_particles_on_hypercubes_follow_the_single_walker() {
             }
         }
     }
+}
+
+#[test]
+fn free_fermions_on_hypercubes_are_a_determinant() {
+    // Two free fermions from the invariant state of nodes 0 and e_k: the
+    // Slater determinant of |0⟩ and |φ⟩ = d^{−1/2} Σ_k |e_k⟩, whose density
+    // is |⟨x|U|0⟩|² + |⟨x|U|φ⟩|² with U = ⊗(cos γt + i sin γt X). At weight
+    // w, ⟨x|U|φ⟩ = d^{−1/2}(is)^{w−1}c^{d−w−1}(wc² − (d − w)s²).
+    for d in [5, 30] {
+        for generator in [Generator::Adjacency, Generator::Laplacian] {
+            let cube = HypercubeParticles::new(d, Statistics::Fermions, 2, generator, 0.9).unwrap();
+            let mut counts = vec![0; 4];
+            counts[0] = d - 1;
+            counts[2] = 1;
+            let x0 = cube.state_of(&counts).unwrap();
+            for t in [0.3, 1.1, std::f64::consts::FRAC_PI_2 / 0.9] {
+                let (c, s) = ((0.9 * t).cos(), (0.9 * t).sin());
+                let expected: Vec<f64> = (0..=d)
+                    .map(|w| {
+                        let binom =
+                            (0..w).fold(1.0, |acc, i| acc * (d - i) as f64 / (i + 1) as f64);
+                        let first = if w >= 1 {
+                            w as f64 * c.powi((d - w + 1) as i32) * s.powi(w as i32 - 1)
+                        } else {
+                            0.0
+                        };
+                        let second = if w < d {
+                            (d - w) as f64 * s.powi(w as i32 + 1) * c.powi((d - w - 1) as i32)
+                        } else {
+                            0.0
+                        };
+                        binom
+                            * (c.powi(2 * (d - w) as i32) * s.powi(2 * w as i32)
+                                + (first - second).powi(2) / d as f64)
+                    })
+                    .collect();
+                let x = cube.evolve(&x0, t).unwrap();
+                assert!(
+                    close(&cube.weights(&x).unwrap(), &expected, 1e-10),
+                    "Q{d} {generator:?} {t}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn small_hypercubes_and_documented_sizes() {
+    // Three fermions on Q₂ keep one state ({0, 1, 3} and {0, 2, 3}), four
+    // none; three do not fit on Q₁.
+    let cube =
+        HypercubeParticles::new(2, Statistics::Fermions, 3, Generator::Adjacency, 1.0).unwrap();
+    assert_eq!(cube.num_states(), 1);
+    let square = generators::hypercube(2);
+    let walk = SymmetricInteractingWalk::new(
+        &square,
+        Generator::Adjacency,
+        1.0,
+        Statistics::Fermions,
+        3,
+        square.stabilizer(&[0]).unwrap().generators(),
+    )
+    .unwrap();
+    assert_eq!(walk.num_orbits(), 1);
+    assert!(
+        HypercubeParticles::new(2, Statistics::Fermions, 4, Generator::Adjacency, 1.0).is_err()
+    );
+    assert!(
+        HypercubeParticles::new(1, Statistics::Fermions, 3, Generator::Adjacency, 1.0).is_err()
+    );
+    // The sizes quoted in the documentation (the generic reduction of Q₈
+    // and Q₉ has as many orbits; see hypercube_particles_equal_the_generic_reduction).
+    for (d, particles, states) in [
+        (8, 3, 1324),
+        (9, 3, 2284),
+        (20, 3, 156_240),
+        (100, 2, 89_726),
+    ] {
+        let cube =
+            HypercubeParticles::new(d, Statistics::Bosons, particles, Generator::Adjacency, 1.0)
+                .unwrap();
+        assert_eq!(cube.num_states(), states, "Q{d}, {particles} bosons");
+    }
+}
+
+#[test]
+fn empty_walks_and_large_inputs_are_refused() {
+    // Walks without an invariant state: four fermions on K₄ and three on
+    // the star with five leaves, under all their automorphisms.
+    for (g, particles) in [(generators::complete(4), 4), (generators::star(6), 3)] {
+        let group = g.automorphism_group();
+        let walk = SymmetricInteractingWalk::new(
+            &g,
+            Generator::Adjacency,
+            1.0,
+            Statistics::Fermions,
+            particles,
+            group.generators(),
+        );
+        assert!(walk.is_err(), "{particles} fermions");
+    }
+    // Fermions cannot start on one site.
+    let ring = generators::cycle(6);
+    assert!(
+        SymmetricInteractingWalk::from_start(
+            &ring,
+            Generator::Adjacency,
+            1.0,
+            Statistics::Fermions,
+            &[0, 0],
+        )
+        .is_err()
+    );
+    // 2²² orbits of 23 distinguishable particles on two nodes: their
+    // representatives would take 772 MB, refused before they are stored.
+    let pair = generators::path(2);
+    assert!(
+        SymmetricInteractingWalk::new(
+            &pair,
+            Generator::Adjacency,
+            1.0,
+            Statistics::Distinguishable,
+            23,
+            &[vec![1, 0]],
+        )
+        .is_err()
+    );
+    // Hamiltonians beyond 2²⁶ entries, refused before the compositions
+    // are enumerated.
+    for (d, particles) in [(12, 4), (36, 3)] {
+        assert!(
+            HypercubeParticles::new(
+                d,
+                Statistics::Distinguishable,
+                particles,
+                Generator::Adjacency,
+                1.0
+            )
+            .is_err()
+        );
+    }
+    // Counts that do not add up to d, however large.
+    let cube =
+        HypercubeParticles::new(4, Statistics::Bosons, 1, Generator::Adjacency, 1.0).unwrap();
+    assert!(cube.state_of(&[usize::MAX, 5]).is_err());
+    assert!(cube.state_of(&[usize::MAX - 65_532, 65_536]).is_err());
+    assert!(cube.state_of(&[3, 1]).is_ok());
 }
 
 #[test]
