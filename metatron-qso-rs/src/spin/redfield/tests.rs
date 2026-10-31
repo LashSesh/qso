@@ -320,15 +320,27 @@ fn both_frames_relax_alike_and_input_is_checked() {
         .unwrap();
     let back = SpinSystem::from_json(&sys.to_json()).unwrap();
     assert_eq!(back, sys);
-    // Seven relaxing spins in the laboratory frame have blocks of 3432.
+    // Seven relaxing spins have blocks of 3432 elements, beyond a dense
+    // superoperator; with one isotope both frames keep all of R.
     let mut big = SpinSystem::new(9.4).with_frame(Frame::Laboratory);
     for k in 0..7 {
         big.add_spin(Isotope::H1, 0.0).unwrap();
         big.set_position(k, [1.8 * k as f64, 0.0, 0.0]).unwrap();
     }
     let big = big.with_correlation_time(Some(1e-10)).unwrap();
-    let err = big.relaxation_rates(&[big.iz(0).unwrap()]).unwrap_err();
-    assert!(format!("{err}").contains("Redfield"), "{err}");
+    let ops = [
+        big.iz(0).unwrap(),
+        big.iz(3).unwrap(),
+        big.iplus(1).unwrap(),
+    ];
+    let lab = big.relaxation_rates(&ops).unwrap();
+    let rot = big
+        .clone()
+        .with_frame(Frame::Rotating)
+        .relaxation_rates(&ops)
+        .unwrap();
+    assert!(lab[(0, 0)] > 0.0 && lab[(2, 2)] > lab[(0, 0)]);
+    assert!((&lab - &rot).abs().max() < 1e-12 * lab.abs().max());
 }
 
 #[test]
@@ -519,9 +531,11 @@ fn redfield_runs_through_every_path() {
         sys.redfield(9.4).unwrap().unwrap(),
         lab.redfield(9.4).unwrap().unwrap(),
     );
+    // Every entry of the rotating-frame blocks, and whether it is kept.
     let entries = |r: &RedfieldBlocks| {
         let mut m = std::collections::BTreeMap::new();
-        for (elements, block) in &r.blocks {
+        for (k, (_, elements)) in r.liouville.blocks.iter().enumerate() {
+            let block = r.block(k).to_dense();
             for (j, &x) in elements.iter().enumerate() {
                 for (i, &y) in elements.iter().enumerate() {
                     m.insert((y, x), block[(i, j)]);
@@ -566,4 +580,142 @@ fn redfield_refuses_slow_motion_and_impossible_input() {
     still.add_spin(Isotope::H1, 0.0).unwrap();
     let g = still.relaxation_rates(&[still.iz(0).unwrap()]).unwrap();
     assert!(g[(0, 0)] == 0.0 && g[(0, 0)].is_sign_positive());
+}
+
+/// `Y(X)_mn = X_mn J(ω_mn)` in the eigenbasis of the laboratory `H₀`,
+/// densely.
+fn dense_spectral(x: &CMatrix, blocks: &[Eigenblock], tau: f64) -> CMatrix {
+    let d = x.nrows();
+    let mut out = CMatrix::zeros(d, d);
+    for a in blocks {
+        for b in blocks {
+            let sub = CMatrix::from_fn(a.states.len(), b.states.len(), |r, c| {
+                x[(a.states[r], b.states[c])]
+            });
+            let mut t = a.vectors.adjoint() * sub * &b.vectors;
+            for (r, &ea) in a.values.iter().enumerate() {
+                for (c, &eb) in b.values.iter().enumerate() {
+                    t[(r, c)] *= j((a.shift - b.shift) + ea - eb, tau);
+                }
+            }
+            let back = &a.vectors * t * b.vectors.adjoint();
+            for (r, &i) in a.states.iter().enumerate() {
+                for (c, &k) in b.states.iter().enumerate() {
+                    out[(i, k)] += back[(r, c)];
+                }
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn the_sparse_superoperator_equals_the_dense_formulas() {
+    // R(|a⟩⟨b|) = Σ w (𝒬Y|a⟩⟨b| − 𝒬|a⟩⟨b|Y − Y|a⟩⟨b|𝒬 + |a⟩⟨b|Y𝒬) from
+    // dense operators (full-space products, the old construction), read
+    // on every block of both frames: ¹³C, two protons and ¹⁵N with
+    // positions, shielding anisotropies and strong coupling.
+    let mut base = SpinSystem::new(1.5);
+    let spins = [
+        (Isotope::C13, 40.0, [0.0, 0.0, 0.0]),
+        (Isotope::H1, 2.0, [1.09, 0.0, 0.0]),
+        (Isotope::H1, 2.02, [-0.36, 1.03, 0.0]),
+        (Isotope::N15, 120.0, [-0.5, -0.8, 1.1]),
+    ];
+    for (k, (x, shift, p)) in spins.into_iter().enumerate() {
+        base.add_spin(x, shift).unwrap();
+        base.set_position(k, p).unwrap();
+    }
+    base.set_csa(0, Some(axial_csa(80.0, [0.3, 0.1, 1.0]).unwrap()))
+        .unwrap();
+    base.set_csa(3, Some(axial_csa(-150.0, [1.0, 0.0, 0.2]).unwrap()))
+        .unwrap();
+    base.couple(1, 2, 12.0).unwrap();
+    base.couple(0, 1, 140.0).unwrap();
+    base.couple(0, 3, 15.0).unwrap();
+    let base = base.with_correlation_time(Some(2e-10)).unwrap();
+    for frame in [Frame::Rotating, Frame::Laboratory] {
+        let sys = base.clone().with_frame(frame);
+        let b = sys.field();
+        let r = sys.redfield(b).unwrap().unwrap();
+        let d = sys.dimension();
+        let ops: Vec<[CMatrix; 3]> = (0..4)
+            .map(|i| [sys.ix(i).unwrap(), sys.iy(i).unwrap(), sys.iz(i).unwrap()])
+            .collect();
+        let pairs = [(0, 0), (1, 1), (2, 2), (0, 1), (0, 2), (1, 2)];
+        let half = C64::new(0.5, 0.0);
+        let third = C64::new(1.0 / 3.0, 0.0);
+        let tensor = |c: Coupling, (x, y): (usize, usize)| -> CMatrix {
+            match c {
+                Coupling::Dipolar(i, k) => {
+                    let dot =
+                        &ops[i][0] * &ops[k][0] + &ops[i][1] * &ops[k][1] + &ops[i][2] * &ops[k][2];
+                    let mut q = (&ops[i][x] * &ops[k][y] + &ops[i][y] * &ops[k][x]) * half;
+                    if x == y {
+                        q -= dot * third;
+                    }
+                    q
+                }
+                Coupling::Shielding(i) => {
+                    let mut q = CMatrix::zeros(d, d);
+                    if y == 2 {
+                        q += &ops[i][x] * half;
+                    }
+                    if x == 2 {
+                        q += &ops[i][y] * half;
+                    }
+                    if x == y {
+                        q -= &ops[i][2] * third;
+                    }
+                    q
+                }
+            }
+        };
+        let interactions = sys.interactions(b);
+        let mut lab = sys.clone();
+        lab.frame = Frame::Laboratory;
+        let eigen = lab.eigenblocks(&lab.hamiltonian_at(b));
+        let mut terms = Vec::new();
+        for e in &basis() {
+            for &(x, y) in &pairs {
+                let mut q = CMatrix::zeros(d, d);
+                for (a, c) in &interactions {
+                    let alpha: f64 = (0..3)
+                        .map(|u| (0..3).map(|v| a[u][v] * e[u][v]).sum::<f64>())
+                        .sum();
+                    q += tensor(*c, (x, y)) * C64::new(alpha, 0.0);
+                }
+                let yq = dense_spectral(&q, &eigen, 2e-10);
+                terms.push((q, yq, if x == y { 1.0 } else { 2.0 } / 5.0));
+            }
+        }
+        let mut largest = 0.0f64;
+        let mut worst = 0.0f64;
+        for (k, (_, elements)) in r.liouville.blocks.iter().enumerate() {
+            let block = r.block(k).to_dense();
+            for (jj, &(a, bb)) in elements.iter().enumerate() {
+                let mut x = CMatrix::zeros(d, d);
+                x[(a, bb)] = C64::new(1.0, 0.0);
+                let mut want = CMatrix::zeros(d, d);
+                for (q, yq, w) in &terms {
+                    want +=
+                        (q * yq * &x - q * &x * yq - yq * &x * q + &x * yq * q) * C64::new(*w, 0.0);
+                }
+                for (i, &(c, e)) in elements.iter().enumerate() {
+                    largest = largest.max(want[(c, e)].norm());
+                    worst = worst.max((block[(i, jj)] - want[(c, e)]).norm());
+                }
+            }
+        }
+        assert!(
+            worst < 1e-12 * largest,
+            "{frame:?}: {worst:e} of {largest:e}"
+        );
+        // Column by column without keeping blocks, as the drift is built.
+        let deviation = sys.thermal_state().unwrap() - sys.identity_state();
+        let (mut kept, mut fresh) = (CMatrix::zeros(d, d), CMatrix::zeros(d, d));
+        r.apply(&deviation, &mut kept, 1.0);
+        r.image(&deviation, &mut fresh, 1.0);
+        assert!((&kept - &fresh).norm() < 1e-12 * kept.norm());
+    }
 }

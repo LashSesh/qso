@@ -397,19 +397,46 @@ the pairs of blocks that `F₊` connects, time averages compare energies
 with the carriers added back, and free evolution conjugates block by
 block (complex products as three real GEMMs). With relaxation, every jump
 acts on one spin and keeps the coherence order `label(a) − label(b)` of
-`|a⟩⟨b|`, so the Lindblad superoperator splits into blocks by order. They
-are built entry by entry from the sparse `H` and the local jumps and
-exponentiated (Taylor degree 16 by Paterson–Stockmeyer, scaling and
-squaring, in `linalg::dense::expm`). The state is propagated as its
-deviation from `1/d`, with `L(1/d)` as an augmented column of the
-population block; coherence blocks are shifted by their mean diagonal
-first. FIDs need only the block of order `−1`, one exponential for the
-dwell time and a matrix-vector product per point. The work of the block
-exponentials is compared with an estimate for Dormand–Prince 5(4) steps
-(sparse `H`, jumps applied in place, error relative to the deviation), the
-cheaper one runs, and more than `MAX_RELAXATION_WORK` is refused before
-anything is computed. Shaped pulses mix the orders and use one block.
-Sweeps are piecewise constant, with the field at the middle of each piece.
+`|a⟩⟨b|`, so the Lindblad superoperator splits into blocks by order. The
+state is propagated as its deviation from `1/d`, with `L(1/d)` as an
+augmented column of the population block; coherence blocks are shifted by
+their mean diagonal first. Only the blocks the deviation occupies (and
+the population block, if it drifts) move. Each block is planned before
+anything is built: its entries are counted and its `‖A‖∞` bounded column
+by column from the sparse `H` and the local jumps (and the Redfield
+terms, below), which gives the work of a dense exponential (Taylor degree
+16 by Paterson–Stockmeyer, scaling and squaring, in
+`linalg::dense::expm`; up to 2048 elements) and of Krylov steps
+(`spin/krylov.rs`), and the memory of either. The cheaper runs; all the
+blocks together are compared with Dormand–Prince 5(4) steps on the whole
+state (sparse `H`, jumps applied in place, error relative to the
+deviation), and more than `MAX_RELAXATION_WORK` operations or
+`MAX_RELAXATION_MEMORY` bytes is refused. A block is then built column by
+column (in parallel, each column merged in a dense accumulator) into a
+compressed sparse row matrix. Krylov steps are Arnoldi's process on
+subspaces of dimension 30 with Expokit's error estimate and step control
+(Sidje 1998), to 10⁻¹² of the propagated vector in the 2-norm; the
+augmented entry is set to the size of the deviation (or of equilibrium's,
+if larger), so that the tolerance stays relative to it. A Krylov space
+that is invariant to the tolerance ends the propagation in one step;
+when the a priori estimate is large, `‖A y‖` of the start vector is
+computed first, so that a stationary block (equilibrium) is not refused
+for the steps it will not take. FIDs need only the block of order `−1`:
+one exponential for the dwell time and a matrix-vector product per point,
+or Krylov steps of one dwell time each. Shaped pulses mix the orders and
+use one block. Sweeps are piecewise constant, with the field at the
+middle of each piece.
+
+Declared symmetries (`spin/symmetry.rs`) are permutations of the spins,
+checked against isotopes, shifts, relaxation times, couplings and the
+Gram matrix `A^k : A^l` of the relaxing interactions (on which isotropic
+tumbling makes `R` depend). They induce permutations of the basis states
+and of each block's elements. When `H` (to 10⁻¹² of its largest entry)
+and the block's start vector (to 10⁻¹¹) are invariant, union–find gives
+the orbits of the elements; after the built block is checked entry by
+entry against its images, it is reduced to `M_OP = Σ_{c ∈ P} A_{o,c}` at
+a representative `o` of each orbit `O`, and the result is lifted back.
+Anything not invariant propagates in full.
 
 Redfield relaxation (`spin/redfield.rs`) works on the same blocks. The
 spatial tensors of the interactions (dipolar `b(1 − 3nnᵀ)`, anisotropic
@@ -418,11 +445,23 @@ symmetric tensors; the isotropic average of their correlations makes the
 superoperator a sum of 30 independent terms `[𝒬, [Y(𝒬), ·]]`, with
 `𝒬 = Σ_k (A^k : E_μ) Q^k,S_ab` and `Y` the multiplication by `J(ω_mn)` in
 the eigenbasis of the laboratory-frame `H` (its blocks by total `M`).
-`R` is assembled entry by entry for each coherence-order block of the
-frame's labels, which in the rotating frame is the secular projection,
-and added to the Lindblad blocks. `R(ρ_eq)` joins `L(1/d)` in the drift
-of the deviation's equation. Dormand–Prince steps apply `R` block by block
-as matrix-vector products.
+The 30 terms are kept as sparse operators on the basis states ordered by
+label (every label's states contiguous), `𝒬` from the local two-spin
+tensors and `Y(𝒬)` from one pair of eigenblocks at a time (entries below
+10⁻¹⁵ of their pair's largest dropped as rounding), together with the
+part of `Σ w 𝒬Y` within each label. A column `R(|a⟩⟨b|)` of a
+coherence-order block of the frame's labels (in the rotating frame the
+secular projection) is the sum of that left product's columns `a` and `b`
+(the right product is its adjoint) and of the products `𝒬_ca Y_be` and
+`Y_ca 𝒬_be` over the pairs whose labels keep the order, found by binary
+search per label; a block costs its entries, not their square. The
+entries are bounded from the union of the terms' patterns before a block
+is built, and the terms' own memory and work from the sizes of the
+laboratory blocks before the terms are. Blocks are built into the
+generator where they are used and kept only for Dormand–Prince steps,
+which apply them as matrix-vector products. `R(ρ_eq − 1/d)` joins
+`L(1/d)` in the drift of the deviation's equation (`R(1) = 0`, so the
+identity's image would be rounding of `R`'s size).
 
 Chemical exchange (`spin/exchange.rs`) joins the coherence-order blocks
 of all sites: labels are written over the isotopes of all sites, each

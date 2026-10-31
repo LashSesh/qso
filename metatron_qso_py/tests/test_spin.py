@@ -319,6 +319,40 @@ def test_redfield_bindings():
         sys.with_correlation_time(-1.0)
 
 
+def test_equivalent_spins_reduce_relaxation_exactly():
+    # A 13C methyl group with a proton on its axis, dipolar relaxation:
+    # declaring the threefold cycle of the methyl protons leaves every
+    # propagation as it was (it only shrinks the blocks).
+    sys = q.SpinSystem(9.4)
+    sys.add_spin("13C", 20.0)
+    sys.set_position(0, (0.0, 0.0, 0.0))
+    for k in range(3):
+        th = 2 * math.pi * k / 3
+        i = sys.add_spin("1H", 1.2)
+        sys.set_position(i, (1.03 * math.cos(th), 1.03 * math.sin(th), 0.36))
+        sys.couple(0, i, 125.0)
+    i = sys.add_spin("1H", 3.0)
+    sys.set_position(i, (0.0, 0.0, -1.6))
+    for m in (1, 2, 3):
+        sys.couple(m, i, 4.0)
+    sys = sys.with_correlation_time(3e-11)
+    plain = q.SpinSystem.from_json(sys.to_json())
+    sys.set_symmetries([[0, 2, 3, 1, 4]])
+    assert sys.symmetries == [[0, 2, 3, 1, 4]] and plain.symmetries == []
+    rho = sys.evolve(sys.thermal_state(), [spin.pulse("1H", 90.0)])
+    events = [spin.delay(0.2)]
+    a, b = sys.evolve(rho, events), plain.evolve(rho, events)
+    assert np.abs(a - b).max() < 1e-10 * np.abs(rho - np.eye(16) / 16).max()
+    assert q.SpinSystem.from_json(sys.to_json()).symmetries == [[0, 2, 3, 1, 4]]
+    with pytest.raises(ValueError):
+        sys.set_symmetries([[1, 0, 2, 3, 4]])
+    with pytest.raises(ValueError):
+        sys.set_symmetries([[0, 1, 2, 4, 3]])
+    assert sys.symmetries == [[0, 2, 3, 1, 4]]
+    sys.set_symmetries([])
+    assert sys.symmetries == []
+
+
 def test_exchange_matches_a_monte_carlo_of_exchange_events():
     # A SABRE complex (two hydrides and a bound 15N, laboratory frame near
     # the anti-crossing): hydrogen exchange renews the hydrides from

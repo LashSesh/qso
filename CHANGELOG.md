@@ -71,6 +71,34 @@ All notable changes to this project are documented here. The format follows
     Tetienne's eigenbasis rates where levels are split, continuous at
     degeneracies and the excited-state anticrossing.
 
+- **Relaxation of larger spin systems** (1.41, `spin`):
+  - The blocks of the master equation as sparse matrices, built column by
+    column and propagated by Krylov steps (Arnoldi with Expokit's step
+    control, to 10⁻¹² of the deviation from `1/d`) where a dense
+    exponential costs more or does not fit: seven protons (blocks of 3432
+    elements) and eight (12 870) relax for seconds. Each block takes the
+    cheaper of the two, the whole state Dormand–Prince steps when those
+    are cheaper still, and blocks the state does not occupy are skipped;
+    free induction decays likewise.
+  - Equivalent spins: `SpinSystem::set_symmetries` and `symmetries`
+    (Python `set_symmetries`, `symmetries`; kept in JSON) declare
+    permutations of the spins, checked against isotopes, shifts,
+    relaxation times, couplings and the relaxing interactions. States
+    they leave unchanged propagate exactly on the orbits of the elements
+    `|a⟩⟨b|`, in blocks several times smaller.
+  - `MAX_RELAXATION_MEMORY` (2 GiB): with the work limit, checked from
+    estimates before anything is built.
+
+### Changed
+
+- **Redfield relaxation without a block-size limit** (1.41): the
+  superoperator's 30 terms are kept as sparse operators and its columns
+  computed from them where a block is used, so its memory grows with the
+  blocks' entries instead of their squares (it used to stop at six
+  relaxing protons). The terms' memory and work are estimated before they
+  are built. The drift uses `R(ρ_eq − 1/d)` (equal to `R(ρ_eq)`, without
+  the rounding of `R(1)`), and the rate bound comes from the terms.
+
 ## [1.8.0] — 2026-10-30
 
 Milestones 1.29 to 1.37 of the [roadmap](docs/ROADMAP.md), its seventh

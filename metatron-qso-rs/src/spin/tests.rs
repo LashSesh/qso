@@ -356,17 +356,24 @@ fn the_laboratory_frame_propagates_as_the_rotating_one() {
 
 #[test]
 fn hopeless_relaxation_is_refused_early() {
-    // Seven spins in the laboratory frame at 9.4 T: blocks of 3432
-    // elements and Zeeman frequencies of 10⁹ rad/s.
+    // ¹³C and six protons in the laboratory frame at 9.4 T, both pulsed:
+    // the blocks of coherence order ±1 hold carbon and proton coherences,
+    // 2·10⁹ rad/s apart, which neither exponentials (3003 elements),
+    // Krylov steps nor Dormand–Prince steps can follow for a second.
     let mut sys = SpinSystem::new(9.4).with_frame(Frame::Laboratory);
-    for k in 0..7 {
+    let c = sys.add_spin(Isotope::C13, 30.0).unwrap();
+    sys.set_relaxation(c, Some(5.0), None).unwrap();
+    for k in 0..6 {
         let i = sys.add_spin(Isotope::H1, k as f64).unwrap();
         sys.set_relaxation(i, Some(1.0), None).unwrap();
     }
+    let pulses = [
+        Event::pulse(Target::Isotope(Isotope::H1), 90.0, 0.0),
+        Event::pulse(Target::Isotope(Isotope::C13), 90.0, 0.0),
+    ];
+    let rho = sys.evolve(&sys.thermal_state().unwrap(), &pulses).unwrap();
     let start = std::time::Instant::now();
-    let err = sys
-        .evolve(&sys.thermal_state().unwrap(), &[Event::Delay(1.0)])
-        .unwrap_err();
+    let err = sys.evolve(&rho, &[Event::Delay(1.0)]).unwrap_err();
     assert!(format!("{err}").contains("operations"), "{err}");
     assert!(start.elapsed().as_secs_f64() < 5.0);
 }

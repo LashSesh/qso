@@ -612,6 +612,24 @@ impl PySpinSystem {
         self.inner.correlation_time()
     }
 
+    /// Declare permutations of the spins (`p[i]` the image of spin `i`)
+    /// that leave the system unchanged: equal isotopes, shifts, relaxation
+    /// times and couplings, and the relaxing interactions up to a rotation
+    /// (a methyl group's protons `h1, h2, h3` with its threefold axis give
+    /// the cycle `h1 → h2 → h3 → h1`). Relaxation then propagates states
+    /// they leave unchanged on the orbits of their elements, exactly and in
+    /// smaller blocks. Replaces earlier ones; an empty list removes them.
+    fn set_symmetries(&mut self, permutations: Vec<Vec<usize>>) -> PyResult<()> {
+        self.inner.set_symmetries(permutations).raise()?;
+        Ok(())
+    }
+
+    /// The declared permutations of the spins.
+    #[getter]
+    fn symmetries(&self) -> Vec<Vec<usize>> {
+        self.inner.symmetries().to_vec()
+    }
+
     /// The dipolar coupling constant `(μ₀/4π) γ_i γ_j ħ / r³` (rad/s).
     fn dipolar_coupling(&self, i: usize, j: usize) -> PyResult<f64> {
         self.inner.dipolar_coupling(i, j).raise()

@@ -84,16 +84,17 @@ equilibrium is thermal; quadrupolar relaxation is not modelled.
 Cross-relaxation follows from Redfield theory (next section).
 
 The master equation conserves the coherence orders of `H`'s blocks. Each
-block of its superoperator, up to 2048 elements (six protons have blocks
-of 924), is exponentiated exactly, for the deviation of the state from
-`1/d`: thermal polarisations are parts in 10⁵ of `1/d`, and they keep
-their relative precision. A free induction decay needs only the
-coherences of order −1. Short intervals and shaped pulses, which mix the
-orders, use adaptive Dormand–Prince steps with a local error of 10⁻¹¹ of
-that deviation when they are cheaper. A propagation estimated at more
-than 1.5·10¹² operations, about a minute, is refused with an error. One
-second of five relaxing protons at 9.4 T takes 0.2 s, in either frame,
-and of six about ten seconds.
+block of its superoperator is propagated for the deviation of the state
+from `1/d`: thermal polarisations are parts in 10⁵ of `1/d`, and they keep
+their relative precision. A block up to 2048 elements (six protons have
+blocks of 924) can be exponentiated exactly; larger ones, and long
+intervals, go by Krylov steps (next sections). A free induction decay
+needs only the coherences of order −1. Short intervals and shaped pulses,
+which mix the orders, use adaptive Dormand–Prince steps with a local
+error of 10⁻¹¹ of that deviation when they are cheaper. A propagation
+estimated at more than 1.5·10¹² operations, about a minute, or 2 GiB is
+refused with an error before anything is built. One second of five
+relaxing protons at 9.4 T takes 0.15 s, of six 4 s.
 
 ## Relaxation from first principles
 
@@ -146,13 +147,12 @@ the same block exponentials.
   and second kind, which matters for ²H at low field), spin-rotation,
   antisymmetric shielding, intermolecular, solvent, oxygen and
   paramagnetic relaxation, and chemical exchange.
-- **Size.** The superoperator is built block by block of coherence order,
-  each block at most 2048 elements: up to six relaxing protons of one
-  isotope, or six spins in the laboratory frame; more is an error (`T₁`
-  and `T₂` alone fall back to Dormand–Prince steps). Its build is counted
-  in the work limit; one build takes about 0.04 s for five spins and
-  0.5 s for six. `evolve` reuses it while the field stays, so shaped
-  pulses cost little more, but every step of a sweep builds it anew.
+- **Size.** The superoperator's 30 terms are built once per field (for
+  seven protons in 0.02 s) and its blocks of coherence order column by
+  column where they are used (next section); there is no limit on the
+  size of a block, only on work and memory. `evolve` reuses the terms
+  while the field stays, so shaped pulses cost little more, but every
+  step of a sweep builds them anew.
 
 `relaxation_rates(ops)` returns the matrix `Γ_ij = −Re Tr(O_i† D(O_j)) /
 Tr(O_i† O_i)` of the relaxation `D` (without `H`): its diagonal holds the
@@ -160,6 +160,77 @@ auto-relaxation rates (`1/T₁` of `I_z`, `1/T₂` of `I₊` for an isolated
 spin), the rest the cross-relaxation; with cross-relaxation, recovery has
 several rates. `qso spins --rates` prints the auto-relaxation times
 `1/Γ_ii` of `I_z` and `I₊` of every spin.
+
+## Larger systems and equivalent spins
+
+From seven spins of one isotope the coherence-order blocks outgrow a dense
+exponential: seven protons have blocks of 3432 elements, eight of 12 870.
+Such blocks are kept as sparse matrices, `−i[H, ·]`, the Lindblad
+dissipators and `−R` built column by column, and propagated by their
+action on the state: Arnoldi's process on Krylov subspaces of dimension 30
+with the step-size control of Expokit (Sidje 1998), to 10⁻¹² of the
+deviation from `1/d` in the 2-norm. Every block takes the cheaper of a
+dense exponential and Krylov steps by estimated work, and the whole
+propagation the cheaper of the blocks and Dormand–Prince steps; blocks
+the state does not occupy are skipped.
+
+Krylov steps cost in proportion to the interval and to the spread of
+frequencies in a block, so lower fields and the rotating frame are
+cheaper. On four cores one second of seven relaxing protons at 9.4 T
+takes 27 s, of eight at 1 T 18 s, and 0.1 s of eight at 9.4 T 16 s; with
+dipolar relaxation 0.1 s of seven protons takes 12 s. A block that does
+not move, such as thermal equilibrium, takes a single step: its
+deviation, parts in 10⁵ of `1/d`, is only known to about 10⁻¹¹, and a
+vector that moves by less than 10⁻¹¹ of itself over the interval is taken
+as it is. The laboratory frame with several isotopes keeps carbon and
+proton coherences, 2·10⁹ rad/s apart, in one block; there only short
+intervals are affordable.
+
+The Redfield superoperator is not formed block by dense block any more.
+Its 30 terms `𝒬 ⊗ Y(𝒬)` are kept as sparse operators on the basis
+states, and each column `R(|a⟩⟨b|)` is computed from them where a block is
+used, so memory grows with the entries of the blocks in use, not with
+their squares. Before anything is built the work and memory of every
+block and of the terms are estimated: eleven protons with dipolar
+relaxation are refused for the memory of the terms alone, and nine
+relaxing protons over 100 s at 9.4 T for work.
+
+Equivalent spins reduce the blocks further. Declare the permutations of
+the spins that leave the system unchanged: each spin onto one of its
+isotope with the same shift, relaxation times and couplings, and the
+dipolar couplings and shielding anisotropies onto each other up to a
+rotation of the molecule. A ¹³C methyl group with a threefold axis:
+
+```python
+import math
+import metatron_qso as q
+from metatron_qso import spin
+
+sys = q.SpinSystem(9.4)
+sys.add_spin("13C", 20.0)
+sys.set_position(0, (0.0, 0.0, 0.0))
+for k in range(3):
+    th = 2 * math.pi * k / 3
+    h = sys.add_spin("1H", 1.2)
+    sys.set_position(h, (1.03 * math.cos(th), 1.03 * math.sin(th), 0.36))
+    sys.couple(0, h, 125.0)
+sys = sys.with_correlation_time(3e-11)
+sys.set_symmetries([[0, 2, 3, 1]])      # H1 → H2 → H3 → H1
+```
+
+A state the permutations leave unchanged (thermal equilibrium, pulses on
+the isotope) then propagates on the orbits of the elements `|a⟩⟨b|`: one
+coefficient per orbit, the generator summed over the orbits of its
+columns at a representative row. This is exact, not an approximation.
+With three protons on the axis below the methyl group (seven spins) the
+8193 coefficients of a pulsed state shrink to 3073, as the threefold
+cycle predicts (8/3), and a delay runs TBD_speedup times faster; a
+methylene group's swap halves its blocks less (8/5). States that break the
+symmetry (a pulse on one of the protons) and Hamiltonians that do (a
+shaped pulse on one spin) propagate in full. A declaration the system does
+not obey is an error, at `set_symmetries` or when the system is next
+used; a new spin stays where it is under the permutations, and JSON keeps
+them.
 
 ## Chemical exchange
 
@@ -722,6 +793,18 @@ of twelve, the second in none.
   ¹³CH₃ and an amide ¹⁵N–¹H (with shielding cross-correlation) agree to
   5·10⁻¹⁵ and the expectations after exact propagation to 3·10⁻⁹.
 
+- **Larger systems.** Krylov steps equal the dense exponentials up to six
+  spins to 6·10⁻¹³ of the deviation (six protons at 2 and 9.4 T with `T₁`
+  and `T₂`; a methyl group and a proton with Redfield relaxation; five
+  protons with dipolar relaxation in the laboratory frame; a shaped
+  pulse), and Dormand–Prince steps for seven protons to 4·10⁻¹², for
+  delays and free induction decays alike. The Redfield superoperator,
+  built column by column from its sparse terms, equals the dense formulas
+  (products of full-space operators) to 10⁻¹² on every block of both
+  frames. Propagation on the orbits of a symmetry equals the full one to
+  3·10⁻¹² (a methyl group with three protons on its axis) and 10⁻¹¹ (a
+  methylene group), and equilibrium of seven protons with `T₁`, `T₂` and
+  dipolar relaxation is unchanged after five seconds.
 - **Exchange.** The free induction decay of one proton exchanging
   between two sites follows the closed-form Bloch–McConnell equations to
   10⁻¹⁰ (equal and unequal populations, with and without `T₂`), and the

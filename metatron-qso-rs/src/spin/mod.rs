@@ -102,8 +102,12 @@ use crate::linalg::{CMatrix, expm_hermitian};
 mod blocks;
 mod control;
 mod exchange;
+mod krylov;
+#[cfg(test)]
+mod large_tests;
 mod nv;
 mod redfield;
+mod symmetry;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -139,6 +143,9 @@ pub const MAX_LIOUVILLE_BLOCK: usize = 2048;
 /// relaxation, about a minute on one core; more is refused. (One second
 /// of six relaxing protons at 9.4 T takes about 3·10¹¹, ten seconds.)
 pub const MAX_RELAXATION_WORK: f64 = 1.5e12;
+/// Most memory (bytes, estimated) one propagation with relaxation may
+/// hold: its largest block, or the Redfield superoperator's terms.
+pub const MAX_RELAXATION_MEMORY: f64 = 2.0 * (1u64 << 30) as f64;
 /// Most points of a free induction decay.
 pub const MAX_FID_POINTS: usize = 1 << 20;
 /// Most segments of a shaped pulse or a field sweep.
@@ -385,6 +392,9 @@ pub struct SpinSystem {
     /// anisotropies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     correlation_time: Option<f64>,
+    /// Permutations of the spins that leave the system unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    symmetries: Vec<Vec<usize>>,
 }
 
 fn room_temperature() -> f64 {
@@ -466,6 +476,7 @@ impl SpinSystem {
             frame: Frame::Rotating,
             carriers: BTreeMap::new(),
             correlation_time: None,
+            symmetries: Vec::new(),
         }
     }
 
@@ -490,7 +501,12 @@ impl SpinSystem {
             position: None,
             csa: None,
         });
-        Ok(self.spins.len() - 1)
+        // The new spin stays where it is under the symmetries.
+        let i = self.spins.len() - 1;
+        for p in &mut self.symmetries {
+            p.push(i);
+        }
+        Ok(i)
     }
 
     /// Set the scalar coupling `J` (Hz) between spins `i` and `j`
@@ -618,7 +634,8 @@ impl SpinSystem {
         if self.carriers.values().any(|c| !c.is_finite()) {
             return Err(QsoError::invalid("carriers", "carriers must be finite"));
         }
-        self.validate_motion()
+        self.validate_motion()?;
+        self.validate_symmetries()
     }
 
     fn check_spin(&self, i: usize) -> Result<()> {

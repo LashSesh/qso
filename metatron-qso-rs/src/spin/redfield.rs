@@ -33,13 +33,18 @@
 //! is kept (the secular approximation with respect to the carriers); in
 //! the laboratory frame `R` keeps the total coherence order exactly.
 
+use std::collections::BTreeMap;
+use std::sync::OnceLock;
+
 use num_complex::Complex64 as C64;
 
-use super::blocks::{Eigenblock, Liouville};
-use super::{Frame, HBAR, SpinSystem, ZERO};
+use super::blocks::{Eigenblock, Liouville, distinct};
+use super::krylov::{Accumulator, SparseBlock};
+use super::{Frame, HBAR, ONE, SpinSystem, ZERO, spin_ops};
 use crate::error::{QsoError, Result};
 use crate::linalg::dense::cmul;
 use crate::linalg::{CMatrix, RMatrix};
+use crate::parallel::map_tasks;
 
 /// `μ₀/4π` (T² m³ J⁻¹, CODATA 2018).
 pub const MU0_OVER_4PI: f64 = 1.000_000_000_55e-7;
@@ -47,9 +52,6 @@ pub const MU0_OVER_4PI: f64 = 1.000_000_000_55e-7;
 /// in rad/s times the correlation time) accepted; Redfield theory needs it
 /// far below 1.
 const MAX_NARROWING: f64 = 1.0;
-/// Operations per element pair of the coherence blocks to build the
-/// superoperator (30 terms, scalar loops; measured).
-const BUILD_COST: f64 = 7680.0;
 
 /// The shielding tensor (ppm) of an axially symmetric anisotropy
 /// `Δσ = σ_∥ − σ_⊥` along `axis`: `(Δσ/3)(3nnᵀ − 1)`, traceless.
@@ -107,42 +109,388 @@ enum Coupling {
     Shielding(usize),
 }
 
-/// The Redfield superoperator block by block of coherence order.
+/// The basis states ordered by their labels, each label's states
+/// contiguous.
+struct Grouping {
+    /// The state at each position.
+    order: Vec<usize>,
+    /// The position of each state.
+    rank: Vec<u32>,
+    /// The label (an index into `labels`) at each position.
+    label: Vec<u32>,
+    /// `starts[l]..starts[l + 1]`: the positions of label `l`.
+    starts: Vec<usize>,
+    index: BTreeMap<Vec<i32>, u32>,
+}
+
+impl Grouping {
+    fn new(labels: &[Vec<i32>]) -> Self {
+        let (list, id) = distinct(labels);
+        let mut order: Vec<usize> = (0..labels.len()).collect();
+        order.sort_by_key(|&s| (id[s], s));
+        let mut rank = vec![0u32; labels.len()];
+        for (p, &s) in order.iter().enumerate() {
+            rank[s] = p as u32;
+        }
+        let label: Vec<u32> = order.iter().map(|&s| id[s] as u32).collect();
+        let mut starts = vec![0usize; list.len() + 1];
+        for &l in &label {
+            starts[l as usize + 1] += 1;
+        }
+        for l in 0..list.len() {
+            starts[l + 1] += starts[l];
+        }
+        let index = list
+            .into_iter()
+            .enumerate()
+            .map(|(k, l)| (l, k as u32))
+            .collect();
+        Grouping {
+            order,
+            rank,
+            label,
+            starts,
+            index,
+        }
+    }
+
+    /// For every label `l`, the label `l − q`, if a state has it.
+    fn shifted(&self, q: &[i32]) -> Vec<Option<u32>> {
+        let mut out = vec![None; self.index.len()];
+        for (l, &k) in &self.index {
+            let target: Vec<i32> = l.iter().zip(q).map(|(x, y)| x - y).collect();
+            out[k as usize] = self.index.get(&target).copied();
+        }
+        out
+    }
+}
+
+/// One term `w (𝒬 ⊗ Y(𝒬))` of the superoperator: both operators
+/// Hermitian, by rows in the positions of the grouping.
+struct Term {
+    q: SparseBlock,
+    y: SparseBlock,
+    w: f64,
+}
+
+/// The Redfield superoperator, block by block of coherence order. Its
+/// columns come from the terms on demand, so a block takes memory only
+/// while it is used; [`RedfieldBlocks::apply`] keeps the blocks it built.
 pub(super) struct RedfieldBlocks {
-    /// `(elements, R restricted to them)`.
-    pub blocks: Vec<(Vec<(usize, usize)>, CMatrix)>,
+    grouping: Grouping,
+    terms: Vec<Term>,
+    /// Column `a` of `Σ w 𝒬 Y(𝒬)` within the label of `a`, as row `a`.
+    left: SparseBlock,
+    /// The union of the terms' patterns, for estimates.
+    pattern: SparseBlock,
+    /// The blocks of coherence order.
+    pub liouville: Liouville,
+    built: Vec<OnceLock<SparseBlock>>,
+    counts: Vec<OnceLock<usize>>,
+    rate: f64,
 }
 
 impl RedfieldBlocks {
-    /// `out += scale · R(x)`.
+    /// For the labels of `c`, the labels `e` must have for `|c⟩⟨e|` to lie
+    /// in block `k`.
+    pub fn targets(&self, k: usize) -> Vec<Option<u32>> {
+        self.grouping.shifted(&self.liouville.blocks[k].0)
+    }
+
+    /// `scale · R(|a⟩⟨b|)` for the element `j = (a, b)` of block `k`:
+    /// `add(c, e, v)` for its entries at `|c⟩⟨e|` (repeated `(c, e)` add
+    /// up). `targets` are the block's.
+    pub fn column(
+        &self,
+        k: usize,
+        j: usize,
+        targets: &[Option<u32>],
+        scale: C64,
+        mut add: impl FnMut(usize, usize, C64),
+    ) {
+        let g = &self.grouping;
+        let (a, b) = self.liouville.blocks[k].1[j];
+        let (pa, pb) = (g.rank[a] as usize, g.rank[b] as usize);
+        // Σ w 𝒬Y|a⟩⟨b| from column a of the left product, Σ w |a⟩⟨b|Y𝒬
+        // from its column b conjugated (Y𝒬 = (𝒬Y)†).
+        for (pc, v) in self.left.row(pa) {
+            add(g.order[pc], b, v * scale);
+        }
+        for (pe, v) in self.left.row(pb) {
+            add(a, g.order[pe], v.conj() * scale);
+        }
+        for term in &self.terms {
+            let f = scale * -term.w;
+            self.cross(&term.q, &term.y, pa, pb, targets, f, &mut add);
+            self.cross(&term.y, &term.q, pa, pb, targets, f, &mut add);
+        }
+    }
+
+    /// `f · X|a⟩⟨b|Z` on the block: `X_ca = conj(X_ac)` from row `a` of
+    /// `X` (Hermitian) and `Z_be` from row `b` of `Z`, each label of `c`
+    /// with the states `e` of its target label.
+    #[allow(clippy::too_many_arguments)]
+    fn cross(
+        &self,
+        x: &SparseBlock,
+        z: &SparseBlock,
+        pa: usize,
+        pb: usize,
+        targets: &[Option<u32>],
+        f: C64,
+        add: &mut impl FnMut(usize, usize, C64),
+    ) {
+        let g = &self.grouping;
+        let (xc, xv) = x.row_parts(pa);
+        let (zc, zv) = z.row_parts(pb);
+        if zc.is_empty() {
+            return;
+        }
+        let mut i = 0;
+        while i < xc.len() {
+            let l = g.label[xc[i] as usize];
+            let mut end = i + 1;
+            while end < xc.len() && g.label[xc[end] as usize] == l {
+                end += 1;
+            }
+            if let Some(t) = targets[l as usize] {
+                let (lo, hi) = (g.starts[t as usize] as u32, g.starts[t as usize + 1] as u32);
+                let s0 = zc.partition_point(|&c| c < lo);
+                let s1 = s0 + zc[s0..].partition_point(|&c| c < hi);
+                for r in i..end {
+                    let c = g.order[xc[r] as usize];
+                    let w = xv[r].conj() * f;
+                    for s in s0..s1 {
+                        add(c, g.order[zc[s] as usize], w * zv[s]);
+                    }
+                }
+            }
+            i = end;
+        }
+    }
+
+    /// Products `X_ca Z_be` the union pattern gives for the element at
+    /// positions `(pa, pb)`: a bound on the entries of its column.
+    fn products(&self, pa: usize, pb: usize, targets: &[Option<u32>]) -> usize {
+        let g = &self.grouping;
+        let (xc, _) = self.pattern.row_parts(pa);
+        let (zc, _) = self.pattern.row_parts(pb);
+        let mut count = 0;
+        let mut i = 0;
+        while i < xc.len() {
+            let l = g.label[xc[i] as usize];
+            let mut end = i + 1;
+            while end < xc.len() && g.label[xc[end] as usize] == l {
+                end += 1;
+            }
+            if let Some(t) = targets[l as usize] {
+                let (lo, hi) = (g.starts[t as usize] as u32, g.starts[t as usize + 1] as u32);
+                let s0 = zc.partition_point(|&c| c < lo);
+                let s1 = s0 + zc[s0..].partition_point(|&c| c < hi);
+                count += (end - i) * (s1 - s0);
+            }
+            i = end;
+        }
+        count
+    }
+
+    /// At most how many entries block `k` has (without building it).
+    pub fn count(&self, k: usize) -> usize {
+        *self.counts[k].get_or_init(|| self.bound(k))
+    }
+
+    fn bound(&self, k: usize) -> usize {
+        let g = &self.grouping;
+        let elements = &self.liouville.blocks[k].1;
+        let n = elements.len();
+        let targets = self.targets(k);
+        let chunk = 1024;
+        map_tasks(n.div_ceil(chunk), |c| {
+            (c * chunk..((c + 1) * chunk).min(n))
+                .map(|j| {
+                    let (a, b) = elements[j];
+                    let (pa, pb) = (g.rank[a] as usize, g.rank[b] as usize);
+                    let total = self.left.row_parts(pa).0.len()
+                        + self.left.row_parts(pb).0.len()
+                        + self.products(pa, pb, &targets);
+                    total.min(n)
+                })
+                .sum::<usize>()
+        })
+        .into_iter()
+        .sum()
+    }
+
+    /// Block `k` as a sparse matrix (columns in parallel).
+    fn build(&self, k: usize) -> SparseBlock {
+        let n = self.liouville.blocks[k].1.len();
+        let targets = self.targets(k);
+        let chunk = 256;
+        let parts: Vec<Vec<Vec<(u32, C64)>>> = map_tasks(n.div_ceil(chunk), |c| {
+            let mut acc = Accumulator::new(n);
+            (c * chunk..((c + 1) * chunk).min(n))
+                .map(|j| {
+                    self.column(k, j, &targets, C64::new(1.0, 0.0), |r, e, v| {
+                        acc.add(self.liouville.position_of(r, e), v)
+                    });
+                    acc.take()
+                })
+                .collect()
+        });
+        let columns: Vec<Vec<(u32, C64)>> = parts.into_iter().flatten().collect();
+        SparseBlock::from_columns(n, &columns)
+    }
+
+    /// Block `k`, built once.
+    pub fn block(&self, k: usize) -> &SparseBlock {
+        self.built[k].get_or_init(|| self.build(k))
+    }
+
+    /// Bytes of the blocks built so far.
+    pub fn bytes(&self) -> usize {
+        self.built
+            .iter()
+            .filter_map(OnceLock::get)
+            .map(SparseBlock::bytes)
+            .sum()
+    }
+
+    /// `out += scale · R(x)` from the blocks `x` touches, built once (for
+    /// repeated use).
     pub fn apply(&self, x: &CMatrix, out: &mut CMatrix, scale: f64) {
-        for (elements, r) in &self.blocks {
+        for (k, (_, elements)) in self.liouville.blocks.iter().enumerate() {
             let v: Vec<C64> = elements.iter().map(|&(a, b)| x[(a, b)]).collect();
             if v.iter().all(|z| *z == ZERO) {
                 continue;
             }
-            for (i, &(a, b)) in elements.iter().enumerate() {
-                let mut s = ZERO;
-                for (j, vj) in v.iter().enumerate() {
-                    s += r[(i, j)] * vj;
-                }
-                out[(a, b)] += s * scale;
+            let mut y = vec![ZERO; v.len()];
+            self.block(k).apply(&v, &mut y);
+            for (&(a, b), yi) in elements.iter().zip(y) {
+                out[(a, b)] += yi * scale;
             }
         }
     }
 
-    /// The largest column sum of `|R|`: a bound on its rates.
-    pub fn rate(&self) -> f64 {
-        self.blocks
-            .iter()
-            .map(|(_, r)| crate::linalg::dense::one_norm(r))
-            .fold(0.0, f64::max)
+    /// `out += scale · R(x)`, column by column without keeping anything.
+    pub fn image(&self, x: &CMatrix, out: &mut CMatrix, scale: f64) {
+        for (k, (_, elements)) in self.liouville.blocks.iter().enumerate() {
+            if elements.iter().all(|&(a, b)| x[(a, b)] == ZERO) {
+                continue;
+            }
+            let targets = self.targets(k);
+            let mut acc = Accumulator::new(elements.len());
+            for (j, &(a, b)) in elements.iter().enumerate() {
+                let v = x[(a, b)];
+                if v != ZERO {
+                    self.column(k, j, &targets, v * scale, |r, e, w| {
+                        acc.add(self.liouville.position_of(r, e), w)
+                    });
+                }
+            }
+            for (i, v) in acc.take() {
+                let (a, b) = elements[i as usize];
+                out[(a, b)] += v;
+            }
+        }
     }
 
-    /// Entries of all blocks (the work of one application).
-    pub fn entries(&self) -> usize {
-        self.blocks.iter().map(|(e, _)| e.len() * e.len()).sum()
+    /// A bound on the largest column sum of `|R|`, and so on its rates.
+    pub fn rate(&self) -> f64 {
+        self.rate
     }
+
+    /// Number of terms `𝒬 ⊗ Y(𝒬)`.
+    pub fn terms(&self) -> usize {
+        self.terms.len()
+    }
+}
+
+/// `Y(X)_mn = X_mn J(ω_mn)` of a Hermitian `X` (by rows in the positions of
+/// `grouping`) in the eigenbasis of the laboratory `H₀`, one pair of its
+/// blocks at a time. Entries below 10⁻¹⁵ of the largest of their pair of
+/// blocks are the rounding of the transformation and dropped.
+fn spectral(x: &SparseBlock, eigen: &[Eigenblock], grouping: &Grouping, tau: f64) -> SparseBlock {
+    let d = x.n;
+    // The block of every state, and its index there.
+    let mut home = vec![(0u32, 0u32); d];
+    for (k, block) in eigen.iter().enumerate() {
+        for (i, &s) in block.states.iter().enumerate() {
+            home[s] = (k as u32, i as u32);
+        }
+    }
+    let parts: Vec<Vec<(u32, u32, C64)>> = map_tasks(eigen.len(), |ka| {
+        let a = &eigen[ka];
+        let mut subs: BTreeMap<u32, CMatrix> = BTreeMap::new();
+        for (i, &s) in a.states.iter().enumerate() {
+            for (pc, v) in x.row(grouping.rank[s] as usize) {
+                let (kb, j) = home[grouping.order[pc]];
+                subs.entry(kb).or_insert_with(|| {
+                    CMatrix::zeros(a.states.len(), eigen[kb as usize].states.len())
+                })[(i, j as usize)] = v;
+            }
+        }
+        let mut out = Vec::new();
+        for (kb, sub) in subs {
+            let b = &eigen[kb as usize];
+            let mut t = cmul(&cmul(&a.vectors.adjoint(), &sub), &b.vectors);
+            for (r, &ea) in a.values.iter().enumerate() {
+                for (c, &eb) in b.values.iter().enumerate() {
+                    let w = (a.shift - b.shift) + ea - eb;
+                    t[(r, c)] *= tau / (1.0 + w * w * tau * tau);
+                }
+            }
+            let back = cmul(&cmul(&a.vectors, &t), &b.vectors.adjoint());
+            let floor = 1e-15 * back.iter().fold(0.0f64, |m, z| m.max(z.norm()));
+            for (r, &s) in a.states.iter().enumerate() {
+                for (c, &e) in b.states.iter().enumerate() {
+                    let v = back[(r, c)];
+                    if v.norm() > floor {
+                        out.push((grouping.rank[s], grouping.rank[e], v));
+                    }
+                }
+            }
+        }
+        out
+    });
+    SparseBlock::from_triplets(d, parts.into_iter().flatten().collect())
+}
+
+/// Column `a` of `Σ w 𝒬 Y(𝒬)` within the label of `a` (the part a
+/// column of a block can reach), as row `a`: `(𝒬Y)_ca = Σ_m conj(𝒬_mc
+/// Y_am)`.
+fn left_products(terms: &[Term], g: &Grouping) -> SparseBlock {
+    let d = g.order.len();
+    let chunk = 64;
+    let rows: Vec<Vec<(u32, C64)>> = map_tasks(d.div_ceil(chunk), |c| {
+        (c * chunk..((c + 1) * chunk).min(d))
+            .map(|pa| {
+                let l = g.label[pa] as usize;
+                let (lo, hi) = (g.starts[l], g.starts[l + 1]);
+                let mut acc = vec![ZERO; hi - lo];
+                for term in terms {
+                    let (yc, yv) = term.y.row_parts(pa);
+                    for (&pm, &yam) in yc.iter().zip(yv) {
+                        let (qc, qv) = term.q.row_parts(pm as usize);
+                        let s0 = qc.partition_point(|&c| (c as usize) < lo);
+                        let s1 = s0 + qc[s0..].partition_point(|&c| (c as usize) < hi);
+                        let f = yam.conj() * term.w;
+                        for s in s0..s1 {
+                            acc[qc[s] as usize - lo] += qv[s].conj() * f;
+                        }
+                    }
+                }
+                acc.into_iter()
+                    .enumerate()
+                    .filter(|(_, v)| *v != ZERO)
+                    .map(|(i, v)| ((lo + i) as u32, v))
+                    .collect()
+            })
+            .collect::<Vec<_>>()
+    })
+    .into_iter()
+    .flatten()
+    .collect();
+    SparseBlock::from_rows(d, rows)
 }
 
 impl SpinSystem {
@@ -281,30 +629,88 @@ impl SpinSystem {
         self.correlation_time.is_some() && !self.interactions(1.0).is_empty()
     }
 
-    /// `Y(X)_mn = X_mn J(ω_mn)` in the eigenbasis of the laboratory `H₀`.
-    fn spectral(x: &CMatrix, blocks: &[Eigenblock], tau: f64) -> CMatrix {
-        let d = x.nrows();
-        let mut out = CMatrix::zeros(d, d);
-        for a in blocks {
-            for b in blocks {
-                let sub = CMatrix::from_fn(a.states.len(), b.states.len(), |r, c| {
-                    x[(a.states[r], b.states[c])]
-                });
-                if sub.iter().all(|z| *z == ZERO) {
-                    continue;
+    /// The six components `𝒬^S_xy` (`xx, yy, zz, xy, xz, yz`) of an
+    /// interaction's spin tensor, on the spins it acts on (the first the
+    /// most significant): `(I_x I_y + I_y I_x)/2 − δ_xy I·I/3` for a dipolar
+    /// pair, `(I_x δ_yz + I_y δ_xz)/2 − δ_xy I_z/3` for a shielding.
+    fn local_tensor(&self, c: Coupling) -> (Vec<usize>, Vec<CMatrix>) {
+        let pairs = [(0, 0), (1, 1), (2, 2), (0, 1), (0, 2), (1, 2)];
+        let ops = |i: usize| {
+            let [iz, _, _, ix, iy] = spin_ops(self.spins[i].isotope.levels());
+            [ix, iy, iz]
+        };
+        let half = C64::new(0.5, 0.0);
+        let third = C64::new(1.0 / 3.0, 0.0);
+        match c {
+            Coupling::Dipolar(i, j) => {
+                let (a, b) = (ops(i), ops(j));
+                let product = |x: usize, y: usize| a[x].kronecker(&b[y]);
+                let dot = product(0, 0) + product(1, 1) + product(2, 2);
+                let tensor = pairs
+                    .iter()
+                    .map(|&(x, y)| {
+                        let mut q = (product(x, y) + product(y, x)) * half;
+                        if x == y {
+                            q -= &dot * third;
+                        }
+                        q
+                    })
+                    .collect();
+                (vec![i, j], tensor)
+            }
+            Coupling::Shielding(i) => {
+                let a = ops(i);
+                let n = a[0].nrows();
+                let tensor = pairs
+                    .iter()
+                    .map(|&(x, y)| {
+                        let mut q = CMatrix::zeros(n, n);
+                        if y == 2 {
+                            q += &a[x] * half;
+                        }
+                        if x == 2 {
+                            q += &a[y] * half;
+                        }
+                        if x == y {
+                            q -= &a[2] * third;
+                        }
+                        q
+                    })
+                    .collect();
+                (vec![i], tensor)
+            }
+        }
+    }
+
+    /// The entries `(row, column, value)` of an operator `local` on
+    /// `spins` (the first the most significant) in the full space.
+    fn embed_local(&self, spins: &[usize], local: &CMatrix) -> Vec<(usize, usize, C64)> {
+        let strides: Vec<usize> = spins.iter().map(|&i| self.stride(i)).collect();
+        let levels: Vec<usize> = spins
+            .iter()
+            .map(|&i| self.spins[i].isotope.levels())
+            .collect();
+        let n = local.nrows();
+        // The part of a state's index that each local index stands for.
+        let offset: Vec<usize> = (0..n)
+            .map(|l| {
+                let mut rest = l;
+                let mut out = 0;
+                for k in (0..spins.len()).rev() {
+                    out += (rest % levels[k]) * strides[k];
+                    rest /= levels[k];
                 }
-                let mut t = cmul(&cmul(&a.vectors.adjoint(), &sub), &b.vectors);
-                for (r, &ea) in a.values.iter().enumerate() {
-                    for (c, &eb) in b.values.iter().enumerate() {
-                        let w = (a.shift - b.shift) + ea - eb;
-                        t[(r, c)] *= tau / (1.0 + w * w * tau * tau);
-                    }
-                }
-                let back = cmul(&cmul(&a.vectors, &t), &b.vectors.adjoint());
-                for (r, &i) in a.states.iter().enumerate() {
-                    for (c, &j) in b.states.iter().enumerate() {
-                        out[(i, j)] += back[(r, c)];
-                    }
+                out
+            })
+            .collect();
+        let mut out = Vec::new();
+        for c in 0..self.dimension() {
+            let lc = (0..spins.len()).fold(0, |l, k| l * levels[k] + (c / strides[k]) % levels[k]);
+            let base = c - offset[lc];
+            for (lr, &o) in offset.iter().enumerate() {
+                let v = local[(lr, lc)];
+                if v != ZERO {
+                    out.push((base + o, c, v));
                 }
             }
         }
@@ -313,8 +719,10 @@ impl SpinSystem {
 
     /// The Redfield superoperator at field `b`, block by block of the
     /// coherence orders of the labels (`None` without motion or
-    /// interactions). Blocks above [`super::MAX_LIOUVILLE_BLOCK`] are an
-    /// error.
+    /// interactions). Its memory and the work of building its terms are
+    /// estimated first and refused above [`super::MAX_RELAXATION_MEMORY`]
+    /// and [`super::MAX_RELAXATION_WORK`]; the blocks themselves are built
+    /// where they are used.
     pub(super) fn redfield(&self, b: f64) -> Result<Option<RedfieldBlocks>> {
         let Some(tau) = self.correlation_time else {
             return Ok(None);
@@ -339,86 +747,33 @@ impl SpinSystem {
             ));
         }
         let labels = self.labels();
-        let largest = super::blocks::largest_coherence_block(&labels);
-        let work = BUILD_COST * super::blocks::coherence_entries(&labels) as f64;
-        if work > super::MAX_RELAXATION_WORK {
+        let mut lab = self.clone();
+        lab.frame = Frame::Laboratory;
+        let (work, memory) = redfield_cost(&lab.labels(), &labels, interactions.len());
+        if work > super::MAX_RELAXATION_WORK || memory > super::MAX_RELAXATION_MEMORY {
             return Err(QsoError::invalid(
                 "redfield",
                 format!(
                     "the Redfield superoperator at dimension {} needs about {work:.1e} \
-                     operations to build (limit {:.1e})",
+                     operations and {:.1} GB to build (limits {:.1e} and {:.1} GB)",
                     self.dimension(),
-                    super::MAX_RELAXATION_WORK
-                ),
-            ));
-        }
-        if largest > super::MAX_LIOUVILLE_BLOCK {
-            return Err(QsoError::invalid(
-                "redfield",
-                format!(
-                    "Redfield relaxation at dimension {} needs blocks of {largest} elements \
-                     (at most {})",
-                    self.dimension(),
-                    super::MAX_LIOUVILLE_BLOCK
+                    memory / 1e9,
+                    super::MAX_RELAXATION_WORK,
+                    super::MAX_RELAXATION_MEMORY / 1e9
                 ),
             ));
         }
         let d = self.dimension();
-        let ops: Vec<[CMatrix; 3]> = (0..self.spins.len())
-            .map(|i| {
-                [
-                    self.ix(i).expect("spin"),
-                    self.iy(i).expect("spin"),
-                    self.iz(i).expect("spin"),
-                ]
-            })
-            .collect();
-        // Q^S_ab of every interaction, for a ≤ b.
-        let pairs = [(0, 0), (1, 1), (2, 2), (0, 1), (0, 2), (1, 2)];
-        let spin_tensor = |c: Coupling| -> Vec<CMatrix> {
-            match c {
-                Coupling::Dipolar(i, j) => {
-                    let dot =
-                        &ops[i][0] * &ops[j][0] + &ops[i][1] * &ops[j][1] + &ops[i][2] * &ops[j][2];
-                    pairs
-                        .iter()
-                        .map(|&(x, y)| {
-                            let mut q = (&ops[i][x] * &ops[j][y] + &ops[i][y] * &ops[j][x])
-                                * C64::new(0.5, 0.0);
-                            if x == y {
-                                q -= &dot * C64::new(1.0 / 3.0, 0.0);
-                            }
-                            q
-                        })
-                        .collect()
-                }
-                Coupling::Shielding(i) => pairs
-                    .iter()
-                    .map(|&(x, y)| {
-                        let mut q = CMatrix::zeros(d, d);
-                        if y == 2 {
-                            q += &ops[i][x] * C64::new(0.5, 0.0);
-                        }
-                        if x == 2 {
-                            q += &ops[i][y] * C64::new(0.5, 0.0);
-                        }
-                        if x == y {
-                            q -= &ops[i][2] * C64::new(1.0 / 3.0, 0.0);
-                        }
-                        q
-                    })
-                    .collect(),
-            }
-        };
-        let tensors: Vec<Vec<CMatrix>> =
-            interactions.iter().map(|&(_, c)| spin_tensor(c)).collect();
-        let e = basis();
-        let mut lab = self.clone();
-        lab.frame = Frame::Laboratory;
         let eigen = lab.eigenblocks(&lab.hamiltonian_at(b));
+        let grouping = Grouping::new(&labels);
+        let locals: Vec<(Vec<usize>, Vec<CMatrix>)> = interactions
+            .iter()
+            .map(|&(_, c)| self.local_tensor(c))
+            .collect();
+        let pairs = [(0, 0), (1, 1), (2, 2), (0, 1), (0, 2), (1, 2)];
         // Terms (𝒬, Y(𝒬), weight).
-        let mut terms: Vec<(CMatrix, CMatrix, f64)> = Vec::new();
-        for basis_tensor in &e {
+        let mut terms = Vec::new();
+        for basis_tensor in &basis() {
             let alpha: Vec<f64> = interactions
                 .iter()
                 .map(|(a, _)| {
@@ -431,53 +786,114 @@ impl SpinSystem {
                 continue;
             }
             for (p, &(x, y)) in pairs.iter().enumerate() {
-                let mut q = CMatrix::zeros(d, d);
-                for (k, t) in tensors.iter().enumerate() {
-                    if alpha[k] != 0.0 {
-                        q += &t[p] * C64::new(alpha[k], 0.0);
+                let mut triplets = Vec::new();
+                for ((spins, local), &weight) in locals.iter().zip(&alpha) {
+                    if weight != 0.0 {
+                        for (r, c, v) in self.embed_local(spins, &local[p]) {
+                            triplets.push((grouping.rank[r], grouping.rank[c], v * weight));
+                        }
                     }
                 }
+                let q = SparseBlock::from_triplets(d, triplets);
+                if q.nnz() == 0 {
+                    continue;
+                }
+                let yq = spectral(&q, &eigen, &grouping, tau);
                 let weight = if x == y { 1.0 } else { 2.0 } / 5.0;
-                let yq = Self::spectral(&q, &eigen, tau);
-                terms.push((q, yq, weight));
+                terms.push(Term {
+                    q,
+                    y: yq,
+                    w: weight,
+                });
             }
         }
-        // R(|a⟩⟨b|) = Σ w (QY|a⟩⟨b| − Q|a⟩⟨b|Y − Y|a⟩⟨b|Q + |a⟩⟨b|YQ).
-        let mut left = CMatrix::zeros(d, d);
-        let mut right = CMatrix::zeros(d, d);
-        for (q, y, w) in &terms {
-            left += cmul(q, y) * C64::new(*w, 0.0);
-            right += cmul(y, q) * C64::new(*w, 0.0);
+        let left = left_products(&terms, &grouping);
+        let finite = |m: &SparseBlock| {
+            (0..m.n).all(|r| m.row(r).all(|(_, v)| v.re.is_finite() && v.im.is_finite()))
+        };
+        if !(finite(&left) && terms.iter().all(|t| finite(&t.q) && finite(&t.y))) {
+            return Err(QsoError::invalid(
+                "redfield",
+                "the Redfield superoperator is not finite",
+            ));
         }
-        let liouville = Liouville::new(&labels, None);
-        let mut blocks = Vec::with_capacity(liouville.blocks.len());
-        for (_, elements) in &liouville.blocks {
-            let n = elements.len();
-            let mut r = CMatrix::zeros(n, n);
-            for (j, &(a, b)) in elements.iter().enumerate() {
-                for (i, &(c, e)) in elements.iter().enumerate() {
-                    let mut v = ZERO;
-                    if e == b {
-                        v += left[(c, a)];
-                    }
-                    if c == a {
-                        v += right[(b, e)];
-                    }
-                    for (q, y, w) in &terms {
-                        v -= (q[(c, a)] * y[(b, e)] + y[(c, a)] * q[(b, e)]) * *w;
-                    }
-                    r[(i, j)] = v;
+        let mut triplets = Vec::new();
+        for t in &terms {
+            for m in [&t.q, &t.y] {
+                for r in 0..d {
+                    triplets.extend(m.row(r).map(|(c, _)| (r as u32, c as u32, ONE)));
                 }
             }
-            if r.iter().any(|z| !(z.re.is_finite() && z.im.is_finite())) {
-                return Err(QsoError::invalid(
-                    "redfield",
-                    "the Redfield superoperator is not finite",
-                ));
-            }
-            blocks.push((elements.clone(), r));
         }
-        Ok(Some(RedfieldBlocks { blocks }))
+        let pattern = SparseBlock::from_triplets(d, triplets);
+        // Σ_ce |R_ce,ab| ≤ |𝒬Y col a| + |𝒬Y col b| + Σ w (‖𝒬‖‖Y‖ + ‖Y‖‖𝒬‖).
+        let rate = 2.0 * left.norm_inf()
+            + terms
+                .iter()
+                .map(|t| 2.0 * t.w * t.q.norm_inf() * t.y.norm_inf())
+                .sum::<f64>();
+        let liouville = Liouville::new(&labels, None);
+        let built = (0..liouville.blocks.len())
+            .map(|_| OnceLock::new())
+            .collect();
+        let counts = (0..liouville.blocks.len())
+            .map(|_| OnceLock::new())
+            .collect();
+        Ok(Some(RedfieldBlocks {
+            grouping,
+            terms,
+            left,
+            pattern,
+            liouville,
+            built,
+            counts,
+            rate,
+        }))
+    }
+
+    /// Whether the Redfield relaxation is unchanged by the spin
+    /// permutation `p`: it maps the relaxing interactions onto each other
+    /// and keeps the contractions `A^k : A^l` of their tensors, on which
+    /// alone isotropic tumbling makes the relaxation depend (to 10⁻⁹ of the
+    /// largest).
+    pub(super) fn redfield_invariant(&self, p: &[usize]) -> bool {
+        if self.correlation_time.is_none() {
+            return true;
+        }
+        let interactions = self.interactions(1.0);
+        let key = |c: Coupling| match c {
+            Coupling::Dipolar(i, j) => (i.min(j), i.max(j), false),
+            Coupling::Shielding(i) => (i, i, true),
+        };
+        let index: BTreeMap<(usize, usize, bool), usize> = interactions
+            .iter()
+            .enumerate()
+            .map(|(k, &(_, c))| (key(c), k))
+            .collect();
+        let image: Option<Vec<usize>> = interactions
+            .iter()
+            .map(|&(_, c)| {
+                let moved = match c {
+                    Coupling::Dipolar(i, j) => Coupling::Dipolar(p[i], p[j]),
+                    Coupling::Shielding(i) => Coupling::Shielding(p[i]),
+                };
+                index.get(&key(moved)).copied()
+            })
+            .collect();
+        let Some(image) = image else {
+            return false;
+        };
+        let gram = |k: usize, l: usize| -> f64 {
+            let (a, b) = (&interactions[k].0, &interactions[l].0);
+            (0..3)
+                .map(|x| (0..3).map(|y| a[x][y] * b[x][y]).sum::<f64>())
+                .sum()
+        };
+        let n = interactions.len();
+        let largest = (0..n).map(|k| gram(k, k)).fold(0.0, f64::max);
+        (0..n).all(|k| {
+            (0..n).all(|l| (gram(image[k], image[l]) - gram(k, l)).abs() <= 1e-9 * largest)
+        })
     }
 
     /// Relaxation rates among observables: `Γ_ij = −Re Tr(O_i† D(O_j)) /
@@ -513,6 +929,38 @@ impl SpinSystem {
         }
         Ok(out)
     }
+}
+
+/// Estimated operations and bytes of building the Redfield terms: 30
+/// operators, their spectral images (at most the pairs of laboratory
+/// blocks whose `2M` differ by up to 4), their union, the left products,
+/// the laboratory Hamiltonian's eigenvectors and the index of the blocks.
+fn redfield_cost(lab: &[Vec<i32>], labels: &[Vec<i32>], interactions: usize) -> (f64, f64) {
+    let d = labels.len() as f64;
+    let mut sizes: BTreeMap<i32, f64> = BTreeMap::new();
+    for l in lab {
+        *sizes.entry(l[0]).or_default() += 1.0;
+    }
+    let (mut y, mut spectral, mut eigen) = (0.0, 0.0, 0.0);
+    for (&ma, &na) in &sizes {
+        eigen += 40.0 * na * na * na;
+        for (&mb, &nb) in &sizes {
+            if (ma - mb).abs() <= 4 {
+                y += na * nb;
+                spectral += 16.0 * na * nb * (na + nb);
+            }
+        }
+    }
+    let q = (interactions as f64 * 9.0 * d).min(d * d);
+    let terms = 30.0;
+    let mut own: BTreeMap<&Vec<i32>, f64> = BTreeMap::new();
+    for l in labels {
+        *own.entry(l).or_default() += 1.0;
+    }
+    let left: f64 = own.values().map(|n| n * n).sum();
+    let work = eigen + terms * (spectral + 64.0 * (q + y)) + 64.0 * left;
+    let memory = terms * (q + y) * (20.0 + 24.0) + left * 20.0 + d * d * (3.0 * 16.0 + 24.0);
+    (work, memory)
 }
 
 fn distance(p: [f64; 3], q: [f64; 3]) -> f64 {
