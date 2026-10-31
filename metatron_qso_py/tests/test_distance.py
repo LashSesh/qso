@@ -125,3 +125,69 @@ def test_correlations_help_with_both_kinds_of_detectors() -> None:
     plain = q.logical_error_rate(c, 20000, seed=9, decoder="matching")
     correlated = q.logical_error_rate(c, 20000, seed=9, decoder="correlated_matching")
     assert correlated.errors < 0.9 * plain.errors
+
+
+def _nullspace_gf2(rows: np.ndarray) -> np.ndarray:
+    """A basis of {x : rows · x = 0} over GF(2)."""
+    a = rows.copy() % 2
+    m, n = a.shape
+    pivots = []
+    r = 0
+    for c in range(n):
+        p = next((i for i in range(r, m) if a[i, c]), None)
+        if p is None:
+            continue
+        a[[r, p]] = a[[p, r]]
+        for i in range(m):
+            if i != r and a[i, c]:
+                a[i] ^= a[r]
+        pivots.append(c)
+        r += 1
+    free = [c for c in range(n) if c not in pivots]
+    basis = []
+    for f in free:
+        x = np.zeros(n, dtype=np.uint8)
+        x[f] = 1
+        for i, p in enumerate(pivots):
+            x[p] = a[i, f]
+        basis.append(x)
+    return np.array(basis)
+
+
+def test_exact_distance_of_the_golay_code_and_a_circuit() -> None:
+    # The Golay code [23, 12, 7] as a model: its parity checks are the
+    # detectors and the first twelve columns (an information set of the
+    # cyclic code) the observables.
+    g = [0, 2, 4, 5, 6, 10, 11]
+    generator = np.zeros((12, 23), dtype=np.uint8)
+    for s in range(12):
+        generator[s, [e + s for e in g]] = 1
+    checks = _nullspace_gf2(generator)
+    errors = [
+        (0.01, [int(i) for i in np.flatnonzero(checks[:, c])], (1 << c) if c < 12 else 0)
+        for c in range(23)
+    ]
+    model = q.DetectorErrorModel(len(checks), errors, 12)
+    for method in ("auto", "brouwer_zimmermann", "search"):
+        r = q.exact_circuit_distance(model, method=method)
+        assert (r.lower_bound, r.upper_bound, r.distance) == (7, 7, 7), method
+    # A colour-code circuit: hook errors halve the distance, and the
+    # lightest logical error is three faults of the circuit.
+    c = q.css_code_memory(q.CssCode.color_code(5), 2, 0.001)
+    model = c.detector_error_model()
+    r = q.exact_circuit_distance(model, max_seconds=None)
+    assert r.distance == 3
+    faults = q.explain_errors(c, model, r.witness)
+    assert len(faults) == 3 and all(faults)
+    for options in faults:
+        for f in options:
+            assert 0 <= f["operation"] < len(c)
+            assert all(p in "XYZM" for _, p in f["paulis"]) and 0 < f["probability"] < 1
+    everything = q.explain_errors(c, model)
+    assert len(everything) == len(model) and all(everything)
+    with pytest.raises(ValueError):
+        q.exact_circuit_distance(model, method="magic")
+    with pytest.raises(ValueError):
+        q.exact_circuit_distance(model, max_seconds=-1.0)
+    with pytest.raises(ValueError):
+        q.explain_errors(c, model, [len(model)])

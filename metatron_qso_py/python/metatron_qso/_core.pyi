@@ -2190,6 +2190,18 @@ def circuit_distance(
     bposd_trials: int = 4,
     seed: int = 0,
 ) -> CircuitDistance: ...
+def exact_circuit_distance(
+    model: DetectorErrorModel,
+    max_seconds: Optional[float] = 60.0,
+    method: Literal["auto", "search", "brouwer_zimmermann"] = "auto",
+    bposd_trials: int = 4,
+    seed: int = 0,
+) -> CircuitDistance: ...
+def explain_errors(
+    circuit: DetectorCircuit,
+    model: DetectorErrorModel,
+    indices: Optional[Sequence[int]] = None,
+) -> list[list[dict[str, Any]]]: ...
 def graphlike_distance(model: DetectorErrorModel) -> CircuitDistance: ...
 
 @final

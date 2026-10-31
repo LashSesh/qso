@@ -499,10 +499,14 @@ enum Command {
         /// for the colour code, e.g. 0,1,2,3,4,5 (not with --circuit).
         #[arg(long, default_value = "greedy")]
         schedule: String,
-        /// Also bound the circuit distance: the fewest faults that flip a
-        /// logical observable undetected.
+        /// Also compute the circuit distance: the fewest faults that flip
+        /// a logical observable undetected (bounds when the time runs out).
         #[arg(long)]
         circuit_distance: bool,
+        /// Seconds for each circuit distance, after which the bounds
+        /// reached are reported.
+        #[arg(long, default_value_t = 60.0, requires = "circuit_distance")]
+        max_seconds: f64,
     },
 }
 
@@ -1585,6 +1589,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             circuit: from_file,
             schedule,
             circuit_distance,
+            max_seconds,
         } => {
             let kind = match decoder {
                 DecoderArg::UnionFind => qec::DecoderChoice::UnionFind,
@@ -1629,14 +1634,14 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                     "schedules are for the colour and bicycle codes",
                 ));
             }
-            // Bounds on the circuit distance, as JSON and text.
+            // The circuit distance (or bounds on it), as JSON and text.
             let bound = |c: &qec::DetectorCircuit| -> Result<(serde_json::Value, String)> {
                 if !*circuit_distance {
                     return Ok((serde_json::Value::Null, String::new()));
                 }
-                let r = qec::circuit_distance(
+                let r = qec::exact_circuit_distance(
                     &qec::detector_error_model(c, false)?,
-                    &qec::DistanceOptions::default(),
+                    &qec::ExactDistanceOptions::default().with_max_seconds(*max_seconds),
                 )?;
                 let text = match (r.distance(), r.upper_bound()) {
                     (Some(d), _) => format!("; circuit distance {d}"),

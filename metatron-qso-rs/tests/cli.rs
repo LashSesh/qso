@@ -479,6 +479,34 @@ fn error_correction() {
     ]);
     assert_eq!(c["circuit_distance"]["lower_bound"], 5);
     assert_eq!(c["circuit_distance"]["upper_bound"], 5);
+    // No time: the bounds before any step (the shortest graph-like cycle
+    // above, two below), and the text says so.
+    let args = [
+        "qec",
+        "--circuit",
+        "tests/data/stim/surface_d5_memory_z.stim",
+        "--shots",
+        "100",
+        "--circuit-distance",
+        "--max-seconds",
+        "0",
+    ];
+    let c = qso(&args);
+    assert_eq!(c["circuit_distance"]["lower_bound"], 2);
+    assert_eq!(c["circuit_distance"]["upper_bound"], 5);
+    assert!(qso_text(&args).contains("circuit distance 2 to 5"));
+    assert!(
+        qso_fails(&[
+            "qec",
+            "--circuit",
+            stim.path(),
+            "--shots",
+            "10",
+            "--max-seconds",
+            "5"
+        ])
+        .contains("circuit-distance")
+    );
     let colour = qso(&[
         "qec",
         "--code",

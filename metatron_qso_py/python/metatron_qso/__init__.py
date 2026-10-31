@@ -16,7 +16,8 @@ QUBO/Ising problems with QAOA mixers; amplitude estimation; stabilizer
 simulation and graph states; and quantum error correction (detector
 circuits, Pauli-frame sampling, detector error models, union-find and
 minimum-weight matching and BP+OSD decoding, repetition, surface,
-colour and bivariate bicycle code memory experiments); matrix-product
+colour and bivariate bicycle code memory experiments, exact circuit
+distances); matrix-product
 states for circuits with little entanglement on many qubits; and nuclear
 spin dynamics for magnetic resonance (``metatron_qso.spin``).
 
@@ -110,6 +111,8 @@ from ._core import (
     coordinate_permutations,
     css_code_memory,
     circuit_distance,
+    exact_circuit_distance,
+    explain_errors,
     graphlike_distance,
     diagonal_unitary_circuit,
     distilled_expectation,
@@ -263,6 +266,8 @@ __all__ = [
     "coordinate_permutations",
     "css_code_memory",
     "circuit_distance",
+    "exact_circuit_distance",
+    "explain_errors",
     "graphlike_distance",
     "diagonal_unitary_circuit",
     "distilled_expectation",

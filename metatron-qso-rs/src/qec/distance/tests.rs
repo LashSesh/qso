@@ -305,3 +305,182 @@ fn bounds_below_the_distance_are_not_taken_for_none() {
     };
     assert!(circuit_distance(&dem, &many).is_err());
 }
+
+#[test]
+fn every_exact_method_matches_brute_force() {
+    let mut rng = Rng::seed_from_u64(42);
+    let methods = [
+        DistanceMethod::Auto,
+        DistanceMethod::Search,
+        DistanceMethod::BrouwerZimmermann,
+    ];
+    for _ in 0..300 {
+        let n = 1 + rng.below(8) as usize;
+        let m = 1 + rng.below(15) as usize;
+        let dem = random_model(&mut rng, n, m, 4);
+        let want = brute_force(&dem);
+        for method in methods {
+            let options = ExactDistanceOptions::default()
+                .with_method(method)
+                .with_bposd_trials(0);
+            let r = exact_circuit_distance(&dem, &options).unwrap();
+            check_witness(&dem, &r);
+            match want {
+                Some(d) => assert_eq!(r.distance(), Some(d), "{method:?}"),
+                None => assert_eq!(r.lower_bound, usize::MAX, "{method:?}"),
+            }
+        }
+    }
+}
+
+#[test]
+fn exact_distances_of_codes() {
+    use super::zimmermann::tests::{classical, golay, reed_muller};
+    // Classical codes, by either method.
+    for (name, (rows, n), d) in [
+        ("Golay [23, 12]", golay(false), 7),
+        ("Golay [24, 12]", golay(true), 8),
+        ("RM(2, 6) [64, 22]", reed_muller(2, 6), 16),
+    ] {
+        let dem = classical(&rows, n);
+        for method in [DistanceMethod::Auto, DistanceMethod::BrouwerZimmermann] {
+            let options = ExactDistanceOptions::default().with_method(method);
+            let r = exact_circuit_distance(&dem, &options).unwrap();
+            check_witness(&dem, &r);
+            assert_eq!(r.distance(), Some(d), "{name}, {method:?}");
+        }
+    }
+    // Code capacity: one round of data errors (Z basis: X errors).
+    let cases = [
+        (CssCode::color_code(7).unwrap(), 7),
+        (CssCode::bivariate_bicycle_code(72).unwrap().0, 6),
+        (CssCode::bivariate_bicycle_code(144).unwrap().0, 12),
+    ];
+    for (code, d) in cases {
+        let c = css_code_memory(&code, 1, &CircuitNoise::data_only(0.01), MemoryBasis::Z).unwrap();
+        let dem = detector_error_model(&c, false).unwrap();
+        let r = exact_circuit_distance(&dem, &ExactDistanceOptions::default()).unwrap();
+        check_witness(&dem, &r);
+        assert_eq!(r.distance(), Some(d), "[[{}, {}]]", code.n(), code.k());
+    }
+}
+
+#[test]
+fn exact_circuit_distances_and_time_limits() {
+    // Circuit noise: the colour code's hook errors halve its distance; the
+    // bicycle code's depth-8 cycle keeps 6.
+    let colour = css_code_memory(
+        &CssCode::color_code(5).unwrap(),
+        2,
+        &CircuitNoise::uniform(0.001),
+        MemoryBasis::Z,
+    )
+    .unwrap();
+    let dem = detector_error_model(&colour, false).unwrap();
+    for method in [DistanceMethod::Auto, DistanceMethod::Search] {
+        let options = ExactDistanceOptions::default().with_method(method);
+        let r = exact_circuit_distance(&dem, &options).unwrap();
+        check_witness(&dem, &r);
+        assert_eq!(r.distance(), Some(3), "{method:?}");
+    }
+    let (code, _) = CssCode::bivariate_bicycle_code(72).unwrap();
+    let c = crate::qec::css_code_memory_with(
+        &code,
+        2,
+        &CircuitNoise::uniform(0.001),
+        MemoryBasis::Z,
+        crate::qec::CssSchedule::Bicycle,
+    )
+    .unwrap();
+    let dem = detector_error_model(&c, false).unwrap();
+    let r = exact_circuit_distance(&dem, &ExactDistanceOptions::default()).unwrap();
+    check_witness(&dem, &r);
+    assert_eq!(r.distance(), Some(6));
+    // A time limit returns honest bounds at once.
+    let (code, _) = CssCode::bivariate_bicycle_code(144).unwrap();
+    let c = crate::qec::css_code_memory_with(
+        &code,
+        2,
+        &CircuitNoise::uniform(0.001),
+        MemoryBasis::Z,
+        crate::qec::CssSchedule::Bicycle,
+    )
+    .unwrap();
+    let dem = detector_error_model(&c, false).unwrap();
+    let start = std::time::Instant::now();
+    let options = ExactDistanceOptions::default()
+        .with_max_seconds(0.5)
+        .with_bposd_trials(1);
+    let r = exact_circuit_distance(&dem, &options).unwrap();
+    assert!(start.elapsed().as_secs_f64() < 10.0);
+    check_witness(&dem, &r);
+    assert!(r.lower_bound >= 2 && r.upper_bound().is_some_and(|u| u >= r.lower_bound));
+    // Invalid limits.
+    for bad in [f64::NAN, -1.0] {
+        assert!(exact_circuit_distance(&dem, &options.with_max_seconds(bad)).is_err());
+    }
+}
+
+#[test]
+fn witnesses_are_explained_by_circuit_faults() {
+    // Every error of a circuit's model comes from faults whose
+    // probabilities combine to its own, and the colour code's lightest
+    // logical error is three faults of the circuit.
+    let colour = css_code_memory(
+        &CssCode::color_code(3).unwrap(),
+        2,
+        &CircuitNoise::uniform(0.002),
+        MemoryBasis::Z,
+    )
+    .unwrap();
+    let dem = detector_error_model(&colour, false).unwrap();
+    let explained = crate::qec::explain_errors(&colour, &dem.errors).unwrap();
+    for (e, faults) in dem.errors.iter().zip(&explained) {
+        assert!(!faults.is_empty());
+        let p = faults.iter().fold(0.0, |acc, f| {
+            acc * (1.0 - f.probability) + f.probability * (1.0 - acc)
+        });
+        assert!(
+            (p - e.probability).abs() < 1e-15,
+            "{p} vs {}",
+            e.probability
+        );
+        for f in faults {
+            assert!(matches!(
+                colour.operations()[f.operation],
+                crate::qec::QecOp::Noise { .. } | crate::qec::QecOp::Measure { .. }
+            ));
+            assert!(!f.paulis.is_empty());
+            assert!(f.paulis.iter().all(|&(_, c)| "XYZM".contains(c)));
+        }
+    }
+    let r = exact_circuit_distance(&dem, &ExactDistanceOptions::default()).unwrap();
+    let w = r.witness.unwrap();
+    let chosen: Vec<ErrorMechanism> = w.iter().map(|&k| dem.errors[k].clone()).collect();
+    let faults = crate::qec::explain_errors(&colour, &chosen).unwrap();
+    assert_eq!(faults.len(), r.lower_bound);
+    assert!(faults.iter().all(|f| !f.is_empty()));
+    // An error the circuit cannot make has no fault.
+    let foreign = ErrorMechanism {
+        probability: 0.1,
+        detectors: vec![0, 1, 2, 3, 4, 5, 6],
+        observables: 1,
+    };
+    assert!(crate::qec::explain_errors(&colour, &[foreign]).unwrap()[0].is_empty());
+}
+
+#[test]
+fn exact_distance_ends_when_nothing_is_logical() {
+    // Beyond the detectors where linear algebra decides, and without a
+    // time limit: the search stops once its weight passes the number of
+    // errors, and at once when no error flips an observable.
+    let n = MAX_EXISTENCE_DETECTORS + 10;
+    let unlimited = ExactDistanceOptions::default().with_max_seconds(f64::INFINITY);
+    for errors in [
+        vec![error(&[0, 1, 2], 1), error(&[0], 0)],
+        vec![error(&[0, 1, 2], 0), error(&[0], 0), error(&[1, 2], 0)],
+    ] {
+        let r = exact_circuit_distance(&model(n, errors), &unlimited).unwrap();
+        assert_eq!((r.lower_bound, r.witness), (usize::MAX, None));
+    }
+}

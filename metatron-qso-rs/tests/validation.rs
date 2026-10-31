@@ -1423,18 +1423,22 @@ fn bposd_decodes_colour_and_bicycle_codes() {
 #[test]
 fn circuit_distances_of_memory_experiments() {
     use metatron_qso::qec::{
-        CircuitNoise, CssCode, CssSchedule, DistanceOptions, MemoryBasis, circuit_distance,
-        css_code_memory, css_code_memory_with, detector_error_model, repetition_code_memory,
-        surface_code_memory_with,
+        CircuitNoise, CssCode, CssSchedule, DistanceOptions, ExactDistanceOptions, MemoryBasis,
+        circuit_distance, css_code_memory, css_code_memory_with, detector_error_model,
+        exact_circuit_distance, repetition_code_memory, surface_code_memory_with,
     };
     let noise = CircuitNoise::uniform(0.001);
+    // The bounds of the search meet, and the exact computation agrees.
     let distance = |c: &metatron_qso::qec::DetectorCircuit| {
-        circuit_distance(
-            &detector_error_model(c, false).unwrap(),
-            &DistanceOptions::default(),
-        )
-        .unwrap()
-        .distance()
+        let dem = detector_error_model(c, false).unwrap();
+        let bounded = circuit_distance(&dem, &DistanceOptions::default())
+            .unwrap()
+            .distance();
+        let exact = exact_circuit_distance(&dem, &ExactDistanceOptions::default())
+            .unwrap()
+            .distance();
+        assert_eq!(exact, bounded);
+        exact
     };
     // Repetition and rotated surface codes with the hook-safe order keep
     // their distance.
@@ -1487,33 +1491,43 @@ fn circuit_distances_of_memory_experiments() {
 #[ignore]
 fn bicycle_cycle_reaches_the_published_circuit_distances() {
     use metatron_qso::qec::{
-        CircuitNoise, CssCode, CssSchedule, DistanceOptions, MemoryBasis, circuit_distance,
-        css_code_memory_with, detector_error_model,
+        CircuitNoise, CssCode, CssSchedule, DistanceOptions, ExactDistanceOptions, MemoryBasis,
+        circuit_distance, css_code_memory_with, detector_error_model, exact_circuit_distance,
     };
     // Bravyi et al. (2024), table 1, give dcirc ≤ 8, 8 and 10 for
     // [[90, 8, 10]], [[108, 8, 10]] and [[144, 12, 12]] with the depth-8
     // cycle, under noise that also strikes idle qubits. Three cycles of
-    // QSO's circuit noise (no idle errors): BP+OSD with 256 searches per
-    // observable finds logical errors of 8, 9 and 11 faults, and the
-    // exhaustive search proves that none has fewer than 7.
+    // QSO's circuit noise (no idle errors): the first two have circuit
+    // distance 8 exactly (11 s and 98 s on four cores). For the third,
+    // BP+OSD with 256 searches per observable finds a logical error of 11
+    // faults, and the exhaustive search proves that none has fewer than 7.
     let noise = CircuitNoise::uniform(0.001);
-    for (n, bound) in [(90, 8), (108, 9), (144, 11)] {
+    for n in [90, 108] {
         let (code, _) = CssCode::bivariate_bicycle_code(n).unwrap();
         let c =
             css_code_memory_with(&code, 3, &noise, MemoryBasis::Z, CssSchedule::Bicycle).unwrap();
-        let r = circuit_distance(
-            &detector_error_model(&c, false).unwrap(),
-            &DistanceOptions {
-                max_work: 1 << 27,
-                bposd_trials: 256,
-                ..DistanceOptions::default()
-            },
-        )
-        .unwrap();
+        let options = ExactDistanceOptions::default()
+            .with_max_seconds(3600.0)
+            .with_bposd_trials(16);
+        let r =
+            exact_circuit_distance(&detector_error_model(&c, false).unwrap(), &options).unwrap();
         eprintln!("[[{n}]]: {} ..= {:?}", r.lower_bound, r.upper_bound());
-        assert!(r.upper_bound().unwrap() <= bound, "[[{n}]]: {r:?}");
-        assert!(r.lower_bound >= 7, "[[{n}]]: {r:?}");
+        assert_eq!(r.distance(), Some(8), "[[{n}]]: {r:?}");
     }
+    let (code, _) = CssCode::bivariate_bicycle_code(144).unwrap();
+    let c = css_code_memory_with(&code, 3, &noise, MemoryBasis::Z, CssSchedule::Bicycle).unwrap();
+    let r = circuit_distance(
+        &detector_error_model(&c, false).unwrap(),
+        &DistanceOptions {
+            max_work: 1 << 27,
+            bposd_trials: 256,
+            ..DistanceOptions::default()
+        },
+    )
+    .unwrap();
+    eprintln!("[[144]]: {} ..= {:?}", r.lower_bound, r.upper_bound());
+    assert!(r.upper_bound().unwrap() <= 11, "[[144]]: {r:?}");
+    assert!(r.lower_bound >= 7, "[[144]]: {r:?}");
     // Every order of directions gives the colour codes of distance 3 and 5
     // circuit distance 2 and 3.
     for (d, dc) in [(3, 2), (5, 3)] {

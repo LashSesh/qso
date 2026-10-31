@@ -583,7 +583,9 @@ def correlated_and_distance_vs_stim(quick: bool) -> dict:
     against PyMatching with `enable_correlations=True`, shot by shot on the
     same model (Stim's) and syndromes; circuit distances against Stim's
     `shortest_graphlike_error` (graph-like, exact on both sides) and
-    `search_for_undetectable_logical_errors` (a heuristic search)."""
+    `search_for_undetectable_logical_errors`, a heuristic search with
+    truncation and exhaustive (so exact) without, against QSO's
+    `circuit_distance` bounds and `exact_circuit_distance`."""
     import pymatching
     import stim
 
@@ -663,22 +665,62 @@ def correlated_and_distance_vs_stim(quick: bool) -> dict:
             "graphlike_distance_qso": q.graphlike_distance(qc.detector_error_model(decompose=True)).distance,
             "searched_distance_stim": searched,
             "circuit_distance_qso": [exact.lower_bound, exact.upper_bound],
+            **exact_distances(sc, qc),
         }
-    # QSO's colour code (errors flip three detectors) through Stim.
-    colour = q.css_code_memory(q.CssCode.color_code(5), 2, 0.001)
-    sc = stim.Circuit(colour.to_stim())
-    exact = q.circuit_distance(colour.detector_error_model())
-    out["qso colour d=5"] = {
-        "searched_distance_stim": len(
-            sc.search_for_undetectable_logical_errors(
-                dont_explore_detection_event_sets_with_size_above=6,
-                dont_explore_edges_with_degree_above=6,
-                dont_explore_edges_increasing_symptom_degree=False,
-            )
+    # Errors that flip three or more detectors: QSO's colour and bicycle
+    # codes through Stim, and Stim's colour code (its C_XYZ gates as
+    # S_DAG then H, the same Clifford up to sign) through QSO.
+    hyper = {
+        "qso colour d=5": q.css_code_memory(q.CssCode.color_code(5), 2, 0.001),
+        "qso bicycle [[72, 12, 6]] depth-8 cycle": q.css_code_memory(
+            q.CssCode.bivariate_bicycle_code(72)[0], 1, 0.001, schedule="bicycle"
         ),
-        "circuit_distance_qso": [exact.lower_bound, exact.upper_bound],
     }
+    for d in (5, 7):
+        text = str(stim.Circuit.generated("color_code:memory_xyz", distance=d, rounds=3, **noise).flattened())
+        text = "\n".join(
+            f"S_DAG {line[6:]}\nH {line[6:]}" if line.startswith("C_XYZ ") else line
+            for line in text.splitlines()
+        )
+        hyper[f"stim color_code:memory_xyz d={d}"] = q.DetectorCircuit.from_stim(text)
+    for name, qc in hyper.items():
+        sc = stim.Circuit(qc.to_stim())
+        exact = q.circuit_distance(qc.detector_error_model())
+        out[name] = {
+            "searched_distance_stim": len(
+                sc.search_for_undetectable_logical_errors(
+                    dont_explore_detection_event_sets_with_size_above=6,
+                    dont_explore_edges_with_degree_above=6,
+                    dont_explore_edges_increasing_symptom_degree=False,
+                )
+            ),
+            "circuit_distance_qso": [exact.lower_bound, exact.upper_bound],
+            **exact_distances(sc, qc),
+        }
     return out
+
+
+def exact_distances(sc, qc) -> dict:
+    """Stim's search with no truncation (exhaustive: the circuit distance)
+    and QSO's `exact_circuit_distance`, with their times."""
+    import metatron_qso as q
+
+    started = time.time()
+    exhaustive = len(
+        sc.search_for_undetectable_logical_errors(
+            dont_explore_detection_event_sets_with_size_above=sc.num_detectors,
+            dont_explore_edges_with_degree_above=sc.num_detectors,
+            dont_explore_edges_increasing_symptom_degree=False,
+        )
+    )
+    middle = time.time()
+    exact = q.exact_circuit_distance(qc.detector_error_model(), max_seconds=600.0)
+    return {
+        "exhaustive_distance_stim": exhaustive,
+        "exhaustive_distance_stim_seconds": middle - started,
+        "exact_distance_qso": [exact.lower_bound, exact.upper_bound],
+        "exact_distance_qso_seconds": time.time() - middle,
+    }
 
 
 def gaussian_vs_thewalrus(rng) -> dict:
@@ -1366,6 +1408,8 @@ def check(c: dict) -> list[str]:
         lower, upper = r["circuit_distance_qso"]
         if lower != upper or upper > r["searched_distance_stim"]:
             failures.append(f"circuit distance of {name} is not exact or exceeds Stim's search: {r}")
+        if r["exact_distance_qso"] != [r["exhaustive_distance_stim"]] * 2:
+            failures.append(f"exact circuit distance of {name} differs from Stim's exhaustive search: {r}")
         if "graphlike_distance_stim" not in r:
             continue
         if r["graphlike_distance_qso"] != r["graphlike_distance_stim"]:

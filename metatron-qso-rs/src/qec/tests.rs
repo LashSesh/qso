@@ -974,3 +974,54 @@ fn matching_ignores_impossible_errors_and_bounds_its_pairs() {
     assert_eq!(d.decode(&[5, 9]).unwrap(), 0);
     assert_eq!(d.decode(&[n - 2, 1]).unwrap(), 1);
 }
+
+#[test]
+fn explain_errors_names_paulis_and_measurements() {
+    // Qubit 0 in |+⟩, measured in X: its Z and Y errors fire D0, its X
+    // error nothing. Qubit 1 in |0⟩, measured in Z with a flip: X, Y and
+    // the flip fire D1 and the observable.
+    let c = DetectorCircuit::from_stim(
+        "R 0 1\nH 0\nDEPOLARIZE1(0.1) 0 1\nMX 0\nM(0.05) 1\n\
+         DETECTOR rec[-2]\nDETECTOR rec[-1]\nOBSERVABLE_INCLUDE(0) rec[-1]\n",
+    )
+    .unwrap();
+    let noise_on = |q: usize| {
+        c.operations()
+            .iter()
+            .position(|op| matches!(op, QecOp::Noise { qubits, .. } if qubits.contains(&q)))
+            .unwrap()
+    };
+    let flip = c
+        .operations()
+        .iter()
+        .position(|op| matches!(op, QecOp::Measure { flip, .. } if *flip > 0.0))
+        .unwrap();
+    let dem = detector_error_model(&c, false).unwrap();
+    let explained = explain_errors(&c, &dem.errors).unwrap();
+    let fault = |op: usize, q: usize, p: char| (op, vec![(q, p)]);
+    for (e, faults) in dem.errors.iter().zip(&explained) {
+        let got: Vec<(usize, Vec<(usize, char)>)> = faults
+            .iter()
+            .map(|f| (f.operation, f.paulis.clone()))
+            .collect();
+        let want = match (e.detectors.as_slice(), e.observables) {
+            ([0], 0) => vec![fault(noise_on(0), 0, 'Z'), fault(noise_on(0), 0, 'Y')],
+            ([1], 1) => vec![
+                fault(noise_on(1), 1, 'X'),
+                fault(noise_on(1), 1, 'Y'),
+                fault(flip, 1, 'M'),
+            ],
+            other => panic!("unexpected error {other:?}"),
+        };
+        assert_eq!(got, want);
+        assert!(faults.iter().all(|f| f.probability > 0.0));
+    }
+    assert_eq!(dem.errors.len(), 2);
+    // An effect no fault has is explained by nothing.
+    let none = ErrorMechanism {
+        probability: 0.1,
+        detectors: vec![0, 1],
+        observables: 0,
+    };
+    assert_eq!(explain_errors(&c, &[none]).unwrap(), vec![Vec::new()]);
+}
