@@ -418,10 +418,14 @@ subspaces of dimension 30 with Expokit's error estimate and step control
 (Sidje 1998), to 10⁻¹² of the propagated vector in the 2-norm; the
 augmented entry is set to the size of the deviation (or of equilibrium's,
 if larger), so that the tolerance stays relative to it. A Krylov space
-that is invariant to the tolerance ends the propagation in one step;
-when the a priori estimate is large, `‖A y‖` of the start vector is
-computed first, so that a stationary block (equilibrium) is not refused
-for the steps it will not take. FIDs need only the block of order `−1`:
+that is invariant to the tolerance ends the propagation in one step. So
+do populations that move no faster than the rounding of the state
+explains (forming the deviation leaves `ε·Tr(ρ)/d` on each population) or
+by less than 10⁻¹¹ of themselves over the interval: when the a priori
+estimate is large, `‖A y‖` of their start vector is computed first, so
+that equilibrium is not refused for the steps it will not take. Blocks
+are built with one dense accumulator per task (about four per thread),
+which the memory estimate counts. FIDs need only the block of order `−1`:
 one exponential for the dwell time and a matrix-vector product per point,
 or Krylov steps of one dwell time each. Shaped pulses mix the orders and
 use one block. Sweeps are piecewise constant, with the field at the
