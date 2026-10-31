@@ -89,7 +89,29 @@ All notable changes to this project are documented here. The format follows
   - `MAX_RELAXATION_MEMORY` (2 GiB): with the work limit, checked from
     estimates before anything is built.
 
+- **Exact distances of error-correcting circuits** (1.42, `qec`):
+  - `exact_circuit_distance` (Python `exact_circuit_distance`, options
+    `ExactDistanceOptions`, `DistanceMethod`): the circuit distance of
+    any detector error model, exact when the time allows, with a witness.
+    The lower bound rises step by step, by the exhaustive search of 1.22
+    or by levels of the Brouwer–Zimmermann enumeration (Grassl 2006),
+    whichever is estimated to cost less; after `max_seconds` (a minute by
+    default) the bounds reached so far are returned.
+  - `explain_errors` (Python `explain_errors`) and `CircuitFault`: the
+    circuit faults behind errors of a model (operation, Paulis or flipped
+    measurements, probability), so a witness becomes circuit locations.
+  - CLI: `qso qec --circuit-distance` computes the exact distance, with
+    `--max-seconds` (60 by default).
+
 ### Changed
+
+- **A faster exhaustive search** (1.42): `circuit_distance`'s search for
+  logical errors now runs on all threads and reuses its buffers. The
+  threads search ahead, but only the sets that the search in index order
+  visits count against `max_work`, so the bounds and the witness are
+  those of 1.22 on any number of threads. When no branch was cut by the
+  weight, the search proves that no logical error exists, beyond the
+  4096 detectors where linear algebra decides.
 
 - **Redfield relaxation without a block-size limit** (1.41): the
   superoperator's 30 terms are kept as sparse operators and its columns

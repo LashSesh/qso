@@ -243,6 +243,44 @@ frame update for each gate is derived once.
   random stream, so it returns the same result as one call of
   `sample_detectors` with the same seed, in bounded memory. A batch is
   1024 shots, or fewer when its frames and records would exceed 128 MiB.
+- **Exact circuit distance** (`qec/distance.rs`,
+  `qec/distance/zimmermann.rs`). The lower bound rises in steps of two
+  kinds, chosen by their estimated cost (`SEARCH_NANOS` per set visited,
+  `ENUMERATION_NANOS` per word operation). The search's next step is
+  extrapolated to the weight it will search, by the growth per weight of
+  its last two steps; the enumeration may have raised the bound by
+  several since.
+  - The search of 1.22 proves that no logical error of the current
+    bound's weight exists. Its first errors are shared out between
+    threads in tasks of `n / (16 · threads)`, each of which records, per
+    first error, the sets it visited and what it found. The answer is
+    read off these records in index order, as the sequential search
+    would have met them: the set found from the lowest first error, and
+    the work counted up to it. Where the threads stopped short (at the
+    work limit), the search goes on alone from the first unfinished first
+    error. So the bounds and the witness do not depend on the threads,
+    the work limit included. A step in which no branch was cut by the
+    weight proves that no logical error exists. Each walker keeps one
+    buffer of fired detectors per depth and allocates nothing while it
+    walks.
+  - A level of the Brouwer–Zimmermann enumeration. The generator
+    matrices are built only when, at their best (disjoint information
+    sets of full rank), the levels could cost less than the search. The
+    kernel of `H` comes from its reduced row echelon form, systematic on
+    the free columns. Further information sets come from eliminating on
+    the columns not yet used, as long as their rank deficit is at most
+    64. Each level enumerates the sums of `w` rows by depth-first
+    search, one task per first row, with a running XOR per depth. A
+    matrix of rank `r < k` joins at level `k − r` and then enumerates
+    every lower level once; the bound needs them.
+  - Both steps check the deadline: the search every 4096 sets, the
+    enumeration every 2²⁰ word operations, in every task. A step it
+    interrupts leaves the bounds where they were.
+- **Circuit locations.** `explain_errors` replays each noise channel's
+  components (`dem::each_channel`, also used to build the model). For
+  every combination of a channel's Paulis it takes the XOR of their
+  signatures and keeps those equal to the error's effect, as
+  `CircuitFault`s with the operation index.
 
 ## Matrix-product states (`mps/`)
 

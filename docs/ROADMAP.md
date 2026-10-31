@@ -15,8 +15,7 @@ finished milestones are released together, not one by one. The third
 (1.26 to 1.28) stages ship together as release 1.7.0. The seventh
 (1.29 to 1.33, section 4g) and eighth (1.34 to 1.37, magnetic resonance
 for medical research, section 4h) stages ship together as release
-1.8.0. The ninth stage (1.38 to 1.42) is planned in section 4i; 1.38
-to 1.41 are delivered. Up to 1.3
+1.8.0. The ninth stage (1.38 to 1.42, section 4i) is delivered. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -56,7 +55,7 @@ which withdraws the results of version 1.
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18) | time-dependent Hamiltonians and decoherent coined walks without symmetry reduction; pretty good transfer on other graphs |
 | Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the nested-commutator bound of product formulas (1.32) is tight for small Hamiltonians only, its tail ignoring which terms commute; spin relaxation, phenomenological (T₁ and T₂) or from dipolar couplings and shielding anisotropy by Redfield theory for isotropic tumbling (1.34), is exact up to about six relaxing spins of one isotope; larger relaxing systems run for short times only (Redfield not at all), and propagations estimated above a minute are refused; chemical exchange needs steady chemistry (no irreversible hydrogenation) and one block of at most 2048 elements over all sites; optimal control with relaxation works in Liouville space of up to six spins ½, and field profiles have many local optima; NV centres are secular (field along the axis), with classical noise only (no spin bath beyond the explicit nuclei, no optical cycle, so pulsed ODMR only) |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
-| Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22) | circuit distances of hypergraph models are bounds, not always exact |
+| Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22); exact circuit distances of any model by a parallel search or the Brouwer–Zimmermann enumeration, with the lightest logical error as circuit locations (1.42) | exact circuit distances need time exponential in the distance: the circuit of [[144, 12, 12]] gets bounds only |
 | Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9), in the browser build too (1.25) | — |
 | Documentation | user guide, executed tutorials and Python reference on GitHub Pages (1.2); Rust tutorials from the examples and the documentation of every release since 1.2.0 (1.25) | — |
 | Engineering | CI on Linux (x86_64, arm64), macOS and Windows; Miri, fuzzing, API checks, weekly cross-validation and benchmark tracking; Trusted Publishing (1.2); line and branch coverage, and differential tests of all simulators on random circuits (1.21); coverage of the CLI and of the Python tests (1.25) | — |
@@ -3366,7 +3365,7 @@ this refuses rather than misleads), and blocks of up to 30 elements use
 the whole space (Expokit asks for a smaller one; a breakdown at rounding
 level ends the process).
 
-### 1.42 — Exact distances of error-correcting circuits (M)
+### 1.42 — Exact distances of error-correcting circuits (M, delivered)
 
 Use case: the circuit-level distance of a code under an error model with
 hyperedges (colour codes, bivariate bicycle codes, any model whose errors
@@ -3385,6 +3384,163 @@ minimum distances of classical codes (the Golay codes [23, 12, 7] and
 and bivariate bicycle codes ([[72, 12, 6]], [[144, 12, 12]]); Stim's
 `search_for_undetectable_logical_errors` on the same circuits in the
 cross-validation, with parameters at which its search is exhaustive.
+
+Delivered in `qec/distance.rs`, `qec/distance/zimmermann.rs` and
+`qec/dem.rs`:
+
+- **Exact distance.** `exact_circuit_distance` starts from the upper
+  bound of 1.22 (the graph-like errors and BP+OSD searches) and raises
+  the lower bound until the two meet. Each step is one weight of the
+  exhaustive search of 1.22 or one level of the Brouwer–Zimmermann
+  enumeration, whichever is estimated to cost less.
+  `ExactDistanceOptions::max_seconds` (a minute by default) returns the
+  bounds reached; `method` forces one of the two.
+- **Brouwer–Zimmermann.** The undetectable errors are the code `ker H`.
+  Its generator matrices are systematic on disjoint information sets:
+  first the free columns of `H`'s reduced echelon form, then sets found
+  by eliminating on the columns left, as long as their rank falls at
+  most 64 short of the dimension. Level `w` enumerates the sums of `w`
+  rows, in parallel over the first row, and keeps those that flip an
+  observable. After it, no logical error lighter than
+  `Σ_j max(0, w + 1 − (k − r_j))` is left unseen.
+- **A faster search.** The search of 1.22 runs on all threads and
+  allocates nothing while it walks. The threads search ahead of index
+  order, but the answer and the sets counted against a work limit are
+  those of the search in index order: the bounds and the witness are the
+  ones 1.22 found, on any number of threads. A step in which the weight
+  cut no branch proves that no logical error exists at all.
+- **Logical errors as circuit locations.** `explain_errors` lists, for
+  each error of the model, the faults of the circuit with exactly its
+  effect: the noise operation, the Pauli on each qubit (Y where both
+  parts are set) or a flipped measurement, and the probability.
+- In Python: `exact_circuit_distance`, `explain_errors`. On the command
+  line: `qso qec --circuit-distance` computes the exact distance, with
+  `--max-seconds`.
+
+Changes to the plan:
+
+- **Two methods, not one.** Brouwer–Zimmermann pays off when the code of
+  undetectable errors has a small dimension against its length. In a
+  circuit it does not: the dimension is the number of errors less the
+  rank of the detectors, 1014 of 1152 for [[72, 12, 6]] over three
+  rounds. There is then a single information set, the bound grows by one
+  per level, and level `w` costs `C(k, w)` sums. The search of 1.22, which follows the sparse detectors,
+  is the method for circuits; Brouwer–Zimmermann serves classical and
+  dense codes. Choosing per step by estimated cost lets one function
+  serve both.
+- **Deficient information sets catch up.** A matrix of rank `r < k`
+  raises the bound only from level `k − r` on. Enumerating it only from
+  there, as sums of exactly that many rows, misses words that vanish on
+  its information set and are sums of fewer rows. A first version did
+  this and returned 4 instead of 3 on random codes of high rate. Such a
+  matrix now enumerates all lower levels at once when it joins.
+- **One deadline.** The BP+OSD searches (between searches), the
+  construction of the generator matrices (at every pivot) and both kinds
+  of step check the same deadline; only the polynomial preliminaries
+  (the shortest graph-like cycle, the linear-algebra test for any
+  logical error) do not. A step it interrupts leaves the bounds where
+  they were.
+
+Measured (four cores, uniform circuit noise p = 0.001):
+
+- **Classical codes.** Golay [23, 12, 7] and [24, 12, 8] and RM(1, 5)
+  [32, 6, 16] take milliseconds by either method. Brouwer–Zimmermann
+  finds RM(2, 6) [64, 22, 16] in 0.02 s (the search: 65 s), RM(3, 6)
+  [64, 42, 8] in 0.14 s (0.18 s), RM(2, 7) [128, 29, 32] in 0.2 s and
+  RM(3, 7) [128, 64, 16] in 5.4 s, where the search reaches only 16 and
+  10 in two minutes. The automatic choice takes about as long as
+  Brouwer–Zimmermann on each (0.17 s for RM(2, 7), 5.5 s for RM(3, 7)).
+  A first version, which extrapolated the search's cost by one weight
+  only, spent 3.6 s on RM(2, 7): after the enumeration had raised the
+  bound from 2 to 20, it took a search at weight 20 for one at weight 3.
+- **Code capacity.** The search gives [[72, 12, 6]], [[90, 8, 10]],
+  [[108, 8, 10]] and [[144, 12, 12]] their distances 6, 10, 10 and 12 in
+  at most 0.1 s; Brouwer–Zimmermann takes 4 s for [[90, 8, 10]], 21 s
+  for [[108, 8, 10]] and reaches only 9 for [[144, 12, 12]] in two
+  minutes. The automatic choice takes the search.
+- **Circuits.** Colour codes of distance 5, 7 and 9 (two rounds) have
+  circuit distance 3, 4 and 5, rotated surface codes of distance 5 and
+  7 (d rounds) 5 and 7, each found in at most 0.01 s. With the depth-8
+  cycle over three rounds, [[72, 12, 6]] has circuit distance 6 (0.5 s),
+  [[90, 8, 10]] 8 (12 s; 1.22 had 7 to 8) and [[108, 8, 10]] also 8
+  (97 s; 1.22 had 7 to 9). For [[144, 12, 12]] twenty minutes raise the
+  lower bound to 9 (1.22: 7); the upper bound stays at the 11 that 256
+  BP+OSD searches per observable find (the 16 of these runs find 12).
+- **Against Stim.** On nine circuits (Stim's rotated surface codes of
+  distance 5 in both bases and with Y errors, its unrotated surface
+  code of distance 3, repetition code of distance 7 and colour codes of
+  distance 5 and 7; QSO's colour code of distance 5 and [[72, 12, 6]]
+  with the depth-8 cycle), `search_for_undetectable_logical_errors`
+  without truncation, which is then exhaustive, gives the same distance
+  every time. Stim takes up to 71 s ([[72, 12, 6]], one round), QSO at
+  most 0.05 s.
+
+Not done, and why:
+
+- **The circuit of [[144, 12, 12]] exactly.** Twenty minutes rule out
+  every logical error of up to 8 of its 2304 errors. Each further weight
+  costs the search about sixteen times the last (over two rounds, 2²⁴,
+  2²⁸ and 2³² sets ruled out weights up to 5, 6 and 7, in 2 s, 19 s and
+  302 s), so 9 and 10 would take hours and days. Brouwer–Zimmermann
+  cannot help: the code of undetectable errors has dimension 2022.
+
+Independent review: no distance reported as exact was wrong, and every
+witness was undetectable, logical and the lightest. The reviewer checked:
+
+- The bound: a word's weight on an information set against the rows it
+  sums, the catch-up of deficient matrices, the disjointness and rank of
+  the further information sets, and that dropping matrices only weakens
+  the bound. An independent Python port checked it level by level on
+  1317 random codes with deficient information sets.
+- 9300 random models of up to 20 errors with all three methods
+  (probability-0 errors, duplicate effects and errors that flip no
+  detector included) and over 6000 codes of high rate, of dimension up
+  to 21, against a full enumeration of `ker H`: no mismatch.
+- Interleaved search and enumeration steps, interrupted steps, and the
+  witnesses on one, two and four threads; a port of 1.22's sequential
+  search gives the same witnesses on 637 models.
+- Edge inputs: empty models, no detectors or observables, only errors of
+  probability zero, p = 1, and time limits of 0, −0, 5·10⁻³²⁴, 10³⁰⁰,
+  infinity, None, NaN and −1, on the command line too.
+- `explain_errors` against Stim's `explain_detector_error_model_errors`
+  on eight circuits (10 794 faults): the same operations, Paulis (Y
+  included), flipped measurements and probabilities.
+- The comparison with Stim's exhaustive search, on the nine circuits and
+  a colour code of distance 3 over three rounds, and the measurements
+  above.
+
+Fixed:
+
+- **The enumeration ran past the deadline.** Each task checked the
+  budget every 2¹⁴ sums, so no task of level 2 checked at all when the
+  dimension was below 16 384: a limit of 1.5 s returned after 24 s on
+  20 000 errors of six detectors. Work is now counted in word operations
+  and checked about every millisecond, and levels and tasks that start
+  after the deadline do nothing.
+- **Under a work limit, `circuit_distance` depended on the threads.**
+  Whether the bounds met, and which witness came out, varied with the
+  point at which the shared budget ran out. Now each thread records, per
+  first error, the sets it visited and what it found. The answer is read
+  in index order, as 1.22's sequential search would meet it, and the
+  search goes on alone where the threads stopped short. A test compares
+  one to four threads.
+- **Models without a logical error beyond 4096 detectors.** Without a
+  time limit, the search climbed weight by weight without end, and with
+  one it reported lower bounds above the number of errors. Three early
+  exits now end it:
+  - a step in which the weight cut no branch proves that no logical error
+    exists;
+  - the bound stops at the number of errors;
+  - a code whose undetectable errors flip no observable is "none" for
+    Brouwer–Zimmermann too, instead of an error.
+- **Wasted elimination.** Further information sets are not attempted when
+  too few columns are left, which is always the case in circuits (it cost
+  3.8·10⁹ word operations for [[144, 12, 12]] over 24 rounds). The
+  detectors' matrix is freed before they are built.
+- **The command line** computes each distance once for all values of p.
+- **Claims** are narrowed to what the tests check: which method for
+  which code, the measured bound of [[144, 12, 12]], the number of random
+  codes, and which phases check the deadline.
 
 ### Not in this stage
 
