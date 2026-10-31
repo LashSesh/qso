@@ -718,7 +718,11 @@ Hamiltonians and Pauli sums on 2ⁿ amplitudes.
   residual, verified by an explicit residual at the end.
 * Propagation `exp(−iHt)v`: Lanczos basis per sub-step, exact exponential of
   the tridiagonal matrix, step-size control from the a-posteriori error
-  estimate `β₀·β_m·|[e^{−iτT}e₁]_m|`.
+  estimate `β₀·β_m·|[e^{−iτT}e₁]_m|`. That estimate holds only where the
+  Krylov approximation converges, so a step never exceeds `m` divided by
+  the spread of the Ritz values (Hochbruck and Lubich); beyond, it can be
+  small by accident, as on the equally spaced spectra of hypercubes.
+  Estimates at rounding level (64 ε) count as converged.
 * Cyclic subspaces (`cyclic_spectrum`): real Lanczos from a start vector
   until the next vector vanishes to rounding error, with full
   re-orthogonalisation (a second pass only when the first removed much of
@@ -826,7 +830,28 @@ agree with brute force on random graphs.
   single-particle `h` (hopping amplitudes `√(n_j (n_i + 1))` for bosons,
   the Jordan–Wigner sign of the sites in between for fermions). Up to
   2048 configurations it is diagonalised; beyond that it propagates by
-  Krylov.
+  Krylov. `Terms::apply` gives a configuration's diagonal and hops, and
+  serves both the full Hamiltonian and the reduced ones.
+* Interacting walkers on orbits (`walks/interacting/symmetric.rs`): a
+  union–find over the ranks of all configurations links each to its
+  images under the generators, with the relative sign `ψ(g·c) = s(g, c)
+  ψ(c)` in the top bit of every 4-byte word. Roots are the smallest rank,
+  so a scan in rank order meets every orbit's representative first and
+  relabels the words in place as orbit numbers; a cycle of signs that
+  multiplies to −1 marks the orbit as carrying no invariant state. The
+  reduced Hamiltonian is read off at the representatives,
+  `⟨O′|H|O⟩ = √(|O|/|O′|) Σ φ(c′)⟨c′|H|r⟩`.
+* On the hypercube (`walks/interacting/hypercube.rs`) the orbits of the
+  coordinate permutations are compositions of `d` into `2^N` bit
+  patterns, ranked by their bars in colex order; the particle
+  permutations act on the patterns, and each composition's word holds
+  its class (the lowest-ranked image) and the sign of the permutation to
+  it. A hop changes one pattern `p` into `p ⊕ e_j`, with weight
+  `−γ √(n_p (n_q + 1) k_n / k_m)` (`k`: compositions per class).
+* Certificates by orbits (`InteractingWalk::certificate_by_orbits`): one
+  row of transition probabilities per orbit of the automorphisms, by
+  Krylov steps to 10⁻¹⁴ per unit time unless the walk was diagonalised
+  already, repeated by the orbit's size before sorting.
 
 ## Error handling
 

@@ -103,7 +103,28 @@ All notable changes to this project are documented here. The format follows
   - CLI: `qso qec --circuit-distance` computes the exact distance, with
     `--max-seconds` (60 by default).
 
+- **Interacting walkers on symmetric graphs** (1.43, `walks::interacting`):
+  - `SymmetricInteractingWalk` (Python `SymmetricInteractingWalk`): the
+    walks of `InteractingWalk` on the orbits of a group of the graph's
+    automorphisms, for states that the group leaves alone (from a start
+    configuration: the automorphisms fixing its occupied nodes).
+    Fermionic configurations that a symmetry maps to minus themselves drop
+    out. Orbits come from `ConfigurationOrbits`, a union–find with signs
+    over up to 2²⁷ configurations: three bosons on `Q₉` (22.5 million
+    configurations) have 2284 orbits.
+  - `HypercubeParticles` (Python `HypercubeParticles`): up to four
+    particles on `Q_d`, on orbits of the coordinate permutations written
+    down as compositions of `d`, without building the graph (two bosons on
+    `Q₁₀₀`: 89 726 states).
+  - `InteractingWalk::certificate_by_orbits`: certificates from one start
+    per orbit of the automorphisms, 37 times faster on the Paley graph of
+    order 61 and beyond the dense limit, up to 8192 configurations.
+
 ### Changed
+
+- **The Hamiltonian of interacting walkers** is built one configuration
+  at a time by shared code (1.43); `certificate_tolerance` bounds `‖H‖` by
+  the largest absolute row sum above the dense limit instead of refusing.
 
 - **A faster exhaustive search** (1.42): `circuit_distance`'s search for
   logical errors now runs on all threads and reuses its buffers. The
@@ -120,6 +141,18 @@ All notable changes to this project are documented here. The format follows
   relaxing protons). The terms' memory and work are estimated before they
   are built. The drift uses `R(ρ_eq − 1/d)` (equal to `R(ρ_eq)`, without
   the rounding of `R(1)`), and the rate bound comes from the terms.
+
+### Fixed
+
+- **Krylov propagation** (`linalg::expm_multiply`, used by continuous,
+  driven and interacting walks above the dense limit; 1.43): steps now
+  stay within the range where the error estimate holds,
+  `τ ≤ m/(spread of the Ritz values)`. A single step over the whole
+  interval was accepted when the estimate was small by accident, which
+  happens on equally spaced spectra: two free bosons on `Q₄₀` arrived at
+  the antipode with probability 0 instead of 1. Estimates at the level of
+  rounding now count as converged, so that tight tolerances no longer
+  shrink the steps forever.
 
 ## [1.8.0] — 2026-10-30
 

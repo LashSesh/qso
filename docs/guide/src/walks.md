@@ -250,6 +250,94 @@ The amplitudes are checked in the tests against independent references:
   particles on a complete graph with weights of both signs;
 - against the closed-form spectrum of the Hubbard dimer.
 
+### Symmetric graphs
+
+The configurations grow fast: three bosons on the hypercube `Q₈` have
+2 829 056 of them, beyond the 2²² that `InteractingWalk` accepts. A walk
+that starts in a state left alone by some automorphisms of the graph
+stays in such states, and those need one amplitude per *orbit* of the
+automorphisms on the configurations. `SymmetricInteractingWalk` works on
+the orbits. `from_start(graph, start)` takes the automorphisms that fix
+every occupied node (`graph.stabilizer_generators(start)`), and the
+constructor takes any generators of automorphisms:
+
+```python
+import metatron_qso as q
+
+g = q.Graph.hypercube(8)
+walk = q.SymmetricInteractingWalk.from_start(g, [0, 0, 0], on_site=1.0)
+print(walk.num_orbits, walk.num_configurations)
+# 1324 2829056
+x = walk.evolve(walk.state_of([0, 0, 0]), 1.0)
+print(round(walk.densities(x).sum(), 12), walk.probability_of(x, [0, 0, 0]) < 1e-4)
+# 3.0 True
+```
+
+States are vectors over the orbits, one unit vector per orbit:
+`|O⟩ = |O|^{−1/2} Σ_{c∈O} ±|c⟩`. For fermions the sign is that of sorting
+their sites after the permutation; a configuration that some
+automorphism maps to minus itself has no symmetric state, and its orbit
+drops out (`state_of` refuses it). `densities`, `pair_correlations`,
+`probability_of`, `orbit_probabilities` and `lift` (the amplitudes on all
+configurations, in `InteractingWalk`'s order) read the state. The
+orbits are found by union–find over all configurations, so at most
+2²⁷ of them; give a small set of generators.
+
+On the hypercube the orbits of the coordinate permutations need not be
+found: `HypercubeParticles(d, particles)` writes them down as the numbers
+of coordinates in which the particles' bits form each pattern, for up to
+four particles and without building the graph. Two bosons on `Q₄₀`
+(2⁴⁰ nodes) have 6391 states. Free bosons both arrive at the antipode at
+`γt = π/2`, as one walker does; an on-site interaction spoils the
+transfer:
+
+```python
+import math
+import metatron_qso as q
+
+for u in [0.0, 1.0, 10.0]:
+    cube = q.HypercubeParticles(40, 2, on_site=u)
+    x = cube.evolve(cube.localized(), math.pi / 2)
+    print(u, cube.num_states, round(cube.antipode_probability(x), 4))
+# 0.0 6391 1.0
+# 1.0 6391 0.9938
+# 10.0 6391 0.5364
+```
+
+`weights` gives the expected number of particles at each Hamming
+weight, `pair_distances` the distribution of the distance between two
+particles.
+
+Certificates need every configuration as a start, but the
+automorphisms of the graph map starts onto starts with the same
+transition probabilities. `certificate_by_orbits(times, generators)`
+computes one row per orbit and repeats it, by Krylov steps unless the
+walk was diagonalised already. It gives the same certificate: for two
+bosons on the Paley graph of order 61 in 0.22 s instead of 8.1 s, and
+beyond the 2048 configurations of `certificate`, up to 8192 (two bosons
+on the Paley graph of order 101, 5151 configurations, in 1.3 s).
+
+The checks:
+
+- The reduced walks equal `InteractingWalk` on the Petersen graph, the
+  4 × 4 rook's graph, `Q₄` and `C₈`, for all three statistics, two and
+  three particles, both generators and `U` and `V` both on; under the
+  whole automorphism group too, orbit by orbit, with the fermionic signs.
+- `HypercubeParticles` equals the reduction of the graph `Q₃` and `Q₄` by
+  the stabiliser of node 0, for bosons, fermions and distinguishable
+  particles.
+- Free particles from node 0 of `Q_d` follow the single walker: the
+  weights are `N·Bin(d, sin²γt)`, two particles differ in a coordinate
+  with probability `2q(1 − q)`, and all are at the antipode with
+  probability `q^{dN}`, up to perfect transfer (`Q₃₀` and `Q₄₀` with two
+  particles, `Q₁₂` with three, `Q₆` with four).
+- Two bosons on a ring of 101 sites with `U` have the bound pair of zero
+  momentum at `E = ±√(U² + 16J²)` (Winkler et al. 2006) to 10⁻¹², and
+  the rest of their spectrum in the band `[−4J, 4J]`.
+- Certificates by orbits equal `certificate` for the Shrikhande, rook,
+  Chang and Petersen graphs, with dense and with Krylov rows, and a
+  relabelled `Q₆` gives the same certificate beyond the dense limit.
+
 ## In Rust
 
 ```rust
