@@ -471,14 +471,14 @@ impl Orbits {
         let mut representatives = Vec::new();
         let mut sizes = Vec::new();
         let mut index = vec![u32::MAX; n];
-        for x in 0..n {
+        for (x, orbit) in of.iter_mut().enumerate() {
             let root = find(&mut parent, x as u32) as usize;
             if index[root] == u32::MAX {
                 index[root] = representatives.len() as u32;
                 representatives.push(root as u32);
                 sizes.push(0);
             }
-            of[x] = index[root];
+            *orbit = index[root];
             sizes[index[root] as usize] += 1;
         }
         Orbits {

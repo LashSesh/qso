@@ -224,8 +224,8 @@ coefficient per orbit, the generator summed over the orbits of its
 columns at a representative row. This is exact, not an approximation.
 With three protons on the axis below the methyl group (seven spins) the
 8193 coefficients of a pulsed state shrink to 3073, as the threefold
-cycle predicts (8/3), and a delay runs TBD_speedup times faster; a
-methylene group's swap halves its blocks less (8/5). States that break the
+cycle predicts (8/3), and 0.1 s of it take 1.5 s instead of 4.5; a
+methylene group's swap shrinks its blocks less (8/5). States that break the
 symmetry (a pulse on one of the protons) and Hamiltonians that do (a
 shaped pulse on one spin) propagate in full. A declaration the system does
 not obey is an error, at `set_symmetries` or when the system is next

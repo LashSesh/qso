@@ -16,7 +16,7 @@ finished milestones are released together, not one by one. The third
 (1.29 to 1.33, section 4g) and eighth (1.34 to 1.37, magnetic resonance
 for medical research, section 4h) stages ship together as release
 1.8.0. The ninth stage (1.38 to 1.42) is planned in section 4i; 1.38
-to 1.40 are delivered. Up to 1.3
+to 1.41 are delivered. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -3193,7 +3193,7 @@ Fixed:
 - **Tests.** The mutations the reviewer found unseen are now caught: a
   scaled Rabi coupling, Γ₁ or Γ₂*, an S_y drive and Taylor's factor 2.
 
-### 1.41 — Relaxation of larger spin systems (M)
+### 1.41 — Relaxation of larger spin systems (M, delivered)
 
 Use case: hyperpolarised molecules and proton networks with more than six
 relaxing spins: the ¹³C-labelled metabolites of 1.35 with all their
@@ -3213,6 +3213,100 @@ space where both run; the cross-correlated dipolar relaxation of an AX₃
 (methyl) system follows the closed forms of Werbelow and Grant (Adv.
 Magn. Reson. 9, 189 (1977)); thermal equilibrium stays stationary. QuTiP's
 Bloch–Redfield solver for seven and eight spins in the cross-validation.
+
+Delivered in `spin/krylov.rs`, `spin/blocks.rs`, `spin/redfield.rs` and
+`spin/symmetry.rs`:
+
+- **Sparse blocks and Krylov steps.** Each coherence-order block of the
+  deviation's master equation is built column by column (`−i[H, ·]`, the
+  Lindblad dissipators, `−R`) as a compressed sparse matrix and propagated
+  by Arnoldi's process on Krylov subspaces of dimension 30 with Expokit's
+  error estimate and step control, to 10⁻¹² of the propagated vector. Each
+  block takes the cheaper of that and a dense exponential, the whole state
+  Dormand–Prince steps when those are cheaper still; free induction decays
+  likewise.
+- **Redfield from sparse terms.** The 30 terms `𝒬 ⊗ Y(𝒬)` are sparse
+  operators; a column `R(|a⟩⟨b|)` comes from them on demand, label by
+  label, so a block costs its entries, not their square. The limit of
+  blocks of 2048 elements is gone.
+- **Equivalent spins.** `SpinSystem::set_symmetries` declares spin
+  permutations, checked against isotopes, shifts, relaxation times,
+  couplings and the Gram matrix `A^k : A^l` of the relaxing interactions;
+  invariant states propagate on the orbits of their elements.
+- **Limits.** `MAX_RELAXATION_MEMORY` (2 GiB) joins the work limit; both
+  are checked from estimates before anything is built (the Redfield
+  terms from the sizes of the laboratory blocks, every block from its
+  counted entries and a bound on its norm).
+- In Python: `SpinSystem.set_symmetries` and `symmetries`; JSON keeps
+  them.
+
+Changes to the plan:
+
+- **Krylov, not Taylor.** Expokit's a posteriori error estimate adapts
+  the steps to the vector, where a Taylor series would need the norm. The
+  first version shrank its steps forever: Expokit floors the error at
+  `‖A‖ε`, which at a tolerance of 10⁻¹² per unit time is the tolerance
+  itself. Steps now grow at most tenfold and the last one lands on `t`.
+- **Symmetry by declaration.** The permutations are declared and
+  checked, not searched for: the positions of a methyl group are only
+  symmetric up to how they were typed, and a declaration states which
+  symmetry is meant. A declaration the system does not obey is refused;
+  states and Hamiltonians that break it (a pulse on one proton)
+  propagate in full, so the reduction never changes a result.
+- **Stationary blocks.** Equilibrium is known only to about 10⁻¹¹ of its
+  deviation (parts in 10⁵ of `1/d`, stored next to `1/d`), so it seems
+  to move at that level, and Krylov steps chased that motion through the
+  fast zero-quantum coherences: five seconds of seven protons were
+  refused for 3·10¹² operations. A vector that moves by less than 10⁻¹¹
+  of itself over the interval now takes one step, and the work estimate
+  checks that first (`‖A y‖`, one pass over the block's columns).
+- **Two sources of rounding removed.** The diagonal of `−i[H, ·]` is
+  added as one difference `H_aa − H_bb`, before anything else, instead of
+  two Zeeman energies of 10⁹ rad/s; the Redfield drift is `R(ρ_eq − 1/d)`
+  rather than `R(ρ_eq)`, whose identity part is rounding of `R`'s size.
+  Blocks holding only rounding (the multiple-quantum orders of a pulsed
+  thermal state, 10⁻²⁵ of it) are left empty.
+
+Measured (four cores):
+
+- **Krylov against dense exponentials** up to six spins: 6·10⁻¹³ of the
+  deviation at worst (six protons at 2 and 9.4 T with `T₁` and `T₂`, a
+  methyl group with a proton and Redfield relaxation, five protons with
+  dipolar relaxation in the laboratory frame, a shaped pulse); free
+  induction decays to 10⁻¹⁰ of the first point.
+- **Seven protons against Dormand–Prince** over 2 ms: 4·10⁻¹².
+- **The sparse Redfield superoperator** equals the dense formulas
+  (products of full-space operators, the construction of 1.34) to 10⁻¹²
+  on every block of both frames; the old tests (Solomon, BPP, Overhauser,
+  CSA, singlet order, both frames, QuTiP) pass unchanged.
+- **Symmetry.** On the orbits, a methyl group with three protons on its
+  axis (seven spins) keeps 3073 of 8193 coefficients, the 8/3 its
+  threefold cycle predicts, and equals the full propagation to 3·10⁻¹²;
+  0.1 s takes 1.5 s instead of 4.5. A methylene group (swap, 8/5) agrees
+  to 10⁻¹¹.
+- **Equilibrium** of seven protons with `T₁`, `T₂` and dipolar relaxation
+  is unchanged after five seconds.
+- **Cost.** One second at 9.4 T of five relaxing protons takes 0.16 s,
+  of six 3.8 s (about ten before), of seven 26 s; one second of eight at
+  1 T 18 s, and 0.1 s at 9.4 T 16 s. The Redfield terms of seven protons
+  take 0.02 s (the dense superoperator took 0.5 s for six), and 0.1 s of
+  seven protons with dipolar relaxation 12 s. Eleven protons with dipolar
+  relaxation and nine relaxing for 100 s are refused at once.
+
+Not done, and why:
+
+- **Werbelow and Grant's closed forms for AX₃.** The review is available
+  only as scanned pages, from which the cross-correlated rates could not
+  be taken reliably. The methyl group is covered instead by 1.34's
+  comparison of a ¹³CH₃ with QuTiP's `bloch_redfield_tensor` (to
+  5·10⁻¹⁵), by the dense formulas above and by the full propagation.
+- **QuTiP's Bloch–Redfield solver for seven and eight spins.** Its tensor
+  is dense in Liouville space, `(d²)²` complex entries: 4.3 GB at seven
+  spins and 69 GB at eight. The QuTiP comparisons stay at two to five
+  spins; larger systems are checked against dense exponentials (up to
+  six spins), Dormand–Prince steps (seven) and the full propagation.
+- **Finding equivalent spins automatically** was not planned and is not
+  done; a declaration is checked instead.
 
 ### 1.42 — Exact distances of error-correcting circuits (M)
 

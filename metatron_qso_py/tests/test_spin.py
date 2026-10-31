@@ -342,7 +342,8 @@ def test_equivalent_spins_reduce_relaxation_exactly():
     rho = sys.evolve(sys.thermal_state(), [spin.pulse("1H", 90.0)])
     events = [spin.delay(0.2)]
     a, b = sys.evolve(rho, events), plain.evolve(rho, events)
-    assert np.abs(a - b).max() < 1e-10 * np.abs(rho - np.eye(16) / 16).max()
+    d = len(rho)
+    assert np.abs(a - b).max() < 1e-10 * np.abs(rho - np.eye(d) / d).max()
     assert q.SpinSystem.from_json(sys.to_json()).symmetries == [[0, 2, 3, 1, 4]]
     with pytest.raises(ValueError):
         sys.set_symmetries([[1, 0, 2, 3, 4]])
