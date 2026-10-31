@@ -101,3 +101,64 @@ def test_errors():
     with pytest.raises(ValueError, match="nonzero"):
         q.InteractingWalk(q.Graph.complete(1500), 2, "fermions")
     assert w.configuration(0) == [0, 1]
+
+
+def test_symmetric_walks_equal_the_full_walk():
+    # Two bosons at a corner of the 4 x 4 rook's graph: its stabiliser
+    # leaves 11 orbits of the 136 configurations.
+    g = q.Graph.rook(4, 4)
+    w = q.SymmetricInteractingWalk.from_start(g, [0, 0], on_site=1.0, neighbour=0.2)
+    assert (w.num_orbits, w.num_configurations) == (11, 136)
+    full = q.InteractingWalk(g, 2, on_site=1.0, neighbour=0.2)
+    x = w.evolve(w.state_of([0, 0]), 1.3)
+    psi = full.evolve(full.basis_state([0, 0]), 1.3)
+    assert np.abs(w.lift(x) - psi).max() < 1e-10
+    assert np.abs(w.densities(x) - full.densities(psi)).max() < 1e-10
+    assert np.abs(w.pair_correlations(x) - full.pair_correlations(psi)).max() < 1e-10
+    assert abs(w.probability_of(x, [5, 10]) - abs(psi[full.index_of([5, 10])]) ** 2) < 1e-12
+    assert abs(w.orbit_probabilities(x).sum() - 1) < 1e-12
+    assert w.orbit_size(0) == 1 and w.representative(0) == [0, 0]
+    # Fermions on C4 that its reflection maps to minus themselves.
+    c4 = q.Graph.cycle(4)
+    f = q.SymmetricInteractingWalk(c4, 2, [[0, 3, 2, 1]], statistics="fermions")
+    with pytest.raises(ValueError):
+        f.state_of([1, 3])
+    assert "orbits" in repr(f)
+
+
+def test_hypercube_particles():
+    # Free bosons from node 0 of Q_30: each walks alone, so the weights
+    # are 2·Bin(30, sin²t) and two differ in a coordinate with 2q(1 − q).
+    w = q.HypercubeParticles(30, 2)
+    assert w.num_states == 2856
+    t = 0.6
+    x = w.evolve(w.localized(), t)
+    p = math.sin(t) ** 2
+    binomial = np.array([math.comb(30, k) * p**k * (1 - p) ** (30 - k) for k in range(31)])
+    assert np.abs(w.weights(x) - 2 * binomial).max() < 1e-10
+    r = 2 * p * (1 - p)
+    distances = np.array([math.comb(30, k) * r**k * (1 - r) ** (30 - k) for k in range(31)])
+    assert np.abs(w.pair_distances(x) - distances).max() < 1e-10
+    assert abs(w.antipode_probability(x) - p**60) < 1e-15
+    # With an interaction it equals the reduction of the graph Q_4.
+    cube = q.HypercubeParticles(4, 3, on_site=1.5)
+    g = q.Graph.hypercube(4)
+    s = q.SymmetricInteractingWalk(g, 3, g.stabilizer_generators([0]), on_site=1.5)
+    assert cube.num_states == s.num_orbits
+    y, z = cube.evolve(cube.localized(), 1.1), s.evolve(s.state_of([0, 0, 0]), 1.1)
+    assert abs(cube.antipode_probability(y) - s.probability_of(z, [15, 15, 15])) < 1e-12
+    with pytest.raises(ValueError):
+        q.HypercubeParticles(4, 2, "fermions").localized()
+    with pytest.raises(ValueError):
+        q.HypercubeParticles(4, 5)
+
+
+def test_certificates_by_orbits():
+    g = q.Graph.shrikhande()
+    w = q.InteractingWalk(g, 2, on_site=1.0)
+    times = [0.5, 1.5]
+    full = w.certificate(times)
+    reduced = w.certificate_by_orbits(times, g.automorphism_generators())
+    assert q.interacting_certificate_distance(full, reduced) < w.certificate_tolerance(times)
+    with pytest.raises(ValueError):
+        w.certificate_by_orbits(times, [[1, 0] + list(range(2, 16))])
