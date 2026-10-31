@@ -249,11 +249,14 @@ fn free_particles_on_hypercubes_follow_the_single_walker() {
             })
             .collect()
     };
-    for (d, particles) in [(30, 2), (12, 3), (6, 4)] {
+    for (d, particles) in [(30, 2), (40, 2), (12, 3), (6, 4)] {
         for statistics in [Statistics::Bosons, Statistics::Distinguishable] {
             let cube = HypercubeParticles::new(d, statistics, particles, Generator::Adjacency, 0.9)
                 .unwrap();
-            for t in [0.2, 1.1] {
+            // Up to perfect transfer at γt = π/2, where every particle sits
+            // at the antipode: the equally spaced spectrum once misled the
+            // step control of the Krylov propagation (6391 states for Q₄₀).
+            for t in [0.2, 1.1, 1.5, std::f64::consts::FRAC_PI_2 / 0.9] {
                 let x = cube.evolve(&cube.localized().unwrap(), t).unwrap();
                 let q = (0.9 * t).sin().powi(2);
                 let weights: Vec<f64> = binomial(d, q)
