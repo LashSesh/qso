@@ -120,6 +120,24 @@ All notable changes to this project are documented here. The format follows
     per orbit of the automorphisms, 37 times faster on the Paley graph of
     order 61 and beyond the dense limit, up to 8192 configurations.
 
+- **The NV bath with the electron in every cluster** (1.45,
+  `spin::generalised`, `spin.GeneralisedBath`): the generalised
+  cluster-correlation expansion of Onizhuk et al. The electron (spin 1,
+  `D S_z² + γ_e B·S` in a field of any direction) is propagated with each
+  cluster of up to eight ¹³C, with full hyperfine tensors (point dipoles
+  or given ones), nuclear Zeeman terms and dipolar couplings; its density
+  matrix is expanded element by element. Ideal pulses in the rotating
+  frame, rectangular and shaped finite pulses (rotating-wave
+  approximation) and ideal pulses about laboratory axes (as PyCCE).
+  Sampled product states of the nuclei, every cluster in the static field
+  of the others (PyCCE's bath sampling with its mean field), with standard
+  errors (`estimate`): finite pulses need them beyond the first order.
+  With `dressed`, the electron's levels dressed by each cluster's nuclei
+  (an exact block diagonalisation), which keeps the expansion converging
+  for nuclei coupled by a MHz. Exact propagation of up to eight nuclei,
+  averages over random baths; PyCCE's `gcce` agrees to 5·10⁻⁸. In Python:
+  `GeneralisedBath`, `generalised_ensemble_signal`, `point_dipole_tensor`.
+
 - **Slow noise, averaged exactly** (1.44, `noise::slow`): classical
   Markov processes with finitely many states (`MarkovProcess`: telegraph
   noise, Ornstein–Uhlenbeck noise as the Ehrenfest chain of `K`

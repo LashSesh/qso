@@ -625,6 +625,41 @@ found as the subsets present in the map of smaller clusters; disconnected
 subsets contribute exactly 1 because their couplings are not kept.
 Clusters of one size are evaluated in parallel.
 
+The generalised expansion (`spin/nv/generalised.rs`) takes the clusters of
+the same graph but propagates the electron with each: a dense Hamiltonian
+of dimension `3·2^k` in the eigenbasis of the electron's own Hamiltonian
+(index `e·2^k + s`), diagonalised once. The `2^k` columns `|α⟩|s⟩` are
+propagated together and the electron's density matrix is their average
+partial trace. The rotating frame enters as phases on the rows of each
+level before and after a free period (`(f t).fract()` keeps them accurate
+over milliseconds); ideal pulses act on the electron's three rows of
+every nuclear state. Finite pulses build the frame's Hamiltonian once per
+cluster (blocks of levels that turn alike, less `2πf`) and add the
+co-rotating drive per segment; propagators are cached by duration and
+phase, segments by length, amplitude and phase. The drive is divided by
+`⟨β|S_x|α⟩` of the electron alone, so that `rabi` and the pulse phase
+refer to the qubit whatever the field's direction and the eigenvectors'
+phases. The expansion divides element by element on the qubit's 2 × 2
+block (the third level's elements, and those of the electron alone below
+10⁻⁹, take no correction) and multiplies the results of all clusters
+into one 3 × 3 matrix (`Matrix3`, on the stack) per sequence; the
+coherence and the readout come from it at the end. The dressed frame
+replaces the eigenvectors `V` by `V′`, block-diagonal between `α` and
+the other levels: the eigenvectors are grouped by the block holding most
+of their weight, and each block of `V′` is the unitary factor of the SVD
+of that block of `V` (the direct rotation `T = V V′†` closest to the
+identity). Free periods then use `V′`, and the drive of finite pulses is
+`T† S_x T`.
+
+Sampled bath states run one task per state (in parallel), each expanding
+all clusters in turn with its own map of subcluster contributions. A
+state is a list of projections ±½ along the field; `BathFields` holds the
+hyperfine tensors and, per nucleus, the dipolar tensors of its neighbours
+within the cutoff, from which the field of the nuclei outside a cluster
+follows by subtraction. The cluster then propagates one column, the
+product of its nuclei's spinors, instead of `2^k`, with the mean field
+added to its Hamiltonian; every cluster is diagonalised once per state.
+
 ## Hamiltonian simulation and chemistry (`algorithms/time_evolution.rs`, `chemistry/`)
 
 Every exponential of a Pauli string becomes `Circuit::pauli_rotation`: a

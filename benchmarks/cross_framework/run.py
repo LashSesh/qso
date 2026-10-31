@@ -230,6 +230,7 @@ def correctness(quick: bool) -> dict:
         "spins_vs_qutip": spins_vs_qutip(),
         "redfield_vs_qutip": redfield_vs_qutip(),
         "bath_vs_pycce": bath_vs_pycce(),
+        "generalised_bath_vs_pycce": generalised_bath_vs_pycce(),
     }
 
 
@@ -952,6 +953,10 @@ TOLERANCES = {
     # 7·10⁻⁶ on a natural bath of 182 spins at 50 mT).
     "redfield_rate": 1e-12,
     "bath_coherence": 2e-4,
+    # The generalised expansion: both propagate the same Hamiltonian in the
+    # laboratory frame, where the electron's phase (GHz over milliseconds,
+    # ωt ≈ 4·10⁷) rounds to ε·ωt ≈ 10⁻⁸ per step (measured 5·10⁻⁸).
+    "generalised_bath_coherence": 1e-6,
     "redfield_expectation": 1e-7,
     "qaoa_single": 1e-5,
 }
@@ -1226,6 +1231,88 @@ def bath_vs_pycce() -> dict:
     return out
 
 
+def generalised_bath_vs_pycce() -> dict:
+    """The generalised cluster-correlation expansion (the electron, a spin 1
+    with D = 2.87 GHz, in every cluster; full point-dipole hyperfine
+    tensors; fields of any direction) against PyCCE's ``gcce``, both with
+    ideal pulses about axes fixed in the laboratory frame (QSO's
+    ``pulses="laboratory"``), the Hahn-echo coherence relative to the
+    electron alone. PyCCE takes the qubit as the eigenvectors of the
+    electron's Hamiltonian, the electron's gyromagnetic ratio of QSO and,
+    for ¹³C, QSO's 6.728284·10⁷ rad/s/T (its own differs by 2·10⁻⁷)."""
+    import warnings
+
+    from metatron_qso import spin
+
+    warnings.filterwarnings("ignore", module="pycce")
+    pycce = import_pycce()
+    d, gamma_e = 2.87e9, 28.025e9
+    s = 1 / math.sqrt(2)
+    sx = s * np.array([[0, 1, 0], [1, 0, 1], [0, 1, 0]], complex)
+    sy = s * np.array([[0, -1j, 0], [1j, 0, -1j], [0, 1j, 0]], complex)
+    sz = np.diag([1.0, 0.0, -1.0]).astype(complex)
+
+    def qubit(field):
+        # The electron's eigenvectors closest to m_s = 0 and -1 (basis +1, 0, -1).
+        w, v = np.linalg.eigh(d * sz @ sz + gamma_e * (field[0] * sx + field[1] * sy + field[2] * sz))
+        a = int(np.argmax(abs(v[1, :])))
+        b = max((j for j in range(3) if j != a), key=lambda j: abs(v[2, j]))
+        return v[:, a], v[:, b]
+
+    compact = np.array(
+        [[0.6, 0.2, 0.4], [0.9, 0.1, 0.1], [0.5, 0.6, 0.0], [0.8, 0.5, 0.5], [1.4, -0.3, 0.9], [-0.8, 0.9, 1.1]]
+    ) * 1e-9
+    tilt = lambda b, angle: (b * math.sin(angle), 0.0, b * math.cos(angle))  # noqa: E731
+    cases = {
+        "6 13C, all pairs, 50 mT along the axis, order 3": (
+            spin.GeneralisedBath((0.0, 0.0, 0.05), [(list(p), spin.point_dipole_tensor(list(p))) for p in compact]),
+            math.inf,
+            3,
+        ),
+        "6 13C, all pairs, 5 mT at 0.3 rad, order 3": (
+            spin.GeneralisedBath(tilt(0.005, 0.3), [(list(p), spin.point_dipole_tensor(list(p))) for p in compact]),
+            math.inf,
+            3,
+        ),
+        "natural bath within 2.5 nm (seed 3), pairs within 0.8 nm, 20 mT at 1 rad, order 2": (
+            spin.GeneralisedBath.diamond(tilt(0.02, 1.0), radius=2.5e-9, seed=3, min_radius=5e-10),
+            8e-10,
+            2,
+        ),
+    }
+    times = np.linspace(0.05e-3, 1.5e-3, 10)
+    out = {}
+    for name, (bath, cutoff, order) in cases.items():
+        start = time.perf_counter()
+        ours = bath.coherence([spin.hahn(t / 2) for t in times], order=order, cutoff=cutoff, pulses="laboratory")
+        ours_time = time.perf_counter() - start
+        spins = bath.spins
+        atoms = pycce.BathArray((len(spins),), names=["13C"] * len(spins))
+        atoms.add_type("13C", 0.5, 6.728284)
+        atoms["xyz"] = np.array([p for p, _ in spins]) * 1e10
+        for i, (_, tensor) in enumerate(spins):
+            atoms["A"][i] = np.array(tensor) / 1e3
+        alpha, beta = qubit(bath.field)
+        calc = pycce.Simulator(
+            spin=1, position=[0, 0, 0], alpha=alpha, beta=beta,
+            magnetic_field=list(np.array(bath.field) * 1e4), bath=atoms, r_bath=1e3,
+            r_dipole=1e3 if math.isinf(cutoff) else cutoff * 1e10,
+            order=order, pulses=1, D=d / 1e3, gyro=-2 * math.pi * gamma_e / 1e7,
+        )
+        start = time.perf_counter()
+        theirs = np.asarray(calc.compute(times * 1e3, method="gcce", quantity="coherence"))
+        their_time = time.perf_counter() - start
+        out[name] = {
+            "spins": len(spins),
+            # QSO's coherence is ⟨β′|ρ|α′⟩, PyCCE's ⟨α′|ρ|β′⟩.
+            "max_coherence_difference": float(np.abs(ours - np.conj(theirs)).max()),
+            "qso_seconds": ours_time,
+            "pycce_seconds": their_time,
+        }
+    out["max_coherence_difference"] = max(r["max_coherence_difference"] for r in out.values())
+    return out
+
+
 def redfield_vs_qutip() -> dict:
     """Redfield relaxation against QuTiP's Bloch–Redfield tensor.
 
@@ -1442,6 +1529,11 @@ def check(c: dict) -> list[str]:
     bath = c["bath_vs_pycce"]
     if not bath["max_coherence_difference"] <= TOLERANCES["bath_coherence"]:
         failures.append(f"bath coherences differ from PyCCE by {bath['max_coherence_difference']:.3g}")
+    general = c["generalised_bath_vs_pycce"]
+    if not general["max_coherence_difference"] <= TOLERANCES["generalised_bath_coherence"]:
+        failures.append(
+            f"generalised bath coherences differ from PyCCE by {general['max_coherence_difference']:.3g}"
+        )
     chem = c["chemistry_vs_pyscf"]
     if not chem["integral_max_difference"] <= TOLERANCES["integral"]:
         failures.append(f"integrals differ from PySCF by {chem['integral_max_difference']:.3g}")

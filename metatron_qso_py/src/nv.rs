@@ -15,6 +15,10 @@ use metatron_qso::spin::bath::{
     self, BathSpin, Cce, DIAMOND_LATTICE_CONSTANT, MAX_BATH_SPINS, MAX_CLUSTER_ORDER,
     MAX_EXACT_BATH, NATURAL_C13_ABUNDANCE, SpinBath,
 };
+use metatron_qso::spin::generalised::{
+    self, BathEstimate, FullSpin, GeneralisedBath, GeneralisedCce, MAX_BATH_STATES,
+    MAX_ENVELOPE_SEGMENTS, MAX_GENERALISED_EXACT, MAX_GENERALISED_ORDER, Pulses,
+};
 use metatron_qso::spin::optics::{
     self, CwOdmr, NV_EXCITED_SPLITTING, OpticalNv, Photophysics, PulsedReadout, TwoLevelOdmr,
 };
@@ -748,6 +752,432 @@ impl PySpinBath {
     }
 }
 
+/// A nucleus with its position (m) and full hyperfine tensor (Hz, row: the
+/// electron's component).
+type TensorSpin = ([f64; 3], [[f64; 3]; 3]);
+
+/// Coherences and signals.
+type CoherenceAndSignal<'py> = (Bound<'py, PyArray1<C64>>, Bound<'py, PyArray1<f64>>);
+
+/// The pulses of the generalised expansion: `"ideal"` (the default
+/// without `rabi`), `"finite"` (the default with it; shaped with an
+/// `envelope`) or `"laboratory"`.
+fn pulses_of(
+    pulses: Option<&str>,
+    rabi: Option<f64>,
+    envelope: Option<Vec<(f64, f64)>>,
+) -> PyResult<Pulses> {
+    let kind = pulses.unwrap_or(if rabi.is_some() { "finite" } else { "ideal" });
+    match (kind, rabi, envelope) {
+        ("ideal", None, None) => Ok(Pulses::Ideal),
+        ("laboratory", None, None) => Ok(Pulses::Laboratory),
+        ("finite", Some(rabi), None) => Ok(Pulses::Finite { rabi }),
+        ("finite", Some(rabi), Some(envelope)) => Ok(Pulses::Shaped { rabi, envelope }),
+        ("finite", None, _) => Err(invalid("finite pulses need a Rabi frequency `rabi` (Hz)")),
+        ("ideal" | "laboratory", _, _) => Err(invalid(
+            "`rabi` and `envelope` belong to finite pulses (pulses=\"finite\")",
+        )),
+        _ => Err(invalid("pulses: \"ideal\", \"finite\" or \"laboratory\"")),
+    }
+}
+
+/// The expansion's settings from the keyword arguments.
+#[allow(clippy::too_many_arguments)]
+fn cce_of(
+    order: usize,
+    cutoff: f64,
+    pulses: Option<&str>,
+    rabi: Option<f64>,
+    envelope: Option<Vec<(f64, f64)>>,
+    bath_states: usize,
+    seed: u64,
+) -> PyResult<GeneralisedCce> {
+    Ok(GeneralisedCce {
+        order,
+        cutoff,
+        pulses: pulses_of(pulses, rabi, envelope)?,
+        bath_states,
+        seed,
+    })
+}
+
+/// The ¹³C bath of an NV centre with the electron in every cluster: the
+/// generalised cluster-correlation expansion (Onizhuk et al., PRX Quantum
+/// 2, 010311 (2021)). The spin Hamiltonian is that of the laboratory
+/// frame, `D S_z² + γ_e B·S + Σ [S·A_i·I_i − γ_C B·I_i]` and the dipolar
+/// couplings of the nuclei, with the field `field` (T, three components,
+/// z along the NV axis) in any direction and the full hyperfine tensors.
+/// `spins` are `(position, tensor)` pairs: the position from the vacancy
+/// (m) and the 3 × 3 tensor `A` (Hz, row: the electron's component). The
+/// qubit `{α, β}` is formed by the electron's eigenstates closest to
+/// `m_s = 0` and `m_s = transition`; pulses act in the frame rotating at
+/// `frequency` (Hz; the bare qubit's transition by default). With
+/// `dressed`, the electron's levels are those dressed by the nuclei of
+/// each cluster, which keeps the expansion converging for nuclei coupled
+/// by a MHz or more.
+///
+/// The keyword arguments of `coherence`, `signal` and `estimate`: clusters
+/// of up to `order` nuclei connected by pairs closer than `cutoff` (m);
+/// `pulses` `"ideal"`, `"finite"` (rectangular, Rabi frequency `rabi` in
+/// Hz; shaped with an `envelope` of `(amplitude, phase)` segments of equal
+/// length, the phase in degrees) or `"laboratory"` (ideal, about axes
+/// fixed in the laboratory frame, as PyCCE); `bath_states` product states
+/// of the nuclei sampled with `seed`, each cluster in the static field of
+/// the others (0: unpolarised nuclei). Finite pulses need sampled states
+/// beyond the first order.
+#[pyclass(name = "GeneralisedBath", module = "metatron_qso", frozen)]
+pub struct PyGeneralisedBath {
+    inner: GeneralisedBath,
+}
+
+#[pymethods]
+impl PyGeneralisedBath {
+    #[new]
+    #[pyo3(
+        signature = (
+            field, spins, transition = -1, frequency = None, dressed = false,
+            zero_field_splitting = NV_ZERO_FIELD_SPLITTING,
+            gyromagnetic_ratio = NV_GYROMAGNETIC_RATIO,
+        ),
+        text_signature = "(field, spins, transition=-1, frequency=None, dressed=False, zero_field_splitting=2870000000.0, gyromagnetic_ratio=28025000000.0)"
+    )]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        py: Python<'_>,
+        field: [f64; 3],
+        spins: Vec<TensorSpin>,
+        transition: i64,
+        frequency: Option<f64>,
+        dressed: bool,
+        zero_field_splitting: f64,
+        gyromagnetic_ratio: f64,
+    ) -> PyResult<Self> {
+        let spins = spins
+            .into_iter()
+            .map(|(position, hyperfine)| FullSpin {
+                position,
+                hyperfine,
+            })
+            .collect();
+        let mut inner = GeneralisedBath::new(field, transition_of(transition)?, spins);
+        inner.frequency = frequency;
+        inner.dressed = dressed;
+        inner.zero_field_splitting = zero_field_splitting;
+        inner.gyromagnetic_ratio = gyromagnetic_ratio;
+        py.detach(|| inner.validate()).raise()?;
+        Ok(Self { inner })
+    }
+
+    /// A random bath of `SpinBath.diamond` (the same nuclei for the same
+    /// seed) with the point-dipole tensors, in the field `field` (T, three
+    /// components); none closer than `min_radius` (m).
+    #[staticmethod]
+    #[pyo3(
+        signature = (
+            field, abundance = NATURAL_C13_ABUNDANCE, radius = 4e-9, seed = 0, transition = -1,
+            min_radius = 0.0, dressed = false,
+        ),
+        text_signature = "(field, abundance=0.0107, radius=4e-09, seed=0, transition=-1, min_radius=0.0, dressed=False)"
+    )]
+    #[allow(clippy::too_many_arguments)]
+    fn diamond(
+        py: Python<'_>,
+        field: [f64; 3],
+        abundance: f64,
+        radius: f64,
+        seed: u64,
+        transition: i64,
+        min_radius: f64,
+        dressed: bool,
+    ) -> PyResult<Self> {
+        let transition = transition_of(transition)?;
+        let mut inner = py
+            .detach(|| GeneralisedBath::diamond(field, transition, abundance, radius, seed))
+            .raise()?
+            .without_spins_within(min_radius);
+        inner.dressed = dressed;
+        Ok(Self { inner })
+    }
+
+    /// The bath of a `SpinBath` (field along the axis): each nucleus with
+    /// the point-dipole tensor at its position, whose row `A_z·` is the
+    /// bath's coupling.
+    #[staticmethod]
+    #[pyo3(signature = (bath, dressed = false))]
+    fn from_bath(py: Python<'_>, bath: &PySpinBath, dressed: bool) -> PyResult<Self> {
+        let b = &bath.inner;
+        let mut inner = py.detach(|| GeneralisedBath::from_bath(b)).raise()?;
+        inner.dressed = dressed;
+        Ok(Self { inner })
+    }
+
+    #[getter]
+    fn field(&self) -> [f64; 3] {
+        self.inner.field
+    }
+
+    #[getter]
+    fn transition(&self) -> i8 {
+        self.inner.transition
+    }
+
+    #[getter]
+    fn frequency(&self) -> Option<f64> {
+        self.inner.frequency
+    }
+
+    #[getter]
+    fn dressed(&self) -> bool {
+        self.inner.dressed
+    }
+
+    #[getter]
+    fn zero_field_splitting(&self) -> f64 {
+        self.inner.zero_field_splitting
+    }
+
+    #[getter]
+    fn gyromagnetic_ratio(&self) -> f64 {
+        self.inner.gyromagnetic_ratio
+    }
+
+    /// The frequency (Hz) of the rotating frame: set, or the bare qubit's
+    /// transition (negative where `β` lies below `α`).
+    fn frame_frequency(&self) -> f64 {
+        self.inner.frame_frequency()
+    }
+
+    #[getter]
+    fn num_spins(&self) -> usize {
+        self.inner.spins.len()
+    }
+
+    /// The nuclei as `(position, tensor)` pairs.
+    #[getter]
+    fn spins(&self) -> Vec<TensorSpin> {
+        self.inner
+            .spins
+            .iter()
+            .map(|s| (s.position, s.hyperfine))
+            .collect()
+    }
+
+    /// The bath without the nuclei closer than `radius` (m) to the vacancy.
+    fn without_spins_within(&self, radius: f64) -> Self {
+        Self {
+            inner: self.inner.clone().without_spins_within(radius),
+        }
+    }
+
+    /// The bath with the electron's bare or dressed levels.
+    fn with_dressed(&self, dressed: bool) -> Self {
+        let mut inner = self.inner.clone();
+        inner.dressed = dressed;
+        Self { inner }
+    }
+
+    /// The connected clusters of up to `order` nuclei.
+    #[pyo3(signature = (order = 2, cutoff = 8e-10))]
+    fn clusters(&self, py: Python<'_>, order: usize, cutoff: f64) -> PyResult<Vec<Vec<usize>>> {
+        let b = &self.inner;
+        py.detach(|| b.clusters(order, cutoff)).raise()
+    }
+
+    /// The bath's factor of the coherence before the last pulse of each
+    /// sequence (relative to the electron alone; the `L` of
+    /// `SpinBath.coherence` for ideal pulses and a field along the axis).
+    #[pyo3(
+        signature = (
+            sequences, order = 2, cutoff = 8e-10, pulses = None, rabi = None, envelope = None,
+            bath_states = 0, seed = 0,
+        ),
+        text_signature = "($self, sequences, order=2, cutoff=8e-10, pulses=None, rabi=None, envelope=None, bath_states=0, seed=0)"
+    )]
+    #[allow(clippy::too_many_arguments)]
+    fn coherence<'py>(
+        &self,
+        py: Python<'py>,
+        sequences: Vec<Vec<PyRef<'_, PyNvEvent>>>,
+        order: usize,
+        cutoff: f64,
+        pulses: Option<&str>,
+        rabi: Option<f64>,
+        envelope: Option<Vec<(f64, f64)>>,
+        bath_states: usize,
+        seed: u64,
+    ) -> PyResult<Bound<'py, PyArray1<C64>>> {
+        let cce = cce_of(order, cutoff, pulses, rabi, envelope, bath_states, seed)?;
+        let (seqs, b) = (self::sequences(&sequences), &self.inner);
+        let l = py.detach(|| b.coherence(&seqs, &cce)).raise()?;
+        Ok(complex_array(py, l))
+    }
+
+    /// The population of `α` after each sequence (its last pulse ideal).
+    #[pyo3(
+        signature = (
+            sequences, order = 2, cutoff = 8e-10, pulses = None, rabi = None, envelope = None,
+            bath_states = 0, seed = 0,
+        ),
+        text_signature = "($self, sequences, order=2, cutoff=8e-10, pulses=None, rabi=None, envelope=None, bath_states=0, seed=0)"
+    )]
+    #[allow(clippy::too_many_arguments)]
+    fn signal<'py>(
+        &self,
+        py: Python<'py>,
+        sequences: Vec<Vec<PyRef<'_, PyNvEvent>>>,
+        order: usize,
+        cutoff: f64,
+        pulses: Option<&str>,
+        rabi: Option<f64>,
+        envelope: Option<Vec<(f64, f64)>>,
+        bath_states: usize,
+        seed: u64,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let cce = cce_of(order, cutoff, pulses, rabi, envelope, bath_states, seed)?;
+        let (seqs, b) = (self::sequences(&sequences), &self.inner);
+        let s = py.detach(|| b.signal(&seqs, &cce)).raise()?;
+        Ok(real_array(py, s))
+    }
+
+    /// The coherence and the signal with their standard errors over the
+    /// sampled bath states (0 for unpolarised nuclei, NaN for one state): a
+    /// dict of arrays `coherence`, `coherence_error`, `signal`,
+    /// `signal_error`.
+    #[pyo3(
+        signature = (
+            sequences, order = 2, cutoff = 8e-10, pulses = None, rabi = None, envelope = None,
+            bath_states = 0, seed = 0,
+        ),
+        text_signature = "($self, sequences, order=2, cutoff=8e-10, pulses=None, rabi=None, envelope=None, bath_states=0, seed=0)"
+    )]
+    #[allow(clippy::too_many_arguments)]
+    fn estimate<'py>(
+        &self,
+        py: Python<'py>,
+        sequences: Vec<Vec<PyRef<'_, PyNvEvent>>>,
+        order: usize,
+        cutoff: f64,
+        pulses: Option<&str>,
+        rabi: Option<f64>,
+        envelope: Option<Vec<(f64, f64)>>,
+        bath_states: usize,
+        seed: u64,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let cce = cce_of(order, cutoff, pulses, rabi, envelope, bath_states, seed)?;
+        let (seqs, b) = (self::sequences(&sequences), &self.inner);
+        let e: Vec<BathEstimate> = py.detach(|| b.estimate(&seqs, &cce)).raise()?;
+        let d = PyDict::new(py);
+        d.set_item(
+            "coherence",
+            complex_array(py, e.iter().map(|x| x.coherence).collect()),
+        )?;
+        d.set_item(
+            "coherence_error",
+            real_array(py, e.iter().map(|x| x.coherence_error).collect()),
+        )?;
+        d.set_item(
+            "signal",
+            real_array(py, e.iter().map(|x| x.signal).collect()),
+        )?;
+        d.set_item(
+            "signal_error",
+            real_array(py, e.iter().map(|x| x.signal_error).collect()),
+        )?;
+        Ok(d)
+    }
+
+    /// The electron and the whole bath (at most `MAX_GENERALISED_EXACT`
+    /// nuclei, unpolarised) propagated together, with the couplings of
+    /// pairs closer than `cutoff`: `(coherence, signal)` arrays.
+    #[pyo3(
+        signature = (sequences, cutoff = f64::INFINITY, pulses = None, rabi = None, envelope = None),
+        text_signature = "($self, sequences, cutoff=inf, pulses=None, rabi=None, envelope=None)"
+    )]
+    fn exact<'py>(
+        &self,
+        py: Python<'py>,
+        sequences: Vec<Vec<PyRef<'_, PyNvEvent>>>,
+        cutoff: f64,
+        pulses: Option<&str>,
+        rabi: Option<f64>,
+        envelope: Option<Vec<(f64, f64)>>,
+    ) -> PyResult<CoherenceAndSignal<'py>> {
+        let pulses = pulses_of(pulses, rabi, envelope)?;
+        let (seqs, b) = (self::sequences(&sequences), &self.inner);
+        let r = py.detach(|| b.exact(&seqs, cutoff, &pulses)).raise()?;
+        let (l, s): (Vec<C64>, Vec<f64>) = r.into_iter().unzip();
+        Ok((complex_array(py, l), real_array(py, s)))
+    }
+
+    fn __repr__(&self) -> String {
+        let [x, y, z] = self.inner.field;
+        format!(
+            "GeneralisedBath(({x}, {y}, {z}) T, m = {}, {} spins{})",
+            self.inner.transition,
+            self.inner.spins.len(),
+            if self.inner.dressed { ", dressed" } else { "" }
+        )
+    }
+}
+
+/// The population after each sequence averaged over `configurations`
+/// random baths of `GeneralisedBath.diamond` (seeded) in the field `field`
+/// (T, three components), by the generalised expansion: `(means, standard
+/// errors)`.
+#[pyfunction(name = "generalised_ensemble_signal")]
+#[pyo3(
+    signature = (
+        field, sequences, configurations, abundance = NATURAL_C13_ABUNDANCE, radius = 4e-9,
+        seed = 0, transition = -1, order = 2, cutoff = 8e-10, pulses = None, rabi = None,
+        envelope = None, bath_states = 0,
+    ),
+    text_signature = "(field, sequences, configurations, abundance=0.0107, radius=4e-09, seed=0, transition=-1, order=2, cutoff=8e-10, pulses=None, rabi=None, envelope=None, bath_states=0)"
+)]
+#[allow(clippy::too_many_arguments)]
+fn py_generalised_ensemble_signal<'py>(
+    py: Python<'py>,
+    field: [f64; 3],
+    sequences: Vec<Vec<PyRef<'_, PyNvEvent>>>,
+    configurations: usize,
+    abundance: f64,
+    radius: f64,
+    seed: u64,
+    transition: i64,
+    order: usize,
+    cutoff: f64,
+    pulses: Option<&str>,
+    rabi: Option<f64>,
+    envelope: Option<Vec<(f64, f64)>>,
+    bath_states: usize,
+) -> PyResult<MeansAndErrors<'py>> {
+    let cce = cce_of(order, cutoff, pulses, rabi, envelope, bath_states, seed)?;
+    let (seqs, transition) = (self::sequences(&sequences), transition_of(transition)?);
+    let r = py
+        .detach(|| {
+            generalised::generalised_ensemble_signal(
+                field,
+                transition,
+                abundance,
+                radius,
+                configurations,
+                seed,
+                &seqs,
+                &cce,
+            )
+        })
+        .raise()?;
+    let (mean, err): (Vec<f64>, Vec<f64>) = r.into_iter().unzip();
+    Ok((real_array(py, mean), real_array(py, err)))
+}
+
+/// The full point-dipole hyperfine tensor (Hz, row: the electron's
+/// component) of a ¹³C at `position` (m from the vacancy, z along the NV
+/// axis).
+#[pyfunction(name = "point_dipole_tensor")]
+fn py_point_dipole_tensor(position: [f64; 3]) -> PyResult<[[f64; 3]; 3]> {
+    Ok(FullSpin::point_dipole(position).raise()?.hyperfine)
+}
+
 /// The point-dipole hyperfine couplings `(A_zx, A_zy, A_zz)` (Hz) of a ¹³C
 /// at `position` (m from the vacancy, z along the NV axis).
 #[pyfunction(name = "point_dipole_hyperfine")]
@@ -1235,6 +1665,13 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("MAX_CLUSTER_ORDER", MAX_CLUSTER_ORDER)?;
     m.add("MAX_EXACT_BATH", MAX_EXACT_BATH)?;
     m.add("MAX_BATH_TRAJECTORIES", bath::MAX_BATH_TRAJECTORIES)?;
+    m.add_class::<PyGeneralisedBath>()?;
+    m.add_function(wrap_pyfunction!(py_generalised_ensemble_signal, m)?)?;
+    m.add_function(wrap_pyfunction!(py_point_dipole_tensor, m)?)?;
+    m.add("MAX_GENERALISED_ORDER", MAX_GENERALISED_ORDER)?;
+    m.add("MAX_GENERALISED_EXACT", MAX_GENERALISED_EXACT)?;
+    m.add("MAX_ENVELOPE_SEGMENTS", MAX_ENVELOPE_SEGMENTS)?;
+    m.add("MAX_BATH_STATES", MAX_BATH_STATES)?;
     m.add_class::<PyNvCenter>()?;
     m.add_class::<PyNvEvent>()?;
     m.add_class::<PyFieldNoise>()?;

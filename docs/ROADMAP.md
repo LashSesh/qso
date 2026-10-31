@@ -3879,7 +3879,7 @@ moderate faults and six smaller ones; all are fixed or documented.
   - Results are bitwise identical on one to four threads.
   - About 4500 fuzzed calls raised no panic.
 
-### 1.45 — The NV bath with finite pulses (M)
+### 1.45 — The NV bath with finite pulses (M, delivered)
 
 Use case: the coherence of an NV centre under realistic decoupling,
 whose π pulses last tens of nanoseconds, at low fields where the
@@ -3900,6 +3900,135 @@ equal to the expansion of 1.39 where that converges and the pulses are
 ideal; PyCCE's generalised expansion (ideal pulses) on natural baths in
 the cross-validation; convergence with the cluster size where the
 expansion of 1.39 diverges.
+
+Delivered in `spin/nv/generalised.rs`:
+
+- **The generalised expansion.** `GeneralisedBath` holds the electron
+  (spin 1, `D S_z² + γ_e B·S` in a field of any direction) and its nuclei
+  with full hyperfine tensors (`FullSpin`, `point_dipole` or given), their
+  Zeeman terms and the dipolar couplings within the cutoff, in the
+  laboratory frame. The qubit is formed by the electron's eigenstates
+  closest to `m_s = 0` and `m`. Each cluster of up to eight nuclei is
+  propagated with the electron (dimension `3·2^k`), and the electron's
+  density matrix before the last pulse is expanded element by element on
+  the qubit's elements (Onizhuk et al.). `coherence` is relative to the
+  electron alone, `signal` follows the ideal last pulse, and `exact`
+  propagates up to eight nuclei whole.
+- **Pulses.** Ideal pulses in the frame rotating at the qubit's
+  transition; finite pulses in the rotating-wave approximation,
+  rectangular (`Pulses::Finite`) or shaped (`Pulses::Shaped`, an envelope
+  of amplitude and phase segments); ideal pulses about laboratory axes
+  (`Pulses::Laboratory`, PyCCE's convention).
+- **Bath states.** `GeneralisedCce::bath_states` expands in sampled
+  product states of the nuclei, along the field. Every cluster sits in the
+  static field of the nuclei outside it (PyCCE's bath sampling with its
+  mean field). `estimate` gives the means with standard errors.
+- **Dressed levels.** With `GeneralisedBath::dressed`, each cluster's
+  Hamiltonian is block-diagonal between `α` and the other levels, by the
+  exact direct rotation (the unitary factor of a polar decomposition).
+- **Baths.** `GeneralisedBath::diamond` gives 1.39's nuclei for a seed;
+  `from_bath` keeps given couplings in the row `A_z·`;
+  `without_spins_within`; `generalised_ensemble_signal` averages over
+  random baths.
+- In Python: `GeneralisedBath` (with `estimate`, `exact`,
+  `with_dressed`), `generalised_ensemble_signal`, `point_dipole_tensor`.
+
+Changes to the plan:
+
+- **Where 1.39 diverges.** The plan expected the generalised expansion
+  to converge where 1.39's diverges. 1.39's third order did not diverge in
+  16 baths at 10 % ¹³C within 2 nm (no nuclei within 0.3 nm, Hahn echoes
+  from 20 to 400 µs). For the coherence the two expansions are the same multiplicative
+  one in the secular limit, and with nuclei closer than 0.3 nm it is the
+  generalised expansion that diverges. Convergence with the cluster size
+  is shown instead where the expansion of unpolarised nuclei in the bare
+  levels fails: finite pulses (bath states) and strongly coupled nuclei
+  (dressed levels).
+- **Bath states with a mean field.** These are not in the plan, but finite
+  pulses need them. A finite pulse depends on the electron's detuning by
+  all nuclei together, which a product over clusters of unpolarised
+  nuclei cannot represent. On eight nuclei with 50 MHz pulses, the error of
+  that expansion grows from 10⁻³ at first order to 0.19 at fourth, while
+  the sampled one stays within 1.5 standard errors at orders 1 to 3.
+- **Dressed levels.** These are not in the plan either. Nuclei coupled by
+  a MHz make the bare levels' populations oscillate at GHz with
+  amplitudes `A/Δ`. The other nuclei dephase these oscillations, which a
+  product over clusters cannot follow: the expansion stalls at 10⁻⁵ or
+  diverges. In the dressed levels the oscillations are gone, and the
+  mixing acts on the nuclei to all orders.
+- **The qubit's elements only.** Finite pulses leave the third level tiny
+  elements, whose ratios are unstable, so the expansion takes the qubit's
+  elements only. The coherence and the readout use no others.
+- **Shaped pulses** are defined here: 1.37 has rectangular pulses only.
+  An envelope has segments of equal length, each with an amplitude and a
+  phase, and a pulse lasts until the area of its envelope is its angle.
+- **The Rabi frequency in tilted fields** is that of the qubit. A
+  transverse field changes how a drive along x couples `α` and `β`, and
+  the phases of the electron's eigenstates are arbitrary. The drive is
+  therefore scaled by that matrix element, so that a pulse turns the
+  qubit by its angle about the axes of the ideal pulses. Before this, a
+  Hahn echo with 10 MHz pulses at 45° read 0.48 instead of 0.90.
+
+Not done, and why:
+
+- **Strongly coupled nuclei in every cluster.** Nuclei closer than about
+  0.3 nm also couple to each other through the electron (`A_i A_j/Δ`,
+  tens of kHz), and the expansion converges slowly in them: in a bath at
+  10 % ¹³C, the second and third orders differ by up to 0.17 even in the
+  dressed levels. Holding such nuclei in every cluster, as a central
+  system of several spins (as PyCCE allows), would address this.
+- **The mean field of moving nuclei.** Sampled states are static along
+  the field. Nuclei that precess about other axes (strong hyperfine
+  fields, low fields) keep the mean field of their initial projection.
+- **Interlaced averaging** (PyCCE) is not implemented.
+- **Classical field noise** (1.37, 1.39) has not been joined with the
+  generalised bath.
+- **Couplings of the nuclei next to the vacancy.** As in 1.39, no table
+  of computed tensors ships; give them as `FullSpin`.
+
+Measured (four cores):
+
+- **Against PyCCE** (`gcce`, ideal pulses about laboratory axes, the
+  Hahn-echo coherence): six close ¹³C with every pair at third order, at
+  50 mT along the axis and at 5 mT tilted by 0.3 rad, and a natural bath of
+  111 ¹³C within 2.5 nm at 20 mT tilted by 1 rad (second order), agree to
+  5·10⁻⁸, the rounding of the electron's phase over milliseconds in the
+  laboratory frame. QSO takes 4–18 ms, PyCCE 0.06–0.35 s.
+- **Against 1.39.** A natural bath of 509 ¹³C within 4 nm at 50 mT (no
+  nuclei within 0.5 nm; 1414 clusters at second order, 3582 at third)
+  agrees with `SpinBath` to 5·10⁻⁴ at second order (two baths). The second
+  order takes 0.02 s and the third 0.13 s; the third order moves the
+  coherence by at most 0.02 at 1 ms. Bare and dressed levels agree to
+  10⁻⁴ there.
+- **Tilted fields.** The same bath at 20 mT tilted by 0°, 2°, 5°, 15° and
+  45° has a Hahn echo of 0.562, 0.471, 0.630, 0.657 and 0.336 at 0.6 ms;
+  the second and third orders differ by at most 0.011 (0.1 s each).
+- **Exact propagation.** Eight nuclei (dimension 768): 4.6 s with ideal
+  pulses, 13.7 s with 10 MHz pulses; the expansion at eighth order equals
+  them to 2·10⁻¹⁵.
+- **Finite pulses on eight nuclei** (CPMG-8 and -32 at 50 mT, spacing
+  10 µs). Errors of the expansion of unpolarised nuclei at orders 1 to 4
+  are 1.4·10⁻⁴, 1.4·10⁻³, 4.0·10⁻³, 6.5·10⁻³ (10 MHz) and 10⁻³, 0.047,
+  0.15, 0.19 (50 MHz). With 300 sampled bath states the errors at orders
+  1 to 3 are 1.2·10⁻⁴ to 5.7·10⁻⁴, within 1.5 standard errors (2·10⁻⁴ to
+  6·10⁻⁴).
+- **Finite and shaped pulses on a natural bath** (231 ¹³C within 3 nm,
+  50 mT, CPMG-32 with spacing 10 µs, 200 bath states, 3 s per run, 10 s
+  with a Gaussian envelope of 16 segments). Ideal pulses give 0.9028 ±
+  0.0005, and 10 and 50 MHz pulses give 0.9017 ± 0.0011 and 0.9001 ±
+  0.0012. At 2 MHz the pulses themselves lose: 0.888 ± 0.004 rectangular,
+  0.882 ± 0.005 Gaussian of the same peak. The first and second orders
+  agree to 10⁻⁴. Unpolarised, the second order had given 0.865 at 50 MHz.
+- **Dressed levels.** Eight nuclei, one 0.25 nm from the vacancy
+  (`A_zz = −0.40 MHz`): the errors at orders 2, 3, 4 are 1.6·10⁻⁵,
+  1.3·10⁻⁵, 1.6·10⁻⁵ in the bare levels and 1.2·10⁻⁵, 1.0·10⁻⁶,
+  1.0·10⁻⁸ in the dressed ones.
+- **Strongly coupled nuclei in a large bath.** At 10 % ¹³C within 2 nm
+  (549 nuclei, four within 0.3 nm) the third order diverges in the bare
+  levels and stays finite in the dressed ones, but differs from the
+  second by up to 0.17. Without the four, both converge (orders 2 and 3
+  within 0.002) and agree with 1.39 to 0.3 %.
+
 
 ### 1.46 — Optimal control of larger spin systems (M–L)
 

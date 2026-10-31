@@ -2951,6 +2951,114 @@ MAX_CLUSTER_ORDER: int
 MAX_EXACT_BATH: int
 MAX_BATH_TRAJECTORIES: int
 
+@final
+class GeneralisedBath:
+    def __new__(
+        cls,
+        field: Sequence[float],
+        spins: Sequence[Tuple[Sequence[float], Sequence[Sequence[float]]]],
+        transition: int = -1,
+        frequency: Optional[float] = None,
+        dressed: bool = False,
+        zero_field_splitting: float = 2870000000.0,
+        gyromagnetic_ratio: float = 28025000000.0,
+    ) -> GeneralisedBath: ...
+    @staticmethod
+    def diamond(
+        field: Sequence[float],
+        abundance: float = 0.0107,
+        radius: float = 4e-9,
+        seed: int = 0,
+        transition: int = -1,
+        min_radius: float = 0.0,
+        dressed: bool = False,
+    ) -> GeneralisedBath: ...
+    @staticmethod
+    def from_bath(bath: SpinBath, dressed: bool = False) -> GeneralisedBath: ...
+    @property
+    def field(self) -> list[float]: ...
+    @property
+    def transition(self) -> int: ...
+    @property
+    def frequency(self) -> Optional[float]: ...
+    @property
+    def dressed(self) -> bool: ...
+    @property
+    def zero_field_splitting(self) -> float: ...
+    @property
+    def gyromagnetic_ratio(self) -> float: ...
+    def frame_frequency(self) -> float: ...
+    @property
+    def num_spins(self) -> int: ...
+    @property
+    def spins(self) -> list[Tuple[list[float], list[list[float]]]]: ...
+    def without_spins_within(self, radius: float) -> GeneralisedBath: ...
+    def with_dressed(self, dressed: bool) -> GeneralisedBath: ...
+    def clusters(self, order: int = 2, cutoff: float = 8e-10) -> list[list[int]]: ...
+    def coherence(
+        self,
+        sequences: Sequence[Sequence[NvEvent]],
+        order: int = 2,
+        cutoff: float = 8e-10,
+        pulses: Optional[str] = None,
+        rabi: Optional[float] = None,
+        envelope: Optional[Sequence[Tuple[float, float]]] = None,
+        bath_states: int = 0,
+        seed: int = 0,
+    ) -> ComplexArray: ...
+    def signal(
+        self,
+        sequences: Sequence[Sequence[NvEvent]],
+        order: int = 2,
+        cutoff: float = 8e-10,
+        pulses: Optional[str] = None,
+        rabi: Optional[float] = None,
+        envelope: Optional[Sequence[Tuple[float, float]]] = None,
+        bath_states: int = 0,
+        seed: int = 0,
+    ) -> RealArray: ...
+    def estimate(
+        self,
+        sequences: Sequence[Sequence[NvEvent]],
+        order: int = 2,
+        cutoff: float = 8e-10,
+        pulses: Optional[str] = None,
+        rabi: Optional[float] = None,
+        envelope: Optional[Sequence[Tuple[float, float]]] = None,
+        bath_states: int = 0,
+        seed: int = 0,
+    ) -> dict[str, NDArray[Any]]: ...
+    def exact(
+        self,
+        sequences: Sequence[Sequence[NvEvent]],
+        cutoff: float = ...,
+        pulses: Optional[str] = None,
+        rabi: Optional[float] = None,
+        envelope: Optional[Sequence[Tuple[float, float]]] = None,
+    ) -> Tuple[ComplexArray, RealArray]: ...
+
+def generalised_ensemble_signal(
+    field: Sequence[float],
+    sequences: Sequence[Sequence[NvEvent]],
+    configurations: int,
+    abundance: float = 0.0107,
+    radius: float = 4e-9,
+    seed: int = 0,
+    transition: int = -1,
+    order: int = 2,
+    cutoff: float = 8e-10,
+    pulses: Optional[str] = None,
+    rabi: Optional[float] = None,
+    envelope: Optional[Sequence[Tuple[float, float]]] = None,
+    bath_states: int = 0,
+) -> Tuple[RealArray, RealArray]: ...
+def point_dipole_tensor(position: Sequence[float]) -> list[list[float]]: ...
+
+MAX_GENERALISED_ORDER: int
+MAX_GENERALISED_EXACT: int
+MAX_ENVELOPE_SEGMENTS: int
+MAX_BATH_STATES: int
+
 def nv_pulse(angle: float, phase: float = 0.0) -> NvEvent: ...
 def nv_free(t: float) -> NvEvent: ...
 def ramsey(tau: float) -> list[NvEvent]: ...

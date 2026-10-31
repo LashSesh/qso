@@ -37,14 +37,25 @@ from the cluster-correlation expansion::
 
     bath = spin.SpinBath.diamond(0.05, seed=1)
     print(bath.signal([spin.hahn(t) for t in (100e-6, 300e-6)]))
+
+``GeneralisedBath`` keeps the electron in every cluster (the generalised
+expansion): fields of any direction, full hyperfine tensors, finite and
+shaped pulses::
+
+    bath = spin.GeneralisedBath.diamond((0.01, 0, 0.03), radius=2e-9, seed=1)
+    print(bath.signal([spin.hahn(100e-6)], rabi=20e6))
 """
 
 from ._core import (
     DIAMOND_LATTICE_CONSTANT,
     MAX_BATH_SPINS,
+    MAX_BATH_STATES,
     MAX_BATH_TRAJECTORIES,
     MAX_CLUSTER_ORDER,
+    MAX_ENVELOPE_SEGMENTS,
     MAX_EXACT_BATH,
+    MAX_GENERALISED_EXACT,
+    MAX_GENERALISED_ORDER,
     MAX_NV_DIMENSION,
     NATURAL_C13_ABUNDANCE,
     NV_EXCITED_SPLITTING,
@@ -53,6 +64,7 @@ from ._core import (
     Control,
     Exchange,
     FieldNoise,
+    GeneralisedBath,
     NvCenter,
     NvEvent,
     OpticalNv,
@@ -72,6 +84,7 @@ from ._core import (
     ensemble_lines,
     field_from_lines,
     filter_function,
+    generalised_ensemble_signal,
     gyromagnetic_ratio,
     hahn,
     inept,
@@ -82,6 +95,7 @@ from ._core import (
     nv_orientations,
     nv_pulse,
     point_dipole_hyperfine,
+    point_dipole_tensor,
     ramsey,
     ramsey_sensitivity,
     readout_contrast,
@@ -102,9 +116,13 @@ from ._core import spin_sweep as sweep
 __all__ = [
     "DIAMOND_LATTICE_CONSTANT",
     "MAX_BATH_SPINS",
+    "MAX_BATH_STATES",
     "MAX_BATH_TRAJECTORIES",
     "MAX_CLUSTER_ORDER",
+    "MAX_ENVELOPE_SEGMENTS",
     "MAX_EXACT_BATH",
+    "MAX_GENERALISED_EXACT",
+    "MAX_GENERALISED_ORDER",
     "MAX_NV_DIMENSION",
     "NATURAL_C13_ABUNDANCE",
     "NV_EXCITED_SPLITTING",
@@ -113,6 +131,7 @@ __all__ = [
     "Control",
     "Exchange",
     "FieldNoise",
+    "GeneralisedBath",
     "NvCenter",
     "NvEvent",
     "OpticalNv",
@@ -133,6 +152,7 @@ __all__ = [
     "ensemble_lines",
     "field_from_lines",
     "filter_function",
+    "generalised_ensemble_signal",
     "gyromagnetic_ratio",
     "hahn",
     "inept",
@@ -143,6 +163,7 @@ __all__ = [
     "nv_orientations",
     "nv_pulse",
     "point_dipole_hyperfine",
+    "point_dipole_tensor",
     "pulse",
     "ramsey",
     "ramsey_sensitivity",

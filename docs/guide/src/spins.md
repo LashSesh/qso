@@ -745,6 +745,96 @@ with `|L| > 1`, are refused with an error; a lower order or a smaller
 cutoff usually helps. At 10 % ¹³C the third order diverged in one bath
 of twelve, the second in none.
 
+### The electron in every cluster
+
+`SpinBath` holds the electron in one level along each branch, which needs
+a field along the axis, ideal pulses and the secular coupling.
+`spin.GeneralisedBath` propagates the electron with every cluster
+instead, the generalised expansion of Onizhuk et al. (PRX Quantum 2,
+010311 (2021)):
+
+- **The model.** The Hamiltonian of the laboratory frame: `D S_z² + γ_e
+  B·S` for the electron in a field `(B_x, B_y, B_z)` of any direction,
+  the full hyperfine tensors `S·A·I` (`spin.point_dipole_tensor` gives a
+  point dipole's; give your own for the nuclei next to the vacancy), the
+  nuclear Zeeman terms and the dipolar couplings of the pairs within the
+  cutoff. The qubit `{α, β}` is formed by the electron's eigenstates
+  closest to `m_s = 0` and `m_s = transition`. `GeneralisedBath.diamond`
+  and `GeneralisedBath.from_bath` take the baths of `SpinBath`, the same
+  nuclei for the same seed.
+- **Pulses.** By default ideal, in the frame rotating at the qubit's
+  transition (or at `frequency`). With `rabi` they are rectangular with
+  that Rabi frequency and drive both transitions from `α` in the
+  rotating-wave approximation; with an `envelope` of `(amplitude, phase)`
+  segments they are shaped, a pulse of angle `θ` lasting until the area
+  of its envelope is `θ`. Free periods count between pulse centres.
+  `pulses="laboratory"` applies ideal pulses about axes fixed in the
+  laboratory frame, as PyCCE does. The last pulse reads out ideally.
+- **The expansion.** Each cluster gives the electron's density matrix
+  before the last pulse. Divided element by element by that of the
+  electron alone and by its subclusters' contributions, the clusters up
+  to `order` nuclei multiply into the result (on the qubit's elements,
+  the only ones the outputs use). `coherence` is the qubit's coherence
+  relative to the electron alone (the `L` of `SpinBath` for ideal pulses
+  and a field along the axis), `signal` the population of `α` after the
+  last pulse, and `exact` propagates the electron with a whole bath of up
+  to eight nuclei.
+- **Bath states.** A product over clusters represents only what
+  factorises over them. Phases from independent nuclei do, so ideal
+  pulses converge quickly. A finite pulse, however, depends on the
+  electron's detuning by all nuclei together: with unpolarised nuclei the
+  expansion moves away from the exact result as the order grows. With
+  `bath_states=N` the expansion runs in `N` product states of the nuclei,
+  each nucleus up or down along the field (seeded by `seed`), every
+  cluster in the static field of the nuclei outside it, and the results
+  are averaged, as PyCCE's bath sampling with its mean field does.
+  `estimate` returns the means with their standard errors. Use it for
+  finite pulses beyond the first order.
+- **Dressed levels.** The non-secular coupling mixes the electron's
+  levels with the nuclei, to first order in `A/Δ` (`Δ` the electron's
+  transitions, GHz): populations and coherences oscillate at the
+  electron's frequencies with amplitudes of order `A/Δ`, and the other
+  nuclei dephase these oscillations. A product over clusters cannot follow
+  that. For nuclei coupled by a MHz or more, closer than about 0.3 nm, the
+  expansion stalls or diverges. With `dressed=True` each cluster's
+  Hamiltonian is taken block-diagonal between `α` and the other levels,
+  by the direct rotation closest to the identity, computed exactly: the
+  electron is prepared, pulsed and read out in its levels dressed by the
+  nuclei, the fast oscillations are gone, and the mixing still acts on
+  the nuclei to all orders. Near a crossing of `α` with another level
+  (0.1024 T for `m_s = −1`) the dressed levels do not exist and are
+  refused.
+
+```python
+import math
+
+from metatron_qso import spin
+
+seqs = [spin.hahn(t / 2) for t in (0.2e-3, 0.6e-3, 1.0e-3)]   # 2τ = 0.2, 0.6, 1 ms
+for degrees in (0, 5, 45):                                     # 20 mT, tilted
+    a = math.radians(degrees)
+    field = (0.02 * math.sin(a), 0.0, 0.02 * math.cos(a))
+    bath = spin.GeneralisedBath.diamond(field, radius=4e-9, seed=1, min_radius=5e-10)
+    print(degrees, abs(bath.coherence(seqs)).round(3))
+# 0 [0.674 0.562 0.216]
+# 5 [0.808 0.63  0.256]
+# 45 [0.806 0.335 0.448]
+
+cpmg = [spin.cpmg(32, 10e-6)]                  # 10 MHz pulses: sample bath states
+est = bath.estimate(cpmg, rabi=10e6, bath_states=100, seed=1)
+print(est["signal"].round(4), est["signal_error"].round(4), bath.signal(cpmg).round(4))
+# [0.5685] [0.0032] [0.5697]: within its error of ideal pulses
+```
+
+The tilt changes the echo through the nuclei's quantisation axes, which
+differ between the electron's levels when the field is off the axis.
+For the 509 nuclei of a natural bath at 50 mT along the axis, the second
+order takes 0.02 s and agrees with `SpinBath` to 5·10⁻⁴; the third order
+(0.13 s) moves it by at most 0.02 at 1 ms. With 10 MHz pulses and 100
+bath states the CPMG signal above is the ideal one within its standard
+error, while the expansion of unpolarised nuclei gives 0.558 (it does not
+converge for finite pulses).
+
 ## Validation
 
 - **Single spins and pairs, against closed forms.** The FID
