@@ -957,7 +957,10 @@ impl DensityMatrix {
     /// over-rotation spreads) is averaged exactly: telegraph noise over the
     /// joint states of its processes, quasi-static noise by Gauss
     /// quadrature to an a-priori error of [`slow::QUADRATURE_ERROR`] per
-    /// entry (see [`slow`]); within [`slow::MAX_SLOW_WORK`] operations.
+    /// entry (see [`slow`]); within [`slow::MAX_SLOW_WORK`] operations and
+    /// up to 12 qubits. Each call averages over its own draws of that
+    /// noise, starting at time 0: a circuit split over two calls is two
+    /// experiments, whose slow noise is not correlated.
     pub fn apply_device(
         &mut self,
         circuit: &Circuit,

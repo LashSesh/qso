@@ -308,7 +308,7 @@ fn round2(t: f64) -> f64 {
 /// `nnz` entries and `‖A‖∞ = norm` over `t`: a Krylov step covers about
 /// `m/4` of `‖A‖ t`, and costs `m + 1` products, the orthogonalisation and
 /// a small exponential.
-pub(super) fn krylov_work(n: usize, nnz: usize, norm: f64, t: f64) -> f64 {
+pub(crate) fn krylov_work(n: usize, nnz: usize, norm: f64, t: f64) -> f64 {
     let m = KRYLOV_DIM.min(n.max(1)) as f64;
     let steps = (norm * t / (0.25 * m)).ceil() + 1.0;
     let n = n as f64;

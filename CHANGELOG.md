@@ -140,8 +140,10 @@ All notable changes to this project are documented here. The format follows
   detunings, telegraph noise and over-rotation spreads. Telegraph noise
   is averaged exactly over the joint states of its processes,
   quasi-static noise by Gauss quadrature with an a-priori error below
-  10⁻¹³ per entry. Noise learning on density matrices accepts such
-  devices too (on Pauli frames it still refuses them).
+  10⁻¹³ per entry, up to 12 qubits. Each call averages over its own
+  draws: slow noise is not correlated across calls. Noise learning on
+  density matrices accepts such devices too (on Pauli frames it still
+  refuses them).
 
 - **The Hamiltonian of interacting walkers** is built one configuration
   at a time by shared code (1.43). `certificate_tolerance` bounds `‖H‖` by

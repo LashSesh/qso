@@ -479,7 +479,7 @@ impl PyDensityMatrix {
 
     /// Run `circuit(theta)` on |0…0⟩⟨0…0|, inserting `noise` after every
     /// gate if given, or with the noise of `device` (its slow noise
-    /// averaged exactly).
+    /// averaged exactly, up to 12 qubits).
     #[staticmethod]
     #[pyo3(signature = (circuit, theta = None, noise = None, device = None))]
     fn simulate(
@@ -510,6 +510,8 @@ impl PyDensityMatrix {
     }
 
     /// Apply `circuit(theta)` (with optional `noise` or `device`) in place.
+    /// Slow noise of a device is averaged over its own draws in each call:
+    /// a circuit split over two calls loses its correlation in time.
     #[pyo3(signature = (circuit, theta = None, noise = None, device = None))]
     fn apply<'py>(
         mut slf: PyRefMut<'py, Self>,

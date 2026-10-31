@@ -300,12 +300,17 @@ density matrix per joint state of the telegraph processes of the qubits
 it acts on (2ᴷ of them for K such qubits). Quasi-static detunings and
 over-rotation spreads are averaged by Gauss quadrature (Hermite nodes for
 a normal distribution, Legendre nodes for a uniform one), with as many
-nodes as the error bound of the rule needs to stay below 10⁻¹³: a phase
+nodes as the error bound of the rule needs to stay below 10⁻¹³ (the
+rounding of the largest rules adds up to about 10⁻¹³ more): a phase
 `δ·T` with `σT = 10` takes 94 nodes. Markovian noise (relaxation, gate
 channels, crosstalk) applies to every one of these matrices as before.
 The work is the number of quadrature points times 2ᴷ density-matrix
-simulations, and is refused beyond 2·10¹¹ operations or 2²⁶ entries held
-at once; trajectories remain for those.
+simulations, each counted pass by pass (two per gate, `4ᵏ` per channel on
+`k` qubits), and is refused beyond 2·10¹¹ operations or 2²⁶ entries held
+at once, which is 12 qubits; trajectories remain for those. Each call
+averages over its own draws of the slow noise, starting at time 0: a
+circuit split over two `apply` calls is two experiments, and an echo
+split that way no longer refocuses a static detuning.
 
 ```python
 import math
@@ -336,8 +341,12 @@ frequency shift of every state (angular frequency), the switching rates
 `dephasing(t, pulses)` gives the coherence `⟨exp(−i∫f ν dt)⟩` of a qubit
 under ideal π pulses at the times `pulses` (`f = ±1` flips at each):
 `1ᵀ ∏ exp(Δ_k(W − i f_k diag ν)) p₀`, with the closed form of each period
-for telegraph processes. `Fluctuators` adds up independent processes,
-whose dephasing is the product of their factors, for any number of them;
+for telegraph processes and Ornstein–Uhlenbeck chains (the `K`-th power
+of one fluctuator's factor), Krylov steps otherwise. Krylov steps add the
+rounding of a stiff generator, about `10⁻¹⁶ ‖W‖ t` (10⁻⁹ at switching
+rates of 10⁶ over a unit time), and are refused beyond 10¹¹ operations.
+`Fluctuators` adds up independent processes, whose dephasing is the
+product of their factors, for any number of them;
 `Fluctuators.one_over_f(ν, γ_min, γ_max, count)` spreads the rates of
 `count` telegraph fluctuators evenly in their logarithm, a spectrum that
 falls as `1/ω` between `2γ_min` and `2γ_max`.
@@ -394,9 +403,11 @@ The checks:
 - Free induction and Hahn echo under telegraph noise follow the closed
   forms (Paladino et al. 2014) to 10⁻¹², from the static limit (γ = 0)
   through the crossover to switching ten thousand times faster than the
-  amplitude, with the closed-form propagator and with Krylov steps.
-- The Ehrenfest chain equals the product of its K fluctuators to 10⁻¹²
-  (free induction, echo and four π pulses, K up to 64); its correlation is
+  amplitude with the closed-form propagator, and for rates up to 2.5 by
+  Krylov steps too; values shifted off zero add the expected phase.
+- The Ehrenfest chain by Krylov steps equals the product of its K
+  fluctuators to 10⁻¹² (free induction, echo and four π pulses, K up to
+  64); its correlation is
   `σ² e^{−|τ|/τ_c}` to 10⁻¹²; its dephasing approaches Kubo's Gaussian
   forms with an error that falls as 1/K (K·error constant to 2 % from
   K = 256 to 4096).

@@ -3705,7 +3705,7 @@ ones; all are fixed.
   graphs closed under a permutation, by that permutation and by their
   whole group, and two particles on `Q₈` against the full walk of 1.29.
 
-### 1.44 — Slow noise, exactly averaged (M)
+### 1.44 — Slow noise, exactly averaged (M, delivered)
 
 Use case: dephasing by slow fluctuators (charge noise, 1/f flux noise)
 and by Ornstein–Uhlenbeck field noise, averaged exactly instead of over
@@ -3726,6 +3726,158 @@ Gaussian dephasing under Ornstein–Uhlenbeck noise follows Kubo's closed
 form as the levels grow, and its convergence is measured; 1.30's
 trajectory averages agree within their standard errors; quasi-static
 noise is the limit of slow switching.
+
+Delivered in `noise/slow.rs` (with `noise/mod.rs`, `noise/device.rs` and
+`backend.rs`):
+
+- **Markov processes.** `MarkovProcess` holds a value per state, the
+  switching rates and the distribution at time 0: `telegraph`,
+  `ornstein_uhlenbeck` (the Ehrenfest chain of `K` telegraph fluctuators
+  of amplitude `σ/√K` and rate `1/(2τ_c)`, binomially started, with an
+  exactly exponential correlation at every `K`), `quasi_static` (a Gauss
+  rule's nodes as states, its weights as probabilities) and `product`.
+- **Pure dephasing.** `dephasing(pulses, t)` is
+  `1ᵀ ∏ exp(Δ_k(W − i f_k diag ν)) p₀` for ideal π pulses, in closed form
+  per period for telegraph processes (written so that fast switching does
+  not overflow), by Krylov steps otherwise. `Fluctuators` multiplies the
+  factors of independent processes; `one_over_f` spreads the rates of
+  telegraph fluctuators evenly in their logarithm.
+- **Stochastic Liouville equation.** `StochasticLiouville` couples
+  independent processes to a system through Hermitian operators, with
+  Lindblad operators besides; `start`, `evolve` and `pulse` act on one
+  density matrix per joint state (`JointState`), propagated by the Krylov
+  steps of 1.41 on the sparse joint generator.
+- **Circuits.** `DensityMatrix::apply_device` averages the slow noise of a
+  device instead of refusing it (and with it `DensityMatrix.simulate`,
+  `DeviceBackend::density_matrix` and noise learning on density
+  matrices). Telegraph noise: one density matrix per joint state of the
+  telegraph processes of the qubits it acts on, each phase step of a
+  qubit coupling the pairs of matrices that differ in its process by the
+  2×2 propagator of each element class. Quasi-static detunings and
+  over-rotation spreads: the tensor grid of Gauss rules with as many
+  nodes as their error terms need for 10⁻¹³ per entry, the reach of each
+  parameter bounded by the time its qubit is turned or the angles its
+  rule turns.
+- In Python: `MarkovProcess`, `Fluctuators`, `StochasticLiouville`
+  (states as arrays of shape `(joint states, d, d)`); density matrices of
+  devices average slow noise.
+
+Changes to the plan:
+
+- **Quadrature for quasi-static noise.** A continuous distribution has no
+  finite set of states. The Gauss rules are exact to an a-priori bound:
+  the derivatives of every entry in the parameter are bounded by the
+  time the qubit turns (or the angles a rule turns), and the error terms
+  of the Hermite and Legendre rules then fix the nodes. A static
+  detuning with `σT = 10` takes 94 nodes.
+- **The density matrices themselves.** The plan named circuits on density
+  matrices; `apply_device` now does it rather than a new function, so
+  every user of density matrices with a device gains it.
+- **Krylov steps, not dense exponentials,** for the stochastic Liouville
+  equation: the joint generator of `n` process states and a system of
+  dimension `d` has `n·d²` rows but few entries per row.
+
+Not done, and why:
+
+- **The NV centre's noise** (1.37) is still sampled for telegraph noise:
+  its propagation runs on blocks of the nuclear spins in a rotating
+  frame, and joining it with joint process states belongs with the bath
+  of 1.45.
+- **Device models with other processes.** Devices carry the noise of
+  1.30 (telegraph, quasi-static); Ornstein–Uhlenbeck and 1/f processes on
+  qubits of a device would change the JSON schema, and the stochastic
+  Liouville equation serves them for explicit Hamiltonians.
+- **Sparse grids.** Several quasi-static parameters take the tensor grid
+  of their rules; beyond the work limit trajectories remain.
+- **Characteristic functions.** Every entry of the density matrix depends
+  on a static detuning or spread only through terms `e^{iωδ}`, so its
+  Gaussian average is a sum of `e^{−σ²ω²/2}`, without nodes. The review's
+  reference took 0.16 s for four qubits with telegraph noise on each,
+  three detunings and two spreads, where the tensor grid takes 38 to 54 s.
+  But the number of frequencies grows with the depth of the circuit, and
+  the grid keeps one a-priori bound for both distributions.
+
+Measured (four cores):
+
+- **Exact against sampled.** Three qubits with telegraph noise on two,
+  detunings on two, an over-rotation spread, `T₁`, `T₂` and gate noise
+  (ten gates): the exact average takes 25 ms; 20 000 trajectories take
+  0.16 s and leave a standard error of 0.002 on `⟨Z₀Z₂⟩` (0.0216 ± 0.0023
+  against the exact 0.0207).
+- **Eight qubits** with telegraph noise on four (16 density matrices of
+  4⁸ entries) and 69 gates: 1.3 s.
+- **Quadrature.** A static Gaussian detuning with `σT = 10` takes 94
+  nodes: `⟨Z⟩ = 5·10⁻¹⁵` against `e^{−50} = 2·10⁻²²`, within the bound of
+  10⁻¹³, in 1.4 ms.
+- **Stochastic Liouville equation.** Four driven, coupled qubits with
+  telegraph noise on each (16 joint states, 4096 coefficients) over
+  `t = 10`: 0.08 s.
+- **Fluctuators.** 1000 telegraph fluctuators under CPMG with 16 pulses:
+  0.8 ms. An Ehrenfest chain of 1001 levels by Krylov steps equals the
+  product of its 1000 factors to twelve digits (55 ms).
+- **Convergence to Kubo's form.** `K·error` stays constant to 2 % from
+  `K = 256` to 4096 (about 0.11 for the free induction at `t = 2`,
+  `σ = 1.3`, `τ_c = 0.7`).
+
+Review: an independent review confirmed the physics and found four
+moderate faults and six smaller ones; all are fixed or documented.
+
+- **The work of deep circuits.** The work limit counted one pass per
+  operation of the program, but one operation holds a whole run of gates
+  (two passes each), and a channel on `k` qubits costs `4ᵏ` passes. Ten
+  qubits with 2000 gates and a detuning of 94 nodes were accepted at an
+  estimate of 6·10⁸ operations and took 150 s, about 4·10¹¹. The estimate
+  now counts the passes of every gate and channel.
+- **Allocations before any limit.** The coefficients of a stochastic
+  Liouville equation (whose Krylov steps hold 34 vectors of `n·d²`) and
+  the rates of a product of processes were allocated unchecked, so
+  inputs within the documented limits aborted the Python process. Both
+  are now bounded before they are stored: 2²¹ coefficients, 2²⁴ rates.
+- **Krylov steps at fast switching.** The rounding of a stiff generator
+  grows as `10⁻¹⁶ ‖W‖ t`: an Ornstein–Uhlenbeck chain of 64 levels with
+  `τ_c = 10⁻⁷` missed its exact coherence by 7·10⁻⁸, and nothing bounded
+  the runtime (a chain with an amplitude of 10²⁰⁰ ran for minutes).
+  Ornstein–Uhlenbeck chains now take the `K`-th power of one fluctuator's
+  closed form, which is exact, and their mean and correlation in closed
+  form too. Other processes and the stochastic Liouville equation
+  estimate the work of their Krylov steps and are refused beyond 10¹¹
+  and 10¹² operations, and the rounding is documented. The README had
+  claimed 10⁻¹² by Krylov steps for switching 10⁴ times faster than the
+  amplitude, which the tests covered only up to rates of 2.5; it now says
+  that.
+- **Slow noise in split circuits.** Each `apply` call averages over its
+  own draws of the slow noise: an echo split over two calls does not
+  refocus a static detuning (`⟨Z⟩ = e^{−1}` instead of 1). This is what
+  the average means; the documentation now says so.
+- **Smaller faults.**
+  - The memory held at once was three to four times the documented 2²⁶
+    entries: each group of quadrature points held a sum and an average
+    besides its joint states. The sums now accumulate in place and the
+    bound counts them, so slow noise on density matrices reaches 12
+    qubits. The refusal says so; before, it spoke of telegraph noise on
+    0 qubits.
+  - The closed-form propagator squared `γτ` and `aτ` in complex
+    arithmetic and returned NaN or wrong values outside about 10^{±154}
+    (a gate of 10⁻³⁰⁰ s gave a density matrix of NaN). It now finds `μ`
+    in real arithmetic, scaled.
+  - `StochasticLiouville.pulse` accepted unitaries with NaN entries.
+  - The bound of 10⁻¹³ covers the truncation of the Gauss rules only;
+    their rounding adds up to 9·10⁻¹⁴ at 1024 nodes, as the
+    documentation now says.
+  - The Gauss rules were built before the work check (about a second for
+    a rule of 1024 nodes); now they are built after it.
+- **Checked and correct.**
+  - An independent reference averages detunings and spreads by their
+    characteristic functions and propagates telegraph noise with dense
+    exponentials. It agrees with the circuit runner to 3.3·10⁻¹⁴ over
+    about 450 random circuits on one to four qubits.
+  - 360 observables of 40 000 trajectories each lie within `|z| ≤ 3.7`
+    (rms 0.8).
+  - The stochastic Liouville generator equals a dense reference to
+    4.9·10⁻¹⁵.
+  - The closed form equals mpmath to 10⁻¹³ over 3000 near-critical cases.
+  - Results are bitwise identical on one to four threads.
+  - About 4500 fuzzed calls raised no panic.
 
 ### 1.45 — The NV bath with finite pulses (M)
 

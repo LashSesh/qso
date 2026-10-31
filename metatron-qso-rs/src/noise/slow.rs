@@ -49,7 +49,7 @@ use crate::error::{QsoError, Result};
 use crate::linalg::{CMatrix, RMatrix, eigh_real};
 use crate::parallel::map_tasks;
 use crate::quantum::{Instruction, Param, kernels};
-use crate::spin::krylov::{SparseBlock, expv};
+use crate::spin::krylov::{SparseBlock, expv, krylov_work};
 
 /// Most states of a [`MarkovProcess`], and most joint states of the
 /// processes of a [`StochasticLiouville`] equation.
@@ -62,24 +62,44 @@ pub const MAX_QUADRATURE_NODES: usize = 1024;
 /// Most fluctuators of [`Fluctuators`].
 pub const MAX_FLUCTUATORS: usize = 1 << 20;
 
+/// Most switching rates of a [`MarkovProcess`] (24 bytes each).
+pub const MAX_PROCESS_RATES: usize = 1 << 24;
+
+/// Most operations (estimated) of one propagation of a process by Krylov
+/// steps.
+pub const MAX_PROCESS_WORK: f64 = 1e11;
+
+/// Most coefficients `n·d²` of a [`StochasticLiouville`] equation (its
+/// Krylov steps hold 34 vectors of them, 16 bytes each: 1.1 GB).
+pub const MAX_LIOUVILLE_COEFFICIENTS: usize = 1 << 21;
+
+/// Most operations (estimated) of one propagation of a
+/// [`StochasticLiouville`] equation.
+pub const MAX_LIOUVILLE_WORK: f64 = 1e12;
+
 /// Most entries of the generator of a [`StochasticLiouville`] equation
 /// (an upper bound is checked before it is built; 20 bytes each).
 pub const MAX_LIOUVILLE_ENTRIES: usize = 1 << 25;
 
 /// Most density-matrix entries a circuit with slow noise holds at once
-/// (16 bytes each, 1 GiB).
+/// (16 bytes each, 1 GiB): the joint states and the sum of every group of
+/// quadrature points in flight, and the start. Slow noise on density
+/// matrices therefore reaches 12 qubits.
 pub const MAX_SLOW_ENTRIES: usize = 1 << 26;
 
-/// Most operations (density-matrix entries times steps, summed over the
-/// joint states and quadrature nodes) of a circuit with slow noise.
+/// Most operations (passes over density-matrix entries: two per gate,
+/// `4^k` per channel on `k` qubits, a few per phase step; summed over the
+/// joint states and quadrature points) of a circuit with slow noise.
 pub const MAX_SLOW_WORK: f64 = 2e11;
 
-/// Error of the quadrature over the quasi-static parameters of a circuit,
-/// bounded a priori for every entry of the density matrix.
+/// Truncation error of the quadrature over the quasi-static parameters of
+/// a circuit, bounded a priori for every entry of the density matrix (the
+/// rounding of the rules adds up to about 10⁻¹³ for the largest).
 pub const QUADRATURE_ERROR: f64 = 1e-13;
 
-/// Absolute error of a Krylov propagation in the 2-norm (states and
-/// probability vectors have norm at most 1).
+/// Absolute error of a Krylov step in the 2-norm (states and probability
+/// vectors have norm at most 1). The rounding of a stiff generator adds
+/// about `10⁻¹⁶ ‖W‖ t`.
 const KRYLOV_TOL: f64 = 1e-13;
 
 const ZERO: C64 = C64::new(0.0, 0.0);
@@ -101,6 +121,20 @@ pub struct MarkovProcess {
     /// `(from, to, rate)`, positive rates between different states.
     rates: Vec<(usize, usize, f64)>,
     initial: Vec<f64>,
+    kind: Kind,
+}
+
+/// What a process is known to be, for its closed forms.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Kind {
+    General,
+    /// The Ehrenfest chain of `fluctuators` telegraph processes of
+    /// `amplitude` flipping at `rate`, started stationary.
+    Ehrenfest {
+        amplitude: f64,
+        rate: f64,
+        fluctuators: usize,
+    },
 }
 
 impl MarkovProcess {
@@ -120,6 +154,12 @@ impl MarkovProcess {
         }
         if values.iter().any(|v| !v.is_finite()) {
             return Err(invalid("values", "the values must be finite"));
+        }
+        if rates.len() > MAX_PROCESS_RATES {
+            return Err(invalid(
+                "rates",
+                format!("at most {MAX_PROCESS_RATES} rates"),
+            ));
         }
         for &(from, to, rate) in &rates {
             if from >= n || to >= n || from == to {
@@ -152,6 +192,7 @@ impl MarkovProcess {
             values,
             rates: rates.into_iter().filter(|r| r.2 > 0.0).collect(),
             initial: initial.iter().map(|p| p / total).collect(),
+            kind: Kind::General,
         })
     }
 
@@ -218,7 +259,13 @@ impl MarkovProcess {
         for p in &mut initial {
             *p /= total;
         }
-        Self::new(values, rates, initial)
+        let mut process = Self::new(values, rates, initial)?;
+        process.kind = Kind::Ehrenfest {
+            amplitude: step,
+            rate,
+            fluctuators: k,
+        };
+        Ok(process)
     }
 
     /// Quasi-static noise: a constant drawn from `spread`, on the `nodes`
@@ -253,6 +300,19 @@ impl MarkovProcess {
                     format!("more than {MAX_PROCESS_STATES} joint states"),
                 )
             })?;
+        let count = self
+            .rates
+            .len()
+            .checked_mul(n2)
+            .zip(other.rates.len().checked_mul(n1))
+            .and_then(|(a, b)| a.checked_add(b))
+            .filter(|&c| c <= MAX_PROCESS_RATES)
+            .ok_or_else(|| {
+                invalid(
+                    "processes",
+                    format!("more than {MAX_PROCESS_RATES} joint rates"),
+                )
+            })?;
         let mut values = Vec::with_capacity(n);
         let mut initial = Vec::with_capacity(n);
         for i in 0..n1 {
@@ -261,7 +321,7 @@ impl MarkovProcess {
                 initial.push(self.initial[i] * other.initial[j]);
             }
         }
-        let mut rates = Vec::with_capacity(self.rates.len() * n2 + other.rates.len() * n1);
+        let mut rates = Vec::with_capacity(count);
         for &(from, to, rate) in &self.rates {
             for j in 0..n2 {
                 rates.push((from * n2 + j, to * n2 + j, rate));
@@ -299,6 +359,9 @@ impl MarkovProcess {
     /// The mean value `⟨ν(t)⟩`.
     pub fn mean(&self, t: f64) -> Result<f64> {
         check_time(t)?;
+        if let Kind::Ehrenfest { .. } = self.kind {
+            return Ok(0.0);
+        }
         let p = self.propagate(&self.initial_vector(), t, 0.0)?;
         Ok(self.values.iter().zip(&p).map(|(v, x)| v * x.re).sum())
     }
@@ -307,6 +370,14 @@ impl MarkovProcess {
     /// the correlation function).
     pub fn correlation(&self, tau: f64) -> Result<f64> {
         check_time(tau)?;
+        if let Kind::Ehrenfest {
+            amplitude,
+            rate,
+            fluctuators,
+        } = self.kind
+        {
+            return Ok(fluctuators as f64 * amplitude * amplitude * (-2.0 * rate * tau).exp());
+        }
         let start: Vec<C64> = self
             .values
             .iter()
@@ -334,23 +405,22 @@ impl MarkovProcess {
                 .sum());
         }
         if let Some((amplitude, shift, rate)) = self.symmetric_telegraph() {
-            // The closed form of each period (stable for any switching).
-            let mut p = [
-                C64::new(self.initial[0], 0.0),
-                C64::new(self.initial[1], 0.0),
-            ];
-            for (duration, sign) in periods {
-                // W − i f diag(shift ± a): the propagator's sign is −f.
-                let m = telegraph_propagator(amplitude, -sign * shift, rate, -sign, duration);
-                p = [
-                    m[0][0] * p[0] + m[0][1] * p[1],
-                    m[1][0] * p[0] + m[1][1] * p[1],
-                ];
-            }
-            return Ok(p[0] + p[1]);
+            return Ok(telegraph_dephasing(amplitude, shift, rate, &periods));
+        }
+        if let Kind::Ehrenfest {
+            amplitude,
+            rate,
+            fluctuators,
+        } = self.kind
+        {
+            // The chain is K independent fluctuators: the K-th power of one
+            // closed-form factor.
+            let one = telegraph_dephasing(amplitude, 0.0, rate, &periods);
+            return Ok(one.powu(fluctuators as u32));
         }
         // One generator per sign of f, built once.
         let (plus, minus) = (self.generator(1.0), self.generator(-1.0));
+        check_krylov(&plus, t)?;
         let mut p = self.initial_vector();
         for (duration, sign) in periods {
             if duration > 0.0 {
@@ -410,8 +480,42 @@ impl MarkovProcess {
         if t == 0.0 {
             return Ok(p.to_vec());
         }
-        expv(&self.generator(sign), p, t, KRYLOV_TOL, 0.0)
+        let block = self.generator(sign);
+        check_krylov(&block, t)?;
+        expv(&block, p, t, KRYLOV_TOL, 0.0)
     }
+}
+
+/// Refuse a Krylov propagation of a process beyond [`MAX_PROCESS_WORK`].
+fn check_krylov(block: &SparseBlock, t: f64) -> Result<()> {
+    let work = krylov_work(block.n, block.nnz(), block.norm_inf(), t);
+    if work.is_nan() || work > MAX_PROCESS_WORK {
+        return Err(invalid(
+            "process",
+            format!(
+                "Krylov steps over ‖W‖t = {:.1e} would take about {work:.1e} operations \
+                 (limit {MAX_PROCESS_WORK:.0e})",
+                block.norm_inf() * t
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// The coherence under a symmetric telegraph process (values `shift ±
+/// amplitude`, started stationary) over the periods, by the closed form
+/// of each.
+fn telegraph_dephasing(amplitude: f64, shift: f64, rate: f64, periods: &[(f64, f64)]) -> C64 {
+    let mut p = [C64::new(0.5, 0.0), C64::new(0.5, 0.0)];
+    for &(duration, sign) in periods {
+        // W − i f diag(shift ± a): the propagator's sign is −f.
+        let m = telegraph_propagator(amplitude, -sign * shift, rate, -sign, duration);
+        p = [
+            m[0][0] * p[0] + m[0][1] * p[1],
+            m[1][0] * p[0] + m[1][1] * p[1],
+        ];
+    }
+    p[0] + p[1]
 }
 
 /// The periods between `0`, the pulses and `t`, with the sign of `f`.
@@ -464,32 +568,53 @@ fn width(spread: &Spread) -> f64 {
 /// (values `shift ± a`, flipping at `rate` both ways), for the sign `s`
 /// of the phase (`−1` for the coherence `e^{−iφ}`, `±1` or 0 for the
 /// elements of a density matrix), in closed form:
-/// `e^{iσ·shift·τ}[C·I + S·((i s a τ, γτ), (γτ, −i s a τ))]` with
-/// `μ = τ√(γ² − s²a²)`, `C = e^{−γτ} cosh μ` and `S = e^{−γτ} sinh μ / μ`,
-/// written with `e^{μ−γτ}` and `e^{−μ−γτ}` so that neither fast switching
-/// nor long times overflow, and `μ − γτ = −s²a²τ²/(μ + γτ)` without
-/// cancellation.
+/// `e^{i·shift·τ}[C·I + S·((i s a τ, γτ), (γτ, −i s a τ))]` with
+/// `μ² = (γτ)² − (saτ)²`, `C = e^{−γτ} cosh μ` and `S = e^{−γτ} sinh μ / μ`.
+/// `μ` is real or imaginary and is found in real arithmetic, scaled, as
+/// `√((γτ − |x|)(γτ + |x|))`; `C` and `S` are written with `e^{μ−γτ}` and
+/// `e^{−μ−γτ}`, `μ − γτ = −x²/(μ + γτ)` without cancellation, so that
+/// neither fast switching nor long or tiny times overflow or lose the
+/// result.
 fn telegraph_propagator(a: f64, shift: f64, rate: f64, s: f64, tau: f64) -> [[C64; 2]; 2] {
     // Here `shift` carries the sign already: the common phase is e^{i shift τ}.
     let g = rate * tau;
     let x = s * a * tau;
-    let mu = C64::new(g * g - x * x, 0.0).sqrt();
-    let denominator = mu + g;
-    let up = if denominator.norm() > 0.0 {
-        C64::new(-x * x, 0.0) / denominator
+    let ax = x.abs();
+    let scale = g.max(ax);
+    let (product, mu) = if scale > 0.0 {
+        let p = ((g - ax) / scale) * ((g + ax) / scale);
+        (p, scale * p.abs().sqrt())
     } else {
-        ZERO
+        (0.0, 0.0)
     };
-    let down = -mu - g;
-    let (eu, ed) = (up.exp(), down.exp());
-    let c = 0.5 * (eu + ed);
-    let sh = if mu.norm() > 1e-3 {
-        (eu - ed) / (2.0 * mu)
+    let decay = (-g).exp();
+    let (c, sh) = if product >= 0.0 {
+        // μ real, 0 ≤ μ ≤ γτ: e^{μ−γτ} with μ − γτ = −x²/(μ + γτ).
+        let up = if mu + g > 0.0 {
+            -ax * (ax / (mu + g))
+        } else {
+            0.0
+        };
+        let (eu, ed) = (up.exp(), (-mu - g).exp());
+        let sh = if mu > 1e-3 {
+            (eu - ed) / (2.0 * mu)
+        } else {
+            let m2 = mu * mu;
+            decay * (1.0 + m2 / 6.0 + m2 * m2 / 120.0 + m2 * m2 * m2 / 5040.0)
+        };
+        (0.5 * (eu + ed), sh)
     } else {
-        // e^{−γτ}(1 + μ²/6 + μ⁴/120 + μ⁶/5040).
-        let m2 = mu * mu;
-        C64::new((-g).exp(), 0.0) * (1.0 + m2 / 6.0 + m2 * m2 / 120.0 + m2 * m2 * m2 / 5040.0)
+        // μ = i w: C = e^{−γτ} cos w, S = e^{−γτ} sin(w)/w.
+        let w = mu;
+        let sinc = if w > 1e-3 {
+            w.sin() / w
+        } else {
+            let w2 = w * w;
+            1.0 - w2 / 6.0 + w2 * w2 / 120.0 - w2 * w2 * w2 / 5040.0
+        };
+        (decay * w.cos(), decay * sinc)
     };
+    let (c, sh) = (C64::new(c, 0.0), C64::new(sh, 0.0));
     let phase = C64::from_polar(1.0, shift * tau);
     [
         [phase * (c + sh * I * x), phase * sh * g],
@@ -789,6 +914,18 @@ impl StochasticLiouville {
                     )
                 })?;
         }
+        if joint
+            .checked_mul(dimension * dimension)
+            .is_none_or(|c| c > MAX_LIOUVILLE_COEFFICIENTS)
+        {
+            return Err(invalid(
+                "dimension",
+                format!(
+                    "{joint} joint states of a {dimension}-level system exceed \
+                     {MAX_LIOUVILLE_COEFFICIENTS} coefficients"
+                ),
+            ));
+        }
         let mut strides = vec![1usize; processes.len()];
         for k in (0..processes.len().saturating_sub(1)).rev() {
             strides[k] = strides[k + 1] * processes[k + 1].0.num_states();
@@ -880,6 +1017,16 @@ impl StochasticLiouville {
             return Ok(state.clone());
         }
         let block = self.generator(hamiltonian)?;
+        let work = krylov_work(block.n, block.nnz(), block.norm_inf(), t);
+        if work.is_nan() || work > MAX_LIOUVILLE_WORK {
+            return Err(invalid(
+                "t",
+                format!(
+                    "Krylov steps would take about {work:.1e} operations (limit \
+                     {MAX_LIOUVILLE_WORK:.0e})"
+                ),
+            ));
+        }
         let data = expv(&block, &state.data, t, KRYLOV_TOL, 0.0)?;
         Ok(JointState { d: self.d, data })
     }
@@ -893,6 +1040,12 @@ impl StochasticLiouville {
                 expected: self.d,
                 actual: unitary.nrows(),
             });
+        }
+        if unitary
+            .iter()
+            .any(|z| !(z.re.is_finite() && z.im.is_finite()))
+        {
+            return Err(invalid("unitary", "entries must be finite"));
         }
         let product = unitary.adjoint() * unitary;
         let off = (0..self.d)
@@ -1030,9 +1183,11 @@ impl StochasticLiouville {
     }
 }
 
-/// A quasi-static parameter of a circuit: one value per node of its Gauss
-/// rule.
+/// A quasi-static parameter of a circuit: its distribution and the nodes
+/// of its Gauss rule (built once the work is known to be within limits).
 struct Parameter {
+    spread: Spread,
+    count: usize,
     nodes: Vec<f64>,
     weights: Vec<f64>,
 }
@@ -1119,9 +1274,13 @@ impl Plan {
                     ),
                 )
             })?;
-            let (nodes, weights) = gauss_rule(s, m);
             points = points.saturating_mul(m);
-            parameters.push(Parameter { nodes, weights });
+            parameters.push(Parameter {
+                spread: *s,
+                count: m,
+                nodes: Vec::new(),
+                weights: Vec::new(),
+            });
         }
         Ok(Plan {
             bit,
@@ -1131,6 +1290,13 @@ impl Plan {
             parameters,
             points,
         })
+    }
+
+    /// The Gauss rules of the parameters.
+    fn build_rules(&mut self) {
+        for par in &mut self.parameters {
+            (par.nodes, par.weights) = gauss_rule(&par.spread, par.count);
+        }
     }
 
     /// The values of the parameters at quadrature point `p` (the first
@@ -1152,23 +1318,40 @@ impl Plan {
 /// over the telegraph processes and by Gauss quadrature over the
 /// quasi-static parameters (see the module documentation).
 pub(crate) fn run_program(rho: &mut DensityMatrix, program: &Program) -> Result<()> {
-    let plan = Plan::new(program)?;
+    let mut plan = Plan::new(program)?;
     let entries = rho.data.len();
+    // A group of points in flight holds a density matrix per joint state
+    // and its sum; besides, the start.
     let joint = 1usize
         .checked_shl(plan.telegraph.len() as u32)
-        .filter(|j| j.saturating_mul(entries) <= MAX_SLOW_ENTRIES)
+        .filter(|j| (j + 2).saturating_mul(entries) <= MAX_SLOW_ENTRIES)
         .ok_or_else(|| {
             invalid(
                 "device",
                 format!(
-                    "telegraph noise on {} qubits needs 2^{} density matrices of {entries} \
-                     entries, more than {MAX_SLOW_ENTRIES} in all",
+                    "slow noise on {} qubits with telegraph noise on {} of them needs \
+                     {} density matrices of {entries} entries at once, more than \
+                     {MAX_SLOW_ENTRIES} entries in all (12 qubits at most)",
+                    rho.n_qubits,
                     plan.telegraph.len(),
-                    plan.telegraph.len()
+                    (1u128 << plan.telegraph.len().min(100)) + 2,
                 ),
             )
         })?;
-    let work = plan.points as f64 * joint as f64 * entries as f64 * (program.ops.len() + 1) as f64;
+    // Passes over the entries of one density matrix: two per gate (rows
+    // and columns), 4^k per channel on k qubits, a few per phase step.
+    let passes: f64 = 1.0
+        + program
+            .ops
+            .iter()
+            .map(|op| match op {
+                Op::Gates(c) => 2.0 * c.instructions().len() as f64,
+                Op::Channel { qubits, .. } => 4f64.powi(qubits.len() as i32),
+                Op::Phase { .. } => 4.0,
+                Op::SpreadGate { .. } => 2.0,
+            })
+            .sum::<f64>();
+    let work = plan.points as f64 * joint as f64 * entries as f64 * passes;
     if work > MAX_SLOW_WORK {
         return Err(invalid(
             "device",
@@ -1180,28 +1363,27 @@ pub(crate) fn run_program(rho: &mut DensityMatrix, program: &Program) -> Result<
             ),
         ));
     }
+    plan.build_rules();
     // Groups of quadrature points, fixed by their number alone, run in
     // parallel; their sums are added in order (the same result on any
-    // number of threads).
+    // number of threads). Each holds `joint + 1` density matrices.
     let groups = plan
         .points
         .min(64)
-        .min((MAX_SLOW_ENTRIES / (joint * entries)).max(1));
+        .min(((MAX_SLOW_ENTRIES / entries - 1) / (joint + 1)).max(1));
     let per_group = plan.points.div_ceil(groups);
     let partial: Vec<Vec<C64>> = map_tasks(groups, |g| {
         let mut sum = vec![ZERO; entries];
         for p in g * per_group..((g + 1) * per_group).min(plan.points) {
             let (values, weight) = plan.point(p);
-            let average = run_point(rho, program, &plan, &values, joint);
-            for (s, z) in sum.iter_mut().zip(&average) {
-                *s += z * weight;
-            }
+            run_point(rho, program, &plan, &values, joint, weight, &mut sum);
         }
         sum
     });
-    let mut total = vec![ZERO; entries];
-    for part in &partial {
-        for (s, z) in total.iter_mut().zip(part) {
+    let mut parts = partial.into_iter();
+    let mut total = parts.next().expect("at least one group");
+    for part in parts {
+        for (s, z) in total.iter_mut().zip(&part) {
             *s += z;
         }
     }
@@ -1211,14 +1393,16 @@ pub(crate) fn run_program(rho: &mut DensityMatrix, program: &Program) -> Result<
 
 /// The program at one quadrature point: one density matrix per joint state
 /// of the telegraph processes (starting stationary, so each holds
-/// `ρ/2^K`), their sum at the end.
+/// `ρ/2^K`), their sum added to `sum` with `weight`.
 fn run_point(
     rho: &DensityMatrix,
     program: &Program,
     plan: &Plan,
     values: &[f64],
     joint: usize,
-) -> Vec<C64> {
+    weight: f64,
+    sum: &mut [C64],
+) {
     let n = rho.n_qubits;
     let mut start = rho.clone();
     start.scale(1.0 / joint as f64);
@@ -1314,13 +1498,11 @@ fn run_point(
             }
         }
     }
-    let mut sum = vec![ZERO; rho.data.len()];
     for state in &states {
         for (s, z) in sum.iter_mut().zip(&state.data) {
-            *s += z;
+            *s += z * weight;
         }
     }
-    sum
 }
 
 #[cfg(test)]

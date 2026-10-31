@@ -150,11 +150,23 @@ fn the_telegraph_propagator_is_the_exponential() {
     assert!((sum - c((-1.5e-8f64).exp())).norm() < 1e-15);
 }
 
+/// The same process without its closed forms (Krylov steps).
+fn general(p: &MarkovProcess) -> MarkovProcess {
+    MarkovProcess::new(
+        p.values().to_vec(),
+        p.rates().to_vec(),
+        p.initial().to_vec(),
+    )
+    .unwrap()
+}
+
 #[test]
 fn ornstein_uhlenbeck_noise_is_a_product_of_fluctuators_and_tends_to_kubo() {
     let (sigma, tc) = (1.3, 0.7);
     for k in [1usize, 4, 16, 64] {
-        let chain = MarkovProcess::ornstein_uhlenbeck(sigma, tc, k + 1).unwrap();
+        // The chain by Krylov steps on its generator, against the product
+        // of K closed-form factors that its own dephasing uses.
+        let chain = general(&MarkovProcess::ornstein_uhlenbeck(sigma, tc, k + 1).unwrap());
         let one = MarkovProcess::telegraph(sigma / (k as f64).sqrt(), 0.5 / tc).unwrap();
         for t in [0.5, 2.0] {
             let cpmg: Vec<f64> = (0..4).map(|j| (j as f64 + 0.5) * t / 4.0).collect();
@@ -165,11 +177,14 @@ fn ornstein_uhlenbeck_noise_is_a_product_of_fluctuators_and_tends_to_kubo() {
             }
         }
         // The correlation is exponential at every K.
+        let tagged = MarkovProcess::ornstein_uhlenbeck(sigma, tc, k + 1).unwrap();
         for tau in [0.0, 0.3, 2.0] {
             let expected = sigma * sigma * (-tau / tc).exp();
             assert!((chain.correlation(tau).unwrap() - expected).abs() < 1e-12);
+            assert!((tagged.correlation(tau).unwrap() - expected).abs() < 1e-12);
         }
         assert!(chain.mean(1.0).unwrap().abs() < 1e-12);
+        assert_eq!(tagged.mean(1.0).unwrap(), 0.0);
     }
     // The error against Kubo's Gaussian forms falls as 1/K: K·error tends
     // to a constant (from the product of exact factors, K up to 4096).
@@ -206,6 +221,26 @@ fn quasi_static_noise_is_the_limit_of_slow_switching() {
         assert!((frozen.dephasing(&[], t).unwrap() - c((0.8 * t).cos())).norm() < 1e-14);
         assert!((frozen.dephasing(&[t / 2.0], t).unwrap() - c(1.0)).norm() < 1e-14);
     }
+    // Times and rates at the edges of floating point stay finite.
+    let p = MarkovProcess::telegraph(1.0, 1.0).unwrap();
+    assert!((p.dephasing(&[], 1e-300).unwrap() - c(1.0)).norm() < 1e-15);
+    for (a, g, t) in [
+        (1.0, 1e154, 1.0),
+        (1.0, 1e200, 1.0),
+        (1e200, 1.0, 1.0),
+        (1.0, 1.0, 1e200),
+    ] {
+        let d = MarkovProcess::telegraph(a, g)
+            .unwrap()
+            .dephasing(&[], t)
+            .unwrap();
+        assert!(
+            d.re.is_finite() && d.im.is_finite() && d.norm() <= 1.0 + 1e-12,
+            "{a} {g} {t}: {d}"
+        );
+    }
+    let fast = MarkovProcess::telegraph(1.0, 1e154).unwrap();
+    assert!((fast.dephasing(&[], 1.0).unwrap() - c(1.0)).norm() < 1e-15);
     // Slow switching approaches it linearly in the rate.
     let t = 3.0;
     let errors: Vec<f64> = [1e-2, 1e-3, 1e-4]
@@ -795,6 +830,51 @@ fn markovian_parts_and_limits() {
 }
 
 #[test]
+fn work_and_memory_are_bounded() {
+    // A deep circuit counts every gate: 2000 gates on ten qubits with a
+    // strong detuning (94 nodes) are refused before they run.
+    let deep = DeviceModel::new("deep")
+        .with_qubit(
+            0,
+            QubitProperties::new().with_detuning(Spread::Gaussian { sigma: 1.0 }),
+        )
+        .with_rule(GateRule::for_gate("id").with_duration(10.0));
+    let mut c = Circuit::new(10);
+    c.h(0).id(0);
+    for k in 0..2000 {
+        c.ry(1 + k % 9, 0.1);
+    }
+    let mut rho = DensityMatrix::zero(10).unwrap();
+    let err = rho.apply_device(&c, &[], &deep).unwrap_err();
+    assert!(err.to_string().contains("operations"), "{err}");
+    // Joint rates and Liouville coefficients are bounded before anything
+    // is allocated, and Krylov steps before they run.
+    let dense = MarkovProcess::new(
+        vec![0.0; 64],
+        (0..64)
+            .flat_map(|i| (0..64).filter(move |&j| j != i).map(move |j| (i, j, 1.0)))
+            .collect(),
+        vec![1.0 / 64.0; 64],
+    )
+    .unwrap();
+    let chain = MarkovProcess::ornstein_uhlenbeck(1.0, 1.0, 4096).unwrap();
+    assert!(dense.product(&chain).is_err());
+    let nodes = MarkovProcess::quasi_static(Spread::Gaussian { sigma: 1.0 }, 1024).unwrap();
+    let wide = nodes.product(&nodes).unwrap();
+    assert!(StochasticLiouville::new(2, vec![(wide, pauli(3))]).is_err());
+    let huge = general(&MarkovProcess::ornstein_uhlenbeck(1e200, 3.41, 3).unwrap());
+    assert!(huge.dephasing(&[], 3.86).is_err());
+    assert!(
+        MarkovProcess::ornstein_uhlenbeck(1e200, 3.41, 3)
+            .unwrap()
+            .dephasing(&[], 3.86)
+            .unwrap()
+            .norm()
+            .is_finite()
+    );
+}
+
+#[test]
 fn invalid_input() {
     assert!(MarkovProcess::new(vec![], vec![], vec![]).is_err());
     assert!(MarkovProcess::new(vec![f64::NAN], vec![], vec![1.0]).is_err());
@@ -824,5 +904,7 @@ fn invalid_input() {
     assert!(sle.evolve(&start, &not_hermitian, 1.0).is_err());
     assert!(sle.evolve(&start, &pauli(1), -1.0).is_err());
     assert!(sle.pulse(&start, &(pauli(1) * c(2.0))).is_err());
+    let nan = CMatrix::from_row_slice(2, 2, &[c(f64::NAN), c(0.0), c(0.0), c(1.0)]);
+    assert!(sle.pulse(&start, &nan).is_err());
     assert!(sle.start(&CMatrix::zeros(3, 3)).is_err());
 }
