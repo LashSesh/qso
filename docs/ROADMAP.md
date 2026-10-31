@@ -15,7 +15,9 @@ finished milestones are released together, not one by one. The third
 (1.26 to 1.28) stages ship together as release 1.7.0. The seventh
 (1.29 to 1.33, section 4g) and eighth (1.34 to 1.37, magnetic resonance
 for medical research, section 4h) stages ship together as release
-1.8.0. The ninth stage (1.38 to 1.42, section 4i) is delivered. Up to 1.3
+1.8.0. The ninth stage (1.38 to 1.42, section 4i) is delivered; the
+tenth (1.43 to 1.47, section 4j) is planned, and both ship together as
+one release. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -3550,6 +3552,139 @@ exact reference. Mixed Gaussian states with many photons in many modes,
 whose exact methods stay exponential. Noise learning for layers of
 non-Clifford gates. The GPU track, still parked (section 7).
 
+## 4j. Tenth stage (1.43 to 1.47)
+
+Planned October 2026, after the ninth stage, from the gaps that remain
+in the table of section 1. As before, the stage starts with walks on
+graphs. Two milestones then make QSO's averages over slow noise and over
+nuclear-spin baths exact where they are sampled or truncated today, one
+carries optimal control to the spin systems that 1.41 can propagate,
+and the last uses the symmetry of error models for the one circuit
+distance that 1.42 left open. The rules stay: no new dependency of the
+crate, an independent reference for every deliverable, reference tools
+in the cross-validation only. The ninth and tenth stages ship together
+as one release.
+
+### 1.43 — Interacting walkers on symmetric graphs (M)
+
+Use case: few-body dynamics on graphs too large for the occupation
+basis of 1.29, which stops at 2²² configurations: Bose–Hubbard pairs and
+triples on lattices and hypercubes, and certificates of graph
+isomorphism with more particles or larger graphs. A walk that starts in
+a state invariant under a group of automorphisms (for example, the
+stabilizer of the occupied nodes) stays in the invariant subspace, whose
+dimension is about the number of configurations divided by the group's
+order.
+
+| Deliverable | Detail |
+|---|---|
+| Orbits of configurations | the orbits of a permutation group of the nodes on the configurations of N bosons, fermions (with the sign of the permutation, so that orbits fixed with sign −1 drop out) or distinguishable particles; groups from the graph's automorphisms or its stabilizers (1.38) |
+| Reduced walks | the Hamiltonian of 1.29 (hopping, U, V) on the orbits, evolution, densities, pair correlations and configuration probabilities lifted back; the stabilizer of the start found automatically |
+| Hypercubes | N particles on `Q_d` started at one node, on orbits of coordinate permutations written down directly (as `HypercubeOpenWalk` of 1.38), without building the graph |
+| Certificates | the certificates of 1.29 from orbit representatives of the start configurations only |
+| Limits | orbits found within a stated number of configurations; work and memory estimated before anything is built |
+
+Validation: equal to the full occupation basis of 1.29 wherever both run
+(random graphs with automorphisms, strongly regular graphs, hypercubes up
+to `Q₈`, all three statistics, with U and V); free particles equal the
+permanents and determinants of the single-walker propagator, on `Q_d`
+from its closed form; two bosons on a ring follow the closed-form
+dispersion of bound pairs, `E(K) = ±√(U² + 16J²cos²(K/2))` (Winkler et
+al., Nature 441, 853 (2006)); certificates equal those of 1.29.
+
+### 1.44 — Slow noise, exactly averaged (M)
+
+Use case: dephasing by slow fluctuators (charge noise, 1/f flux noise)
+and by Ornstein–Uhlenbeck field noise, averaged exactly instead of over
+sampled trajectories. 1.30 samples telegraph and quasi-static noise on
+trajectories; their averages carry a statistical error that hides the
+plateaus and beats of non-Gaussian noise.
+
+| Deliverable | Detail |
+|---|---|
+| Stochastic Liouville equation | Kubo's equation for a classical Markov process with finitely many states and the system together: one density matrix per state of the process, coupled by the switching rates (Kubo, J. Math. Phys. 4, 174 (1963)) |
+| Processes | random telegraph processes, several independent fluctuators, Ornstein–Uhlenbeck noise as the limit of a birth–death chain with a stated number of levels, and 1/f noise as fluctuators with log-uniform rates; pure dephasing by independent fluctuators as products of their exact factors |
+| Circuits | the slow noise of 1.30 on density matrices, exactly averaged, for circuits within the density-matrix limit |
+
+Validation: free induction and echo decay under one telegraph fluctuator
+follow the closed forms (Paladino, Galperin, Falci and Altshuler, Rev.
+Mod. Phys. 86, 361 (2014)), from motional narrowing to the static limit;
+Gaussian dephasing under Ornstein–Uhlenbeck noise follows Kubo's closed
+form as the levels grow, and its convergence is measured; 1.30's
+trajectory averages agree within their standard errors; quasi-static
+noise is the limit of slow switching.
+
+### 1.45 — The NV bath with finite pulses (M)
+
+Use case: the coherence of an NV centre under realistic decoupling,
+whose π pulses last tens of nanoseconds, at low fields where the
+electron and the nuclei mix, and in baths where the expansion of 1.39
+diverges. The generalised cluster-correlation expansion keeps the
+electron in every cluster (Onizhuk et al., PRX Quantum 2, 010311
+(2021)).
+
+| Deliverable | Detail |
+|---|---|
+| Generalised expansion | the electron and each cluster of up to eight nuclei propagated together, the coherence as the product over clusters of their irreducible contributions |
+| Finite pulses | rectangular and shaped pulses of 1.37 within every cluster, with the full hyperfine tensor (its non-secular terms included) and fields of any direction (1.40) |
+| Bath | the diamond baths of 1.39, given couplings for the nuclei next to the vacancy, averages over bath configurations |
+
+Validation: equal to the exact propagation of the electron and the whole
+bath for baths of up to eight nuclei, with ideal and finite pulses;
+equal to the expansion of 1.39 where that converges and the pulses are
+ideal; PyCCE's generalised expansion (ideal pulses) on natural baths in
+the cross-validation; convergence with the cluster size where the
+expansion of 1.39 diverges.
+
+### 1.46 — Optimal control of larger spin systems (M–L)
+
+Use case: optimal pulses for the spin systems 1.41 can propagate:
+¹³C-labelled metabolites with all their protons, polarisation transfer
+in networks of seven and eight spins with relaxation. 1.36 optimises in
+dense Liouville space, up to six spins.
+
+| Deliverable | Detail |
+|---|---|
+| Gradients on sparse blocks | the GRAPE objectives of 1.36 with exact gradients on the sparse blocks of 1.41: each slice's derivative from the exponential of an augmented block matrix applied to a vector by Krylov steps (Van Loan, IEEE Trans. Autom. Control 23, 395 (1978); Goodwin and Kuprov, J. Chem. Phys. 143, 084113 (2015)) |
+| Symmetry | controls that respect declared equivalent spins (1.41) optimised on the orbits |
+| Limits | work and memory per iteration estimated before anything is built |
+
+Validation: gradients equal 1.36's dense gradients up to six spins and
+central differences beyond; with relaxation off, transfer stays below
+the unitary bound and reaches it where 1.36 does; optimised pulses
+propagated afterwards by the dense or the Krylov propagation give the
+objective that the optimiser reported.
+
+### 1.47 — Circuit distances by symmetry (M)
+
+Use case: the circuit distance of [[144, 12, 12]] with the depth-8 cycle,
+which 1.42 bounds between 9 and 11 after twenty minutes. Its error model
+inherits the code's translations, 72 of them, and a logical error moved
+by one is still a logical error, so the exhaustive search need only start
+from one error of each orbit.
+
+| Deliverable | Detail |
+|---|---|
+| Symmetries of error models | the permutations of errors and detectors that keep which detectors each error flips, from QSO's automorphism search on the error model's bipartite graph or declared; each checked to map the undetectable sets that flip no observable onto themselves, so that logical errors map to logical errors |
+| Search on orbits | the exhaustive search of 1.42 started only from the first error of each orbit, with its other errors of higher index, which still meets an image of every logical error |
+| Distance | the circuit distance of [[144, 12, 12]] over three rounds of the depth-8 cycle, or the bounds a stated time reaches |
+
+Validation: the same distances with and without symmetry where both run
+([[72, 12, 6]], [[90, 8, 10]] and [[108, 8, 10]] circuits, code capacity,
+random symmetric models against enumeration); Stim's exhaustive search
+on small symmetric circuits; declared symmetries that do not hold are
+refused. The result for [[144, 12, 12]] is set against Bravyi et al.'s
+bound `d_circ ≤ 10` (Nature 627, 778 (2024)), which holds under their
+noise model, with idle errors that QSO's model lacks.
+
+### Not in this stage
+
+Leakage out of the qubit space, which needs qudits in every simulator.
+Pretty good state transfer outside the cyclotomic families, which has no
+exact reference. Mixed Gaussian states with many photons in many modes,
+whose exact methods stay exponential. Noise learning for layers of
+non-Clifford gates. The GPU track, still parked (section 7).
+
 ## 5. Order and reasoning
 
 1. **1.2 first:** small, made every later release safer, and documentation
@@ -3629,6 +3764,14 @@ non-Clifford gates. The GPU track, still parked (section 7).
     Relaxation of larger spin systems (1.41) lifts the six-spin limit of
     1.34 to 1.36, and exact circuit distances (1.42) close the last gap of
     the error-correction row; neither depends on the others.
+18. **Tenth stage: walks first again, then exact averages.** Interacting
+    walkers on symmetric graphs (1.43) join the many-particle walks of
+    1.29 to the symmetry of 1.38. Slow noise exactly averaged (1.44)
+    comes before the NV bath with finite pulses (1.45), because both
+    replace sampled or truncated averages and the second reuses the
+    first's tests of convergence. Optimal control of larger systems
+    (1.46) needs the sparse blocks of 1.41, and circuit distances by
+    symmetry (1.47) the search of 1.42; neither depends on the others.
 
 ## 6. Measures of success
 
@@ -3710,6 +3853,12 @@ Taken (October 2026):
   relaxation of larger spin systems (1.41), exact distances of
   error-correcting circuits (1.42). PyCCE joins QuTiP and Stim as a
   reference of the cross-validation only; leakage stays out.
+* Tenth stage (October 2026, accepted as proposed): interacting walkers
+  on symmetric graphs (1.43), slow noise exactly averaged (1.44), the NV
+  bath with finite pulses by the generalised cluster-correlation
+  expansion (1.45), optimal control of larger spin systems (1.46),
+  circuit distances by symmetry (1.47). The ninth and tenth stages ship
+  together as one release.
 * The browser playground stays, because it costs little to maintain: it
   is plain HTML and JavaScript without dependencies or a build step, it
   uses only the npm package's JSON interface, which the package's tests
