@@ -93,7 +93,7 @@ pub struct Orbitals {
     sizes: Vec<u32>,
 }
 
-fn check_permutation(n: usize, p: &[usize], k: usize) -> Result<()> {
+pub(crate) fn check_permutation(n: usize, p: &[usize], k: usize) -> Result<()> {
     if p.len() != n {
         return Err(QsoError::invalid(
             "symmetries",

@@ -608,3 +608,72 @@ fn many_sites_are_enumerated_quickly() {
     assert_eq!(f.index_of(&[1998, 1999]).unwrap(), f.dimension() - 1);
     assert!(start.elapsed().as_secs_f64() < 30.0);
 }
+
+#[test]
+fn certificates_from_orbit_representatives() {
+    // Two interacting bosons on the strongly regular graphs of 1.29: one
+    // start per orbit of the automorphisms gives the whole certificate,
+    // with dense and with Krylov rows.
+    let times = [0.7, 2.0];
+    for g in [
+        generators::shrikhande(),
+        generators::rook(4, 4).unwrap(),
+        generators::chang(1).unwrap(),
+        generators::petersen(),
+    ] {
+        let group = g.automorphism_group();
+        for statistics in ALL {
+            let w = InteractingWalk::new(&g, Generator::Adjacency, 1.0, statistics, 2)
+                .unwrap()
+                .with_interaction(1.0, 0.3)
+                .unwrap();
+            let full = w.certificate(&times).unwrap();
+            let tolerance = w.certificate_tolerance(&times).unwrap();
+            for krylov in [false, true] {
+                let reduced = w
+                    .orbit_certificate(&times, group.generators(), krylov)
+                    .unwrap();
+                let distance = certificate_distance(&full, &reduced);
+                assert!(distance < tolerance, "{statistics:?} {krylov}: {distance}");
+            }
+        }
+    }
+    // Beyond the dense limit: two bosons on Q₆ (2080 configurations) and a
+    // relabelled copy agree, where the dense certificate is refused.
+    let q6 = generators::hypercube(6);
+    let mut rng = Rng::seed_from_u64(9);
+    let mut relabel: Vec<usize> = (0..64).collect();
+    for i in (1..64).rev() {
+        relabel.swap(i, rng.below(i as u64 + 1) as usize);
+    }
+    let edges: Vec<(usize, usize, f64)> = q6
+        .edges()
+        .iter()
+        .map(|&(u, v, w)| (relabel[u], relabel[v], w))
+        .collect();
+    let copy = Graph::from_weighted_edges(64, &edges).unwrap();
+    let certificate = |g: &Graph| {
+        let w = InteractingWalk::new(g, Generator::Adjacency, 1.0, Statistics::Bosons, 2)
+            .unwrap()
+            .with_interaction(1.0, 0.0)
+            .unwrap();
+        assert!(w.certificate(&[1.0]).is_err());
+        let c = w
+            .certificate_by_orbits(&[1.0], g.automorphism_group().generators())
+            .unwrap();
+        (c, w.certificate_tolerance(&[1.0]).unwrap())
+    };
+    let (a, tolerance) = certificate(&q6);
+    let (b, _) = certificate(&copy);
+    assert_eq!(a.len(), 2080 * 2080);
+    assert!(certificate_distance(&a, &b) < tolerance);
+    // Each row is a probability distribution (Krylov steps keep the norm
+    // to about 10⁻¹¹).
+    let total: f64 = a.iter().sum();
+    assert!((total - 2080.0).abs() < 1e-7, "{total}");
+    // A permutation that is no automorphism is refused.
+    let w = InteractingWalk::new(&q6, Generator::Adjacency, 1.0, Statistics::Bosons, 2).unwrap();
+    let mut swap: Vec<usize> = (0..64).collect();
+    swap.swap(0, 3);
+    assert!(w.certificate_by_orbits(&[1.0], &[swap]).is_err());
+}
