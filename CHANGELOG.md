@@ -120,7 +120,28 @@ All notable changes to this project are documented here. The format follows
     per orbit of the automorphisms, 37 times faster on the Paley graph of
     order 61 and beyond the dense limit, up to 8192 configurations.
 
+- **Slow noise, averaged exactly** (1.44, `noise::slow`): classical
+  Markov processes with finitely many states (`MarkovProcess`: telegraph
+  noise, Ornstein–Uhlenbeck noise as the Ehrenfest chain of `K`
+  fluctuators, quasi-static noise on the nodes of a Gauss rule, products
+  of independent processes), the exact coherence under ideal π pulses
+  (`dephasing`), independent fluctuators whose factors multiply
+  (`Fluctuators`, 1/f noise from rates spread evenly in their logarithm)
+  and Kubo's stochastic Liouville equation (`StochasticLiouville`: one
+  density matrix per joint state of the processes, Krylov steps on the
+  sparse generator). In Python: `MarkovProcess`, `Fluctuators`,
+  `StochasticLiouville`.
+
 ### Changed
+
+- **Density matrices average slow noise** (1.44):
+  `DensityMatrix::apply_device`, `DensityMatrix.simulate` with a device
+  and `DeviceBackend::density_matrix` no longer refuse quasi-static
+  detunings, telegraph noise and over-rotation spreads. Telegraph noise
+  is averaged exactly over the joint states of its processes,
+  quasi-static noise by Gauss quadrature with an a-priori error below
+  10⁻¹³ per entry. Noise learning on density matrices accepts such
+  devices too (on Pauli frames it still refuses them).
 
 - **The Hamiltonian of interacting walkers** is built one configuration
   at a time by shared code (1.43). `certificate_tolerance` bounds `‖H‖` by

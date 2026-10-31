@@ -36,9 +36,10 @@
 //! [`TrajectorySimulator`](super::TrajectorySimulator) draws them once and
 //! turns a qubit by `RZ` of its accumulated phase for every time it spends
 //! in gates or waiting (during a gate, half before and half after it).
-//! Density matrices
-//! cannot represent this and refuse such devices
-//! ([`DeviceModel::is_markovian`]).
+//! Density matrices average the same noise exactly
+//! ([`DensityMatrix::apply_device`](super::DensityMatrix::apply_device),
+//! [`slow`](super::slow)); [`DeviceModel::is_markovian`] tells whether a
+//! device has any.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -584,8 +585,9 @@ impl DeviceModel {
 
     /// Whether every noise of the device is a channel applied at one point
     /// of the circuit. Quasi-static detunings, telegraph noise and spreads
-    /// of over-rotations are correlated in time; only trajectories simulate
-    /// them, density matrices refuse them.
+    /// of over-rotations are correlated in time: trajectories sample them,
+    /// density matrices average them exactly ([`super::slow`]), and PEC
+    /// refuses them.
     pub fn is_markovian(&self) -> bool {
         !(self.default_qubit.slow()
             || self.qubits.iter().any(QubitProperties::slow)

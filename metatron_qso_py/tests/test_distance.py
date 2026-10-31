@@ -186,7 +186,7 @@ def test_exact_distance_of_the_golay_code_and_a_circuit() -> None:
     everything = q.explain_errors(c, model)
     assert len(everything) == len(model) and all(everything)
     with pytest.raises(ValueError):
-        q.exact_circuit_distance(model, method="magic")
+        q.exact_circuit_distance(model, method="magic")  # type: ignore[arg-type]
     with pytest.raises(ValueError):
         q.exact_circuit_distance(model, max_seconds=-1.0)
     with pytest.raises(ValueError):

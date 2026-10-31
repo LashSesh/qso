@@ -20,6 +20,7 @@
 
 pub mod device;
 pub mod learning;
+pub mod slow;
 pub mod trajectories;
 
 pub use device::{
@@ -952,6 +953,11 @@ impl DensityMatrix {
     /// Apply `circuit(theta)` with the noise of `device` (gate errors,
     /// relaxation during gates and idle times; see [`DeviceModel`]). Readout
     /// errors apply when sampling with [`DensityMatrix::sample_with_readout`].
+    /// Noise correlated in time (quasi-static detunings, telegraph noise,
+    /// over-rotation spreads) is averaged exactly: telegraph noise over the
+    /// joint states of its processes, quasi-static noise by Gauss
+    /// quadrature to an a-priori error of [`slow::QUADRATURE_ERROR`] per
+    /// entry (see [`slow`]); within [`slow::MAX_SLOW_WORK`] operations.
     pub fn apply_device(
         &mut self,
         circuit: &Circuit,
@@ -965,16 +971,17 @@ impl DensityMatrix {
             });
         }
         device.validate()?;
-        if !device.is_markovian() {
-            return Err(QsoError::invalid(
-                "device",
-                "quasi-static and telegraph noise are correlated in time; \
-                 simulate them with trajectories",
-            ));
-        }
         let program = device::Program::compile(circuit, theta, device)?;
-        self.run_program(&program);
-        Ok(())
+        let slow_steps = program
+            .ops
+            .iter()
+            .any(|op| matches!(op, device::Op::Phase { .. } | device::Op::SpreadGate { .. }));
+        if slow_steps {
+            slow::run_program(self, &program)
+        } else {
+            self.run_program(&program);
+            Ok(())
+        }
     }
 
     /// Apply a compiled program (sizes already checked).
@@ -1014,7 +1021,7 @@ impl DensityMatrix {
                     };
                 }
                 device::Op::Phase { .. } | device::Op::SpreadGate { .. } => {
-                    unreachable!("density matrices only run programs of Markovian devices")
+                    unreachable!("slow noise is averaged by `slow::run_program`")
                 }
             }
         }

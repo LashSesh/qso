@@ -45,7 +45,7 @@ pub(super) const KRYLOV_STATIONARY: f64 = 1e-11;
 
 /// A square sparse matrix by rows.
 #[derive(Clone, Debug)]
-pub(super) struct SparseBlock {
+pub(crate) struct SparseBlock {
     pub n: usize,
     indptr: Vec<usize>,
     cols: Vec<u32>,
@@ -325,7 +325,7 @@ pub(super) fn krylov_bytes(n: usize) -> f64 {
 /// `tol` in the 2-norm. With `stationary` > 0, a vector that moves by less
 /// than that fraction of itself over the rest of the interval is taken as
 /// it is (see [`KRYLOV_STATIONARY`]).
-pub(super) fn expv(
+pub(crate) fn expv(
     a: &SparseBlock,
     v: &[C64],
     t: f64,

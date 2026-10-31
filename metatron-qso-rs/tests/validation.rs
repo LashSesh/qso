@@ -366,6 +366,63 @@ fn slow_noise_follows_ramsey_and_echo_closed_forms() {
     assert!(worst < 4.0, "worst deviation {worst} standard errors");
 }
 
+#[test]
+fn slow_noise_on_density_matrices_follows_the_closed_forms() {
+    // 1.44: the Ramsey and echo experiments of the trajectory check above,
+    // now averaged exactly on density matrices: telegraph noise as Kubo
+    // and Anderson (free induction and echo, slow and fast switching), a
+    // Gaussian detuning as exp(−σ²t²/2), all to 10⁻¹² (README).
+    use metatron_qso::noise::{
+        DensityMatrix, DeviceModel, GateRule, QubitProperties, Spread, Telegraph,
+    };
+    let z: PauliSum = "Z0".parse().unwrap();
+    let run = |qubit: QubitProperties, t: f64, echo: bool| -> f64 {
+        let wait = if echo { t / 2.0 } else { t };
+        let device = DeviceModel::new("slow")
+            .with_default_qubit(qubit)
+            .with_rule(GateRule::for_gate("id").with_duration(wait));
+        let mut c = Circuit::new(1);
+        c.h(0).id(0);
+        if echo {
+            c.x(0).id(0);
+        }
+        c.h(0);
+        let mut rho = DensityMatrix::zero(1).unwrap();
+        rho.apply_device(&c, &[], &device).unwrap();
+        rho.expectation(&z).unwrap()
+    };
+    // Kubo–Anderson, with e^{(μ−γ)t} and e^{−(μ+γ)t}, μ − γ = −ν²/(μ + γ).
+    let parts = |nu: f64, g: f64, t: f64| {
+        use num_complex::Complex64 as Z;
+        let mu = Z::new(g * g - nu * nu, 0.0).sqrt();
+        let slow = (Z::new(-nu * nu, 0.0) / (mu + g) * t).exp();
+        let fast = (-(mu + g) * t).exp();
+        (mu, slow, fast)
+    };
+    let free = |nu: f64, g: f64, t: f64| {
+        let (mu, slow, fast) = parts(nu, g, t);
+        (0.5 * ((1.0 + g / mu) * slow + (1.0 - g / mu) * fast)).re
+    };
+    let echo = |nu: f64, g: f64, t: f64| {
+        let (mu, slow, fast) = parts(nu, g, t);
+        let r = g / mu;
+        ((-g * t).exp() * (1.0 - r * r) + slow * 0.5 * (r + r * r) + fast * 0.5 * (r * r - r)).re
+    };
+    let sigma = 0.8;
+    let gauss = QubitProperties::new().with_detuning(Spread::Gaussian { sigma });
+    for t in [0.5, 1.0, 2.0, 3.0] {
+        assert!((run(gauss.clone(), t, false) - (-(sigma * t).powi(2) / 2.0).exp()).abs() < 1e-12);
+        assert!((run(gauss.clone(), t, true) - 1.0).abs() < 1e-12);
+    }
+    for (nu, g) in [(1.0, 0.2), (1.0, 5.0)] {
+        let q = QubitProperties::new().with_telegraph(Telegraph::new(nu, g));
+        for t in [0.5, 1.5, 3.0, 6.0] {
+            assert!((run(q.clone(), t, false) - free(nu, g, t)).abs() < 1e-12);
+            assert!((run(q.clone(), t, true) - echo(nu, g, t)).abs() < 1e-12);
+        }
+    }
+}
+
 /// The toy device of `examples/devices/toy_device.json`.
 fn toy_device() -> metatron_qso::noise::DeviceModel {
     metatron_qso::noise::DeviceModel::from_json(include_str!("../examples/devices/toy_device.json"))

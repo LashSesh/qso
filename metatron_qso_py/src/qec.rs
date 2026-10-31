@@ -942,7 +942,10 @@ fn circuit_distance(
 /// after `max_seconds` (None: no limit) the bounds reached so far are
 /// returned.
 #[pyfunction]
-#[pyo3(signature = (model, max_seconds = Some(60.0), method = "auto", bposd_trials = 4, seed = 0))]
+#[pyo3(
+    signature = (model, max_seconds = Some(60.0), method = "auto", bposd_trials = 4, seed = 0),
+    text_signature = "(model, max_seconds=60.0, method='auto', bposd_trials=4, seed=0)"
+)]
 fn exact_circuit_distance(
     py: Python<'_>,
     model: &PyDetectorErrorModel,

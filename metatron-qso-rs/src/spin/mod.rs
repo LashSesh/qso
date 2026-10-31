@@ -107,7 +107,7 @@ use crate::linalg::{CMatrix, expm_hermitian};
 mod blocks;
 mod control;
 mod exchange;
-mod krylov;
+pub(crate) mod krylov;
 #[cfg(test)]
 mod large_tests;
 mod nv;

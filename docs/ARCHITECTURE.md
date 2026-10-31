@@ -353,7 +353,8 @@ Density matrices apply the program with the state-vector kernels on the
 vectorised ρ and multiply consecutive superoperators first. A k-qubit
 channel is a `4ᵏ × 4ᵏ` superoperator on the k row and k column bits; four
 qubits need eight targets, which `apply_kq` handles with a larger buffer
-than gates use. Programs with slow noise do not run on density matrices.
+than gates use. Programs with slow noise run through `noise/slow.rs`
+(below).
 
 Slow noise is part of a trajectory's random choices, drawn before it
 runs: the over-rotation spread of every rule, the detuning of every
@@ -362,6 +363,30 @@ waiting times) over the phase steps in time order. A phase step becomes
 an `RZ` of that angle and a spread gate its rotation with scaled angles,
 inside the fused blocks. Markovian programs draw nothing extra, so their
 trajectories are unchanged.
+
+* Slow noise averaged exactly (`noise/slow.rs`): a classical Markov
+  process is its values, its rates as a list and its starting
+  distribution. Pure dephasing propagates the distribution under
+  `W − i f diag ν` period by period: for symmetric telegraph processes by
+  the closed-form 2×2 propagator `e^{−γτ}(cosh μ + sinh μ/μ K)`, written
+  with `e^{μ−γτ}` and `e^{−μ−γτ}` and `μ − γτ = −x²/(μ + γτ)` so that
+  neither fast switching nor long times lose accuracy; otherwise by the
+  Arnoldi steps of `spin::krylov` on a sparse matrix. The stochastic
+  Liouville equation assembles the joint generator on `x·d² + r + c·d`
+  (commutator and dissipator per joint state, `W ⊗ I` between them) and
+  propagates by the same steps.
+* Slow noise on density matrices (`slow::run_program`, called by
+  `DensityMatrix::apply_device` for non-Markovian devices): the compiled
+  program's `Phase` steps carry the turns of slow noise. Each qubit with
+  telegraph noise owns a bit of the joint state; a phase step couples
+  the pairs of density matrices that differ in that bit, entry by entry,
+  with one of three 2×2 propagators chosen by `b_r − b_c` of the entry,
+  after the free switching since the process was last needed. Runs of
+  gates and channels apply to every joint matrix through `run_ops`.
+  Quasi-static parameters take Gauss nodes (Golub–Welsch on the Jacobi
+  matrix, made symmetric); the points of their tensor grid are split into
+  groups fixed by their number, run in parallel and added in order, so
+  the result does not depend on the number of threads.
 
 Trajectories (`noise/trajectories.rs`) use the waiting-time form of the
 Monte-Carlo wave-function method.

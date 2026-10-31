@@ -409,9 +409,12 @@ fn over_rotation_spread_averages_the_rotation() {
         (theta * (1.0 + eps)).cos() * (-(theta * sigma).powi(2) / 2.0).exp(),
         "spread",
     );
-    // Density matrices and PEC refuse noise correlated in time.
+    // Density matrices average the spread exactly (1.44); PEC refuses
+    // noise correlated in time.
     let mut rho = DensityMatrix::zero(1).unwrap();
-    assert!(rho.apply_device(&c, &[], &device).is_err());
+    rho.apply_device(&c, &[], &device).unwrap();
+    let exact = (theta * (1.0 + eps)).cos() * (-(theta * sigma).powi(2) / 2.0).exp();
+    assert!((rho.expectation(&z).unwrap() - exact).abs() < 1e-12);
     assert!(crate::mitigation::pec::pec_expectation(&c, &[], &device, &z, 10, 1).is_err());
 }
 

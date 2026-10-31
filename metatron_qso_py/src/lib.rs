@@ -27,6 +27,7 @@ mod photonics;
 mod qec;
 mod reduced;
 mod simulation;
+mod slow;
 mod spin;
 mod stabilizer;
 mod state;
@@ -200,6 +201,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     reduced::register(m)?;
     discrete::register(m)?;
     noise::register(m)?;
+    slow::register(m)?;
     estimation::register(m)?;
     mitigation::register(m)?;
     learning::register(m)?;

@@ -232,13 +232,13 @@ that time, the way Ramsey and echo experiments do.
 | telegraph noise | `telegraph=(ν, γ)` per qubit | a frequency shift that jumps between +ν and −ν at the times of a Poisson process with γ jumps per unit time; the qubit turns by `RZ(∫ν(t) dt)` |
 | over-rotation spread | `over_rotation_spread=("gaussian", σ)` per rule | an error η added to the rule's relative over-rotation: θ ↦ θ(1 + ε + η) |
 
-Density matrices describe a single step of noise at a time, so they
-refuse these three kinds; `DeviceModel.is_markovian` tells whether a
-device has none of them (anywhere in the device, even on qubits or rules
-a circuit does not use). Trajectories simulate them exactly: each
-trajectory draws its detunings and spreads, and follows its telegraph
-process through every gate and wait (at a cost proportional to the
-number of jumps, γ times the duration of the circuit). The turn during
+`DeviceModel.is_markovian` tells whether a device has none of them
+(anywhere in the device, even on qubits or rules a circuit does not use).
+Trajectories simulate them exactly: each trajectory draws its detunings
+and spreads, and follows its telegraph process through every gate and
+wait (at a cost proportional to the number of jumps, γ times the duration
+of the circuit). Density matrices average them exactly instead (see
+[Slow noise, averaged exactly](#slow-noise-averaged-exactly) below). The turn during
 a gate is split, half before the gate and half after it: exact for gates
 that commute with Z, and a gate in the middle of an echo still
 refocuses a static detuning.
@@ -285,3 +285,134 @@ two-state equations, solved in closed form for each half. All 20
 estimates lie within four standard errors (the largest deviation is 1.5),
 and the echo of a static detuning is exact.
 
+## Slow noise, averaged exactly
+
+Trajectories sample slow noise, and their averages carry a statistical
+error. For a qubit whose frequency follows a classical Markov process
+with finitely many states, the average can be computed exactly: one
+density matrix per state of the process, coupled by the switching rates
+(Kubo's stochastic Liouville equation).
+
+**Density matrices of devices.** `DensityMatrix.simulate(circuit,
+device=...)` and `DensityMatrix.apply` average the slow noise of a device
+exactly instead of refusing it. Telegraph noise is followed with one
+density matrix per joint state of the telegraph processes of the qubits
+it acts on (2ᴷ of them for K such qubits). Quasi-static detunings and
+over-rotation spreads are averaged by Gauss quadrature (Hermite nodes for
+a normal distribution, Legendre nodes for a uniform one), with as many
+nodes as the error bound of the rule needs to stay below 10⁻¹³: a phase
+`δ·T` with `σT = 10` takes 94 nodes. Markovian noise (relaxation, gate
+channels, crosstalk) applies to every one of these matrices as before.
+The work is the number of quadrature points times 2ᴷ density-matrix
+simulations, and is refused beyond 2·10¹¹ operations or 2²⁶ entries held
+at once; trajectories remain for those.
+
+```python
+import math
+import metatron_qso as q
+
+ramsey = q.Circuit(1).h(0).id(0).h(0)
+device = (q.DeviceModel("telegraph")
+          .with_default_qubit(telegraph=(1.0, 0.2))
+          .with_rule(gate="id", duration=3.0))
+rho = q.DensityMatrix.simulate(ramsey, device=device)
+mu = math.sqrt(1 - 0.04)
+exact = math.exp(-0.6) * (math.cos(3 * mu) + 0.2 * math.sin(3 * mu) / mu)
+print(abs(rho.expectation(q.PauliSum("Z0")) - exact) < 1e-12)
+# True
+```
+
+**Markov processes.** `MarkovProcess(values, rates, initial)` takes the
+frequency shift of every state (angular frequency), the switching rates
+`(from, to, rate)` and the probabilities at time 0. Ready-made:
+
+| Process | Description |
+|---|---|
+| `telegraph(ν, γ)` | `±ν`, flipping at `γ` both ways, starting stationary; correlation `ν² e^{−2γ|τ|}` |
+| `ornstein_uhlenbeck(σ, τ_c, levels)` | the Ehrenfest chain of `K = levels − 1` telegraph fluctuators of amplitude `σ/√K` and rate `1/(2τ_c)`: correlation `σ² e^{−|τ|/τ_c}` at every K, Gaussian as K grows |
+| `quasi_static(kind, width, nodes)` | a constant from a `"gaussian"` or `"uniform"` distribution on the nodes of its Gauss rule |
+| `p.product(other)` | two independent processes, values added |
+
+`dephasing(t, pulses)` gives the coherence `⟨exp(−i∫f ν dt)⟩` of a qubit
+under ideal π pulses at the times `pulses` (`f = ±1` flips at each):
+`1ᵀ ∏ exp(Δ_k(W − i f_k diag ν)) p₀`, with the closed form of each period
+for telegraph processes. `Fluctuators` adds up independent processes,
+whose dephasing is the product of their factors, for any number of them;
+`Fluctuators.one_over_f(ν, γ_min, γ_max, count)` spreads the rates of
+`count` telegraph fluctuators evenly in their logarithm, a spectrum that
+falls as `1/ω` between `2γ_min` and `2γ_max`.
+
+```python
+import math
+import metatron_qso as q
+
+# Three strong, slow fluctuators beat (cos(νt)³ while none has switched);
+# 300 weak ones of the same variance dephase like Gaussian noise.
+few = q.Fluctuators.one_over_f(0.5, 1e-3, 1e-2, 3)
+many = q.Fluctuators.one_over_f(0.05, 1e-3, 1e-2, 300)
+for t in [2.0, 2 * math.pi, 4 * math.pi]:
+    print(round(t, 2), round(few.dephasing(t).real, 4), round(many.dephasing(t).real, 4))
+# 2.0 0.1602 0.2243
+# 6.28 -0.9148 0.0
+# 12.57 0.8369 0.0
+```
+
+**The stochastic Liouville equation.** `StochasticLiouville(d, [(process,
+B), ...], dissipators=[L, ...])` couples independent processes to a
+system of dimension `d` through Hermitian operators `B_k`: in the joint
+state `x` the Hamiltonian is `H + Σ ν_k(x_k) B_k`, and the Lindblad
+operators `L_j` act besides. A state is an array of shape `(joint states,
+d, d)`, one density matrix per joint state of the processes, adding up to
+the state of the system. `start(ρ)`, `evolve(state, H, t)` (Krylov steps
+on the sparse generator, up to 2²⁵ entries) and `pulse(state, U)` build
+any sequence of free evolution, drives and ideal pulses.
+
+```python
+import math
+import numpy as np
+import metatron_qso as q
+
+# Rabi oscillations (Ω = 2) of a qubit whose frequency sits at +1 or −1
+# and switches rarely (rate 0.01): close to the static average
+# (4/5) sin²(√5 t/2) as long as few switches happen.
+z = np.diag([0.5, -0.5]).astype(complex)
+drive = np.array([[0, 1], [1, 0]], dtype=complex)
+sle = q.StochasticLiouville(2, [(q.MarkovProcess.telegraph(1.0, 0.01), z)])
+state = sle.start(np.diag([1.0, 0.0]).astype(complex))
+for step in range(1, 4):
+    state = sle.evolve(state, drive, 0.5)
+    t = 0.5 * step
+    p = state.sum(axis=0)[1, 1].real
+    print(t, round(p, 4), round(0.8 * math.sin(math.sqrt(5) * t / 2) ** 2, 4))
+# 0.5 0.225 0.225
+# 1.0 0.6472 0.6469
+# 1.5 0.7924 0.791
+```
+
+The checks:
+
+- Free induction and Hahn echo under telegraph noise follow the closed
+  forms (Paladino et al. 2014) to 10⁻¹², from the static limit (γ = 0)
+  through the crossover to switching ten thousand times faster than the
+  amplitude, with the closed-form propagator and with Krylov steps.
+- The Ehrenfest chain equals the product of its K fluctuators to 10⁻¹²
+  (free induction, echo and four π pulses, K up to 64); its correlation is
+  `σ² e^{−|τ|/τ_c}` to 10⁻¹²; its dephasing approaches Kubo's Gaussian
+  forms with an error that falls as 1/K (K·error constant to 2 % from
+  K = 256 to 4096).
+- Slow switching approaches static noise linearly in the rate;
+  Ornstein–Uhlenbeck noise with a long correlation time gives the static
+  binomial levels; quasi-static Gaussian and uniform noise on Gauss nodes
+  give `e^{−σ²t²/2}` and `sin(ht)/(ht)` to 10⁻¹³, and the error bound
+  holds for `e^{icx}` up to `c = 25`.
+- The stochastic Liouville equation dephases as the scalar formula (free
+  induction and echo, a symmetric and an asymmetric process), equals the
+  Lindblad equation of a driven, decaying qubit when the noise is silent,
+  narrows to Lindblad dephasing at rate `ν²/(2γ)` as the switching gets
+  fast (the error falling as 1/γ), factorises for independent noise on two
+  qubits, and agrees with 4000 sampled paths within five standard errors.
+- Circuits: Ramsey and echo under telegraph noise, Gaussian and uniform
+  detunings and an over-rotation spread follow the closed forms of 1.30
+  to 10⁻¹²; a three-qubit circuit with every kind of slow noise, T₁, T₂
+  and gate noise agrees with 20 000 trajectories within five standard
+  errors.

@@ -319,8 +319,8 @@ impl PyDeviceModel {
     /// `q`, a quasi-static frequency offset `detuning=("gaussian", sigma)`
     /// or `("uniform", half_width)` and telegraph noise
     /// `telegraph=(amplitude, rate)`; values left out follow the default
-    /// qubit. Detunings and telegraph noise are correlated in time: only
-    /// trajectories simulate them.
+    /// qubit. Detunings and telegraph noise are correlated in time:
+    /// trajectories sample them, density matrices average them exactly.
     #[pyo3(signature = (q, t1 = None, t2 = None, readout = None, detuning = None, telegraph = None))]
     #[allow(clippy::too_many_arguments)]
     fn with_qubit(
@@ -403,8 +403,8 @@ impl PyDeviceModel {
     }
 
     /// Whether all noise is channels at points of the circuit (no
-    /// detunings, telegraph noise or over-rotation spreads, which only
-    /// `TrajectorySimulator` simulates).
+    /// detunings, telegraph noise or over-rotation spreads, which
+    /// `TrajectorySimulator` samples and density matrices average exactly).
     #[getter]
     fn is_markovian(&self) -> bool {
         self.inner.is_markovian()
@@ -478,7 +478,8 @@ impl PyDensityMatrix {
     }
 
     /// Run `circuit(theta)` on |0…0⟩⟨0…0|, inserting `noise` after every
-    /// gate if given, or with the noise of `device`.
+    /// gate if given, or with the noise of `device` (its slow noise
+    /// averaged exactly).
     #[staticmethod]
     #[pyo3(signature = (circuit, theta = None, noise = None, device = None))]
     fn simulate(
