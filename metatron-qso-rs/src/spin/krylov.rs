@@ -17,10 +17,12 @@
 
 use num_complex::Complex64 as C64;
 
+use std::ops::Range;
+
 use crate::error::{QsoError, Result};
 use crate::linalg::CMatrix;
 use crate::linalg::dense::expm;
-use crate::parallel::{CHUNK, for_each_block};
+use crate::parallel::{CHUNK, for_each_block, threads};
 
 /// Dimension of the Krylov subspaces.
 const KRYLOV_DIM: usize = 30;
@@ -33,10 +35,12 @@ const MAX_KRYLOV_STEPS: usize = 1 << 22;
 /// or its equilibrium value when larger).
 pub(super) const KRYLOV_TOLERANCE: f64 = 1e-12;
 
-/// A vector that moves by less than this fraction of itself over the
-/// rest of the interval is taken as stationary (one step). The deviation
-/// of a thermal state from `1/d`, parts in 10⁵ of it, is itself only known
-/// to about 10⁻¹¹, so equilibrium seems to move at that level.
+/// A block of populations that moves by less than this fraction of
+/// itself over the rest of an interval, or no faster than the rounding of
+/// the state explains, is taken as stationary (one step). The deviation of
+/// a thermal state from `1/d`, parts in 10⁵ of it, is itself only known to
+/// about 10⁻¹¹, so equilibrium seems to move at that level. Coherences and
+/// free induction decays keep the full tolerance.
 pub(super) const KRYLOV_STATIONARY: f64 = 1e-11;
 
 /// A square sparse matrix by rows.
@@ -231,6 +235,20 @@ impl SparseBlock {
     }
 }
 
+/// The columns `0..n` of a block split into ranges for parallel tasks,
+/// each with one [`Accumulator`]: about four per thread, of at least 256
+/// columns.
+pub(super) fn column_ranges(n: usize) -> Vec<Range<usize>> {
+    let tasks = n.div_ceil(256).min(4 * threads()).max(1);
+    let size = n.div_ceil(tasks).max(1);
+    (0..n).step_by(size).map(|s| s..(s + size).min(n)).collect()
+}
+
+/// Bytes of the accumulators that build a block of `n` elements at once.
+pub(super) fn accumulator_bytes(n: usize) -> f64 {
+    threads() as f64 * 17.0 * n as f64
+}
+
 /// Sums over a block's elements that remember which they touched, for
 /// building a sparse column.
 pub(super) struct Accumulator {
@@ -304,8 +322,17 @@ pub(super) fn krylov_bytes(n: usize) -> f64 {
 
 /// `exp(t A) v` by Arnoldi's process on Krylov subspaces of dimension 30
 /// with the step-size control of Expokit, to an absolute error of about
-/// `tol` in the 2-norm.
-pub(super) fn expv(a: &SparseBlock, v: &[C64], t: f64, tol: f64) -> Result<Vec<C64>> {
+/// `tol` in the 2-norm. With `stationary` > 0, a vector that moves by less
+/// than that fraction of itself over the rest of the interval is taken as
+/// it is (see [`KRYLOV_STATIONARY`]).
+pub(super) fn expv(
+    a: &SparseBlock,
+    v: &[C64],
+    t: f64,
+    tol: f64,
+    stationary: f64,
+) -> Result<Vec<C64>> {
+    debug_assert!(t.is_finite() && t >= 0.0, "a finite, non-negative time");
     let n = v.len();
     let mut w = v.to_vec();
     let mut beta = norm2(&w);
@@ -354,7 +381,7 @@ pub(super) fn expv(a: &SparseBlock, v: &[C64], t: f64, tol: f64) -> Result<Vec<C
             }
             let s = norm2(&p);
             // Dropping the rest errs by at most β·s per unit time.
-            if s <= tol / beta || s <= 1e-15 * anorm || s * (t - t_now) <= KRYLOV_STATIONARY {
+            if s <= tol / beta || s <= 1e-15 * anorm || s * (t - t_now) <= stationary {
                 k1 = 0;
                 mb = j + 1;
                 t_step = t - t_now;

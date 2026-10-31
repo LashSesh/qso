@@ -452,6 +452,18 @@ where
     (0..n_chunks).map(f).sum()
 }
 
+/// Threads that [`map_tasks`] runs on (1 without the `parallel` feature).
+pub(crate) fn threads() -> usize {
+    #[cfg(feature = "parallel")]
+    {
+        rayon::current_num_threads()
+    }
+    #[cfg(not(feature = "parallel"))]
+    {
+        1
+    }
+}
+
 /// Map independent coarse-grained tasks (e.g. random restarts) to results,
 /// in parallel regardless of their count. Order is preserved.
 pub(crate) fn map_tasks<T, F>(n: usize, f: F) -> Vec<T>

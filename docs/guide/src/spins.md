@@ -94,7 +94,7 @@ which mix the orders, use adaptive Dormand–Prince steps with a local
 error of 10⁻¹¹ of that deviation when they are cheaper. A propagation
 estimated at more than 1.5·10¹² operations, about a minute, or 2 GiB is
 refused with an error before anything is built. One second of five
-relaxing protons at 9.4 T takes 0.15 s, of six 4 s.
+relaxing protons at 9.4 T takes 0.17 s, of six 4 s.
 
 ## Relaxation from first principles
 
@@ -177,12 +177,14 @@ the state does not occupy are skipped.
 Krylov steps cost in proportion to the interval and to the spread of
 frequencies in a block, so lower fields and the rotating frame are
 cheaper. On four cores one second of seven relaxing protons at 9.4 T
-takes 27 s, of eight at 1 T 18 s, and 0.1 s of eight at 9.4 T 16 s; with
-dipolar relaxation 0.1 s of seven protons takes 12 s. A block that does
-not move, such as thermal equilibrium, takes a single step: its
-deviation, parts in 10⁵ of `1/d`, is only known to about 10⁻¹¹, and a
-vector that moves by less than 10⁻¹¹ of itself over the interval is taken
-as it is. The laboratory frame with several isotopes keeps carbon and
+takes 28 s, of eight at 1 T 18 s, and 0.1 s of eight at 9.4 T 17 s; with
+dipolar relaxation 0.1 s of seven protons takes 12 s. Populations that
+do not move, such as thermal equilibrium, take a single step: their
+deviation, parts in 10⁵ of `1/d`, is only known to about 10⁻¹¹ (forming
+it from ρ leaves `ε·Tr(ρ)/d` on every population), and populations that
+move no faster than that rounding explains, or by less than 10⁻¹¹ of
+themselves over the interval, are taken as they are. Coherences and free
+induction decays keep the full tolerance. The laboratory frame with several isotopes keeps carbon and
 proton coherences, 2·10⁹ rad/s apart, in one block; there only short
 intervals are affordable.
 
@@ -224,7 +226,7 @@ coefficient per orbit, the generator summed over the orbits of its
 columns at a representative row. This is exact, not an approximation.
 With three protons on the axis below the methyl group (seven spins) the
 8193 coefficients of a pulsed state shrink to 3073, as the threefold
-cycle predicts (8/3), and 0.1 s of it take 1.5 s instead of 4.5; a
+cycle predicts (8/3), and 0.1 s of it take 1.5 s instead of 4.3; a
 methylene group's swap shrinks its blocks less (8/5). States that break the
 symmetry (a pulse on one of the protons) and Hamiltonians that do (a
 shaped pulse on one spin) propagate in full. A declaration the system does

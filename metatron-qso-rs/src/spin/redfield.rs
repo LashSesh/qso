@@ -39,7 +39,7 @@ use std::sync::OnceLock;
 use num_complex::Complex64 as C64;
 
 use super::blocks::{Eigenblock, Liouville, distinct};
-use super::krylov::{Accumulator, SparseBlock};
+use super::krylov::{Accumulator, SparseBlock, column_ranges};
 use super::{Frame, HBAR, ONE, SpinSystem, ZERO, spin_ops};
 use crate::error::{QsoError, Result};
 use crate::linalg::dense::cmul;
@@ -325,10 +325,11 @@ impl RedfieldBlocks {
     fn build(&self, k: usize) -> SparseBlock {
         let n = self.liouville.blocks[k].1.len();
         let targets = self.targets(k);
-        let chunk = 256;
-        let parts: Vec<Vec<Vec<(u32, C64)>>> = map_tasks(n.div_ceil(chunk), |c| {
+        let ranges = column_ranges(n);
+        let parts: Vec<Vec<Vec<(u32, C64)>>> = map_tasks(ranges.len(), |c| {
             let mut acc = Accumulator::new(n);
-            (c * chunk..((c + 1) * chunk).min(n))
+            ranges[c]
+                .clone()
                 .map(|j| {
                     self.column(k, j, &targets, C64::new(1.0, 0.0), |r, e, v| {
                         acc.add(self.liouville.position_of(r, e), v)
@@ -344,6 +345,24 @@ impl RedfieldBlocks {
     /// Block `k`, built once.
     pub fn block(&self, k: usize) -> &SparseBlock {
         self.built[k].get_or_init(|| self.build(k))
+    }
+
+    /// Bytes of the terms and the index of the blocks, held while the
+    /// relaxation is.
+    pub fn terms_bytes(&self) -> usize {
+        let d = self.grouping.order.len();
+        self.terms
+            .iter()
+            .map(|t| t.q.bytes() + t.y.bytes())
+            .sum::<usize>()
+            + self.left.bytes()
+            + self.pattern.bytes()
+            + d * d * 24
+    }
+
+    /// Whether block `k` is built.
+    pub fn is_built(&self, k: usize) -> bool {
+        self.built[k].get().is_some()
     }
 
     /// Bytes of the blocks built so far.

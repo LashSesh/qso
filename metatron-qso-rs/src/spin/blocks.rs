@@ -18,8 +18,8 @@ use std::collections::BTreeMap;
 use num_complex::Complex64 as C64;
 
 use super::krylov::{
-    Accumulator, KRYLOV_STATIONARY, KRYLOV_TOLERANCE, Orbits, SparseBlock, expv, krylov_bytes,
-    krylov_work,
+    Accumulator, KRYLOV_STATIONARY, KRYLOV_TOLERANCE, Orbits, SparseBlock, accumulator_bytes,
+    column_ranges, expv, krylov_bytes, krylov_work,
 };
 use super::redfield::RedfieldBlocks;
 use super::{Frame, Isotope, ONE, SpinSystem, ZERO};
@@ -124,6 +124,20 @@ impl Sparse {
 
     fn entries(&self) -> usize {
         self.rows.iter().map(Vec::len).sum()
+    }
+
+    /// The largest absolute row sum off the diagonal.
+    fn off_diagonal(&self) -> f64 {
+        self.rows
+            .iter()
+            .enumerate()
+            .map(|(r, row)| {
+                row.iter()
+                    .filter(|&&(c, _)| c != r)
+                    .map(|(_, v)| v.norm())
+                    .sum::<f64>()
+            })
+            .fold(0.0, f64::max)
     }
 
     /// Width of the spectrum of a Hermitian matrix, bounded by
@@ -505,19 +519,25 @@ struct BlockPlan {
     /// reduces.
     orbits: Option<(Orbits, Vec<Vec<u32>>)>,
     dense: bool,
+    /// Taken as stationary below this fraction (the populations of one
+    /// propagation; 0 otherwise).
+    stationary: f64,
     work: f64,
     /// Peak bytes.
     memory: f64,
-    /// Entries (at most) of the Redfield blocks inside, and their build.
-    redfield: f64,
-    redfield_build: f64,
 }
 
 enum Propagator {
     /// `exp(tA)`.
     Dense(CMatrix),
-    /// `A`, applied by Krylov steps over `t` to `tol`.
-    Krylov { a: SparseBlock, t: f64, tol: f64 },
+    /// `A`, applied by Krylov steps over `t` to `tol` (and taken as
+    /// stationary below `stationary`, see [`expv`]).
+    Krylov {
+        a: SparseBlock,
+        t: f64,
+        tol: f64,
+        stationary: f64,
+    },
 }
 
 /// A block's propagator over one interval, on the orbits when reduced.
@@ -537,7 +557,12 @@ impl Stepper {
             Propagator::Dense(p) => (0..y.len())
                 .map(|r| y.iter().enumerate().map(|(c, v)| p[(r, c)] * v).sum())
                 .collect(),
-            Propagator::Krylov { a, t, tol } => expv(a, y, *t, *tol)?,
+            Propagator::Krylov {
+                a,
+                t,
+                tol,
+                stationary,
+            } => expv(a, y, *t, *tol, *stationary)?,
         };
         if self.phase != ONE {
             for v in out.iter_mut() {
@@ -962,10 +987,11 @@ impl SpinSystem {
                 .map(|q| r.targets(q))
                 .collect()
         });
-        let chunk = 256;
-        let parts: Vec<Vec<Vec<(u32, C64)>>> = map_tasks(n.div_ceil(chunk), |c| {
+        let ranges = column_ranges(n);
+        let parts: Vec<Vec<Vec<(u32, C64)>>> = map_tasks(ranges.len(), |c| {
             let mut acc = Accumulator::new(size);
-            (c * chunk..((c + 1) * chunk).min(n))
+            ranges[c]
+                .clone()
                 .map(|j| {
                     let (a, b) = elements[j];
                     coherent_column(a, b, h, &locals, |r, e, v| {
@@ -1023,10 +1049,10 @@ impl SpinSystem {
                 .map(|q| r.targets(q))
                 .collect()
         });
-        let chunk = 256;
-        let parts: Vec<Vec<(u32, C64)>> = map_tasks(n.div_ceil(chunk), |c| {
+        let ranges = column_ranges(n);
+        let parts: Vec<Vec<(u32, C64)>> = map_tasks(ranges.len(), |c| {
             let mut acc = Accumulator::new(n);
-            for j in c * chunk..((c + 1) * chunk).min(n) {
+            for j in ranges[c].clone() {
                 let v = y[j];
                 if v == ZERO {
                     continue;
@@ -1072,7 +1098,7 @@ impl SpinSystem {
         relaxation: &Relaxation,
         t: f64,
         repeats: usize,
-        (x, scale): (Vec<C64>, f64),
+        (x, scale, level): (Vec<C64>, f64, f64),
         trace: Option<C64>,
         maps: Option<&[Vec<usize>]>,
     ) -> BlockPlan {
@@ -1094,18 +1120,16 @@ impl SpinSystem {
                 .redfield
                 .as_ref()
                 .map_or(0.0, RedfieldBlocks::rate);
-        // The drift enters as a last column against an entry of about the
-        // deviation's size, so the tolerance stays relative to it.
+        // The drift enters as a last column against an entry of the size of
+        // the deviation or of equilibrium's, whichever is larger, so the
+        // tolerance stays relative to it (the drift's integral is bounded
+        // by equilibrium's deviation).
         let augmented = trace.and_then(|trace| {
-            let drift = relaxation
-                .drift
-                .iter()
-                .map(|z| z.norm_sqr())
-                .sum::<f64>()
-                .sqrt();
-            let s = norm2(&x)
-                .max(relaxation.equilibrium * trace.norm())
-                .max(drift * trace.norm() * t);
+            let mut s = norm2(&x).max(relaxation.equilibrium * trace.norm());
+            if s == 0.0 {
+                let drift = relaxation.drift.iter().map(|z| z.norm_sqr()).sum::<f64>();
+                s = drift.sqrt() * trace.norm() * t;
+            }
             (s > 0.0).then_some((trace, s))
         });
         let size = n + usize::from(augmented.is_some());
@@ -1142,15 +1166,51 @@ impl SpinSystem {
             f64::INFINITY
         };
         let mut krylov = repeats as f64 * krylov_work(m, entries, norm, t);
-        // A stationary block (equilibrium) ends the Krylov process at once:
-        // one step, not the a priori ones.
-        if krylov > 1e9 {
+        let build_memory = 44.0 * nnz as f64
+            + accumulator_bytes(size)
+            + if orbits.is_some() {
+                44.0 * entries as f64
+            } else {
+                0.0
+            };
+        // The populations (equilibrium) may not move at all: then the
+        // Krylov process ends at once, in one step, not the a priori ones.
+        // They count as stationary when they move by less than
+        // KRYLOV_STATIONARY over the interval, or no faster than the
+        // rounding of the state explains: forming the deviation from ρ
+        // leaves `ε·Tr(ρ)/d` on each population, which relaxation and the
+        // couplings move at most at `rate + 2‖H_off‖` (with a factor 2).
+        // Checked by one pass over the columns, and only where a block can
+        // be built at all. On orbits the vector's norm differs by up to the
+        // root of the ratio of their sizes.
+        let populations = repeats <= 1 && liouville.blocks[k].0.iter().all(|&q| q == 0);
+        let mut stationary = 0.0;
+        if populations {
             let mut y = x.clone();
             y.extend(augmented.map(|(_, s)| C64::new(s, 0.0)));
-            let factor = augmented.map(|(trace, s)| trace / s);
-            let moving = self.probe(liouville, k, h, relaxation, shift, factor, &y);
-            if moving * t <= 0.5 * KRYLOV_STATIONARY * norm2(&y) {
-                krylov = repeats as f64 * krylov_work(m, entries, 0.0, t);
+            let size_y = norm2(&y);
+            let diagonal = elements.iter().filter(|&&(a, b)| a == b).count() as f64;
+            let rounding = f64::EPSILON * level * diagonal.sqrt();
+            let speed = relaxation.rate + 2.0 * h.off_diagonal();
+            if size_y > 0.0 && t > 0.0 {
+                stationary = KRYLOV_STATIONARY.max(2.0 * speed * rounding * t / size_y);
+            }
+            if krylov > 1e9
+                && stationary > 0.0
+                && build_memory + krylov_bytes(m) <= super::MAX_RELAXATION_MEMORY
+            {
+                let factor = augmented.map(|(trace, s)| trace / s);
+                let moving = self.probe(liouville, k, h, relaxation, shift, factor, &y);
+                let spread = orbits.as_ref().map_or(1.0, |(o, _)| {
+                    let (lo, hi) = o
+                        .sizes
+                        .iter()
+                        .fold((u32::MAX, 0), |(lo, hi), &s| (lo.min(s), hi.max(s)));
+                    (f64::from(hi) / f64::from(lo)).sqrt()
+                });
+                if moving * t * spread <= 0.5 * stationary * size_y {
+                    krylov = krylov_work(m, entries, 0.0, t);
+                }
             }
         }
         let dense = dense_work <= krylov;
@@ -1161,13 +1221,7 @@ impl SpinSystem {
             } else {
                 0.0
             };
-        let memory = 44.0 * nnz as f64
-            + 64.0 * 25.0 * size as f64
-            + if orbits.is_some() {
-                44.0 * entries as f64
-            } else {
-                0.0
-            }
+        let memory = build_memory
             + if dense {
                 160.0 * mf * mf
             } else {
@@ -1180,10 +1234,9 @@ impl SpinSystem {
             augmented,
             orbits,
             dense,
+            stationary,
             work: build + dense_work.min(krylov),
             memory,
-            redfield,
-            redfield_build,
         }
     }
 
@@ -1219,7 +1272,12 @@ impl SpinSystem {
             Propagator::Dense(expm(&(a.to_dense() * C64::new(t, 0.0))))
         } else {
             let tol = KRYLOV_TOLERANCE * norm2(&start) / repeats.max(1) as f64;
-            Propagator::Krylov { a, t, tol }
+            Propagator::Krylov {
+                a,
+                t,
+                tol,
+                stationary: plan.stationary,
+            }
         };
         Ok(Stepper {
             kind,
@@ -1350,11 +1408,18 @@ impl SpinSystem {
             }
         }
         let block_work: f64 = plans.iter().map(|p| p.work).sum();
-        let block_memory = plans.iter().map(|p| p.memory).fold(0.0, f64::max);
-        let redfield: f64 = plans.iter().map(|p| p.redfield).sum();
-        let dp_work = self.dp_work(&sparse, relaxation, t, redfield)
-            + plans.iter().map(|p| p.redfield_build).sum::<f64>();
-        let dp_memory = self.dp_memory(relaxation, redfield);
+        // The largest block at a time, next to what stays held: the index
+        // of the elements and the Redfield terms.
+        let held = self.held_bytes(relaxation);
+        let block_memory = plans.iter().map(|p| p.memory).fold(0.0, f64::max) + held;
+        // Dormand–Prince steps apply (and keep) every Redfield block the
+        // state reaches: those it occupies and, with a drift, the
+        // populations', or all of them when the orders mix.
+        let drifting = trace != ZERO && relaxation.drift.iter().any(|z| *z != ZERO);
+        let (redfield, redfield_build) =
+            self.redfield_touched(relaxation, &delta, !conserving, drifting);
+        let dp_work = self.dp_work(&sparse, relaxation, t, redfield) + redfield_build;
+        let dp_memory = self.dp_memory(relaxation, redfield) + held;
         let limit = super::MAX_RELAXATION_MEMORY;
         let use_blocks = match force {
             Some(Method::Steps) => false,
@@ -1422,7 +1487,7 @@ impl SpinSystem {
                 relaxation,
                 t,
                 1,
-                (x, scale),
+                (x, scale, trace.norm() / self.dimension() as f64),
                 drift,
                 maps.as_deref(),
             ));
@@ -1465,17 +1530,40 @@ impl SpinSystem {
 
     /// Entries (at most) and build work of the Redfield blocks on which `x`
     /// is nonzero.
-    fn redfield_touched(&self, relaxation: &Relaxation, x: &CMatrix) -> (f64, f64) {
+    fn redfield_touched(
+        &self,
+        relaxation: &Relaxation,
+        x: &CMatrix,
+        all: bool,
+        drifting: bool,
+    ) -> (f64, f64) {
         let Some(r) = &relaxation.redfield else {
             return (0.0, 0.0);
         };
-        let mut entries = 0.0;
-        for (q, (_, elements)) in r.liouville.blocks.iter().enumerate() {
-            if elements.iter().any(|&(a, b)| x[(a, b)] != ZERO) {
+        let (mut entries, mut build) = (0.0, 0.0);
+        for (q, (order, elements)) in r.liouville.blocks.iter().enumerate() {
+            let reached = all
+                || (drifting && order.iter().all(|&o| o == 0))
+                || elements.iter().any(|&(a, b)| x[(a, b)] != ZERO);
+            if reached {
                 entries += r.count(q) as f64;
+                if !r.is_built(q) {
+                    build += 16.0 * r.terms() as f64 * r.count(q) as f64;
+                }
             }
         }
-        (entries, 16.0 * r.terms() as f64 * entries)
+        (entries, build)
+    }
+
+    /// Bytes held through a propagation: the index of the elements and the
+    /// Redfield terms.
+    fn held_bytes(&self, relaxation: &Relaxation) -> f64 {
+        let d = self.dimension() as f64;
+        24.0 * d * d
+            + relaxation
+                .redfield
+                .as_ref()
+                .map_or(0, RedfieldBlocks::terms_bytes) as f64
     }
 
     /// The free induction decay with relaxation: `Tr(ρ(k·dwell) F₊)`. Only
@@ -1504,6 +1592,9 @@ impl SpinSystem {
     ) -> Result<Vec<C64>> {
         let d = self.dimension();
         let fp = self.fplus(isotope)?;
+        if points == 1 {
+            return Ok(vec![self.expectation(rho, &fp)?]);
+        }
         let h = self.hamiltonian_at(self.field);
         let relaxation = self.relaxation(self.field)?;
         let sparse = Sparse::new(&h);
@@ -1534,7 +1625,7 @@ impl SpinSystem {
                 &relaxation,
                 dwell,
                 repeats,
-                (x, max_entry(&delta)),
+                (x, max_entry(&delta), trace.norm() / d as f64),
                 None,
                 maps.as_deref(),
             );
@@ -1546,14 +1637,17 @@ impl SpinSystem {
             }
             plan
         });
-        let (redfield, redfield_build) = self.redfield_touched(&relaxation, &delta);
+        let drifting = trace != ZERO && relaxation.drift.iter().any(|z| *z != ZERO);
+        let (redfield, redfield_build) =
+            self.redfield_touched(&relaxation, &delta, false, drifting);
         let dp_work =
             repeats as f64 * self.dp_work(&sparse, &relaxation, dwell, redfield) + redfield_build;
-        let dp_memory = self.dp_memory(&relaxation, redfield);
+        let held = self.held_bytes(&relaxation);
+        let dp_memory = self.dp_memory(&relaxation, redfield) + held;
         let limit = super::MAX_RELAXATION_MEMORY;
         let fid_time = dwell * points as f64;
         if let Some(plan) = plan.filter(|p| {
-            p.memory <= limit && (dp_memory > limit || p.work <= dp_work || force.is_some())
+            p.memory + held <= limit && (dp_memory > limit || p.work <= dp_work || force.is_some())
         }) {
             if force.is_none() && plan.work > super::MAX_RELAXATION_WORK {
                 return Err(self.too_much("a free induction decay", fid_time, plan.work));

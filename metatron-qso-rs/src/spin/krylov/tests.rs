@@ -58,7 +58,7 @@ fn krylov_propagation_matches_the_dense_exponential() {
         let v = random_vector(n, seed + 10);
         let norm = norm2(&v);
         let want = dense_expv(&a, &v, t);
-        let got = expv(&a, &v, t, 1e-12 * norm).unwrap();
+        let got = expv(&a, &v, t, 1e-12 * norm, 0.0).unwrap();
         let err = distance(&got, &want) / norm;
         assert!(err < 1e-11, "n = {n}, ‖A‖t = {}: {err:e}", a.norm_inf() * t);
     }
@@ -80,15 +80,15 @@ fn breakdown_and_trivial_cases_are_exact() {
     let mut v = vec![C64::new(0.0, 0.0); n];
     v[0] = C64::new(1.0, 0.0);
     let want = dense_expv(&a, &v, 4.0);
-    let got = expv(&a, &v, 4.0, 1e-12).unwrap();
+    let got = expv(&a, &v, 4.0, 1e-12, 0.0).unwrap();
     assert!(distance(&got, &want) < 1e-13, "{}", distance(&got, &want));
     // Zero time, zero vector and a stationary vector.
-    assert_eq!(expv(&a, &v, 0.0, 1e-12).unwrap(), v);
+    assert_eq!(expv(&a, &v, 0.0, 1e-12, 0.0).unwrap(), v);
     let zero = vec![C64::new(0.0, 0.0); n];
-    assert_eq!(expv(&a, &zero, 1.0, 1e-12).unwrap(), zero);
+    assert_eq!(expv(&a, &zero, 1.0, 1e-12, 0.0).unwrap(), zero);
     let still = SparseBlock::from_triplets(3, vec![(1, 1, C64::new(-1.0, 0.0))]);
     let x = vec![C64::new(2.0, 0.0), C64::new(0.0, 0.0), C64::new(0.0, -1.0)];
-    assert_eq!(expv(&still, &x, 1e3, 1e-12).unwrap(), x);
+    assert_eq!(expv(&still, &x, 1e3, 1e-12, 0.0).unwrap(), x);
 }
 
 #[test]
@@ -103,7 +103,7 @@ fn the_estimate_bounds_the_work() {
     let one = krylov_work(a.n, a.nnz(), norm, 0.0);
     // At least the steps of a run at the same tolerance as the relaxation.
     let start = std::time::Instant::now();
-    expv(&a, &v, t, KRYLOV_TOLERANCE * norm2(&v)).unwrap();
+    expv(&a, &v, t, KRYLOV_TOLERANCE * norm2(&v), 0.0).unwrap();
     let elapsed = start.elapsed();
     assert!(work / one > norm * t / 10.0, "{}", work / one);
     assert!(elapsed.as_secs_f64() < 60.0);
@@ -187,7 +187,7 @@ fn orbits_reduce_an_invariant_generator() {
     let x0: Vec<C64> = orbits.of.iter().map(|&o| y0[o as usize]).collect();
     assert!(orbits.asymmetry(&x0) < 1e-15);
     let full = dense_expv(&a, &x0, 0.7);
-    let reduced = expv(&orbits.reduce(&a), &orbits.average(&x0), 0.7, 1e-13).unwrap();
+    let reduced = expv(&orbits.reduce(&a), &orbits.average(&x0), 0.7, 1e-13, 0.0).unwrap();
     let lifted: Vec<C64> = orbits.of.iter().map(|&o| reduced[o as usize]).collect();
     assert!(distance(&full, &lifted) < 1e-11 * norm2(&x0));
 }

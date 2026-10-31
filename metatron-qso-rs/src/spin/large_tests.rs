@@ -188,7 +188,10 @@ fn seven_protons_relax_as_dormand_prince_steps_and_beyond() {
         );
         assert!((z1 - zeq).abs() < (z0 - zeq).abs(), "spin {i}");
     }
-    // The free induction decay by Krylov steps, against the delays.
+    // The free induction decay by Krylov steps, against the delays; one
+    // point is the state's own signal.
+    let one = sys.fid(&rho, Isotope::H1, 1e-3, 1).unwrap();
+    assert_eq!(one, vec![sys.expectation(&rho, &fp).unwrap()]);
     let fid = sys.fid(&rho, Isotope::H1, 1e-3, 3).unwrap();
     for (k, s) in fid.iter().enumerate() {
         let at = run(Method::Krylov, k as f64 * 1e-3);

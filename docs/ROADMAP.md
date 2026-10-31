@@ -3257,9 +3257,12 @@ Changes to the plan:
   deviation (parts in 10⁵ of `1/d`, stored next to `1/d`), so it seems
   to move at that level, and Krylov steps chased that motion through the
   fast zero-quantum coherences: five seconds of seven protons were
-  refused for 3·10¹² operations. A vector that moves by less than 10⁻¹¹
-  of itself over the interval now takes one step, and the work estimate
-  checks that first (`‖A y‖`, one pass over the block's columns).
+  refused for 3·10¹² operations. Populations that move no faster than the
+  rounding of the state explains (`ε·Tr(ρ)/d` on every population, moved
+  at most at the relaxation rates and twice the couplings), or by less
+  than 10⁻¹¹ of themselves over the interval, now take one step, and the
+  work estimate checks that first (`‖A y‖`, one pass over the block's
+  columns).
 - **Two sources of rounding removed.** The diagonal of `−i[H, ·]` is
   added as one difference `H_aa − H_bb`, before anything else, instead of
   two Zeeman energies of 10⁹ rad/s; the Redfield drift is `R(ρ_eq − 1/d)`
@@ -3285,13 +3288,13 @@ Measured (four cores):
 - **Symmetry.** On the orbits, a methyl group with three protons on its
   axis (seven spins) keeps 3073 of 8193 coefficients, the 8/3 its
   threefold cycle predicts, and equals the full propagation to 3·10⁻¹²;
-  0.1 s takes 1.5 s instead of 4.5. A methylene group (swap, 8/5) agrees
+  0.1 s takes 1.5 s instead of 4.3. A methylene group (swap, 8/5) agrees
   to 10⁻¹¹.
 - **Equilibrium** of seven protons with `T₁`, `T₂` and dipolar relaxation
   is unchanged after five seconds.
-- **Cost.** One second at 9.4 T of five relaxing protons takes 0.16 s,
-  of six 3.8 s (about ten before), of seven 26 s; one second of eight at
-  1 T 18 s, and 0.1 s at 9.4 T 16 s. The Redfield terms of seven protons
+- **Cost.** One second at 9.4 T of five relaxing protons takes 0.17 s,
+  of six 4 s (about ten before), of seven 28 s; one second of eight at
+  1 T 18 s, and 0.1 s at 9.4 T 17 s. The Redfield terms of seven protons
   take 0.02 s (the dense superoperator took 0.5 s for six), and 0.1 s of
   seven protons with dipolar relaxation 12 s. Eleven protons with dipolar
   relaxation and nine relaxing for 100 s are refused at once.
@@ -3310,6 +3313,58 @@ Not done, and why:
   six spins), Dormand–Prince steps (seven) and the full propagation.
 - **Finding equivalent spins automatically** was not planned and is not
   done; a declaration is checked instead.
+
+Independent review: no wrong results found. The reviewer checked:
+
+- `expv` against Expokit's DGEXPV: the augmented Hessenberg matrix, the
+  error estimates and exponents, rejection, the breakdown criteria (each
+  bounds the error by `β s τ`) and the last step; a NumPy port against
+  SciPy's `expm_multiply` agreed to 3·10⁻¹⁶–4·10⁻¹⁴, also at tolerances
+  divided by 10⁶ repeats.
+- The Redfield columns against `R(|a⟩⟨b|) = Σ w (𝒬Y|a⟩⟨b| − 𝒬|a⟩⟨b|Y −
+  Y|a⟩⟨b|𝒬 + |a⟩⟨b|Y𝒬)`: the left and right products, the cross terms,
+  the label shifts with several isotopes, and the Hermiticity they rely
+  on (it would need revisiting with dynamic frequency shifts). The rate
+  bound is 1.3–2.5 times the exact largest column sum for two to five
+  protons.
+- The symmetry: the Gram matrix of the interactions is exactly the
+  invariance condition under isotropic tumbling; validation, state maps,
+  orbits, the reduced generator and the lifting are exact, and anything
+  not invariant propagates in full.
+- The augmented block, `generator_entries` (control and exchange see the
+  same generator as before), parallel determinism, index ranges and the
+  edge cases (no deviation, traces other than one, spin 1, the
+  laboratory frame).
+
+Fixed:
+
+- **Accumulators.** Every 256 columns allocated an accumulator over the
+  whole block, `n²/16` bytes of zeroing per build: a terabyte for one
+  step of a shaped pulse at dimension 2048, before the memory limit was
+  even checked. Each task (about four per thread) now keeps one, and the
+  stationarity check runs only for populations and only where the block
+  fits.
+- **Memory.** The Redfield terms, the index of the elements and the
+  accumulators of every thread now count together with the largest
+  block, and Dormand–Prince's estimate with every Redfield block it
+  reaches, those left empty as rounding included.
+- **Stationarity** applies only to the populations of one propagation: a
+  free induction decay of a distant spin could lose 10⁻¹¹ at every point.
+  Its bound now follows the rounding of the state rather than a fixed
+  fraction, which held equilibrium only while the augmented entry was
+  large.
+- **The augmented entry** no longer grows with the interval, which
+  loosened the tolerance (to 10⁻⁹ for 100 s at `T₁` = 0.1 s).
+- **A free induction decay of one point** returns the state's signal
+  without building a block.
+- **Orbits of different sizes** enter the stationarity check (the
+  reduced vector's norm differs by up to the root of their ratio).
+- `expv` asserts a finite, non-negative time.
+
+Kept: more than ten rejected steps are an error (Expokit has no limit;
+this refuses rather than misleads), and blocks of up to 30 elements use
+the whole space (Expokit asks for a smaller one; a breakdown at rounding
+level ends the process).
 
 ### 1.42 — Exact distances of error-correcting circuits (M)
 
