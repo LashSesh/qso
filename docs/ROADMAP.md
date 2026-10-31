@@ -3278,7 +3278,10 @@ Measured (four cores):
 - **The sparse Redfield superoperator** equals the dense formulas
   (products of full-space operators, the construction of 1.34) to 10⁻¹²
   on every block of both frames; the old tests (Solomon, BPP, Overhauser,
-  CSA, singlet order, both frames, QuTiP) pass unchanged.
+  CSA, singlet order, both frames) pass unchanged, and so does the
+  cross-validation against QuTiP: Redfield rates to 5·10⁻¹⁵ and
+  expectations to 3·10⁻⁹, Lindblad relaxation to 7·10⁻¹² (rotating frame)
+  and 2·10⁻¹⁰ (laboratory frame).
 - **Symmetry.** On the orbits, a methyl group with three protons on its
   axis (seven spins) keeps 3073 of 8193 coefficients, the 8/3 its
   threefold cycle predicts, and equals the full propagation to 3·10⁻¹²;

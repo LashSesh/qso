@@ -32,13 +32,18 @@
 //! spins in the laboratory frame, so free evolution, spectra and time
 //! averages use the eigendecomposition of each block of `H` (exact). With
 //! relaxation the Lindblad equation conserves the matching coherence
-//! orders; each block of its superoperator, up to [`MAX_LIOUVILLE_BLOCK`]
-//! elements, is exponentiated exactly for the deviation `ρ − 1/d`, so that
-//! thermal polarisations of parts in 10⁵ keep their relative precision.
-//! Short intervals and shaped pulses use adaptive Dormand–Prince steps
-//! instead, with a local error of 10⁻¹¹ of that deviation, when they are
-//! cheaper. A propagation that would take more than
-//! [`MAX_RELAXATION_WORK`] operations is refused.
+//! orders; each block of its superoperator is propagated for the deviation
+//! `ρ − 1/d`, so that thermal polarisations of parts in 10⁵ keep their
+//! relative precision: exponentiated exactly (up to
+//! [`MAX_LIOUVILLE_BLOCK`] elements) or, as a sparse matrix, by Krylov
+//! steps to 10⁻¹² of the deviation, whichever costs less. Short intervals
+//! and shaped pulses use adaptive Dormand–Prince steps instead, with a
+//! local error of 10⁻¹¹ of that deviation, when they are cheaper.
+//! Permutations of equivalent spins ([`SpinSystem::set_symmetries`])
+//! reduce the blocks of states they leave unchanged, exactly. A
+//! propagation that would take more than [`MAX_RELAXATION_WORK`]
+//! operations or [`MAX_RELAXATION_MEMORY`] bytes is refused before
+//! anything is built.
 //!
 //! Relaxation is phenomenological, per spin: `T₁` towards thermal
 //! equilibrium at the current field and temperature (jump operators
@@ -136,8 +141,9 @@ pub const BOLTZMANN: f64 = 1.380_649e-23;
 /// Largest dimension of a spin system's Hilbert space (11 spins ½).
 pub const MAX_SPIN_DIMENSION: usize = 2048;
 /// Largest block of the Lindblad superoperator (elements of one coherence
-/// order) that is exponentiated; larger ones use Dormand–Prince steps.
-/// Six spins ½ of one isotope have blocks of up to 924 elements.
+/// order) that is exponentiated densely; larger ones take Krylov steps.
+/// Six spins ½ of one isotope have blocks of up to 924 elements, seven
+/// of 3432.
 pub const MAX_LIOUVILLE_BLOCK: usize = 2048;
 /// Most floating-point operations (estimated) of one propagation with
 /// relaxation, about a minute on one core; more is refused. (One second
