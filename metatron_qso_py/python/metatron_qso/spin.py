@@ -42,8 +42,8 @@ from the cluster-correlation expansion::
 expansion): fields of any direction, full hyperfine tensors, finite and
 shaped pulses::
 
-    bath = spin.GeneralisedBath.diamond((0.01, 0, 0.03), radius=2e-9, seed=1)
-    print(bath.signal([spin.hahn(100e-6)], rabi=20e6))
+    bath = spin.GeneralisedBath.diamond((0.01, 0, 0.03), radius=2e-9, seed=1, min_radius=5e-10)
+    print(bath.signal([spin.hahn(100e-6)], rabi=20e6, bath_states=100))
 """
 
 from ._core import (

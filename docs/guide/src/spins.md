@@ -759,26 +759,41 @@ instead, the generalised expansion of Onizhuk et al. (PRX Quantum 2,
   point dipole's; give your own for the nuclei next to the vacancy), the
   nuclear Zeeman terms and the dipolar couplings of the pairs within the
   cutoff. The qubit `{α, β}` is formed by the electron's eigenstates
-  closest to `m_s = 0` and `m_s = transition`. `GeneralisedBath.diamond`
-  and `GeneralisedBath.from_bath` take the baths of `SpinBath`, the same
+  closest to `m_s = 0` and `m_s = transition`. A field across the axis
+  mixes `m_s = ±1`; where `β` keeps less than 0.75 of `|m⟩` there is no
+  such level, and the field is refused. `GeneralisedBath.diamond` and
+  `GeneralisedBath.from_bath` take the baths of `SpinBath`, the same
   nuclei for the same seed.
 - **Pulses.** By default ideal, in the frame rotating at the qubit's
   transition (or at `frequency`). With `rabi` they are rectangular with
   that Rabi frequency and drive both transitions from `α` in the
   rotating-wave approximation; with an `envelope` of `(amplitude, phase)`
   segments they are shaped, a pulse of angle `θ` lasting until the area
-  of its envelope is `θ`. Free periods count between pulse centres.
+  of its envelope is `θ`. A pulse of phase `φ` is a carrier
+  `cos(2πft + φ)` along x at the frame's `t = 0`, scaled to turn the
+  qubit at `rabi` in any field. The rotating-wave approximation needs
+  `rabi` (at the envelope's peak) below a tenth of the frame's frequency,
+  which is refused otherwise: near the crossing at 0.1024 T the frame
+  turns at 240 kHz. Free periods count between pulse centres.
   `pulses="laboratory"` applies ideal pulses about axes fixed in the
   laboratory frame, as PyCCE does. The last pulse reads out ideally.
 - **The expansion.** Each cluster gives the electron's density matrix
-  before the last pulse. Divided element by element by that of the
-  electron alone and by its subclusters' contributions, the clusters up
-  to `order` nuclei multiply into the result (on the qubit's elements,
-  the only ones the outputs use). `coherence` is the qubit's coherence
-  relative to the electron alone (the `L` of `SpinBath` for ideal pulses
-  and a field along the axis), `signal` the population of `α` after the
-  last pulse, and `exact` propagates the electron with a whole bath of up
-  to eight nuclei.
+  before the last pulse. It is expanded element by element in the basis
+  the inner pulses carry the qubit to, where the electron alone keeps the
+  state its first pulse made: elements that are not small there are
+  divided by those of the electron alone and of the subclusters, and
+  multiply into the result; small ones (the third level's, the qubit's
+  after a first pulse of 180°) add up as differences. The result is exact
+  when `order` reaches the number of nuclei and the cutoff joins them;
+  the electron couples separate groups of nuclei, so unlike `SpinBath`
+  a bath of separate groups is not exact at the size of its largest
+  group. Inner π pulses converge quickly; other inner pulses mix the
+  branches' populations and coherences, and the expansion converges more
+  slowly. `coherence` is the qubit's coherence relative to the electron
+  alone (the `L` of `SpinBath` for ideal pulses and a field along the
+  axis; NaN after a first pulse of 0° or 180°), `signal` the population
+  of `α` after the last pulse, and `exact` propagates the electron with a
+  whole bath of up to eight nuclei.
 - **Bath states.** A product over clusters represents only what
   factorises over them. Phases from independent nuclei do, so ideal
   pulses converge quickly. A finite pulse, however, depends on the
@@ -801,9 +816,11 @@ instead, the generalised expansion of Onizhuk et al. (PRX Quantum 2,
   by the direct rotation closest to the identity, computed exactly: the
   electron is prepared, pulsed and read out in its levels dressed by the
   nuclei, the fast oscillations are gone, and the mixing still acts on
-  the nuclei to all orders. Near a crossing of `α` with another level
-  (0.1024 T for `m_s = −1`) the dressed levels do not exist and are
-  refused.
+  the nuclei to all orders. Where nuclei mix `α` with another level
+  strongly (near the crossing at 0.1024 T for `m_s = −1`, with a
+  strongly coupled nucleus) the dressed levels do not exist and are
+  refused; with weak couplings near the crossing they differ from the
+  bare ones by the mixing, a few per cent.
 
 ```python
 import math
@@ -830,7 +847,7 @@ The tilt changes the echo through the nuclei's quantisation axes, which
 differ between the electron's levels when the field is off the axis.
 For the 509 nuclei of a natural bath at 50 mT along the axis, the second
 order takes 0.02 s and agrees with `SpinBath` to 5·10⁻⁴; the third order
-(0.13 s) moves it by at most 0.02 at 1 ms. With 10 MHz pulses and 100
+(0.11 s) moves it by at most 0.02 at 1 ms. With 10 MHz pulses and 100
 bath states the CPMG signal above is the ideal one within its standard
 error, while the expansion of unpolarised nuclei gives 0.558 (it does not
 converge for finite pulses).

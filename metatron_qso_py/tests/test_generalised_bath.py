@@ -225,3 +225,36 @@ def test_sampled_bath_states_with_finite_pulses():
     assert math.isnan(b.estimate(seqs, bath_states=1)["signal_error"][0])
     with pytest.raises(ValueError):
         b.signal(seqs, bath_states=spin.MAX_BATH_STATES + 1)
+
+
+def test_review_fixes():
+    b, spins = bath((0.0, 0.0, 0.05))
+    # Inner pulses that leave the electron alone at a pole before the read
+    # pulse: exact at full order (the expansion runs in the carried basis).
+    pole = [[spin.nv_pulse(90), spin.nv_free(20e-6), spin.nv_pulse(90), spin.nv_pulse(90)]]
+    _, exact = b.exact(pole)
+    assert abs(b.signal(pole, order=3, cutoff=math.inf)[0] - exact[0]) < 1e-10
+    # Ramsey read out by an identity pulse.
+    ramsey_read = [[spin.nv_pulse(90), spin.nv_free(20e-6), spin.nv_pulse(90, 180), spin.nv_pulse(0)]]
+    _, exact = b.exact(ramsey_read)
+    assert abs(b.signal(ramsey_read, order=3, cutoff=math.inf)[0] - exact[0]) < 1e-10
+    # No coherence between the branches after a first π pulse: NaN.
+    flip = [[spin.nv_pulse(180), spin.nv_free(10e-6), spin.nv_pulse(90)]]
+    assert math.isnan(b.coherence(flip, cutoff=math.inf)[0].real)
+    # Fields across the axis mix m_s = ±1: refused.
+    with pytest.raises(ValueError):
+        spin.GeneralisedBath((0.01, 0.0, 0.0), spins)
+    # The rotating-wave approximation: at most a tenth of the frame's frequency.
+    near = spin.GeneralisedBath((0.0, 0.0, 0.1024), spins)
+    with pytest.raises(ValueError):
+        near.signal([spin.hahn(20e-6)], rabi=1e6)
+    with pytest.raises(ValueError):
+        b.signal([spin.hahn(20e-6)], rabi=1e9)
+    # Radii that are not numbers, or negative, are refused.
+    for radius in (math.nan, -1e-9):
+        with pytest.raises(ValueError):
+            b.without_spins_within(radius)
+        with pytest.raises(ValueError):
+            spin.GeneralisedBath.diamond((0.0, 0.0, 0.05), radius=1.5e-9, min_radius=radius)
+        with pytest.raises(ValueError):
+            spin.SpinBath.diamond(0.05, radius=1.5e-9, min_radius=radius)

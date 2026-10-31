@@ -635,15 +635,21 @@ level before and after a free period (`(f t).fract()` keeps them accurate
 over milliseconds); ideal pulses act on the electron's three rows of
 every nuclear state. Finite pulses build the frame's Hamiltonian once per
 cluster (blocks of levels that turn alike, less `2πf`) and add the
-co-rotating drive per segment; propagators are cached by duration and
-phase, segments by length, amplitude and phase. The drive is divided by
-`⟨β|S_x|α⟩` of the electron alone, so that `rabi` and the pulse phase
-refer to the qubit whatever the field's direction and the eigenvectors'
-phases. The expansion divides element by element on the qubit's 2 × 2
-block (the third level's elements, and those of the electron alone below
-10⁻⁹, take no correction) and multiplies the results of all clusters
-into one 3 × 3 matrix (`Matrix3`, on the stack) per sequence; the
-coherence and the readout come from it at the end. The dressed frame
+co-rotating drive per segment. The eigenvectors of the electron alone are put in a fixed gauge
+(α real on |0⟩, `⟨β|S_x|α⟩` real and positive, the third level real on
+its largest component), and the drive is divided by `|⟨β|S_x|α⟩|`, so
+that `rabi` and the pulse phase refer to the qubit and results are
+continuous in the field. Free periods apply `V e^{−iEτ} V†` to the
+columns (two products) instead of keeping a matrix per duration; finite
+pulses keep their propagator per duration and phase, counted against a
+memory bound before the expansion starts. The expansion works in the
+basis the ideal inner pulses carry the qubit to (`ρ̃ = C†ρC`, `C` a 3 × 3
+product), element by element: products for the qubit's elements that
+are not small in the electron alone, sums of differences for the others
+(the mode of each element follows the electron alone and is the same for
+every cluster). Everything multiplies or adds into one 3 × 3 matrix
+(`Matrix3`, on the stack) per sequence, transformed back at the end for
+the coherence and the readout. The dressed frame
 replaces the eigenvectors `V` by `V′`, block-diagonal between `α` and
 the other levels: the eigenvectors are grouped by the block holding most
 of their weight, and each block of `V′` is the unitary factor of the SVD
@@ -655,8 +661,9 @@ Sampled bath states run one task per state (in parallel), each expanding
 all clusters in turn with its own map of subcluster contributions. A
 state is a list of projections ±½ along the field; `BathFields` holds the
 hyperfine tensors and, per nucleus, the dipolar tensors of its neighbours
-within the cutoff, from which the field of the nuclei outside a cluster
-follows by subtraction. The cluster then propagates one column, the
+within the cutoff. The fields of all nuclei are summed once per state;
+the field of the nuclei outside a cluster follows by subtracting its
+members'. The cluster then propagates one column, the
 product of its nuclei's spinors, instead of `2^k`, with the mean field
 added to its Hamiltonian; every cluster is diagonalised once per state.
 

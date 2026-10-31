@@ -15,9 +15,12 @@
 //! the field `B` in any direction, the full hyperfine tensors `A_i`, and
 //! the dipolar couplings of the pairs closer than the cutoff. The qubit
 //! `{α, β}` is formed by the eigenstates of the electron's own Hamiltonian
-//! `D S_z² + γ_e B·S` closest to `m_s = 0` and `m_s = m`; the electron
-//! starts in `α`, the nuclei unpolarised (or in sampled product states,
-//! below).
+//! `D S_z² + γ_e B·S` closest to `m_s = 0` and `m_s = m`; fields that leave
+//! `β` less than [`MIN_QUBIT_WEIGHT`] of `|m⟩` (across the axis, where they
+//! mix `m_s = ±1`) are refused. Their phases follow a convention, not the
+//! eigensolver: `α` real and positive on `|0⟩`, `⟨β|S_x|α⟩` real and
+//! positive. The electron starts in `α`, the nuclei unpolarised (or in
+//! sampled product states, below).
 //!
 //! Pulses act in the frame rotating at the microwave frequency `f`, which
 //! turns the electron's levels other than `α` (the frame of
@@ -27,9 +30,12 @@
 //! rectangular or shaped, drive both transitions from `α` in the
 //! rotating-wave approximation, and leave out, while they last, the terms
 //! that the frame makes oscillate at `f` (a transverse field, the
-//! non-secular hyperfine coupling). Free periods are exact.
-//! [`Pulses::Laboratory`] applies ideal pulses about axes fixed in the
-//! laboratory frame instead, as PyCCE does.
+//! non-secular hyperfine coupling); their peak Rabi frequency must stay
+//! below [`RWA_LIMIT`] of `|f|`. A pulse of phase `φ` is a carrier
+//! `cos(2πft + φ)` along x at the frame's `t = 0`, scaled to turn the qubit
+//! at its Rabi frequency. Free periods are exact. [`Pulses::Laboratory`]
+//! applies ideal pulses about axes fixed in the laboratory frame instead,
+//! as PyCCE does.
 //!
 //! The non-secular coupling mixes the electron's levels with the nuclei to
 //! first order in `A/Δ` (`Δ` the electron's transitions, GHz): the
@@ -44,22 +50,34 @@
 //! and read out in its levels dressed by the cluster's nuclei, the fast
 //! oscillations are gone, and the mixing acts on the nuclei to all orders
 //! (shifts of order `A²/Δ`, couplings between nuclei through the
-//! electron). Near a crossing of `α` with another level (0.1024 T for
-//! `m_s = −1`) the dressed levels do not exist and are refused.
+//! electron). Where the nuclei mix `α` with another level strongly (near
+//! the crossing at 0.1024 T for `m_s = −1`, with a strongly coupled
+//! nucleus) the dressed levels do not exist and are refused; with weak
+//! couplings near the crossing they exist but differ from the bare ones by
+//! the mixing, a few per cent.
 //!
 //! The electron's density matrix just before the last pulse, `ρ_C` for
 //! each cluster `C` (and `ρ_∅` for the electron alone), expands element by
-//! element on the qubit `{α, β}`, whose elements the coherence and the
-//! readout take (the third level's elements, and elements of the electron
-//! alone below 10⁻⁹, keep the electron's values):
+//! element in the basis the inner pulses carry the qubit to, `ρ̃ = C† ρ C`
+//! (`C` their ideal product), where the electron alone keeps the state its
+//! first pulse made wherever the inner pulses leave it:
 //!
 //! ```text
-//! ρ = ρ_∅ ⊙ Π_C r̃_C,   r_C = ρ_C ⊘ ρ_∅,   r̃_C = r_C ⊘ Π_{∅≠C′⊊C} r̃_{C′},
+//! ρ̃ = ρ̃_∅ ⊙ Π_C r̃_C,   r_C = ρ̃_C ⊘ ρ̃_∅,   r̃_C = r_C ⊘ Π_{∅≠C′⊊C} r̃_{C′},
 //! ```
 //!
-//! truncated at clusters of `order` nuclei and exact once `order` reaches
-//! the largest connected cluster. The last pulse, ideal, reads out the
-//! population of `α`.
+//! for the elements of the qubit that are not small in the electron alone,
+//! and by sums of differences for the others (the third level's, and the
+//! qubit's after a first pulse of 0° or 180°). It is truncated at clusters
+//! of `order` nuclei and exact when `order` reaches the number of nuclei
+//! and the cutoff joins them all: unlike the expansion of
+//! [`bath`](super::bath), the electron couples separate groups of nuclei,
+//! so a cluster's subsets that are not connected do not factorise. With
+//! inner π pulses the expansion converges quickly; other inner pulses mix
+//! the branches' populations and coherences, and it converges more slowly.
+//! The last pulse, ideal, reads out the population of `α`; the coherence
+//! is undefined (NaN) where the electron alone holds none between the
+//! branches.
 //!
 //! With unpolarised nuclei a product over clusters represents only what
 //! factorises over them: phases from independent nuclei do, but a finite
@@ -103,6 +121,23 @@ pub const MAX_GENERALISED_MATRICES: usize = 1 << 22;
 
 /// Most sampled bath states ([`GeneralisedCce::bath_states`]).
 pub const MAX_BATH_STATES: usize = 1 << 16;
+
+/// Least weight of the qubit's level `β` on `|m_s = m⟩`: below it the field
+/// mixes `m_s = ±1` and the levels are not labelled by `m`.
+pub const MIN_QUBIT_WEIGHT: f64 = 0.75;
+
+/// Largest peak Rabi frequency of finite pulses, as a fraction of the
+/// frame's frequency: the rotating-wave approximation fails beyond.
+pub const RWA_LIMIT: f64 = 0.1;
+
+/// Elements of the electron's density matrix (in the carried basis) smaller
+/// than this in the electron alone are expanded by sums, not products.
+const SMALL_ELEMENT: f64 = 1e-6;
+
+/// Most bytes the propagators of finite pulses, kept for reuse, may take in
+/// one expansion (one matrix of the cluster's dimension per distinct pulse,
+/// for every cluster in flight).
+pub const MAX_GENERALISED_CACHE: f64 = (1u64 << 30) as f64;
 
 /// The electron's density matrix (eigenbasis of its own Hamiltonian).
 type Rho = Matrix3<C64>;
@@ -320,33 +355,68 @@ struct BathFields {
     neighbours: Vec<Vec<(usize, [[f64; 3]; 3])>>,
 }
 
+/// The static fields of all nuclei in one bath state: on the electron, and
+/// on each nucleus from its neighbours within the cutoff (Hz).
+struct FieldSums {
+    electron: [f64; 3],
+    nuclei: Vec<[f64; 3]>,
+}
+
 impl BathFields {
-    /// The mean field on the cluster `members` in the bath state with the
-    /// projections `m` (±½ along the axis).
-    fn mean_field(&self, m: &[f64], members: &[usize]) -> MeanField {
+    /// `A·v` for a 3 × 3 tensor and a vector.
+    fn apply(a: &[[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
+        a.map(|row| row[0] * v[0] + row[1] * v[1] + row[2] * v[2])
+    }
+
+    /// The fields of all nuclei in the bath state with the projections `m`
+    /// (±½ along the axis), once per state.
+    fn totals(&self, m: &[f64]) -> FieldSums {
         let spin = |j: usize| self.axis.map(|x| x * m[j]);
-        let inside = |j: usize| members.contains(&j);
         let mut electron = [0.0; 3];
         for (j, a) in self.hyperfine.iter().enumerate() {
-            if inside(j) {
-                continue;
+            let f = Self::apply(a, spin(j));
+            for c in 0..3 {
+                electron[c] += f[c];
             }
-            let v = spin(j);
-            for (c, row) in a.iter().enumerate() {
-                electron[c] += row[0] * v[0] + row[1] * v[1] + row[2] * v[2];
+        }
+        let nuclei = self
+            .neighbours
+            .iter()
+            .map(|list| {
+                let mut g = [0.0; 3];
+                for &(j, ref d) in list {
+                    let f = Self::apply(d, spin(j));
+                    for c in 0..3 {
+                        g[c] += f[c];
+                    }
+                }
+                g
+            })
+            .collect();
+        FieldSums { electron, nuclei }
+    }
+
+    /// The mean field on the cluster `members` in the bath state with the
+    /// projections `m`: the fields of all nuclei less those of the members.
+    fn mean_field(&self, m: &[f64], sums: &FieldSums, members: &[usize]) -> MeanField {
+        let spin = |j: usize| self.axis.map(|x| x * m[j]);
+        let mut electron = sums.electron;
+        for &j in members {
+            let f = Self::apply(&self.hyperfine[j], spin(j));
+            for c in 0..3 {
+                electron[c] -= f[c];
             }
         }
         let nuclei = members
             .iter()
             .map(|&i| {
-                let mut g = [0.0; 3];
+                let mut g = sums.nuclei[i];
                 for &(j, ref d) in &self.neighbours[i] {
-                    if inside(j) {
-                        continue;
-                    }
-                    let v = spin(j);
-                    for (a, row) in d.iter().enumerate() {
-                        g[a] += row[0] * v[0] + row[1] * v[1] + row[2] * v[2];
+                    if members.contains(&j) {
+                        let f = Self::apply(d, spin(j));
+                        for c in 0..3 {
+                            g[c] -= f[c];
+                        }
                     }
                 }
                 g
@@ -405,9 +475,11 @@ struct Electron {
     values: [f64; 3],
     alpha: usize,
     beta: usize,
-    /// `⟨β|S_x|α⟩`: how the drive couples the qubit (its magnitude and the
-    /// phase of the eigenvectors).
+    /// `⟨β|S_x|α⟩`: how the drive couples the qubit (real and positive by
+    /// the phase convention, where it does not vanish).
     coupling: C64,
+    /// The weights of `α` on `|0⟩` and of `β` on `|m⟩`.
+    weights: (f64, f64),
 }
 
 /// One sequence ready to run: its steps before the last pulse, the pulses
@@ -477,9 +549,11 @@ impl GeneralisedBath {
         Ok(bath)
     }
 
-    /// The bath without the nuclei closer than `radius` (m) to the vacancy.
+    /// The bath without the nuclei closer than `radius` (m) to the vacancy
+    /// (a radius that is not a number removes none).
     pub fn without_spins_within(mut self, radius: f64) -> Self {
-        self.spins.retain(|s| norm(s.position) >= radius);
+        self.spins
+            .retain(|s| radius.is_nan() || norm(s.position) >= radius);
         self
     }
 
@@ -520,7 +594,37 @@ impl GeneralisedBath {
                 "hyperfine tensors must be finite",
             ));
         }
-        self.as_bath().validate()
+        self.as_bath().validate()?;
+        // The qubit {0, m}: its levels must be recognisable.
+        let electron = self.electron();
+        if electron.values.iter().any(|x| !x.is_finite())
+            || electron.vectors.iter().any(|z| !z.norm().is_finite())
+        {
+            return Err(QsoError::invalid(
+                "field",
+                "the electron's levels are not finite: the field is too large",
+            ));
+        }
+        let (alpha, beta) = electron.weights;
+        if alpha < 0.5 {
+            return Err(QsoError::invalid(
+                "field",
+                format!(
+                    "the field mixes m_s = 0 with m_s = ±1 (weight {alpha:.2} on |0⟩): the \
+                     qubit is not defined"
+                ),
+            ));
+        }
+        if beta < MIN_QUBIT_WEIGHT {
+            return Err(QsoError::invalid(
+                "field",
+                format!(
+                    "the field mixes m_s = +1 and −1 (weight {beta:.2} on |m⟩, below \
+                     {MIN_QUBIT_WEIGHT}): no level is that of m_s = m; tilt it towards the axis"
+                ),
+            ));
+        }
+        Ok(())
     }
 
     /// The connected clusters of up to `order` nuclei (pairs closer than
@@ -545,7 +649,7 @@ impl GeneralisedBath {
             + &sx * c(g * self.field[0])
             + &sy * c(g * self.field[1])
             + &sz * c(g * self.field[2]);
-        let (values, vectors) = eigh(&h);
+        let (values, mut vectors) = eigh(&h);
         // The eigenstate closest to |m_s⟩ (basis +1, 0, −1), each taken once.
         let closest = |level: usize, taken: &[usize]| -> usize {
             (0..3)
@@ -557,8 +661,44 @@ impl GeneralisedBath {
                 })
                 .expect("three eigenvectors")
         };
+        let level = if self.transition < 0 { 2 } else { 0 };
         let alpha = closest(1, &[]);
-        let beta = closest(if self.transition < 0 { 2 } else { 0 }, &[alpha]);
+        let beta = closest(level, &[alpha]);
+        let weights = (
+            vectors[(1, alpha)].norm_sqr(),
+            vectors[(level, beta)].norm_sqr(),
+        );
+        // The eigenvectors' phases, which the solver leaves arbitrary: α real
+        // and positive on |0⟩, ⟨β|S_x|α⟩ real and positive (or β real and
+        // positive on |m⟩ where the drive does not couple them), the third
+        // level real and positive on its largest component.
+        let gauge = |vectors: &mut CMatrix, j: usize, z: C64| {
+            if z.norm() > 0.0 {
+                let unit = z.conj() / z.norm();
+                for r in 0..3 {
+                    vectors[(r, j)] *= unit;
+                }
+            }
+        };
+        let z = vectors[(1, alpha)];
+        gauge(&mut vectors, alpha, z);
+        let x = (vectors.column(beta).adjoint() * &sx * vectors.column(alpha))[(0, 0)];
+        let z = if x.norm() > 1e-6 {
+            x.conj()
+        } else {
+            vectors[(level, beta)]
+        };
+        gauge(&mut vectors, beta, z);
+        let third = 3 - alpha - beta;
+        let largest = (0..3)
+            .max_by(|&a, &b| {
+                vectors[(a, third)]
+                    .norm_sqr()
+                    .total_cmp(&vectors[(b, third)].norm_sqr())
+            })
+            .expect("three components");
+        let z = vectors[(largest, third)];
+        gauge(&mut vectors, third, z);
         let coupling = (vectors.adjoint() * sx * &vectors)[(beta, alpha)];
         Electron {
             vectors,
@@ -566,6 +706,7 @@ impl GeneralisedBath {
             alpha,
             beta,
             coupling,
+            weights,
         }
     }
 
@@ -732,11 +873,27 @@ impl GeneralisedBath {
     /// pulse.
     fn parse(&self, sequences: &[Vec<NvEvent>], pulses: &Pulses) -> Result<Vec<Sequence>> {
         pulses.validate()?;
-        if pulses.drive().is_some() && self.electron().coupling.norm() < 0.05 {
-            return Err(QsoError::invalid(
-                "pulses",
-                "a drive along x hardly couples the qubit's levels in this field",
-            ));
+        if let Some((rabi, envelope)) = pulses.drive() {
+            if self.electron().coupling.norm() < 0.05 {
+                return Err(QsoError::invalid(
+                    "pulses",
+                    "a drive along x hardly couples the qubit's levels in this field",
+                ));
+            }
+            // The rotating-wave approximation needs the drive far slower than
+            // the frame.
+            let peak = rabi * envelope.iter().map(|s| s.0).fold(0.0, f64::max);
+            let frame = self.frame_frequency().abs();
+            if peak > RWA_LIMIT * frame {
+                return Err(QsoError::invalid(
+                    "rabi",
+                    format!(
+                        "a peak Rabi frequency of {:.3e} Hz exceeds {RWA_LIMIT} of the frame's \
+                         frequency ({:.3e} Hz): the rotating-wave approximation fails",
+                        peak, frame
+                    ),
+                ));
+            }
         }
         // Durations follow from the Rabi frequency of equal area.
         let drive = Microwave {
@@ -879,9 +1036,11 @@ impl GeneralisedBath {
             let (pv, pw) = eigh(&hp);
             from_spectrum(&pv, &pw, |e| C64::from_polar(1.0, -e * length))
         };
-        let mut free_cache: HashMap<u64, CMatrix> = HashMap::new();
+        // Free periods apply V e^{−iEτ} V† to the columns; the propagators of
+        // finite pulses are kept per duration and phase (bounded by
+        // MAX_GENERALISED_CACHE before the expansion starts).
+        let inverse = vectors.adjoint();
         let mut pulse_cache: HashMap<(u64, u64), CMatrix> = HashMap::new();
-        let mut segment_cache: HashMap<(u64, u64, u64), CMatrix> = HashMap::new();
         Ok(sequences
             .iter()
             .map(|seq| {
@@ -913,11 +1072,18 @@ impl GeneralisedBath {
                             if tau == 0.0 {
                                 continue;
                             }
-                            let x = free_cache.entry(tau.to_bits()).or_insert_with(|| {
-                                from_spectrum(&values, &vectors, |e| C64::from_polar(1.0, -e * tau))
-                            });
+                            let free = |psi: &CMatrix| -> CMatrix {
+                                let mut y = cmul(&inverse, psi);
+                                for (r, e) in values.iter().enumerate() {
+                                    let phase = C64::from_polar(1.0, -e * tau);
+                                    for c in 0..cols {
+                                        y[(r, c)] *= phase;
+                                    }
+                                }
+                                cmul(&vectors, &y)
+                            };
                             if lab {
-                                psi = cmul(x, &psi);
+                                psi = free(&psi);
                             } else {
                                 // U_f(t + τ)† e^{−iHτ} U_f(t), on the columns.
                                 let (before, after) = (frame(t), frame(t + tau));
@@ -928,7 +1094,7 @@ impl GeneralisedBath {
                                         moved[(r, c)] *= ph;
                                     }
                                 }
-                                psi = cmul(x, &moved);
+                                psi = free(&moved);
                                 for r in 0..d {
                                     let ph = after[r / n].conj();
                                     for c in 0..cols {
@@ -945,21 +1111,15 @@ impl GeneralisedBath {
                                 let duration = angle.abs() / 360.0 / area;
                                 let key = (duration.to_bits(), phase.to_bits());
                                 let u = pulse_cache.entry(key).or_insert_with(|| {
-                                    // The segments in turn (equal ones once).
+                                    // The segments in turn.
                                     let length = duration / envelope.len() as f64;
                                     let mut u: Option<CMatrix> = None;
                                     for &(amplitude, offset) in envelope {
-                                        let key = (
-                                            length.to_bits(),
-                                            amplitude.to_bits(),
-                                            (phase + offset).to_bits(),
-                                        );
-                                        let x = segment_cache.entry(key).or_insert_with(|| {
-                                            segment(base, length, rabi * amplitude, phase + offset)
-                                        });
+                                        let x =
+                                            segment(base, length, rabi * amplitude, phase + offset);
                                         u = Some(match u {
-                                            None => x.clone(),
-                                            Some(before) => cmul(x, &before),
+                                            None => x,
+                                            Some(before) => cmul(&x, &before),
                                         });
                                     }
                                     u.expect("at least one segment")
@@ -1045,40 +1205,37 @@ impl GeneralisedBath {
     }
 
     /// Operations (estimated): per cluster a diagonalisation, per distinct
-    /// free period an exponential, per distinct segment of a finite pulse a
-    /// diagonalisation, per step a product with the columns (`2^k`, or one
-    /// in a sampled state), all `repeats` times.
+    /// segment of a finite pulse a diagonalisation and an exponential, per
+    /// free period two products with the columns (`2^k`, or one in a
+    /// sampled state) and per pulse one, all `repeats` times.
     fn check_work(
         sizes: &[usize],
         sequences: &[Sequence],
         pulses: &Pulses,
         repeats: usize,
     ) -> Result<()> {
-        let mut free = HashSet::new();
         let mut driven = HashSet::new();
-        let mut steps = 0usize;
+        let (mut free, mut pulsed) = (0usize, 0usize);
         for step in sequences.iter().flat_map(|s| &s.steps) {
-            steps += 1;
             match *step {
-                NvEvent::Free(tau) => {
-                    free.insert(tau.to_bits());
-                }
+                NvEvent::Free(_) => free += 1,
                 NvEvent::Pulse { angle, phase } => {
+                    pulsed += 1;
                     driven.insert((angle.to_bits(), phase.to_bits()));
                 }
             }
         }
         let segments = pulses.drive().map_or(0, |(_, envelope)| envelope.len());
-        let (free, driven) = (free.len() as f64, (driven.len() * segments) as f64);
-        let columns = |n: f64| if repeats > 1 { 1.0 } else { n };
+        let driven = (driven.len() * segments) as f64;
+        let columns = |n: f64| if repeats > 0 { 1.0 } else { n };
         let work: f64 = repeats.max(1) as f64
             * sizes
                 .iter()
                 .map(|&k| {
                     let n = (1u64 << k) as f64;
                     let d = 3.0 * n;
-                    d * d * d * (60.0 + 10.0 * free + 80.0 * driven)
-                        + steps as f64 * 8.0 * d * d * columns(n)
+                    d * d * d * (60.0 + 80.0 * driven)
+                        + (16.0 * free as f64 + 8.0 * pulsed as f64) * d * d * columns(n)
                 })
                 .sum::<f64>();
         if work > MAX_GENERALISED_WORK {
@@ -1097,6 +1254,14 @@ impl GeneralisedBath {
     /// sequence by the expansion `cce`, for each sampled bath state (one
     /// for unpolarised nuclei), and that of the electron alone (eigenbasis,
     /// rotating frame).
+    ///
+    /// The expansion runs in the basis the inner pulses carry the qubit to,
+    /// `ρ̃ = C† ρ C` (`C` their ideal product): there the electron alone keeps
+    /// the state its first pulse made, wherever the inner pulses leave it.
+    /// Elements of `ρ̃` that are not small in the electron alone expand by
+    /// products (`r_C = ρ̃_C ⊘ ρ̃_∅`), the others (the third level's, and the
+    /// qubit's after a first pulse of 0° or 180°) by sums of differences:
+    /// both are exact at full order.
     fn expanded(
         &self,
         sequences: &[Sequence],
@@ -1120,10 +1285,10 @@ impl GeneralisedBath {
         let in_flight = if cce.bath_states > 0 {
             crate::parallel::threads().min(cce.bath_states)
         } else {
-            1
+            crate::parallel::threads()
         };
         let held = below
-            .saturating_mul(in_flight)
+            .saturating_mul(if cce.bath_states > 0 { in_flight } else { 1 })
             .saturating_add(cce.bath_states)
             .saturating_mul(sequences.len());
         if held > MAX_GENERALISED_MATRICES {
@@ -1136,6 +1301,12 @@ impl GeneralisedBath {
                 ),
             ));
         }
+        Self::check_cache(
+            sizes.iter().copied().max().unwrap_or(0),
+            sequences,
+            &cce.pulses,
+            in_flight,
+        )?;
         let electron = self.electron();
         let frequency = self.frame_frequency();
         let run = |members: &[usize], mean: Option<&MeanField>| {
@@ -1150,25 +1321,52 @@ impl GeneralisedBath {
             )
         };
         let bare = run(&[], None)?;
-        // r = ρ_C ⊘ ρ_∅ on the qubit's elements, where the coherence and
-        // the readout take theirs; those of the third level, and those of
-        // the electron alone below 10⁻⁹, keep the electron's values (their
-        // ratios are unstable and unused).
-        let qubit = |e: usize| e == electron.alpha || e == electron.beta;
-        let ratio = |rho: &Rho, base: &Rho| -> Rho {
-            Rho::from_fn(|e, f| {
-                if qubit(e) && qubit(f) && base[(e, f)].norm() > 1e-9 {
-                    rho[(e, f)] / base[(e, f)]
-                } else {
-                    C64::new(1.0, 0.0)
-                }
-            })
+        Self::check_finite(&bare)?;
+        // The carried basis of each sequence.
+        let carries: Vec<Rho> = sequences
+            .iter()
+            .map(|seq| Self::carry(&electron, seq))
+            .collect();
+        let tilde = |states: Vec<Rho>| -> Vec<Rho> {
+            states
+                .iter()
+                .zip(&carries)
+                .map(|(rho, c)| c.adjoint() * rho * c)
+                .collect()
         };
-        // Divide each cluster's ratios by the contributions of its
-        // subclusters, multiply them into `total`, and keep them below the
-        // order.
+        // Which elements expand by products: the qubit's that are not small
+        // in the electron alone.
+        let qubit = |e: usize| e == electron.alpha || e == electron.beta;
+        let products = |zero: &[Rho]| -> Vec<Matrix3<bool>> {
+            zero.iter()
+                .map(|z| {
+                    Matrix3::from_fn(|e, f| {
+                        qubit(e) && qubit(f) && z[(e, f)].norm() > SMALL_ELEMENT
+                    })
+                })
+                .collect()
+        };
+        // The cluster's contributions before its subclusters are taken out.
+        let contributions = |rho: &[Rho], zero: &[Rho], modes: &[Matrix3<bool>]| -> Vec<Rho> {
+            rho.iter()
+                .zip(zero)
+                .zip(modes)
+                .map(|((r, z), m)| {
+                    Rho::from_fn(|e, f| {
+                        if m[(e, f)] {
+                            r[(e, f)] / z[(e, f)]
+                        } else {
+                            r[(e, f)] - z[(e, f)]
+                        }
+                    })
+                })
+                .collect()
+        };
+        // Take the subclusters' irreducible contributions out of a cluster's,
+        // add it to `total`, and keep it below the order.
         let absorb = |members: &[usize],
                       mut r: Vec<Rho>,
+                      modes: &[Matrix3<bool>],
                       total: &mut [Rho],
                       reduced: &mut HashMap<Vec<usize>, Vec<Rho>>| {
             let size = members.len();
@@ -1178,19 +1376,41 @@ impl GeneralisedBath {
                     .map(|b| members[b])
                     .collect();
                 if let Some(below) = reduced.get(&sub) {
-                    for (x, y) in r.iter_mut().zip(below) {
-                        x.zip_apply(y, |a, b| *a /= b);
+                    for ((x, y), m) in r.iter_mut().zip(below).zip(modes) {
+                        for e in 0..3 {
+                            for f in 0..3 {
+                                if m[(e, f)] {
+                                    x[(e, f)] /= y[(e, f)];
+                                } else {
+                                    x[(e, f)] -= y[(e, f)];
+                                }
+                            }
+                        }
                     }
                 }
             }
-            for (t, x) in total.iter_mut().zip(&r) {
-                t.zip_apply(x, |a, b| *a *= b);
+            for ((t, x), m) in total.iter_mut().zip(&r).zip(modes) {
+                for e in 0..3 {
+                    for f in 0..3 {
+                        if m[(e, f)] {
+                            t[(e, f)] *= x[(e, f)];
+                        } else {
+                            t[(e, f)] += x[(e, f)];
+                        }
+                    }
+                }
             }
             if size < cce.order {
                 reduced.insert(members.to_vec(), r);
             }
         };
-        let diverges = |total: &[Rho], state: Option<usize>| -> Result<()> {
+        // Back from the carried basis, checked.
+        let finish = |total: Vec<Rho>, state: Option<usize>| -> Result<Vec<Rho>> {
+            let total: Vec<Rho> = total
+                .iter()
+                .zip(&carries)
+                .map(|(t, c)| c * t * c.adjoint())
+                .collect();
             if let Some(k) = total.iter().position(|rho| {
                 rho.iter()
                     .any(|z| !(z.norm().is_finite() && z.norm() <= 1.0 + 1e-6))
@@ -1210,10 +1430,12 @@ impl GeneralisedBath {
                     ),
                 ));
             }
-            Ok(())
+            Ok(total)
         };
         if cce.bath_states == 0 {
-            let mut total = bare.clone();
+            let zero = tilde(bare.clone());
+            let modes = products(&zero);
+            let mut total = zero.clone();
             let mut reduced: HashMap<Vec<usize>, Vec<Rho>> = HashMap::new();
             for size in 1..=cce.order {
                 let list: Vec<&Vec<usize>> = clusters.iter().filter(|c| c.len() == size).collect();
@@ -1224,43 +1446,89 @@ impl GeneralisedBath {
                         .into_iter()
                         .collect::<Result<Vec<_>>>()?;
                     for (&members, states) in part.iter().zip(raw) {
-                        let r = states
-                            .iter()
-                            .zip(&bare)
-                            .map(|(rho, base)| ratio(rho, base))
-                            .collect();
-                        absorb(members, r, &mut total, &mut reduced);
+                        let r = contributions(&tilde(states), &zero, &modes);
+                        absorb(members, r, &modes, &mut total, &mut reduced);
                     }
                 }
             }
-            diverges(&total, None)?;
-            return Ok((vec![total], bare));
+            return Ok((vec![finish(total, None)?], bare));
         }
         // Sampled bath states, each expanded on its own (in parallel), every
         // cluster in the static field of the nuclei outside it.
         let fields = self.bath_fields(cce.cutoff)?;
         let states = self.bath_states(cce.bath_states, cce.seed);
         let totals = crate::parallel::map_tasks(states.len(), |m| -> Result<Vec<Rho>> {
-            let mean = |members: &[usize]| fields.mean_field(&states[m], members);
-            let zero = run(&[], Some(&mean(&[])))?;
+            let sums = fields.totals(&states[m]);
+            let mean = |members: &[usize]| fields.mean_field(&states[m], &sums, members);
+            let zero = tilde(run(&[], Some(&mean(&[])))?);
+            let modes = products(&zero);
             let mut total = zero.clone();
             let mut reduced: HashMap<Vec<usize>, Vec<Rho>> = HashMap::new();
             for size in 1..=cce.order {
                 for members in clusters.iter().filter(|c| c.len() == size) {
-                    let r = run(members, Some(&mean(members)))?
-                        .iter()
-                        .zip(&zero)
-                        .map(|(rho, base)| ratio(rho, base))
-                        .collect();
-                    absorb(members, r, &mut total, &mut reduced);
+                    let rho = tilde(run(members, Some(&mean(members)))?);
+                    let r = contributions(&rho, &zero, &modes);
+                    absorb(members, r, &modes, &mut total, &mut reduced);
                 }
             }
-            diverges(&total, Some(m))?;
-            Ok(total)
+            finish(total, Some(m))
         })
         .into_iter()
         .collect::<Result<Vec<_>>>()?;
         Ok((totals, bare))
+    }
+
+    /// Refuse an electron alone whose propagation is not finite (fields,
+    /// times or Rabi frequencies beyond double precision).
+    fn check_finite(states: &[Rho]) -> Result<()> {
+        if states
+            .iter()
+            .any(|rho| rho.iter().any(|z| !(z.re.is_finite() && z.im.is_finite())))
+        {
+            return Err(QsoError::invalid(
+                "sequence",
+                "the propagation is not finite: the field, the times or the Rabi frequency are \
+                 beyond double precision",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Refuse caches of finite pulses beyond [`MAX_GENERALISED_CACHE`]: a
+    /// matrix of the largest cluster's dimension per distinct pulse, for
+    /// every cluster in flight.
+    fn check_cache(
+        largest: usize,
+        sequences: &[Sequence],
+        pulses: &Pulses,
+        in_flight: usize,
+    ) -> Result<()> {
+        if pulses.drive().is_none() {
+            return Ok(());
+        }
+        let distinct: HashSet<(u64, u64)> = sequences
+            .iter()
+            .flat_map(|s| &s.steps)
+            .filter_map(|step| match *step {
+                NvEvent::Pulse { angle, phase } => Some((angle.to_bits(), phase.to_bits())),
+                NvEvent::Free(_) => None,
+            })
+            .collect();
+        let d = (3u64 << largest) as f64;
+        let bytes = distinct.len() as f64 * 16.0 * d * d * in_flight as f64;
+        if bytes > MAX_GENERALISED_CACHE {
+            return Err(QsoError::invalid(
+                "pulses",
+                format!(
+                    "{} distinct finite pulses would keep {:.1} GB of propagators (limit {:.1} \
+                     GB): use fewer pulse angles and phases, or a lower order",
+                    distinct.len(),
+                    bytes / 1e9,
+                    MAX_GENERALISED_CACHE / 1e9
+                ),
+            ));
+        }
+        Ok(())
     }
 
     /// The bath's projections (±½ along the field, along z without one) in
@@ -1376,22 +1644,26 @@ impl GeneralisedBath {
     /// by the inner pulses (ideally): where the branches that started in
     /// `α` and `β` are, as [`SpinBath::coherence`] follows them.
     fn branch_coherence(electron: &Electron, seq: &Sequence, rho: &Rho, base: &Rho) -> C64 {
+        let carry = Self::carry(electron, seq);
+        let element =
+            |m: &Rho| -> C64 { (carry.adjoint() * m * carry)[(electron.beta, electron.alpha)] };
+        let reference = element(base);
+        // Undefined where the electron alone holds no coherence between the
+        // branches (a first pulse of 0° or 180°).
+        if reference.norm() < 1e-9 {
+            return C64::new(f64::NAN, f64::NAN);
+        }
+        element(rho) / reference
+    }
+
+    /// The inner pulses of a sequence, ideal: they carry `α` and `β` to the
+    /// branches `α′`, `β′` (its columns).
+    fn carry(electron: &Electron, seq: &Sequence) -> Rho {
         let mut carry = CMatrix::identity(3, 3);
         for &(angle, phase) in &seq.inner {
             carry = Self::ideal(electron, angle, phase) * carry;
         }
-        let alpha = carry.column(electron.alpha).clone_owned();
-        let beta = carry.column(electron.beta).clone_owned();
-        let element = |m: &Rho| -> C64 {
-            let mut z = ZERO;
-            for e in 0..3 {
-                for f in 0..3 {
-                    z += beta[e].conj() * m[(e, f)] * alpha[f];
-                }
-            }
-            z
-        };
-        element(rho) / element(base)
+        Rho::from_fn(|r, c| carry[(r, c)])
     }
 
     /// The population of `α` after each sequence, its last pulse ideal,
@@ -1442,6 +1714,7 @@ impl GeneralisedBath {
         }
         let parsed = self.parse(sequences, pulses)?;
         Self::check_work(&[0, self.spins.len()], &parsed, pulses, 0)?;
+        Self::check_cache(self.spins.len(), &parsed, pulses, 1)?;
         let electron = self.electron();
         let frequency = self.frame_frequency();
         let members: Vec<usize> = (0..self.spins.len()).collect();
@@ -1449,6 +1722,8 @@ impl GeneralisedBath {
         let full = self.cluster_states(
             &members, &parsed, cutoff, pulses, &electron, frequency, None,
         )?;
+        Self::check_finite(&zero)?;
+        Self::check_finite(&full)?;
         Ok(full
             .iter()
             .zip(&zero)
@@ -1483,16 +1758,34 @@ pub fn generalised_ensemble_signal(
         return Err(QsoError::invalid("configurations", "at least one"));
     }
     let root = crate::rng::Rng::seed_from_u64(seed);
-    // Every bath first, so that one out of range fails before any work.
-    let baths = (0..configurations)
+    let bath = |k: usize| {
+        GeneralisedBath::diamond(
+            field,
+            transition,
+            abundance,
+            radius,
+            root.fork(k as u64).next_u64(),
+        )
+    };
+    // The settings and the sequences are checked on the first bath before any
+    // work; the baths are built one at a time.
+    let first = bath(0)?;
+    first.parse(sequences, &cce.pulses)?;
+    first.clusters(cce.order, cce.cutoff)?;
+    // Each configuration samples its own bath states.
+    let states = crate::rng::Rng::seed_from_u64(cce.seed);
+    let runs = (0..configurations)
         .map(|k| {
-            let bath_seed = root.fork(k as u64).next_u64();
-            GeneralisedBath::diamond(field, transition, abundance, radius, bath_seed)
+            let own = GeneralisedCce {
+                seed: states.fork(u64::MAX - k as u64).next_u64(),
+                ..cce.clone()
+            };
+            if k == 0 {
+                first.signal(sequences, &own)
+            } else {
+                bath(k)?.signal(sequences, &own)
+            }
         })
-        .collect::<Result<Vec<_>>>()?;
-    let runs = baths
-        .iter()
-        .map(|bath| bath.signal(sequences, cce))
         .collect::<Result<Vec<_>>>()?;
     let n = configurations as f64;
     Ok((0..sequences.len())

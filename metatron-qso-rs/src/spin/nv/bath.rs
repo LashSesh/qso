@@ -468,9 +468,11 @@ impl SpinBath {
     }
 
     /// The bath without the spins closer than `radius` (m) to the vacancy,
-    /// whose contact couplings the point dipole misses.
+    /// whose contact couplings the point dipole misses (a radius that is not
+    /// a number removes none).
     pub fn without_spins_within(mut self, radius: f64) -> Self {
-        self.spins.retain(|s| norm(s.position) >= radius);
+        self.spins
+            .retain(|s| radius.is_nan() || norm(s.position) >= radius);
         self
     }
 

@@ -3910,10 +3910,10 @@ Delivered in `spin/nv/generalised.rs`:
   laboratory frame. The qubit is formed by the electron's eigenstates
   closest to `m_s = 0` and `m`. Each cluster of up to eight nuclei is
   propagated with the electron (dimension `3·2^k`), and the electron's
-  density matrix before the last pulse is expanded element by element on
-  the qubit's elements (Onizhuk et al.). `coherence` is relative to the
-  electron alone, `signal` follows the ideal last pulse, and `exact`
-  propagates up to eight nuclei whole.
+  density matrix before the last pulse is expanded element by element
+  (Onizhuk et al.), in the basis the inner pulses carry the qubit to.
+  `coherence` is relative to the electron alone, `signal` follows the
+  ideal last pulse, and `exact` propagates up to eight nuclei whole.
 - **Pulses.** Ideal pulses in the frame rotating at the qubit's
   transition; finite pulses in the rotating-wave approximation,
   rectangular (`Pulses::Finite`) or shaped (`Pulses::Shaped`, an envelope
@@ -3956,9 +3956,13 @@ Changes to the plan:
   product over clusters cannot follow: the expansion stalls at 10⁻⁵ or
   diverges. In the dressed levels the oscillations are gone, and the
   mixing acts on the nuclei to all orders.
-- **The qubit's elements only.** Finite pulses leave the third level tiny
-  elements, whose ratios are unstable, so the expansion takes the qubit's
-  elements only. The coherence and the readout use no others.
+- **The carried basis, and sums for small elements.** Elements that are
+  zero for the electron alone have no ratio. These are the third level's
+  elements under finite pulses, and the qubit's when inner pulses leave
+  the electron at a pole. The expansion therefore runs in the basis the
+  inner pulses carry the qubit to, and expands the elements that are
+  small there by sums of differences. Both choices are exact at full
+  order.
 - **Shaped pulses** are defined here: 1.37 has rectangular pulses only.
   An envelope has segments of equal length, each with an amplitude and a
   phase, and a pulse lasts until the area of its envelope is its angle.
@@ -3997,14 +4001,14 @@ Measured (four cores):
 - **Against 1.39.** A natural bath of 509 ¹³C within 4 nm at 50 mT (no
   nuclei within 0.5 nm; 1414 clusters at second order, 3582 at third)
   agrees with `SpinBath` to 5·10⁻⁴ at second order (two baths). The second
-  order takes 0.02 s and the third 0.13 s; the third order moves the
+  order takes 0.02 s and the third 0.11 s; the third order moves the
   coherence by at most 0.02 at 1 ms. Bare and dressed levels agree to
   10⁻⁴ there.
 - **Tilted fields.** The same bath at 20 mT tilted by 0°, 2°, 5°, 15° and
   45° has a Hahn echo of 0.562, 0.471, 0.630, 0.657 and 0.336 at 0.6 ms;
   the second and third orders differ by at most 0.011 (0.1 s each).
-- **Exact propagation.** Eight nuclei (dimension 768): 4.6 s with ideal
-  pulses, 13.7 s with 10 MHz pulses; the expansion at eighth order equals
+- **Exact propagation.** Eight nuclei (dimension 768): 2.3 s with ideal
+  pulses, 7.8 s with 10 MHz pulses; the expansion at eighth order equals
   them to 2·10⁻¹⁵.
 - **Finite pulses on eight nuclei** (CPMG-8 and -32 at 50 mT, spacing
   10 µs). Errors of the expansion of unpolarised nuclei at orders 1 to 4
@@ -4013,8 +4017,8 @@ Measured (four cores):
   1 to 3 are 1.2·10⁻⁴ to 5.7·10⁻⁴, within 1.5 standard errors (2·10⁻⁴ to
   6·10⁻⁴).
 - **Finite and shaped pulses on a natural bath** (231 ¹³C within 3 nm,
-  50 mT, CPMG-32 with spacing 10 µs, 200 bath states, 3 s per run, 10 s
-  with a Gaussian envelope of 16 segments). Ideal pulses give 0.9028 ±
+  50 mT, CPMG-32 with spacing 10 µs, 200 bath states, 3.5 s per run,
+  16 s with a Gaussian envelope of 16 segments). Ideal pulses give 0.9028 ±
   0.0005, and 10 and 50 MHz pulses give 0.9017 ± 0.0011 and 0.9001 ±
   0.0012. At 2 MHz the pulses themselves lose: 0.888 ± 0.004 rectangular,
   0.882 ± 0.005 Gaussian of the same peak. The first and second orders
@@ -4029,6 +4033,58 @@ Measured (four cores):
   second by up to 0.17. Without the four, both converge (orders 2 and 3
   within 0.002) and agree with 1.39 to 0.3 %.
 
+Review: an independent review confirmed the exact propagation against
+its own NumPy reference to 2·10⁻⁹. It covered every pulse kind, bare and
+dressed levels, tilted fields and both transitions, as well as the
+expansion, the mean field and the dressed frame. It also reproduced the
+PyCCE agreement and every number above. It found one serious fault and
+eleven smaller ones; all are fixed or documented.
+
+- **Inner pulses that leave the electron at a pole.** Elements that the
+  electron alone held below 10⁻⁹ kept its value, and the readout used
+  them. When inner pulses turned the electron alone to `|α⟩` or `|β⟩`
+  before the read pulse, the signal was wrong by up to 0.25 even at full
+  order, and by 0.48 at first order for a Ramsey sequence read out by an
+  identity pulse. Sampled states reported a standard error of 0 for the
+  same fault. The expansion now runs in the basis the inner pulses carry
+  the qubit to, with small elements by sums; it is exact at full order
+  for these sequences (tested). A free period after an inner π/2 pulse
+  converges slowly (errors 0.55, 0.044 and 1.1·10⁻³ at orders 1 to 3 on
+  four nuclei), as such pulses mix the branches.
+- **Eigenvector phases.** Pulses and the drive were defined relative to
+  the eigensolver's arbitrary phases. Results jumped by up to 5·10⁻⁴ when
+  the field moved by a picotesla across the axis. A fixed gauge
+  (`⟨β|S_x|α⟩` real and positive) makes them continuous.
+- **Memory of the propagators.** A matrix per distinct free period and
+  pulse segment was kept outside every limit: 160 000 distinct Hahn
+  echoes took 6 GB. Free periods are now applied to the columns, segment
+  propagators are not kept, and the propagators of finite pulses count
+  against 1 GiB. The ensemble validates the sequences on its first bath
+  and builds the baths one at a time; before, 20 000 configurations took
+  1 GB before an invalid sequence was reported.
+- **Fields across the axis.** These mix `m_s = ±1`, so both transitions
+  gave the same level, and a picotesla turned a Hahn echo from 0.9999
+  into 0.646. Such fields are now refused when `β` keeps less than 0.75
+  of `|m⟩`.
+- **The rotating-wave approximation** was not checked. Near the
+  crossing at 0.1024 T, 1 MHz pulses returned 1.000 where a laboratory
+  drive gives 0.583. Peak Rabi frequencies above a tenth of the frame's
+  frequency are now refused.
+- **Smaller faults.**
+  - The module claimed exactness at the size of the largest connected
+    cluster, but the electron couples separate groups; the text is
+    corrected.
+  - The dressed levels are refused at the crossing only for strongly
+    coupled nuclei, as the documentation now says.
+  - The mean field looped over every nucleus for every cluster. It is now
+    summed once per state.
+  - Coherences with no reference are NaN, and non-finite propagations are
+    refused.
+  - A radius that is not a number emptied the bath. It now removes no
+    nucleus, and Python refuses it.
+  - The docstring's example needed a minimum radius and bath states.
+  - Every configuration of an ensemble sampled the same bath states;
+    each now draws its own.
 
 ### 1.46 — Optimal control of larger spin systems (M–L)
 

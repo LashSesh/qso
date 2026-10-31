@@ -580,7 +580,7 @@ fn sampled_bath_states_are_exact_at_full_order() {
                     &pulses,
                     &electron,
                     b.frame_frequency(),
-                    Some(&fields.mean_field(&states[m], &all)),
+                    Some(&fields.mean_field(&states[m], &fields.totals(&states[m]), &all)),
                 )
                 .unwrap();
             for (k, seq) in parsed.iter().enumerate() {
@@ -672,4 +672,208 @@ fn finite_pulses_in_tilted_fields() {
             assert!((s - t).abs() < 2e-3, "{degrees}°: {s} vs {t}");
         }
     }
+}
+
+#[test]
+fn sequences_that_leave_the_electron_at_a_pole() {
+    // Inner pulses that turn the electron alone to |α⟩ or |β⟩ before the
+    // read pulse: the expansion runs in the basis they carry the qubit to,
+    // so it stays exact at full order, and close to it below.
+    let b = bath([0.0, 0.0, 0.05], 4);
+    let p = |angle, phase| NvEvent::Pulse { angle, phase };
+    let seqs = vec![
+        vec![
+            p(90.0, 0.0),
+            NvEvent::Free(20e-6),
+            p(90.0, 0.0),
+            p(90.0, 0.0),
+        ],
+        vec![
+            p(90.0, 0.0),
+            NvEvent::Free(20e-6),
+            p(90.0, 0.0),
+            NvEvent::Free(5e-6),
+            p(90.0, 0.0),
+        ],
+        vec![
+            p(90.0, 0.0),
+            NvEvent::Free(60e-6),
+            p(180.0, 90.0),
+            NvEvent::Free(60e-6),
+            p(90.0, 0.0),
+            p(90.0, 0.0),
+        ],
+        // Ramsey read out by an identity pulse.
+        vec![
+            p(90.0, 0.0),
+            NvEvent::Free(20e-6),
+            p(90.0, 180.0),
+            p(0.0, 0.0),
+        ],
+    ];
+    for pulses in [Pulses::Ideal, Pulses::Finite { rabi: 20e6 }] {
+        let exact = b.exact(&seqs, f64::INFINITY, &pulses).unwrap();
+        let full = GeneralisedCce {
+            order: 4,
+            cutoff: f64::INFINITY,
+            pulses: pulses.clone(),
+            ..Default::default()
+        };
+        let (l, s) = (
+            b.coherence(&seqs, &full).unwrap(),
+            b.signal(&seqs, &full).unwrap(),
+        );
+        for (k, (lk, sk)) in exact.iter().enumerate() {
+            assert!(
+                (s[k] - sk).abs() < 1e-10,
+                "{pulses:?} {k}: {} vs {sk}",
+                s[k]
+            );
+            assert!(
+                (l[k] - lk).norm() < 1e-10,
+                "{pulses:?} {k}: {} vs {lk}",
+                l[k]
+            );
+        }
+        if pulses == Pulses::Ideal {
+            // Below full order: the poles reached by inner π/2 pulses are
+            // close at once; a free period after such a pulse, which mixes the
+            // branches' populations and coherences, converges more slowly.
+            let errors: Vec<Vec<f64>> = (1..=3)
+                .map(|order| {
+                    b.signal(
+                        &seqs,
+                        &GeneralisedCce {
+                            order,
+                            cutoff: f64::INFINITY,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap()
+                    .iter()
+                    .zip(&exact)
+                    .map(|(a, (_, t))| (a - t).abs())
+                    .collect()
+                })
+                .collect();
+            for k in [0, 2, 3] {
+                assert!(errors[1][k] < 1e-4, "{k}: {:?}", errors[1]);
+            }
+            assert!(errors[0][1] > errors[1][1] && errors[1][1] > errors[2][1]);
+            assert!(errors[2][1] < 2e-3, "{:?}", errors[2]);
+        }
+    }
+    // A first pulse of 180° leaves no coherence between the branches: the
+    // coherence is undefined, the signal still exact.
+    let flip = vec![vec![p(180.0, 0.0), NvEvent::Free(10e-6), p(90.0, 0.0)]];
+    let exact = b.exact(&flip, f64::INFINITY, &Pulses::Ideal).unwrap();
+    let full = GeneralisedCce {
+        order: 4,
+        cutoff: f64::INFINITY,
+        ..Default::default()
+    };
+    assert!(exact[0].0.re.is_nan());
+    assert!(b.coherence(&flip, &full).unwrap()[0].re.is_nan());
+    assert!((b.signal(&flip, &full).unwrap()[0] - exact[0].1).abs() < 1e-10);
+}
+
+#[test]
+fn results_are_continuous_in_the_field() {
+    // The eigenvectors' phases are fixed by convention, not by the solver:
+    // a picotesla across the axis changes nothing.
+    let spins: Vec<FullSpin> = [
+        [0.2e-9, 0.1e-9, 0.12e-9],
+        [0.6e-9, 0.2e-9, 0.4e-9],
+        [0.9e-9, 0.1e-9, 0.1e-9],
+    ]
+    .iter()
+    .map(|&p| FullSpin::point_dipole(p).unwrap())
+    .collect();
+    let seqs = vec![crate::spin::nv::xy8(1, 10e-6), hahn(20e-6)];
+    let run = |field: [f64; 3], pulses: &Pulses| {
+        GeneralisedBath::new(field, -1, spins.clone())
+            .exact(&seqs, f64::INFINITY, pulses)
+            .unwrap()
+    };
+    for pulses in [Pulses::Ideal, Pulses::Finite { rabi: 15e6 }] {
+        let reference = run([0.0, 0.0, 0.05], &pulses);
+        for field in [[-1e-12, 0.0, 0.05], [1e-12, 0.0, 0.05], [0.0, 1e-12, 0.05]] {
+            // A picotesla across the axis tilts the electron by 10⁻⁸ rad;
+            // before the convention the phases jumped by up to 5·10⁻⁴.
+            for ((a, s), (b, t)) in run(field, &pulses).iter().zip(&reference) {
+                assert!(
+                    (s - t).abs() < 1e-7 && (a - b).norm() < 1e-7,
+                    "{field:?} {pulses:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn ill_defined_qubits_and_drives_are_refused() {
+    let seqs = vec![hahn(20e-6)];
+    let cce = GeneralisedCce::default();
+    // Fields across the axis mix m_s = ±1: no level is m_s = −1.
+    for field in [[0.01, 0.0, 0.0], [0.01, 0.0, 1e-6], [1e-12, 0.0, 0.0]] {
+        assert!(
+            GeneralisedBath::new(field, -1, vec![]).validate().is_err(),
+            "{field:?}"
+        );
+    }
+    // Tilted by 60° it is fine.
+    let tilted = GeneralisedBath::new([0.0433, 0.0, 0.025], -1, vec![]);
+    assert!(tilted.validate().is_ok());
+    // The rotating-wave approximation: the drive at most a tenth of the
+    // frame's frequency (240 kHz at the crossing, 1.47 GHz at 50 mT).
+    let crossing = GeneralisedBath::new([0.0, 0.0, 0.1024], -1, vec![]);
+    let finite = |rabi| GeneralisedCce {
+        pulses: Pulses::Finite { rabi },
+        ..cce.clone()
+    };
+    assert!(crossing.signal(&seqs, &finite(1e6)).is_err());
+    let b = GeneralisedBath::new([0.0, 0.0, 0.05], -1, vec![]);
+    assert!(b.signal(&seqs, &finite(1e9)).is_err());
+    assert!(b.signal(&seqs, &finite(50e6)).is_ok());
+    // Beyond double precision.
+    assert!(
+        GeneralisedBath::new([1e300, 0.0, 0.0], -1, vec![])
+            .validate()
+            .is_err()
+    );
+    assert!(
+        b.exact(&[hahn(1e300)], f64::INFINITY, &Pulses::Ideal)
+            .is_err()
+    );
+    // Propagators of many distinct finite pulses on eight nuclei exceed the
+    // cache (9.4 MB each).
+    let many = GeneralisedBath::new(
+        [0.0, 0.0, 0.05],
+        -1,
+        (0..8)
+            .map(|k| FullSpin::point_dipole([1e-9 + 2e-10 * k as f64, 0.3e-9, 0.5e-9]).unwrap())
+            .collect(),
+    );
+    let phases: Vec<Vec<NvEvent>> = (0..120)
+        .map(|k| {
+            vec![
+                NvEvent::Pulse {
+                    angle: 90.0,
+                    phase: k as f64,
+                },
+                NvEvent::Free(1e-6),
+                NvEvent::Pulse {
+                    angle: 90.0,
+                    phase: 0.0,
+                },
+            ]
+        })
+        .collect();
+    assert!(
+        many.exact(&phases, f64::INFINITY, &Pulses::Finite { rabi: 20e6 })
+            .is_err()
+    );
+    // A radius that is not a number removes no nucleus.
+    let spins = bath([0.0, 0.0, 0.05], 3);
+    assert_eq!(spins.clone().without_spins_within(f64::NAN).spins.len(), 3);
 }

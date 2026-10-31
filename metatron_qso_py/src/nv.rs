@@ -547,6 +547,15 @@ fn sequences(list: &[Vec<PyRef<'_, PyNvEvent>>]) -> Vec<Vec<NvEvent>> {
     list.iter().map(|s| events(s)).collect()
 }
 
+/// A radius (m) of nuclei to leave out: finite and ≥ 0.
+fn radius_of(radius: f64) -> PyResult<f64> {
+    if radius.is_finite() && radius >= 0.0 {
+        Ok(radius)
+    } else {
+        Err(invalid("the radius must be finite and ≥ 0"))
+    }
+}
+
 fn transition_of(transition: i64) -> PyResult<i8> {
     match transition {
         1 => Ok(1),
@@ -623,7 +632,8 @@ impl PySpinBath {
         let spins = py
             .detach(|| bath::diamond_bath(abundance, radius, seed))
             .raise()?;
-        let inner = SpinBath::new(field, transition, spins).without_spins_within(min_radius);
+        let inner =
+            SpinBath::new(field, transition, spins).without_spins_within(radius_of(min_radius)?);
         if !inner.field.is_finite() {
             return Err(invalid("the field must be finite"));
         }
@@ -641,10 +651,10 @@ impl PySpinBath {
     }
 
     /// The bath without the spins closer than `radius` (m) to the vacancy.
-    fn without_spins_within(&self, radius: f64) -> Self {
-        Self {
-            inner: self.inner.clone().without_spins_within(radius),
-        }
+    fn without_spins_within(&self, radius: f64) -> PyResult<Self> {
+        Ok(Self {
+            inner: self.inner.clone().without_spins_within(radius_of(radius)?),
+        })
     }
 
     #[getter]
@@ -894,7 +904,7 @@ impl PyGeneralisedBath {
         let mut inner = py
             .detach(|| GeneralisedBath::diamond(field, transition, abundance, radius, seed))
             .raise()?
-            .without_spins_within(min_radius);
+            .without_spins_within(radius_of(min_radius)?);
         inner.dressed = dressed;
         Ok(Self { inner })
     }
@@ -963,10 +973,10 @@ impl PyGeneralisedBath {
     }
 
     /// The bath without the nuclei closer than `radius` (m) to the vacancy.
-    fn without_spins_within(&self, radius: f64) -> Self {
-        Self {
-            inner: self.inner.clone().without_spins_within(radius),
-        }
+    fn without_spins_within(&self, radius: f64) -> PyResult<Self> {
+        Ok(Self {
+            inner: self.inner.clone().without_spins_within(radius_of(radius)?),
+        })
     }
 
     /// The bath with the electron's bare or dressed levels.
