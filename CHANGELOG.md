@@ -8,6 +8,23 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Relaxation beyond isotropic tumbling** (1.49, `spin`): Redfield
+  relaxation with anisotropic rotational diffusion
+  (`SpinSystem::with_diffusion`, any symmetric diffusion tensor in the
+  molecular frame; `axial_diffusion`) and model-free internal motion of
+  groups of interactions (`SpinSystem::set_internal_motion`,
+  `ModelFree::lipari_szabo`, `ModelFree::extended`, `Interaction`). The
+  correlation functions become sums of exponentials (modes): the five
+  eigentensors of the diffusion operator (Woessner), times the internal
+  correlation function of each group; cross-correlations between
+  dipolar couplings and shielding included. `correlation_function` and
+  `spectral_density` give the normalised functions. ¹⁵N–¹H `R₁`, `R₂`
+  and `σ_NH` follow the closed forms of every model to 10⁻⁹, the TROSY
+  rate follows Goldman's as a function of the angle, and isotropic
+  diffusion with order parameters of 1 equals 1.34 to 10⁻¹². In Python:
+  `with_diffusion`, `set_internal_motion`, `spin.ModelFree`,
+  `spin.axial_diffusion`.
+
 - **Open walks on large symmetric graphs** (1.48, `walks::symmetric`):
   `Orbitals` and `SymmetricOpenWalk` beyond 8192 nodes. There the
   orbitals are the orbits of the stabiliser of one point of each orbit

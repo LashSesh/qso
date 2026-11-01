@@ -4664,7 +4664,7 @@ one fault and several smaller points; all are fixed or documented.
   nodes of equal overlap" held by construction, and is replaced by the
   comparison with the quotient walk.
 
-### 1.49 — Relaxation beyond isotropic tumbling (M)
+### 1.49 — Relaxation beyond isotropic tumbling (M, delivered)
 
 Use case: ¹⁵N and ¹³C relaxation in proteins and elongated molecules,
 the rates that NMR studies of dynamics measure (`R₁`, `R₂`, the
@@ -4685,6 +4685,93 @@ follow Goldman's closed form (J. Magn. Reson. 60, 437 (1984)) as a
 function of the angle between the tensors; spectral densities integrate
 to the correlation functions they come from; equilibrium stays
 stationary.
+
+Delivered in `spin/redfield/motion.rs`, with `spin/redfield.rs`:
+
+- **Anisotropic diffusion.** `with_diffusion(D)` takes any symmetric,
+  positive definite diffusion tensor in the molecular frame (the frame of
+  the positions and shielding tensors; `axial_diffusion` builds an
+  axially symmetric one). On the traceless symmetric tensors rotational
+  diffusion acts as `M = −Σ_ab D_ab G_a G_b`, with `G_a` the rotation
+  generators: a symmetric 5 × 5 matrix whose eigentensors `V_j` and rates
+  `λ_j` replace the basis `E_μ` and the single `1/τ_c` of 1.34. Averaged
+  over the initial orientation, the correlation of two interactions is
+  then `Σ_j (A^k : V_j)(A^l : V_j) e^{−λ_j τ}` times the isotropic
+  laboratory-frame factor, so cross-correlations follow as before. For
+  `D = d·1`, `M = 6d` and `τ_c = 1/(6d)`.
+- **Internal motion.** `set_internal_motion(interactions, motion)` gives a
+  group of interactions one model-free motion, `ModelFree::lipari_szabo`
+  or `ModelFree::extended`:
+  `C_I(τ) = S² + (1 − S_f²) e^{−τ/τ_f} + (S_f² − S²) e^{−τ/τ_s}`. Each
+  overall mode is scaled by `S_k` of every interaction, and each group
+  adds modes `λ_j + 1/τ_f` and `λ_j + 1/τ_s` with weights `√(1 − S_f²)` and
+  `√(S_f² − S²)` on its interactions. Within a group the internal motion
+  is shared (the ¹⁵N–¹H coupling and the ¹⁵N shielding of a rigid peptide
+  plane); between groups and with interactions that move only with the
+  molecule only the order parameters correlate, `S_k S_l`.
+- **Relaxation.** The Redfield superoperator of 1.34 and 1.41 runs over
+  the modes, six terms each with `J(ω) = λ/(λ² + ω²)`, cross-correlations
+  between dipolar couplings and shielding anisotropy included; the
+  fast-motion condition uses the slowest correlation time. Declared spin
+  symmetries must keep `Σ w_k w_l` over the modes of every rate.
+  `correlation_function` and `spectral_density` give the normalised
+  `C_kl` and `J_kl` (5/2 times the `J` of the NMR literature). In Python:
+  `with_diffusion`, `set_internal_motion`, `spin.ModelFree`,
+  `spin.axial_diffusion`, interactions as `(i, j)` and `i`.
+
+Changes to the plan:
+
+- **Any diffusion tensor.** The plan named axially symmetric and fully
+  anisotropic diffusion; the operator `M` takes any symmetric tensor, so
+  the diffusion frame need not be the frame of the positions.
+- **Groups of interactions.** The plan had order parameters per
+  interaction; cross-correlation needs to know which interactions move
+  together, so internal motion is given to groups.
+
+Not done, and why:
+
+- **Correlated internal motions of different groups** (for example
+  crankshaft motions of neighbouring peptide planes): they need a model of
+  their joint motion; the cross terms between groups keep only
+  `S_k S_l`.
+- **Fitting.** Model-free parameters are inputs; fitting them to measured
+  rates (as Modelfree or relax do) is left to the user.
+- **Dynamic frequency shifts** stay out, as in 1.34.
+
+Measured (¹⁵N–¹H of a small protein, `τ_c` = 4.1 ns, or the same mean
+rate with `D_∥/D_⊥` = 1.2; `S²` = 0.85, `τ_e` = 50 ps; the bond 40° from
+the long axis, the shielding of −160 ppm 17° from the bond):
+
+| 18.8 T | `R₁` (s⁻¹) | `R₂` (s⁻¹) | NOE | `η_xy` (s⁻¹) | TROSY line (s⁻¹) |
+|---|---|---|---|---|---|
+| isotropic, rigid | 1.909 | 7.660 | 0.829 | 6.391 | 1.269 |
+| isotropic, Lipari–Szabo | 1.667 | 6.556 | 0.725 | 5.450 | 1.106 |
+| axial, rigid | 1.890 | 7.756 | 0.832 | 6.436 | 1.320 |
+| axial, Lipari–Szabo | 1.651 | 6.638 | 0.726 | 5.488 | 1.149 |
+
+At 14.1 T the same models give `R₁` 2.16 to 2.51 s⁻¹, `R₂` 5.92 to
+7.01 s⁻¹ and NOE 0.69 to 0.77. Six relaxing protons with anisotropic
+diffusion and three groups of extended model-free motion have 35 modes;
+their rates take 0.09 s instead of 0.03 s with isotropic tumbling.
+
+Validation: the diffusion operator's rates equal Woessner's to 10⁻¹²,
+also for the tensor in a rotated frame. ¹⁵N–¹H `R₁`, `R₂` and `σ_NH`
+follow the closed forms of isotropic tumbling with Lipari–Szabo and
+extended model-free motion, of axially symmetric diffusion (Woessner's
+three terms) and of fully anisotropic diffusion with Lipari–Szabo motion
+of the bond (his five terms) to 10⁻⁹, and the cross spectral density of
+two axes in axial diffusion to 10⁻¹². The TROSY rate follows Goldman's
+`−(1/15) b ω_N Δσ P₂(cos β)(4J(0) + 3J(ω_N))` at five angles (zero at
+the magic angle), the doublet's lines differ by `2η_xy`, and in axial
+diffusion `η_xy` follows the cross spectral density. Isotropic diffusion
+and order parameters of 1 reproduce 1.34's rates to 10⁻¹², spectral
+densities equal the cosine transforms of the correlation functions by
+quadrature to 10⁻⁹, a NumPy Monte Carlo of rotational Brownian motion
+(6000 bonds) reproduces `C(τ)` within its statistical error, the thermal
+state stays fixed under anisotropic diffusion with internal motion, the
+frames agree, positions, shielding and diffusion tensor rotated together
+(a non-diagonal tensor) give the same rates to 10⁻¹⁰, and symmetries
+that the motion breaks are refused.
 
 ### 1.50 — Hyperpolarisation with reaction kinetics (M)
 

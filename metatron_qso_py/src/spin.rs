@@ -4,9 +4,10 @@ use metatron_qso::C64;
 use metatron_qso::linalg::CMatrix;
 use metatron_qso::optimize::Options;
 use metatron_qso::spin::{
-    Channel, Control, Drive, Event, Exchange, Frame, Fresh, Isotope, Member, Optimized, Profile,
-    Segment, Spectrum, SpinSystem, Target, axial_csa, inept, inept_cycle, inversion_recovery, m2s,
-    s2m, spin_echo, spin_lock, unitary_bound,
+    Channel, Control, Drive, Event, Exchange, Frame, Fresh, Interaction, Isotope, Member,
+    ModelFree, Optimized, Profile, Segment, Spectrum, SpinSystem, Target, axial_csa,
+    axial_diffusion, inept, inept_cycle, inversion_recovery, m2s, s2m, spin_echo, spin_lock,
+    unitary_bound,
 };
 use numpy::{IntoPyArray, PyArray1, PyArray2};
 use pyo3::exceptions::PyValueError;
@@ -232,6 +233,91 @@ fn py_axial_csa<'py>(
         py,
         &t.iter().map(|r| r.to_vec()).collect::<Vec<_>>(),
     )?)
+}
+
+/// The rotational diffusion tensor (s⁻¹) of axially symmetric diffusion
+/// with `parallel` about `axis` and `perpendicular` across it.
+#[pyfunction(name = "axial_diffusion")]
+fn py_axial_diffusion<'py>(
+    py: Python<'py>,
+    parallel: f64,
+    perpendicular: f64,
+    axis: [f64; 3],
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let t = axial_diffusion(parallel, perpendicular, axis).raise()?;
+    Ok(PyArray2::from_vec2(
+        py,
+        &t.iter().map(|r| r.to_vec()).collect::<Vec<_>>(),
+    )?)
+}
+
+/// An interaction that relaxes: `(i, j)` the dipolar coupling of spins `i`
+/// and `j`, `i` the shielding anisotropy of spin `i`.
+#[derive(FromPyObject)]
+enum InteractionArg {
+    Dipolar(usize, usize),
+    Shielding(usize),
+}
+
+impl From<InteractionArg> for Interaction {
+    fn from(a: InteractionArg) -> Self {
+        match a {
+            InteractionArg::Dipolar(i, j) => Interaction::Dipolar(i, j),
+            InteractionArg::Shielding(i) => Interaction::Shielding(i),
+        }
+    }
+}
+
+/// Model-free internal motion: `C_I(τ) = S² + (1 − S_f²) e^{−τ/τ_f} +
+/// (S_f² − S²) e^{−τ/τ_s}` with `S² = S_f² S_s²` (Clore et al. 1990);
+/// Lipari and Szabo's form has `S_s² = 1`.
+#[pyclass(name = "ModelFree", module = "metatron_qso", frozen)]
+#[derive(Clone, Copy)]
+pub struct PyModelFree {
+    inner: ModelFree,
+}
+
+#[pymethods]
+impl PyModelFree {
+    /// Lipari and Szabo: order parameter `s2` and internal correlation
+    /// time `tau_e` (s).
+    #[staticmethod]
+    fn lipari_szabo(s2: f64, tau_e: f64) -> PyResult<Self> {
+        Ok(Self {
+            inner: ModelFree::lipari_szabo(s2, tau_e).raise()?,
+        })
+    }
+
+    /// Clore et al.: a fast motion (`s2_fast`, `tau_fast`) and a slow one
+    /// (`s2_slow`, `tau_slow`), times in s.
+    #[staticmethod]
+    fn extended(s2_fast: f64, tau_fast: f64, s2_slow: f64, tau_slow: f64) -> PyResult<Self> {
+        Ok(Self {
+            inner: ModelFree::extended(s2_fast, tau_fast, s2_slow, tau_slow).raise()?,
+        })
+    }
+
+    /// The order parameter `S² = S_f² S_s²`.
+    #[getter]
+    fn order_parameter(&self) -> f64 {
+        self.inner.order_parameter()
+    }
+
+    /// `(s2_fast, tau_fast, s2_slow, tau_slow)`.
+    #[getter]
+    fn parameters(&self) -> (f64, f64, f64, f64) {
+        self.inner.parameters()
+    }
+
+    /// The internal correlation function `C_I(tau)`.
+    fn correlation(&self, tau: f64) -> f64 {
+        self.inner.correlation(tau)
+    }
+
+    fn __repr__(&self) -> String {
+        let (a, b, c, d) = self.inner.parameters();
+        format!("ModelFree(s2_fast={a}, tau_fast={b}, s2_slow={c}, tau_slow={d})")
+    }
 }
 
 /// Gyromagnetic ratio (rad s⁻¹ T⁻¹) of an isotope.
@@ -610,6 +696,75 @@ impl PySpinSystem {
     #[getter]
     fn correlation_time(&self) -> Option<f64> {
         self.inner.correlation_time()
+    }
+
+    /// The same system with rotational diffusion tensor `tensor` (s⁻¹,
+    /// 3×3, molecular frame; symmetric, positive definite) in place of
+    /// isotropic tumbling, or without it (`None`). `d·1` is isotropic
+    /// tumbling with `tau_c = 1/(6d)`.
+    #[pyo3(signature = (tensor))]
+    fn with_diffusion(&self, tensor: Option<[[f64; 3]; 3]>) -> PyResult<Self> {
+        Ok(Self {
+            inner: self.inner.clone().with_diffusion(tensor).raise()?,
+        })
+    }
+
+    /// The rotational diffusion tensor (s⁻¹), if set.
+    #[getter]
+    fn diffusion<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyArray2<f64>>>> {
+        match self.inner.diffusion() {
+            Some(t) => Ok(Some(PyArray2::from_vec2(
+                py,
+                &t.iter().map(|r| r.to_vec()).collect::<Vec<_>>(),
+            )?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Give `interactions` (`(i, j)` a dipolar coupling, `i` a shielding)
+    /// one shared model-free internal motion; they leave any group they
+    /// were in. `None` lets them move only with the molecule.
+    #[pyo3(signature = (interactions, motion))]
+    fn set_internal_motion(
+        &mut self,
+        interactions: Vec<InteractionArg>,
+        motion: Option<PyRef<'_, PyModelFree>>,
+    ) -> PyResult<()> {
+        let list: Vec<Interaction> = interactions.into_iter().map(Interaction::from).collect();
+        self.inner
+            .set_internal_motion(&list, motion.map(|m| m.inner))
+            .raise()?;
+        Ok(())
+    }
+
+    /// The internal motion of an interaction, if it has one.
+    fn internal_motion(&self, interaction: InteractionArg) -> Option<PyModelFree> {
+        self.inner
+            .internal_motion(interaction.into())
+            .map(|inner| PyModelFree { inner })
+    }
+
+    /// The normalised spectral density `J_kl(ω)` (s; `omega` in rad/s) of
+    /// two interactions: `τ_c/(1 + ω²τ_c²)` for a rigid molecule tumbling
+    /// isotropically, 5/2 times the `(2/5) Σ A_i τ_i/(1 + ω²τ_i²)` of the
+    /// NMR literature.
+    fn spectral_density(&self, k: InteractionArg, l: InteractionArg, omega: f64) -> PyResult<f64> {
+        self.inner
+            .spectral_density(k.into(), l.into(), omega)
+            .raise()
+    }
+
+    /// The normalised correlation function `C_kl(tau)` of two
+    /// interactions (`C_kk(0) = 1`).
+    fn correlation_function(
+        &self,
+        k: InteractionArg,
+        l: InteractionArg,
+        tau: f64,
+    ) -> PyResult<f64> {
+        self.inner
+            .correlation_function(k.into(), l.into(), tau)
+            .raise()
     }
 
     /// Declare permutations of the spins (`p[i]` the image of spin `i`)
@@ -1033,6 +1188,8 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(spectrum, m)?)?;
     m.add_function(wrap_pyfunction!(gyromagnetic_ratio, m)?)?;
     m.add_function(wrap_pyfunction!(py_axial_csa, m)?)?;
+    m.add_function(wrap_pyfunction!(py_axial_diffusion, m)?)?;
+    m.add_class::<PyModelFree>()?;
     m.add_function(wrap_pyfunction!(py_m2s, m)?)?;
     m.add_function(wrap_pyfunction!(py_s2m, m)?)?;
     m.add_function(wrap_pyfunction!(py_spin_lock, m)?)?;

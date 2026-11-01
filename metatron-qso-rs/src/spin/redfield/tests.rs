@@ -645,9 +645,9 @@ fn the_sparse_superoperator_equals_the_dense_formulas() {
         let pairs = [(0, 0), (1, 1), (2, 2), (0, 1), (0, 2), (1, 2)];
         let half = C64::new(0.5, 0.0);
         let third = C64::new(1.0 / 3.0, 0.0);
-        let tensor = |c: Coupling, (x, y): (usize, usize)| -> CMatrix {
+        let tensor = |c: Interaction, (x, y): (usize, usize)| -> CMatrix {
             match c {
-                Coupling::Dipolar(i, k) => {
+                Interaction::Dipolar(i, k) => {
                     let dot =
                         &ops[i][0] * &ops[k][0] + &ops[i][1] * &ops[k][1] + &ops[i][2] * &ops[k][2];
                     let mut q = (&ops[i][x] * &ops[k][y] + &ops[i][y] * &ops[k][x]) * half;
@@ -656,7 +656,7 @@ fn the_sparse_superoperator_equals_the_dense_formulas() {
                     }
                     q
                 }
-                Coupling::Shielding(i) => {
+                Interaction::Shielding(i) => {
                     let mut q = CMatrix::zeros(d, d);
                     if y == 2 {
                         q += &ops[i][x] * half;

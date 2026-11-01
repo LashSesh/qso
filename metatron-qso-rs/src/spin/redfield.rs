@@ -32,11 +32,25 @@
 //! only the part of `R` that keeps the coherence order of every isotope
 //! is kept (the secular approximation with respect to the carriers); in
 //! the laboratory frame `R` keeps the total coherence order exactly.
+//!
+//! Beyond isotropic tumbling (`motion.rs`, 1.49) the five tensors `E_μ`
+//! with one `τ_c` become *modes*: an exponential `e^{−λτ}` with a weight
+//! `w_k` per interaction, so that `(A^k : A^l) e^{−τ/τ_c}` is replaced by
+//! `Σ_modes w_k w_l e^{−λτ}`, and `𝒬_μab = Σ_k w_k Q^k,S_ab` with its own
+//! `J(ω) = λ/(λ² + ω²)` for each mode. Rotational diffusion with any
+//! tensor gives five modes (the eigentensors of the diffusion operator),
+//! model-free internal motion more with the faster rates `λ + 1/τ_e`. The
+//! fast-motion condition uses the slowest correlation time.
 
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 use num_complex::Complex64 as C64;
+
+mod motion;
+
+pub(super) use motion::InternalMotion;
+pub use motion::{Interaction, ModelFree, axial_diffusion};
 
 use super::blocks::{Eigenblock, Liouville, distinct};
 use super::krylov::{Accumulator, SparseBlock, column_ranges};
@@ -87,7 +101,7 @@ fn anisotropic(t: &[[f64; 3]; 3]) -> [[f64; 3]; 3] {
 }
 
 /// An orthonormal basis of traceless symmetric 3 × 3 tensors.
-fn basis() -> [[[f64; 3]; 3]; 5] {
+pub(super) fn basis() -> [[[f64; 3]; 3]; 5] {
     let (s2, s6) = (2f64.sqrt(), 6f64.sqrt());
     let mut e = [[[0.0; 3]; 3]; 5];
     e[0][0][0] = 1.0 / s2;
@@ -100,13 +114,6 @@ fn basis() -> [[[f64; 3]; 3]; 5] {
         e[2 + k][b][a] = 1.0 / s2;
     }
     e
-}
-
-/// The spin part of an interaction.
-#[derive(Clone, Copy)]
-enum Coupling {
-    Dipolar(usize, usize),
-    Shielding(usize),
 }
 
 /// The basis states ordered by their labels, each label's states
@@ -549,6 +556,9 @@ impl SpinSystem {
                 "the correlation time must be finite and positive",
             ));
         }
+        if tau_c.is_some() {
+            self.diffusion = None;
+        }
         self.correlation_time = tau_c;
         Ok(self)
     }
@@ -580,6 +590,7 @@ impl SpinSystem {
     }
 
     pub(super) fn validate_motion(&self) -> Result<()> {
+        self.validate_internal_motions()?;
         if let Some(t) = self.correlation_time
             && !(t.is_finite() && t > 0.0)
         {
@@ -613,7 +624,7 @@ impl SpinSystem {
     }
 
     /// The interactions that relax, with their spatial tensors (rad/s).
-    fn interactions(&self, b: f64) -> Vec<([[f64; 3]; 3], Coupling)> {
+    fn interactions(&self, b: f64) -> Vec<([[f64; 3]; 3], Interaction)> {
         let mut out = Vec::new();
         let n = self.spins.len();
         for i in 0..n {
@@ -629,14 +640,14 @@ impl SpinSystem {
                             *v = coupling * (delta - 3.0 * u[x] * u[y]);
                         }
                     }
-                    out.push((a, Coupling::Dipolar(i, j)));
+                    out.push((a, Interaction::Dipolar(i, j)));
                 }
             }
             if let Some(t) = self.spins[i].csa {
                 let w = self.spins[i].isotope.gamma() * b * 1e-6;
                 let a = anisotropic(&t).map(|row| row.map(|x| x * w));
                 if a.iter().flatten().any(|x| *x != 0.0) {
-                    out.push((a, Coupling::Shielding(i)));
+                    out.push((a, Interaction::Shielding(i)));
                 }
             }
         }
@@ -645,14 +656,14 @@ impl SpinSystem {
 
     /// Whether Redfield relaxation is on and has an interaction.
     pub(super) fn redfield_active(&self) -> bool {
-        self.correlation_time.is_some() && !self.interactions(1.0).is_empty()
+        self.has_motion() && !self.interactions(1.0).is_empty()
     }
 
     /// The six components `𝒬^S_xy` (`xx, yy, zz, xy, xz, yz`) of an
     /// interaction's spin tensor, on the spins it acts on (the first the
     /// most significant): `(I_x I_y + I_y I_x)/2 − δ_xy I·I/3` for a dipolar
     /// pair, `(I_x δ_yz + I_y δ_xz)/2 − δ_xy I_z/3` for a shielding.
-    fn local_tensor(&self, c: Coupling) -> (Vec<usize>, Vec<CMatrix>) {
+    fn local_tensor(&self, c: Interaction) -> (Vec<usize>, Vec<CMatrix>) {
         let pairs = [(0, 0), (1, 1), (2, 2), (0, 1), (0, 2), (1, 2)];
         let ops = |i: usize| {
             let [iz, _, _, ix, iy] = spin_ops(self.spins[i].isotope.levels());
@@ -661,7 +672,7 @@ impl SpinSystem {
         let half = C64::new(0.5, 0.0);
         let third = C64::new(1.0 / 3.0, 0.0);
         match c {
-            Coupling::Dipolar(i, j) => {
+            Interaction::Dipolar(i, j) => {
                 let (a, b) = (ops(i), ops(j));
                 let product = |x: usize, y: usize| a[x].kronecker(&b[y]);
                 let dot = product(0, 0) + product(1, 1) + product(2, 2);
@@ -677,7 +688,7 @@ impl SpinSystem {
                     .collect();
                 (vec![i, j], tensor)
             }
-            Coupling::Shielding(i) => {
+            Interaction::Shielding(i) => {
                 let a = ops(i);
                 let n = a[0].nrows();
                 let tensor = pairs
@@ -743,32 +754,39 @@ impl SpinSystem {
     /// and [`super::MAX_RELAXATION_WORK`]; the blocks themselves are built
     /// where they are used.
     pub(super) fn redfield(&self, b: f64) -> Result<Option<RedfieldBlocks>> {
-        let Some(tau) = self.correlation_time else {
+        if !self.has_motion() {
             return Ok(None);
-        };
+        }
         let interactions = self.interactions(b);
         if interactions.is_empty() {
             return Ok(None);
         }
-        // Redfield theory needs fast motion: |H₁| τ_c ≪ 1.
+        let modes = self.modes(&interactions);
+        // Redfield theory needs fast motion: |H₁| τ ≪ 1 for the slowest
+        // correlation time τ.
         let strength = interactions
             .iter()
             .map(|(a, _)| a.iter().flatten().map(|x| x * x).sum::<f64>().sqrt())
             .fold(0.0, f64::max);
+        let tau = modes.iter().map(|m| 1.0 / m.rate).fold(0.0, f64::max);
         let narrowing = strength * tau;
         if narrowing.is_nan() || narrowing > MAX_NARROWING {
             return Err(QsoError::invalid(
                 "redfield",
                 format!(
-                    "an interaction of {strength:.3e} rad/s with τ_c = {tau:e} s is outside \
-                     Redfield theory, which needs |H₁|·τ_c ≪ 1 (here {narrowing:.3e})"
+                    "an interaction of {strength:.3e} rad/s with a correlation time of {tau:e} s \
+                     is outside Redfield theory, which needs |H₁|·τ_c ≪ 1 (here \
+                     {narrowing:.3e})"
                 ),
             ));
+        }
+        if modes.is_empty() {
+            return Ok(None);
         }
         let labels = self.labels();
         let mut lab = self.clone();
         lab.frame = Frame::Laboratory;
-        let (work, memory) = redfield_cost(&lab.labels(), &labels, interactions.len());
+        let (work, memory) = redfield_cost(&lab.labels(), &labels, interactions.len(), modes.len());
         if work > super::MAX_RELAXATION_WORK || memory > super::MAX_RELAXATION_MEMORY {
             return Err(QsoError::invalid(
                 "redfield",
@@ -790,23 +808,14 @@ impl SpinSystem {
             .map(|&(_, c)| self.local_tensor(c))
             .collect();
         let pairs = [(0, 0), (1, 1), (2, 2), (0, 1), (0, 2), (1, 2)];
-        // Terms (𝒬, Y(𝒬), weight).
+        // Terms (𝒬, Y(𝒬), weight), six for each mode.
         let mut terms = Vec::new();
-        for basis_tensor in &basis() {
-            let alpha: Vec<f64> = interactions
-                .iter()
-                .map(|(a, _)| {
-                    (0..3)
-                        .map(|x| (0..3).map(|y| a[x][y] * basis_tensor[x][y]).sum::<f64>())
-                        .sum()
-                })
-                .collect();
-            if alpha.iter().all(|x| *x == 0.0) {
-                continue;
-            }
+        for mode in &modes {
+            let alpha = &mode.weights;
+            let tau = 1.0 / mode.rate;
             for (p, &(x, y)) in pairs.iter().enumerate() {
                 let mut triplets = Vec::new();
-                for ((spins, local), &weight) in locals.iter().zip(&alpha) {
+                for ((spins, local), &weight) in locals.iter().zip(alpha) {
                     if weight != 0.0 {
                         for (r, c, v) in self.embed_local(spins, &local[p]) {
                             triplets.push((grouping.rank[r], grouping.rank[c], v * weight));
@@ -872,17 +881,18 @@ impl SpinSystem {
 
     /// Whether the Redfield relaxation is unchanged by the spin
     /// permutation `p`: it maps the relaxing interactions onto each other
-    /// and keeps the contractions `A^k : A^l` of their tensors, on which
-    /// alone isotropic tumbling makes the relaxation depend (to 10⁻⁹ of the
-    /// largest).
+    /// and keeps, for every rate of the modes, `Σ w_k w_l` over the modes of
+    /// that rate (to 10⁻⁹ of the largest), on which alone the relaxation
+    /// depends. For isotropic tumbling of a rigid molecule these are the
+    /// contractions `A^k : A^l`.
     pub(super) fn redfield_invariant(&self, p: &[usize]) -> bool {
-        if self.correlation_time.is_none() {
+        if !self.has_motion() {
             return true;
         }
         let interactions = self.interactions(1.0);
-        let key = |c: Coupling| match c {
-            Coupling::Dipolar(i, j) => (i.min(j), i.max(j), false),
-            Coupling::Shielding(i) => (i, i, true),
+        let key = |c: Interaction| match c {
+            Interaction::Dipolar(i, j) => (i.min(j), i.max(j), false),
+            Interaction::Shielding(i) => (i, i, true),
         };
         let index: BTreeMap<(usize, usize, bool), usize> = interactions
             .iter()
@@ -893,8 +903,8 @@ impl SpinSystem {
             .iter()
             .map(|&(_, c)| {
                 let moved = match c {
-                    Coupling::Dipolar(i, j) => Coupling::Dipolar(p[i], p[j]),
-                    Coupling::Shielding(i) => Coupling::Shielding(p[i]),
+                    Interaction::Dipolar(i, j) => Interaction::Dipolar(p[i], p[j]),
+                    Interaction::Shielding(i) => Interaction::Shielding(p[i]),
                 };
                 index.get(&key(moved)).copied()
             })
@@ -902,16 +912,29 @@ impl SpinSystem {
         let Some(image) = image else {
             return false;
         };
-        let gram = |k: usize, l: usize| -> f64 {
-            let (a, b) = (&interactions[k].0, &interactions[l].0);
-            (0..3)
-                .map(|x| (0..3).map(|y| a[x][y] * b[x][y]).sum::<f64>())
-                .sum()
-        };
+        // The modes grouped by rate (to 10⁻¹² relative).
+        let mut modes = self.modes(&interactions);
+        modes.sort_by(|a, b| a.rate.total_cmp(&b.rate));
+        let mut groups: Vec<Vec<&motion::Mode>> = Vec::new();
+        for m in &modes {
+            match groups.last_mut() {
+                Some(g) if (m.rate - g[0].rate).abs() <= 1e-12 * m.rate => g.push(m),
+                _ => groups.push(vec![m]),
+            }
+        }
         let n = interactions.len();
-        let largest = (0..n).map(|k| gram(k, k)).fold(0.0, f64::max);
-        (0..n).all(|k| {
-            (0..n).all(|l| (gram(image[k], image[l]) - gram(k, l)).abs() <= 1e-9 * largest)
+        let gram = |g: &[&motion::Mode], k: usize, l: usize| -> f64 {
+            g.iter().map(|m| m.weights[k] * m.weights[l]).sum()
+        };
+        let largest = groups
+            .iter()
+            .flat_map(|g| (0..n).map(move |k| gram(g, k, k)))
+            .fold(0.0, f64::max);
+        groups.iter().all(|g| {
+            (0..n).all(|k| {
+                (0..n)
+                    .all(|l| (gram(g, image[k], image[l]) - gram(g, k, l)).abs() <= 1e-9 * largest)
+            })
         })
     }
 
@@ -950,11 +973,16 @@ impl SpinSystem {
     }
 }
 
-/// Estimated operations and bytes of building the Redfield terms: 30
-/// operators, their spectral images (at most the pairs of laboratory
+/// Estimated operations and bytes of building the Redfield terms: six
+/// operators per mode, their spectral images (at most the pairs of laboratory
 /// blocks whose `2M` differ by up to 4), their union, the left products,
 /// the laboratory Hamiltonian's eigenvectors and the index of the blocks.
-fn redfield_cost(lab: &[Vec<i32>], labels: &[Vec<i32>], interactions: usize) -> (f64, f64) {
+fn redfield_cost(
+    lab: &[Vec<i32>],
+    labels: &[Vec<i32>],
+    interactions: usize,
+    modes: usize,
+) -> (f64, f64) {
     let d = labels.len() as f64;
     let mut sizes: BTreeMap<i32, f64> = BTreeMap::new();
     for l in lab {
@@ -971,7 +999,7 @@ fn redfield_cost(lab: &[Vec<i32>], labels: &[Vec<i32>], interactions: usize) -> 
         }
     }
     let q = (interactions as f64 * 9.0 * d).min(d * d);
-    let terms = 30.0;
+    let terms = 6.0 * modes as f64;
     let mut own: BTreeMap<&Vec<i32>, f64> = BTreeMap::new();
     for l in labels {
         *own.entry(l).or_default() += 1.0;
@@ -986,5 +1014,7 @@ fn distance(p: [f64; 3], q: [f64; 3]) -> f64 {
     ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt()
 }
 
+#[cfg(test)]
+mod motion_tests;
 #[cfg(test)]
 mod tests;

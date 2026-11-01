@@ -1071,3 +1071,81 @@ def test_grape_keeps_its_digits_at_low_polarisation():
         after = np.asarray(sys.evolve(rho0, sys.control_events(c, u)))
         replay = np.trace(target @ after).real
         assert replay == pytest.approx(value, rel=1e-10 if field > 1 else 1e-6, abs=0), field
+
+
+def test_anisotropic_diffusion_matches_rotational_brownian_motion():
+    # A body-fixed bond under rotational diffusion D = diag(1.0, 1.7, 3.1)
+    # x 10^7 s^-1, simulated by small random rotations about the body axes
+    # (variance 2 D_i dt each): <P2(u . R(t) u)> against C(t).
+    d = np.array([1.0e7, 1.7e7, 3.1e7])
+    u = np.array([math.sin(0.7) * math.cos(0.4), math.sin(0.7) * math.sin(0.4), math.cos(0.7)])
+    sys = q.SpinSystem(14.1)
+    sys.add_spin("15N", 120.0)
+    sys.add_spin("1H", 8.0)
+    sys.set_position(0, [0.0, 0.0, 0.0])
+    sys.set_position(1, list(1.02 * u))
+    sys = sys.with_diffusion(np.diag(d))
+    rng = np.random.default_rng(7)
+    n, dt, steps = 6000, 2e-10, 150
+    rot = np.tile(np.eye(3), (n, 1, 1))
+    checkpoints = {30: None, 75: None, 150: None}
+    for step in range(1, steps + 1):
+        xi = rng.normal(size=(n, 3)) * np.sqrt(2 * d * dt)
+        angle = np.linalg.norm(xi, axis=1)
+        axis = xi / angle[:, None]
+        k = np.zeros((n, 3, 3))
+        k[:, 0, 1], k[:, 0, 2], k[:, 1, 2] = -axis[:, 2], axis[:, 1], -axis[:, 0]
+        k -= k.transpose(0, 2, 1)
+        s, c = np.sin(angle)[:, None, None], np.cos(angle)[:, None, None]
+        step_rot = np.eye(3) + s * k + (1 - c) * (k @ k)
+        rot = rot @ step_rot  # increments about the body axes
+        if step in checkpoints:
+            cos = np.einsum("i,nij,j->n", u, rot, u)
+            p2 = (3 * cos**2 - 1) / 2
+            checkpoints[step] = (p2.mean(), p2.std() / math.sqrt(n))
+    for step, (mean, err) in checkpoints.items():
+        want = sys.correlation_function((0, 1), (0, 1), step * dt)
+        assert abs(mean - want) < 4 * err + 2e-3, (step, mean, want, err)
+
+
+def test_model_free_bindings():
+    m = spin.ModelFree.lipari_szabo(0.85, 5e-11)
+    assert m.order_parameter == pytest.approx(0.85)
+    assert m.parameters == pytest.approx((0.85, 5e-11, 1.0, 5e-11))
+    assert m.correlation(0.0) == pytest.approx(1.0)
+    ext = spin.ModelFree.extended(0.9, 2e-11, 0.8, 1.5e-9)
+    assert ext.order_parameter == pytest.approx(0.72)
+    with pytest.raises(ValueError):
+        spin.ModelFree.lipari_szabo(1.5, 1e-11)
+    sys = q.SpinSystem(18.8)
+    sys.add_spin("15N", 120.0)
+    sys.add_spin("1H", 8.3)
+    sys.set_position(0, [0.0, 0.0, 0.0])
+    sys.set_position(1, [0.0, 0.0, 1.02])
+    sys.set_csa(0, spin.axial_csa(-160.0, [0.0, 0.0, 1.0]))
+    with pytest.raises(ValueError):
+        sys.spectral_density((0, 1), (0, 1), 0.0)
+    tau_c = 8e-9
+    sys = sys.with_correlation_time(tau_c)
+    sys.set_internal_motion([(1, 0), 0], m)
+    assert sys.internal_motion((0, 1)).parameters == m.parameters
+    assert sys.internal_motion(1) is None
+    # Lipari-Szabo for isotropic tumbling, the normalised density.
+    te = 1 / (1 / tau_c + 1 / 5e-11)
+    for w in (0.0, 5e8, 3e9):
+        want = 0.85 * tau_c / (1 + (w * tau_c) ** 2) + 0.15 * te / (1 + (w * te) ** 2)
+        assert sys.spectral_density((0, 1), 0, w) == pytest.approx(want, rel=1e-12)
+    axial = spin.axial_diffusion(3e7, 1.5e7, [0.0, 0.0, 1.0])
+    assert np.allclose(axial, np.diag([1.5e7, 1.5e7, 3e7]))
+    moving = sys.with_diffusion(axial)
+    assert moving.correlation_time is None and np.allclose(moving.diffusion, axial)
+    # Along the symmetry axis Woessner's first term alone: 1/(6 D_perp).
+    rigid = moving.with_diffusion(axial)
+    rigid.set_internal_motion([(0, 1), 0], None)
+    assert rigid.spectral_density((0, 1), (0, 1), 0.0) == pytest.approx(1 / 9e7, rel=1e-12)
+    back = q.SpinSystem.from_json(moving.to_json())
+    assert np.allclose(back.diffusion, axial)
+    with pytest.raises(ValueError):
+        sys.with_diffusion(np.diag([1e7, -1e7, 1e7]))
+    with pytest.raises(ValueError):
+        sys.set_internal_motion([(0, 7)], m)

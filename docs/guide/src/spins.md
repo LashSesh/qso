@@ -142,13 +142,13 @@ the same block exponentials.
   interactions, `|H₁|·τ_c ≪ 1`; QSO refuses `|A|·τ_c > 1` (the Frobenius
   norm of an interaction's spatial tensor in rad/s), so a C–H pair at
   τ_c = 1 ms fails while a protein at 50 ns does not.
-- **Not modelled.** Dynamic frequency shifts, anisotropic tumbling,
-  internal motion, quadrupolar relaxation, scalar relaxation (of the first
+- **Not modelled.** Dynamic frequency shifts, quadrupolar relaxation,
+  scalar relaxation (of the first
   and second kind, which matters for ²H at low field), spin-rotation,
   antisymmetric shielding, intermolecular, solvent, oxygen and
   paramagnetic relaxation, and chemical exchange.
-- **Size.** The superoperator's 30 terms are built once per field (for
-  seven protons in 0.02 s) and its blocks of coherence order column by
+- **Size.** The superoperator's 30 terms (six per mode of the motion,
+  next section) are built once per field (for seven protons in 0.02 s) and its blocks of coherence order column by
   column where they are used (next section); there is no limit on the
   size of a block, only on work and memory. `evolve` reuses the terms
   while the field stays, so shaped pulses cost little more, but every
@@ -160,6 +160,63 @@ auto-relaxation rates (`1/T₁` of `I_z`, `1/T₂` of `I₊` for an isolated
 spin), the rest the cross-relaxation; with cross-relaxation, recovery has
 several rates. `qso spins --rates` prints the auto-relaxation times
 `1/Γ_ii` of `I_z` and `I₊` of every spin.
+
+## Anisotropic tumbling and internal motion
+
+Elongated molecules tumble faster about their long axis, and bonds move
+within the molecule. `with_diffusion(D)` replaces the correlation time by
+a rotational diffusion tensor `D` (s⁻¹, 3×3 in the frame of the
+positions; `spin.axial_diffusion(D_par, D_perp, axis)` builds an axially
+symmetric one, and `d·1` is isotropic tumbling with `τ_c = 1/(6d)`).
+`set_internal_motion(interactions, motion)` gives interactions (`(i, j)`
+a dipolar coupling, `i` a shielding anisotropy) a model-free internal
+motion: `spin.ModelFree.lipari_szabo(S², τ_e)` (Lipari and Szabo 1982) or
+`spin.ModelFree.extended(S_f², τ_f, S_s², τ_s)` (Clore et al. 1990). The
+¹⁵N–¹H bond and the ¹⁵N shielding of a peptide plane share theirs:
+
+```python
+import metatron_qso as q
+from metatron_qso import spin
+
+sys = q.SpinSystem(18.8)
+n = sys.add_spin("15N", 120.0)
+h = sys.add_spin("1H", 8.3)
+sys.set_position(n, (0.0, 0.0, 0.0))
+sys.set_position(h, (0.656, 0.0, 0.781))                     # 1.02 Å, 40° from z
+sys.set_csa(n, spin.axial_csa(-160.0, (0.839, 0.0, 0.545)))   # 17° from the bond
+sys = sys.with_diffusion(spin.axial_diffusion(4.573e7, 3.811e7, (0.0, 0.0, 1.0)))
+sys.set_internal_motion([(n, h), n], spin.ModelFree.lipari_szabo(0.85, 5e-11))
+nz, nx, hz = sys.spin_operator(n, "z"), sys.spin_operator(n, "x"), sys.spin_operator(h, "z")
+g = sys.relaxation_rates([nz, hz, nx, 2 * nx @ hz])
+noe = 1 + g[0, 1] / g[0, 0] * spin.gyromagnetic_ratio("1H") / spin.gyromagnetic_ratio("15N")
+print(g[0, 0], g[2, 2], noe, g[2, 3])   # R₁ 1.65 /s, R₂ 6.64 /s, NOE 0.726, η_xy 5.49 /s
+```
+
+Each interaction's tensor is fixed in the molecular frame; averaged over
+the initial orientation, the correlation of two interactions `k` and `l`
+is a sum of exponentials, `|A^k||A^l| C_kl(τ)`, which takes the place of
+`(A^k : A^l) e^{−τ/τ_c}` in the Redfield superoperator. Rotational
+diffusion contributes five exponentials, the eigentensors of the
+diffusion operator on traceless tensors (Woessner 1962); internal motion
+multiplies them by `S² + (1 − S_f²) e^{−τ/τ_f} + (S_f² − S²) e^{−τ/τ_s}`.
+Interactions in one group share their internal motion (as a rigid
+peptide plane does); between groups, and with interactions that move
+only with the molecule, only the order parameters correlate (`S_k S_l`).
+`correlation_function(k, l, τ)` and `spectral_density(k, l, ω)` give the
+normalised `C_kl` (`C_kk(0) = 1`) and its transform; for a rigid molecule
+tumbling isotropically `J(ω) = τ_c/(1 + ω²τ_c²)`, 5/2 times the
+`J(ω) = (2/5) Σ A_i τ_i/(1 + ω²τ_i²)` of the NMR literature.
+
+- **Cost.** Each exponential is a mode with six terms of the
+  superoperator: five modes for any diffusion tensor, five more for each
+  group and internal time scale. Six relaxing protons with anisotropic
+  diffusion and three extended model-free groups have 35 modes and take
+  0.09 s instead of 0.03 s for their rates.
+- **Symmetries.** Declared spin permutations must keep the motion too:
+  the diffusion tensor and the groups of internal motion.
+- **Assumptions.** Internal and overall motion are independent, and the
+  correlation of two groups' internal motions is left out; the fast-motion
+  condition of Redfield theory uses the slowest correlation time.
 
 ## Larger systems and equivalent spins
 
@@ -189,7 +246,7 @@ proton coherences, 2·10⁹ rad/s apart, in one block; there only short
 intervals are affordable.
 
 The Redfield superoperator is not formed block by dense block any more.
-Its 30 terms `𝒬 ⊗ Y(𝒬)` are kept as sparse operators on the basis
+Its terms `𝒬 ⊗ Y(𝒬)` (30 for isotropic tumbling) are kept as sparse operators on the basis
 states, and each column `R(|a⟩⟨b|)` is computed from them where a block is
 used, so memory grows with the entries of the blocks in use, not with
 their squares. Before anything is built the work and memory of every
@@ -949,6 +1006,21 @@ converge for finite pulses).
   orientations rather than QSO's closed form, the rates of a ¹³C–¹H₂, a
   ¹³CH₃ and an amide ¹⁵N–¹H (with shielding cross-correlation) agree to
   5·10⁻¹⁵ and the expectations after exact propagation to 3·10⁻⁹.
+
+- **Anisotropic tumbling and internal motion.** The diffusion operator's
+  rates equal Woessner's (`4D_x + D_y + D_z`, …, `6D ± 6√(D² − L²)`) to
+  10⁻¹², also in a rotated frame. `R₁`, `R₂` and `σ_NH` of ¹⁵N–¹H follow
+  the closed forms with Lipari–Szabo and extended model-free motion,
+  Woessner's three terms of axially symmetric and five terms of fully
+  anisotropic diffusion, to 10⁻⁹, and the cross spectral density of two
+  axes in axial diffusion to 10⁻¹². The TROSY rate `η_xy` follows
+  Goldman's `−(1/15) b ω_N Δσ P₂(cos β)(4J(0) + 3J(ω_N))` at five angles
+  `β` (zero at the magic angle), and the two lines of the doublet differ
+  by `2η_xy`. Isotropic diffusion and order parameters of 1 give 1.34's
+  rates to 10⁻¹². Spectral densities equal the transforms of the
+  correlation functions by quadrature to 10⁻⁹, a Monte Carlo of
+  rotational Brownian motion (6000 bonds, NumPy) reproduces `C(τ)` within
+  its statistical error, and the thermal state stays the fixed point.
 
 - **Larger systems.** Krylov steps equal the dense exponentials up to six
   spins to 6·10⁻¹³ of the deviation (six protons at 2 and 9.4 T with `T₁`

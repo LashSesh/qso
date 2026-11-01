@@ -3,6 +3,7 @@ metatron_qso._core.Angle
 metatron_qso._core.BoolArray
 metatron_qso._core.ComplexArray
 metatron_qso._core.Edge
+metatron_qso._core.Interaction
 metatron_qso._core.Instruction
 metatron_qso._core.IntArray
 metatron_qso._core.RealArray

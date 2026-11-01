@@ -60,9 +60,13 @@
 //! shielding anisotropies relax the system by Bloch–Wangsness–Redfield
 //! theory for isotropic tumbling, cross-correlations included, towards
 //! thermal equilibrium (see the `redfield` source for the formulas).
+//! Anisotropic rotational diffusion ([`SpinSystem::with_diffusion`]) and
+//! model-free internal motion of groups of interactions
+//! ([`SpinSystem::set_internal_motion`], [`ModelFree`]) replace the single
+//! exponential correlation function by a sum of exponentials
+//! ([`SpinSystem::correlation_function`], [`SpinSystem::spectral_density`]).
 //! [`SpinSystem::relaxation_rates`] gives auto- and cross-relaxation rates
-//! of observables. Quadrupolar relaxation and internal motion are not
-//! modelled.
+//! of observables. Quadrupolar relaxation is not modelled.
 //!
 //! The signal is `s(t) = Tr(ρ(t) F₊)`, `F₊ = Σ_{i ∈ X} I₊ᵢ`: a spin with
 //! offset Ω gives `e^{iΩt}`. [`SpinSystem::lines`] gives the exact stick
@@ -125,7 +129,7 @@ pub use nv::{
     NV_ZERO_FIELD_SPLITTING, Nitrogen, NitrogenIsotope, NvCenter, NvEvent, cpmg, decay_exponent,
     filter_function, hahn, ramsey, xy8,
 };
-pub use redfield::{MU0_OVER_4PI, axial_csa};
+pub use redfield::{Interaction, MU0_OVER_4PI, ModelFree, axial_csa, axial_diffusion};
 
 /// The nuclear-spin bath of an NV centre (cluster-correlation expansion).
 pub use nv::bath;
@@ -404,6 +408,13 @@ pub struct SpinSystem {
     /// anisotropies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     correlation_time: Option<f64>,
+    /// Rotational diffusion tensor (s⁻¹, molecular frame), in place of
+    /// isotropic tumbling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    diffusion: Option<[[f64; 3]; 3]>,
+    /// Groups of interactions that share a model-free internal motion.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    internal_motions: Vec<redfield::InternalMotion>,
     /// Permutations of the spins that leave the system unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     symmetries: Vec<Vec<usize>>,
@@ -488,6 +499,8 @@ impl SpinSystem {
             frame: Frame::Rotating,
             carriers: BTreeMap::new(),
             correlation_time: None,
+            diffusion: None,
+            internal_motions: Vec::new(),
             symmetries: Vec::new(),
         }
     }

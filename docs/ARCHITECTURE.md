@@ -534,7 +534,16 @@ symmetric tensors; the isotropic average of their correlations makes the
 superoperator a sum of 30 independent terms `[𝒬, [Y(𝒬), ·]]`, with
 `𝒬 = Σ_k (A^k : E_μ) Q^k,S_ab` and `Y` the multiplication by `J(ω_mn)` in
 the eigenbasis of the laboratory-frame `H` (its blocks by total `M`).
-The 30 terms are kept as sparse operators on the basis states ordered by
+Beyond isotropic tumbling (`spin/redfield/motion.rs`) the `E_μ` with one
+`J` become modes: rotational diffusion with tensor `D` acts on the
+traceless tensors as `M = −Σ_ab D_ab G_a G_b` (`G_a` the rotation
+generators), a symmetric 5 × 5 matrix whose eigentensors `V_j` and rates
+`λ_j` replace `E_μ` and `1/τ_c`; model-free internal motion adds, per
+group of interactions, the modes `λ_j + 1/τ_f` and `λ_j + 1/τ_s` with
+weights `√(1 − S_f²)` and `√(S_f² − S²)` on the group, and scales every
+interaction's overall mode by its `S`. Each mode `(λ, w)` gives six terms
+with `𝒬 = Σ_k w_k Q^k,S_ab` and `J(ω) = λ/(λ² + ω²)`; spin symmetries
+must keep `Σ w_k w_l` over the modes of each rate. The terms are kept as sparse operators on the basis states ordered by
 label (every label's states contiguous), `𝒬` from the local two-spin
 tensors and `Y(𝒬)` from one pair of eigenblocks at a time (entries below
 10⁻¹⁵ of their pair's largest dropped as rounding), together with the
