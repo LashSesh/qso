@@ -4737,6 +4737,12 @@ Not done, and why:
 - **Fitting.** Model-free parameters are inputs; fitting them to measured
   rates (as Modelfree or relax do) is left to the user.
 - **Dynamic frequency shifts** stay out, as in 1.34.
+- **One order parameter per group, and none negative.** A group shares
+  one internal correlation function, so a dipolar coupling and a shielding
+  tensor with different order parameters need separate groups, which
+  loses their internal cross-correlation; between groups `S_k S_l` is
+  taken non-negative, so the negative `S` of a cone beyond the magic angle
+  is not represented. Both are the usual practice.
 
 Measured (¹⁵N–¹H of a small protein, `τ_c` = 4.1 ns, or the same mean
 rate with `D_∥/D_⊥` = 1.2; `S²` = 0.85, `τ_e` = 50 ps; the bond 40° from
@@ -4767,11 +4773,49 @@ diffusion `η_xy` follows the cross spectral density. Isotropic diffusion
 and order parameters of 1 reproduce 1.34's rates to 10⁻¹², spectral
 densities equal the cosine transforms of the correlation functions by
 quadrature to 10⁻⁹, a NumPy Monte Carlo of rotational Brownian motion
-(6000 bonds) reproduces `C(τ)` within its statistical error, the thermal
+(6000 bonds) reproduces `C(τ)` within four standard errors, the thermal
 state stays fixed under anisotropic diffusion with internal motion, the
 frames agree, positions, shielding and diffusion tensor rotated together
 (a non-diagonal tensor) give the same rates to 10⁻¹⁰, and symmetries
 that the motion breaks are refused.
+
+Review: an independent review found no fault in the physics or the
+normalisation. It derived the diffusion operator anew from the second
+derivatives of `R A Rᵀ`, ran a Monte Carlo of 200 000 rotating bodies with
+a non-diagonal diffusion tensor (the factor `(1/10)(δδ + δδ − ⅔δδ)` and
+the modes, auto and cross, within one standard error), and wrote a dense
+Redfield superoperator in NumPy from its own correlation functions: on
+¹⁵N–¹H–¹³C in the laboratory frame with J couplings, a non-axial and an
+axial shielding tensor, a non-diagonal diffusion tensor and three groups
+of internal motion, all 13 × 13 rates agree to 1.3·10⁻¹⁵ (mutations of
+the diffusion tensor or of the cross-group terms break the agreement by
+10⁻² to 10⁻¹). It found two small faults and several smaller points; all
+are fixed or documented.
+
+- **Subnormal correlation times.** `τ = 10⁻³¹⁰` passed the check, and its
+  infinite rate made `correlation_function` and `spectral_density` NaN.
+  Times now need a finite rate (test).
+- **Near-degenerate rates.** Modes were grouped by rate to 10⁻¹² but
+  compared to 10⁻⁹; a near-axial diffusion tensor that splits a
+  degenerate pair by 10⁻¹¹ made the solver's individual eigentensors
+  ill-conditioned and refused the cycle of a methyl group. Rates within
+  10⁻⁹ are grouped now (test with splits of 10⁻¹² to 10⁻¹⁰, and 10⁻³
+  refused).
+- **Symmetries after the fact.** `set_internal_motion` and
+  `with_diffusion` did not check declared symmetries, so the system broke
+  later with a message about positions and tensors. Both check them now
+  (`set_internal_motion` restores its groups on an error), and the message
+  names the motion (test).
+- **Python.** `set_internal_motion((0, 1), m)` read the pair as two
+  shieldings; the interactions must now be a list, a 2-element list
+  `[i, j]` is a dipolar coupling too, and bools are refused (test).
+- **Documentation.** `with_correlation_time(None)` keeps a diffusion
+  tensor (it said it turns relaxation off); the isotropic forms of `C` and
+  `J` hold for `k = l` (`J_kl` carries `Â^k : Â^l`); the assumptions of one
+  `S²` per group and of `S_k S_l ≥ 0` between groups are stated; the Monte
+  Carlo bound is four standard errors; `Interaction` is
+  `#[non_exhaustive]`, and a group without interactions is refused in
+  JSON.
 
 ### 1.50 — Hyperpolarisation with reaction kinetics (M)
 

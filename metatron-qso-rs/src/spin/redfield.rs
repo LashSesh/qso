@@ -546,7 +546,8 @@ impl SpinSystem {
     }
 
     /// The same system tumbling isotropically with correlation time
-    /// `τ_c` (s), or without Redfield relaxation (`None`).
+    /// `τ_c` (s), which replaces a diffusion tensor; `None` removes the
+    /// correlation time (a diffusion tensor, if set, stays).
     pub fn with_correlation_time(mut self, tau_c: Option<f64>) -> Result<Self> {
         if let Some(t) = tau_c
             && !(t.is_finite() && t > 0.0)
@@ -912,13 +913,15 @@ impl SpinSystem {
         let Some(image) = image else {
             return false;
         };
-        // The modes grouped by rate (to 10⁻¹² relative).
+        // The modes grouped by rate (to 10⁻⁹ relative, the tolerance of the
+        // comparison: within a near-degenerate pair the eigentensors are
+        // ill-conditioned, their sum is not).
         let mut modes = self.modes(&interactions);
         modes.sort_by(|a, b| a.rate.total_cmp(&b.rate));
         let mut groups: Vec<Vec<&motion::Mode>> = Vec::new();
         for m in &modes {
             match groups.last_mut() {
-                Some(g) if (m.rate - g[0].rate).abs() <= 1e-12 * m.rate => g.push(m),
+                Some(g) if (m.rate - g[0].rate).abs() <= 1e-9 * m.rate => g.push(m),
                 _ => groups.push(vec![m]),
             }
         }

@@ -33,6 +33,7 @@ use crate::linalg::RMatrix;
 /// An interaction that relaxes: the dipolar coupling of two spins (the
 /// lower index first) or the shielding anisotropy of one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum Interaction {
     Dipolar(usize, usize),
     Shielding(usize),
@@ -82,7 +83,8 @@ impl ModelFree {
 
     pub(super) fn validate(&self) -> Result<()> {
         let unit = |s: f64| (0.0..=1.0).contains(&s);
-        let time = |t: f64| t.is_finite() && t > 0.0;
+        // Positive, finite, and with a finite rate 1/t (no subnormals).
+        let time = |t: f64| t.is_finite() && t > 0.0 && (1.0 / t).is_finite();
         if !(unit(self.s2_fast) && unit(self.s2_slow) && time(self.tau_fast) && time(self.tau_slow))
         {
             return Err(QsoError::invalid(
@@ -249,14 +251,16 @@ pub(in crate::spin) struct Mode {
 impl SpinSystem {
     /// The same system with rotational diffusion tensor `D` (s⁻¹, molecular
     /// frame; finite, symmetric, positive definite) in place of isotropic
-    /// tumbling, or without it (`None`). It replaces a correlation time;
-    /// `D = d·1` is isotropic tumbling with `τ_c = 1/(6d)`.
+    /// tumbling, or without it (`None`, which leaves a correlation time
+    /// alone). It replaces a correlation time; `D = d·1` is isotropic
+    /// tumbling with `τ_c = 1/(6d)`. Declared symmetries must keep it.
     pub fn with_diffusion(mut self, tensor: Option<[[f64; 3]; 3]>) -> Result<Self> {
         if let Some(d) = &tensor {
             check_diffusion(d)?;
             self.correlation_time = None;
         }
         self.diffusion = tensor;
+        self.validate_symmetries()?;
         Ok(self)
     }
 
@@ -266,7 +270,10 @@ impl SpinSystem {
     }
 
     /// Give `interactions` one shared internal motion (they leave any group
-    /// they were in), or move only with the molecule (`None`).
+    /// they were in), or move only with the molecule (`None`). Interactions
+    /// that do not relax (spins without positions or shielding tensor) are
+    /// kept and take effect once they do. Declared symmetries must keep the
+    /// groups; on an error nothing changes.
     pub fn set_internal_motion(
         &mut self,
         interactions: &[Interaction],
@@ -293,6 +300,7 @@ impl SpinSystem {
         if let Some(m) = &motion {
             m.validate()?;
         }
+        let old = self.internal_motions.clone();
         for group in &mut self.internal_motions {
             group.interactions.retain(|k| !list.contains(k));
         }
@@ -307,6 +315,10 @@ impl SpinSystem {
                     motion,
                 });
             }
+        }
+        if let Err(e) = self.validate_symmetries() {
+            self.internal_motions = old;
+            return Err(e);
         }
         Ok(self)
     }
@@ -334,6 +346,12 @@ impl SpinSystem {
         let mut seen = std::collections::BTreeSet::new();
         for g in &self.internal_motions {
             g.motion.validate()?;
+            if g.interactions.is_empty() {
+                return Err(QsoError::invalid(
+                    "internal_motion",
+                    "a group of internal motion needs an interaction",
+                ));
+            }
             for k in &g.interactions {
                 let ok = match *k {
                     Interaction::Dipolar(i, j) => i < j && j < n,
@@ -481,7 +499,9 @@ impl SpinSystem {
 
     /// The normalised correlation function of two interactions,
     /// `C_kl(τ) = Σ_modes ŵ_k ŵ_l e^{−λτ}` with `ŵ = w/|A|`: `C_kk(0) = 1`,
-    /// and `e^{−τ/τ_c}` for a rigid molecule tumbling isotropically. The
+    /// and for a rigid molecule tumbling isotropically `(Â^k : Â^l)
+    /// e^{−τ/τ_c}` (`e^{−τ/τ_c}` for `k = l`, `±P₂(cos β)` times it for two
+    /// axial tensors at an angle `β`). The
     /// relaxation by `k` and `l` is that of 1.34 with `(A^k : A^l)
     /// e^{−τ/τ_c}` replaced by `|A^k||A^l| C_kl(τ)`.
     pub fn correlation_function(&self, k: Interaction, l: Interaction, tau: f64) -> Result<f64> {
@@ -496,8 +516,9 @@ impl SpinSystem {
     }
 
     /// The normalised spectral density `J_kl(ω) = ∫₀^∞ C_kl(τ) cos(ωτ) dτ =
-    /// Σ_modes ŵ_k ŵ_l λ/(λ² + ω²)` (s; `ω` in rad/s): `τ_c/(1 + ω²τ_c²)`
-    /// for a rigid molecule tumbling isotropically, 5/2 times the
+    /// Σ_modes ŵ_k ŵ_l λ/(λ² + ω²)` (s; `ω` in rad/s): `J_kk =
+    /// τ_c/(1 + ω²τ_c²)` for a rigid molecule tumbling isotropically (`J_kl`
+    /// carries `Â^k : Â^l`), 5/2 times the
     /// `J(ω) = (2/5) Σ A_i τ_i/(1 + ω²τ_i²)` of the NMR literature.
     pub fn spectral_density(&self, k: Interaction, l: Interaction, omega: f64) -> Result<f64> {
         if !omega.is_finite() {

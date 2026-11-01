@@ -1149,3 +1149,19 @@ def test_model_free_bindings():
         sys.with_diffusion(np.diag([1e7, -1e7, 1e7]))
     with pytest.raises(ValueError):
         sys.set_internal_motion([(0, 7)], m)
+
+
+def test_interaction_arguments_are_unambiguous():
+    sys = q.SpinSystem(14.1)
+    sys.add_spin("15N", 120.0)
+    sys.add_spin("1H", 8.0)
+    m = spin.ModelFree.lipari_szabo(0.8, 5e-11)
+    # A bare pair would read as two shieldings: refused, a list is required.
+    with pytest.raises(ValueError):
+        sys.set_internal_motion((0, 1), m)
+    sys.set_internal_motion([[0, 1]], m)
+    assert sys.internal_motion((1, 0)).parameters == m.parameters
+    assert sys.internal_motion(0) is None
+    for bad in ([True], [(0, False)], [(0, 1, 2)], [-1]):
+        with pytest.raises(ValueError):
+            sys.set_internal_motion(bad, m)

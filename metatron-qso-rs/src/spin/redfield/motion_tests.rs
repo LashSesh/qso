@@ -698,3 +698,81 @@ fn a_rotated_frame_gives_the_same_rates() {
     let worst = (&a - &b).iter().fold(0.0f64, |m, x| m.max(x.abs()));
     assert!(worst < 1e-10 * largest, "{worst:e}");
 }
+
+#[test]
+fn review_findings_stay_fixed() {
+    // A subnormal correlation time has an infinite rate: refused.
+    assert!(ModelFree::lipari_szabo(0.5, 1e-310).is_err());
+    assert!(ModelFree::extended(0.9, 1e-11, 0.8, 1e-310).is_err());
+    // A methyl group about a C₃ axis with near-axial diffusion: splitting
+    // the degenerate rates by 10⁻¹¹ or 10⁻¹⁰ of themselves keeps the
+    // cycle of the protons a symmetry; a split of 10⁻³ does not.
+    let norm = |x: [f64; 3]| {
+        let r = (x[0] * x[0] + x[1] * x[1] + x[2] * x[2]).sqrt();
+        x.map(|y| y / r)
+    };
+    let n = norm([0.31, -0.52, 0.79]);
+    let e1 = norm([n[1], -n[0], 0.0]);
+    let e2 = [
+        n[1] * e1[2] - n[2] * e1[1],
+        n[2] * e1[0] - n[0] * e1[2],
+        n[0] * e1[1] - n[1] * e1[0],
+    ];
+    let methyl = |eps: f64| {
+        let mut sys = SpinSystem::new(14.1);
+        sys.add_spin(Isotope::C13, 20.0).unwrap();
+        sys.set_position(0, [0.0; 3]).unwrap();
+        for k in 0..3 {
+            let phi = 2.0 * std::f64::consts::PI * k as f64 / 3.0;
+            let p = [0, 1, 2].map(|a| 0.36 * n[a] + 1.03 * (phi.cos() * e1[a] + phi.sin() * e2[a]));
+            sys.add_spin(Isotope::H1, 0.9).unwrap();
+            sys.set_position(k + 1, p).unwrap();
+            sys.couple(0, k + 1, 125.0).unwrap();
+        }
+        let mut d = axial_diffusion(5e9, 1e9, n).unwrap();
+        for a in 0..3 {
+            for b in 0..3 {
+                d[a][b] += eps * 1e9 * e1[a] * e1[b];
+            }
+        }
+        let mut sys = sys.with_diffusion(Some(d)).unwrap();
+        let m = ModelFree::extended(0.9, 2e-11, 0.8, 4e-10).unwrap();
+        for k in 1..4 {
+            sys.set_internal_motion(&[Interaction::Dipolar(0, k)], Some(m))
+                .unwrap();
+        }
+        sys
+    };
+    let cycle = [0, 2, 3, 1];
+    for eps in [0.0, 1e-12, 1e-11, 1e-10] {
+        assert!(methyl(eps).redfield_invariant(&cycle), "{eps}");
+    }
+    assert!(!methyl(1e-3).redfield_invariant(&cycle));
+    // Declared symmetries must survive later changes of the motion.
+    let mut sys = methyl(0.0);
+    sys.set_symmetries(vec![cycle.to_vec()]).unwrap();
+    let before = sys.clone();
+    assert!(
+        sys.set_internal_motion(&[Interaction::Dipolar(0, 1)], None)
+            .is_err()
+    );
+    assert_eq!(sys, before);
+    assert!(
+        sys.clone()
+            .with_diffusion(Some(axial_diffusion(5e9, 1e9, e1).unwrap()))
+            .is_err()
+    );
+    // A group without interactions is refused in JSON.
+    let text = nh(14.1, unit(0.7, 0.4), unit(0.9, 0.1))
+        .with_correlation_time(Some(1e-9))
+        .unwrap()
+        .to_json()
+        .replacen(
+            "\"correlation_time\"",
+            "\"internal_motions\": [{\"interactions\": [], \"motion\": {\"s2_fast\": 0.8, \
+             \"tau_fast\": 1e-11, \"s2_slow\": 1.0, \"tau_slow\": 1e-11}}], \"correlation_time\"",
+            1,
+        );
+    assert!(text.contains("internal_motions"));
+    assert!(SpinSystem::from_json(&text).is_err());
+}

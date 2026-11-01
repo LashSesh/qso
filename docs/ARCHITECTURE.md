@@ -543,8 +543,9 @@ group of interactions, the modes `λ_j + 1/τ_f` and `λ_j + 1/τ_s` with
 weights `√(1 − S_f²)` and `√(S_f² − S²)` on the group, and scales every
 interaction's overall mode by its `S`. Each mode `(λ, w)` gives six terms
 with `𝒬 = Σ_k w_k Q^k,S_ab` and `J(ω) = λ/(λ² + ω²)`; spin symmetries
-must keep `Σ w_k w_l` over the modes of each rate. The terms are kept as sparse operators on the basis states ordered by
-label (every label's states contiguous), `𝒬` from the local two-spin
+must keep `Σ w_k w_l` over the modes of each rate (rates within 10⁻⁹
+grouped). The terms are kept as sparse operators on the basis states
+ordered by label (every label's states contiguous), `𝒬` from the local two-spin
 tensors and `Y(𝒬)` from one pair of eigenblocks at a time (entries below
 10⁻¹⁵ of their pair's largest dropped as rounding), together with the
 part of `Σ w 𝒬Y` within each label. A column `R(|a⟩⟨b|)` of a

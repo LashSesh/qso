@@ -89,7 +89,8 @@ impl SpinSystem {
             if !self.redfield_invariant(p) {
                 return refuse(format!(
                     "{p:?} changes the relaxing dipolar couplings or shielding anisotropies \
-                     (positions and tensors must agree up to a rotation)"
+                     (positions and tensors must agree up to a rotation that also keeps the \
+                     diffusion tensor and the groups of internal motion)"
                 ));
             }
         }

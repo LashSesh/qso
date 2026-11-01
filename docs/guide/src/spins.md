@@ -147,9 +147,11 @@ the same block exponentials.
   and second kind, which matters for ²H at low field), spin-rotation,
   antisymmetric shielding, intermolecular, solvent, oxygen and
   paramagnetic relaxation, and chemical exchange.
-- **Size.** The superoperator's 30 terms (six per mode of the motion,
-  next section) are built once per field (for seven protons in 0.02 s) and its blocks of coherence order column by
-  column where they are used (next section); there is no limit on the
+- **Size.** The superoperator's terms (30 for isotropic tumbling, six
+  per mode of the motion otherwise, see the next section) are built once
+  per field (for seven protons in 0.02 s) and its blocks of coherence
+  order column by column where they are used (see *Larger systems and
+  equivalent spins*); there is no limit on the
   size of a block, only on work and memory. `evolve` reuses the terms
   while the field stays, so shaped pulses cost little more, but every
   step of a sweep builds them anew.
@@ -204,7 +206,8 @@ peptide plane does); between groups, and with interactions that move
 only with the molecule, only the order parameters correlate (`S_k S_l`).
 `correlation_function(k, l, τ)` and `spectral_density(k, l, ω)` give the
 normalised `C_kl` (`C_kk(0) = 1`) and its transform; for a rigid molecule
-tumbling isotropically `J(ω) = τ_c/(1 + ω²τ_c²)`, 5/2 times the
+tumbling isotropically `J_kk(ω) = τ_c/(1 + ω²τ_c²)` (`J_kl` carries
+`Â^k : Â^l`, `±P₂(cos β)` for two axial tensors), 5/2 times the
 `J(ω) = (2/5) Σ A_i τ_i/(1 + ω²τ_i²)` of the NMR literature.
 
 - **Cost.** Each exponential is a mode with six terms of the
@@ -215,8 +218,17 @@ tumbling isotropically `J(ω) = τ_c/(1 + ω²τ_c²)`, 5/2 times the
 - **Symmetries.** Declared spin permutations must keep the motion too:
   the diffusion tensor and the groups of internal motion.
 - **Assumptions.** Internal and overall motion are independent, and the
-  correlation of two groups' internal motions is left out; the fast-motion
+  correlation of two groups' internal motions is left out. Every member of
+  a group has the group's one internal correlation function, so its auto-
+  and cross-terms share one `S²` (a dipolar coupling and a shielding tensor
+  in one plane in general have different order parameters: give them
+  separate groups, at the price of their internal cross-correlation).
+  Between groups `S_k S_l = √S²_k √S²_l ≥ 0`, so a negative `S` (the `P₂`
+  of a cone beyond the magic angle) is not represented. The fast-motion
   condition of Redfield theory uses the slowest correlation time.
+- **Correlation time and diffusion.** Setting one replaces the other;
+  `with_correlation_time(None)` removes a correlation time but leaves a
+  diffusion tensor, and `with_diffusion(None)` the reverse.
 
 ## Larger systems and equivalent spins
 
@@ -246,8 +258,8 @@ proton coherences, 2·10⁹ rad/s apart, in one block; there only short
 intervals are affordable.
 
 The Redfield superoperator is not formed block by dense block any more.
-Its terms `𝒬 ⊗ Y(𝒬)` (30 for isotropic tumbling) are kept as sparse operators on the basis
-states, and each column `R(|a⟩⟨b|)` is computed from them where a block is
+Its terms `𝒬 ⊗ Y(𝒬)` (30 for isotropic tumbling) are kept as sparse
+operators on the basis states, and each column `R(|a⟩⟨b|)` is computed from them where a block is
 used, so memory grows with the entries of the blocks in use, not with
 their squares. Before anything is built the work and memory of every
 block and of the terms are estimated: eleven protons with dipolar
@@ -1020,7 +1032,8 @@ converge for finite pulses).
   rates to 10⁻¹². Spectral densities equal the transforms of the
   correlation functions by quadrature to 10⁻⁹, a Monte Carlo of
   rotational Brownian motion (6000 bonds, NumPy) reproduces `C(τ)` within
-  its statistical error, and the thermal state stays the fixed point.
+  four standard errors (plus 2·10⁻³), and the thermal state stays the
+  fixed point.
 
 - **Larger systems.** Krylov steps equal the dense exponentials up to six
   spins to 6·10⁻¹³ of the deviation (six protons at 2 and 9.4 T with `T₁`

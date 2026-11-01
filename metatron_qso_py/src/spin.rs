@@ -12,7 +12,7 @@ use metatron_qso::spin::{
 use numpy::{IntoPyArray, PyArray1, PyArray2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyDict};
+use pyo3::types::{PyBool, PyDict, PyList, PyTuple};
 
 use crate::graph::PyGraph;
 use crate::{
@@ -251,21 +251,27 @@ fn py_axial_diffusion<'py>(
     )?)
 }
 
-/// An interaction that relaxes: `(i, j)` the dipolar coupling of spins `i`
-/// and `j`, `i` the shielding anisotropy of spin `i`.
-#[derive(FromPyObject)]
-enum InteractionArg {
-    Dipolar(usize, usize),
-    Shielding(usize),
-}
-
-impl From<InteractionArg> for Interaction {
-    fn from(a: InteractionArg) -> Self {
-        match a {
-            InteractionArg::Dipolar(i, j) => Interaction::Dipolar(i, j),
-            InteractionArg::Shielding(i) => Interaction::Shielding(i),
+/// An interaction that relaxes: `(i, j)` (or `[i, j]`) the dipolar
+/// coupling of spins `i` and `j`, `i` the shielding anisotropy of spin `i`
+/// (indices, not bools).
+fn interaction(x: &Bound<'_, PyAny>) -> PyResult<Interaction> {
+    let index = |v: &Bound<'_, PyAny>| -> PyResult<usize> {
+        if v.is_instance_of::<PyBool>() {
+            return Err(invalid("a spin index, not a bool"));
         }
+        v.extract::<usize>()
+            .map_err(|_| invalid("a spin index is a non-negative integer"))
+    };
+    if x.is_instance_of::<PyTuple>() || x.is_instance_of::<PyList>() {
+        let items: Vec<Bound<'_, PyAny>> = x.try_iter()?.collect::<PyResult<_>>()?;
+        if items.len() != 2 {
+            return Err(invalid(
+                "a dipolar coupling is a pair of spin indices (i, j)",
+            ));
+        }
+        return Ok(Interaction::Dipolar(index(&items[0])?, index(&items[1])?));
     }
+    Ok(Interaction::Shielding(index(x)?))
 }
 
 /// Model-free internal motion: `C_I(τ) = S² + (1 − S_f²) e^{−τ/τ_f} +
@@ -685,8 +691,9 @@ impl PySpinSystem {
     }
 
     /// The same system tumbling isotropically with correlation time
-    /// `tau_c` (s), which turns on Redfield relaxation; `None` turns it
-    /// off.
+    /// `tau_c` (s), which turns on Redfield relaxation and replaces a
+    /// diffusion tensor; `None` removes the correlation time (a diffusion
+    /// tensor, if set, stays).
     fn with_correlation_time(&self, tau_c: Option<f64>) -> PyResult<Self> {
         Ok(Self {
             inner: self.inner.clone().with_correlation_time(tau_c).raise()?,
@@ -721,16 +728,27 @@ impl PySpinSystem {
         }
     }
 
-    /// Give `interactions` (`(i, j)` a dipolar coupling, `i` a shielding)
-    /// one shared model-free internal motion; they leave any group they
-    /// were in. `None` lets them move only with the molecule.
+    /// Give `interactions`, a list (`(i, j)` a dipolar coupling, `i` a
+    /// shielding), one shared model-free internal motion; they leave any
+    /// group they were in. `None` lets them move only with the molecule.
+    /// Interactions that do not relax yet (no positions or shielding
+    /// tensor) are kept; declared symmetries must keep the groups.
     #[pyo3(signature = (interactions, motion))]
     fn set_internal_motion(
         &mut self,
-        interactions: Vec<InteractionArg>,
+        interactions: &Bound<'_, PyAny>,
         motion: Option<PyRef<'_, PyModelFree>>,
     ) -> PyResult<()> {
-        let list: Vec<Interaction> = interactions.into_iter().map(Interaction::from).collect();
+        if !interactions.is_instance_of::<PyList>() {
+            return Err(invalid(
+                "interactions are a list, such as [(0, 1), 0] (a tuple (0, 1) alone would be \
+                 ambiguous)",
+            ));
+        }
+        let list: Vec<Interaction> = interactions
+            .try_iter()?
+            .map(|x| interaction(&x?))
+            .collect::<PyResult<_>>()?;
         self.inner
             .set_internal_motion(&list, motion.map(|m| m.inner))
             .raise()?;
@@ -738,19 +756,25 @@ impl PySpinSystem {
     }
 
     /// The internal motion of an interaction, if it has one.
-    fn internal_motion(&self, interaction: InteractionArg) -> Option<PyModelFree> {
-        self.inner
-            .internal_motion(interaction.into())
-            .map(|inner| PyModelFree { inner })
+    fn internal_motion(&self, interaction: &Bound<'_, PyAny>) -> PyResult<Option<PyModelFree>> {
+        Ok(self
+            .inner
+            .internal_motion(self::interaction(interaction)?)
+            .map(|inner| PyModelFree { inner }))
     }
 
     /// The normalised spectral density `J_kl(ω)` (s; `omega` in rad/s) of
-    /// two interactions: `τ_c/(1 + ω²τ_c²)` for a rigid molecule tumbling
-    /// isotropically, 5/2 times the `(2/5) Σ A_i τ_i/(1 + ω²τ_i²)` of the
+    /// two interactions: `J_kk = τ_c/(1 + ω²τ_c²)` for a rigid molecule
+    /// tumbling isotropically (`J_kl` carries `Â^k : Â^l`), 5/2 times the `(2/5) Σ A_i τ_i/(1 + ω²τ_i²)` of the
     /// NMR literature.
-    fn spectral_density(&self, k: InteractionArg, l: InteractionArg, omega: f64) -> PyResult<f64> {
+    fn spectral_density(
+        &self,
+        k: &Bound<'_, PyAny>,
+        l: &Bound<'_, PyAny>,
+        omega: f64,
+    ) -> PyResult<f64> {
         self.inner
-            .spectral_density(k.into(), l.into(), omega)
+            .spectral_density(interaction(k)?, interaction(l)?, omega)
             .raise()
     }
 
@@ -758,12 +782,12 @@ impl PySpinSystem {
     /// interactions (`C_kk(0) = 1`).
     fn correlation_function(
         &self,
-        k: InteractionArg,
-        l: InteractionArg,
+        k: &Bound<'_, PyAny>,
+        l: &Bound<'_, PyAny>,
         tau: f64,
     ) -> PyResult<f64> {
         self.inner
-            .correlation_function(k.into(), l.into(), tau)
+            .correlation_function(interaction(k)?, interaction(l)?, tau)
             .raise()
     }
 
