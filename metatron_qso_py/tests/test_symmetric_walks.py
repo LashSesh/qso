@@ -148,11 +148,35 @@ def test_errors():
     with pytest.raises(ValueError):
         q.SymmetricOpenWalk(g, generator="bogus")
     with pytest.raises(ValueError):
-        q.coordinate_permutations(14)
+        q.coordinate_permutations(21)
     with pytest.raises(ValueError):
         q.QuotientDrivenWalk(q.Quotient.complete(5), [("laplacian", q.Graph.complete(5))])
     with pytest.raises(ValueError):
         walk.orbitals.coefficients(np.eye(10), float("nan"))
+
+
+def test_beyond_eight_thousand_nodes():
+    # Q14 (16 384 nodes): the orbitals from the stabilisers of points, and
+    # the distance distribution of HypercubeOpenWalk.
+    d, t = 14, 0.9
+    n = 1 << d
+    g = q.Graph.hypercube(d)
+    sites = (0.3, list(range(n)))
+    coordinates = [(0.2, [(u >> k) & 1 for u in range(n)]) for k in range(d)]
+    sym = q.coordinate_permutations(d)
+    walk = q.SymmetricOpenWalk(g, dephasing=[sites] + coordinates, symmetries=sym)
+    assert walk.num_orbitals == math.comb(d + 3, 3)
+    p = walk.populations(walk.evolve(walk.localized(0), t))
+    by_distance = np.bincount([bin(u).count("1") for u in range(n)], weights=p, minlength=d + 1)
+    ref = q.HypercubeOpenWalk(d, gamma=1.0, site_rate=0.3, coordinate_rate=0.2)
+    expected = ref.distance_distribution(ref.evolve(ref.localized(), t))
+    assert np.abs(by_distance - expected).max() < 1e-12
+    # Dense operators stop at 8192 points; dephasing of one coordinate only
+    # is not kept by the symmetries.
+    with pytest.raises(ValueError):
+        walk.orbitals.operator(walk.uniform())
+    with pytest.raises(ValueError):
+        q.SymmetricOpenWalk(g, dephasing=coordinates[:1], symmetries=sym)
 
 
 def bloch(gamma: float, kappa: float, t: float) -> float:

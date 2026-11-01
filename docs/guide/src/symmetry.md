@@ -114,6 +114,38 @@ assert np.abs(walk.populations(x) - full.populations(0, 2.3)).max() < 1e-9
 print(walk.num_orbitals)                            # 15 instead of 100
 ```
 
+Beyond 8192 nodes the `n²` pairs no longer fit, and the orbitals come from
+the orbits of the stabiliser of one node of each orbit on nodes, in
+memory of the nodes times the orbits on nodes (one row of labels per
+orbit on nodes, at most 2²⁷ labels). For small orbits every Schreier generator of the
+stabiliser is used; otherwise random elements of the group (seeded, so
+reproducible) until 64 in a row merge nothing. A missed merge would only
+split an orbital into several classes, which keeps every invariant state
+exact. The
+dense `coefficients` and `operator` stop at 8192 nodes, and the dephasing
+must be kept term by term: every symmetry maps each partition onto one
+with the same rate (terms with the same partition count as one, with
+their rates added). From a node with site and coordinate dephasing,
+Q₁₈ (262 144 nodes, a density matrix of 6.9·10¹⁰ entries) has 1330
+orbitals: 6.8 s to set up and 0.06 s to evolve on four cores; the Hamming
+graph H(7, 5) (78 125 nodes) has 330 and takes 1.0 s.
+
+```python
+import numpy as np
+import metatron_qso as q
+
+d = 14                                              # 16 384 nodes
+n = 1 << d
+dephasing = [(0.3, list(range(n)))] + [(0.2, [(u >> k) & 1 for u in range(n)]) for k in range(d)]
+walk = q.SymmetricOpenWalk(q.Graph.hypercube(d), dephasing=dephasing,
+                           symmetries=q.coordinate_permutations(d))
+print(walk.num_orbitals)                            # C(17, 3) = 680
+p = walk.populations(walk.evolve(walk.localized(0), 0.9))
+by_distance = np.bincount([bin(u).count("1") for u in range(n)], weights=p)
+ref = q.HypercubeOpenWalk(d, site_rate=0.3, coordinate_rate=0.2)
+assert np.abs(by_distance - ref.distance_distribution(ref.evolve(ref.localized(), 0.9))).max() < 1e-12
+```
+
 `HypercubeOpenWalk(d, gamma, site_rate, coordinate_rate)` does the same for
 the hypercube without building it. A pair of nodes is characterised by how
 many coordinates have bits 00, 01, 10 and 11, which gives `C(d + 3, 3)`

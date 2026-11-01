@@ -6,6 +6,33 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Open walks on large symmetric graphs** (1.48, `walks::symmetric`):
+  `Orbitals` and `SymmetricOpenWalk` beyond 8192 nodes. There the
+  orbitals are the orbits of the stabiliser of one point of each orbit
+  on points, found by union–find on the points along elements of the
+  stabiliser (every Schreier generator for small orbits, random elements
+  from product replacement otherwise), in memory of the points times the
+  orbits on points. The orbitals are numbered as the union–find on all
+  pairs numbers them, and both give the same walk (a merge missed by the
+  random elements would only split orbitals, which keeps invariant states
+  exact); the generator is read off at one representative pair per
+  orbital as before. Q₁₄ to Q₁₈ follow `HypercubeOpenWalk` to 10⁻¹²,
+  H(4, 10) the product of walks on K₁₀ to 10⁻¹³, and J(24, 4) (10 626
+  nodes) without dephasing the quotient walk of its distance partition to
+  10⁻¹². Limits: `MAX_SUBORBIT_LABELS` (2²⁷ labels, checked before
+  anything is built) and `MAX_SUBORBIT_WORK` (an estimate of 10¹¹ point
+  images, checked once the Schreier trees are built).
+
+### Changed
+
+- `coordinate_permutations` takes up to 20 coordinates (was 13).
+- Beyond 8192 nodes, `SymmetricOpenWalk` checks the dephasing term by
+  term (every symmetry maps each partition onto one of the same rate,
+  terms with equal partitions merged), and `Orbitals::coefficients` and
+  `Orbitals::operator`, which are dense, refuse such sizes.
+
 ## [1.9.0] — 2026-11-01
 
 Milestones 1.38 to 1.47 of the [roadmap](docs/ROADMAP.md), its ninth and

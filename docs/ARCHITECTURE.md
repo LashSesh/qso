@@ -908,8 +908,24 @@ agree with brute force on random graphs.
   `s_i = √(|C_i|/N)`) and hand the `k × k` problem to `DrivenWalk`.
 * Open walks on orbitals (`walks/symmetric.rs`): an operator invariant
   under a permutation group is constant on its orbits on ordered pairs.
-  The orbits come from union–find over the `n²` pairs, with every root the
-  smallest pair of its set, so one pass relabels them in order. The
+  Up to 8192 points the orbits come from union–find over the `n²` pairs,
+  with every root the smallest pair of its set, so one pass relabels them
+  in order. Beyond (`walks/symmetric/suborbits.rs`), the orbitals with
+  first point in an orbit `A` on points are the orbits of the stabiliser
+  `G_a` of `a = min A`, read through `(u, v) ~ (a, t_u⁻¹ v)`: one row of
+  `n` labels per orbit on points. `t_u⁻¹` is a path in a breadth-first
+  Schreier tree over the generators, ten random elements and their
+  inverses (shallow for hypercubes, Hamming and Johnson graphs, so
+  `of(u, v)` costs a few steps; it can be deep for groups whose random
+  elements are short words). The
+  orbits of `G_a` come from union–find on the points along every Schreier
+  generator `t_{s(x)}⁻¹ s t_x` when `|A|·|S|·n ≤ 2²⁶` and the whole work
+  estimate allows it (exact, by Schreier's lemma), otherwise along
+  `t_{g(a)}⁻¹ g` for random `g` from product replacement (an accumulator,
+  every generator but the identity in a slot of its own) until 64 in a
+  row merge nothing; missed merges only split orbitals.
+  Classes are labelled by their smallest point, so the orbitals are
+  numbered by their smallest pair, as on the pairs. The
   Lindblad generator maps invariant operators to invariant ones, so row
   `O` of the reduced map is read off at one representative pair of `O`;
   it is applied by a Taylor series in substeps of ∞-norm ½. The coined

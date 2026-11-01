@@ -4494,7 +4494,7 @@ below what sampling reaches. The rules stay: no new dependency of the
 crate, an independent reference for every deliverable, reference tools
 in the cross-validation only.
 
-### 1.48 — Open walks on large symmetric graphs (M)
+### 1.48 — Open walks on large symmetric graphs (M, delivered)
 
 Use case: continuous-time walks with dephasing (1.38) on vertex- and
 edge-transitive graphs of 10⁵ to 10⁶ nodes: Hamming, Johnson and Kneser
@@ -4515,6 +4515,154 @@ nodes, site and block dephasing); hypercubes equal `HypercubeOpenWalk`
 their closed forms; Hamming graphs, whose walk factorises over the
 coordinates under per-coordinate dephasing, follow the product of the
 factors' walks.
+
+Delivered in `walks/symmetric/suborbits.rs`, with `walks/symmetric.rs`:
+
+- **Orbitals from suborbits.** Beyond 8192 points `Orbitals` no longer
+  labels the `n²` pairs. For each orbit `A` of the group on points, with
+  smallest point `a`, a pair `(u, v)` lies in the orbital of
+  `(a, t_u⁻¹ v)`, where `t_u` maps `a` to `u`; two pairs `(a, w)` and
+  `(a, w')` share an orbital exactly when the stabiliser `G_a` maps `w`
+  to `w'`. So one row of `n` labels per orbit on points holds every
+  orbital, at most 2²⁷ labels (`MAX_SUBORBIT_LABELS`). `t_u⁻¹` is a path
+  in a breadth-first Schreier tree over the generators, ten random
+  elements of the group and their inverses, which keeps the tree shallow
+  for the families measured and `of(u, v)` cheap.
+  The orbits of `G_a` come from a union–find on the
+  points: along every Schreier generator `t_{s(x)}⁻¹ s t_x` when the
+  orbit times the generators times the points is at most 2²⁶ and the
+  whole work estimate allows it (exact, by Schreier's lemma), otherwise
+  along `t_{g(a)}⁻¹ g` for random `g` from product replacement (Celler et
+  al. 1995, with Leedham-Green's accumulator, every generator other than
+  the identity in a slot of its own, seeded) until 64 in a row merge
+  nothing. While the classes are finer than the orbits of `G_a`, a
+  uniform `g` merges two of them with probability at least ½ (product
+  replacement only approximates uniform elements); merges that are missed
+  would split an orbital into several classes, which keeps every state
+  invariant under the group exact and only costs coefficients. Classes
+  are labelled by their smallest point, so the orbitals are numbered by
+  their smallest pair, as the union–find on all pairs numbers them, and
+  both give the same walk. The generators are those given (from
+  `stabilizer_generators`, or in closed form such as
+  `coordinate_permutations`, now up to 20 coordinates), checked to be
+  automorphisms as before.
+- **Walks on orbitals.** `SymmetricOpenWalk` reads row `O` of its
+  generator at the representative pair of `O`, as in 1.38, now through
+  `of(u, v)` on the suborbits. Beyond 8192 points the dephasing is
+  checked term by term instead of pair by pair: terms with the same
+  partition are merged (rates added), and every symmetry must map each
+  partition onto one with the same rate. The dense `coefficients` and
+  `operator` of `Orbitals` refuse such sizes.
+- **Limits.** Before anything of the size of the points is built: more
+  than 2²⁷ points, or the trivial group with more than 2²⁷ pairs. Then
+  the labels (orbits on points times points, at most 2²⁷, and 16 bytes
+  per orbital), and, once the Schreier trees are built, the work,
+  estimated as point images through Schreier paths (at most 10¹¹,
+  `MAX_SUBORBIT_WORK`; a lower estimate, since draws that merge restart
+  the count of 64); the reduced generator's entries as before (2²⁶).
+
+Changes to the plan:
+
+- **No search inside the walk.** The plan named the automorphism search
+  "where it runs" as a source of the group. As in 1.38 the walk takes
+  generators: `stabilizer_generators` gives them for graphs the search
+  handles, closed forms (`coordinate_permutations`, the stabilisers of
+  Hamming and Johnson graphs in the tests) for the large families.
+- **Rows at representative pairs.** The plan computed the generator from
+  the intersection numbers of the orbitals. Reading each row at one
+  representative pair, as 1.38 does, gives the same entries without
+  them.
+- **The dephasing term by term.** A check over all pairs is what the
+  suborbits avoid. Merging terms with the same partition matters: a
+  check that only asked for some term of the same rate accepted a
+  coordinate dephased twice and the others once on Q₁₄ (now a test).
+- **The comparison where both run** is made on the orbitals, label by
+  label (the walk follows from them): Petersen, Q₃ to Q₆ (the full group
+  of Q₄ too), J(7, 3), Paley(13), C₁₂, H(3, 4), the trivial group and 60
+  random groups of disjoint cycles, by every Schreier generator and by
+  random elements alone, with two seeds; and J(16, 4) (1820 nodes).
+
+Not done, and why:
+
+- **Complete and complete bipartite graphs beyond 8192 nodes.** Their
+  graphs alone have more than 3·10⁷ edges; the walks of 1.38 on them up
+  to 8192 nodes stand.
+- **Kneser graphs, circulants and Cayley graphs beyond 8192 nodes.**
+  Kneser graphs share the group of the Johnson graph on the same sets but
+  are as dense; a localised start on a circulant leaves only a
+  reflection, whose about `n²/2` orbitals do not reduce.
+- **Coined walks** keep the limit of 2048 arcs: their reduction acts on
+  arcs, not on pairs of nodes.
+- **Dephasing that is invariant only as a sum.** Beyond 8192 nodes a
+  dephasing is accepted when the symmetries permute its partitions. Four
+  partitions of K₄ whose decays add up to that of site dephasing, lifted
+  to K₄ □ Q₁₂, are refused there although they are invariant (the review
+  found it); site dephasing of the same rate is accepted. A check of the
+  decay on every pair is what the suborbits avoid.
+
+Measured (four cores; `γ = 1`, from a node to `t = 1`; site dephasing
+0.3 and dephasing 0.2 of every coordinate on hypercubes, 0.4 of every
+coordinate on Hamming graphs, site dephasing 0.3 on Johnson graphs; the
+generators of the stabiliser of the start, two or four permutations):
+
+| Graph | Nodes | Orbitals | Set up | Evolved |
+|---|---|---|---|---|
+| Q₁₄ | 16 384 | 680 | 2.7 s | 0.02 s |
+| Q₁₆ | 65 536 | 969 | 1.2 s | 0.02 s |
+| Q₁₈ | 262 144 | 1330 | 6.8 s | 0.06 s |
+| H(4, 10) | 10 000 | 70 | 0.27 s | 0.01 s |
+| H(7, 5) | 78 125 | 330 | 1.0 s | 0.02 s |
+| J(24, 4) | 10 626 | 81 | 0.69 s | 0.01 s |
+| J(30, 4) | 27 405 | 81 | 0.69 s | 0.02 s |
+
+The density matrix of Q₁₈ has 6.9·10¹⁰ entries; its 1330 coefficients
+keep the trace to 2.4·10⁻¹² (the other graphs to 10⁻¹² or better). The
+review measured Q₂₀ (1771 orbitals) in 71 s and 2.6 GB.
+
+Validation: Q₁₄, Q₁₆ and Q₁₈ have `C(d + 3, 3)` orbitals and follow the
+distance distribution of `HypercubeOpenWalk` to 10⁻¹² (measured 5·10⁻¹⁴
+for Q₁₈), and on Q₁₄ a coordinate dephased in two halves gives the same
+walk to 10⁻¹⁴; H(4, 10) with the same dephasing on every coordinate is
+the product of four walks on K₁₀ to 10⁻¹³; J(24, 4) without dephasing
+follows the quotient walk of its distance partition to 10⁻¹², and with
+site dephasing conserves the population to 10⁻¹².
+
+Review: an independent review found the reduction, the numbering and the
+dephasing check correct. It compared the orbitals with a brute-force
+closure on pairs for 201 groups (random permutations, intransitive and
+imprimitive groups, wreath products in both actions, PGL(2, p), Sym(n),
+dihedral groups with repeated generators and identities, the trivial
+group), every Schreier generator and random elements alone, five seeds
+each; the walk on the stabiliser path, forced at small sizes, equal to
+the walk on the pairs bit for bit; products beyond 8192 nodes (C₇ □ Q₁₁,
+Petersen □ K₈₂₉, K₃ □ Q₁₂) against the product of their factors' walks
+to 2·10⁻¹⁶; and 1200 random dephasings against the pairs path. It found
+one fault and several smaller points; all are fixed or documented.
+
+- **Generators beyond the tenth.** Product replacement filled its ten
+  slots with the first ten generators, so further generators never
+  entered the random elements. When the first ten do not generate the
+  group, orbitals were split into many classes, not two: the eleven
+  adjacent transpositions of Q₁₂ gave 752 classes instead of 455, and
+  ten identities before the coordinate permutations of Q₁₄ 147 620
+  instead of 680. Invariant states stayed exact, but the walk grew past
+  its limits. Every generator other than the identity now starts in a
+  slot of its own, repetitions are dropped, and an accumulator mixes the
+  random elements (tests with more generators than slots and with
+  identities first). `stabilizer_generators` gives 28 generators for Q₈.
+- **Huge point sets without generators** were allocated before the limit
+  refused them (an abort for 2³⁶ points); they are now refused first.
+- **The work estimate** chose every Schreier generator orbit by orbit;
+  it now does so only while the whole estimate stays within the limit
+  (a diagonal Sym(256) on 65 536 points was refused, and is built from
+  random elements). The documentation says "estimated", and that it is
+  checked after the Schreier trees.
+- **Documentation.** Missed merges split an orbital into several
+  classes, not two; the memory of the orbitals is 16 bytes each more than
+  the labels (on the pairs too); the trees are shallow for the families
+  measured, not for every generating set; the J(24, 4) claim "equal on
+  nodes of equal overlap" held by construction, and is replaced by the
+  comparison with the quotient walk.
 
 ### 1.49 — Relaxation beyond isotropic tumbling (M)
 
