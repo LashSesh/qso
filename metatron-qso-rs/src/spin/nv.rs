@@ -1471,5 +1471,9 @@ impl NvCenter {
     }
 }
 
+pub mod bath;
+pub mod generalised;
+pub mod optics;
+
 #[cfg(test)]
 mod tests;

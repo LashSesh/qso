@@ -6,6 +6,276 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.9.0] — 2026-11-01
+
+Milestones 1.38 to 1.47 of the [roadmap](docs/ROADMAP.md), its ninth and
+tenth stages, released together:
+
+- **ninth stage**: 1.38 (symmetry for driven and decoherent walks), 1.39
+  (the nuclear-spin bath of an NV centre), 1.40 (the optical cycle and
+  magnetometer sensitivity), 1.41 (relaxation of larger spin systems),
+  1.42 (exact distances of error-correcting circuits);
+- **tenth stage**: 1.43 (interacting walkers on symmetric graphs), 1.44
+  (slow noise, averaged exactly), 1.45 (the NV bath with finite pulses),
+  1.46 (optimal control of larger spin systems), 1.47 (circuit distances
+  by symmetry).
+
+New results are checked against closed forms from the literature, the
+computations of earlier milestones without symmetry reduction, dense
+propagation, enumeration, PyCCE, Stim and independent NumPy and SciPy
+builds; each milestone's section of the roadmap names its references.
+The validation tests of 1.8.0 still pass; they only grew. The public
+Rust API only grows (`cargo-semver-checks` against 1.8.0).
+
+### Added
+
+- **Symmetry for driven and decoherent walks** (1.38, `walks::symmetric`,
+  `walks::driven::QuotientDrivenWalk`):
+  - `QuotientDrivenWalk` integrates time-dependent Hamiltonians whose terms
+    respect an equitable partition (graph, cells, per-cell potential,
+    uniform projector) on the quotient; `Quotient::lift` returns node
+    amplitudes. Local adiabatic search on K_N with N = 2³⁰ reaches the
+    marked node with probability 0.999999 in 0.02 s.
+  - `Orbitals`, the orbits of a permutation group on ordered pairs, and
+    `SymmetricOpenWalk`, continuous-time walks with dephasing between the
+    blocks of node partitions (site or per-coordinate dephasing) on
+    orbital coefficients. Q₁₂ with site dephasing has 455 orbitals.
+  - `HypercubeOpenWalk`: the hypercube with site and coordinate dephasing
+    on the `C(d + 3, 3)` orbitals of the coordinate permutations, up to
+    d = 230, without building the graph.
+  - `SymmetricCoinedWalk`, coined walks with coin and position dephasing on
+    orbitals of pairs of arcs, and `DecoherentCoinedWalk::with_coin_labels`,
+    so that coin dephasing on hypercubes can be labelled by direction.
+  - `ProductOpenWalk`: Cartesian products with independent dephasing per
+    factor, with the distribution of the number of factors at a target.
+  - `Graph::stabilizer` (automorphisms fixing given nodes),
+    `coordinate_permutations`, `DephasingWalk::num_nodes`.
+  - Python: `Orbitals`, `SymmetricOpenWalk`, `HypercubeOpenWalk`,
+    `SymmetricCoinedWalk`, `ProductOpenWalk`, `QuotientDrivenWalk`,
+    `coordinate_permutations`, `Graph.stabilizer_generators`,
+    `Graph.stabilizer_order`, `Quotient.lift`,
+    `DecoherentCoinedWalk.with_coin_labels` and `coin_labels`.
+
+- **The nuclear-spin bath of an NV centre** (1.39, `spin::bath`,
+  `spin.SpinBath`):
+  - ¹³C at random on the diamond lattice around the centre
+    (`diamond_bath`, `diamond_sites`), with point-dipole hyperfine
+    couplings or given ones, and the dipolar couplings between them.
+  - The coherence after any sequence of a pulse, free periods and π
+    pulses, a pulse (ideal pulses) by the cluster-correlation expansion
+    of Yang and Liu, up to clusters of eight spins connected within a
+    cutoff; whole baths of up to ten spins exactly.
+  - Classical field noise on top (exact for Gaussian noise, sampled for
+    telegraph noise) and averages over random baths (`ensemble_signal`).
+  - The Hahn echo collapses and revives with the ¹³C Larmor period at
+    5 mT. At 50 mT its decay time in natural diamond has a median of
+    0.89 ms over 30 baths, converged in the bath radius and the cutoff,
+    and scales as the inverse of the abundance.
+  - It agrees with PyCCE to 7·10⁻⁶, which joins the cross-framework
+    comparison as a reference.
+  - Divergent expansions (|L| > 1 or not finite) are refused.
+
+- **The optical cycle of an NV centre and magnetometer sensitivity**
+  (1.40, `spin::optics`, `spin.OpticalNv`):
+  - The seven-level model of Tetienne et al. in a field of any direction
+    as a Lindblad equation, with a microwave, dephasing and spin-lattice
+    relaxation.
+  - Steady states, polarisation and fluorescence; CW-ODMR spectra with
+    contrast, width and shot-noise sensitivity; pulsed readout from the
+    laser-polarised state with the best counting window.
+  - Ramsey and echo sensitivities from a readout and a coherence (the ¹³C
+    bath of 1.39, for example).
+  - Dréau's reduced model (`TwoLevelOdmr`).
+  - Levels and lines in any field; the lines of the four orientations of
+    an ensemble and the field vector from them.
+  - Jumps in the zero-field basis with the Hamiltonians of both triplets:
+    Tetienne's eigenbasis rates where levels are split, continuous at
+    degeneracies and the excited-state anticrossing.
+
+- **Relaxation of larger spin systems** (1.41, `spin`):
+  - The blocks of the master equation as sparse matrices, built column by
+    column and propagated by Krylov steps (Arnoldi with Expokit's step
+    control, to 10⁻¹² of the deviation from `1/d`) where a dense
+    exponential costs more or does not fit: seven protons (blocks of 3432
+    elements) and eight (12 870) relax for seconds. Each block takes the
+    cheaper of the two, the whole state Dormand–Prince steps when those
+    are cheaper still, and blocks the state does not occupy are skipped;
+    free induction decays likewise.
+  - Equivalent spins: `SpinSystem::set_symmetries` and `symmetries`
+    (Python `set_symmetries`, `symmetries`; kept in JSON) declare
+    permutations of the spins, checked against isotopes, shifts,
+    relaxation times, couplings and the relaxing interactions. States
+    they leave unchanged propagate exactly on the orbits of the elements
+    `|a⟩⟨b|`, in blocks several times smaller.
+  - `MAX_RELAXATION_MEMORY` (2 GiB): with the work limit, checked from
+    estimates before anything is built.
+
+- **Exact distances of error-correcting circuits** (1.42, `qec`):
+  - `exact_circuit_distance` (Python `exact_circuit_distance`, options
+    `ExactDistanceOptions`, `DistanceMethod`): the circuit distance of
+    any detector error model, exact when the time allows, with a witness.
+    The lower bound rises step by step, by the exhaustive search of 1.22
+    or by levels of the Brouwer–Zimmermann enumeration (Grassl 2006),
+    whichever is estimated to cost less; after `max_seconds` (a minute by
+    default) the bounds reached so far are returned.
+  - `explain_errors` (Python `explain_errors`) and `CircuitFault`: the
+    circuit faults behind errors of a model (operation, Paulis or flipped
+    measurements, probability), so a witness becomes circuit locations.
+  - CLI: `qso qec --circuit-distance` computes the exact distance, with
+    `--max-seconds` (60 by default).
+
+- **Interacting walkers on symmetric graphs** (1.43, `walks::interacting`):
+  - `SymmetricInteractingWalk` (Python `SymmetricInteractingWalk`): the
+    walks of `InteractingWalk` on the orbits of a group of the graph's
+    automorphisms, for states that the group leaves alone (from a start
+    configuration: the automorphisms fixing its occupied nodes).
+    Fermionic configurations that a symmetry maps to minus themselves drop
+    out. Orbits come from `ConfigurationOrbits`, a union–find with signs
+    over up to 2²⁷ configurations: three bosons on `Q₉` (22.5 million
+    configurations) have 2284 orbits.
+  - `HypercubeParticles` (Python `HypercubeParticles`): up to four
+    particles on `Q_d`, on orbits of the coordinate permutations written
+    down as compositions of `d`, without building the graph (two bosons on
+    `Q₁₀₀`: 89 726 states).
+  - `InteractingWalk::certificate_by_orbits`: certificates from one start
+    per orbit of the automorphisms, 37 times faster on the Paley graph of
+    order 61 and beyond the dense limit, up to 8192 configurations.
+
+- **Slow noise, averaged exactly** (1.44, `noise::slow`): classical
+  Markov processes with finitely many states (`MarkovProcess`: telegraph
+  noise, Ornstein–Uhlenbeck noise as the Ehrenfest chain of `K`
+  fluctuators, quasi-static noise on the nodes of a Gauss rule, products
+  of independent processes), the exact coherence under ideal π pulses
+  (`dephasing`), independent fluctuators whose factors multiply
+  (`Fluctuators`, 1/f noise from rates spread evenly in their logarithm)
+  and Kubo's stochastic Liouville equation (`StochasticLiouville`: one
+  density matrix per joint state of the processes, Krylov steps on the
+  sparse generator). In Python: `MarkovProcess`, `Fluctuators`,
+  `StochasticLiouville`.
+
+- **The NV bath with the electron in every cluster** (1.45,
+  `spin::generalised`, `spin.GeneralisedBath`): the generalised
+  cluster-correlation expansion of Onizhuk et al. The electron (spin 1,
+  `D S_z² + γ_e B·S` in a field of any direction) is propagated with each
+  cluster of up to eight ¹³C, with full hyperfine tensors (point dipoles
+  or given ones), nuclear Zeeman terms and dipolar couplings; its density
+  matrix is expanded element by element. Ideal pulses in the rotating
+  frame, rectangular and shaped finite pulses (rotating-wave
+  approximation) and ideal pulses about laboratory axes (as PyCCE).
+  Sampled product states of the nuclei, every cluster in the static field
+  of the others (PyCCE's bath sampling with its mean field), with standard
+  errors (`estimate`): finite pulses need them beyond the first order.
+  With `dressed`, the electron's levels dressed by each cluster's nuclei
+  (an exact block diagonalisation), which keeps the expansion converging
+  for nuclei coupled by a MHz. Exact propagation of up to eight nuclei,
+  averages over random baths; PyCCE's `gcce` agrees to 5·10⁻⁸. In Python:
+  `GeneralisedBath`, `generalised_ensemble_signal`, `point_dipole_tensor`.
+
+- **Optimal control of larger spin systems** (1.46, `spin`): GRAPE with
+  relaxation on sparse blocks. Rf controls keep the Liouville generator
+  (the master equation and the drift towards equilibrium) as sparse
+  matrices, built once per optimisation, shared by the members of an
+  ensemble (offsets as diagonals, rf errors as factors) and applied to
+  vectors only: seven and eight relaxing spins, where 1.36 stopped at
+  six. The gradient is exact to rounding: Gauss–Legendre nodes in every
+  substep, with the state and costate at the nodes from the Taylor terms
+  of the substep's exponentials. With declared symmetries
+  (`set_symmetries`), rf on whole isotopes and an initial state that
+  respect them, the controls are optimised on the orbits of the elements
+  (a methyl group's 16 385 coefficients with three more protons: 6145).
+  `SpinSystem::control_cost` estimates the operations and memory of one
+  evaluation, and the coefficients it propagates, before the generator is
+  built; an evaluation counts what it spends and stops at the limit. In
+  Python: `SpinSystem.control_cost`.
+
+- **Circuit distances by symmetry** (1.47, `qec`): the exhaustive search
+  of `exact_circuit_distance` starts from one error of each orbit of the
+  model's symmetries (`ExactDistanceOptions::symmetry`; models of more
+  than 4096 detectors are searched without them), with the errors of each
+  orbit in one block of its order. `error_model_symmetries` finds
+  generators of the automorphisms of the graph joining every error to its
+  detectors (detectors and errors kept apart) and keeps those under which
+  every observable is a sum of detectors and observables over GF(2), so
+  that logical errors map onto logical errors (a group of symmetries,
+  not always all of them). `exact_circuit_distance_with_symmetries` takes
+  declared detector permutations, checked the same way and refused when
+  they fail. The
+  depth-8 cycle of the bicycle codes keeps their translations: the
+  circuit of [[144, 12, 12]] over three rounds has circuit distance 10
+  (12 minutes on four cores), where 1.42 reached 9 to 11 in twenty
+  minutes. In Python: `exact_circuit_distance(..., symmetry=True,
+  symmetries=...)` and `error_model_symmetries`; on the command line
+  `qso qec --symmetry`.
+
+### Changed
+
+- **Redfield relaxation without a block-size limit** (1.41): the
+  superoperator's 30 terms are kept as sparse operators and its columns
+  computed from them where a block is used, so its memory grows with the
+  blocks' entries instead of their squares (it used to stop at six
+  relaxing protons). The terms' memory and work are estimated before they
+  are built. The drift uses `R(ρ_eq − 1/d)` (equal to `R(ρ_eq)`, without
+  the rounding of `R(1)`), and the rate bound comes from the terms.
+
+- **A faster exhaustive search** (1.42): `circuit_distance`'s search for
+  logical errors now runs on all threads and reuses its buffers. The
+  threads search ahead, but only the sets that the search in index order
+  visits count against `max_work`, so the bounds and the witness are
+  those of 1.22 on any number of threads. When no branch was cut by the
+  weight, the search proves that no logical error exists, beyond the
+  4096 detectors where linear algebra decides.
+
+- **The Hamiltonian of interacting walkers** is built one configuration
+  at a time by shared code (1.43). `certificate_tolerance` bounds `‖H‖` by
+  the largest absolute row sum instead of diagonalising (above the dense
+  limit it used to refuse); the tolerance can only grow.
+
+- **Density matrices average slow noise** (1.44):
+  `DensityMatrix::apply_device`, `DensityMatrix.simulate` with a device
+  and `DeviceBackend::density_matrix` no longer refuse quasi-static
+  detunings, telegraph noise and over-rotation spreads. Telegraph noise
+  is averaged exactly over the joint states of its processes,
+  quasi-static noise by Gauss quadrature with an a-priori error below
+  10⁻¹³ per entry, up to 12 qubits. Each call averages over its own
+  draws: slow noise is not correlated across calls. Noise learning on
+  density matrices accepts such devices too (on Pauli frames it still
+  refuses them).
+
+- **Rf control with relaxation beyond six spins** (1.46):
+  `control_transfer` and `optimize_control` with rf and relaxation run on
+  sparse blocks at every size, up to the work and memory limits, instead
+  of refusing more than six spins ½. Field profiles with relaxation keep
+  the dense generator and its limit.
+
+- **Colour classes and deadlines in the automorphism search** (1.47):
+  the search keeps given colours of the nodes and stops at a deadline
+  (inside the crate), for the symmetries of error models.
+
+### Fixed
+
+- **Peak memory of sparse relaxation blocks** (1.41): their columns are
+  now built in a few large buffers per task instead of a vector per
+  column, which the allocator kept after the build (0.4 GB for eight
+  spins with dipolar relaxation).
+
+- **Krylov propagation** (`linalg::expm_multiply`, used by continuous,
+  driven and interacting walks above the dense limit; 1.43): steps now
+  stay within the range where the error estimate holds,
+  `τ ≤ m/(spread of the Ritz values)`. A single step over the whole
+  interval was accepted when the estimate was small by accident, which
+  happens on equally spaced spectra: two free bosons on `Q₄₀` arrived at
+  the antipode with probability 0 instead of 1. Estimates at the level of
+  rounding now count as converged, so that tight tolerances no longer
+  shrink the steps forever.
+
+- **Optimal control at low polarisation** (1.46): the Taylor series of
+  `control_transfer` and `optimize_control` with relaxation stopped
+  relative to the trace of `[vec Δ; Tr ρ]` instead of the deviation: at
+  10⁻¹⁸ of the trace, only 10⁻⁹ of a thermal deviation at room
+  temperature and 1 mT. They now stop relative to the deviation, on the
+  dense path of 1.36 as well; SciPy agrees to 10⁻¹⁴ at 9.4 T, 0.1 T and
+  1 mT.
+
 ## [1.8.0] — 2026-10-30
 
 Milestones 1.29 to 1.37 of the [roadmap](docs/ROADMAP.md), its seventh

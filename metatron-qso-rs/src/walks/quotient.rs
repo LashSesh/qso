@@ -515,7 +515,17 @@ impl Quotient {
         Ok(cells.iter().map(|&c| per_cell[c] / self.sizes[c]).collect())
     }
 
-    fn check_len(&self, len: usize) -> Result<()> {
+    /// The node amplitudes of the cell amplitudes `c` (`c_i/√|C_i|` on
+    /// every node of cell `i`). Only for partitions of an explicit graph.
+    pub fn lift(&self, c: &[C64]) -> Result<Vec<C64>> {
+        let cells = self.cell_of.as_ref().ok_or_else(|| {
+            QsoError::invalid("quotient", "lifting to nodes needs an explicit graph")
+        })?;
+        self.check_len(c.len())?;
+        Ok(cells.iter().map(|&i| c[i] / self.sizes[i].sqrt()).collect())
+    }
+
+    pub(crate) fn check_len(&self, len: usize) -> Result<()> {
         if len != self.num_cells() {
             return Err(QsoError::DimensionMismatch {
                 expected: self.num_cells(),

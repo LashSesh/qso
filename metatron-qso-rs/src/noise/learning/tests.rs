@@ -925,8 +925,9 @@ fn frames_refuse_slow_noise() {
     )
     .unwrap_err();
     assert!(err.to_string().contains("slow noise"), "{err}");
-    // Density matrices refuse it too.
-    assert!(learn_layer(&two_gate_layer(), &device, &options).is_err());
+    // Density matrices average slow noise exactly (1.44), as an experiment
+    // over many shots sees it, so learning on them runs.
+    assert!(learn_layer(&two_gate_layer(), &device, &options).is_ok());
 }
 
 #[test]

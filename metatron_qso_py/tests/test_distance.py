@@ -125,3 +125,155 @@ def test_correlations_help_with_both_kinds_of_detectors() -> None:
     plain = q.logical_error_rate(c, 20000, seed=9, decoder="matching")
     correlated = q.logical_error_rate(c, 20000, seed=9, decoder="correlated_matching")
     assert correlated.errors < 0.9 * plain.errors
+
+
+def _nullspace_gf2(rows: np.ndarray) -> np.ndarray:
+    """A basis of {x : rows · x = 0} over GF(2)."""
+    a = rows.copy() % 2
+    m, n = a.shape
+    pivots = []
+    r = 0
+    for c in range(n):
+        p = next((i for i in range(r, m) if a[i, c]), None)
+        if p is None:
+            continue
+        a[[r, p]] = a[[p, r]]
+        for i in range(m):
+            if i != r and a[i, c]:
+                a[i] ^= a[r]
+        pivots.append(c)
+        r += 1
+    free = [c for c in range(n) if c not in pivots]
+    basis = []
+    for f in free:
+        x = np.zeros(n, dtype=np.uint8)
+        x[f] = 1
+        for i, p in enumerate(pivots):
+            x[p] = a[i, f]
+        basis.append(x)
+    return np.array(basis)
+
+
+def _rank_gf2(rows: np.ndarray) -> int:
+    a = rows.copy() % 2
+    rank = 0
+    for col in range(a.shape[1]):
+        hits = np.flatnonzero(a[rank:, col]) + rank
+        if len(hits) == 0:
+            continue
+        a[[rank, hits[0]]] = a[[hits[0], rank]]
+        below = np.flatnonzero(a[:, col])
+        below = below[below != rank]
+        a[below] ^= a[rank]
+        rank += 1
+        if rank == a.shape[0]:
+            break
+    return rank
+
+
+def test_exact_distance_on_the_orbits_of_symmetries() -> None:
+    # The depth-8 cycle of [[72, 12, 6]] keeps the 36 translations of the
+    # torus: every orbit of the distinct errors has 36 of them.
+    code, _ = q.CssCode.bivariate_bicycle_code(72)
+    c = q.css_code_memory(code, 2, 0.001, schedule="bicycle")
+    model = c.detector_error_model()
+    generators = q.error_model_symmetries(model)
+    assert generators
+    n, m = model.n_detectors, len(model)
+    # Independently: each maps the detectors of every error onto those of
+    # an error, and every observable read through it is a sum of rows of
+    # the detectors and observables over GF(2), so that logical errors map
+    # onto logical errors.
+    flips = {tuple(sorted(dets)): obs for _, dets, obs in model.errors}
+    rows = np.zeros((n + model.n_observables, m), dtype=np.uint8)
+    for k, (_, dets, obs) in enumerate(model.errors):
+        rows[dets, k] = 1
+        for b in range(model.n_observables):
+            rows[n + b, k] = obs >> b & 1
+    rank = _rank_gf2(rows)
+    for g in generators:
+        assert sorted(g) == list(range(n))
+        read = np.zeros((model.n_observables, m), dtype=np.uint8)
+        for k, (_, dets, _) in enumerate(model.errors):
+            image = tuple(sorted(g[d] for d in dets))
+            assert image in flips
+            for b in range(model.n_observables):
+                read[b, k] = flips[image] >> b & 1
+        assert _rank_gf2(np.vstack([rows, read])) == rank
+    sets = sorted(flips)
+    index = {s: i for i, s in enumerate(sets)}
+    parent = list(range(len(sets)))
+
+    def root(i: int) -> int:
+        while parent[i] != i:
+            i = parent[i]
+        return i
+
+    for g in generators:
+        for s in sets:
+            a, b = root(index[s]), root(index[tuple(sorted(g[d] for d in s))])
+            parent[max(a, b)] = min(a, b)
+    sizes: dict[int, int] = {}
+    for i in range(len(sets)):
+        sizes[root(i)] = sizes.get(root(i), 0) + 1
+    assert set(sizes.values()) == {36}
+    # The same distance with and without them, found or declared.
+    plain = q.exact_circuit_distance(model, max_seconds=None)
+    found = q.exact_circuit_distance(model, max_seconds=None, symmetry=True)
+    declared = q.exact_circuit_distance(model, max_seconds=None, symmetries=generators)
+    assert plain.distance == found.distance == declared.distance == 6
+    for r in (found, declared):
+        assert r.witness is not None
+        fired = np.zeros(n, dtype=bool)
+        obs = 0
+        for k in r.witness:
+            _, dets, o = model.errors[k]
+            fired[dets] ^= True
+            obs ^= o
+        assert not fired.any() and obs == r.observables != 0
+    # A swap of two detectors is no symmetry.
+    swap = list(range(n))
+    swap[0], swap[1] = 1, 0
+    with pytest.raises(ValueError, match="no error flips"):
+        q.exact_circuit_distance(model, symmetries=[swap])
+    with pytest.raises(ValueError, match="not a permutation"):
+        q.exact_circuit_distance(model, symmetries=[[0] * n])
+
+
+def test_exact_distance_of_the_golay_code_and_a_circuit() -> None:
+    # The Golay code [23, 12, 7] as a model: its parity checks are the
+    # detectors and the first twelve columns (an information set of the
+    # cyclic code) the observables.
+    g = [0, 2, 4, 5, 6, 10, 11]
+    generator = np.zeros((12, 23), dtype=np.uint8)
+    for s in range(12):
+        generator[s, [e + s for e in g]] = 1
+    checks = _nullspace_gf2(generator)
+    errors = [
+        (0.01, [int(i) for i in np.flatnonzero(checks[:, c])], (1 << c) if c < 12 else 0)
+        for c in range(23)
+    ]
+    model = q.DetectorErrorModel(len(checks), errors, 12)
+    for method in ("auto", "brouwer_zimmermann", "search"):
+        r = q.exact_circuit_distance(model, method=method)
+        assert (r.lower_bound, r.upper_bound, r.distance) == (7, 7, 7), method
+    # A colour-code circuit: hook errors halve the distance, and the
+    # lightest logical error is three faults of the circuit.
+    c = q.css_code_memory(q.CssCode.color_code(5), 2, 0.001)
+    model = c.detector_error_model()
+    r = q.exact_circuit_distance(model, max_seconds=None)
+    assert r.distance == 3
+    faults = q.explain_errors(c, model, r.witness)
+    assert len(faults) == 3 and all(faults)
+    for options in faults:
+        for f in options:
+            assert 0 <= f["operation"] < len(c)
+            assert all(p in "XYZM" for _, p in f["paulis"]) and 0 < f["probability"] < 1
+    everything = q.explain_errors(c, model)
+    assert len(everything) == len(model) and all(everything)
+    with pytest.raises(ValueError):
+        q.exact_circuit_distance(model, method="magic")  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        q.exact_circuit_distance(model, max_seconds=-1.0)
+    with pytest.raises(ValueError):
+        q.explain_errors(c, model, [len(model)])

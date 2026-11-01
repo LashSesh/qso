@@ -32,13 +32,18 @@
 //! spins in the laboratory frame, so free evolution, spectra and time
 //! averages use the eigendecomposition of each block of `H` (exact). With
 //! relaxation the Lindblad equation conserves the matching coherence
-//! orders; each block of its superoperator, up to [`MAX_LIOUVILLE_BLOCK`]
-//! elements, is exponentiated exactly for the deviation `ρ − 1/d`, so that
-//! thermal polarisations of parts in 10⁵ keep their relative precision.
-//! Short intervals and shaped pulses use adaptive Dormand–Prince steps
-//! instead, with a local error of 10⁻¹¹ of that deviation, when they are
-//! cheaper. A propagation that would take more than
-//! [`MAX_RELAXATION_WORK`] operations is refused.
+//! orders; each block of its superoperator is propagated for the deviation
+//! `ρ − 1/d`, so that thermal polarisations of parts in 10⁵ keep their
+//! relative precision: exponentiated exactly (up to
+//! [`MAX_LIOUVILLE_BLOCK`] elements) or, as a sparse matrix, by Krylov
+//! steps to 10⁻¹² of the deviation, whichever costs less. Short intervals
+//! and shaped pulses use adaptive Dormand–Prince steps instead, with a
+//! local error of 10⁻¹¹ of that deviation, when they are cheaper.
+//! Permutations of equivalent spins ([`SpinSystem::set_symmetries`])
+//! reduce the blocks of states they leave unchanged, exactly. A
+//! propagation that would take more than [`MAX_RELAXATION_WORK`]
+//! operations or [`MAX_RELAXATION_MEMORY`] bytes is refused before
+//! anything is built.
 //!
 //! Relaxation is phenomenological, per spin: `T₁` towards thermal
 //! equilibrium at the current field and temperature (jump operators
@@ -102,14 +107,18 @@ use crate::linalg::{CMatrix, expm_hermitian};
 mod blocks;
 mod control;
 mod exchange;
+pub(crate) mod krylov;
+#[cfg(test)]
+mod large_tests;
 mod nv;
 mod redfield;
+mod symmetry;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod transfer_tests;
 
-pub use control::{Control, Drive, Member, Optimized, unitary_bound};
+pub use control::{Control, ControlCost, Drive, Member, Optimized, unitary_bound};
 pub use exchange::{Channel, Exchange, Fresh, Profile, Site};
 pub use nv::{
     Carbon, FieldNoise, MAX_NV_DIMENSION, Microwave, NV_GYROMAGNETIC_RATIO,
@@ -118,6 +127,19 @@ pub use nv::{
 };
 pub use redfield::{MU0_OVER_4PI, axial_csa};
 
+/// The nuclear-spin bath of an NV centre (cluster-correlation expansion).
+pub use nv::bath;
+pub use nv::bath::{BathSpin, Cce, SpinBath, diamond_bath};
+/// The generalised cluster-correlation expansion (the electron in every
+/// cluster).
+pub use nv::generalised;
+pub use nv::generalised::{
+    FullSpin, GeneralisedBath, GeneralisedCce, Pulses, generalised_ensemble_signal,
+};
+/// The optical cycle of an NV centre and magnetometer sensitivity.
+pub use nv::optics;
+pub use nv::optics::{OpticalNv, Photophysics, TwoLevelOdmr};
+
 /// Reduced Planck constant (J s, CODATA 2018, exact).
 pub const HBAR: f64 = 1.054_571_817e-34;
 /// Boltzmann constant (J/K, exact).
@@ -125,13 +147,17 @@ pub const BOLTZMANN: f64 = 1.380_649e-23;
 /// Largest dimension of a spin system's Hilbert space (11 spins ½).
 pub const MAX_SPIN_DIMENSION: usize = 2048;
 /// Largest block of the Lindblad superoperator (elements of one coherence
-/// order) that is exponentiated; larger ones use Dormand–Prince steps.
-/// Six spins ½ of one isotope have blocks of up to 924 elements.
+/// order) that is exponentiated densely; larger ones take Krylov steps.
+/// Six spins ½ of one isotope have blocks of up to 924 elements, seven
+/// of 3432.
 pub const MAX_LIOUVILLE_BLOCK: usize = 2048;
 /// Most floating-point operations (estimated) of one propagation with
 /// relaxation, about a minute on one core; more is refused. (One second
 /// of six relaxing protons at 9.4 T takes about 3·10¹¹, ten seconds.)
 pub const MAX_RELAXATION_WORK: f64 = 1.5e12;
+/// Most memory (bytes, estimated) one propagation with relaxation may
+/// hold: its largest block, or the Redfield superoperator's terms.
+pub const MAX_RELAXATION_MEMORY: f64 = 2.0 * (1u64 << 30) as f64;
 /// Most points of a free induction decay.
 pub const MAX_FID_POINTS: usize = 1 << 20;
 /// Most segments of a shaped pulse or a field sweep.
@@ -378,6 +404,9 @@ pub struct SpinSystem {
     /// anisotropies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     correlation_time: Option<f64>,
+    /// Permutations of the spins that leave the system unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    symmetries: Vec<Vec<usize>>,
 }
 
 fn room_temperature() -> f64 {
@@ -459,6 +488,7 @@ impl SpinSystem {
             frame: Frame::Rotating,
             carriers: BTreeMap::new(),
             correlation_time: None,
+            symmetries: Vec::new(),
         }
     }
 
@@ -483,7 +513,12 @@ impl SpinSystem {
             position: None,
             csa: None,
         });
-        Ok(self.spins.len() - 1)
+        // The new spin stays where it is under the symmetries.
+        let i = self.spins.len() - 1;
+        for p in &mut self.symmetries {
+            p.push(i);
+        }
+        Ok(i)
     }
 
     /// Set the scalar coupling `J` (Hz) between spins `i` and `j`
@@ -611,7 +646,8 @@ impl SpinSystem {
         if self.carriers.values().any(|c| !c.is_finite()) {
             return Err(QsoError::invalid("carriers", "carriers must be finite"));
         }
-        self.validate_motion()
+        self.validate_motion()?;
+        self.validate_symmetries()
     }
 
     fn check_spin(&self, i: usize) -> Result<()> {

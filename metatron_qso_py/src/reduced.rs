@@ -179,6 +179,19 @@ impl PyQuotient {
         ))
     }
 
+    /// Node amplitudes from cell amplitudes `c` (`c_i/√|C_i|` on every node
+    /// of cell `i`; explicit graphs only).
+    fn lift<'py>(
+        &self,
+        py: Python<'py>,
+        c: ComplexArg<'_>,
+    ) -> PyResult<Bound<'py, PyArray1<metatron_qso::C64>>> {
+        Ok(complex_array(
+            py,
+            self.inner.lift(&complex_vec(&c)).raise()?,
+        ))
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "Quotient(name={:?}, cells={}, nodes={})",

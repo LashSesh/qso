@@ -5,13 +5,14 @@
 use metatron_qso::qec::{
     self, BpMethod, BpOsdDecoder, BpOsdOptions, BpOsdOutcome, CircuitDistance, CircuitNoise,
     CorrelatedError, CorrelatedErrorModel, CorrelatedMatchingDecoder, CssCode, CssSchedule,
-    Decoder, DecoderChoice, DetectorCircuit, DetectorErrorModel, DistanceOptions, ErrorMechanism,
-    MatchingDecoder, MatchingGraph, MemoryBasis, Noise, OsdMethod, SparseMatchingDecoder,
-    UnionFindDecoder,
+    Decoder, DecoderChoice, DetectorCircuit, DetectorErrorModel, DistanceMethod, DistanceOptions,
+    ErrorMechanism, ExactDistanceOptions, MatchingDecoder, MatchingGraph, MemoryBasis, Noise,
+    OsdMethod, SparseMatchingDecoder, UnionFindDecoder,
 };
 use numpy::ndarray::Array2;
 use numpy::{AllowTypeChange, IntoPyArray, PyArray1, PyArray2, PyArrayLike2};
 use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyList};
 
 use crate::circuit::{PyCircuit, theta_or_empty};
 use crate::{Raise, RealArg, invalid};
@@ -933,6 +934,117 @@ fn circuit_distance(
     })
 }
 
+/// The circuit distance of a model, exactly when the time allows: the
+/// lower bound rises by the exhaustive search or by levels of the
+/// Brouwer–Zimmermann enumeration (`method`: "auto" takes whichever is
+/// estimated to cost less at each step, or "search", or
+/// "brouwer_zimmermann") until it meets the lightest logical error found;
+/// after `max_seconds` (None: no limit) the bounds reached so far are
+/// returned. With `symmetry` the search starts only from one error of each
+/// orbit of the model's symmetries, those `error_model_symmetries` finds
+/// (up to 4096 detectors; larger models are searched without them).
+/// Detector permutations given as `symmetries` are used with or without
+/// `symmetry`: each is checked and refused if it is not a symmetry.
+#[pyfunction]
+#[pyo3(
+    signature = (model, max_seconds = Some(60.0), method = "auto", bposd_trials = 4, seed = 0, symmetry = false, symmetries = None),
+    text_signature = "(model, max_seconds=60.0, method='auto', bposd_trials=4, seed=0, symmetry=False, symmetries=None)"
+)]
+#[allow(clippy::too_many_arguments)]
+fn exact_circuit_distance(
+    py: Python<'_>,
+    model: &PyDetectorErrorModel,
+    max_seconds: Option<f64>,
+    method: &str,
+    bposd_trials: usize,
+    seed: u64,
+    symmetry: bool,
+    symmetries: Option<Vec<Vec<usize>>>,
+) -> PyResult<PyCircuitDistance> {
+    let method = match method {
+        "auto" => DistanceMethod::Auto,
+        "search" => DistanceMethod::Search,
+        "brouwer_zimmermann" => DistanceMethod::BrouwerZimmermann,
+        other => {
+            return Err(invalid(format!(
+                "method must be 'auto', 'search' or 'brouwer_zimmermann', not {other:?}"
+            )));
+        }
+    };
+    let options = ExactDistanceOptions::default()
+        .with_max_seconds(max_seconds.unwrap_or(f64::INFINITY))
+        .with_method(method)
+        .with_bposd_trials(bposd_trials)
+        .with_seed(seed)
+        .with_symmetry(symmetry);
+    let m = &model.inner;
+    let declared = symmetries.unwrap_or_default();
+    Ok(PyCircuitDistance {
+        inner: py
+            .detach(|| qec::exact_circuit_distance_with_symmetries(m, &options, &declared))
+            .raise()?,
+    })
+}
+
+/// Symmetries of a detector error model, as permutations of its detectors
+/// (detector `d` goes to `p[d]`): the generators that QSO's automorphism
+/// search finds on the graph joining each error to its detectors and that
+/// map logical errors onto logical errors. They generate a group of
+/// symmetries, though not always all of them (a product of generators
+/// that fail is lost with them; it can be declared). Empty when two errors
+/// flip the same detectors and different observables (the distance is then
+/// at most 2); otherwise refused beyond 4096 detectors.
+#[pyfunction]
+fn error_model_symmetries(
+    py: Python<'_>,
+    model: &PyDetectorErrorModel,
+) -> PyResult<Vec<Vec<usize>>> {
+    let m = &model.inner;
+    py.detach(|| qec::error_model_symmetries(m)).raise()
+}
+
+/// Where errors of the circuit's (undecomposed) detector error model come
+/// from: for each error (an index into `model.errors`; all when `indices`
+/// is None), the circuit faults with exactly its effect, in circuit order,
+/// as dicts `{"operation": i, "paulis": [(qubit, "X"), ...],
+/// "probability": p}` (`"M"` for a flipped measurement). With a distance's
+/// `witness` this places the lightest logical error in the circuit.
+#[pyfunction]
+#[pyo3(signature = (circuit, model, indices = None))]
+fn explain_errors<'py>(
+    py: Python<'py>,
+    circuit: &PyDetectorCircuit,
+    model: &PyDetectorErrorModel,
+    indices: Option<Vec<usize>>,
+) -> PyResult<Bound<'py, PyList>> {
+    let all = &model.inner.errors;
+    let indices = indices.unwrap_or_else(|| (0..all.len()).collect());
+    if let Some(&k) = indices.iter().find(|&&k| k >= all.len()) {
+        return Err(invalid(format!(
+            "error {k} out of range ({} errors)",
+            all.len()
+        )));
+    }
+    let chosen: Vec<ErrorMechanism> = indices.iter().map(|&k| all[k].clone()).collect();
+    let c = &circuit.inner;
+    let explained = py.detach(|| qec::explain_errors(c, &chosen)).raise()?;
+    let out = PyList::empty(py);
+    for faults in explained {
+        let list = PyList::empty(py);
+        for f in faults {
+            let d = PyDict::new(py);
+            d.set_item("operation", f.operation)?;
+            let paulis: Vec<(usize, String)> =
+                f.paulis.iter().map(|&(q, c)| (q, c.to_string())).collect();
+            d.set_item("paulis", paulis)?;
+            d.set_item("probability", f.probability)?;
+            list.append(d)?;
+        }
+        out.append(list)?;
+    }
+    Ok(out)
+}
+
 /// The lightest undetectable logical error among the model's graph-like
 /// errors (those flipping one or two detectors), as Stim's
 /// `shortest_graphlike_error`; exact.
@@ -1355,6 +1467,9 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCorrelatedMatchingDecoder>()?;
     m.add_class::<PyCircuitDistance>()?;
     m.add_function(wrap_pyfunction!(circuit_distance, m)?)?;
+    m.add_function(wrap_pyfunction!(exact_circuit_distance, m)?)?;
+    m.add_function(wrap_pyfunction!(error_model_symmetries, m)?)?;
+    m.add_function(wrap_pyfunction!(explain_errors, m)?)?;
     m.add_function(wrap_pyfunction!(graphlike_distance, m)?)?;
     m.add_class::<PyBpOsdDecoder>()?;
     m.add_class::<PyBpOsdOutcome>()?;

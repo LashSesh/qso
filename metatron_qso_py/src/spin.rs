@@ -612,6 +612,24 @@ impl PySpinSystem {
         self.inner.correlation_time()
     }
 
+    /// Declare permutations of the spins (`p[i]` the image of spin `i`)
+    /// that leave the system unchanged: equal isotopes, shifts, relaxation
+    /// times and couplings, and the relaxing interactions up to a rotation
+    /// (a methyl group's protons `h1, h2, h3` with its threefold axis give
+    /// the cycle `h1 → h2 → h3 → h1`). Relaxation then propagates states
+    /// they leave unchanged on the orbits of their elements, exactly and in
+    /// smaller blocks. Replaces earlier ones; an empty list removes them.
+    fn set_symmetries(&mut self, permutations: Vec<Vec<usize>>) -> PyResult<()> {
+        self.inner.set_symmetries(permutations).raise()?;
+        Ok(())
+    }
+
+    /// The declared permutations of the spins.
+    #[getter]
+    fn symmetries(&self) -> Vec<Vec<usize>> {
+        self.inner.symmetries().to_vec()
+    }
+
     /// The dipolar coupling constant `(μ₀/4π) γ_i γ_j ħ / r³` (rad/s).
     fn dipolar_coupling(&self, i: usize, j: usize) -> PyResult<f64> {
         self.inner.dipolar_coupling(i, j).raise()
@@ -940,6 +958,28 @@ impl PySpinSystem {
             .detach(|| sys.optimize_control(c, &start, &options(max_iterations)))
             .raise()?;
         optimized(py, r)
+    }
+
+    /// The estimated cost of one evaluation (transfer and gradient) with rf
+    /// of at most `peak` Hz or fields of at most `peak` T, as it is checked
+    /// against the limits before the generator is built: a dict with `method`
+    /// (`"hilbert"`, `"sparse"` or `"dense"`), `coefficients` (per member;
+    /// the orbits of declared symmetries when they apply), `operations` and
+    /// `bytes`.
+    fn control_cost<'py>(
+        &self,
+        py: Python<'py>,
+        control: PyRef<'_, PyControl>,
+        peak: f64,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let (sys, c) = (&self.inner, &control.inner);
+        let r = py.detach(|| sys.control_cost(c, peak)).raise()?;
+        Ok(pydict!(py, {
+            "method" => r.method,
+            "coefficients" => r.coefficients,
+            "operations" => r.operations,
+            "bytes" => r.bytes,
+        }))
     }
 
     /// The events that apply controls `u` in `evolve`.

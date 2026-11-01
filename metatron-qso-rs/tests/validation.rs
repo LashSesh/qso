@@ -366,6 +366,63 @@ fn slow_noise_follows_ramsey_and_echo_closed_forms() {
     assert!(worst < 4.0, "worst deviation {worst} standard errors");
 }
 
+#[test]
+fn slow_noise_on_density_matrices_follows_the_closed_forms() {
+    // 1.44: the Ramsey and echo experiments of the trajectory check above,
+    // now averaged exactly on density matrices: telegraph noise as Kubo
+    // and Anderson (free induction and echo, slow and fast switching), a
+    // Gaussian detuning as exp(−σ²t²/2), all to 10⁻¹² (README).
+    use metatron_qso::noise::{
+        DensityMatrix, DeviceModel, GateRule, QubitProperties, Spread, Telegraph,
+    };
+    let z: PauliSum = "Z0".parse().unwrap();
+    let run = |qubit: QubitProperties, t: f64, echo: bool| -> f64 {
+        let wait = if echo { t / 2.0 } else { t };
+        let device = DeviceModel::new("slow")
+            .with_default_qubit(qubit)
+            .with_rule(GateRule::for_gate("id").with_duration(wait));
+        let mut c = Circuit::new(1);
+        c.h(0).id(0);
+        if echo {
+            c.x(0).id(0);
+        }
+        c.h(0);
+        let mut rho = DensityMatrix::zero(1).unwrap();
+        rho.apply_device(&c, &[], &device).unwrap();
+        rho.expectation(&z).unwrap()
+    };
+    // Kubo–Anderson, with e^{(μ−γ)t} and e^{−(μ+γ)t}, μ − γ = −ν²/(μ + γ).
+    let parts = |nu: f64, g: f64, t: f64| {
+        use num_complex::Complex64 as Z;
+        let mu = Z::new(g * g - nu * nu, 0.0).sqrt();
+        let slow = (Z::new(-nu * nu, 0.0) / (mu + g) * t).exp();
+        let fast = (-(mu + g) * t).exp();
+        (mu, slow, fast)
+    };
+    let free = |nu: f64, g: f64, t: f64| {
+        let (mu, slow, fast) = parts(nu, g, t);
+        (0.5 * ((1.0 + g / mu) * slow + (1.0 - g / mu) * fast)).re
+    };
+    let echo = |nu: f64, g: f64, t: f64| {
+        let (mu, slow, fast) = parts(nu, g, t);
+        let r = g / mu;
+        ((-g * t).exp() * (1.0 - r * r) + slow * 0.5 * (r + r * r) + fast * 0.5 * (r * r - r)).re
+    };
+    let sigma = 0.8;
+    let gauss = QubitProperties::new().with_detuning(Spread::Gaussian { sigma });
+    for t in [0.5, 1.0, 2.0, 3.0] {
+        assert!((run(gauss.clone(), t, false) - (-(sigma * t).powi(2) / 2.0).exp()).abs() < 1e-12);
+        assert!((run(gauss.clone(), t, true) - 1.0).abs() < 1e-12);
+    }
+    for (nu, g) in [(1.0, 0.2), (1.0, 5.0)] {
+        let q = QubitProperties::new().with_telegraph(Telegraph::new(nu, g));
+        for t in [0.5, 1.5, 3.0, 6.0] {
+            assert!((run(q.clone(), t, false) - free(nu, g, t)).abs() < 1e-12);
+            assert!((run(q.clone(), t, true) - echo(nu, g, t)).abs() < 1e-12);
+        }
+    }
+}
+
 /// The toy device of `examples/devices/toy_device.json`.
 fn toy_device() -> metatron_qso::noise::DeviceModel {
     metatron_qso::noise::DeviceModel::from_json(include_str!("../examples/devices/toy_device.json"))
@@ -1423,18 +1480,28 @@ fn bposd_decodes_colour_and_bicycle_codes() {
 #[test]
 fn circuit_distances_of_memory_experiments() {
     use metatron_qso::qec::{
-        CircuitNoise, CssCode, CssSchedule, DistanceOptions, MemoryBasis, circuit_distance,
-        css_code_memory, css_code_memory_with, detector_error_model, repetition_code_memory,
-        surface_code_memory_with,
+        CircuitNoise, CssCode, CssSchedule, DistanceOptions, ExactDistanceOptions, MemoryBasis,
+        circuit_distance, css_code_memory, css_code_memory_with, detector_error_model,
+        exact_circuit_distance, repetition_code_memory, surface_code_memory_with,
     };
     let noise = CircuitNoise::uniform(0.001);
+    // The bounds of the search meet, and the exact computation agrees,
+    // also on the orbits of the circuit's symmetries.
     let distance = |c: &metatron_qso::qec::DetectorCircuit| {
-        circuit_distance(
-            &detector_error_model(c, false).unwrap(),
-            &DistanceOptions::default(),
-        )
-        .unwrap()
-        .distance()
+        let dem = detector_error_model(c, false).unwrap();
+        let bounded = circuit_distance(&dem, &DistanceOptions::default())
+            .unwrap()
+            .distance();
+        let exact = exact_circuit_distance(&dem, &ExactDistanceOptions::default())
+            .unwrap()
+            .distance();
+        let symmetric =
+            exact_circuit_distance(&dem, &ExactDistanceOptions::default().with_symmetry(true))
+                .unwrap()
+                .distance();
+        assert_eq!(exact, bounded);
+        assert_eq!(symmetric, exact);
+        exact
     };
     // Repetition and rotated surface codes with the hook-safe order keep
     // their distance.
@@ -1487,33 +1554,74 @@ fn circuit_distances_of_memory_experiments() {
 #[ignore]
 fn bicycle_cycle_reaches_the_published_circuit_distances() {
     use metatron_qso::qec::{
-        CircuitNoise, CssCode, CssSchedule, DistanceOptions, MemoryBasis, circuit_distance,
-        css_code_memory_with, detector_error_model,
+        CircuitNoise, CssCode, CssSchedule, DistanceOptions, ExactDistanceOptions, MemoryBasis,
+        circuit_distance, css_code_memory_with, detector_error_model, exact_circuit_distance,
     };
     // Bravyi et al. (2024), table 1, give dcirc ≤ 8, 8 and 10 for
     // [[90, 8, 10]], [[108, 8, 10]] and [[144, 12, 12]] with the depth-8
     // cycle, under noise that also strikes idle qubits. Three cycles of
-    // QSO's circuit noise (no idle errors): BP+OSD with 256 searches per
-    // observable finds logical errors of 8, 9 and 11 faults, and the
-    // exhaustive search proves that none has fewer than 7.
+    // QSO's circuit noise (no idle errors): the first two have circuit
+    // distance 8 exactly, with and without the translations (12 s and 97 s
+    // without them on four cores, seconds with them).
     let noise = CircuitNoise::uniform(0.001);
-    for (n, bound) in [(90, 8), (108, 9), (144, 11)] {
+    for n in [90, 108] {
         let (code, _) = CssCode::bivariate_bicycle_code(n).unwrap();
         let c =
             css_code_memory_with(&code, 3, &noise, MemoryBasis::Z, CssSchedule::Bicycle).unwrap();
-        let r = circuit_distance(
-            &detector_error_model(&c, false).unwrap(),
-            &DistanceOptions {
-                max_work: 1 << 27,
-                bposd_trials: 256,
-                ..DistanceOptions::default()
-            },
-        )
-        .unwrap();
-        eprintln!("[[{n}]]: {} ..= {:?}", r.lower_bound, r.upper_bound());
-        assert!(r.upper_bound().unwrap() <= bound, "[[{n}]]: {r:?}");
-        assert!(r.lower_bound >= 7, "[[{n}]]: {r:?}");
+        let dem = detector_error_model(&c, false).unwrap();
+        for symmetry in [false, true] {
+            let options = ExactDistanceOptions::default()
+                .with_max_seconds(3600.0)
+                .with_bposd_trials(16)
+                .with_symmetry(symmetry);
+            let r = exact_circuit_distance(&dem, &options).unwrap();
+            eprintln!(
+                "[[{n}]] (symmetry {symmetry}): {} ..= {:?}",
+                r.lower_bound,
+                r.upper_bound()
+            );
+            assert_eq!(r.distance(), Some(8), "[[{n}]]: {r:?}");
+        }
     }
+    // The third: BP+OSD with 256 searches per observable finds a logical
+    // error of 11 faults and the plain search rules out fewer than 7;
+    // on the orbits of the 72 translations the search finds one of 10
+    // faults after ruling out 9 (1.47).
+    let (code, _) = CssCode::bivariate_bicycle_code(144).unwrap();
+    let c = css_code_memory_with(&code, 3, &noise, MemoryBasis::Z, CssSchedule::Bicycle).unwrap();
+    let dem = detector_error_model(&c, false).unwrap();
+    let r = circuit_distance(
+        &dem,
+        &DistanceOptions {
+            max_work: 1 << 27,
+            bposd_trials: 256,
+            ..DistanceOptions::default()
+        },
+    )
+    .unwrap();
+    eprintln!("[[144]]: {} ..= {:?}", r.lower_bound, r.upper_bound());
+    assert!(r.upper_bound().unwrap() <= 11, "[[144]]: {r:?}");
+    assert!(r.lower_bound >= 7, "[[144]]: {r:?}");
+    let options = ExactDistanceOptions::default()
+        .with_max_seconds(7200.0)
+        .with_symmetry(true);
+    let r = exact_circuit_distance(&dem, &options).unwrap();
+    eprintln!(
+        "[[144]] (symmetry): {} ..= {:?}",
+        r.lower_bound,
+        r.upper_bound()
+    );
+    assert_eq!(r.distance(), Some(10), "[[144]]: {r:?}");
+    // The witness fires no detector and flips an observable.
+    let mut fired = vec![false; dem.n_detectors];
+    let mut flipped = 0u64;
+    for &k in r.witness.as_ref().unwrap() {
+        for &d in &dem.errors[k].detectors {
+            fired[d] ^= true;
+        }
+        flipped ^= dem.errors[k].observables;
+    }
+    assert!(!fired.contains(&true) && flipped != 0 && flipped == r.observables);
     // Every order of directions gives the colour codes of distance 3 and 5
     // circuit distance 2 and 3.
     for (d, dc) in [(3, 2), (5, 3)] {

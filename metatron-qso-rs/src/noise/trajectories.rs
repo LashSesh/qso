@@ -28,7 +28,8 @@
 //! runs: telegraph processes have exponential waiting times between jumps
 //! and are integrated exactly over every gate and wait of their qubit.
 //! Averages over trajectories are then exact in expectation, as for
-//! channels; density matrices cannot represent such noise.
+//! channels; density matrices average such noise exactly
+//! ([`slow`](super::slow)).
 //!
 //! ```
 //! use metatron_qso::noise::{DeviceModel, GateRule, TrajectorySimulator};

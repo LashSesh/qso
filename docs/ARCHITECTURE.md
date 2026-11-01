@@ -16,7 +16,7 @@ algorithms  │ VQE · QAOA (+ mixers, QUBO) · Grover · QFT/QPE ·   │
 optimize    │ L-BFGS · Adam · GD · Nelder–Mead · SPSA            │
 walks       │ CTQW · quotients · transfer · coined/Szegedy ·     │
             │ search · walk circuits · dephasing · classical ·   │
-            │ interacting walkers                                │
+            │ interacting walkers · orbitals (open walks)        │
 mitigation  │ readout calibration · ZNE · PEC · Pauli twirling    │
 estimation  │ estimates with errors · shot allocation · shadows   │
 backend     │ statevector / density-matrix / device backends      │
@@ -243,6 +243,66 @@ frame update for each gate is derived once.
   random stream, so it returns the same result as one call of
   `sample_detectors` with the same seed, in bounded memory. A batch is
   1024 shots, or fewer when its frames and records would exceed 128 MiB.
+- **Exact circuit distance** (`qec/distance.rs`,
+  `qec/distance/zimmermann.rs`). The lower bound rises in steps of two
+  kinds, chosen by their estimated cost (`SEARCH_NANOS` per set visited,
+  `ENUMERATION_NANOS` per word operation). The search's next step is
+  extrapolated to the weight it will search, by the growth per weight of
+  its last two steps; the enumeration may have raised the bound by
+  several since.
+  - The search of 1.22 proves that no logical error of the current
+    bound's weight exists. Its first errors are shared out between
+    threads in tasks of `n / (16 · threads)`, each of which records, per
+    first error, the sets it visited and what it found. The answer is
+    read off these records in index order, as the sequential search
+    would have met them: the set found from the lowest first error, and
+    the work counted up to it. Where the threads stopped short (at the
+    work limit), the search goes on alone from the first unfinished first
+    error. So the bounds and the witness do not depend on the threads,
+    the work limit included. A step in which no branch was cut by the
+    weight proves that no logical error exists. Each walker keeps one
+    buffer of fired detectors per depth and allocates nothing while it
+    walks.
+  - A level of the Brouwer–Zimmermann enumeration. The generator
+    matrices are built only when, at their best (disjoint information
+    sets of full rank), the levels could cost less than the search. The
+    kernel of `H` comes from its reduced row echelon form, systematic on
+    the free columns. Further information sets come from eliminating on
+    the columns not yet used, as long as their rank deficit is at most
+    64. Each level enumerates the sums of `w` rows by depth-first
+    search, one task per first row, with a running XOR per depth. A
+    matrix of rank `r < k` joins at level `k − r` and then enumerates
+    every lower level once; the bound needs them.
+  - Both steps check the deadline: the search every 4096 sets, the
+    enumeration every 2²⁰ word operations, in every task. A step it
+    interrupts leaves the bounds where they were.
+  - **On the orbits of symmetries** (`qec/distance/symmetry.rs`, 1.47).
+    `Checker` maps a detector permutation to the error permutation it
+    induces, through a hash map from detector sets to errors, and checks
+    each observable read through it for membership in the row space of
+    the detectors and observables (one `gf2::Basis` of the rows, built at
+    the first check). Symmetries are found by `coloured_group` on the
+    bipartite graph of the detectors that some error flips and the
+    errors (two colours; detectors flipped by none are left out, since
+    they would only add permutations among themselves), and generators
+    that fail the check are dropped. `orbit_order` closes the orbits
+    under the generators and orders the errors so that each orbit is a
+    block, blocks by their first error. The search then runs over
+    positions in that order (`Search::on_orbits`, with labels back to the
+    errors) and starts only from the first position of each block. Few
+    first errors would leave threads idle, so each is split into parts by
+    the second error the walker would add (`Unit`); the records are kept
+    per part, in the same order as the sequential search, so the answer
+    still does not depend on the threads. With two errors on the same
+    detectors and different observables no symmetry is used: the search
+    finds them at weight 2. Measured on [[144, 12, 12]], this order visits
+    about half the sets that starting from the lowest error of each orbit
+    in the model's order does (`measure_orbit_search`).
+- **Circuit locations.** `explain_errors` replays each noise channel's
+  components (`dem::each_channel`, also used to build the model). For
+  every combination of a channel's Paulis it takes the XOR of their
+  signatures and keeps those equal to the error's effect, as
+  `CircuitFault`s with the operation index.
 
 ## Matrix-product states (`mps/`)
 
@@ -315,7 +375,8 @@ Density matrices apply the program with the state-vector kernels on the
 vectorised ρ and multiply consecutive superoperators first. A k-qubit
 channel is a `4ᵏ × 4ᵏ` superoperator on the k row and k column bits; four
 qubits need eight targets, which `apply_kq` handles with a larger buffer
-than gates use. Programs with slow noise do not run on density matrices.
+than gates use. Programs with slow noise run through `noise/slow.rs`
+(below).
 
 Slow noise is part of a trajectory's random choices, drawn before it
 runs: the over-rotation spread of every rule, the detuning of every
@@ -324,6 +385,30 @@ waiting times) over the phase steps in time order. A phase step becomes
 an `RZ` of that angle and a spread gate its rotation with scaled angles,
 inside the fused blocks. Markovian programs draw nothing extra, so their
 trajectories are unchanged.
+
+* Slow noise averaged exactly (`noise/slow.rs`): a classical Markov
+  process is its values, its rates as a list and its starting
+  distribution. Pure dephasing propagates the distribution under
+  `W − i f diag ν` period by period: for symmetric telegraph processes by
+  the closed-form 2×2 propagator `e^{−γτ}(cosh μ + sinh μ/μ K)`, written
+  with `e^{μ−γτ}` and `e^{−μ−γτ}` and `μ − γτ = −x²/(μ + γτ)` so that
+  neither fast switching nor long times lose accuracy; otherwise by the
+  Arnoldi steps of `spin::krylov` on a sparse matrix. The stochastic
+  Liouville equation assembles the joint generator on `x·d² + r + c·d`
+  (commutator and dissipator per joint state, `W ⊗ I` between them) and
+  propagates by the same steps.
+* Slow noise on density matrices (`slow::run_program`, called by
+  `DensityMatrix::apply_device` for non-Markovian devices): the compiled
+  program's `Phase` steps carry the turns of slow noise. Each qubit with
+  telegraph noise owns a bit of the joint state; a phase step couples
+  the pairs of density matrices that differ in that bit, entry by entry,
+  with one of three 2×2 propagators chosen by `b_r − b_c` of the entry,
+  after the free switching since the process was last needed. Runs of
+  gates and channels apply to every joint matrix through `run_ops`.
+  Quasi-static parameters take Gauss nodes (Golub–Welsch on the Jacobi
+  matrix, made symmetric); the points of their tensor grid are split into
+  groups fixed by their number, run in parallel and added in order, so
+  the result does not depend on the number of threads.
 
 Trajectories (`noise/trajectories.rs`) use the waiting-time form of the
 Monte-Carlo wave-function method.
@@ -397,19 +482,50 @@ the pairs of blocks that `F₊` connects, time averages compare energies
 with the carriers added back, and free evolution conjugates block by
 block (complex products as three real GEMMs). With relaxation, every jump
 acts on one spin and keeps the coherence order `label(a) − label(b)` of
-`|a⟩⟨b|`, so the Lindblad superoperator splits into blocks by order. They
-are built entry by entry from the sparse `H` and the local jumps and
-exponentiated (Taylor degree 16 by Paterson–Stockmeyer, scaling and
-squaring, in `linalg::dense::expm`). The state is propagated as its
-deviation from `1/d`, with `L(1/d)` as an augmented column of the
-population block; coherence blocks are shifted by their mean diagonal
-first. FIDs need only the block of order `−1`, one exponential for the
-dwell time and a matrix-vector product per point. The work of the block
-exponentials is compared with an estimate for Dormand–Prince 5(4) steps
-(sparse `H`, jumps applied in place, error relative to the deviation), the
-cheaper one runs, and more than `MAX_RELAXATION_WORK` is refused before
-anything is computed. Shaped pulses mix the orders and use one block.
-Sweeps are piecewise constant, with the field at the middle of each piece.
+`|a⟩⟨b|`, so the Lindblad superoperator splits into blocks by order. The
+state is propagated as its deviation from `1/d`, with `L(1/d)` as an
+augmented column of the population block; coherence blocks are shifted by
+their mean diagonal first. Only the blocks the deviation occupies (and
+the population block, if it drifts) move. Each block is planned before
+anything is built: its entries are counted and its `‖A‖∞` bounded column
+by column from the sparse `H` and the local jumps (and the Redfield
+terms, below), which gives the work of a dense exponential (Taylor degree
+16 by Paterson–Stockmeyer, scaling and squaring, in
+`linalg::dense::expm`; up to 2048 elements) and of Krylov steps
+(`spin/krylov.rs`), and the memory of either. The cheaper runs; all the
+blocks together are compared with Dormand–Prince 5(4) steps on the whole
+state (sparse `H`, jumps applied in place, error relative to the
+deviation), and more than `MAX_RELAXATION_WORK` operations or
+`MAX_RELAXATION_MEMORY` bytes is refused. A block is then built column by
+column (in parallel, each column merged in a dense accumulator) into a
+compressed sparse row matrix. Krylov steps are Arnoldi's process on
+subspaces of dimension 30 with Expokit's error estimate and step control
+(Sidje 1998), to 10⁻¹² of the propagated vector in the 2-norm; the
+augmented entry is set to the size of the deviation (or of equilibrium's,
+if larger), so that the tolerance stays relative to it. A Krylov space
+that is invariant to the tolerance ends the propagation in one step. So
+do populations that move no faster than the rounding of the state
+explains (forming the deviation leaves `ε·Tr(ρ)/d` on each population) or
+by less than 10⁻¹¹ of themselves over the interval: when the a priori
+estimate is large, `‖A y‖` of their start vector is computed first, so
+that equilibrium is not refused for the steps it will not take. Blocks
+are built with one dense accumulator per task (about four per thread),
+which the memory estimate counts. FIDs need only the block of order `−1`:
+one exponential for the dwell time and a matrix-vector product per point,
+or Krylov steps of one dwell time each. Shaped pulses mix the orders and
+use one block. Sweeps are piecewise constant, with the field at the
+middle of each piece.
+
+Declared symmetries (`spin/symmetry.rs`) are permutations of the spins,
+checked against isotopes, shifts, relaxation times, couplings and the
+Gram matrix `A^k : A^l` of the relaxing interactions (on which isotropic
+tumbling makes `R` depend). They induce permutations of the basis states
+and of each block's elements. When `H` (to 10⁻¹² of its largest entry)
+and the block's start vector (to 10⁻¹¹) are invariant, union–find gives
+the orbits of the elements; after the built block is checked entry by
+entry against its images, it is reduced to `M_OP = Σ_{c ∈ P} A_{o,c}` at
+a representative `o` of each orbit `O`, and the result is lifted back.
+Anything not invariant propagates in full.
 
 Redfield relaxation (`spin/redfield.rs`) works on the same blocks. The
 spatial tensors of the interactions (dipolar `b(1 − 3nnᵀ)`, anisotropic
@@ -418,11 +534,23 @@ symmetric tensors; the isotropic average of their correlations makes the
 superoperator a sum of 30 independent terms `[𝒬, [Y(𝒬), ·]]`, with
 `𝒬 = Σ_k (A^k : E_μ) Q^k,S_ab` and `Y` the multiplication by `J(ω_mn)` in
 the eigenbasis of the laboratory-frame `H` (its blocks by total `M`).
-`R` is assembled entry by entry for each coherence-order block of the
-frame's labels, which in the rotating frame is the secular projection,
-and added to the Lindblad blocks. `R(ρ_eq)` joins `L(1/d)` in the drift
-of the deviation's equation. Dormand–Prince steps apply `R` block by block
-as matrix-vector products.
+The 30 terms are kept as sparse operators on the basis states ordered by
+label (every label's states contiguous), `𝒬` from the local two-spin
+tensors and `Y(𝒬)` from one pair of eigenblocks at a time (entries below
+10⁻¹⁵ of their pair's largest dropped as rounding), together with the
+part of `Σ w 𝒬Y` within each label. A column `R(|a⟩⟨b|)` of a
+coherence-order block of the frame's labels (in the rotating frame the
+secular projection) is the sum of that left product's columns `a` and `b`
+(the right product is its adjoint) and of the products `𝒬_ca Y_be` and
+`Y_ca 𝒬_be` over the pairs whose labels keep the order, found by binary
+search per label; a block costs its entries, not their square. The
+entries are bounded from the union of the terms' patterns before a block
+is built, and the terms' own memory and work from the sizes of the
+laboratory blocks before the terms are. Blocks are built into the
+generator where they are used and kept only for Dormand–Prince steps,
+which apply them as matrix-vector products. `R(ρ_eq − 1/d)` joins
+`L(1/d)` in the drift of the deviation's equation (`R(1) = 0`, so the
+identity's image would be rounding of `R`'s size).
 
 Chemical exchange (`spin/exchange.rs`) joins the coherence-order blocks
 of all sites: labels are written over the isotopes of all sites, each
@@ -459,6 +587,36 @@ block exponentials per coherence-order block (a field keeps the orders),
 with the field derivative of the whole generator by Richardson-
 extrapolated central differences.
 
+Rf controls with relaxation (`spin/control/sparse.rs`) keep that
+generator sparse: one block of all `d² + 1` elements from the column
+builder of the relaxation blocks (`blocks.rs`, with the drift column),
+its adjoint, and the directions `E_j = −i[2πF_{x,y}, ·]` as compressed
+rows, built once per optimisation and shared by the members (an offset is
+a diagonal, an rf scaling multiplies the controls). A step applies
+`base + diag + Σ c_j E_j` to a vector in one pass over the rows; the
+adjoint uses `−E_j` (Hermitian controls) or, on orbits, explicit
+adjoints. The gradient of a step is `Re ∫₀^Δt ⟨λ(τ), E_j x(τ)⟩ dτ`: per
+substep of `‖hL‖ ≤ 2` (`‖L‖ = max(‖L‖₁, ‖L‖∞)`) the state's Taylor terms
+are summed by Horner at ten Gauss–Legendre nodes, the costate's likewise
+backwards, and every direction is paired with them at the nodes. That
+takes three products per term (forwards, forwards again, backwards)
+instead of the `3 + directions` of the augmented exponentials, and the
+rule's error stays below 5·10⁻¹⁸ of the integrand's scale. On the orbits
+of declared symmetries (when the Hamiltonian, the channels and the
+initial state are invariant, and the built block equals its images) the
+reduced matrices `M_OP = Σ_{c∈P} L_{o,c}` give an ordinary linear system
+whose transfer pairs the state with the target summed over each orbit.
+The series stop when a term falls below the rounding of the deviation:
+the trace in the last entry, which the generator keeps and no gradient
+reads, is left out of that scale, so thermal polarisation at low fields
+keeps its digits. Columns are built in runs per task (a few large buffers,
+not a vector per column). Work and memory are estimated before the
+generator is built, from its entries counted column by column (from bounds
+alone when those put the problem fourfold over a limit) and from the rf
+directions, built and reduced for their exact norms; an evaluation counts
+its operations and stops at the limit, as a series may need more terms
+than estimated.
+
 NV centres (`spin/nv.rs`) use the secular Hamiltonian, which is block
 diagonal in the electron level `a` (`m = +1, 0, −1`) and, within a block,
 a sum of one term per nucleus (`S_z` alone couples to the nuclei, and
@@ -481,6 +639,85 @@ products of one state per nucleus, so a line's strength is a product of
 one overlap per nucleus. The Gaussian decay exponent sums the exactly
 integrated exponential correlations of every pair of free periods as a
 running sum, in one pass.
+
+The optical cycle (`spin/nv/optics.rs`) is a Lindblad equation on seven
+levels: ground eigenstates, excited eigenstates, singlet. The jump
+operators are the zero-field ones (`|e_p⟩⟨g_p|` and so on, one per spin
+projection) written in the eigenbases, with both triplets' Hamiltonians
+in the laboratory frame (from their means). Their generator is assembled
+on `vec ρ` as `L̄ ⊗ L − ½(1 ⊗ K + Kᵀ ⊗ 1)`, `K = Σ L†L`. With a
+microwave, the two ground levels other than the one closest to
+`m_s = 0` rotate at the signed frequency, as the `S_z²` frame of 1.37
+does along the axis. Every operator then keeps only its parts within the
+blocks {that level} and {the other two}: the parts between blocks rotate
+at the microwave frequency.
+
+The steady state is an LU solve with one equation replaced by the trace,
+checked to be a state. Readouts propagate with one `expm` per time step,
+and steps or durations whose norm would need too many squarings are
+refused. After the laser, the population that the excited levels and the
+singlet hand to the ground state is one linear solve, `M_go (−M_oo)⁻¹
+x_o`, the integral of the inflow, not a long exponential. The ensemble inversion uses the
+symmetric functions of the three levels of each orientation, which give
+`B²` and `B_⊥²` without solving the cubic. The signs of the projections
+come from `Σ_k B·n_k = 0`, and Gauss–Newton on the eight lines refines
+the field.
+
+The ¹³C bath (`spin/nv/bath.rs`) works with ideal pulses only, so the
+electron is in one of two levels at any moment. A sequence is parsed into
+two branches with their levels per free period and two weights from the
+first and last pulses (π pulses only swap the branches and add phases).
+The bath enters only through `L = Tr(U_m U_0†)/2^N`. Clusters are the
+connected sets of the graph of pairs within the cutoff, grown one spin at
+a time and deduplicated. Each is propagated densely: Hamiltonians built
+by bit operations on the basis states and diagonalised once per level,
+period exponentials from the spectrum and cached by length. The expansion
+divides each cluster's coherence by those of its connected subclusters,
+found as the subsets present in the map of smaller clusters; disconnected
+subsets contribute exactly 1 because their couplings are not kept.
+Clusters of one size are evaluated in parallel.
+
+The generalised expansion (`spin/nv/generalised.rs`) takes the clusters of
+the same graph but propagates the electron with each: a dense Hamiltonian
+of dimension `3·2^k` in the eigenbasis of the electron's own Hamiltonian
+(index `e·2^k + s`), diagonalised once. The `2^k` columns `|α⟩|s⟩` are
+propagated together and the electron's density matrix is their average
+partial trace. The rotating frame enters as phases on the rows of each
+level before and after a free period (`(f t).fract()` keeps them accurate
+over milliseconds); ideal pulses act on the electron's three rows of
+every nuclear state. Finite pulses build the frame's Hamiltonian once per
+cluster (blocks of levels that turn alike, less `2πf`) and add the
+co-rotating drive per segment. The eigenvectors of the electron alone are put in a fixed gauge
+(α real on |0⟩, `⟨β|S_x|α⟩` real and positive, the third level real on
+its largest component), and the drive is divided by `|⟨β|S_x|α⟩|`, so
+that `rabi` and the pulse phase refer to the qubit and results are
+continuous in the field. Free periods apply `V e^{−iEτ} V†` to the
+columns (two products) instead of keeping a matrix per duration; finite
+pulses keep their propagator per duration and phase, counted against a
+memory bound before the expansion starts. The expansion works in the
+basis the ideal inner pulses carry the qubit to (`ρ̃ = C†ρC`, `C` a 3 × 3
+product), element by element: products for the qubit's elements that
+are not small in the electron alone, sums of differences for the others
+(the mode of each element follows the electron alone and is the same for
+every cluster). Everything multiplies or adds into one 3 × 3 matrix
+(`Matrix3`, on the stack) per sequence, transformed back at the end for
+the coherence and the readout. The dressed frame
+replaces the eigenvectors `V` by `V′`, block-diagonal between `α` and
+the other levels: the eigenvectors are grouped by the block holding most
+of their weight, and each block of `V′` is the unitary factor of the SVD
+of that block of `V` (the direct rotation `T = V V′†` closest to the
+identity). Free periods then use `V′`, and the drive of finite pulses is
+`T† S_x T`.
+
+Sampled bath states run one task per state (in parallel), each expanding
+all clusters in turn with its own map of subcluster contributions. A
+state is a list of projections ±½ along the field; `BathFields` holds the
+hyperfine tensors and, per nucleus, the dipolar tensors of its neighbours
+within the cutoff. The fields of all nuclei are summed once per state;
+the field of the nuclei outside a cluster follows by subtracting its
+members'. The cluster then propagates one column, the
+product of its nuclei's spinors, instead of `2^k`, with the mean field
+added to its Hamiltonian; every cluster is diagonalised once per state.
 
 ## Hamiltonian simulation and chemistry (`algorithms/time_evolution.rs`, `chemistry/`)
 
@@ -600,7 +837,11 @@ Hamiltonians and Pauli sums on 2ⁿ amplitudes.
   residual, verified by an explicit residual at the end.
 * Propagation `exp(−iHt)v`: Lanczos basis per sub-step, exact exponential of
   the tridiagonal matrix, step-size control from the a-posteriori error
-  estimate `β₀·β_m·|[e^{−iτT}e₁]_m|`.
+  estimate `β₀·β_m·|[e^{−iτT}e₁]_m|`. That estimate holds only where the
+  Krylov approximation converges, so a step never exceeds `m` divided by
+  the spread of the Ritz values (Hochbruck and Lubich); beyond, it can be
+  small by accident, as on the equally spaced spectra of hypercubes.
+  Estimates at rounding level (64 ε) count as converged.
 * Cyclic subspaces (`cyclic_spectrum`): real Lanczos from a start vector
   until the next vector vanishes to rounding error, with full
   re-orthogonalisation (a second pass only when the first removed much of
@@ -662,6 +903,22 @@ agree with brute force on random graphs.
   hypercubes, Hamming, Johnson, complete and complete multipartite graphs
   have closed-form distance partitions, so their walks never build the
   graph.
+* Driven walks on quotients (`walks/driven.rs`, `QuotientDrivenWalk`)
+  reduce every term to the cells (the uniform projector to `s sᵀ` with
+  `s_i = √(|C_i|/N)`) and hand the `k × k` problem to `DrivenWalk`.
+* Open walks on orbitals (`walks/symmetric.rs`): an operator invariant
+  under a permutation group is constant on its orbits on ordered pairs.
+  The orbits come from union–find over the `n²` pairs, with every root the
+  smallest pair of its set, so one pass relabels them in order. The
+  Lindblad generator maps invariant operators to invariant ones, so row
+  `O` of the reduced map is read off at one representative pair of `O`;
+  it is applied by a Taylor series in substeps of ∞-norm ½. The coined
+  walk's step is the conjugation `Σ_cd U_ac conj(U_bd)` followed by the
+  dephasing factor of each orbital. `HypercubeOpenWalk` indexes the
+  orbitals of the coordinate permutations by the counts of bit pairs
+  (ranked in closed form) and works in the orthonormal basis `B_O/√|O|`,
+  where the moves of one coordinate between classes have entries
+  `γ√(n_c (n_c' + 1))`, the same structure as boson hopping.
 * State transfer (`walks/transfer.rs`) works on the quotient in which the
   source is a singleton: perfect transfer needs the target to be a
   singleton too, strong cospectrality (`E_θ e_v = ±E_θ e_u`) and eigenvalue
@@ -692,7 +949,34 @@ agree with brute force on random graphs.
   single-particle `h` (hopping amplitudes `√(n_j (n_i + 1))` for bosons,
   the Jordan–Wigner sign of the sites in between for fermions). Up to
   2048 configurations it is diagonalised; beyond that it propagates by
-  Krylov.
+  Krylov. `Terms::apply` gives a configuration's diagonal and hops, and
+  serves both the full Hamiltonian and the reduced ones.
+* Interacting walkers on orbits (`walks/interacting/symmetric.rs`): a
+  union–find over the ranks of all configurations links each to its
+  images under the generators, with the relative sign `ψ(g·c) = s(g, c)
+  ψ(c)` in the top bit of every 4-byte word. Roots are the smallest rank,
+  so a scan in rank order meets every orbit's representative first and
+  relabels the words in place as orbit numbers; a cycle of signs that
+  multiplies to −1 marks the orbit as carrying no invariant state. The
+  surviving roots are counted before their sites are stored (at most
+  2²⁶ sites), and a walk without any is refused. The reduced Hamiltonian
+  is read off at the representatives,
+  `⟨O′|H|O⟩ = √(|O|/|O′|) Σ φ(c′)⟨c′|H|r⟩`.
+* On the hypercube (`walks/interacting/hypercube.rs`) the orbits of the
+  coordinate permutations are compositions of `d` into `2^N` bit
+  patterns, ranked by their bars in colex order; the particle
+  permutations act on the patterns, and each composition's word holds
+  its class (the lowest-ranked image) and the sign of the permutation to
+  it. Heap's algorithm lists the permutations with one parity flag shared
+  by its whole recursion (every swap is a transposition). A hop changes
+  one pattern `p` into `p ⊕ e_j`, with weight
+  `−γ √(n_p (n_q + 1) k_n / k_m)` (`k`: compositions per class); the
+  entries are bounded before the matrix is built, by compositions over
+  permutations first and by the classes once they are known.
+* Certificates by orbits (`InteractingWalk::certificate_by_orbits`): one
+  row of transition probabilities per orbit of the automorphisms, by
+  Krylov steps to 10⁻¹⁴ per unit time unless the walk was diagonalised
+  already, repeated by the orbit's size before sorting.
 
 ## Error handling
 

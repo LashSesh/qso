@@ -549,6 +549,50 @@ qubits ("hook errors").
   error exists at all; only then is the lower bound "none" (`usize::MAX`
   in Rust, `math.inf` in Python). BP+OSD needs fewer than 16 384
   detectors and is skipped beyond.
+- **`exact_circuit_distance(model, max_seconds=60)`** computes the
+  distance itself, for any model, when the time allows. It starts from
+  the same upper bound and raises the lower bound step by step, each
+  step by whichever of two methods it estimates to cost less:
+  - the exhaustive search above, for the next weight. It is quick when
+    every error flips few detectors and every detector is flipped by few
+    errors, as in circuits.
+  - a level of the Brouwer–Zimmermann enumeration, as described by
+    Grassl (2006). The undetectable sets of errors form a linear code. Its
+    words are enumerated as sums of `w` rows of generator matrices that
+    are systematic on disjoint sets of columns, and after level `w` no
+    word lighter than a bound that grows with `w` remains unseen. It is
+    quick when that code is small compared with the number of errors, as
+    for classical codes.
+
+  `method="search"` or `"brouwer_zimmermann"` forces one of them. After
+  `max_seconds` (`None`: no limit) the bounds reached so far are
+  returned, and `distance` is set only if they met.
+
+  With `symmetry=True` the search starts only from one error of each
+  orbit of the model's symmetries, which divides its work by a factor that
+  grows with their number (41 to 43 for the 72 translations of
+  [[144, 12, 12]]; see below). Models with more than 4096 detectors are
+  searched without them.
+- **`error_model_symmetries(model)`** finds the symmetries of a model:
+  permutations of its detectors that map the detectors of every error
+  onto those of an error and logical errors onto logical errors, as
+  lists `p` with detector `d` going to `p[d]`. QSO's automorphism search
+  finds generators of the symmetries of the graph that joins every error
+  to the detectors it flips; those that pass a check over GF(2) are kept.
+  The check asks that every observable, read through the permutation, be
+  a sum of detectors and observables. Exactly then does every set of
+  errors that fires no detector and flips no observable map onto such a
+  set. The generators kept generate a group of symmetries, though not
+  always all of them: a symmetry that is a product of generators that
+  fail is lost with them. `exact_circuit_distance(model,
+  symmetries=[...])` takes declared permutations too (with or without
+  `symmetry=True`), checks them the same way and refuses those that
+  fail.
+- **`explain_errors(circuit, model, indices)`** names the circuit faults
+  behind errors of the model: for each error, every noise operation and
+  Pauli error (or flipped measurement) with exactly its effect. With the
+  witness of a distance it places the lightest logical error in the
+  circuit.
 
 ```python
 import metatron_qso as q
@@ -559,6 +603,14 @@ code, _ = q.CssCode.bivariate_bicycle_code(72)
 for schedule, d in [("bicycle", 6), ("greedy", 4)]:
     c = q.css_code_memory(code, 3, 0.001, schedule=schedule)
     assert q.circuit_distance(c.detector_error_model()).distance == d
+
+# Hook errors cut the colour code's distance from 5 to 3. Where are they?
+c = q.css_code_memory(q.CssCode.color_code(5), 2, 0.001)
+model = c.detector_error_model()
+r = q.exact_circuit_distance(model, max_seconds=10)
+assert r.distance == 3
+for faults in q.explain_errors(c, model, r.witness):
+    print(faults[0]["operation"], faults[0]["paulis"])
 ```
 
 `css_code_memory(..., schedule=...)` chooses the order of the CNOTs:
@@ -579,16 +631,23 @@ codes, two for the colour codes):
 |---|---|---|---|
 | [[72, 12, 6]] | depth-8 cycle | 6 (exact) | ≤ 6 |
 | [[72, 12, 6]] | greedy | 4 (exact) | |
-| [[90, 8, 10]] | depth-8 cycle | 7 to 8 | ≤ 8 |
-| [[108, 8, 10]] | depth-8 cycle | 7 to 9 | ≤ 8 |
-| [[144, 12, 12]] | depth-8 cycle | 7 to 11 | ≤ 10 |
+| [[90, 8, 10]] | depth-8 cycle | 8 (exact) | ≤ 8 |
+| [[108, 8, 10]] | depth-8 cycle | 8 (exact) | ≤ 8 |
+| [[144, 12, 12]] | depth-8 cycle | 10 (exact, on the orbits) | ≤ 10 |
 | Colour code, d = 3, 5 | greedy, or any of the 720 orders of directions | (d + 1)/2 (exact) | |
 | Colour code, d = 7 | greedy, or the order 0, 1, 2, 3, 4, 5 | 4 (exact) | |
 
-- **Bicycle codes.** The upper bounds of the three larger codes come from
-  256 BP+OSD searches per observable. The paper's bounds hold under its
+- **Bicycle codes.** `exact_circuit_distance` gives [[90, 8, 10]] and
+  [[108, 8, 10]] their circuit distances in 12 s and 97 s on four
+  cores, and in 0.9 s and 2.5 s with `symmetry=True`. The depth-8 cycle keeps
+  the code's translations of the torus (72 for [[144, 12, 12]]), so each
+  orbit holds one error of each kind at each place. For [[144, 12, 12]]
+  the search without them rules out logical errors of 8 faults in four
+  minutes, but not of 9 in twenty (each weight costs about 17 times the
+  last); on the orbits it rules out 9 in 93 s and finds a logical error
+  of 10 faults, in 12 minutes in all. The paper's bounds hold under its
   own noise model, which also strikes idle qubits; QSO's has no idle
-  errors.
+  errors, and still has a logical error of 10 faults.
 - **Colour codes.** No order of directions keeps the distance: all 720
   give (d + 1)/2 for d = 3 and 5. With one bare ancilla per face, a
   fault halfway through a weight-6 check spreads to three data qubits. In
@@ -600,15 +659,40 @@ The checks:
 
 - Exact results equal brute-force enumeration on 600 random models, both
   graph-like and with hyperedges.
+- `exact_circuit_distance` equals enumeration on 300 random models with
+  each method. Level by level, Brouwer–Zimmermann meets every logical
+  word lighter than its bound on over 1400 random codes of high rate,
+  over 1300 of them with deficient information sets.
+- Brouwer–Zimmermann gives the Golay codes [23, 12, 7] and [24, 12, 8]
+  and the Reed–Muller codes [32, 6, 16], [32, 16, 8], [64, 22, 16] and
+  [64, 42, 8] their minimum distances; so does the automatic choice for
+  the Golay codes and [64, 22, 16], and the search alone for
+  [23, 12, 7]. The automatic choice gives the code-capacity models of
+  the d = 7 colour code, [[72, 12, 6]] and [[144, 12, 12]] theirs.
+- Under a work limit, `circuit_distance` returns the same bounds and
+  witness on one to four threads.
+- On the orbits of symmetries, `exact_circuit_distance` equals
+  enumeration on 900 random models made of the translations of random
+  errors (over 700 of them with symmetries; some observables break
+  them) and the search without symmetries on 150 larger ones, and gives
+  the same witness on one to four threads. The bicycle codes' circuits
+  and code-capacity models, the repetition, surface and colour codes
+  keep their distances. Declared permutations that are not symmetries
+  are refused: a swap of two detectors, and the swap of two triangles of
+  errors that maps a harmless cycle onto a logical one.
 - The repetition and surface codes keep their distance d.
 - `circuit_distances_of_memory_experiments` in `tests/validation.rs`
-  checks the table above.
+  checks the table above, by both functions.
 - `bicycle_cycle_reaches_the_published_circuit_distances`, a long test
-  run weekly, checks the bicycle bounds and all 720 colour-code orders.
+  run weekly, checks the bicycle distances and bounds and all 720
+  colour-code orders.
 - The cross-validation compares Stim's generated circuits with
   `shortest_graphlike_error` (equal) and with
   `search_for_undetectable_logical_errors` (QSO's exact distance is never
-  larger).
+  larger). Without truncation Stim's search is exhaustive. Its distance
+  then equals `exact_circuit_distance`'s on nine circuits, colour codes
+  with hyperedges and [[72, 12, 6]] included, with and without
+  symmetries.
 
 ## Stim circuits and the command line
 
@@ -655,13 +739,16 @@ qso qec --circuit surface.stim --decoder matching --shots 100000
 qso qec --code color --distance 5,7 --decoder bposd --p 0.002
 qso qec --code bb --distance 72,144 --decoder bposd --p 0.001 --shots 2000
 qso qec --code bb --distance 72 --rounds 3 --decoder bposd --schedule bicycle --circuit-distance
+qso qec --code bb --distance 144 --rounds 3 --decoder bposd --schedule bicycle --shots 1000 \
+    --circuit-distance --symmetry --max-seconds 3600
 qso qec --circuit surface.stim --decoder correlated-matching
 ```
 
 For `--code bb`, `--distance` names the code by its qubits.
 `--schedule` takes `greedy`, `bicycle` or six directions (`0,1,2,3,4,5`,
 colour codes only); it is refused with `--circuit`. `--circuit-distance` adds the bounds on the circuit
-distance to each line and to the JSON output.
+distance to each line and to the JSON output; `--symmetry` searches it
+on the orbits of the circuit's symmetries.
 
 ## Limits and costs
 
@@ -679,7 +766,7 @@ distance to each line and to the JSON output.
 | BP+OSD decoder | 16 384 detectors; OSD keeps a dense basis and its combinations, about 2 · (detectors)² bits (64 MiB at the limit), and takes time in proportion to errors × rank × detectors / 64 per shot that BP does not settle |
 | CSS codes | 8192 qubits (the logical operators cost about n³/64 word operations); bivariate bicycle codes l · m ≤ 4096 |
 | Detector error models built directly | 2²⁴ detectors, 64 observables |
-| Circuit distance | exact and polynomial for graph-like models (a breadth-first search per start node, bounded by the best cycle found); otherwise BP+OSD searches (each like one decoding) and an exhaustive search of at most `max_work` sets (2²⁴ by default, about 10⁷ a second) |
+| Circuit distance | exact and polynomial for graph-like models (a breadth-first search per start node, bounded by the best cycle found); otherwise BP+OSD searches (each like one decoding) and an exhaustive search of at most `max_work` sets (2²⁴ by default; some 10⁷ a second per thread). `exact_circuit_distance` runs until `max_seconds` (its polynomial preliminaries aside, the check of symmetries included); symmetries are checked for up to 4096 detectors, by an elimination of about n² · m / 64 word operations for n detectors and m errors, and the automorphism search behind `symmetry` stops at `max_seconds`; the generator matrices of the Brouwer–Zimmermann enumeration take at most 2³¹ bits (256 MiB) together, on information sets whose rank falls at most 64 short of the dimension, and while the first is built the detectors' matrix takes up to as much again |
 
 - **Sampling.** Each operation costs one word operation per 64 shots.
 - **Error model.** The model takes one pass through the circuit per 4096

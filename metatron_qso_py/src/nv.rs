@@ -9,9 +9,23 @@ use metatron_qso::spin::{
 };
 use numpy::{PyArray1, PyArray2};
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
+
+use metatron_qso::spin::bath::{
+    self, BathSpin, Cce, DIAMOND_LATTICE_CONSTANT, MAX_BATH_SPINS, MAX_CLUSTER_ORDER,
+    MAX_EXACT_BATH, NATURAL_C13_ABUNDANCE, SpinBath,
+};
+use metatron_qso::spin::generalised::{
+    self, BathEstimate, FullSpin, GeneralisedBath, GeneralisedCce, MAX_BATH_STATES,
+    MAX_ENVELOPE_SEGMENTS, MAX_GENERALISED_EXACT, MAX_GENERALISED_ORDER, Pulses,
+};
+use metatron_qso::spin::optics::{
+    self, CwOdmr, NV_EXCITED_SPLITTING, OpticalNv, Photophysics, PulsedReadout, TwoLevelOdmr,
+};
 
 use crate::{
-    ComplexMatrixArg, Raise, RealArg, cmatrix, invalid, real_array, real_vec, square_complex,
+    ComplexMatrixArg, Raise, RealArg, cmatrix, complex_array, invalid, real_array, real_vec,
+    square_complex,
 };
 
 /// One step of an NV sensing sequence (made by `nv_pulse`, `nv_free`,
@@ -529,7 +543,1145 @@ impl PyNvCenter {
     }
 }
 
+fn sequences(list: &[Vec<PyRef<'_, PyNvEvent>>]) -> Vec<Vec<NvEvent>> {
+    list.iter().map(|s| events(s)).collect()
+}
+
+/// A radius (m) of nuclei to leave out: finite and ≥ 0.
+fn radius_of(radius: f64) -> PyResult<f64> {
+    if radius.is_finite() && radius >= 0.0 {
+        Ok(radius)
+    } else {
+        Err(invalid("the radius must be finite and ≥ 0"))
+    }
+}
+
+fn transition_of(transition: i64) -> PyResult<i8> {
+    match transition {
+        1 => Ok(1),
+        -1 => Ok(-1),
+        other => Err(invalid(format!("transition is −1 or +1, got {other}"))),
+    }
+}
+
+type SpinTuple = ([f64; 3], [f64; 3]);
+
+/// Energies and eigenvectors.
+type Levels<'py> = (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray2<C64>>);
+
+/// Means and standard errors, one per sequence.
+type MeansAndErrors<'py> = (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>);
+
+/// The ¹³C bath of an NV centre in a field `field` (T) along its axis,
+/// seen by the qubit `{0, transition}`: `spins` are `(position,
+/// hyperfine)` pairs, the position from the vacancy (m, z along the NV
+/// axis) and the secular hyperfine couplings `(A_zx, A_zy, A_zz)` (Hz).
+/// `SpinBath.diamond` places ¹³C at random on the lattice. Its coherence
+/// after a sequence (a pulse, free periods and π pulses, a pulse, with
+/// ideal pulses) comes from the cluster-correlation expansion: clusters
+/// of up to `order` spins connected by pairs closer than `cutoff` (m),
+/// whose dipolar couplings are kept, each propagated exactly.
+#[pyclass(name = "SpinBath", module = "metatron_qso", frozen)]
+pub struct PySpinBath {
+    inner: SpinBath,
+}
+
+#[pymethods]
+impl PySpinBath {
+    #[new]
+    #[pyo3(
+        signature = (field, spins, transition = -1),
+        text_signature = "(field, spins, transition=-1)"
+    )]
+    fn new(py: Python<'_>, field: f64, spins: Vec<SpinTuple>, transition: i64) -> PyResult<Self> {
+        let spins = spins
+            .into_iter()
+            .map(|(position, hyperfine)| BathSpin {
+                position,
+                hyperfine,
+            })
+            .collect();
+        let inner = SpinBath::new(field, transition_of(transition)?, spins);
+        py.detach(|| inner.validate()).raise()?;
+        Ok(Self { inner })
+    }
+
+    /// A random bath: every carbon site within `radius` (m) of the vacancy
+    /// holds a ¹³C with probability `abundance` (seeded; each site's draw
+    /// depends only on the seed, so baths nest in the radius), with
+    /// point-dipole hyperfine couplings; none closer than `min_radius`
+    /// (m), where contact terms dominate.
+    #[staticmethod]
+    #[pyo3(
+        signature = (
+            field, abundance = NATURAL_C13_ABUNDANCE, radius = 4e-9, seed = 0, transition = -1,
+            min_radius = 0.0,
+        ),
+        text_signature = "(field, abundance=0.0107, radius=4e-09, seed=0, transition=-1, min_radius=0.0)"
+    )]
+    fn diamond(
+        py: Python<'_>,
+        field: f64,
+        abundance: f64,
+        radius: f64,
+        seed: u64,
+        transition: i64,
+        min_radius: f64,
+    ) -> PyResult<Self> {
+        let transition = transition_of(transition)?;
+        let spins = py
+            .detach(|| bath::diamond_bath(abundance, radius, seed))
+            .raise()?;
+        let inner =
+            SpinBath::new(field, transition, spins).without_spins_within(radius_of(min_radius)?);
+        if !inner.field.is_finite() {
+            return Err(invalid("the field must be finite"));
+        }
+        Ok(Self { inner })
+    }
+
+    #[getter]
+    fn field(&self) -> f64 {
+        self.inner.field
+    }
+
+    #[getter]
+    fn transition(&self) -> i8 {
+        self.inner.transition
+    }
+
+    /// The bath without the spins closer than `radius` (m) to the vacancy.
+    fn without_spins_within(&self, radius: f64) -> PyResult<Self> {
+        Ok(Self {
+            inner: self.inner.clone().without_spins_within(radius_of(radius)?),
+        })
+    }
+
+    #[getter]
+    fn num_spins(&self) -> usize {
+        self.inner.spins.len()
+    }
+
+    /// The spins as `(position, hyperfine)` pairs.
+    #[getter]
+    fn spins(&self) -> Vec<SpinTuple> {
+        self.inner
+            .spins
+            .iter()
+            .map(|s| (s.position, s.hyperfine))
+            .collect()
+    }
+
+    /// The connected clusters of up to `order` spins.
+    #[pyo3(signature = (order = 2, cutoff = 8e-10))]
+    fn clusters(&self, py: Python<'_>, order: usize, cutoff: f64) -> PyResult<Vec<Vec<usize>>> {
+        let b = &self.inner;
+        py.detach(|| b.clusters(order, cutoff)).raise()
+    }
+
+    /// The coherence `L = Tr(U_m ρ U_0†)` of the bath after each sequence.
+    #[pyo3(signature = (sequences, order = 2, cutoff = 8e-10))]
+    fn coherence<'py>(
+        &self,
+        py: Python<'py>,
+        sequences: Vec<Vec<PyRef<'_, PyNvEvent>>>,
+        order: usize,
+        cutoff: f64,
+    ) -> PyResult<Bound<'py, PyArray1<C64>>> {
+        let (seqs, b) = (self::sequences(&sequences), &self.inner);
+        let l = py
+            .detach(|| b.coherence(&seqs, &Cce { order, cutoff }))
+            .raise()?;
+        Ok(complex_array(py, l))
+    }
+
+    /// The coherence of the whole bath propagated exactly (at most
+    /// `MAX_EXACT_BATH` spins), with the couplings of pairs closer than
+    /// `cutoff`.
+    #[pyo3(signature = (sequences, cutoff = f64::INFINITY))]
+    fn exact_coherence<'py>(
+        &self,
+        py: Python<'py>,
+        sequences: Vec<Vec<PyRef<'_, PyNvEvent>>>,
+        cutoff: f64,
+    ) -> PyResult<Bound<'py, PyArray1<C64>>> {
+        let (seqs, b) = (self::sequences(&sequences), &self.inner);
+        let l = py.detach(|| b.exact_coherence(&seqs, cutoff)).raise()?;
+        Ok(complex_array(py, l))
+    }
+
+    /// The `m_s = 0` population after each sequence.
+    #[pyo3(signature = (sequences, order = 2, cutoff = 8e-10))]
+    fn signal<'py>(
+        &self,
+        py: Python<'py>,
+        sequences: Vec<Vec<PyRef<'_, PyNvEvent>>>,
+        order: usize,
+        cutoff: f64,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let (seqs, b) = (self::sequences(&sequences), &self.inner);
+        let s = py
+            .detach(|| b.signal(&seqs, &Cce { order, cutoff }))
+            .raise()?;
+        Ok(real_array(py, s))
+    }
+
+    /// The population with classical field noise as well: `(means,
+    /// standard errors)`; exact for Gaussian noise (errors 0, `trajectories`
+    /// unused), averaged over `trajectories` paths (seeded) for telegraph
+    /// noise (errors NaN for one path).
+    #[pyo3(signature = (sequences, noise, trajectories = 1000, seed = 0, order = 2, cutoff = 8e-10))]
+    #[allow(clippy::too_many_arguments)]
+    fn signal_with_noise<'py>(
+        &self,
+        py: Python<'py>,
+        sequences: Vec<Vec<PyRef<'_, PyNvEvent>>>,
+        noise: &PyFieldNoise,
+        trajectories: usize,
+        seed: u64,
+        order: usize,
+        cutoff: f64,
+    ) -> PyResult<MeansAndErrors<'py>> {
+        let (seqs, b, noise) = (self::sequences(&sequences), &self.inner, noise.inner);
+        let r = py
+            .detach(|| {
+                b.signal_with_noise(&seqs, &Cce { order, cutoff }, &noise, trajectories, seed)
+            })
+            .raise()?;
+        let (mean, err): (Vec<f64>, Vec<f64>) = r.into_iter().unzip();
+        Ok((real_array(py, mean), real_array(py, err)))
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "SpinBath({} T, m = {}, {} spins)",
+            self.inner.field,
+            self.inner.transition,
+            self.inner.spins.len()
+        )
+    }
+}
+
+/// A nucleus with its position (m) and full hyperfine tensor (Hz, row: the
+/// electron's component).
+type TensorSpin = ([f64; 3], [[f64; 3]; 3]);
+
+/// Coherences and signals.
+type CoherenceAndSignal<'py> = (Bound<'py, PyArray1<C64>>, Bound<'py, PyArray1<f64>>);
+
+/// The pulses of the generalised expansion: `"ideal"` (the default
+/// without `rabi`), `"finite"` (the default with it; shaped with an
+/// `envelope`) or `"laboratory"`.
+fn pulses_of(
+    pulses: Option<&str>,
+    rabi: Option<f64>,
+    envelope: Option<Vec<(f64, f64)>>,
+) -> PyResult<Pulses> {
+    let kind = pulses.unwrap_or(if rabi.is_some() { "finite" } else { "ideal" });
+    match (kind, rabi, envelope) {
+        ("ideal", None, None) => Ok(Pulses::Ideal),
+        ("laboratory", None, None) => Ok(Pulses::Laboratory),
+        ("finite", Some(rabi), None) => Ok(Pulses::Finite { rabi }),
+        ("finite", Some(rabi), Some(envelope)) => Ok(Pulses::Shaped { rabi, envelope }),
+        ("finite", None, _) => Err(invalid("finite pulses need a Rabi frequency `rabi` (Hz)")),
+        ("ideal" | "laboratory", _, _) => Err(invalid(
+            "`rabi` and `envelope` belong to finite pulses (pulses=\"finite\")",
+        )),
+        _ => Err(invalid("pulses: \"ideal\", \"finite\" or \"laboratory\"")),
+    }
+}
+
+/// The expansion's settings from the keyword arguments.
+#[allow(clippy::too_many_arguments)]
+fn cce_of(
+    order: usize,
+    cutoff: f64,
+    pulses: Option<&str>,
+    rabi: Option<f64>,
+    envelope: Option<Vec<(f64, f64)>>,
+    bath_states: usize,
+    seed: u64,
+) -> PyResult<GeneralisedCce> {
+    Ok(GeneralisedCce {
+        order,
+        cutoff,
+        pulses: pulses_of(pulses, rabi, envelope)?,
+        bath_states,
+        seed,
+    })
+}
+
+/// The ¹³C bath of an NV centre with the electron in every cluster: the
+/// generalised cluster-correlation expansion (Onizhuk et al., PRX Quantum
+/// 2, 010311 (2021)). The spin Hamiltonian is that of the laboratory
+/// frame, `D S_z² + γ_e B·S + Σ [S·A_i·I_i − γ_C B·I_i]` and the dipolar
+/// couplings of the nuclei, with the field `field` (T, three components,
+/// z along the NV axis) in any direction and the full hyperfine tensors.
+/// `spins` are `(position, tensor)` pairs: the position from the vacancy
+/// (m) and the 3 × 3 tensor `A` (Hz, row: the electron's component). The
+/// qubit `{α, β}` is formed by the electron's eigenstates closest to
+/// `m_s = 0` and `m_s = transition`; pulses act in the frame rotating at
+/// `frequency` (Hz; the bare qubit's transition by default). With
+/// `dressed`, the electron's levels are those dressed by the nuclei of
+/// each cluster, which keeps the expansion converging for nuclei coupled
+/// by a MHz or more.
+///
+/// The keyword arguments of `coherence`, `signal` and `estimate`: clusters
+/// of up to `order` nuclei connected by pairs closer than `cutoff` (m);
+/// `pulses` `"ideal"`, `"finite"` (rectangular, Rabi frequency `rabi` in
+/// Hz; shaped with an `envelope` of `(amplitude, phase)` segments of equal
+/// length, the phase in degrees) or `"laboratory"` (ideal, about axes
+/// fixed in the laboratory frame, as PyCCE); `bath_states` product states
+/// of the nuclei sampled with `seed`, each cluster in the static field of
+/// the others (0: unpolarised nuclei). Finite pulses need sampled states
+/// beyond the first order.
+#[pyclass(name = "GeneralisedBath", module = "metatron_qso", frozen)]
+pub struct PyGeneralisedBath {
+    inner: GeneralisedBath,
+}
+
+#[pymethods]
+impl PyGeneralisedBath {
+    #[new]
+    #[pyo3(
+        signature = (
+            field, spins, transition = -1, frequency = None, dressed = false,
+            zero_field_splitting = NV_ZERO_FIELD_SPLITTING,
+            gyromagnetic_ratio = NV_GYROMAGNETIC_RATIO,
+        ),
+        text_signature = "(field, spins, transition=-1, frequency=None, dressed=False, zero_field_splitting=2870000000.0, gyromagnetic_ratio=28025000000.0)"
+    )]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        py: Python<'_>,
+        field: [f64; 3],
+        spins: Vec<TensorSpin>,
+        transition: i64,
+        frequency: Option<f64>,
+        dressed: bool,
+        zero_field_splitting: f64,
+        gyromagnetic_ratio: f64,
+    ) -> PyResult<Self> {
+        let spins = spins
+            .into_iter()
+            .map(|(position, hyperfine)| FullSpin {
+                position,
+                hyperfine,
+            })
+            .collect();
+        let mut inner = GeneralisedBath::new(field, transition_of(transition)?, spins);
+        inner.frequency = frequency;
+        inner.dressed = dressed;
+        inner.zero_field_splitting = zero_field_splitting;
+        inner.gyromagnetic_ratio = gyromagnetic_ratio;
+        py.detach(|| inner.validate()).raise()?;
+        Ok(Self { inner })
+    }
+
+    /// A random bath of `SpinBath.diamond` (the same nuclei for the same
+    /// seed) with the point-dipole tensors, in the field `field` (T, three
+    /// components); none closer than `min_radius` (m).
+    #[staticmethod]
+    #[pyo3(
+        signature = (
+            field, abundance = NATURAL_C13_ABUNDANCE, radius = 4e-9, seed = 0, transition = -1,
+            min_radius = 0.0, dressed = false,
+        ),
+        text_signature = "(field, abundance=0.0107, radius=4e-09, seed=0, transition=-1, min_radius=0.0, dressed=False)"
+    )]
+    #[allow(clippy::too_many_arguments)]
+    fn diamond(
+        py: Python<'_>,
+        field: [f64; 3],
+        abundance: f64,
+        radius: f64,
+        seed: u64,
+        transition: i64,
+        min_radius: f64,
+        dressed: bool,
+    ) -> PyResult<Self> {
+        let transition = transition_of(transition)?;
+        let mut inner = py
+            .detach(|| GeneralisedBath::diamond(field, transition, abundance, radius, seed))
+            .raise()?
+            .without_spins_within(radius_of(min_radius)?);
+        inner.dressed = dressed;
+        Ok(Self { inner })
+    }
+
+    /// The bath of a `SpinBath` (field along the axis): each nucleus with
+    /// the point-dipole tensor at its position, whose row `A_z·` is the
+    /// bath's coupling.
+    #[staticmethod]
+    #[pyo3(signature = (bath, dressed = false))]
+    fn from_bath(py: Python<'_>, bath: &PySpinBath, dressed: bool) -> PyResult<Self> {
+        let b = &bath.inner;
+        let mut inner = py.detach(|| GeneralisedBath::from_bath(b)).raise()?;
+        inner.dressed = dressed;
+        Ok(Self { inner })
+    }
+
+    #[getter]
+    fn field(&self) -> [f64; 3] {
+        self.inner.field
+    }
+
+    #[getter]
+    fn transition(&self) -> i8 {
+        self.inner.transition
+    }
+
+    #[getter]
+    fn frequency(&self) -> Option<f64> {
+        self.inner.frequency
+    }
+
+    #[getter]
+    fn dressed(&self) -> bool {
+        self.inner.dressed
+    }
+
+    #[getter]
+    fn zero_field_splitting(&self) -> f64 {
+        self.inner.zero_field_splitting
+    }
+
+    #[getter]
+    fn gyromagnetic_ratio(&self) -> f64 {
+        self.inner.gyromagnetic_ratio
+    }
+
+    /// The frequency (Hz) of the rotating frame: set, or the bare qubit's
+    /// transition (negative where `β` lies below `α`).
+    fn frame_frequency(&self) -> f64 {
+        self.inner.frame_frequency()
+    }
+
+    #[getter]
+    fn num_spins(&self) -> usize {
+        self.inner.spins.len()
+    }
+
+    /// The nuclei as `(position, tensor)` pairs.
+    #[getter]
+    fn spins(&self) -> Vec<TensorSpin> {
+        self.inner
+            .spins
+            .iter()
+            .map(|s| (s.position, s.hyperfine))
+            .collect()
+    }
+
+    /// The bath without the nuclei closer than `radius` (m) to the vacancy.
+    fn without_spins_within(&self, radius: f64) -> PyResult<Self> {
+        Ok(Self {
+            inner: self.inner.clone().without_spins_within(radius_of(radius)?),
+        })
+    }
+
+    /// The bath with the electron's bare or dressed levels.
+    fn with_dressed(&self, dressed: bool) -> Self {
+        let mut inner = self.inner.clone();
+        inner.dressed = dressed;
+        Self { inner }
+    }
+
+    /// The connected clusters of up to `order` nuclei.
+    #[pyo3(signature = (order = 2, cutoff = 8e-10))]
+    fn clusters(&self, py: Python<'_>, order: usize, cutoff: f64) -> PyResult<Vec<Vec<usize>>> {
+        let b = &self.inner;
+        py.detach(|| b.clusters(order, cutoff)).raise()
+    }
+
+    /// The bath's factor of the coherence before the last pulse of each
+    /// sequence (relative to the electron alone; the `L` of
+    /// `SpinBath.coherence` for ideal pulses and a field along the axis).
+    #[pyo3(
+        signature = (
+            sequences, order = 2, cutoff = 8e-10, pulses = None, rabi = None, envelope = None,
+            bath_states = 0, seed = 0,
+        ),
+        text_signature = "($self, sequences, order=2, cutoff=8e-10, pulses=None, rabi=None, envelope=None, bath_states=0, seed=0)"
+    )]
+    #[allow(clippy::too_many_arguments)]
+    fn coherence<'py>(
+        &self,
+        py: Python<'py>,
+        sequences: Vec<Vec<PyRef<'_, PyNvEvent>>>,
+        order: usize,
+        cutoff: f64,
+        pulses: Option<&str>,
+        rabi: Option<f64>,
+        envelope: Option<Vec<(f64, f64)>>,
+        bath_states: usize,
+        seed: u64,
+    ) -> PyResult<Bound<'py, PyArray1<C64>>> {
+        let cce = cce_of(order, cutoff, pulses, rabi, envelope, bath_states, seed)?;
+        let (seqs, b) = (self::sequences(&sequences), &self.inner);
+        let l = py.detach(|| b.coherence(&seqs, &cce)).raise()?;
+        Ok(complex_array(py, l))
+    }
+
+    /// The population of `α` after each sequence (its last pulse ideal).
+    #[pyo3(
+        signature = (
+            sequences, order = 2, cutoff = 8e-10, pulses = None, rabi = None, envelope = None,
+            bath_states = 0, seed = 0,
+        ),
+        text_signature = "($self, sequences, order=2, cutoff=8e-10, pulses=None, rabi=None, envelope=None, bath_states=0, seed=0)"
+    )]
+    #[allow(clippy::too_many_arguments)]
+    fn signal<'py>(
+        &self,
+        py: Python<'py>,
+        sequences: Vec<Vec<PyRef<'_, PyNvEvent>>>,
+        order: usize,
+        cutoff: f64,
+        pulses: Option<&str>,
+        rabi: Option<f64>,
+        envelope: Option<Vec<(f64, f64)>>,
+        bath_states: usize,
+        seed: u64,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let cce = cce_of(order, cutoff, pulses, rabi, envelope, bath_states, seed)?;
+        let (seqs, b) = (self::sequences(&sequences), &self.inner);
+        let s = py.detach(|| b.signal(&seqs, &cce)).raise()?;
+        Ok(real_array(py, s))
+    }
+
+    /// The coherence and the signal with their standard errors over the
+    /// sampled bath states (0 for unpolarised nuclei, NaN for one state): a
+    /// dict of arrays `coherence`, `coherence_error`, `signal`,
+    /// `signal_error`.
+    #[pyo3(
+        signature = (
+            sequences, order = 2, cutoff = 8e-10, pulses = None, rabi = None, envelope = None,
+            bath_states = 0, seed = 0,
+        ),
+        text_signature = "($self, sequences, order=2, cutoff=8e-10, pulses=None, rabi=None, envelope=None, bath_states=0, seed=0)"
+    )]
+    #[allow(clippy::too_many_arguments)]
+    fn estimate<'py>(
+        &self,
+        py: Python<'py>,
+        sequences: Vec<Vec<PyRef<'_, PyNvEvent>>>,
+        order: usize,
+        cutoff: f64,
+        pulses: Option<&str>,
+        rabi: Option<f64>,
+        envelope: Option<Vec<(f64, f64)>>,
+        bath_states: usize,
+        seed: u64,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let cce = cce_of(order, cutoff, pulses, rabi, envelope, bath_states, seed)?;
+        let (seqs, b) = (self::sequences(&sequences), &self.inner);
+        let e: Vec<BathEstimate> = py.detach(|| b.estimate(&seqs, &cce)).raise()?;
+        let d = PyDict::new(py);
+        d.set_item(
+            "coherence",
+            complex_array(py, e.iter().map(|x| x.coherence).collect()),
+        )?;
+        d.set_item(
+            "coherence_error",
+            real_array(py, e.iter().map(|x| x.coherence_error).collect()),
+        )?;
+        d.set_item(
+            "signal",
+            real_array(py, e.iter().map(|x| x.signal).collect()),
+        )?;
+        d.set_item(
+            "signal_error",
+            real_array(py, e.iter().map(|x| x.signal_error).collect()),
+        )?;
+        Ok(d)
+    }
+
+    /// The electron and the whole bath (at most `MAX_GENERALISED_EXACT`
+    /// nuclei, unpolarised) propagated together, with the couplings of
+    /// pairs closer than `cutoff`: `(coherence, signal)` arrays.
+    #[pyo3(
+        signature = (sequences, cutoff = f64::INFINITY, pulses = None, rabi = None, envelope = None),
+        text_signature = "($self, sequences, cutoff=inf, pulses=None, rabi=None, envelope=None)"
+    )]
+    fn exact<'py>(
+        &self,
+        py: Python<'py>,
+        sequences: Vec<Vec<PyRef<'_, PyNvEvent>>>,
+        cutoff: f64,
+        pulses: Option<&str>,
+        rabi: Option<f64>,
+        envelope: Option<Vec<(f64, f64)>>,
+    ) -> PyResult<CoherenceAndSignal<'py>> {
+        let pulses = pulses_of(pulses, rabi, envelope)?;
+        let (seqs, b) = (self::sequences(&sequences), &self.inner);
+        let r = py.detach(|| b.exact(&seqs, cutoff, &pulses)).raise()?;
+        let (l, s): (Vec<C64>, Vec<f64>) = r.into_iter().unzip();
+        Ok((complex_array(py, l), real_array(py, s)))
+    }
+
+    fn __repr__(&self) -> String {
+        let [x, y, z] = self.inner.field;
+        format!(
+            "GeneralisedBath(({x}, {y}, {z}) T, m = {}, {} spins{})",
+            self.inner.transition,
+            self.inner.spins.len(),
+            if self.inner.dressed { ", dressed" } else { "" }
+        )
+    }
+}
+
+/// The population after each sequence averaged over `configurations`
+/// random baths of `GeneralisedBath.diamond` (seeded) in the field `field`
+/// (T, three components), by the generalised expansion: `(means, standard
+/// errors)`.
+#[pyfunction(name = "generalised_ensemble_signal")]
+#[pyo3(
+    signature = (
+        field, sequences, configurations, abundance = NATURAL_C13_ABUNDANCE, radius = 4e-9,
+        seed = 0, transition = -1, order = 2, cutoff = 8e-10, pulses = None, rabi = None,
+        envelope = None, bath_states = 0,
+    ),
+    text_signature = "(field, sequences, configurations, abundance=0.0107, radius=4e-09, seed=0, transition=-1, order=2, cutoff=8e-10, pulses=None, rabi=None, envelope=None, bath_states=0)"
+)]
+#[allow(clippy::too_many_arguments)]
+fn py_generalised_ensemble_signal<'py>(
+    py: Python<'py>,
+    field: [f64; 3],
+    sequences: Vec<Vec<PyRef<'_, PyNvEvent>>>,
+    configurations: usize,
+    abundance: f64,
+    radius: f64,
+    seed: u64,
+    transition: i64,
+    order: usize,
+    cutoff: f64,
+    pulses: Option<&str>,
+    rabi: Option<f64>,
+    envelope: Option<Vec<(f64, f64)>>,
+    bath_states: usize,
+) -> PyResult<MeansAndErrors<'py>> {
+    let cce = cce_of(order, cutoff, pulses, rabi, envelope, bath_states, seed)?;
+    let (seqs, transition) = (self::sequences(&sequences), transition_of(transition)?);
+    let r = py
+        .detach(|| {
+            generalised::generalised_ensemble_signal(
+                field,
+                transition,
+                abundance,
+                radius,
+                configurations,
+                seed,
+                &seqs,
+                &cce,
+            )
+        })
+        .raise()?;
+    let (mean, err): (Vec<f64>, Vec<f64>) = r.into_iter().unzip();
+    Ok((real_array(py, mean), real_array(py, err)))
+}
+
+/// The full point-dipole hyperfine tensor (Hz, row: the electron's
+/// component) of a ¹³C at `position` (m from the vacancy, z along the NV
+/// axis).
+#[pyfunction(name = "point_dipole_tensor")]
+fn py_point_dipole_tensor(position: [f64; 3]) -> PyResult<[[f64; 3]; 3]> {
+    Ok(FullSpin::point_dipole(position).raise()?.hyperfine)
+}
+
+/// The point-dipole hyperfine couplings `(A_zx, A_zy, A_zz)` (Hz) of a ¹³C
+/// at `position` (m from the vacancy, z along the NV axis).
+#[pyfunction(name = "point_dipole_hyperfine")]
+fn py_point_dipole(position: [f64; 3]) -> PyResult<[f64; 3]> {
+    Ok(BathSpin::point_dipole(position).raise()?.hyperfine)
+}
+
+/// The carbon sites of diamond within `radius` (m) of the vacancy, in the
+/// frame of the centre (`k × 3`).
+#[pyfunction(name = "diamond_sites")]
+fn py_diamond_sites<'py>(py: Python<'py>, radius: f64) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let sites = py.detach(|| bath::diamond_sites(radius)).raise()?;
+    let m = metatron_qso::linalg::RMatrix::from_fn(sites.len(), 3, |r, c| sites[r][c]);
+    Ok(crate::rmatrix(py, &m))
+}
+
+/// The population after each sequence averaged over `configurations`
+/// random baths (seeded): `(means, standard errors)`.
+#[pyfunction(name = "bath_ensemble_signal")]
+#[pyo3(
+    signature = (
+        field, sequences, configurations, abundance = NATURAL_C13_ABUNDANCE, radius = 4e-9,
+        seed = 0, transition = -1, order = 2, cutoff = 8e-10,
+    ),
+    text_signature = "(field, sequences, configurations, abundance=0.0107, radius=4e-09, seed=0, transition=-1, order=2, cutoff=8e-10)"
+)]
+#[allow(clippy::too_many_arguments)]
+fn py_ensemble_signal<'py>(
+    py: Python<'py>,
+    field: f64,
+    sequences: Vec<Vec<PyRef<'_, PyNvEvent>>>,
+    configurations: usize,
+    abundance: f64,
+    radius: f64,
+    seed: u64,
+    transition: i64,
+    order: usize,
+    cutoff: f64,
+) -> PyResult<MeansAndErrors<'py>> {
+    let (seqs, transition) = (self::sequences(&sequences), transition_of(transition)?);
+    let r = py
+        .detach(|| {
+            bath::ensemble_signal(
+                field,
+                transition,
+                abundance,
+                radius,
+                configurations,
+                seed,
+                &seqs,
+                &Cce { order, cutoff },
+            )
+        })
+        .raise()?;
+    let (mean, err): (Vec<f64>, Vec<f64>) = r.into_iter().unzip();
+    Ok((real_array(py, mean), real_array(py, err)))
+}
+
+fn cw_dict<'py>(py: Python<'py>, line: CwOdmr) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("frequencies", real_array(py, line.frequencies))?;
+    d.set_item("rates", real_array(py, line.rates))?;
+    d.set_item("off_resonance", line.off_resonance)?;
+    d.set_item("contrast", line.contrast)?;
+    d.set_item("linewidth", line.linewidth)?;
+    d.set_item("slope", line.slope)?;
+    d.set_item("shift", line.shift)?;
+    d.set_item("sensitivity", line.sensitivity)?;
+    Ok(d)
+}
+
+fn readout_dict<'py>(py: Python<'py>, r: PulsedReadout) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("readout_contrast", r.readout_contrast())?;
+    d.set_item("times", real_array(py, r.times))?;
+    d.set_item("bright", real_array(py, r.bright))?;
+    d.set_item("dark", real_array(py, r.dark))?;
+    d.set_item("window", r.window)?;
+    d.set_item("photons_bright", r.photons_bright)?;
+    d.set_item("photons_dark", r.photons_dark)?;
+    Ok(d)
+}
+
+/// A microwave `(frequency, rabi)` from optional Python arguments: both or
+/// neither.
+fn optical_drive(frequency: Option<f64>, rabi: Option<f64>) -> PyResult<Option<(f64, f64)>> {
+    match (frequency, rabi) {
+        (Some(f), Some(r)) => Ok(Some((f, r))),
+        (None, None) => Ok(None),
+        _ => Err(invalid(
+            "a microwave needs both its frequency and its Rabi frequency",
+        )),
+    }
+}
+
+/// The electron spin of an NV centre in its optical cycle: the
+/// seven-level model of Tetienne et al. (ground and excited triplets, a
+/// metastable singlet) in a field `field` (T, frame of the centre: z
+/// along the axis) of any direction, as a Lindblad equation with the
+/// rates `(k_r, k_47, k_57, k_71, k_72)` (1/s; default: Tetienne et al.),
+/// ground-state dephasing `Γ₂*` and spin-lattice rate `Γ₁` (1/s), and the
+/// detected fraction `collection` of the emitted photons. `pump` is the
+/// optical excitation rate of each spin-conserving transition (1/s); a
+/// microwave of `frequency` (Hz, signed as `lines`) and Rabi frequency
+/// `rabi` (Hz) drives the ground state.
+#[pyclass(name = "OpticalNv", module = "metatron_qso", frozen)]
+pub struct PyOpticalNv {
+    inner: OpticalNv,
+}
+
+#[pymethods]
+impl PyOpticalNv {
+    #[new]
+    #[pyo3(signature = (
+        field = [0.0, 0.0, 0.0], rates = None, dephasing = 2e5, spin_lattice = 1e3,
+        collection = 0.01, zero_field_splitting = NV_ZERO_FIELD_SPLITTING,
+        excited_splitting = NV_EXCITED_SPLITTING, gyromagnetic_ratio = NV_GYROMAGNETIC_RATIO,
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        field: [f64; 3],
+        rates: Option<[f64; 5]>,
+        dephasing: f64,
+        spin_lattice: f64,
+        collection: f64,
+        zero_field_splitting: f64,
+        excited_splitting: f64,
+        gyromagnetic_ratio: f64,
+    ) -> PyResult<Self> {
+        let mut inner = OpticalNv::new(field);
+        if let Some(
+            [
+                radiative,
+                isc_zero,
+                isc_plus_minus,
+                singlet_zero,
+                singlet_plus_minus,
+            ],
+        ) = rates
+        {
+            inner.rates = Photophysics {
+                radiative,
+                isc_zero,
+                isc_plus_minus,
+                singlet_zero,
+                singlet_plus_minus,
+            };
+        }
+        inner.dephasing = dephasing;
+        inner.spin_lattice = spin_lattice;
+        inner.collection = collection;
+        inner.zero_field_splitting = zero_field_splitting;
+        inner.excited_splitting = excited_splitting;
+        inner.gyromagnetic_ratio = gyromagnetic_ratio;
+        inner.validate().raise()?;
+        Ok(Self { inner })
+    }
+
+    #[getter]
+    fn field(&self) -> [f64; 3] {
+        self.inner.field
+    }
+
+    /// `(k_r, k_47, k_57, k_71, k_72)` (1/s).
+    #[getter]
+    fn rates(&self) -> [f64; 5] {
+        let r = self.inner.rates;
+        [
+            r.radiative,
+            r.isc_zero,
+            r.isc_plus_minus,
+            r.singlet_zero,
+            r.singlet_plus_minus,
+        ]
+    }
+
+    #[getter]
+    fn collection(&self) -> f64 {
+        self.inner.collection
+    }
+
+    /// `H/h` of the ground triplet (Hz), basis `m_s = +1, 0, −1`.
+    fn ground_hamiltonian<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<C64>> {
+        cmatrix(py, &self.inner.ground_hamiltonian())
+    }
+
+    /// `H/h` of the excited triplet (Hz).
+    fn excited_hamiltonian<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<C64>> {
+        cmatrix(py, &self.inner.excited_hamiltonian())
+    }
+
+    /// Energies (Hz, ascending) and eigenvectors (columns) of the ground
+    /// triplet.
+    fn ground_levels<'py>(&self, py: Python<'py>) -> PyResult<Levels<'py>> {
+        let (e, v) = self.inner.ground_levels().raise()?;
+        Ok((real_array(py, e), cmatrix(py, &v)))
+    }
+
+    /// Energies and eigenvectors of the excited triplet.
+    fn excited_levels<'py>(&self, py: Python<'py>) -> PyResult<Levels<'py>> {
+        let (e, v) = self.inner.excited_levels().raise()?;
+        Ok((real_array(py, e), cmatrix(py, &v)))
+    }
+
+    /// The two ESR lines `(frequency, strength)`, from the level closest
+    /// to `m_s = 0` to those closest to `−1` and `+1` (signed).
+    fn lines(&self) -> PyResult<Vec<(f64, f64)>> {
+        Ok(self.inner.lines().raise()?.to_vec())
+    }
+
+    /// The steady state (7 × 7: ground levels, excited levels, singlet;
+    /// ground coherences in the rotating frame when driven).
+    #[pyo3(signature = (pump, frequency = None, rabi = None))]
+    fn steady_state<'py>(
+        &self,
+        py: Python<'py>,
+        pump: f64,
+        frequency: Option<f64>,
+        rabi: Option<f64>,
+    ) -> PyResult<Bound<'py, PyArray2<C64>>> {
+        let drive = optical_drive(frequency, rabi)?;
+        let rho = self.inner.steady_state(pump, drive).raise()?;
+        Ok(cmatrix(py, &rho))
+    }
+
+    /// The state after `duration` (s) from `rho` (7 × 7) under `pump` and
+    /// an optional microwave.
+    #[pyo3(signature = (rho, duration, pump, frequency = None, rabi = None))]
+    fn evolve<'py>(
+        &self,
+        py: Python<'py>,
+        rho: ComplexMatrixArg<'_>,
+        duration: f64,
+        pump: f64,
+        frequency: Option<f64>,
+        rabi: Option<f64>,
+    ) -> PyResult<Bound<'py, PyArray2<C64>>> {
+        let (d, data) = square_complex("rho", &rho)?;
+        if d != 7 {
+            return Err(invalid(format!(
+                "a state of the optical cycle is 7×7, got {d}×{d}"
+            )));
+        }
+        let rho = CMatrix::from_row_slice(7, 7, &data);
+        let (nv, drive) = (&self.inner, optical_drive(frequency, rabi)?);
+        let out = py
+            .detach(|| nv.evolve(&rho, duration, pump, drive))
+            .raise()?;
+        Ok(cmatrix(py, &out))
+    }
+
+    /// The detected photon rate (1/s) in the steady state.
+    #[pyo3(signature = (pump, frequency = None, rabi = None))]
+    fn fluorescence(&self, pump: f64, frequency: Option<f64>, rabi: Option<f64>) -> PyResult<f64> {
+        let rho = self
+            .inner
+            .steady_state(pump, optical_drive(frequency, rabi)?)
+            .raise()?;
+        Ok(self.inner.fluorescence(&rho))
+    }
+
+    /// The photon rate at each microwave frequency (CW-ODMR).
+    fn cw_odmr<'py>(
+        &self,
+        py: Python<'py>,
+        frequencies: RealArg<'_>,
+        rabi: f64,
+        pump: f64,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let (f, nv) = (real_vec(&frequencies), &self.inner);
+        Ok(real_array(
+            py,
+            py.detach(|| nv.cw_odmr(&f, rabi, pump)).raise()?,
+        ))
+    }
+
+    /// A CW-ODMR line around `centre` over `span` (Hz) with its contrast,
+    /// full width, steepest slope and shot-noise sensitivity (T/√Hz).
+    #[pyo3(signature = (centre, span, rabi, pump, points = 401))]
+    fn cw_line<'py>(
+        &self,
+        py: Python<'py>,
+        centre: f64,
+        span: f64,
+        rabi: f64,
+        pump: f64,
+        points: usize,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let nv = &self.inner;
+        let line = py
+            .detach(|| nv.cw_line(centre, span, points, rabi, pump))
+            .raise()?;
+        cw_dict(py, line)
+    }
+
+    /// The fluorescence after the laser is switched on, from the
+    /// laser-polarised state (`bright`) and after an ideal π pulse on the
+    /// transition (`dark`), with the best counting window.
+    #[pyo3(
+        signature = (pump, duration, steps = 1000, transition = -1),
+        text_signature = "(self, /, pump, duration, steps=1000, transition=-1)"
+    )]
+    fn pulsed_readout<'py>(
+        &self,
+        py: Python<'py>,
+        pump: f64,
+        duration: f64,
+        steps: usize,
+        transition: i64,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let (nv, t) = (&self.inner, transition_of(transition)?);
+        let r = py
+            .detach(|| nv.pulsed_readout(pump, duration, steps, t))
+            .raise()?;
+        readout_dict(py, r)
+    }
+
+    /// The population of the level closest to `m_s = 0` after the laser
+    /// (`duration` s from the unpolarised state, `inf` for the steady
+    /// state) once the excited levels and the singlet have decayed.
+    #[pyo3(signature = (pump, duration = f64::INFINITY))]
+    fn polarisation(&self, pump: f64, duration: f64) -> PyResult<f64> {
+        self.inner.polarisation(pump, duration).raise()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("OpticalNv(field={:?} T)", self.inner.field)
+    }
+}
+
+/// The reduced model of Dréau et al. (2011): the ground qubit {0, 1} with
+/// optical polarisation `polarisation` (Γ_p), optically induced coherence
+/// decay `coherence` (Γ_c), spin-lattice rate `spin_lattice` (Γ₁),
+/// dephasing (Γ₂*) and photon rates `bright` (α) and `dark` (β); rates in
+/// 1/s, detunings and Rabi frequencies in rad/s.
+#[pyclass(name = "TwoLevelOdmr", module = "metatron_qso", frozen)]
+pub struct PyTwoLevelOdmr {
+    inner: TwoLevelOdmr,
+}
+
+#[pymethods]
+impl PyTwoLevelOdmr {
+    #[new]
+    fn new(
+        polarisation: f64,
+        coherence: f64,
+        spin_lattice: f64,
+        dephasing: f64,
+        bright: f64,
+        dark: f64,
+    ) -> PyResult<Self> {
+        let inner = TwoLevelOdmr {
+            polarisation,
+            coherence,
+            spin_lattice,
+            dephasing,
+            bright,
+            dark,
+        };
+        inner.validate().raise()?;
+        Ok(Self { inner })
+    }
+
+    /// The steady-state population of |1⟩ at detuning `ω₀ − ω_m` (rad/s).
+    fn population(&self, detuning: f64, rabi: f64) -> PyResult<f64> {
+        self.inner.population(detuning, rabi).raise()
+    }
+
+    /// The photon rate at a detuning.
+    fn rate(&self, detuning: f64, rabi: f64) -> PyResult<f64> {
+        self.inner.rate(detuning, rabi).raise()
+    }
+
+    /// The line over `span` (rad/s) with its contrast, width (Hz) and
+    /// sensitivity.
+    #[pyo3(signature = (span, rabi, points = 2001))]
+    fn line<'py>(
+        &self,
+        py: Python<'py>,
+        span: f64,
+        rabi: f64,
+        points: usize,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let m = self.inner;
+        cw_dict(py, py.detach(|| m.line(span, points, rabi)).raise()?)
+    }
+}
+
+/// `√(τ + overhead)/(2π γ_e τ C |L|)` (T/√Hz): Ramsey magnetometry of a
+/// static field with readout contrast `C`.
+#[pyfunction(name = "ramsey_sensitivity")]
+#[pyo3(signature = (tau, coherence, readout, overhead = 0.0))]
+fn py_ramsey_sensitivity(tau: f64, coherence: f64, readout: f64, overhead: f64) -> PyResult<f64> {
+    optics::ramsey_sensitivity(tau, coherence, readout, overhead).raise()
+}
+
+/// The Hahn echo of total duration `total` for an AC field in its best
+/// phase: π/2 times the Ramsey expression.
+#[pyfunction(name = "echo_sensitivity")]
+#[pyo3(signature = (total, coherence, readout, overhead = 0.0))]
+fn py_echo_sensitivity(total: f64, coherence: f64, readout: f64, overhead: f64) -> PyResult<f64> {
+    optics::echo_sensitivity(total, coherence, readout, overhead).raise()
+}
+
+/// The best sensitivity over times and coherences: `(time, T/√Hz)`.
+#[pyfunction(name = "best_sensitivity")]
+#[pyo3(signature = (times, coherences, readout, overhead = 0.0, echo = false))]
+fn py_best_sensitivity(
+    times: Vec<f64>,
+    coherences: Vec<f64>,
+    readout: f64,
+    overhead: f64,
+    echo: bool,
+) -> PyResult<(f64, f64)> {
+    optics::best_sensitivity(&times, &coherences, readout, overhead, echo).raise()
+}
+
+/// `[1 + 2(a + b)/(a − b)²]^{−1/2}` for mean photon numbers `a`, `b`.
+#[pyfunction(name = "readout_contrast")]
+fn py_readout_contrast(a: f64, b: f64) -> PyResult<f64> {
+    optics::readout_contrast(a, b).raise()
+}
+
+/// The NV axes of the four orientations in the cubic frame.
+#[pyfunction(name = "nv_orientations")]
+fn py_nv_orientations() -> [[f64; 3]; 4] {
+    optics::nv_orientations()
+}
+
+/// The two signed ESR lines of each orientation (Hz) for a field (T, cubic
+/// frame).
+#[pyfunction(name = "ensemble_lines")]
+#[pyo3(signature = (field, zero_field_splitting = NV_ZERO_FIELD_SPLITTING, gyromagnetic_ratio = NV_GYROMAGNETIC_RATIO))]
+fn py_ensemble_lines(
+    field: [f64; 3],
+    zero_field_splitting: f64,
+    gyromagnetic_ratio: f64,
+) -> PyResult<[[f64; 2]; 4]> {
+    optics::ensemble_lines(field, zero_field_splitting, gyromagnetic_ratio).raise()
+}
+
+/// The field vector (T, cubic frame, up to its sign) from the lines of the
+/// four orientations (in the order of `nv_orientations`, each pair in
+/// either order), with the root-mean-square misfit of the eight lines (Hz).
+#[pyfunction(name = "field_from_lines")]
+#[pyo3(signature = (lines, zero_field_splitting = NV_ZERO_FIELD_SPLITTING, gyromagnetic_ratio = NV_GYROMAGNETIC_RATIO))]
+fn py_field_from_lines(
+    lines: [[f64; 2]; 4],
+    zero_field_splitting: f64,
+    gyromagnetic_ratio: f64,
+) -> PyResult<([f64; 3], f64)> {
+    optics::field_from_lines(lines, zero_field_splitting, gyromagnetic_ratio).raise()
+}
+
+/// `(|B_∥|, B_⊥)` (T) from the two signed lines of one orientation.
+#[pyfunction(name = "axial_and_transverse")]
+#[pyo3(signature = (lines, zero_field_splitting = NV_ZERO_FIELD_SPLITTING, gyromagnetic_ratio = NV_GYROMAGNETIC_RATIO))]
+fn py_axial_and_transverse(
+    lines: [f64; 2],
+    zero_field_splitting: f64,
+    gyromagnetic_ratio: f64,
+) -> PyResult<(f64, f64)> {
+    optics::axial_and_transverse(lines, zero_field_splitting, gyromagnetic_ratio).raise()
+}
+
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyOpticalNv>()?;
+    m.add_class::<PyTwoLevelOdmr>()?;
+    m.add_function(wrap_pyfunction!(py_ramsey_sensitivity, m)?)?;
+    m.add_function(wrap_pyfunction!(py_echo_sensitivity, m)?)?;
+    m.add_function(wrap_pyfunction!(py_best_sensitivity, m)?)?;
+    m.add_function(wrap_pyfunction!(py_readout_contrast, m)?)?;
+    m.add_function(wrap_pyfunction!(py_nv_orientations, m)?)?;
+    m.add_function(wrap_pyfunction!(py_ensemble_lines, m)?)?;
+    m.add_function(wrap_pyfunction!(py_field_from_lines, m)?)?;
+    m.add_function(wrap_pyfunction!(py_axial_and_transverse, m)?)?;
+    m.add("NV_EXCITED_SPLITTING", NV_EXCITED_SPLITTING)?;
+    m.add_class::<PySpinBath>()?;
+    m.add_function(wrap_pyfunction!(py_point_dipole, m)?)?;
+    m.add_function(wrap_pyfunction!(py_diamond_sites, m)?)?;
+    m.add_function(wrap_pyfunction!(py_ensemble_signal, m)?)?;
+    m.add("NATURAL_C13_ABUNDANCE", NATURAL_C13_ABUNDANCE)?;
+    m.add("DIAMOND_LATTICE_CONSTANT", DIAMOND_LATTICE_CONSTANT)?;
+    m.add("MAX_BATH_SPINS", MAX_BATH_SPINS)?;
+    m.add("MAX_CLUSTER_ORDER", MAX_CLUSTER_ORDER)?;
+    m.add("MAX_EXACT_BATH", MAX_EXACT_BATH)?;
+    m.add("MAX_BATH_TRAJECTORIES", bath::MAX_BATH_TRAJECTORIES)?;
+    m.add_class::<PyGeneralisedBath>()?;
+    m.add_function(wrap_pyfunction!(py_generalised_ensemble_signal, m)?)?;
+    m.add_function(wrap_pyfunction!(py_point_dipole_tensor, m)?)?;
+    m.add("MAX_GENERALISED_ORDER", MAX_GENERALISED_ORDER)?;
+    m.add("MAX_GENERALISED_EXACT", MAX_GENERALISED_EXACT)?;
+    m.add("MAX_ENVELOPE_SEGMENTS", MAX_ENVELOPE_SEGMENTS)?;
+    m.add("MAX_BATH_STATES", MAX_BATH_STATES)?;
     m.add_class::<PyNvCenter>()?;
     m.add_class::<PyNvEvent>()?;
     m.add_class::<PyFieldNoise>()?;

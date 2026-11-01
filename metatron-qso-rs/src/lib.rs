@@ -70,6 +70,19 @@ pub mod spin;
 pub mod stabilizer;
 pub mod walks;
 
+/// A wall-clock limit of a test, scaled by the environment variable
+/// `QSO_TIME_SCALE` (at least 1; unset: 1). The coverage build sets it:
+/// instrumented and running every test at once, it is many times slower.
+#[cfg(test)]
+pub(crate) fn time_limit(seconds: f64) -> f64 {
+    let scale = std::env::var("QSO_TIME_SCALE")
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|s| s.is_finite() && *s >= 1.0)
+        .unwrap_or(1.0);
+    seconds * scale
+}
+
 pub use error::{QsoError, Result};
 pub use num_complex::Complex64 as C64;
 pub use rng::Rng;

@@ -61,6 +61,11 @@ impl DephasingWalk {
         })
     }
 
+    /// Number of nodes.
+    pub fn num_nodes(&self) -> usize {
+        self.n
+    }
+
     /// Set the per-step error tolerance (default 1e-11).
     pub fn with_tolerance(mut self, tol: f64) -> Self {
         self.tol = tol.max(1e-15);

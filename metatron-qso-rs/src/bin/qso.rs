@@ -499,10 +499,19 @@ enum Command {
         /// for the colour code, e.g. 0,1,2,3,4,5 (not with --circuit).
         #[arg(long, default_value = "greedy")]
         schedule: String,
-        /// Also bound the circuit distance: the fewest faults that flip a
-        /// logical observable undetected.
+        /// Also compute the circuit distance: the fewest faults that flip
+        /// a logical observable undetected (bounds when the time runs out).
         #[arg(long)]
         circuit_distance: bool,
+        /// Seconds for each circuit distance, after which the bounds
+        /// reached are reported.
+        #[arg(long, default_value_t = 60.0, requires = "circuit_distance")]
+        max_seconds: f64,
+        /// Search the circuit distance on the orbits of the circuit's
+        /// symmetries (such as the translations of a bicycle code), up to
+        /// 4096 detectors.
+        #[arg(long, requires = "circuit_distance")]
+        symmetry: bool,
     },
 }
 
@@ -1585,6 +1594,8 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             circuit: from_file,
             schedule,
             circuit_distance,
+            max_seconds,
+            symmetry,
         } => {
             let kind = match decoder {
                 DecoderArg::UnionFind => qec::DecoderChoice::UnionFind,
@@ -1629,14 +1640,16 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                     "schedules are for the colour and bicycle codes",
                 ));
             }
-            // Bounds on the circuit distance, as JSON and text.
+            // The circuit distance (or bounds on it), as JSON and text.
             let bound = |c: &qec::DetectorCircuit| -> Result<(serde_json::Value, String)> {
                 if !*circuit_distance {
                     return Ok((serde_json::Value::Null, String::new()));
                 }
-                let r = qec::circuit_distance(
+                let r = qec::exact_circuit_distance(
                     &qec::detector_error_model(c, false)?,
-                    &qec::DistanceOptions::default(),
+                    &qec::ExactDistanceOptions::default()
+                        .with_max_seconds(*max_seconds)
+                        .with_symmetry(*symmetry),
                 )?;
                 let text = match (r.distance(), r.upper_bound()) {
                     (Some(d), _) => format!("; circuit distance {d}"),
@@ -1689,6 +1702,10 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             }
             let mut rows = Vec::new();
             let mut lines = Vec::new();
+            // The circuit distance depends on which faults can happen, not
+            // on how likely they are: one per distance for all p > 0.
+            let mut distances: std::collections::HashMap<usize, (serde_json::Value, String)> =
+                std::collections::HashMap::new();
             for &prob in p {
                 for &d in distance {
                     let noise = qec::CircuitNoise::uniform(prob);
@@ -1731,7 +1748,16 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                         })?;
                     }
                     let rate = qec::logical_error_rate_using(&circuit, *shots, *seed, kind)?;
-                    let (distance_json, distance_text) = bound(&circuit)?;
+                    let (distance_json, distance_text) = match distances.get(&d) {
+                        Some(known) if prob > 0.0 => known.clone(),
+                        _ => {
+                            let computed = bound(&circuit)?;
+                            if prob > 0.0 {
+                                distances.insert(d, computed.clone());
+                            }
+                            computed
+                        }
+                    };
                     lines.push(format!(
                         "p = {prob}, {label}, {r} rounds: {} qubits, {} detectors; logical error rate {:.3e} ± {:.1e} ({} of {} shots, {}){distance_text}",
                         circuit.n_qubits(),

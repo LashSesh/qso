@@ -409,6 +409,18 @@ where
         let (vals, vecs) = tridiagonal_eigh(&basis.alphas, &basis.betas[..k]);
         let n_vec = basis.vectors.len().min(k);
         tau = tau.min(remaining);
+        if !basis.breakdown {
+            // The a posteriori estimate below holds only where the Krylov
+            // approximation converges, τ·(spread of the spectrum)/2 ≲ m
+            // (Hochbruck and Lubich 1997); beyond, it can be small by
+            // accident (equally spaced spectra, for example), so steps stay
+            // within half that range, measured by the Ritz values.
+            let spread = vals.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b))
+                - vals.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+            if spread > 0.0 {
+                tau = tau.min(k as f64 / spread);
+            }
+        }
         loop {
             // c = S · diag(e^{−iθτ}) · Sᵀ e₁
             let phases: Vec<C64> = vals
@@ -424,7 +436,11 @@ where
             } else {
                 beta0 * basis.betas[k - 1] * c[k - 1].norm()
             };
-            if err <= opts.tol * total_norm * tau / t.abs() || tau <= t.abs() * 1e-12 {
+            // An estimate at the level of rounding (the coefficients c carry
+            // it whatever the step) counts as converged, as in Expokit;
+            // otherwise a tight tolerance would shrink the steps forever.
+            let floor = 64.0 * f64::EPSILON * total_norm;
+            if err <= (opts.tol * total_norm * tau / t.abs()).max(floor) || tau <= t.abs() * 1e-12 {
                 let coeffs: Vec<C64> = c[..n_vec].iter().map(|z| z * beta0).collect();
                 w = combine(&basis.vectors[..n_vec], &coeffs);
                 remaining -= tau;

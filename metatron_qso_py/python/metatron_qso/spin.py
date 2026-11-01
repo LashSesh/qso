@@ -25,24 +25,66 @@ trajectories::
 
     nv = spin.NvCenter(0.04, nitrogen="14N", carbons=[(60e3, 30e3)])
     print(nv.signal(spin.cpmg(64, 0.54e-6)))
+
+``OpticalNv`` is the centre in its optical cycle (seven levels, any field
+direction): CW-ODMR, pulsed readout and sensitivities::
+
+    optical = spin.OpticalNv((0, 0, 0.005))
+    print(optical.cw_line(optical.lines()[0][0], 20e6, 1e6, 5e6)["sensitivity"])
+
+``SpinBath`` is the bath of hundreds of 13C around a centre, its coherence
+from the cluster-correlation expansion::
+
+    bath = spin.SpinBath.diamond(0.05, seed=1)
+    print(bath.signal([spin.hahn(t) for t in (100e-6, 300e-6)]))
+
+``GeneralisedBath`` keeps the electron in every cluster (the generalised
+expansion): fields of any direction, full hyperfine tensors, finite and
+shaped pulses::
+
+    bath = spin.GeneralisedBath.diamond((0.01, 0, 0.03), radius=2e-9, seed=1, min_radius=5e-10)
+    print(bath.signal([spin.hahn(100e-6)], rabi=20e6, bath_states=100))
 """
 
 from ._core import (
+    DIAMOND_LATTICE_CONSTANT,
+    MAX_BATH_SPINS,
+    MAX_BATH_STATES,
+    MAX_BATH_TRAJECTORIES,
+    MAX_CLUSTER_ORDER,
+    MAX_ENVELOPE_SEGMENTS,
+    MAX_EXACT_BATH,
+    MAX_GENERALISED_EXACT,
+    MAX_GENERALISED_ORDER,
     MAX_NV_DIMENSION,
+    NATURAL_C13_ABUNDANCE,
+    NV_EXCITED_SPLITTING,
     NV_GYROMAGNETIC_RATIO,
     NV_ZERO_FIELD_SPLITTING,
     Control,
     Exchange,
     FieldNoise,
+    GeneralisedBath,
     NvCenter,
     NvEvent,
+    OpticalNv,
     Profile,
+    SpinBath,
     SpinEvent,
     SpinSystem,
+    TwoLevelOdmr,
+    axial_and_transverse,
     axial_csa,
+    bath_ensemble_signal,
+    best_sensitivity,
     cpmg,
     decay_exponent,
+    diamond_sites,
+    echo_sensitivity,
+    ensemble_lines,
+    field_from_lines,
     filter_function,
+    generalised_ensemble_signal,
     gyromagnetic_ratio,
     hahn,
     inept,
@@ -50,8 +92,13 @@ from ._core import (
     inversion_recovery,
     m2s,
     nv_free,
+    nv_orientations,
     nv_pulse,
+    point_dipole_hyperfine,
+    point_dipole_tensor,
     ramsey,
+    ramsey_sensitivity,
+    readout_contrast,
     rf_pulse,
     s2m,
     spin_echo,
@@ -67,22 +114,45 @@ from ._core import spin_shaped as shaped
 from ._core import spin_sweep as sweep
 
 __all__ = [
+    "DIAMOND_LATTICE_CONSTANT",
+    "MAX_BATH_SPINS",
+    "MAX_BATH_STATES",
+    "MAX_BATH_TRAJECTORIES",
+    "MAX_CLUSTER_ORDER",
+    "MAX_ENVELOPE_SEGMENTS",
+    "MAX_EXACT_BATH",
+    "MAX_GENERALISED_EXACT",
+    "MAX_GENERALISED_ORDER",
     "MAX_NV_DIMENSION",
+    "NATURAL_C13_ABUNDANCE",
+    "NV_EXCITED_SPLITTING",
     "NV_GYROMAGNETIC_RATIO",
     "NV_ZERO_FIELD_SPLITTING",
     "Control",
     "Exchange",
     "FieldNoise",
+    "GeneralisedBath",
     "NvCenter",
     "NvEvent",
+    "OpticalNv",
     "Profile",
+    "SpinBath",
     "SpinEvent",
     "SpinSystem",
+    "TwoLevelOdmr",
+    "axial_and_transverse",
     "axial_csa",
+    "bath_ensemble_signal",
+    "best_sensitivity",
     "cpmg",
     "decay_exponent",
     "delay",
+    "diamond_sites",
+    "echo_sensitivity",
+    "ensemble_lines",
+    "field_from_lines",
     "filter_function",
+    "generalised_ensemble_signal",
     "gyromagnetic_ratio",
     "hahn",
     "inept",
@@ -90,9 +160,14 @@ __all__ = [
     "inversion_recovery",
     "m2s",
     "nv_free",
+    "nv_orientations",
     "nv_pulse",
+    "point_dipole_hyperfine",
+    "point_dipole_tensor",
     "pulse",
     "ramsey",
+    "ramsey_sensitivity",
+    "readout_contrast",
     "rf_pulse",
     "s2m",
     "set_field",

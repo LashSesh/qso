@@ -84,16 +84,17 @@ equilibrium is thermal; quadrupolar relaxation is not modelled.
 Cross-relaxation follows from Redfield theory (next section).
 
 The master equation conserves the coherence orders of `H`'s blocks. Each
-block of its superoperator, up to 2048 elements (six protons have blocks
-of 924), is exponentiated exactly, for the deviation of the state from
-`1/d`: thermal polarisations are parts in 10⁵ of `1/d`, and they keep
-their relative precision. A free induction decay needs only the
-coherences of order −1. Short intervals and shaped pulses, which mix the
-orders, use adaptive Dormand–Prince steps with a local error of 10⁻¹¹ of
-that deviation when they are cheaper. A propagation estimated at more
-than 1.5·10¹² operations, about a minute, is refused with an error. One
-second of five relaxing protons at 9.4 T takes 0.2 s, in either frame,
-and of six about ten seconds.
+block of its superoperator is propagated for the deviation of the state
+from `1/d`: thermal polarisations are parts in 10⁵ of `1/d`, and they keep
+their relative precision. A block up to 2048 elements (six protons have
+blocks of 924) can be exponentiated exactly; larger ones, and long
+intervals, go by Krylov steps (next sections). A free induction decay
+needs only the coherences of order −1. Short intervals and shaped pulses,
+which mix the orders, use adaptive Dormand–Prince steps with a local
+error of 10⁻¹¹ of that deviation when they are cheaper. A propagation
+estimated at more than 1.5·10¹² operations, about a minute, or 2 GiB is
+refused with an error before anything is built. One second of five
+relaxing protons at 9.4 T takes 0.17 s, of six 4 s.
 
 ## Relaxation from first principles
 
@@ -146,13 +147,12 @@ the same block exponentials.
   and second kind, which matters for ²H at low field), spin-rotation,
   antisymmetric shielding, intermolecular, solvent, oxygen and
   paramagnetic relaxation, and chemical exchange.
-- **Size.** The superoperator is built block by block of coherence order,
-  each block at most 2048 elements: up to six relaxing protons of one
-  isotope, or six spins in the laboratory frame; more is an error (`T₁`
-  and `T₂` alone fall back to Dormand–Prince steps). Its build is counted
-  in the work limit; one build takes about 0.04 s for five spins and
-  0.5 s for six. `evolve` reuses it while the field stays, so shaped
-  pulses cost little more, but every step of a sweep builds it anew.
+- **Size.** The superoperator's 30 terms are built once per field (for
+  seven protons in 0.02 s) and its blocks of coherence order column by
+  column where they are used (next section); there is no limit on the
+  size of a block, only on work and memory. `evolve` reuses the terms
+  while the field stays, so shaped pulses cost little more, but every
+  step of a sweep builds them anew.
 
 `relaxation_rates(ops)` returns the matrix `Γ_ij = −Re Tr(O_i† D(O_j)) /
 Tr(O_i† O_i)` of the relaxation `D` (without `H`): its diagonal holds the
@@ -160,6 +160,79 @@ auto-relaxation rates (`1/T₁` of `I_z`, `1/T₂` of `I₊` for an isolated
 spin), the rest the cross-relaxation; with cross-relaxation, recovery has
 several rates. `qso spins --rates` prints the auto-relaxation times
 `1/Γ_ii` of `I_z` and `I₊` of every spin.
+
+## Larger systems and equivalent spins
+
+From seven spins of one isotope the coherence-order blocks outgrow a dense
+exponential: seven protons have blocks of 3432 elements, eight of 12 870.
+Such blocks are kept as sparse matrices, `−i[H, ·]`, the Lindblad
+dissipators and `−R` built column by column, and propagated by their
+action on the state: Arnoldi's process on Krylov subspaces of dimension 30
+with the step-size control of Expokit (Sidje 1998), to 10⁻¹² of the
+deviation from `1/d` in the 2-norm. Every block takes the cheaper of a
+dense exponential and Krylov steps by estimated work, and the whole
+propagation the cheaper of the blocks and Dormand–Prince steps; blocks
+the state does not occupy are skipped.
+
+Krylov steps cost in proportion to the interval and to the spread of
+frequencies in a block, so lower fields and the rotating frame are
+cheaper. On four cores one second of seven relaxing protons at 9.4 T
+takes 28 s, of eight at 1 T 18 s, and 0.1 s of eight at 9.4 T 17 s; with
+dipolar relaxation 0.1 s of seven protons takes 12 s. Populations that
+do not move, such as thermal equilibrium, take a single step: their
+deviation, parts in 10⁵ of `1/d`, is only known to about 10⁻¹¹ (forming
+it from ρ leaves `ε·Tr(ρ)/d` on every population), and populations that
+move no faster than that rounding explains, or by less than 10⁻¹¹ of
+themselves over the interval, are taken as they are. Coherences and free
+induction decays keep the full tolerance. The laboratory frame with several isotopes keeps carbon and
+proton coherences, 2·10⁹ rad/s apart, in one block; there only short
+intervals are affordable.
+
+The Redfield superoperator is not formed block by dense block any more.
+Its 30 terms `𝒬 ⊗ Y(𝒬)` are kept as sparse operators on the basis
+states, and each column `R(|a⟩⟨b|)` is computed from them where a block is
+used, so memory grows with the entries of the blocks in use, not with
+their squares. Before anything is built the work and memory of every
+block and of the terms are estimated: eleven protons with dipolar
+relaxation are refused for the memory of the terms alone, and nine
+relaxing protons over 100 s at 9.4 T for work.
+
+Equivalent spins reduce the blocks further. Declare the permutations of
+the spins that leave the system unchanged: each spin onto one of its
+isotope with the same shift, relaxation times and couplings, and the
+dipolar couplings and shielding anisotropies onto each other up to a
+rotation of the molecule. A ¹³C methyl group with a threefold axis:
+
+```python
+import math
+import metatron_qso as q
+from metatron_qso import spin
+
+sys = q.SpinSystem(9.4)
+sys.add_spin("13C", 20.0)
+sys.set_position(0, (0.0, 0.0, 0.0))
+for k in range(3):
+    th = 2 * math.pi * k / 3
+    h = sys.add_spin("1H", 1.2)
+    sys.set_position(h, (1.03 * math.cos(th), 1.03 * math.sin(th), 0.36))
+    sys.couple(0, h, 125.0)
+sys = sys.with_correlation_time(3e-11)
+sys.set_symmetries([[0, 2, 3, 1]])      # H1 → H2 → H3 → H1
+```
+
+A state the permutations leave unchanged (thermal equilibrium, pulses on
+the isotope) then propagates on the orbits of the elements `|a⟩⟨b|`: one
+coefficient per orbit, the generator summed over the orbits of its
+columns at a representative row. This is exact, not an approximation.
+With three protons on the axis below the methyl group (seven spins) the
+8193 coefficients of a pulsed state shrink to 3073, as the threefold
+cycle predicts (8/3), and 0.1 s of it take 1.5 s instead of 4.3; a
+methylene group's swap shrinks its blocks less (8/5). States that break the
+symmetry (a pulse on one of the protons) and Hamiltonians that do (a
+shaped pulse on one spin) propagate in full. A declaration the system does
+not obey is an error, at `set_symmetries` or when the system is next
+used; a new spin stays where it is under the permutations, and JSON keeps
+them.
 
 ## Chemical exchange
 
@@ -292,14 +365,57 @@ pulse = s.control_events(c, r["controls"])           # for evolve
   refused. `control_transfer`, `control_events` and `evolve` take any
   amplitude.
 - **Relaxation.** If the system relaxes (`T₁`, `T₂`, Redfield theory),
-  the controls are optimised in Liouville space (up to six spins ½), with
-  the same relaxation as `evolve` (free precession's, during the pulses as
-  well), the state propagated as its deviation from the identity. The
-  field derivative of relaxation and of thermal populations, in field
-  profiles, is taken by Richardson-extrapolated central differences;
-  against the derivative of the Boltzmann rates written out it agrees to
-  10⁻¹⁴ from 1 K to room temperature and from millitesla to 20 T.
-  Everything else is exact.
+  the controls are optimised in Liouville space, with the same relaxation
+  as `evolve` (free precession's, during the pulses as well), the state
+  propagated as its deviation from the identity. Rf controls keep the
+  generator as sparse matrices (see below); field profiles keep it dense,
+  up to six spins ½. The field derivative of relaxation and of thermal
+  populations, in field profiles, is taken by Richardson-extrapolated
+  central differences; against the derivative of the Boltzmann rates
+  written out it agrees to 10⁻¹⁴ from 1 K to room temperature and from
+  millitesla to 20 T. Everything else is exact.
+- **Larger systems.** With rf and relaxation, the generator of the
+  master equation (with the drift towards equilibrium) and the rf
+  directions `−i[2πF_{x,y}, ·]` are sparse matrices, built once per
+  optimisation, shared by the members of an ensemble, and only applied to
+  vectors; seven and eight relaxing spins fit. Each step's gradient is
+  the integral of `⟨λ(τ), E x(τ)⟩` over the step, taken by a ten-point
+  Gauss–Legendre rule in every substep of `‖hL‖ ≤ 2`, with the state and
+  costate at the nodes from the Taylor terms of the substep's
+  exponentials: exact to the rounding of the deviation, also at room
+  temperature and millitesla fields (it equals the dense gradient to
+  4·10⁻¹⁵, and SciPy at 1 mT to 2·10⁻¹⁵), at a fifth of the cost of the
+  augmented exponentials. On four cores ten steps over 1 ms with rf of up
+  to 2.5 kHz and Redfield relaxation take 0.13 s for a methyl group with
+  a proton below it (five spins, on 385 orbits), 0.7 s with two, 3.5 s
+  with three (6145 orbits) and 31 s with four (eight spins, 24 577 orbits,
+  7·10⁶ entries); without the symmetry 0.44 s, 1.8 s, 10.5 s and 126 s.
+  Declared symmetries (`set_symmetries`) apply when the Hamiltonian, the
+  channels (whole isotopes) and the initial state respect them (thermal
+  equilibrium does); the target need not. The controls are then optimised
+  on the orbits of the elements, a third of them for a methyl group.
+  `control_cost` estimates one evaluation before anything is built:
+
+```python
+import metatron_qso as q
+from metatron_qso import spin
+
+sys = q.SpinSystem(9.4)                   # a ¹³C methyl group with T₁, T₂
+sys.add_spin("13C", 20.0, t1=2.0)
+for _ in range(3):
+    sys.add_spin("1H", 1.2, t1=2.0, t2=0.8)
+for h in (1, 2, 3):
+    sys.couple(0, h, 125.0)
+for e in range(3):                         # three protons coupled to them
+    k = sys.add_spin("1H", 2.0 + 0.6 * e, t1=1.0, t2=0.5)
+    for h in (1, 2, 3):
+        sys.couple(h, k, 3.0 + e)
+sys.set_symmetries([[0, 2, 3, 1, 4, 5, 6]])
+c = spin.Control.rf(["1H", "13C"], 1e-3, 10, sys.thermal_state(),
+                    sys.spin_operator(0, "z"), limit=5000.0)
+cost = sys.control_cost(c, 5000.0)
+print(cost["method"], cost["coefficients"])  # sparse 6145 (of 16 385)
+```
 - **Replay.** `control_events` gives `spin.rf_pulse(...)` (rf on several
   channels at once) or a field and a delay per step; `evolve` reproduces
   the transfer.
@@ -312,13 +428,18 @@ pulse = s.control_events(c, r["controls"])           # for evolve
   field, not a random profile).
 - **Cost.** One evaluation costs about 1 ms for two spins and 100 steps
   and 26 ms for four spins and 200 steps without relaxation. With
-  relaxation it grows with the rf amplitude times the duration (the
-  Taylor series needs more terms): two spins and 100 steps of up to 2 kHz
-  take 50 ms, three spins 0.7 s, at 10 kHz four times as long. Work and memory
-  beyond the limits are refused before anything is allocated; an
-  evaluation the optimiser tries beyond them, possible with relaxation
-  and no `limit`, ends the run with an error. Ctrl-C reaches Python only
-  when an optimisation ends.
+  relaxation it grows with the rf amplitude times the duration (more
+  substeps) and with the entries of the generator (times for five to eight
+  spins above). `control_cost` returns the method, the coefficients per
+  member, the operations and the bytes of one evaluation. Problems
+  beyond the limits (1.5·10¹² operations, 2 GiB) are refused before the
+  generator is built, judged at the peak amplitude; each evaluation is
+  checked again with its own controls, and one whose series run longer
+  than estimated stops at the limit. `control_transfer` builds the sparse
+  generator at every call (0.5 s for seven spins, 4 s for eight),
+  `optimize_control` once. An evaluation the optimiser tries beyond the
+  limits, possible with relaxation and no `limit`, ends the run with an
+  error. Ctrl-C reaches Python only when an optimisation ends.
 - **The bound.** `spin.unitary_bound(ρ, C)` is the largest `Tr(C UρU†)`
   over all unitaries (Glaser et al., Science 280, 421 (1998)), the sum of
   the products of the ordered eigenvalues: no pulse sequence exceeds it.
@@ -504,6 +625,281 @@ for events in (spin.ramsey(1e-6), spin.hahn(1e-6), spin.cpmg(8, 0.125e-6)):
   one core) are refused before they start; `lines` and `decay_exponent`
   cost little at any size (0.03 s for dimension 768).
 
+### The optical cycle and sensitivity
+
+What a magnetometer measures is fluorescence. `spin.OpticalNv(field)` is
+the seven-level model of Tetienne et al. (New J. Phys. 14, 103033
+(2012)) in a field of any direction (T, frame of the centre): the ground
+and excited triplets (`D` = 2.87 and 1.42 GHz) and one metastable
+singlet. Its default rates are the means of their four centres: `k_r` =
+65.9, `k₄₇` = 7.9, `k₅₇` = 53.3, `k₇₁` = 1.0, `k₇₂` = 0.7 μs⁻¹.
+
+- **The model.** Excitation at `pump` (1/s) and radiative decay conserve
+  `m_s` along the axis. The excited `±1` cross to the singlet seven times
+  faster than `0`, and the singlet returns preferentially to `0`.
+- **A Lindblad equation.** The model is solved as a Lindblad equation on
+  the seven levels. The jumps act in the zero-field basis, together with
+  the Hamiltonians of both triplets, so that:
+  - where the levels are split by more than the rates, it is Tetienne's
+    rate model between eigenstates, `k_ij = Σ |⟨i|p⟩|² |⟨j|q⟩|² k⁰_pq`;
+  - it stays continuous at zero field and at the excited-state
+    anticrossing near 51 mT.
+
+  It includes a microwave of `frequency` and `rabi` in the ground state
+  (rotating-wave approximation, frequencies signed as in `lines`; not
+  valid within the Rabi frequency of the ground-state anticrossing at
+  102.4 mT), dephasing `Γ₂*` through `S_z` and spin-lattice relaxation
+  `Γ₁`. `evolve` propagates a state, and `steady_state` gives the
+  stationary one. The signal is `collection · k_r` times the excited
+  population (1 % detected by default).
+- **Polarisation.** `polarisation(pump)` is the ground population of `0`
+  the laser leaves. With these rates it is 0.749 for a weak laser, the
+  closed form of the rate equations, and falls to 0.48 at three times
+  `k_r` as more population waits in the excited and singlet levels.
+- **CW-ODMR.** `cw_odmr` gives the photon rate at each frequency.
+  `cw_line(centre, span, rabi, pump)` gives the line's contrast, full
+  width, steepest slope and the shot-noise sensitivity
+  `√R/(|∂ν/∂B| max|∂I/∂ν|)`, with `R` the off-resonance rate as in Dréau
+  et al. (Phys. Rev. B 84, 195204 (2011)) and `∂ν/∂B` the line's shift
+  with a field along the axis (`shift`: `γ_e` along the axis, less for a
+  tilted field). The width is NaN when the span does not hold both
+  half-depth points.
+- **Pulsed readout.** `pulsed_readout(pump, duration)` starts from the
+  state the laser leaves, as it is (`bright`) and after an ideal π pulse
+  (`dark`). It returns the fluorescence of both, the counting window that
+  best tells them apart and the readout contrast `C = [1 + 2(N₀ +
+  N₁)/(N₀ − N₁)²]^{−1/2}` of Taylor et al. (Nature Phys. 4, 810
+  (2008)).
+- **Ramsey and echo.** `ramsey_sensitivity`, `echo_sensitivity` and
+  `best_sensitivity` combine `C` with a coherence, for example the Hahn
+  echo of a `SpinBath`. For an AC field of the echo's period in its best
+  phase, the echo is `π/2` times the Ramsey expression `√(τ + t_o)/(2π
+  γ_e τ C |L|)`.
+- **Ensembles.** `spin.ensemble_lines(field)` gives the eight lines of
+  the four orientations for a field in the cubic frame.
+  `spin.field_from_lines(lines)` gives the field back, up to its sign,
+  with the misfit of the eight lines. The pairs come in the order of
+  `nv_orientations`, each in either order. A field along a cube axis
+  gives the same lines for all four orientations, so it cannot be told
+  from the other cube axes. `axial_and_transverse` inverts one
+  orientation exactly: the levels are the roots of
+  `λ³ − 2Dλ² + (D² − γ²B²)λ + Dγ²B_⊥² = 0`.
+- **`TwoLevelOdmr`** is Dréau's reduced model, with its closed forms.
+
+```python
+from metatron_qso import spin
+
+nv = spin.OpticalNv((0, 0, 0.005))
+f, _ = nv.lines()[0]                                      # m_s = −1 line
+line = nv.cw_line(f, 10e6, 0.2e6, 0.02 * 65.9e6)
+print(round(line["contrast"], 3), round(line["sensitivity"] * 1e6, 2))
+# 0.143 1.9: 1.9 μT/√Hz at 9.5 kcounts/s, as Dréau et al. (about 2)
+readout = nv.pulsed_readout(65.9e6, 2e-6, 2000)
+print(round(readout["window"] * 1e9), round(readout["readout_contrast"], 4))
+# 446 0.0279: a 30 % brighter m_s = 0 over the first few hundred ns
+
+field = (0.004, -0.002, 0.003)
+back, misfit = spin.field_from_lines(spin.ensemble_lines(field))
+assert max(abs(a - b) for a, b in zip(back, field)) < 1e-11 and misfit < 1e-3
+```
+
+The best CW sensitivity comes at a weak laser and a weak microwave. With
+1 % collection, 1.9 μT/√Hz at 0.02 `k_r` and 0.2 MHz, 3.2 μT/√Hz at 0.1
+`k_r`, and much worse near saturation, where the width grows faster than
+the photon rate. Dréau et al. find about 2 μT/√Hz. Pulsed readout from the
+laser-polarised state is about 30 % brighter for `m_s = 0` at its peak;
+the best window is 920 ns at 0.2 `k_r` and 446 ns at `k_r`, with `C` ≈
+0.028.
+
+A field across the axis mixes the states, and the fluorescence and the
+contrast fall: at 5 mT along the axis the contrast is 0.17 without a
+transverse field, 0.068 with 10 mT across it and 0.0025 with 30 mT. That
+is the contrast Tetienne et al. image with.
+
+A single centre in natural diamond at 50 mT combines the Hahn echo of its
+¹³C bath with this readout, 1 μs of initialisation and the 446 ns window.
+Its best AC sensitivity is 17 nT/√Hz, at a total echo time of 0.49 ms.
+
+### The nuclear-spin bath
+
+In natural diamond an NV centre loses its coherence to the ¹³C around it
+(1.07 % of the carbon), hundreds of nuclei that `NvCenter` cannot hold.
+`spin.SpinBath` takes them all:
+
+- **Baths.** `SpinBath.diamond(field, abundance, radius, seed)` places
+  ¹³C at random on the diamond lattice within `radius` of the vacancy, in
+  the frame of the centre (z from the vacancy to the nitrogen, both left
+  out). Each gets the hyperfine coupling of a point dipole at the vacancy,
+  `A_zj = (μ₀/4π) γ_e γ_C h (3 n_z n_j − δ_zj)/r³` (19.9 kHz on the axis
+  at 1 nm). That is wrong for the nuclei nearest the vacancy, where the
+  contact term dominates: give your own `(position, hyperfine)` pairs to
+  `SpinBath(field, spins)` for those, or leave them out (`min_radius`,
+  `without_spins_within`). Each site's draw depends only on the seed, so
+  baths of one seed nest in the radius.
+- **The coherence.** With ideal pulses the electron is in `m` or `0` at
+  every moment, and the bath evolves under `H_a = Σ_i [a·A_z·I_i − γ_C B
+  I_z^i] + Σ d_ij [I_i·I_j − 3(I_i·n)(I_j·n)]`. A sequence — a pulse,
+  free periods and π pulses, a pulse — splits the electron's coherence
+  into two branches that swap levels at every π pulse. The population is
+  then `S = |w_m|² + |w_0|² + 2 Re(w_m w̄_0 L)`, which for the standard
+  sequences is `(1 + Re L)/2`. Here `L = Tr(U_m ρ U_0†)` is the overlap
+  of the bath's evolutions along the two branches, from the unpolarised
+  state.
+- **The expansion.** `coherence`, `signal`, `order`, `cutoff`: `L` is a
+  product over clusters of spins connected by pairs closer than `cutoff`
+  (default 0.8 nm), each propagated exactly and divided by the
+  contributions of its subclusters (Yang and Liu, Phys. Rev. B 78, 085315
+  (2008)), up to clusters of `order` spins. Only the couplings of pairs
+  within the cutoff are kept, so the expansion is exact once `order`
+  reaches the largest connected cluster, and `exact_coherence` propagates
+  a bath of up to 10 spins whole.
+- **Noise and ensembles.** `signal_with_noise` adds the classical field
+  noise of `FieldNoise`. Gaussian noise multiplies `L` by `e^{−χ}`
+  exactly; telegraph noise is averaged over sampled paths.
+  `spin.bath_ensemble_signal` averages over random baths, with the
+  standard error over them.
+
+```python
+from metatron_qso import spin
+
+bath = spin.SpinBath.diamond(0.05, radius=3e-9, seed=1)    # 50 mT, 233 ¹³C
+larmor = 1 / (10.7084e6 * 0.05)                            # ¹³C period (s)
+taus = [k * larmor for k in (54, 161, 268)]                # 2τ ≈ 0.2, 0.6, 1.0 ms
+print(bath.signal([spin.hahn(t) for t in taus]).round(3))
+# [0.993 0.805 0.622]: on multiples of the Larmor period the distant
+# nuclei's modulation vanishes and the decay by flip-flops remains
+```
+
+At a few mT the Hahn echo collapses between multiples of the ¹³C Larmor
+period and revives at them (Childress et al., Science 314, 281 (2006)):
+averaged over ten baths at 5 mT it is 0.49–0.51 at half periods and
+0.999, 0.993, 0.982 and 0.969 at the first four periods. At 50 mT it
+decays by pair flip-flops. The decay time is `2τ` where `L` falls below
+`1/e`. Over 30 baths its median is 0.89 ms, with quartiles 0.71 and
+1.00 ms. Baths nest in the radius (each site's draw depends only on the
+seed), so the same baths grow with it, and the median converges: 0.902,
+0.892, 0.890 and 0.890 ms for 3, 4, 5 and 6 nm, and 0.889 ms with a
+cutoff of 1.2 nm instead of 0.8. Zhao, Ho and Liu (Phys. Rev. B 85,
+115303 (2012)) give about 0.7 ms in this regime, at the lower quartile.
+T₂ scales as the inverse of the abundance: `T₂·p` at 0.3 % and 3 % is
+0.91 and 0.95 of its value at 1.07 %. A natural bath within 4 nm has 511
+¹³C and 1422 clusters at second order. Thirty baths take 2 s, and the
+third order (0.91 ms) 11 s.
+
+The expansion can diverge. A cluster whose subclusters have almost lost
+their coherence divides by nearly zero: a bonded pair at high abundance,
+large cutoffs, high orders, free decays. Results that are not finite, or
+with `|L| > 1`, are refused with an error; a lower order or a smaller
+cutoff usually helps. At 10 % ¹³C the third order diverged in one bath
+of twelve, the second in none.
+
+### The electron in every cluster
+
+`SpinBath` holds the electron in one level along each branch, which needs
+a field along the axis, ideal pulses and the secular coupling.
+`spin.GeneralisedBath` propagates the electron with every cluster
+instead, the generalised expansion of Onizhuk et al. (PRX Quantum 2,
+010311 (2021)):
+
+- **The model.** The Hamiltonian of the laboratory frame: `D S_z² + γ_e
+  B·S` for the electron in a field `(B_x, B_y, B_z)` of any direction,
+  the full hyperfine tensors `S·A·I` (`spin.point_dipole_tensor` gives a
+  point dipole's; give your own for the nuclei next to the vacancy), the
+  nuclear Zeeman terms and the dipolar couplings of the pairs within the
+  cutoff. The qubit `{α, β}` is formed by the electron's eigenstates
+  closest to `m_s = 0` and `m_s = transition`. A field across the axis
+  mixes `m_s = ±1`; where `β` keeps less than 0.75 of `|m⟩` there is no
+  such level, and the field is refused. `GeneralisedBath.diamond` and
+  `GeneralisedBath.from_bath` take the baths of `SpinBath`, the same
+  nuclei for the same seed.
+- **Pulses.** By default ideal, in the frame rotating at the qubit's
+  transition (or at `frequency`). With `rabi` they are rectangular with
+  that Rabi frequency and drive both transitions from `α` in the
+  rotating-wave approximation; with an `envelope` of `(amplitude, phase)`
+  segments they are shaped, a pulse of angle `θ` lasting until the area
+  of its envelope is `θ`. A pulse of phase `φ` is a carrier
+  `cos(2πft + φ)` along x at the frame's `t = 0`, scaled to turn the
+  qubit at `rabi` in any field. The rotating-wave approximation needs
+  `rabi` (at the envelope's peak) below a tenth of the frame's frequency,
+  which is refused otherwise: near the crossing at 0.1024 T the frame
+  turns at 240 kHz. Free periods count between pulse centres.
+  `pulses="laboratory"` applies ideal pulses about axes fixed in the
+  laboratory frame, as PyCCE does. The last pulse reads out ideally.
+- **The expansion.** Each cluster gives the electron's density matrix
+  before the last pulse. It is expanded element by element in the basis
+  the inner pulses carry the qubit to, where the electron alone keeps the
+  state its first pulse made: elements that are not small there are
+  divided by those of the electron alone and of the subclusters, and
+  multiply into the result; small ones (the third level's, the qubit's
+  after a first pulse of 180°) add up as differences. The result is exact
+  when `order` reaches the number of nuclei and the cutoff joins them;
+  the electron couples separate groups of nuclei, so unlike `SpinBath`
+  a bath of separate groups is not exact at the size of its largest
+  group. Inner π pulses converge quickly; other inner pulses mix the
+  branches' populations and coherences, and the expansion converges more
+  slowly. `coherence` is the qubit's coherence relative to the electron
+  alone (the `L` of `SpinBath` for ideal pulses and a field along the
+  axis; NaN after a first pulse of 0° or 180°), `signal` the population
+  of `α` after the last pulse, and `exact` propagates the electron with a
+  whole bath of up to eight nuclei.
+- **Bath states.** A product over clusters represents only what
+  factorises over them. Phases from independent nuclei do, so ideal
+  pulses converge quickly. A finite pulse, however, depends on the
+  electron's detuning by all nuclei together: with unpolarised nuclei the
+  expansion moves away from the exact result as the order grows. With
+  `bath_states=N` the expansion runs in `N` product states of the nuclei,
+  each nucleus up or down along the field (seeded by `seed`), every
+  cluster in the static field of the nuclei outside it, and the results
+  are averaged, as PyCCE's bath sampling with its mean field does.
+  `estimate` returns the means with their standard errors. Use it for
+  finite pulses beyond the first order.
+- **Dressed levels.** The non-secular coupling mixes the electron's
+  levels with the nuclei, to first order in `A/Δ` (`Δ` the electron's
+  transitions, GHz): populations and coherences oscillate at the
+  electron's frequencies with amplitudes of order `A/Δ`, and the other
+  nuclei dephase these oscillations. A product over clusters cannot follow
+  that. For nuclei coupled by a MHz or more, closer than about 0.3 nm, the
+  expansion stalls or diverges. With `dressed=True` each cluster's
+  Hamiltonian is taken block-diagonal between `α` and the other levels,
+  by the direct rotation closest to the identity, computed exactly: the
+  electron is prepared, pulsed and read out in its levels dressed by the
+  nuclei, the fast oscillations are gone, and the mixing still acts on
+  the nuclei to all orders. Where nuclei mix `α` with another level
+  strongly (near the crossing at 0.1024 T for `m_s = −1`, with a
+  strongly coupled nucleus) the dressed levels do not exist and are
+  refused; with weak couplings near the crossing they differ from the
+  bare ones by the mixing, a few per cent.
+
+```python
+import math
+
+from metatron_qso import spin
+
+seqs = [spin.hahn(t / 2) for t in (0.2e-3, 0.6e-3, 1.0e-3)]   # 2τ = 0.2, 0.6, 1 ms
+for degrees in (0, 5, 45):                                     # 20 mT, tilted
+    a = math.radians(degrees)
+    field = (0.02 * math.sin(a), 0.0, 0.02 * math.cos(a))
+    bath = spin.GeneralisedBath.diamond(field, radius=4e-9, seed=1, min_radius=5e-10)
+    print(degrees, abs(bath.coherence(seqs)).round(3))
+# 0 [0.674 0.562 0.216]
+# 5 [0.808 0.63  0.256]
+# 45 [0.806 0.335 0.448]
+
+cpmg = [spin.cpmg(32, 10e-6)]                  # 10 MHz pulses: sample bath states
+est = bath.estimate(cpmg, rabi=10e6, bath_states=100, seed=1)
+print(est["signal"].round(4), est["signal_error"].round(4), bath.signal(cpmg).round(4))
+# [0.5685] [0.0032] [0.5697]: within its error of ideal pulses
+```
+
+The tilt changes the echo through the nuclei's quantisation axes, which
+differ between the electron's levels when the field is off the axis.
+For the 509 nuclei of a natural bath at 50 mT along the axis, the second
+order takes 0.02 s and agrees with `SpinBath` to 5·10⁻⁴; the third order
+(0.11 s) moves it by at most 0.02 at 1 ms. With 10 MHz pulses and 100
+bath states the CPMG signal above is the ideal one within its standard
+error, while the expansion of unpolarised nuclei gives 0.558 (it does not
+converge for finite pulses).
+
 ## Validation
 
 - **Single spins and pairs, against closed forms.** The FID
@@ -554,6 +950,18 @@ for events in (spin.ramsey(1e-6), spin.hahn(1e-6), spin.cpmg(8, 0.125e-6)):
   ¹³CH₃ and an amide ¹⁵N–¹H (with shielding cross-correlation) agree to
   5·10⁻¹⁵ and the expectations after exact propagation to 3·10⁻⁹.
 
+- **Larger systems.** Krylov steps equal the dense exponentials up to six
+  spins to 6·10⁻¹³ of the deviation (six protons at 2 and 9.4 T with `T₁`
+  and `T₂`; a methyl group and a proton with Redfield relaxation; five
+  protons with dipolar relaxation in the laboratory frame; a shaped
+  pulse), and Dormand–Prince steps for seven protons to 4·10⁻¹², for
+  delays and free induction decays alike. The Redfield superoperator,
+  built column by column from its sparse terms, equals the dense formulas
+  (products of full-space operators) to 10⁻¹² on every block of both
+  frames. Propagation on the orbits of a symmetry equals the full one to
+  3·10⁻¹² (a methyl group with three protons on its axis) and 10⁻¹¹ (a
+  methylene group), and equilibrium of seven protons with `T₁`, `T₂` and
+  dipolar relaxation is unchanged after five seconds.
 - **Exchange.** The free induction decay of one proton exchanging
   between two sites follows the closed-form Bloch–McConnell equations to
   10⁻¹⁰ (equal and unequal populations, with and without `T₂`), and the

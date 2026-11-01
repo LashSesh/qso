@@ -75,8 +75,11 @@ def test_quasi_static_detuning_and_telegraph_noise():
     assert not device.is_markovian
     e = ramsey(device)
     assert abs(e.value - math.exp(-((sigma * t) ** 2) / 2)) < 4 * e.std_error
-    with pytest.raises(ValueError, match="trajectories"):
-        q.DensityMatrix.simulate(q.Circuit(1).h(0), device=device)
+    # Density matrices average the same noise exactly (1.44).
+    c = q.Circuit(1)
+    c.h(0).id(0).h(0)
+    exact = q.DensityMatrix.simulate(c, device=device).expectation(q.PauliSum("Z0"))
+    assert abs(exact - math.exp(-((sigma * t) ** 2) / 2)) < 1e-12
     nu, gamma = 1.0, 5.0
     telegraph = (
         q.DeviceModel("telegraph")

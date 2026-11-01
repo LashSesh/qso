@@ -111,7 +111,7 @@ pub fn detector_error_model(
     decompose: bool,
 ) -> Result<DetectorErrorModel> {
     let mut merged: BTreeMap<Signature, f64> = BTreeMap::new();
-    each_channel(circuit, |basis, probabilities| {
+    each_channel(circuit, |_, basis, probabilities| {
         if !decompose {
             for (k, &p) in probabilities.iter().enumerate().skip(1) {
                 let total = combination(basis, k);
@@ -355,7 +355,7 @@ impl CorrelatedErrorModel {
 /// same parts are merged.
 pub fn correlated_error_model(circuit: &DetectorCircuit) -> Result<CorrelatedErrorModel> {
     let mut merged: BTreeMap<Vec<Signature>, f64> = BTreeMap::new();
-    each_channel(circuit, |basis, probabilities| {
+    each_channel(circuit, |_, basis, probabilities| {
         for (mut parts, p) in decomposed(basis, probabilities)? {
             parts.sort();
             merge(&mut merged, parts, p);
@@ -372,14 +372,95 @@ pub fn correlated_error_model(circuit: &DetectorCircuit) -> Result<CorrelatedErr
     })
 }
 
-/// Calls `f(basis, probabilities)` for every noise channel of the circuit:
-/// the effects of its basis errors in Stim's order (for a depolarizing
-/// channel Z then X on each qubit, as for a Y error; a measurement flip or
-/// a single-qubit X or Z error is one basis error) and the probability of each combination
-/// of them (index: bit `i` for basis error `i`), as independent errors.
+/// A fault of a circuit: one independent error of a noise channel, or a
+/// flipped measurement.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct CircuitFault {
+    /// The noise or measurement operation (an index into
+    /// [`DetectorCircuit::operations`]).
+    pub operation: usize,
+    /// The Pauli error on each qubit it touches (`'X'`, `'Y'`, `'Z'`), or
+    /// `'M'` for a flipped measurement of that qubit.
+    pub paulis: Vec<(usize, char)>,
+    /// Its probability as an independent error.
+    pub probability: f64,
+}
+
+/// Where errors of the circuit's (undecomposed) detector error model come
+/// from: for every error given, the faults of the circuit whose effect is
+/// exactly its detectors and observables, in circuit order (several when
+/// faults are equivalent; none for an error the circuit cannot produce).
+/// With the witness of a circuit distance this gives the lightest logical
+/// error as circuit locations.
+pub fn explain_errors(
+    circuit: &DetectorCircuit,
+    errors: &[ErrorMechanism],
+) -> Result<Vec<Vec<CircuitFault>>> {
+    let mut wanted: BTreeMap<Signature, Vec<usize>> = BTreeMap::new();
+    for (i, e) in errors.iter().enumerate() {
+        wanted
+            .entry((e.detectors.clone(), e.observables))
+            .or_default()
+            .push(i);
+    }
+    let mut out = vec![Vec::new(); errors.len()];
+    each_channel(circuit, |channel, basis, probabilities| {
+        for (k, &p) in probabilities.iter().enumerate().skip(1) {
+            if p == 0.0 {
+                continue;
+            }
+            let Some(targets) = wanted.get(&combination(basis, k)) else {
+                continue;
+            };
+            // The Pauli on each qubit from its Z and X parts.
+            let mut paulis: Vec<(usize, char)> = Vec::new();
+            for (b, &(qubit, kind)) in channel.parts.iter().enumerate() {
+                if k >> b & 1 == 0 {
+                    continue;
+                }
+                let letter = match kind {
+                    Kind::X => 'X',
+                    Kind::Z => 'Z',
+                    Kind::Flip => 'M',
+                };
+                match paulis.iter_mut().find(|(q, _)| *q == qubit) {
+                    Some((_, c)) if (*c, letter) == ('Z', 'X') || (*c, letter) == ('X', 'Z') => {
+                        *c = 'Y'
+                    }
+                    _ => paulis.push((qubit, letter)),
+                }
+            }
+            let fault = CircuitFault {
+                operation: channel.op,
+                paulis,
+                probability: p,
+            };
+            for &t in targets {
+                out[t].push(fault.clone());
+            }
+        }
+        Ok(())
+    })?;
+    Ok(out)
+}
+
+/// Where a noise channel acts: its operation and, for each basis error,
+/// the qubit and kind.
+struct Channel {
+    op: usize,
+    parts: Vec<(usize, Kind)>,
+}
+
+/// Calls `f(channel, basis, probabilities)` for every noise channel of the
+/// circuit: the effects of its basis errors in Stim's order (for a
+/// depolarizing channel Z then X on each qubit, as for a Y error; a
+/// measurement flip or a single-qubit X or Z error is one basis error) and
+/// the probability of each combination of them (index: bit `i` for basis
+/// error `i`), as independent errors.
 fn each_channel(
     circuit: &DetectorCircuit,
-    mut f: impl FnMut(&[Signature], &[f64]) -> Result<()>,
+    mut f: impl FnMut(&Channel, &[Signature], &[f64]) -> Result<()>,
 ) -> Result<()> {
     super::frame::check_deterministic(circuit)?;
     // Elementary components.
@@ -435,18 +516,24 @@ fn each_channel(
                         kind: Kind::Z,
                     })
                 };
+                let at = |parts: Vec<(usize, Kind)>| Channel { op: i, parts };
+                let zx = |q: usize| vec![(q, Kind::Z), (q, Kind::X)];
                 match *noise {
-                    Noise::XError(p) => qubits.iter().try_for_each(|&q| f(&[x(q)], &[0.0, p]))?,
-                    Noise::ZError(p) => qubits.iter().try_for_each(|&q| f(&[z(q)], &[0.0, p]))?,
+                    Noise::XError(p) => qubits
+                        .iter()
+                        .try_for_each(|&q| f(&at(vec![(q, Kind::X)]), &[x(q)], &[0.0, p]))?,
+                    Noise::ZError(p) => qubits
+                        .iter()
+                        .try_for_each(|&q| f(&at(vec![(q, Kind::Z)]), &[z(q)], &[0.0, p]))?,
                     // As one error over the basis Z, X (so that it splits
                     // into its X and Z parts like a depolarizing channel's).
                     Noise::YError(p) => qubits
                         .iter()
-                        .try_for_each(|&q| f(&[z(q), x(q)], &[0.0, 0.0, 0.0, p]))?,
+                        .try_for_each(|&q| f(&at(zx(q)), &[z(q), x(q)], &[0.0, 0.0, 0.0, p]))?,
                     Noise::Depolarize1(p) => {
                         let r = independent(p, 1);
                         for &q in qubits {
-                            f(&[z(q), x(q)], &[0.0, r, r, r])?;
+                            f(&at(zx(q)), &[z(q), x(q)], &[0.0, r, r, r])?;
                         }
                     }
                     Noise::Depolarize2(p) => {
@@ -454,7 +541,10 @@ fn each_channel(
                         let mut probabilities = [r; 16];
                         probabilities[0] = 0.0;
                         for pair in qubits.chunks(2) {
+                            let mut parts = zx(pair[0]);
+                            parts.extend(zx(pair[1]));
                             f(
+                                &at(parts),
                                 &[z(pair[0]), x(pair[0]), z(pair[1]), x(pair[1])],
                                 &probabilities,
                             )?;
@@ -462,8 +552,12 @@ fn each_channel(
                     }
                 }
             }
-            QecOp::Measure { flip, .. } if *flip > 0.0 => {
+            QecOp::Measure { flip, qubit } if *flip > 0.0 => {
                 f(
+                    &Channel {
+                        op: i,
+                        parts: vec![(*qubit, Kind::Flip)],
+                    },
                     &[sig(Component {
                         op: i,
                         qubit: 0,

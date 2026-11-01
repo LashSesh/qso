@@ -17,6 +17,8 @@
 //! strongly regular graphs). It is intended for graphs with up to a few
 //! hundred nodes.
 
+use std::time::Instant;
+
 use serde::{Deserialize, Serialize};
 
 use super::Graph;
@@ -149,16 +151,27 @@ fn refine(g: &Graph, colours: &mut [u32]) {
 }
 
 /// Refined colouring of the paired copies with `left[i] ↔ right[i]`
-/// individualised. Returns `None` if the colour classes are incompatible.
-fn paired_colouring(g: &Graph, left: &[usize], right: &[usize]) -> Option<Vec<u32>> {
+/// individualised, starting from the nodes' `initial` colours (all equal
+/// when empty). Returns `None` if the colour classes are incompatible.
+fn paired_colouring(
+    g: &Graph,
+    initial: &[u32],
+    left: &[usize],
+    right: &[usize],
+) -> Option<Vec<u32>> {
     let n = g.num_nodes();
+    let first = initial.iter().max().map_or(1, |&c| c + 1);
     let mut colours = vec![0u32; 2 * n];
+    if !initial.is_empty() {
+        colours[..n].copy_from_slice(initial);
+        colours[n..].copy_from_slice(initial);
+    }
     for (i, (&l, &r)) in left.iter().zip(right).enumerate() {
-        if colours[l] != 0 || colours[n + r] != 0 {
+        if colours[l] >= first || colours[n + r] >= first || initial.get(l) != initial.get(r) {
             return None;
         }
-        colours[l] = i as u32 + 1;
-        colours[n + r] = i as u32 + 1;
+        colours[l] = first + i as u32;
+        colours[n + r] = first + i as u32;
     }
     refine(g, &mut colours);
     let max = *colours.iter().max().unwrap_or(&0) as usize;
@@ -171,10 +184,20 @@ fn paired_colouring(g: &Graph, left: &[usize], right: &[usize]) -> Option<Vec<u3
     (cl == cr).then_some(colours)
 }
 
-/// Search for an automorphism mapping `left[i] ↦ right[i]` for all `i`.
-fn find_mapping(g: &Graph, left: &mut Vec<usize>, right: &mut Vec<usize>) -> Option<Vec<usize>> {
+/// Search for an automorphism mapping `left[i] ↦ right[i]` for all `i`
+/// and keeping the `initial` colours (`None` also once past `deadline`).
+fn find_mapping(
+    g: &Graph,
+    initial: &[u32],
+    left: &mut Vec<usize>,
+    right: &mut Vec<usize>,
+    deadline: Option<Instant>,
+) -> Option<Vec<usize>> {
+    if deadline.is_some_and(|d| Instant::now() >= d) {
+        return None;
+    }
     let n = g.num_nodes();
-    let colours = paired_colouring(g, left, right)?;
+    let colours = paired_colouring(g, initial, left, right)?;
     let max = *colours.iter().max().unwrap_or(&0) as usize;
     let mut size = vec![0usize; max + 1];
     for &c in &colours[..n] {
@@ -200,7 +223,7 @@ fn find_mapping(g: &Graph, left: &mut Vec<usize>, right: &mut Vec<usize>) -> Opt
             for w in candidates {
                 left.push(u);
                 right.push(w);
-                let found = find_mapping(g, left, right);
+                let found = find_mapping(g, initial, left, right, deadline);
                 left.pop();
                 right.pop();
                 if found.is_some() {
@@ -224,12 +247,63 @@ fn find_mapping(g: &Graph, left: &mut Vec<usize>, right: &mut Vec<usize>) -> Opt
 /// assert_eq!(metatron::fruit_of_life().automorphism_group().order(), Some(12));
 /// ```
 pub fn automorphism_group(g: &Graph) -> AutomorphismGroup {
+    group_fixing(g, &[], Vec::new(), None).expect("no deadline")
+}
+
+/// The automorphisms of `g` that keep the nodes' `colours`, or `None` if
+/// `deadline` passes first.
+pub(crate) fn coloured_group(
+    g: &Graph,
+    colours: &[u32],
+    deadline: Option<Instant>,
+) -> Option<AutomorphismGroup> {
+    debug_assert_eq!(colours.len(), g.num_nodes());
+    group_fixing(g, colours, Vec::new(), deadline)
+}
+
+/// The pointwise stabiliser of the nodes `fixed` in the automorphism group
+/// of `g`: the automorphisms that map each of them to itself. Its base
+/// starts with `fixed` (basic orbits of size one).
+///
+/// ```
+/// use metatron_qso::graph::{automorphism::stabilizer, generators};
+///
+/// // A node of the Petersen graph is fixed by 120/10 = 12 automorphisms.
+/// let g = generators::petersen();
+/// assert_eq!(stabilizer(&g, &[0]).unwrap().order(), Some(12));
+/// ```
+pub fn stabilizer(g: &Graph, fixed: &[usize]) -> crate::error::Result<AutomorphismGroup> {
     let n = g.num_nodes();
+    if let Some(&u) = fixed.iter().find(|&&u| u >= n) {
+        return Err(crate::error::QsoError::NodeOutOfRange {
+            node: u,
+            n_nodes: n,
+        });
+    }
     let mut base: Vec<usize> = Vec::new();
-    let mut orbit_sizes = Vec::new();
+    for &u in fixed {
+        if !base.contains(&u) {
+            base.push(u);
+        }
+    }
+    Ok(group_fixing(g, &[], base, None).expect("no deadline"))
+}
+
+/// The automorphisms keeping the `initial` colours (none: all equal) and
+/// fixing every node of `base`, along a stabiliser chain that starts with
+/// it; `None` once past `deadline`.
+fn group_fixing(
+    g: &Graph,
+    initial: &[u32],
+    mut base: Vec<usize>,
+    deadline: Option<Instant>,
+) -> Option<AutomorphismGroup> {
+    let n = g.num_nodes();
+    let mut orbit_sizes = vec![1; base.len()];
     let mut generators = Vec::new();
     loop {
-        let colours = paired_colouring(g, &base, &base).expect("identity pairing is compatible");
+        let colours =
+            paired_colouring(g, initial, &base, &base).expect("identity pairing is compatible");
         let max = *colours.iter().max().unwrap_or(&0) as usize;
         let mut size = vec![0usize; max + 1];
         for &c in &colours[..n] {
@@ -254,7 +328,7 @@ pub fn automorphism_group(g: &Graph) -> AutomorphismGroup {
             let mut right = base.clone();
             left.push(b);
             right.push(w);
-            if let Some(sigma) = find_mapping(g, &mut left, &mut right) {
+            if let Some(sigma) = find_mapping(g, initial, &mut left, &mut right, deadline) {
                 level_generators.push(sigma);
                 // Close the orbit of b under the generators of this level
                 // (all of them fix the current base, so they lie in G_i).
@@ -272,16 +346,19 @@ pub fn automorphism_group(g: &Graph) -> AutomorphismGroup {
                 }
             }
         }
+        if deadline.is_some_and(|d| Instant::now() >= d) {
+            return None;
+        }
         orbit_sizes.push(in_orbit.iter().filter(|&&x| x).count());
         base.push(b);
         generators.extend(level_generators);
     }
-    AutomorphismGroup {
+    Some(AutomorphismGroup {
         n,
         base,
         orbit_sizes,
         generators,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -382,6 +459,31 @@ mod tests {
             Graph::from_weighted_edges(4, &[(0, 1, 2.0), (1, 2, 1.0), (2, 3, 1.0), (3, 0, 1.0)])
                 .unwrap();
         assert_eq!(g.automorphism_group().order(), Some(2));
+    }
+
+    #[test]
+    fn colours_and_deadlines() {
+        // The 4-cycle has 8 automorphisms; 4 keep alternate colours, 2 a
+        // single marked node.
+        let c4 = cycle(4);
+        assert_eq!(coloured_group(&c4, &[0; 4], None).unwrap().order(), Some(8));
+        assert_eq!(
+            coloured_group(&c4, &[0, 1, 0, 1], None).unwrap().order(),
+            Some(4)
+        );
+        assert_eq!(
+            coloured_group(&c4, &[0, 0, 0, 1], None).unwrap().order(),
+            Some(2)
+        );
+        // K₃,₃: 72 automorphisms, 36 of them keep the sides.
+        let k33 = complete_bipartite(3, 3);
+        assert_eq!(k33.automorphism_group().order(), Some(72));
+        let sides = coloured_group(&k33, &[0, 0, 0, 1, 1, 1], None).unwrap();
+        assert_eq!(sides.order(), Some(36));
+        assert!(sides.generators().iter().all(|p| (0..3).all(|u| p[u] < 3)));
+        // A deadline that has passed.
+        let late = std::time::Instant::now();
+        assert!(coloured_group(&petersen(), &[0; 10], Some(late)).is_none());
     }
 
     #[test]

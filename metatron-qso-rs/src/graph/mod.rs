@@ -606,6 +606,12 @@ impl Graph {
         automorphism_group(self)
     }
 
+    /// The automorphisms that fix each node of `fixed` (see
+    /// [`automorphism::stabilizer`]).
+    pub fn stabilizer(&self, fixed: &[usize]) -> Result<AutomorphismGroup> {
+        automorphism::stabilizer(self, fixed)
+    }
+
     /// Summary statistics.
     pub fn summary(&self) -> GraphSummary {
         let degrees = self.degrees();

@@ -456,22 +456,22 @@ fn control_input_is_checked() {
     ];
     assert!(sys.control_transfer(&huge, &u).is_err());
     // Problems too large for memory are refused before anything is
-    // allocated: seven relaxing spins in Liouville space, and a million
-    // steps of eight spins without relaxation.
+    // allocated: a field profile of seven relaxing spins (whose generator is
+    // dense), and a million steps of eight spins without relaxation.
     let mut seven = SpinSystem::new(9.4);
     for k in 0..7 {
         seven.add_spin(Isotope::H1, k as f64).unwrap();
         seven.set_relaxation(k, Some(1.0), None).unwrap();
     }
-    let big = Control::rf(
-        vec![Target::Isotope(Isotope::H1)],
-        Some(1000.0),
+    let big = Control::field(
+        9.0,
+        9.4,
         1e-3,
         4,
         seven.iz(0).unwrap(),
         seven.iz(1).unwrap(),
     );
-    let err = seven.control_transfer(&big, &[0.0; 8]).unwrap_err();
+    let err = seven.control_transfer(&big, &[9.2; 4]).unwrap_err();
     assert!(err.to_string().contains("Liouville"), "{err}");
     let mut eight = SpinSystem::new(9.4);
     for k in 0..8 {

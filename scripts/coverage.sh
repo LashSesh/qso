@@ -32,6 +32,11 @@ export CARGO_TARGET_DIR=$root/target/llvm-cov-target
 source <(cargo llvm-cov show-env --export-prefix --branch)
 cargo llvm-cov clean --workspace
 
+# Instrumented and run all at once, the tests are many times slower (the
+# lib tests once took over two hours, against minutes): their wall-clock
+# limits are scaled (`time_limit` in the crate).
+export QSO_TIME_SCALE=50
+
 # A failing test does not discard the report; the script fails at the end.
 status=0
 cargo test --release -p metatron-qso-rs --all-features --no-fail-fast || status=$?

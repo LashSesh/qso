@@ -19,13 +19,22 @@
 //!   bounds meet, the distance is exact.
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
 use super::bposd::{BpOsdDecoder, BpOsdOptions, MAX_BPOSD_DETECTORS};
 use super::dem::{DetectorErrorModel, ErrorMechanism};
 use crate::error::{QsoError, Result};
+use crate::parallel::{map_tasks, threads};
 use crate::rng::Rng;
+
+mod symmetry;
+mod zimmermann;
+pub use symmetry::MAX_SYMMETRY_DETECTORS;
+use symmetry::{Checker, orbit_order};
+use zimmermann::{Enumeration, Zimmermann};
 
 /// Most BP+OSD searches per observable.
 pub const MAX_BPOSD_TRIALS: usize = 1 << 16;
@@ -37,8 +46,10 @@ pub struct DistanceOptions {
     /// The exhaustive search stops after proving that no logical error of
     /// this weight exists.
     pub max_weight: usize,
-    /// Most sets of errors the exhaustive search visits (about 10⁷ a
-    /// second).
+    /// Most sets of errors the exhaustive search visits, as the search
+    /// over first errors in index order counts them (some 10⁷ a second
+    /// per thread). The threads search ahead of that order, which costs
+    /// time but changes neither the bounds nor the witness.
     pub max_work: u64,
     /// BP+OSD searches per observable (at most [`MAX_BPOSD_TRIALS`]):
     /// first each observable alone with equal priors, then random sets of
@@ -281,6 +292,60 @@ fn shortest_cycle(n: usize, errors: &[Error]) -> Option<Vec<usize>> {
     best
 }
 
+/// Keep `set` when it is lighter than the best so far.
+fn consider(set: Vec<usize>, best: &mut Option<Vec<usize>>) {
+    if best.as_ref().is_none_or(|b| set.len() < b.len()) {
+        *best = Some(set);
+    }
+}
+
+/// The lightest undetectable logical error among `cycle` (the graph-like
+/// one) and those found by `trials` BP+OSD searches per observable (fewer
+/// if the deadline passes).
+fn upper_bound(
+    n: usize,
+    errors: &[Error],
+    cycle: Option<Vec<usize>>,
+    trials: usize,
+    seed: u64,
+    deadline: Option<Instant>,
+) -> Result<Option<Vec<usize>>> {
+    let mut best = cycle;
+    let bits = errors.iter().fold(0u64, |b, e| b | e.observables);
+    let singles: Vec<u64> = (0..64)
+        .filter(|&b| bits >> b & 1 == 1)
+        .map(|b| 1u64 << b)
+        .collect();
+    let mut rng = Rng::seed_from_u64(seed);
+    if trials > MAX_BPOSD_TRIALS {
+        return Err(QsoError::invalid(
+            "bposd_trials",
+            format!("at most {MAX_BPOSD_TRIALS} BP+OSD searches per observable"),
+        ));
+    }
+    for trial in 0..trials * singles.len() {
+        if deadline.is_some_and(|d| Instant::now() >= d) {
+            break;
+        }
+        // First every observable alone with equal priors, then random sets
+        // of observables (a light logical error often flips several) with
+        // perturbed priors.
+        let (target, perturbed) = match singles.get(trial) {
+            Some(&single) => (single, false),
+            None => loop {
+                let t = rng.next_u64() & bits;
+                if t != 0 {
+                    break (t, true);
+                }
+            },
+        };
+        if let Some(set) = bposd_logical(n, errors, target, perturbed, &mut rng)? {
+            consider(set, &mut best);
+        }
+    }
+    Ok(best)
+}
+
 /// Bounds on the circuit distance of a detector error model: the fewest
 /// errors that flip some observable and no detector. Exact for graph-like
 /// models; otherwise see the [module documentation](self) and
@@ -305,61 +370,35 @@ pub fn circuit_distance(
             None => CircuitDistance::none(),
         });
     }
-    let mut best = cycle;
-    let consider = |set: Vec<usize>, best: &mut Option<Vec<usize>>| {
-        if best.as_ref().is_none_or(|b| set.len() < b.len()) {
-            *best = Some(set);
-        }
-    };
-    let bits = errors.iter().fold(0u64, |b, e| b | e.observables);
-    let singles: Vec<u64> = (0..64)
-        .filter(|&b| bits >> b & 1 == 1)
-        .map(|b| 1u64 << b)
-        .collect();
-    let mut rng = Rng::seed_from_u64(options.seed);
-    if options.bposd_trials > MAX_BPOSD_TRIALS {
-        return Err(QsoError::invalid(
-            "bposd_trials",
-            format!("at most {MAX_BPOSD_TRIALS} BP+OSD searches per observable"),
-        ));
-    }
-    let trials = options.bposd_trials * singles.len();
-    for trial in 0..trials {
-        // First every observable alone with equal priors, then random sets
-        // of observables (a light logical error often flips several) with
-        // perturbed priors.
-        let (target, perturbed) = match singles.get(trial) {
-            Some(&single) => (single, false),
-            None => loop {
-                let t = rng.next_u64() & bits;
-                if t != 0 {
-                    break (t, true);
-                }
-            },
-        };
-        if let Some(set) = bposd_logical(n, &errors, target, perturbed, &mut rng)? {
-            consider(set, &mut best);
-        }
-    }
+    let mut best = upper_bound(n, &errors, cycle, options.bposd_trials, options.seed, None)?;
     // Exhaustive search below the best found.
-    let mut search = Search::new(n, &errors, options.max_work);
+    let search = Search::new(n, &errors);
     let ceiling = best
         .as_ref()
         .map_or(options.max_weight, |b| options.max_weight.min(b.len() - 1));
-    let mut lower = 2;
+    let (mut lower, mut used, mut exhausted) = (2, 0u64, false);
     for w in 2..=ceiling {
-        match search.run(w) {
+        let (outcome, spent) = search.run(w, options.max_work - used, None);
+        used += spent;
+        match outcome {
             Outcome::Found(set) => {
                 consider(set, &mut best);
                 lower = w;
                 break;
             }
-            Outcome::NotFound => lower = w + 1,
+            Outcome::NotFound { exhausted: e } => {
+                lower = w + 1;
+                exhausted = e;
+                if e {
+                    break;
+                }
+            }
             Outcome::OutOfWork => break,
         }
     }
-    // Nothing found: decide by linear algebra whether anything exists.
-    let proven_none = best.is_none() && logical_exists(n, &errors) == Some(false);
+    // Nothing found: the search ran out of errors to add, or linear
+    // algebra decides whether anything exists.
+    let proven_none = best.is_none() && (exhausted || logical_exists(n, &errors) == Some(false));
     Ok(match best {
         Some(set) => {
             let (w, obs) = witness(&errors, &set);
@@ -376,6 +415,445 @@ pub fn circuit_distance(
             observables: 0,
         },
     })
+}
+
+/// How [`exact_circuit_distance`] raises its lower bound.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum DistanceMethod {
+    /// Each step by whichever of the two below is estimated to cost less.
+    #[default]
+    Auto,
+    /// The search over sets of errors that clear the lowest fired detector
+    /// (as in [`circuit_distance`]): quick for sparse models, where every
+    /// error flips few detectors and every detector few errors.
+    Search,
+    /// The Brouwer–Zimmermann enumeration: quick when the undetectable
+    /// errors form a code of small dimension, such as classical codes.
+    BrouwerZimmermann,
+}
+
+/// Options of [`exact_circuit_distance`].
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct ExactDistanceOptions {
+    /// Seconds after which the bounds reached so far are returned
+    /// (infinite: none).
+    pub max_seconds: f64,
+    /// How the lower bound rises (see [`DistanceMethod`]).
+    pub method: DistanceMethod,
+    /// BP+OSD searches per observable for a first upper bound, as in
+    /// [`DistanceOptions`] (fewer if `max_seconds` passes first).
+    pub bposd_trials: usize,
+    /// Seed of the BP+OSD searches.
+    pub seed: u64,
+    /// Start the exhaustive search only from one error of each orbit of
+    /// the model's symmetries, those [`error_model_symmetries`] finds (with
+    /// those declared to [`exact_circuit_distance_with_symmetries`]).
+    /// Models with more than [`MAX_SYMMETRY_DETECTORS`] detectors are
+    /// searched without the symmetries found.
+    pub symmetry: bool,
+}
+
+impl Default for ExactDistanceOptions {
+    /// A minute, [`DistanceMethod::Auto`], 4 BP+OSD searches per
+    /// observable, no symmetry.
+    fn default() -> Self {
+        ExactDistanceOptions {
+            max_seconds: 60.0,
+            method: DistanceMethod::Auto,
+            bposd_trials: 4,
+            seed: 0,
+            symmetry: false,
+        }
+    }
+}
+
+impl ExactDistanceOptions {
+    pub fn with_max_seconds(mut self, seconds: f64) -> Self {
+        self.max_seconds = seconds;
+        self
+    }
+
+    pub fn with_method(mut self, method: DistanceMethod) -> Self {
+        self.method = method;
+        self
+    }
+
+    pub fn with_bposd_trials(mut self, trials: usize) -> Self {
+        self.bposd_trials = trials;
+        self
+    }
+
+    pub fn with_seed(mut self, seed: u64) -> Self {
+        self.seed = seed;
+        self
+    }
+
+    pub fn with_symmetry(mut self, symmetry: bool) -> Self {
+        self.symmetry = symmetry;
+        self
+    }
+}
+
+/// Nanoseconds per set the search visits, and per word operation of the
+/// Brouwer–Zimmermann enumeration (measured on one core), for choosing
+/// between them.
+const SEARCH_NANOS: f64 = 40.0;
+const ENUMERATION_NANOS: f64 = 0.5;
+
+/// The circuit distance of a detector error model, exactly when the time
+/// allows: the fewest errors that flip some observable and no detector,
+/// with the lightest such set as its witness.
+///
+/// Graph-like models are solved by shortest paths. Otherwise an upper
+/// bound comes from the graph-like errors and BP+OSD searches, and the
+/// lower bound rises step by step, by the exhaustive search of
+/// [`circuit_distance`] (no logical error of the current bound's weight)
+/// or by levels of the Brouwer–Zimmermann enumeration, whichever
+/// [`ExactDistanceOptions::method`] picks (by default each step the one
+/// estimated to cost less), until the bounds meet. After
+/// [`ExactDistanceOptions::max_seconds`] the bounds reached so far are
+/// returned; [`CircuitDistance::distance`] tells whether they met.
+///
+/// With [`ExactDistanceOptions::symmetry`] the search starts only from
+/// one error of each orbit of the model's symmetries (see
+/// [`error_model_symmetries`]), which divides its work by a factor that
+/// grows with the order of their group (41 to 43 for the 72 translations
+/// of [[144, 12, 12]] with the depth-8 cycle).
+pub fn exact_circuit_distance(
+    dem: &DetectorErrorModel,
+    options: &ExactDistanceOptions,
+) -> Result<CircuitDistance> {
+    exact_circuit_distance_with_symmetries(dem, options, &[])
+}
+
+/// Symmetries of a detector error model: permutations of its detectors
+/// (detector `d ↦ p[d]`) that map the detectors of every error onto those
+/// of an error, and logical errors onto logical errors. QSO's automorphism
+/// search finds generators of the symmetries of the graph joining each
+/// error to its detectors; those that pass the second condition (the
+/// observables, read through the permutation, are sums of detectors and
+/// observables over GF(2)) are returned. They generate a group of
+/// symmetries of the model, though not always all of them: a symmetry
+/// that is a product of generators that fail is lost with them (it can be
+/// declared to [`exact_circuit_distance_with_symmetries`]). The
+/// exhaustive search of [`exact_circuit_distance`] starts from one error
+/// of each orbit of the group with [`ExactDistanceOptions::symmetry`].
+///
+/// Empty when two errors flip the same detectors and different
+/// observables: the distance is then at most 2 and needs no symmetry.
+/// Otherwise errors for more than [`MAX_SYMMETRY_DETECTORS`] detectors.
+///
+/// ```
+/// use metatron_qso::qec::{
+///     CircuitNoise, CssCode, CssSchedule, ExactDistanceOptions, MemoryBasis,
+///     css_code_memory_with, detector_error_model, error_model_symmetries,
+///     exact_circuit_distance,
+/// };
+///
+/// // The depth-8 cycle of [[72, 12, 6]] keeps the code's translations.
+/// let (code, _) = CssCode::bivariate_bicycle_code(72).unwrap();
+/// let noise = CircuitNoise::uniform(0.001);
+/// let c = css_code_memory_with(&code, 2, &noise, MemoryBasis::Z, CssSchedule::Bicycle).unwrap();
+/// let dem = detector_error_model(&c, false).unwrap();
+/// let generators = error_model_symmetries(&dem).unwrap();
+/// assert!(!generators.is_empty());
+/// let options = ExactDistanceOptions::default().with_symmetry(true);
+/// assert_eq!(exact_circuit_distance(&dem, &options).unwrap().distance(), Some(6));
+/// ```
+pub fn error_model_symmetries(dem: &DetectorErrorModel) -> Result<Vec<Vec<usize>>> {
+    let errors = errors(dem)?;
+    let n = dem.n_detectors;
+    let mut checker = Checker::new(n, &errors);
+    if checker.twins() {
+        return Ok(Vec::new());
+    }
+    symmetry_limit(n)?;
+    let found = checker.find(None).expect("no deadline");
+    Ok(found.into_iter().map(|(sigma, _)| sigma).collect())
+}
+
+fn symmetry_limit(n: usize) -> Result<()> {
+    if n > MAX_SYMMETRY_DETECTORS {
+        return Err(QsoError::invalid(
+            "symmetry",
+            format!("symmetries are checked for up to {MAX_SYMMETRY_DETECTORS} detectors, not {n}"),
+        ));
+    }
+    Ok(())
+}
+
+/// [`exact_circuit_distance`] with declared symmetries: permutations of the
+/// detectors (detector `d ↦ p[d]`), each checked as in
+/// [`error_model_symmetries`] and refused if it fails; the search starts
+/// from one error of each orbit of the group they generate (with those
+/// found, under [`ExactDistanceOptions::symmetry`]). When two errors flip
+/// the same detectors and different observables, only the detectors are
+/// checked: the distance is then at most 2 and the search uses no
+/// symmetry. Otherwise declared symmetries are refused for more than
+/// [`MAX_SYMMETRY_DETECTORS`] detectors.
+pub fn exact_circuit_distance_with_symmetries(
+    dem: &DetectorErrorModel,
+    options: &ExactDistanceOptions,
+    symmetries: &[Vec<usize>],
+) -> Result<CircuitDistance> {
+    if options.max_seconds.is_nan() || options.max_seconds < 0.0 {
+        return Err(QsoError::invalid(
+            "max_seconds",
+            format!("{} is not a time limit", options.max_seconds),
+        ));
+    }
+    // No clock without a limit (wasm32-unknown-unknown has none).
+    let deadline = (options.max_seconds.is_finite())
+        .then(|| Instant::now() + Duration::from_secs_f64(options.max_seconds.min(1e9)));
+    let errors = errors(dem)?;
+    let n = dem.n_detectors;
+    // Symmetries only when asked for; declared ones are checked before
+    // anything else.
+    let mut checker =
+        (options.symmetry || !symmetries.is_empty()).then(|| Checker::new(n, &errors));
+    let mut permutations: Vec<Vec<u32>> = Vec::new();
+    if let Some(checker) = checker.as_mut() {
+        if !symmetries.is_empty() && !checker.twins() {
+            symmetry_limit(n)?;
+        }
+        for (i, sigma) in symmetries.iter().enumerate() {
+            match checker.check(sigma) {
+                Ok(pi) => permutations.extend(pi),
+                Err(why) => {
+                    return Err(QsoError::invalid(
+                        "symmetries",
+                        format!("permutation {i} {why}"),
+                    ));
+                }
+            }
+        }
+    }
+    if let Some(k) = undetectable(&errors) {
+        let (w, obs) = witness(&errors, &[k]);
+        return Ok(CircuitDistance::exact(w, obs));
+    }
+    let cycle = shortest_cycle(n, &errors);
+    if errors.iter().all(|e| e.detectors.len() <= 2) {
+        return Ok(match cycle {
+            Some(set) => {
+                let (w, obs) = witness(&errors, &set);
+                CircuitDistance::exact(w, obs)
+            }
+            None => CircuitDistance::none(),
+        });
+    }
+    let mut best = upper_bound(
+        n,
+        &errors,
+        cycle,
+        options.bposd_trials,
+        options.seed,
+        deadline,
+    )?;
+    // Nothing flips an observable, or linear algebra rules out a logical
+    // error (up to `MAX_EXISTENCE_DETECTORS` detectors).
+    if best.is_none()
+        && (errors.iter().all(|e| e.observables == 0) || logical_exists(n, &errors) == Some(false))
+    {
+        return Ok(CircuitDistance::none());
+    }
+    // The symmetries found, unless two errors flip the same detectors and
+    // different observables (the search at weight 2 then finds a logical
+    // error at once) or the detectors are too many to check them.
+    if options.symmetry
+        && n <= MAX_SYMMETRY_DETECTORS
+        && let Some(checker) = checker.as_mut()
+        && !checker.twins()
+    {
+        match checker.find(deadline) {
+            Some(found) => permutations.extend(found.into_iter().map(|(_, pi)| pi)),
+            None => {
+                return Ok(match best {
+                    Some(set) => {
+                        let (w, obs) = witness(&errors, &set);
+                        CircuitDistance {
+                            lower_bound: 2.min(w.len()),
+                            witness: Some(w),
+                            observables: obs,
+                        }
+                    }
+                    None => CircuitDistance {
+                        lower_bound: 2,
+                        witness: None,
+                        observables: 0,
+                    },
+                });
+            }
+        }
+    }
+    let budget = Budget::new(u64::MAX, deadline);
+    // With twins no permutation was kept.
+    let search = if permutations.is_empty() {
+        Search::new(n, &errors)
+    } else {
+        let (order, starts) = orbit_order(errors.len(), &permutations);
+        Search::on_orbits(n, &errors, order, starts)
+    };
+    // The weights of the search's last two steps and the sets each
+    // visited, for the cost of its next step.
+    let mut history: Vec<(usize, u64)> = Vec::new();
+    let branching = {
+        let entries: usize = errors.iter().map(|e| e.detectors.len()).sum();
+        (entries as f64 / n.max(1) as f64).max(2.0)
+    };
+    let mut enumeration: Option<Enumeration> = None;
+    let mut levels = 0;
+    // A single error is detectable or harmless (checked above).
+    let mut lower = 2;
+    loop {
+        let upper = best.as_ref().map_or(usize::MAX, Vec::len);
+        if lower > errors.len() {
+            // Every logical error is a set of distinct errors, and none is
+            // lighter than `lower`: none exists.
+            lower = usize::MAX;
+        }
+        if lower >= upper || budget.stopped() {
+            break;
+        }
+        // The search's next step, at weight `lower`, extrapolated from its
+        // last by the growth per weight (the enumeration may have raised
+        // `lower` by several since).
+        let search_cost = match history.as_slice() {
+            [] => 0.0,
+            [(w, x)] => *x as f64 * branching.powi((lower - w) as i32),
+            [.., (w0, x0), (w1, x1)] => {
+                let growth = (*x1 as f64 / (*x0).max(1) as f64)
+                    .powf(1.0 / (w1 - w0) as f64)
+                    .max(1.0);
+                *x1 as f64 * growth.powi((lower - w1) as i32)
+            }
+        } * SEARCH_NANOS;
+        // The enumeration's levels until its bound passes `lower`.
+        let enumeration_cost = |z: &Zimmermann| -> f64 {
+            let mut cost = 0.0;
+            let mut w = levels + 1;
+            loop {
+                if w > z.dimension() {
+                    return f64::INFINITY;
+                }
+                cost += z.cost(w) * ENUMERATION_NANOS;
+                if z.bound(w) > lower {
+                    return cost;
+                }
+                w += 1;
+            }
+        };
+        let use_enumeration = match options.method {
+            DistanceMethod::Search => false,
+            DistanceMethod::BrouwerZimmermann => true,
+            DistanceMethod::Auto => {
+                if enumeration.is_none() && search_cost > 0.0 {
+                    // Build the matrices only if, at their best (disjoint
+                    // information sets of full rank), the levels could
+                    // cost less than the search.
+                    let cols = errors.len();
+                    let k = cols.saturating_sub(n).max(1);
+                    let optimistic = optimistic_enumeration(cols, k, lower);
+                    if optimistic * ENUMERATION_NANOS < search_cost {
+                        enumeration = Some(Zimmermann::build(n, &errors, &budget));
+                    }
+                }
+                match &enumeration {
+                    Some(Enumeration::Ready(z)) => enumeration_cost(z) < search_cost,
+                    Some(Enumeration::NoLogicalError) => true,
+                    _ => false,
+                }
+            }
+        };
+        if use_enumeration {
+            let built = enumeration.get_or_insert_with(|| Zimmermann::build(n, &errors, &budget));
+            let z = match built {
+                Enumeration::Ready(z) => &*z,
+                Enumeration::NoLogicalError => {
+                    lower = usize::MAX;
+                    break;
+                }
+                Enumeration::Stopped => break,
+                Enumeration::TooLarge => {
+                    return Err(QsoError::invalid(
+                        "method",
+                        "the detectors or the undetectable errors are too many for the \
+                         Brouwer–Zimmermann enumeration",
+                    ));
+                }
+            };
+            let w = levels + 1;
+            if w > z.dimension() {
+                break;
+            }
+            let level = z.level(w, upper, &budget);
+            if let Some(set) = level.found {
+                consider(set, &mut best);
+            }
+            if !level.complete {
+                break;
+            }
+            levels = w;
+            lower = lower.max(z.bound(w));
+        } else {
+            let weight = lower;
+            let (outcome, spent) = search.run(weight, u64::MAX, deadline);
+            match outcome {
+                Outcome::Found(set) => {
+                    // Nothing lighter exists: this is the distance.
+                    consider(set, &mut best);
+                    break;
+                }
+                // The search ran out of errors to add: nothing exists.
+                Outcome::NotFound { exhausted: true } => lower = usize::MAX,
+                Outcome::NotFound { exhausted: false } => lower += 1,
+                Outcome::OutOfWork => break,
+            }
+            history.push((weight, spent));
+            if history.len() > 2 {
+                history.remove(0);
+            }
+        }
+    }
+    Ok(match best {
+        Some(set) => {
+            let (w, obs) = witness(&errors, &set);
+            CircuitDistance {
+                lower_bound: lower.min(w.len()),
+                witness: Some(w),
+                observables: obs,
+            }
+        }
+        None => CircuitDistance {
+            lower_bound: lower,
+            witness: None,
+            observables: 0,
+        },
+    })
+}
+
+/// Word operations of the enumeration's levels until its bound passes
+/// `lower`, if the code of dimension `k` on `cols` columns had disjoint
+/// information sets of full rank (a lower bound on the real cost).
+fn optimistic_enumeration(cols: usize, k: usize, lower: usize) -> f64 {
+    let full = cols / k;
+    let rest = cols % k;
+    let words = cols.div_ceil(64) as f64 + 4.0;
+    let mut cost = 0.0;
+    for w in 1..=k {
+        let sets = full + usize::from(w + 1 > k - rest);
+        let combos = (0..w).fold(1.0, |acc, i| acc * (k - i) as f64 / (i + 1) as f64);
+        cost += sets as f64 * combos * words;
+        let bound = full * (w + 1) + (w + 1).saturating_sub(k - rest);
+        if bound > lower {
+            return cost;
+        }
+    }
+    f64::INFINITY
 }
 
 /// Most detectors for which [`circuit_distance`] decides by linear algebra
@@ -477,11 +955,63 @@ fn is_logical(n: usize, errors: &[Error], set: &[usize]) -> bool {
 
 enum Outcome {
     Found(Vec<usize>),
-    NotFound,
+    /// No logical error of the weight searched; `exhausted` when the
+    /// weight cut no branch, so that none exists at any weight.
+    NotFound {
+        exhausted: bool,
+    },
     OutOfWork,
 }
 
-/// Exhaustive search for undetectable logical errors of a given weight.
+/// What the search met from one first error.
+enum Tally {
+    /// No logical error: the sets visited, and whether the weight cut a
+    /// branch.
+    Done { work: u64, cut: bool },
+    /// A logical error, at this many sets.
+    Found { at: u64, set: Vec<usize> },
+}
+
+/// Limits shared by the threads of a search: units of work (sets
+/// visited, or sums enumerated) and a deadline.
+pub(super) struct Budget {
+    work: AtomicU64,
+    max_work: u64,
+    deadline: Option<Instant>,
+    stopped: AtomicBool,
+}
+
+impl Budget {
+    pub(super) fn new(max_work: u64, deadline: Option<Instant>) -> Self {
+        Budget {
+            work: AtomicU64::new(0),
+            max_work,
+            deadline,
+            stopped: AtomicBool::new(false),
+        }
+    }
+
+    /// Count `n` more units: false once over the work or past the
+    /// deadline, and from then on.
+    pub(super) fn spend(&self, n: u64) -> bool {
+        if self.stopped.load(Ordering::Relaxed) {
+            return false;
+        }
+        let used = self.work.fetch_add(n, Ordering::Relaxed).saturating_add(n);
+        if used > self.max_work || self.deadline.is_some_and(|d| Instant::now() >= d) {
+            self.stopped.store(true, Ordering::Relaxed);
+            return false;
+        }
+        true
+    }
+
+    pub(super) fn stopped(&self) -> bool {
+        self.stopped.load(Ordering::Relaxed) || self.deadline.is_some_and(|d| Instant::now() >= d)
+    }
+}
+
+/// Exhaustive search for undetectable logical errors of at most a given
+/// weight.
 ///
 /// Every such set of the least weight has a first (lowest-index) error;
 /// starting from each error in turn, the search adds errors of higher
@@ -489,101 +1019,369 @@ enum Outcome {
 /// until no detector fires. A set whose prefix already fires no detector
 /// and flips no observable is never the lightest (dropping the prefix
 /// leaves a lighter logical error), so the search stops there.
-struct Search<'a> {
-    errors: &'a [Error],
-    by_detector: Vec<Vec<usize>>,
-    by_effect: HashMap<&'a [usize], Vec<usize>>,
+///
+/// The first errors are shared out between threads, which search ahead of
+/// index order. The answer is that of the search over first errors in
+/// index order: the set found from the lowest first error, with the sets
+/// counted up to it, so neither the answer nor the count depends on the
+/// threads, the work limit included (the deadline aside).
+///
+/// With symmetries, the errors are searched in an order that puts each
+/// orbit in a block of consecutive positions, and only the first error of
+/// each block starts the search: of the images of a lightest logical
+/// error, the one whose first error comes earliest has the first error of
+/// an orbit as its first (a symmetry moving that error earlier would move
+/// the image's first error earlier too), and the search from there meets
+/// it. Each first error's search is then shared out by the second error it
+/// adds, as the first errors are without symmetries.
+struct Search {
+    detectors: Vec<Vec<u32>>,
+    observables: Vec<u64>,
+    by_detector: Vec<Vec<u32>>,
+    by_effect: HashMap<Vec<u32>, Vec<u32>>,
     widest: usize,
-    chosen: Vec<usize>,
-    work: u64,
-    max_work: u64,
+    /// The error (an index into the distinct errors) at each position.
+    labels: Vec<u32>,
+    /// The positions that start orbits (`None`: every error starts).
+    starts: Option<Vec<u32>>,
 }
 
-impl<'a> Search<'a> {
-    fn new(n: usize, errors: &'a [Error], max_work: u64) -> Self {
+/// One part of a search: the sets of errors whose first error is `first`
+/// and, if given, whose second is `second`; `root` counts the set of the
+/// first error alone.
+#[derive(Clone, Copy)]
+struct Unit {
+    first: u32,
+    second: Option<u32>,
+    root: bool,
+}
+
+impl Search {
+    /// The search over every error, in index order.
+    fn new(n: usize, errors: &[Error]) -> Self {
+        let labels: Vec<u32> = (0..errors.len() as u32).collect();
+        Self::ordered(n, errors, labels, None)
+    }
+
+    /// The search over the errors at positions `order` (each orbit a
+    /// block), started from the first error of each block (`starts`).
+    fn on_orbits(n: usize, errors: &[Error], order: Vec<u32>, starts: Vec<u32>) -> Self {
+        Self::ordered(n, errors, order, Some(starts))
+    }
+
+    fn ordered(n: usize, errors: &[Error], labels: Vec<u32>, starts: Option<Vec<u32>>) -> Self {
+        let detectors: Vec<Vec<u32>> = labels
+            .iter()
+            .map(|&k| {
+                errors[k as usize]
+                    .detectors
+                    .iter()
+                    .map(|&d| d as u32)
+                    .collect()
+            })
+            .collect();
+        let observables = labels
+            .iter()
+            .map(|&k| errors[k as usize].observables)
+            .collect();
         let mut by_detector = vec![Vec::new(); n];
-        let mut by_effect: HashMap<&[usize], Vec<usize>> = HashMap::new();
-        for (k, e) in errors.iter().enumerate() {
-            for &d in &e.detectors {
-                by_detector[d].push(k);
+        let mut by_effect: HashMap<Vec<u32>, Vec<u32>> = HashMap::new();
+        for (k, d) in detectors.iter().enumerate() {
+            for &x in d {
+                by_detector[x as usize].push(k as u32);
             }
-            by_effect.entry(e.detectors.as_slice()).or_default().push(k);
+            by_effect.entry(d.clone()).or_default().push(k as u32);
         }
         Search {
-            errors,
+            widest: detectors.iter().map(Vec::len).max().unwrap_or(0),
+            detectors,
+            observables,
             by_detector,
             by_effect,
-            widest: errors.iter().map(|e| e.detectors.len()).max().unwrap_or(0),
-            chosen: Vec::new(),
-            work: 0,
-            max_work,
+            labels,
+            starts,
         }
     }
 
-    fn run(&mut self, weight: usize) -> Outcome {
-        for first in 0..self.errors.len() {
-            let e = &self.errors[first];
-            self.chosen.clear();
-            self.chosen.push(first);
-            match self.extend(&e.detectors.clone(), e.observables, weight - 1, first) {
-                Some(true) => return Outcome::Found(self.chosen.clone()),
-                Some(false) => {}
-                None => {
-                    return Outcome::OutOfWork;
+    /// The parts of the search at `weight` (at least 1), in its order:
+    /// every first error, or with symmetries the first error of each orbit
+    /// split by the second error it adds.
+    fn units(&self, weight: usize) -> Vec<Unit> {
+        let whole = |f: u32| Unit {
+            first: f,
+            second: None,
+            root: true,
+        };
+        let Some(starts) = &self.starts else {
+            return (0..self.detectors.len() as u32).map(whole).collect();
+        };
+        let mut out = Vec::new();
+        for &f in starts {
+            let detectors = &self.detectors[f as usize];
+            let before = out.len();
+            // As the walker's first step: the errors of higher position
+            // that flip the lowest detector, unless the weight cuts it.
+            if weight >= 3 && !detectors.is_empty() && detectors.len() <= (weight - 1) * self.widest
+            {
+                for &k in &self.by_detector[detectors[0] as usize] {
+                    if k > f {
+                        out.push(Unit {
+                            first: f,
+                            second: Some(k),
+                            root: out.len() == before,
+                        });
+                    }
                 }
             }
+            if out.len() == before {
+                out.push(whole(f));
+            }
         }
-        Outcome::NotFound
+        out
+    }
+
+    /// Whether some undetectable logical error has at most `weight` errors
+    /// within `allowance` sets visited (and the deadline), and the sets
+    /// that count: those the search in index order visits up to its
+    /// answer.
+    fn run(&self, weight: usize, allowance: u64, deadline: Option<Instant>) -> (Outcome, u64) {
+        let m = self.detectors.len();
+        if weight == 0 || m == 0 {
+            return (Outcome::NotFound { exhausted: m == 0 }, 0);
+        }
+        let units = self.units(weight);
+        let n = units.len();
+        // The threads stop soon after visiting `allowance` sets together.
+        let budget = Budget::new(allowance, deadline);
+        let per = n.div_ceil(16 * threads()).max(1);
+        // The lowest part from which a set was found: later parts need not
+        // be searched.
+        let lowest = AtomicUsize::new(usize::MAX);
+        let tallies: Vec<Vec<Tally>> = map_tasks(n.div_ceil(per), |t| {
+            let mut walker = Walker::new(self, weight);
+            let mut out = Vec::new();
+            let first = t * per;
+            for (i, &unit) in units[first..((t + 1) * per).min(n)].iter().enumerate() {
+                let i = first + i;
+                if i > lowest.load(Ordering::Relaxed) {
+                    break;
+                }
+                match walker.unit(unit, weight, &budget) {
+                    Some(true) => {
+                        lowest.fetch_min(i, Ordering::Relaxed);
+                        out.push(Tally::Found {
+                            at: walker.nodes,
+                            set: walker.set(),
+                        });
+                        break;
+                    }
+                    Some(false) => out.push(Tally::Done {
+                        work: walker.nodes,
+                        cut: walker.cut,
+                    }),
+                    None => break,
+                }
+                if !budget.spend(std::mem::take(&mut walker.pending)) {
+                    break;
+                }
+            }
+            out
+        });
+        // The account of the search in index order, part by part, up to
+        // the first one the threads did not finish.
+        let (mut spent, mut cut) = (0u64, false);
+        for (t, tally) in tallies.iter().enumerate() {
+            for entry in tally {
+                match entry {
+                    Tally::Found { at, set } => {
+                        return if spent.saturating_add(*at) <= allowance {
+                            (Outcome::Found(set.clone()), spent + at)
+                        } else {
+                            (Outcome::OutOfWork, allowance)
+                        };
+                    }
+                    Tally::Done { work, cut: c } => {
+                        spent = spent.saturating_add(*work);
+                        cut |= c;
+                        if spent > allowance {
+                            return (Outcome::OutOfWork, allowance);
+                        }
+                    }
+                }
+            }
+            let next = t * per + tally.len();
+            if next < ((t + 1) * per).min(n) {
+                return self.sequential(&units[next..], weight, allowance, deadline, spent, cut);
+            }
+        }
+        (Outcome::NotFound { exhausted: !cut }, spent)
+    }
+
+    /// The search in index order over the parts `units`, on one thread,
+    /// after `spent` sets (`cut`: whether the weight cut a branch before).
+    fn sequential(
+        &self,
+        units: &[Unit],
+        weight: usize,
+        allowance: u64,
+        deadline: Option<Instant>,
+        mut spent: u64,
+        mut cut: bool,
+    ) -> (Outcome, u64) {
+        let budget = Budget::new(allowance - spent, deadline);
+        let mut walker = Walker::new(self, weight);
+        for &unit in units {
+            match walker.unit(unit, weight, &budget) {
+                Some(true) => {
+                    return if spent.saturating_add(walker.nodes) <= allowance {
+                        (Outcome::Found(walker.set()), spent + walker.nodes)
+                    } else {
+                        (Outcome::OutOfWork, allowance)
+                    };
+                }
+                Some(false) => {
+                    spent = spent.saturating_add(walker.nodes);
+                    cut |= walker.cut;
+                    if spent > allowance {
+                        return (Outcome::OutOfWork, allowance);
+                    }
+                }
+                None => return (Outcome::OutOfWork, allowance),
+            }
+        }
+        (Outcome::NotFound { exhausted: !cut }, spent)
+    }
+}
+
+/// One thread's depth-first search, with a buffer of fired detectors per
+/// depth.
+struct Walker<'s> {
+    search: &'s Search,
+    levels: Vec<Vec<u32>>,
+    chosen: Vec<u32>,
+    /// Sets visited and not yet counted in the budget.
+    pending: u64,
+    /// Sets visited from the current first error.
+    nodes: u64,
+    /// Whether the weight cut a branch from the current first error.
+    cut: bool,
+}
+
+impl<'s> Walker<'s> {
+    fn new(search: &'s Search, weight: usize) -> Self {
+        Walker {
+            search,
+            levels: vec![Vec::with_capacity(4 * search.widest.max(1)); weight],
+            chosen: Vec::with_capacity(weight),
+            pending: 0,
+            nodes: 0,
+            cut: false,
+        }
+    }
+
+    /// The errors chosen, by index.
+    fn set(&self) -> Vec<usize> {
+        self.chosen
+            .iter()
+            .map(|&k| self.search.labels[k as usize] as usize)
+            .collect()
+    }
+
+    /// Whether `unit` extends to a logical error of at most `weight`
+    /// errors (`None`: out of budget).
+    fn unit(&mut self, unit: Unit, weight: usize, budget: &Budget) -> Option<bool> {
+        let Some(second) = unit.second else {
+            return self.start(unit.first, weight, budget);
+        };
+        // As `start` and the first step of `extend`, past the first error.
+        let search = self.search;
+        let root = u64::from(unit.root);
+        self.nodes = root;
+        self.pending += root;
+        self.cut = false;
+        self.chosen.clear();
+        self.chosen.extend([unit.first, second]);
+        symmetric_difference(
+            &search.detectors[unit.first as usize],
+            &search.detectors[second as usize],
+            &mut self.levels[1],
+        );
+        let observables =
+            search.observables[unit.first as usize] ^ search.observables[second as usize];
+        self.extend(1, observables, weight - 2, unit.first, budget)
+    }
+
+    /// Whether error `first` extends by errors of higher index to a
+    /// logical error of at most `weight` errors (`None`: out of budget).
+    fn start(&mut self, first: u32, weight: usize, budget: &Budget) -> Option<bool> {
+        let search = self.search;
+        self.nodes = 0;
+        self.cut = false;
+        self.chosen.clear();
+        self.chosen.push(first);
+        self.levels[0].clear();
+        self.levels[0].extend_from_slice(&search.detectors[first as usize]);
+        let observables = search.observables[first as usize];
+        self.extend(0, observables, weight - 1, first, budget)
     }
 
     /// Whether `chosen` extends by at most `remaining` errors of index
-    /// above `first` to a logical error (`None`: out of work).
+    /// above `first` to a logical error, the detectors it fires at
+    /// `levels[depth]` (`None`: out of budget).
     fn extend(
         &mut self,
-        fired: &[usize],
+        depth: usize,
         observables: u64,
         remaining: usize,
-        first: usize,
+        first: u32,
+        budget: &Budget,
     ) -> Option<bool> {
-        self.work += 1;
-        if self.work > self.max_work {
-            return None;
+        let search = self.search;
+        self.nodes += 1;
+        self.pending += 1;
+        if self.pending >= 1 << 12 {
+            if !budget.spend(self.pending) {
+                return None;
+            }
+            self.pending = 0;
         }
-        if fired.is_empty() {
+        let fired = self.levels[depth].len();
+        if fired == 0 {
             return Some(observables != 0);
         }
-        if remaining == 0 || fired.len() > remaining * self.widest {
+        if remaining == 0 || fired > remaining * search.widest {
+            self.cut = true;
             return Some(false);
         }
+        let lowest = self.levels[depth][0] as usize;
         if remaining == 1 {
             // The last error must flip exactly the fired detectors.
-            if let Some(ks) = self.by_effect.get(fired) {
+            if let Some(ks) = search.by_effect.get(self.levels[depth].as_slice()) {
                 for &k in ks {
                     if k > first
                         && !self.chosen.contains(&k)
-                        && observables ^ self.errors[k].observables != 0
+                        && observables ^ search.observables[k as usize] != 0
                     {
                         self.chosen.push(k);
                         return Some(true);
                     }
                 }
             }
+            // Longer extensions, if any, were not tried.
+            self.cut |= search.by_detector[lowest]
+                .iter()
+                .any(|&k| k > first && !self.chosen.contains(&k));
             return Some(false);
         }
-        let lowest = fired[0];
-        for i in 0..self.by_detector[lowest].len() {
-            let k = self.by_detector[lowest][i];
+        for &k in &search.by_detector[lowest] {
             if k <= first || self.chosen.contains(&k) {
                 continue;
             }
-            let next = xor(fired, &self.errors[k].detectors);
+            let (head, tail) = self.levels.split_at_mut(depth + 1);
+            symmetric_difference(&head[depth], &search.detectors[k as usize], &mut tail[0]);
             self.chosen.push(k);
-            match self.extend(
-                &next,
-                observables ^ self.errors[k].observables,
-                remaining - 1,
-                first,
-            ) {
+            let next = observables ^ search.observables[k as usize];
+            match self.extend(depth + 1, next, remaining - 1, first, budget) {
                 Some(true) => return Some(true),
                 Some(false) => {}
                 None => return None,
@@ -594,9 +1392,9 @@ impl<'a> Search<'a> {
     }
 }
 
-/// Symmetric difference of two ascending lists.
-fn xor(a: &[usize], b: &[usize]) -> Vec<usize> {
-    let mut out = Vec::with_capacity(a.len() + b.len());
+/// `out = a △ b` for ascending lists.
+fn symmetric_difference(a: &[u32], b: &[u32], out: &mut Vec<u32>) {
+    out.clear();
     let (mut i, mut j) = (0, 0);
     while i < a.len() && j < b.len() {
         match a[i].cmp(&b[j]) {
@@ -616,7 +1414,6 @@ fn xor(a: &[usize], b: &[usize]) -> Vec<usize> {
     }
     out.extend_from_slice(&a[i..]);
     out.extend_from_slice(&b[j..]);
-    out
 }
 
 #[cfg(test)]
