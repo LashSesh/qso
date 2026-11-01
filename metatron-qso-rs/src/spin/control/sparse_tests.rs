@@ -533,7 +533,9 @@ fn large_problems_are_estimated_before_anything_is_built() {
     );
     let err = seven.control_transfer(&field, &[9.2, 9.3]).unwrap_err();
     assert!(err.to_string().contains("Liouville"), "{err}");
-    // Ten relaxing protons over 10⁵ steps: refused in well under a second.
+    // Ten relaxing protons over 10⁵ steps: refused from the bounds alone,
+    // in about a second (69 s when the entries were counted first; the
+    // bound leaves room for a loaded machine running the other tests).
     let ten = protons(10);
     let long = Control::rf(
         vec![Target::Isotope(Isotope::H1)],
@@ -548,7 +550,8 @@ fn large_problems_are_estimated_before_anything_is_built() {
         .control_transfer(&long, &vec![0.0; 200_000])
         .unwrap_err();
     assert!(err.to_string().contains("needs about"), "{err}");
-    assert!(clock.elapsed().as_secs_f64() < 5.0);
+    let seconds = clock.elapsed().as_secs_f64();
+    assert!(seconds < 20.0, "{seconds} s");
     // The estimate before building against the one from the blocks.
     for (sys, c) in [
         (

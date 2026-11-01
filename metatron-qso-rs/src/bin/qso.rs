@@ -507,6 +507,10 @@ enum Command {
         /// reached are reported.
         #[arg(long, default_value_t = 60.0, requires = "circuit_distance")]
         max_seconds: f64,
+        /// Search the circuit distance on the orbits of the circuit's
+        /// symmetries (such as the translations of a bicycle code).
+        #[arg(long, requires = "circuit_distance")]
+        symmetry: bool,
     },
 }
 
@@ -1590,6 +1594,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             schedule,
             circuit_distance,
             max_seconds,
+            symmetry,
         } => {
             let kind = match decoder {
                 DecoderArg::UnionFind => qec::DecoderChoice::UnionFind,
@@ -1641,7 +1646,9 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 }
                 let r = qec::exact_circuit_distance(
                     &qec::detector_error_model(c, false)?,
-                    &qec::ExactDistanceOptions::default().with_max_seconds(*max_seconds),
+                    &qec::ExactDistanceOptions::default()
+                        .with_max_seconds(*max_seconds)
+                        .with_symmetry(*symmetry),
                 )?;
                 let text = match (r.distance(), r.upper_bound()) {
                     (Some(d), _) => format!("; circuit distance {d}"),

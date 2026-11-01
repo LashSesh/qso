@@ -57,7 +57,7 @@ which withdraws the results of version 1.
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18); interacting bosons, fermions and distinguishable particles with certificates for graph isomorphism (1.29); symmetry for driven walks, open walks on orbitals, coined walks with dephasing, hypercubes with dephasing up to d = 230 (1.38) | interacting walkers stop at 2²² configurations, without symmetry reduction; open walks on orbitals stop at 8192 nodes; pretty good transfer on other graphs has no exact reference |
 | Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37); the ¹³C bath of an NV centre by the cluster-correlation expansion (1.39); the optical cycle, ODMR, pulsed readout and magnetometer sensitivity in fields of any direction, and ensembles (1.40); sparse relaxation blocks propagated by Krylov steps, Redfield relaxation from sparse terms and equivalent spins: seven and eight relaxing protons for seconds (1.41); optimal control with relaxation on sparse blocks and on the orbits of equivalent spins, seven and eight spins (1.46) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the nested-commutator bound of product formulas (1.32) is tight for small Hamiltonians only, its tail ignoring which terms commute; Redfield relaxation assumes isotropic tumbling (1.34), and propagations beyond 1.5·10¹² operations or 2 GiB are refused (eleven protons with dipolar relaxation, nine for 100 s; 1.41); chemical exchange needs steady chemistry (no irreversible hydrogenation) and one block of at most 2048 elements over all sites; field profiles with relaxation are optimised in a dense Liouville space of up to six spins ½, and have many local optima; an evaluation of eight relaxing spins takes tens of seconds (1.46); the NV bath of 1.39 takes ideal pulses only (finite ones: the generalised expansion, 1.45), its expansion can diverge (results beyond `|L| = 1` are refused), and the nuclei next to the vacancy need given contact couplings (1.39); the optical model's rotating-wave approximation fails near the ground-state anticrossing (1.40) |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
-| Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22); exact circuit distances of any model by a parallel search or the Brouwer–Zimmermann enumeration, with the lightest logical error as circuit locations (1.42) | exact circuit distances need time exponential in the distance: the circuit of [[144, 12, 12]] gets bounds only |
+| Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22); exact circuit distances of any model by a parallel search or the Brouwer–Zimmermann enumeration, with the lightest logical error as circuit locations (1.42); the search on the orbits of an error model's symmetries: [[144, 12, 12]] over three rounds of the depth-8 cycle has circuit distance 10 (1.47) | exact circuit distances need time exponential in the distance (each weight about 17 times the last on bicycle circuits); symmetries divide it by at most their number |
 | Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9), in the browser build too (1.25) | — |
 | Documentation | user guide, executed tutorials and Python reference on GitHub Pages (1.2); Rust tutorials from the examples and the documentation of every release since 1.2.0 (1.25) | — |
 | Engineering | CI on Linux (x86_64, arm64), macOS and Windows; Miri, fuzzing, API checks, weekly cross-validation and benchmark tracking; Trusted Publishing (1.2); line and branch coverage, and differential tests of all simulators on random circuits (1.21); coverage of the CLI and of the Python tests (1.25) | — |
@@ -4287,7 +4287,7 @@ following smaller ones; all are fixed or documented.
   spins, the fourfold shortcut, and that `control_transfer` rebuilds the
   blocks at every call.
 
-### 1.47 — Circuit distances by symmetry (M)
+### 1.47 — Circuit distances by symmetry (M, delivered)
 
 Use case: the circuit distance of [[144, 12, 12]] with the depth-8 cycle,
 which 1.42 bounds between 9 and 11 after twenty minutes. Its error model
@@ -4308,6 +4308,116 @@ on small symmetric circuits; declared symmetries that do not hold are
 refused. The result for [[144, 12, 12]] is set against Bravyi et al.'s
 bound `d_circ ≤ 10` (Nature 627, 778 (2024)), which holds under their
 noise model, with idle errors that QSO's model lacks.
+
+Delivered in `qec/distance/symmetry.rs`, with `qec/distance.rs` and
+`graph/automorphism.rs`:
+
+- **Symmetries of error models.** A permutation `σ` of the detectors is
+  a symmetry when it maps the detectors of every error onto those of an
+  error (so that it permutes the errors and the undetectable sets) and
+  every observable, read through that permutation of the errors, is a
+  sum of rows of the detectors and observables over GF(2). Those sums
+  are exactly what vanishes on every set that fires no detector and
+  flips no observable, so the condition holds exactly when such sets map
+  onto such sets, and then logical errors map onto logical errors of the
+  same weight. One elimination of the rows decides it for every
+  candidate. `error_model_symmetries` finds candidates with QSO's
+  automorphism search on the graph that joins each error to its
+  detectors, which now keeps colour classes (detectors and errors apart)
+  and stops at a deadline. Generators that fail the check are dropped.
+  `exact_circuit_distance_with_symmetries` takes declared detector
+  permutations, checks them the same way and refuses those that fail,
+  naming the error or observable.
+- **Search on orbits.** With `ExactDistanceOptions::symmetry` (or
+  declared permutations) the errors are ordered so that each orbit is a
+  block, blocks by their first error, and the search of 1.42 starts only
+  from the first error of each block. Of the images of a lightest
+  logical error, the one whose first error comes earliest starts with
+  such an error, since a symmetry that moved it earlier would move the
+  image's first error earlier too, and the search from there meets it.
+  Each start is split by the second error the search adds, so that 32
+  starts still keep four threads busy; the answer is read in the order
+  of the sequential search, so it does not depend on the threads.
+- **Distance.** The circuit of [[144, 12, 12]] over three rounds of the
+  depth-8 cycle has circuit distance 10 under QSO's circuit noise: no
+  logical error of 9 faults or fewer exists, and the search at weight 10
+  meets one of 10 (see below).
+- In Python: `exact_circuit_distance(..., symmetry=True,
+  symmetries=None)` and `error_model_symmetries`; on the command line
+  `qso qec --circuit-distance --symmetry`.
+
+Changes to the plan:
+
+- **Orbits as blocks.** The plan started the search from the first error
+  of each orbit in the model's order. There the first errors of most
+  orbits come early, and a first error early in the order has the most
+  errors of higher index to add. Ordering the errors so that each orbit
+  is a block halves the sets visited on [[144, 12, 12]] (8.1·10⁸ and
+  3.6·10⁸ at weight 8).
+- **Declared symmetries are detector permutations.** The errors follow
+  from the detectors, since two errors with the same detectors and
+  different observables already make a logical error of weight 2. Such
+  models use no symmetry, and their declared permutations are checked on
+  the detectors only.
+- **The search is split by second errors** when it starts from orbits,
+  for the threads (not in the plan).
+
+Not done, and why:
+
+- **Each orbit of logical errors once.** The search still meets an orbit
+  of sets once for each of its errors in its first block, about twice on
+  average: it visits 1/43 of the sets of the search without symmetries,
+  not 1/72. A test that each set is the least of its images would remove
+  that, at the cost of a canonical form per set.
+- **`circuit_distance` with symmetries.** Its options are a struct
+  without `#[non_exhaustive]`, so a new field would break code that
+  builds them; the exact function takes symmetries instead.
+- **Models beyond 4096 detectors.** The check eliminates the rows of the
+  detectors over all errors, about `n² · m / 64` word operations, the
+  same bound as the test for any logical error of 1.42.
+
+Measured (four cores; uniform circuit noise p = 0.001, Z memory, three
+rounds of the depth-8 cycle):
+
+- **Symmetries.** The automorphism search finds generators of the
+  translations of [[72, 12, 6]], [[90, 8, 10]], [[108, 8, 10]] and
+  [[144, 12, 12]] (36, 45, 54 and 72) in 0.02 to 0.04 s, and they pass
+  the check. The 2304 errors of [[144, 12, 12]] form 32 orbits of 72.
+  Over 3, 6, 12 and 24 rounds (288 to 1800 detectors, 2304 to 17 424
+  errors) the search and the check take 0.04, 0.14, 0.46 and 2.1 s.
+- **The search on [[144, 12, 12]], weight by weight** (sets visited,
+  seconds):
+
+  | Weight | Without symmetry | Lowest error of each orbit (the plan) | Orbits as blocks |
+  |---|---|---|---|
+  | 6 | 4.8·10⁷, 0.81 | 2.3·10⁶, 0.04 | 1.2·10⁶, 0.02 |
+  | 7 | 8.7·10⁸, 12.6 | 4.4·10⁷, 0.66 | 2.1·10⁷, 0.33 |
+  | 8 | 1.6·10¹⁰, 224 | 8.1·10⁸, 11.2 | 3.6·10⁸, 5.4 |
+  | 9 | | | 6.1·10⁹, 93 |
+
+  The blocks visit 41 to 43 times fewer sets than the search without
+  symmetry, and each weight costs about 17 times the last. Weight 8 takes
+  20.7 s on one thread and 5.5 s on four.
+- **Distances.** With four BP+OSD searches per observable, [[72, 12, 6]]
+  has circuit distance 6 in 0.13 s (0.17 s without symmetry),
+  [[90, 8, 10]] 8 in 0.94 s (12.7 s) and [[108, 8, 10]] 8 in 2.5 s
+  (98 s). The code-capacity models of the four codes get 6, 10, 10 and
+  12 in at most 0.09 s either way.
+- **[[144, 12, 12]].** `qso qec --code bb --distance 144 --rounds 3
+  --schedule bicycle --circuit-distance --symmetry` (1000 shots of
+  BP+OSD decoding included) reports circuit distance 10 after 12.5
+  minutes: the search rules out weight 9 and meets a logical error of 10
+  faults at weight 10. 1.42 had reached 9 to 11 in twenty minutes.
+  Bravyi et al.'s bound `d_circ ≤ 10` is thus met over three rounds by
+  QSO's noise model too, which has no idle errors; whether their model,
+  with idle errors, has a logical error of fewer faults is not decided
+  here.
+- **Against Stim.** On the nine circuits of the comparison of 1.42,
+  Stim's exhaustive search and `exact_circuit_distance` with and without
+  symmetry give the same distance. Symmetries were found in Stim's
+  surface and repetition codes (a reflection or rotation each) and in
+  [[72, 12, 6]] with the depth-8 cycle (its translations), none in the
+  colour codes.
 
 ### Not in this stage
 

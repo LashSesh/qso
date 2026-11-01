@@ -596,3 +596,356 @@ fn the_enumeration_keeps_the_time_limit() {
     assert!(seconds < 2.0, "{seconds} s");
     assert!(r.lower_bound >= 2 && r.distance().is_none(), "{r:?}");
 }
+
+/// The memory experiment of a bicycle code over `rounds` rounds of the
+/// depth-8 cycle.
+fn bicycle_circuit(n: usize, rounds: usize) -> DetectorErrorModel {
+    let (code, _) = CssCode::bivariate_bicycle_code(n).unwrap();
+    let c = crate::qec::css_code_memory_with(
+        &code,
+        rounds,
+        &CircuitNoise::uniform(0.001),
+        MemoryBasis::Z,
+        crate::qec::CssSchedule::Bicycle,
+    )
+    .unwrap();
+    detector_error_model(&c, false).unwrap()
+}
+
+/// The error permutations of detector permutations, and the orbits they
+/// make: (errors, orbits).
+fn orbit_count(dem: &DetectorErrorModel, generators: &[Vec<usize>]) -> (usize, usize) {
+    let errors = errors(dem).unwrap();
+    let mut checker = Checker::new(dem.n_detectors, &errors);
+    let perms: Vec<Vec<u32>> = generators
+        .iter()
+        .map(|s| checker.check(s).unwrap().unwrap())
+        .collect();
+    let (mut order, starts) = orbit_order(errors.len(), &perms);
+    // Every error once, each orbit a block.
+    order.sort_unstable();
+    assert!(order.iter().enumerate().all(|(i, &k)| k as usize == i));
+    (errors.len(), starts.len())
+}
+
+#[test]
+fn bicycle_circuits_keep_the_translations() {
+    // The depth-8 cycle commutes with the translations of the torus: 36
+    // for [[72, 12, 6]], 72 for [[144, 12, 12]]; each orbit of errors has
+    // one error of each kind at each place.
+    for (n, translations) in [(72, 36), (144, 72)] {
+        for rounds in [1, 3] {
+            let dem = bicycle_circuit(n, rounds);
+            let generators = error_model_symmetries(&dem).unwrap();
+            assert!(!generators.is_empty(), "[[{n}]]");
+            let (errors, orbits) = orbit_count(&dem, &generators);
+            assert_eq!(errors, orbits * translations, "[[{n}]], {rounds} rounds");
+        }
+    }
+}
+
+#[test]
+fn symmetric_searches_give_the_same_distances() {
+    let exact = ExactDistanceOptions::default().with_max_seconds(f64::INFINITY);
+    let on_orbits = exact.with_symmetry(true);
+    // [[72, 12, 6]] has circuit distance 6 with and without symmetry.
+    for rounds in [2, 3] {
+        let dem = bicycle_circuit(72, rounds);
+        let plain = exact_circuit_distance(&dem, &exact).unwrap();
+        let symmetric = exact_circuit_distance(&dem, &on_orbits).unwrap();
+        check_witness(&dem, &plain);
+        check_witness(&dem, &symmetric);
+        assert_eq!(plain.distance(), Some(6), "{rounds} rounds");
+        assert_eq!(symmetric.distance(), Some(6), "{rounds} rounds");
+    }
+    // [[90, 8, 10]] and [[108, 8, 10]] over three rounds: 8, as the
+    // search without symmetry finds in 12 s and 97 s (1.42).
+    for n in [90, 108] {
+        let dem = bicycle_circuit(n, 3);
+        let r = exact_circuit_distance(&dem, &on_orbits).unwrap();
+        check_witness(&dem, &r);
+        assert_eq!(r.distance(), Some(8), "[[{n}]]");
+    }
+    // Code capacity.
+    for (n, d) in [(72, 6), (90, 10), (144, 12)] {
+        let (code, _) = CssCode::bivariate_bicycle_code(n).unwrap();
+        let c = css_code_memory(&code, 1, &CircuitNoise::data_only(0.01), MemoryBasis::Z).unwrap();
+        let dem = detector_error_model(&c, false).unwrap();
+        assert!(!error_model_symmetries(&dem).unwrap().is_empty());
+        let r = exact_circuit_distance(&dem, &on_orbits).unwrap();
+        check_witness(&dem, &r);
+        assert_eq!(r.distance(), Some(d), "[[{n}]]");
+    }
+}
+
+/// A model made of `cells` translations of random errors over `types`
+/// detectors per cell (cell `c`, type `t`: detector `c·types + t`).
+/// Each pattern's translations flip the same observables, or with
+/// `scattered` each error its own random ones; errors with the detectors
+/// of an earlier one take its observables.
+fn cyclic_model(
+    rng: &mut Rng,
+    cells: usize,
+    types: usize,
+    patterns: usize,
+    widest: usize,
+    scattered: bool,
+) -> DetectorErrorModel {
+    let n = cells * types;
+    let mut errors = Vec::new();
+    let mut flips: HashMap<Vec<usize>, u64> = HashMap::new();
+    for _ in 0..patterns {
+        let k = 1 + rng.below(widest as u64) as usize;
+        let places: Vec<(usize, usize)> = (0..k)
+            .map(|_| {
+                (
+                    rng.below(cells as u64) as usize,
+                    rng.below(types as u64) as usize,
+                )
+            })
+            .collect();
+        let shared = rng.below(4);
+        for shift in 0..cells {
+            let mut dets: Vec<usize> = places
+                .iter()
+                .map(|&(c, t)| (c + shift) % cells * types + t)
+                .collect();
+            dets.sort_unstable();
+            // A detector flipped twice is not flipped.
+            let mut odd: Vec<usize> = Vec::new();
+            for d in dets {
+                if odd.last() == Some(&d) {
+                    odd.pop();
+                } else {
+                    odd.push(d);
+                }
+            }
+            let obs = if scattered { rng.below(4) } else { shared };
+            let obs = *flips.entry(odd.clone()).or_insert(obs);
+            errors.push(error(&odd, obs));
+        }
+    }
+    model(n, errors)
+}
+
+#[test]
+fn symmetric_searches_match_brute_force() {
+    // Without BP+OSD the search alone settles the distance.
+    let mut rng = Rng::seed_from_u64(47);
+    let options = ExactDistanceOptions::default()
+        .with_max_seconds(f64::INFINITY)
+        .with_method(DistanceMethod::Search)
+        .with_bposd_trials(0)
+        .with_symmetry(true);
+    let mut symmetric = 0;
+    for trial in 0..900 {
+        let cells = 2 + rng.below(3) as usize;
+        let types = 1 + rng.below(3) as usize;
+        let widest = 1 + rng.below(4) as usize;
+        let dem = cyclic_model(&mut rng, cells, types, 16 / cells, widest, trial % 4 == 0);
+        let r = exact_circuit_distance(&dem, &options).unwrap();
+        check_witness(&dem, &r);
+        match brute_force(&dem) {
+            Some(d) => assert_eq!(r.distance(), Some(d), "trial {trial}: {r:?}"),
+            None => assert_eq!(r.lower_bound, usize::MAX, "trial {trial}: {r:?}"),
+        }
+        if !error_model_symmetries(&dem).unwrap().is_empty() {
+            symmetric += 1;
+        }
+    }
+    assert!(symmetric > 700, "{symmetric} of 900 models with symmetries");
+    // Larger models against the search without symmetry.
+    let plain = options.with_symmetry(false);
+    for trial in 0..150 {
+        let cells = 3 + rng.below(6) as usize;
+        let types = 2 + rng.below(3) as usize;
+        let widest = 2 + rng.below(3) as usize;
+        let dem = cyclic_model(&mut rng, cells, types, 48 / cells, widest, trial % 3 == 0);
+        let a = exact_circuit_distance(&dem, &options).unwrap();
+        let b = exact_circuit_distance(&dem, &plain).unwrap();
+        check_witness(&dem, &a);
+        assert_eq!(a.distance(), b.distance(), "trial {trial}");
+        assert_eq!(a.lower_bound, b.lower_bound, "trial {trial}");
+    }
+}
+
+#[test]
+fn declared_symmetries_are_checked() {
+    let options = ExactDistanceOptions::default().with_max_seconds(f64::INFINITY);
+    let dem = bicycle_circuit(72, 2);
+    let n = dem.n_detectors;
+    // The symmetries found, declared, give the same distance.
+    let found = error_model_symmetries(&dem).unwrap();
+    let r = exact_circuit_distance_with_symmetries(&dem, &options, &found).unwrap();
+    check_witness(&dem, &r);
+    assert_eq!(r.distance(), Some(6));
+    let refused = |dem: &DetectorErrorModel, sigma: Vec<usize>| {
+        exact_circuit_distance_with_symmetries(dem, &options, &[sigma])
+            .unwrap_err()
+            .to_string()
+    };
+    assert!(refused(&dem, vec![0; n]).contains("not a permutation"));
+    assert!(refused(&dem, (0..n - 1).collect()).contains("entries"));
+    let mut swap: Vec<usize> = (0..n).collect();
+    swap.swap(0, 1);
+    assert!(refused(&dem, swap).contains("no error flips"));
+    // Two triangles of graph-like errors, one of them logical: swapping
+    // them keeps every error but not the logical ones.
+    let triangles = model(
+        6,
+        vec![
+            error(&[0, 1], 0),
+            error(&[1, 2], 0),
+            error(&[0, 2], 0),
+            error(&[3, 4], 1),
+            error(&[4, 5], 0),
+            error(&[3, 5], 0),
+        ],
+    );
+    assert!(refused(&triangles, vec![3, 4, 5, 0, 1, 2]).contains("flips observable 0"));
+    // Turning each triangle is a symmetry, although it moves the observable.
+    let r = exact_circuit_distance_with_symmetries(&triangles, &options, &[vec![1, 2, 0, 4, 5, 3]])
+        .unwrap();
+    assert_eq!(r.distance(), Some(3));
+    // Two errors with the same detectors and different observables: the
+    // distance is 2, and only the detectors are checked.
+    let twins = model(
+        3,
+        vec![error(&[0, 1, 2], 1), error(&[0, 1, 2], 2), error(&[0], 0)],
+    );
+    let r = exact_circuit_distance_with_symmetries(
+        &twins,
+        &options.with_symmetry(true),
+        &[vec![1, 2, 0]],
+    );
+    assert!(r.unwrap_err().to_string().contains("no error flips"));
+    let r = exact_circuit_distance_with_symmetries(
+        &twins,
+        &options.with_symmetry(true),
+        &[vec![0, 2, 1]],
+    )
+    .unwrap();
+    assert_eq!(r.distance(), Some(2));
+    assert!(error_model_symmetries(&twins).unwrap().is_empty());
+}
+
+#[cfg(feature = "parallel")]
+#[test]
+fn symmetric_searches_do_not_depend_on_the_threads() {
+    // Without BP+OSD the search finds the witness; on every number of
+    // threads the same one.
+    let dem = bicycle_circuit(72, 3);
+    let options = ExactDistanceOptions::default()
+        .with_max_seconds(f64::INFINITY)
+        .with_method(DistanceMethod::Search)
+        .with_bposd_trials(0)
+        .with_symmetry(true);
+    let on = |threads: usize| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| exact_circuit_distance(&dem, &options).unwrap())
+    };
+    let one = on(1);
+    check_witness(&dem, &one);
+    assert_eq!(one.distance(), Some(6));
+    for threads in [2, 3, 4] {
+        assert_eq!(on(threads), one, "{threads} threads");
+    }
+}
+
+#[test]
+fn a_passed_time_limit_returns_before_the_symmetries() {
+    let options = ExactDistanceOptions::default()
+        .with_bposd_trials(0)
+        .with_symmetry(true);
+    // A time limit that has passed returns at once, before the symmetries
+    // (the search alone would take minutes; the bound leaves room for a
+    // loaded machine).
+    let dem = bicycle_circuit(144, 3);
+    let start = std::time::Instant::now();
+    let r = exact_circuit_distance(&dem, &options.with_max_seconds(0.0)).unwrap();
+    let seconds = start.elapsed().as_secs_f64();
+    assert!(seconds < 20.0, "{seconds} s");
+    assert_eq!((r.lower_bound, r.witness), (2, None));
+}
+
+/// The search at each weight with and without the translations, on
+/// [[144, 12, 12]] over three rounds of the depth-8 cycle (weights up to
+/// `QSO_PLAIN_WEIGHT`, default 7, without them, `QSO_ORBIT_WEIGHT`,
+/// default 9, with them): sets visited and seconds.
+#[test]
+#[ignore]
+fn measure_orbit_search() {
+    let weight = |name: &str, default: usize| {
+        std::env::var(name)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
+    };
+    let dem = bicycle_circuit(144, 3);
+    let errors = errors(&dem).unwrap();
+    let n = dem.n_detectors;
+    let start = std::time::Instant::now();
+    let generators = error_model_symmetries(&dem).unwrap();
+    let mut checker = Checker::new(n, &errors);
+    let perms: Vec<Vec<u32>> = generators
+        .iter()
+        .map(|s| checker.check(s).unwrap().unwrap())
+        .collect();
+    let (order, starts) = orbit_order(errors.len(), &perms);
+    eprintln!(
+        "{} errors, {} orbits; symmetries in {:.2} s",
+        errors.len(),
+        starts.len(),
+        start.elapsed().as_secs_f64()
+    );
+    // The lowest error of each orbit in the model's order, as the plan had
+    // it: as exact, but those errors come early.
+    let mut seen = vec![false; errors.len()];
+    let mut minima = Vec::new();
+    for k in 0..errors.len() {
+        if !seen[k] {
+            minima.push(k as u32);
+            let mut stack = vec![k];
+            seen[k] = true;
+            while let Some(x) = stack.pop() {
+                for p in &perms {
+                    let y = p[x] as usize;
+                    if !seen[y] {
+                        seen[y] = true;
+                        stack.push(y);
+                    }
+                }
+            }
+        }
+    }
+    let identity: Vec<u32> = (0..errors.len() as u32).collect();
+    let in_order = Search::ordered(n, &errors, identity, Some(minima));
+    let plain = Search::new(n, &errors);
+    let orbits = Search::on_orbits(n, &errors, order, starts);
+    for (name, search, top) in [
+        ("orbits", &orbits, weight("QSO_ORBIT_WEIGHT", 9)),
+        (
+            "lowest of each orbit",
+            &in_order,
+            weight("QSO_ORBIT_WEIGHT", 9) - 1,
+        ),
+        ("plain", &plain, weight("QSO_PLAIN_WEIGHT", 7)),
+    ] {
+        for w in 2..=top {
+            let clock = std::time::Instant::now();
+            let (outcome, sets) = search.run(w, u64::MAX, None);
+            let found = matches!(outcome, Outcome::Found(_));
+            eprintln!(
+                "{name} weight {w}: {sets} sets, {:.2} s{}",
+                clock.elapsed().as_secs_f64(),
+                if found { ", found" } else { "" }
+            );
+            if found {
+                break;
+            }
+        }
+    }
+}

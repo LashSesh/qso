@@ -2354,7 +2354,10 @@ def exact_circuit_distance(
     method: Literal["auto", "search", "brouwer_zimmermann"] = "auto",
     bposd_trials: int = 4,
     seed: int = 0,
+    symmetry: bool = False,
+    symmetries: Optional[Sequence[Sequence[int]]] = None,
 ) -> CircuitDistance: ...
+def error_model_symmetries(model: DetectorErrorModel) -> list[list[int]]: ...
 def explain_errors(
     circuit: DetectorCircuit,
     model: DetectorErrorModel,

@@ -30,7 +30,10 @@ use crate::error::{QsoError, Result};
 use crate::parallel::{map_tasks, threads};
 use crate::rng::Rng;
 
+mod symmetry;
 mod zimmermann;
+pub use symmetry::MAX_SYMMETRY_DETECTORS;
+use symmetry::{Checker, orbit_order};
 use zimmermann::{Enumeration, Zimmermann};
 
 /// Most BP+OSD searches per observable.
@@ -446,17 +449,22 @@ pub struct ExactDistanceOptions {
     pub bposd_trials: usize,
     /// Seed of the BP+OSD searches.
     pub seed: u64,
+    /// Start the exhaustive search only from one error of each orbit of
+    /// the model's symmetries, those [`error_model_symmetries`] finds (with
+    /// those declared to [`exact_circuit_distance_with_symmetries`]).
+    pub symmetry: bool,
 }
 
 impl Default for ExactDistanceOptions {
     /// A minute, [`DistanceMethod::Auto`], 4 BP+OSD searches per
-    /// observable.
+    /// observable, no symmetry.
     fn default() -> Self {
         ExactDistanceOptions {
             max_seconds: 60.0,
             method: DistanceMethod::Auto,
             bposd_trials: 4,
             seed: 0,
+            symmetry: false,
         }
     }
 }
@@ -481,6 +489,11 @@ impl ExactDistanceOptions {
         self.seed = seed;
         self
     }
+
+    pub fn with_symmetry(mut self, symmetry: bool) -> Self {
+        self.symmetry = symmetry;
+        self
+    }
 }
 
 /// Nanoseconds per set the search visits, and per word operation of the
@@ -502,9 +515,82 @@ const ENUMERATION_NANOS: f64 = 0.5;
 /// estimated to cost less), until the bounds meet. After
 /// [`ExactDistanceOptions::max_seconds`] the bounds reached so far are
 /// returned; [`CircuitDistance::distance`] tells whether they met.
+///
+/// With [`ExactDistanceOptions::symmetry`] the search starts only from
+/// one error of each orbit of the model's symmetries (see
+/// [`error_model_symmetries`]), which divides its work by up to the order
+/// of their group.
 pub fn exact_circuit_distance(
     dem: &DetectorErrorModel,
     options: &ExactDistanceOptions,
+) -> Result<CircuitDistance> {
+    exact_circuit_distance_with_symmetries(dem, options, &[])
+}
+
+/// Symmetries of a detector error model: permutations of its detectors
+/// (detector `d ↦ p[d]`) that map the detectors of every error onto those
+/// of an error, and logical errors onto logical errors. They generate the
+/// group of symmetries that QSO's automorphism search finds on the graph
+/// joining each error to its detectors and that pass that check (the
+/// observables, read through the permutation, are sums of detectors and
+/// observables over GF(2)); the exhaustive search of
+/// [`exact_circuit_distance`] starts from one error of each of its orbits
+/// with [`ExactDistanceOptions::symmetry`].
+///
+/// Empty when two errors flip the same detectors (and different
+/// observables): the distance is then at most 2 and needs no symmetry.
+/// Errors for more than [`MAX_SYMMETRY_DETECTORS`] detectors.
+///
+/// ```
+/// use metatron_qso::qec::{
+///     CircuitNoise, CssCode, CssSchedule, ExactDistanceOptions, MemoryBasis,
+///     css_code_memory_with, detector_error_model, error_model_symmetries,
+///     exact_circuit_distance,
+/// };
+///
+/// // The depth-8 cycle of [[72, 12, 6]] keeps the code's translations.
+/// let (code, _) = CssCode::bivariate_bicycle_code(72).unwrap();
+/// let noise = CircuitNoise::uniform(0.001);
+/// let c = css_code_memory_with(&code, 2, &noise, MemoryBasis::Z, CssSchedule::Bicycle).unwrap();
+/// let dem = detector_error_model(&c, false).unwrap();
+/// let generators = error_model_symmetries(&dem).unwrap();
+/// assert!(!generators.is_empty());
+/// let options = ExactDistanceOptions::default().with_symmetry(true);
+/// assert_eq!(exact_circuit_distance(&dem, &options).unwrap().distance(), Some(6));
+/// ```
+pub fn error_model_symmetries(dem: &DetectorErrorModel) -> Result<Vec<Vec<usize>>> {
+    let errors = errors(dem)?;
+    let n = dem.n_detectors;
+    let mut checker = Checker::new(n, &errors);
+    if checker.twins() {
+        return Ok(Vec::new());
+    }
+    symmetry_limit(n)?;
+    let found = checker.find(None).expect("no deadline");
+    Ok(found.into_iter().map(|(sigma, _)| sigma).collect())
+}
+
+fn symmetry_limit(n: usize) -> Result<()> {
+    if n > MAX_SYMMETRY_DETECTORS {
+        return Err(QsoError::invalid(
+            "symmetry",
+            format!("symmetries are checked for up to {MAX_SYMMETRY_DETECTORS} detectors, not {n}"),
+        ));
+    }
+    Ok(())
+}
+
+/// [`exact_circuit_distance`] with declared symmetries: permutations of the
+/// detectors (detector `d ↦ p[d]`), each checked as in
+/// [`error_model_symmetries`] and refused if it fails; the search starts
+/// from one error of each orbit of the group they generate (with those
+/// found, under [`ExactDistanceOptions::symmetry`]). When two errors flip
+/// the same detectors, only the detectors are checked: the distance is
+/// then at most 2 and the search uses no symmetry.
+pub fn exact_circuit_distance_with_symmetries(
+    dem: &DetectorErrorModel,
+    options: &ExactDistanceOptions,
+    symmetries: &[Vec<usize>],
 ) -> Result<CircuitDistance> {
     if options.max_seconds.is_nan() || options.max_seconds < 0.0 {
         return Err(QsoError::invalid(
@@ -516,11 +602,32 @@ pub fn exact_circuit_distance(
     let deadline = (options.max_seconds.is_finite())
         .then(|| Instant::now() + Duration::from_secs_f64(options.max_seconds.min(1e9)));
     let errors = errors(dem)?;
+    let n = dem.n_detectors;
+    // Symmetries only when asked for; declared ones are checked before
+    // anything else.
+    let mut checker =
+        (options.symmetry || !symmetries.is_empty()).then(|| Checker::new(n, &errors));
+    let mut permutations: Vec<Vec<u32>> = Vec::new();
+    if let Some(checker) = checker.as_mut() {
+        if !symmetries.is_empty() && !checker.twins() {
+            symmetry_limit(n)?;
+        }
+        for (i, sigma) in symmetries.iter().enumerate() {
+            match checker.check(sigma) {
+                Ok(pi) => permutations.extend(pi),
+                Err(why) => {
+                    return Err(QsoError::invalid(
+                        "symmetries",
+                        format!("permutation {i} {why}"),
+                    ));
+                }
+            }
+        }
+    }
     if let Some(k) = undetectable(&errors) {
         let (w, obs) = witness(&errors, &[k]);
         return Ok(CircuitDistance::exact(w, obs));
     }
-    let n = dem.n_detectors;
     let cycle = shortest_cycle(n, &errors);
     if errors.iter().all(|e| e.detectors.len() <= 2) {
         return Ok(match cycle {
@@ -546,8 +653,42 @@ pub fn exact_circuit_distance(
     {
         return Ok(CircuitDistance::none());
     }
+    // The symmetries found, unless two errors flip the same detectors
+    // (the search at weight 2 then finds a logical error at once).
+    if options.symmetry
+        && let Some(checker) = checker.as_mut()
+        && !checker.twins()
+    {
+        symmetry_limit(n)?;
+        match checker.find(deadline) {
+            Some(found) => permutations.extend(found.into_iter().map(|(_, pi)| pi)),
+            None => {
+                return Ok(match best {
+                    Some(set) => {
+                        let (w, obs) = witness(&errors, &set);
+                        CircuitDistance {
+                            lower_bound: 2.min(w.len()),
+                            witness: Some(w),
+                            observables: obs,
+                        }
+                    }
+                    None => CircuitDistance {
+                        lower_bound: 2,
+                        witness: None,
+                        observables: 0,
+                    },
+                });
+            }
+        }
+    }
     let budget = Budget::new(u64::MAX, deadline);
-    let search = Search::new(n, &errors);
+    // With two errors on the same detectors no permutation was kept.
+    let search = if permutations.is_empty() {
+        Search::new(n, &errors)
+    } else {
+        let (order, starts) = orbit_order(errors.len(), &permutations);
+        Search::on_orbits(n, &errors, order, starts)
+    };
     // The weights of the search's last two steps and the sets each
     // visited, for the cost of its next step.
     let mut history: Vec<(usize, u64)> = Vec::new();
@@ -875,19 +1016,64 @@ impl Budget {
 /// index order: the set found from the lowest first error, with the sets
 /// counted up to it, so neither the answer nor the count depends on the
 /// threads, the work limit included (the deadline aside).
-struct Search<'a> {
-    errors: &'a [Error],
+///
+/// With symmetries, the errors are searched in an order that puts each
+/// orbit in a block of consecutive positions, and only the first error of
+/// each block starts the search: of the images of a lightest logical
+/// error, the one whose first error comes earliest has the first error of
+/// an orbit as its first (a symmetry moving that error earlier would move
+/// the image's first error earlier too), and the search from there meets
+/// it. Each first error's search is then shared out by the second error it
+/// adds, as the first errors are without symmetries.
+struct Search {
     detectors: Vec<Vec<u32>>,
+    observables: Vec<u64>,
     by_detector: Vec<Vec<u32>>,
     by_effect: HashMap<Vec<u32>, Vec<u32>>,
     widest: usize,
+    /// The error (an index into the distinct errors) at each position.
+    labels: Vec<u32>,
+    /// The positions that start orbits (`None`: every error starts).
+    starts: Option<Vec<u32>>,
 }
 
-impl<'a> Search<'a> {
-    fn new(n: usize, errors: &'a [Error]) -> Self {
-        let detectors: Vec<Vec<u32>> = errors
+/// One part of a search: the sets of errors whose first error is `first`
+/// and, if given, whose second is `second`; `root` counts the set of the
+/// first error alone.
+#[derive(Clone, Copy)]
+struct Unit {
+    first: u32,
+    second: Option<u32>,
+    root: bool,
+}
+
+impl Search {
+    /// The search over every error, in index order.
+    fn new(n: usize, errors: &[Error]) -> Self {
+        let labels: Vec<u32> = (0..errors.len() as u32).collect();
+        Self::ordered(n, errors, labels, None)
+    }
+
+    /// The search over the errors at positions `order` (each orbit a
+    /// block), started from the first error of each block (`starts`).
+    fn on_orbits(n: usize, errors: &[Error], order: Vec<u32>, starts: Vec<u32>) -> Self {
+        Self::ordered(n, errors, order, Some(starts))
+    }
+
+    fn ordered(n: usize, errors: &[Error], labels: Vec<u32>, starts: Option<Vec<u32>>) -> Self {
+        let detectors: Vec<Vec<u32>> = labels
             .iter()
-            .map(|e| e.detectors.iter().map(|&d| d as u32).collect())
+            .map(|&k| {
+                errors[k as usize]
+                    .detectors
+                    .iter()
+                    .map(|&d| d as u32)
+                    .collect()
+            })
+            .collect();
+        let observables = labels
+            .iter()
+            .map(|&k| errors[k as usize].observables)
             .collect();
         let mut by_detector = vec![Vec::new(); n];
         let mut by_effect: HashMap<Vec<u32>, Vec<u32>> = HashMap::new();
@@ -898,12 +1084,51 @@ impl<'a> Search<'a> {
             by_effect.entry(d.clone()).or_default().push(k as u32);
         }
         Search {
-            errors,
             widest: detectors.iter().map(Vec::len).max().unwrap_or(0),
             detectors,
+            observables,
             by_detector,
             by_effect,
+            labels,
+            starts,
         }
+    }
+
+    /// The parts of the search at `weight` (at least 1), in its order:
+    /// every first error, or with symmetries the first error of each orbit
+    /// split by the second error it adds.
+    fn units(&self, weight: usize) -> Vec<Unit> {
+        let whole = |f: u32| Unit {
+            first: f,
+            second: None,
+            root: true,
+        };
+        let Some(starts) = &self.starts else {
+            return (0..self.detectors.len() as u32).map(whole).collect();
+        };
+        let mut out = Vec::new();
+        for &f in starts {
+            let detectors = &self.detectors[f as usize];
+            let before = out.len();
+            // As the walker's first step: the errors of higher position
+            // that flip the lowest detector, unless the weight cuts it.
+            if weight >= 3 && !detectors.is_empty() && detectors.len() <= (weight - 1) * self.widest
+            {
+                for &k in &self.by_detector[detectors[0] as usize] {
+                    if k > f {
+                        out.push(Unit {
+                            first: f,
+                            second: Some(k),
+                            root: out.len() == before,
+                        });
+                    }
+                }
+            }
+            if out.len() == before {
+                out.push(whole(f));
+            }
+        }
+        out
     }
 
     /// Whether some undetectable logical error has at most `weight` errors
@@ -911,26 +1136,30 @@ impl<'a> Search<'a> {
     /// that count: those the search in index order visits up to its
     /// answer.
     fn run(&self, weight: usize, allowance: u64, deadline: Option<Instant>) -> (Outcome, u64) {
-        let n = self.errors.len();
-        if weight == 0 || n == 0 {
-            return (Outcome::NotFound { exhausted: n == 0 }, 0);
+        let m = self.detectors.len();
+        if weight == 0 || m == 0 {
+            return (Outcome::NotFound { exhausted: m == 0 }, 0);
         }
+        let units = self.units(weight);
+        let n = units.len();
         // The threads stop soon after visiting `allowance` sets together.
         let budget = Budget::new(allowance, deadline);
         let per = n.div_ceil(16 * threads()).max(1);
-        // The lowest first error from which a set was found: later first
-        // errors need not be searched.
+        // The lowest part from which a set was found: later parts need not
+        // be searched.
         let lowest = AtomicUsize::new(usize::MAX);
         let tallies: Vec<Vec<Tally>> = map_tasks(n.div_ceil(per), |t| {
             let mut walker = Walker::new(self, weight);
             let mut out = Vec::new();
-            for first in t * per..((t + 1) * per).min(n) {
-                if first > lowest.load(Ordering::Relaxed) {
+            let first = t * per;
+            for (i, &unit) in units[first..((t + 1) * per).min(n)].iter().enumerate() {
+                let i = first + i;
+                if i > lowest.load(Ordering::Relaxed) {
                     break;
                 }
-                match walker.start(first as u32, weight, &budget) {
+                match walker.unit(unit, weight, &budget) {
                     Some(true) => {
-                        lowest.fetch_min(first, Ordering::Relaxed);
+                        lowest.fetch_min(i, Ordering::Relaxed);
                         out.push(Tally::Found {
                             at: walker.nodes,
                             set: walker.set(),
@@ -949,8 +1178,8 @@ impl<'a> Search<'a> {
             }
             out
         });
-        // The account of the search in index order, first error by first
-        // error, up to the first one the threads did not finish.
+        // The account of the search in index order, part by part, up to
+        // the first one the threads did not finish.
         let (mut spent, mut cut) = (0u64, false);
         for (t, tally) in tallies.iter().enumerate() {
             for entry in tally {
@@ -973,18 +1202,17 @@ impl<'a> Search<'a> {
             }
             let next = t * per + tally.len();
             if next < ((t + 1) * per).min(n) {
-                return self.sequential(next, weight, allowance, deadline, spent, cut);
+                return self.sequential(&units[next..], weight, allowance, deadline, spent, cut);
             }
         }
         (Outcome::NotFound { exhausted: !cut }, spent)
     }
 
-    /// The search in index order from first error `from` on, on one
-    /// thread, after `spent` sets (`cut`: whether the weight cut a branch
-    /// before).
+    /// The search in index order over the parts `units`, on one thread,
+    /// after `spent` sets (`cut`: whether the weight cut a branch before).
     fn sequential(
         &self,
-        from: usize,
+        units: &[Unit],
         weight: usize,
         allowance: u64,
         deadline: Option<Instant>,
@@ -993,8 +1221,8 @@ impl<'a> Search<'a> {
     ) -> (Outcome, u64) {
         let budget = Budget::new(allowance - spent, deadline);
         let mut walker = Walker::new(self, weight);
-        for first in from..self.errors.len() {
-            match walker.start(first as u32, weight, &budget) {
+        for &unit in units {
+            match walker.unit(unit, weight, &budget) {
                 Some(true) => {
                     return if spent.saturating_add(walker.nodes) <= allowance {
                         (Outcome::Found(walker.set()), spent + walker.nodes)
@@ -1018,8 +1246,8 @@ impl<'a> Search<'a> {
 
 /// One thread's depth-first search, with a buffer of fired detectors per
 /// depth.
-struct Walker<'s, 'a> {
-    search: &'s Search<'a>,
+struct Walker<'s> {
+    search: &'s Search,
     levels: Vec<Vec<u32>>,
     chosen: Vec<u32>,
     /// Sets visited and not yet counted in the budget.
@@ -1030,8 +1258,8 @@ struct Walker<'s, 'a> {
     cut: bool,
 }
 
-impl<'s, 'a> Walker<'s, 'a> {
-    fn new(search: &'s Search<'a>, weight: usize) -> Self {
+impl<'s> Walker<'s> {
+    fn new(search: &'s Search, weight: usize) -> Self {
         Walker {
             search,
             levels: vec![Vec::with_capacity(4 * search.widest.max(1)); weight],
@@ -1044,7 +1272,34 @@ impl<'s, 'a> Walker<'s, 'a> {
 
     /// The errors chosen, by index.
     fn set(&self) -> Vec<usize> {
-        self.chosen.iter().map(|&k| k as usize).collect()
+        self.chosen
+            .iter()
+            .map(|&k| self.search.labels[k as usize] as usize)
+            .collect()
+    }
+
+    /// Whether `unit` extends to a logical error of at most `weight`
+    /// errors (`None`: out of budget).
+    fn unit(&mut self, unit: Unit, weight: usize, budget: &Budget) -> Option<bool> {
+        let Some(second) = unit.second else {
+            return self.start(unit.first, weight, budget);
+        };
+        // As `start` and the first step of `extend`, past the first error.
+        let search = self.search;
+        let root = u64::from(unit.root);
+        self.nodes = root;
+        self.pending += root;
+        self.cut = false;
+        self.chosen.clear();
+        self.chosen.extend([unit.first, second]);
+        symmetric_difference(
+            &search.detectors[unit.first as usize],
+            &search.detectors[second as usize],
+            &mut self.levels[1],
+        );
+        let observables =
+            search.observables[unit.first as usize] ^ search.observables[second as usize];
+        self.extend(1, observables, weight - 2, unit.first, budget)
     }
 
     /// Whether error `first` extends by errors of higher index to a
@@ -1057,7 +1312,7 @@ impl<'s, 'a> Walker<'s, 'a> {
         self.chosen.push(first);
         self.levels[0].clear();
         self.levels[0].extend_from_slice(&search.detectors[first as usize]);
-        let observables = search.errors[first as usize].observables;
+        let observables = search.observables[first as usize];
         self.extend(0, observables, weight - 1, first, budget)
     }
 
@@ -1096,7 +1351,7 @@ impl<'s, 'a> Walker<'s, 'a> {
                 for &k in ks {
                     if k > first
                         && !self.chosen.contains(&k)
-                        && observables ^ search.errors[k as usize].observables != 0
+                        && observables ^ search.observables[k as usize] != 0
                     {
                         self.chosen.push(k);
                         return Some(true);
@@ -1116,7 +1371,7 @@ impl<'s, 'a> Walker<'s, 'a> {
             let (head, tail) = self.levels.split_at_mut(depth + 1);
             symmetric_difference(&head[depth], &search.detectors[k as usize], &mut tail[0]);
             self.chosen.push(k);
-            let next = observables ^ search.errors[k as usize].observables;
+            let next = observables ^ search.observables[k as usize];
             match self.extend(depth + 1, next, remaining - 1, first, budget) {
                 Some(true) => return Some(true),
                 Some(false) => {}

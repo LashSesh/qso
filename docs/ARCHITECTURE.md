@@ -276,6 +276,28 @@ frame update for each gate is derived once.
   - Both steps check the deadline: the search every 4096 sets, the
     enumeration every 2²⁰ word operations, in every task. A step it
     interrupts leaves the bounds where they were.
+  - **On the orbits of symmetries** (`qec/distance/symmetry.rs`, 1.47).
+    `Checker` maps a detector permutation to the error permutation it
+    induces, through a hash map from detector sets to errors, and checks
+    each observable read through it for membership in the row space of
+    the detectors and observables (one `gf2::Basis` of the rows, built at
+    the first check). Symmetries are found by `coloured_group` on the
+    bipartite graph of the detectors that some error flips and the
+    errors (two colours; detectors flipped by none are left out, since
+    they would only add permutations among themselves), and generators
+    that fail the check are dropped. `orbit_order` closes the orbits
+    under the generators and orders the errors so that each orbit is a
+    block, blocks by their first error. The search then runs over
+    positions in that order (`Search::on_orbits`, with labels back to the
+    errors) and starts only from the first position of each block. Few
+    first errors would leave threads idle, so each is split into parts by
+    the second error the walker would add (`Unit`); the records are kept
+    per part, in the same order as the sequential search, so the answer
+    still does not depend on the threads. With two errors on the same
+    detectors no symmetry is used: the search finds them at weight 2.
+    Measured on [[144, 12, 12]], this order visits about half the sets
+    that starting from the lowest error of each orbit in the model's
+    order does, and a tenth of what the reversed order of blocks does.
 - **Circuit locations.** `explain_errors` replays each noise channel's
   components (`dem::each_channel`, also used to build the model). For
   every combination of a channel's Paulis it takes the XOR of their

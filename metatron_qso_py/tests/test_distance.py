@@ -154,6 +154,92 @@ def _nullspace_gf2(rows: np.ndarray) -> np.ndarray:
     return np.array(basis)
 
 
+def _rank_gf2(rows: np.ndarray) -> int:
+    a = rows.copy() % 2
+    rank = 0
+    for col in range(a.shape[1]):
+        hits = np.flatnonzero(a[rank:, col]) + rank
+        if len(hits) == 0:
+            continue
+        a[[rank, hits[0]]] = a[[hits[0], rank]]
+        below = np.flatnonzero(a[:, col])
+        below = below[below != rank]
+        a[below] ^= a[rank]
+        rank += 1
+        if rank == a.shape[0]:
+            break
+    return rank
+
+
+def test_exact_distance_on_the_orbits_of_symmetries() -> None:
+    # The depth-8 cycle of [[72, 12, 6]] keeps the 36 translations of the
+    # torus: every orbit of the distinct errors has 36 of them.
+    code, _ = q.CssCode.bivariate_bicycle_code(72)
+    c = q.css_code_memory(code, 2, 0.001, schedule="bicycle")
+    model = c.detector_error_model()
+    generators = q.error_model_symmetries(model)
+    assert generators
+    n, m = model.n_detectors, len(model)
+    # Independently: each maps the detectors of every error onto those of
+    # an error, and every observable read through it is a sum of rows of
+    # the detectors and observables over GF(2), so that logical errors map
+    # onto logical errors.
+    flips = {tuple(sorted(dets)): obs for _, dets, obs in model.errors}
+    rows = np.zeros((n + model.n_observables, m), dtype=np.uint8)
+    for k, (_, dets, obs) in enumerate(model.errors):
+        rows[dets, k] = 1
+        for b in range(model.n_observables):
+            rows[n + b, k] = obs >> b & 1
+    rank = _rank_gf2(rows)
+    for g in generators:
+        assert sorted(g) == list(range(n))
+        read = np.zeros((model.n_observables, m), dtype=np.uint8)
+        for k, (_, dets, _) in enumerate(model.errors):
+            image = tuple(sorted(g[d] for d in dets))
+            assert image in flips
+            for b in range(model.n_observables):
+                read[b, k] = flips[image] >> b & 1
+        assert _rank_gf2(np.vstack([rows, read])) == rank
+    sets = sorted(flips)
+    index = {s: i for i, s in enumerate(sets)}
+    parent = list(range(len(sets)))
+
+    def root(i: int) -> int:
+        while parent[i] != i:
+            i = parent[i]
+        return i
+
+    for g in generators:
+        for s in sets:
+            a, b = root(index[s]), root(index[tuple(sorted(g[d] for d in s))])
+            parent[max(a, b)] = min(a, b)
+    sizes: dict[int, int] = {}
+    for i in range(len(sets)):
+        sizes[root(i)] = sizes.get(root(i), 0) + 1
+    assert set(sizes.values()) == {36}
+    # The same distance with and without them, found or declared.
+    plain = q.exact_circuit_distance(model, max_seconds=None)
+    found = q.exact_circuit_distance(model, max_seconds=None, symmetry=True)
+    declared = q.exact_circuit_distance(model, max_seconds=None, symmetries=generators)
+    assert plain.distance == found.distance == declared.distance == 6
+    for r in (found, declared):
+        assert r.witness is not None
+        fired = np.zeros(n, dtype=bool)
+        obs = 0
+        for k in r.witness:
+            _, dets, o = model.errors[k]
+            fired[dets] ^= True
+            obs ^= o
+        assert not fired.any() and obs == r.observables != 0
+    # A swap of two detectors is no symmetry.
+    swap = list(range(n))
+    swap[0], swap[1] = 1, 0
+    with pytest.raises(ValueError, match="no error flips"):
+        q.exact_circuit_distance(model, symmetries=[swap])
+    with pytest.raises(ValueError, match="not a permutation"):
+        q.exact_circuit_distance(model, symmetries=[[0] * n])
+
+
 def test_exact_distance_of_the_golay_code_and_a_circuit() -> None:
     # The Golay code [23, 12, 7] as a model: its parity checks are the
     # detectors and the first twelve columns (an information set of the

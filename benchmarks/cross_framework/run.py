@@ -703,7 +703,8 @@ def correlated_and_distance_vs_stim(quick: bool) -> dict:
 
 def exact_distances(sc, qc) -> dict:
     """Stim's search with no truncation (exhaustive: the circuit distance)
-    and QSO's `exact_circuit_distance`, with their times."""
+    and QSO's `exact_circuit_distance`, with their times; QSO again on the
+    orbits of the circuit's symmetries (1.47)."""
     import metatron_qso as q
 
     started = time.time()
@@ -715,12 +716,18 @@ def exact_distances(sc, qc) -> dict:
         )
     )
     middle = time.time()
-    exact = q.exact_circuit_distance(qc.detector_error_model(), max_seconds=600.0)
+    model = qc.detector_error_model()
+    exact = q.exact_circuit_distance(model, max_seconds=600.0)
+    plain_done = time.time()
+    symmetric = q.exact_circuit_distance(model, max_seconds=600.0, symmetry=True)
     return {
         "exhaustive_distance_stim": exhaustive,
         "exhaustive_distance_stim_seconds": middle - started,
         "exact_distance_qso": [exact.lower_bound, exact.upper_bound],
-        "exact_distance_qso_seconds": time.time() - middle,
+        "exact_distance_qso_seconds": plain_done - middle,
+        "exact_distance_qso_symmetric": [symmetric.lower_bound, symmetric.upper_bound],
+        "exact_distance_qso_symmetric_seconds": time.time() - plain_done,
+        "symmetry_generators": len(q.error_model_symmetries(model)),
     }
 
 
@@ -1497,6 +1504,8 @@ def check(c: dict) -> list[str]:
             failures.append(f"circuit distance of {name} is not exact or exceeds Stim's search: {r}")
         if r["exact_distance_qso"] != [r["exhaustive_distance_stim"]] * 2:
             failures.append(f"exact circuit distance of {name} differs from Stim's exhaustive search: {r}")
+        if r["exact_distance_qso_symmetric"] != [r["exhaustive_distance_stim"]] * 2:
+            failures.append(f"circuit distance of {name} on the orbits differs from Stim's exhaustive search: {r}")
         if "graphlike_distance_stim" not in r:
             continue
         if r["graphlike_distance_qso"] != r["graphlike_distance_stim"]:

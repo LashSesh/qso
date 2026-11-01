@@ -58,8 +58,9 @@ pub use dem::{
     MAX_MODEL_DETECTORS, correlated_error_model, detector_error_model, explain_errors,
 };
 pub use distance::{
-    CircuitDistance, DistanceMethod, DistanceOptions, ExactDistanceOptions, circuit_distance,
-    exact_circuit_distance, graphlike_distance,
+    CircuitDistance, DistanceMethod, DistanceOptions, ExactDistanceOptions, MAX_SYMMETRY_DETECTORS,
+    circuit_distance, error_model_symmetries, exact_circuit_distance,
+    exact_circuit_distance_with_symmetries, graphlike_distance,
 };
 pub use frame::{DetectorSamples, sample_detectors};
 pub use matching::{MAX_MATCHING_PAIRS, MatchingDecoder};

@@ -168,7 +168,6 @@ impl Basis {
     }
 
     /// Whether `v` is in the span.
-    #[cfg(test)]
     pub(crate) fn contains(&mut self, v: &[u64]) -> bool {
         let mut v = v.to_vec();
         self.reduce(&mut v, None);
