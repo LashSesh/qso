@@ -353,7 +353,7 @@ fn thermal_equilibrium_stays_put() {
     let later = sys.evolve(&thermal, &[Event::Delay(5.0)]).unwrap();
     let err = relative(&later, &thermal);
     assert!(err < 1e-10, "{err:e}");
-    assert!(start.elapsed().as_secs_f64() < 10.0);
+    assert!(start.elapsed().as_secs_f64() < crate::time_limit(10.0));
 }
 
 #[test]
@@ -379,7 +379,7 @@ fn large_problems_are_refused_from_the_estimates() {
         .unwrap_err()
         .to_string();
     assert!(err.contains("operations"), "{err}");
-    assert!(start.elapsed().as_secs_f64() < 20.0);
+    assert!(start.elapsed().as_secs_f64() < crate::time_limit(20.0));
 }
 
 /// Timings for the guide (`cargo test --release -- --ignored --nocapture

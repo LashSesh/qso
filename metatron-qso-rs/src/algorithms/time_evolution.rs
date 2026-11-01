@@ -998,7 +998,7 @@ mod tests {
         let again = trotter_error_bounds(&h, 1.0, 40, 4).unwrap();
         assert_eq!(first, again);
         assert!(
-            start.elapsed().as_secs_f64() < 0.05,
+            start.elapsed().as_secs_f64() < crate::time_limit(0.05),
             "{:?}",
             start.elapsed()
         );

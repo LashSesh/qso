@@ -640,7 +640,11 @@ mod tests {
             let (h, _) = shuffled(g, k as u64);
             assert_eq!(g.canonical_form().edges(), h.canonical_form().edges());
         }
-        assert!(start.elapsed().as_secs() < 20, "{:?}", start.elapsed());
+        assert!(
+            start.elapsed().as_secs_f64() < crate::time_limit(20.0),
+            "{:?}",
+            start.elapsed()
+        );
         // Weighted 4-cycles: twins only if their edge weights agree. In
         // `w`, 1 and 2 are twins (weights 2 to 0 and 1 to 3); `u` is `w`
         // relabelled; in `v` the weights alternate and nothing is a twin.
@@ -669,7 +673,7 @@ mod tests {
         let k = complete(60);
         let (h, _) = shuffled(&k, 1);
         assert!(isomorphism(&k, &h).is_some());
-        assert!(start.elapsed().as_secs() < 20);
+        assert!(start.elapsed().as_secs_f64() < crate::time_limit(20.0));
         // Leaf automorphisms are genuine.
         let g = hypercube(5);
         let mut search = Search {

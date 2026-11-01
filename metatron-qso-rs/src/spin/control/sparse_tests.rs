@@ -551,7 +551,7 @@ fn large_problems_are_estimated_before_anything_is_built() {
         .unwrap_err();
     assert!(err.to_string().contains("needs about"), "{err}");
     let seconds = clock.elapsed().as_secs_f64();
-    assert!(seconds < 20.0, "{seconds} s");
+    assert!(seconds < crate::time_limit(20.0), "{seconds} s");
     // The estimate before building against the one from the blocks.
     for (sys, c) in [
         (

@@ -2260,7 +2260,7 @@ mod tests {
         src.push_str("g39 q[0];");
         let start = std::time::Instant::now();
         assert!(Program::from_qasm(&src).is_err());
-        assert!(start.elapsed().as_secs() < 30);
+        assert!(start.elapsed().as_secs_f64() < crate::time_limit(30.0));
         // Controls count towards the budget.
         let qs: Vec<String> = (0..64).map(|k| format!("q[{k}]")).collect();
         let src = format!(

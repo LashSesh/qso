@@ -1034,7 +1034,7 @@ mod tests {
         let start = std::time::Instant::now();
         assert!(paley(18_446_744_073_709_551_557).is_err());
         assert!(paley(1_000_000_000_000_000_009).is_err());
-        assert!(start.elapsed().as_millis() < 100);
+        assert!(start.elapsed().as_secs_f64() < crate::time_limit(0.1));
     }
 
     #[test]
@@ -1053,7 +1053,7 @@ mod tests {
         // Pairing succeeds with probability ≈ e^{−(d²−1)/4}: never for d = 60.
         let start = std::time::Instant::now();
         assert!(random_regular(4000, 60, &mut Rng::seed_from_u64(1)).is_err());
-        assert!(start.elapsed().as_secs() < 30);
+        assert!(start.elapsed().as_secs_f64() < crate::time_limit(30.0));
     }
 
     #[test]

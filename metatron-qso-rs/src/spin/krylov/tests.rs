@@ -106,7 +106,7 @@ fn the_estimate_bounds_the_work() {
     expv(&a, &v, t, KRYLOV_TOLERANCE * norm2(&v), 0.0).unwrap();
     let elapsed = start.elapsed();
     assert!(work / one > norm * t / 10.0, "{}", work / one);
-    assert!(elapsed.as_secs_f64() < 60.0);
+    assert!(elapsed.as_secs_f64() < crate::time_limit(60.0));
 }
 
 #[test]

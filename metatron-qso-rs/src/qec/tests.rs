@@ -449,7 +449,7 @@ fn limits_fail_early_with_an_error() {
     // Memory experiments beyond the operation limit fail before building.
     let start = std::time::Instant::now();
     assert!(surface_code_memory(101, 10_000, &CircuitNoise::uniform(0.001)).is_err());
-    assert!(start.elapsed().as_secs_f64() < 2.0);
+    assert!(start.elapsed().as_secs_f64() < crate::time_limit(2.0));
     // Matching graphs check their detectors.
     let bad = DetectorErrorModel {
         n_detectors: 3,

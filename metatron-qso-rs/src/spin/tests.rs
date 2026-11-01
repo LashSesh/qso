@@ -375,7 +375,7 @@ fn hopeless_relaxation_is_refused_early() {
     let start = std::time::Instant::now();
     let err = sys.evolve(&rho, &[Event::Delay(1.0)]).unwrap_err();
     assert!(format!("{err}").contains("operations"), "{err}");
-    assert!(start.elapsed().as_secs_f64() < 5.0);
+    assert!(start.elapsed().as_secs_f64() < crate::time_limit(5.0));
 }
 
 #[test]

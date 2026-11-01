@@ -606,7 +606,7 @@ fn many_sites_are_enumerated_quickly() {
     );
     assert_eq!(f.dimension(), 1999 * 1000);
     assert_eq!(f.index_of(&[1998, 1999]).unwrap(), f.dimension() - 1);
-    assert!(start.elapsed().as_secs_f64() < 30.0);
+    assert!(start.elapsed().as_secs_f64() < crate::time_limit(30.0));
 }
 
 #[test]

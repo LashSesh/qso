@@ -412,7 +412,7 @@ fn exact_circuit_distances_and_time_limits() {
         .with_max_seconds(0.5)
         .with_bposd_trials(1);
     let r = exact_circuit_distance(&dem, &options).unwrap();
-    assert!(start.elapsed().as_secs_f64() < 10.0);
+    assert!(start.elapsed().as_secs_f64() < crate::time_limit(10.0));
     check_witness(&dem, &r);
     assert!(r.lower_bound >= 2 && r.upper_bound().is_some_and(|u| u >= r.lower_bound));
     // Invalid limits.
@@ -593,7 +593,7 @@ fn the_enumeration_keeps_the_time_limit() {
     let start = std::time::Instant::now();
     let r = exact_circuit_distance(&dem, &options).unwrap();
     let seconds = start.elapsed().as_secs_f64();
-    assert!(seconds < 2.0, "{seconds} s");
+    assert!(seconds < crate::time_limit(2.0), "{seconds} s");
     assert!(r.lower_bound >= 2 && r.distance().is_none(), "{r:?}");
 }
 
@@ -887,7 +887,7 @@ fn a_passed_time_limit_returns_before_the_symmetries() {
     let start = std::time::Instant::now();
     let r = exact_circuit_distance(&dem, &options.with_max_seconds(0.0)).unwrap();
     let seconds = start.elapsed().as_secs_f64();
-    assert!(seconds < 20.0, "{seconds} s");
+    assert!(seconds < crate::time_limit(20.0), "{seconds} s");
     assert_eq!((r.lower_bound, r.witness), (2, None));
 }
 
