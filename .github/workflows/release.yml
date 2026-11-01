@@ -89,6 +89,9 @@ jobs:
     needs: preflight
     runs-on: ${{ matrix.os }}
     strategy:
+      # Every platform runs to the end, so that one run shows all failures
+      # (publishing still needs every wheel).
+      fail-fast: false
       matrix:
         include:
           - { platform: linux-x86_64, os: ubuntu-latest, target: x86_64, linux: auto }
