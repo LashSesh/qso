@@ -16,7 +16,8 @@ finished milestones are released together, not one by one. The third
 (1.29 to 1.33, section 4g) and eighth (1.34 to 1.37, magnetic resonance
 for medical research, section 4h) stages ship together as release
 1.8.0. The ninth (1.38 to 1.42, section 4i) and tenth (1.43 to 1.47,
-section 4j) stages ship together as release 1.9.0. Up to 1.3
+section 4j) stages ship together as release 1.9.0. The eleventh stage
+(1.48 to 1.52, section 4k) is planned. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -4480,6 +4481,134 @@ exact reference. Mixed Gaussian states with many photons in many modes,
 whose exact methods stay exponential. Noise learning for layers of
 non-Clifford gates. The GPU track, still parked (section 7).
 
+## 4k. Eleventh stage (1.48 to 1.52)
+
+Planned November 2026, after the release of the ninth and tenth stages
+(1.9.0), from the gaps that remain in the table of section 1. As before,
+the stage starts with walks on graphs. Three milestones then carry the
+magnetic-resonance work to what experiments measure and do: relaxation
+of molecules that do not tumble isotropically, hyperpolarisation while
+the reaction that makes it runs, and field cycling of the spin systems
+that 1.41 can propagate. The last estimates logical error rates far
+below what sampling reaches. The rules stay: no new dependency of the
+crate, an independent reference for every deliverable, reference tools
+in the cross-validation only.
+
+### 1.48 — Open walks on large symmetric graphs (M)
+
+Use case: continuous-time walks with dephasing (1.38) on vertex- and
+edge-transitive graphs of 10⁵ to 10⁶ nodes: Hamming, Johnson and Kneser
+graphs, circulants and Cayley graphs, where the density matrix has
+10¹⁰ entries or more but the orbitals of the symmetry group are few.
+1.38 finds the orbitals by a union–find over all `n²` ordered pairs and
+stops at 8192 nodes.
+
+| Deliverable | Detail |
+|---|---|
+| Orbitals from suborbits | the orbitals of a group of automorphisms as the orbits of each point stabiliser on the nodes (one representative per orbit of the group), in memory linear in the nodes; the group from the automorphism search where it runs, or declared generators, checked |
+| Walks on orbitals | the generator of `SymmetricOpenWalk` (coherent part and dephasing between blocks) from the intersection numbers of the orbitals, computed from one representative pair each |
+| Limits | orbitals, intersection numbers, work and memory estimated before anything is built |
+
+Validation: equal to `SymmetricOpenWalk` where both run (up to 8192
+nodes, site and block dephasing); hypercubes equal `HypercubeOpenWalk`
+(1.38) at any dimension; complete and complete bipartite graphs follow
+their closed forms; Hamming graphs, whose walk factorises over the
+coordinates under per-coordinate dephasing, follow the product of the
+factors' walks.
+
+### 1.49 — Relaxation beyond isotropic tumbling (M)
+
+Use case: ¹⁵N and ¹³C relaxation in proteins and elongated molecules,
+the rates that NMR studies of dynamics measure (`R₁`, `R₂`, the
+heteronuclear NOE, cross-correlated rates and the TROSY effect).
+Redfield relaxation of 1.34 assumes isotropic tumbling with one
+correlation time.
+
+| Deliverable | Detail |
+|---|---|
+| Anisotropic diffusion | spectral densities of axially symmetric and fully anisotropic rotational diffusion (Woessner, J. Chem. Phys. 37, 647 (1962)), with each interaction's orientation in the diffusion frame, for auto- and cross-correlations |
+| Internal motion | the model-free spectral densities of Lipari and Szabo (J. Am. Chem. Soc. 104, 4546 (1982)) and their extension by Clore et al. (1990): order parameters and internal correlation times per interaction |
+| Relaxation | the Redfield superoperators of 1.34 and 1.41 with these spectral densities, cross-correlations between dipolar couplings and shielding anisotropy included |
+
+Validation: the isotropic limit equals 1.34; `R₁`, `R₂` and the NOE of an
+¹⁵N–¹H pair follow the standard closed forms for all three motional
+models; the dipolar–CSA cross-correlated rate and its TROSY consequence
+follow Goldman's closed form (J. Magn. Reson. 60, 437 (1984)) as a
+function of the angle between the tensors; spectral densities integrate
+to the correlation functions they come from; equilibrium stays
+stationary.
+
+### 1.50 — Hyperpolarisation with reaction kinetics (M)
+
+Use case: PASADENA and ALTADENA as they run: parahydrogen adds
+irreversibly to a substrate at a finite rate, the product accumulates
+while its polarisation is transferred and relaxes, and the signal peaks
+before the reaction ends. 1.35 needs steady chemistry: exchange between
+species whose amounts stay fixed.
+
+| Deliverable | Detail |
+|---|---|
+| Kinetics | species whose amounts follow irreversible and reversible reactions (first and second order, parahydrogen in excess or depleted), integrated with the spin dynamics |
+| Spin source | each reaction event creates the product with the spin state of its reactants (the singlet of parahydrogen, the substrate's state), with the product's density matrix unnormalised so that its trace is its amount |
+| Experiments | PASADENA and ALTADENA with finite reaction rates, field ramps during the reaction, and SABRE with a catalyst that is consumed |
+
+Validation: amounts follow the closed-form kinetics; for a two-spin
+product with `T₁` relaxation the accumulated polarisation follows its
+closed form (a convolution of exponentials); fast reactions give the
+results of 1.33; a Monte Carlo of reaction events (as in 1.35) agrees
+within its standard error; the product's trace equals its amount.
+
+### 1.51 — Field profiles with relaxation beyond six spins (M–L)
+
+Use case: field cycling for seven and eight relaxing spins (SABRE-SHEATH
+at microtesla fields, ALTADENA ramps, the field steps that store and
+release long-lived singlet order), optimised with the exact gradients of
+1.46. 1.36 optimises field profiles with relaxation in a dense
+Liouville space of up to six spins, and 1.46 left them dense: the
+generator changes with the field at every step, and its field
+derivative took four more relaxation superoperators per step.
+
+| Deliverable | Detail |
+|---|---|
+| Relaxation over the field | the relaxation superoperator as a function of the field across the profile's range, with an analytic field derivative (from the spectral densities and the Hamiltonian's eigenbasis, or an interpolant over the range with a stated error), built once per optimisation |
+| Gradients on sparse blocks | field-profile objectives of 1.36 on the sparse blocks of 1.46, with the Gauss–Legendre gradients of 1.46 and the field direction from that derivative |
+| Limits | work and memory estimated before anything is built, as in 1.46 |
+
+Validation: gradients equal 1.36's dense gradients up to six spins and
+central differences beyond; the relaxation superoperator over the field
+equals direct builds within its stated error; optimised profiles replayed
+by `evolve` give the objective the optimiser reported; SABRE-SHEATH
+transfer peaks at the level anticrossing of the closed-form two- and
+three-spin models.
+
+### 1.52 — Logical error rates below sampling (L)
+
+Use case: logical error rates of surface and bivariate bicycle codes at
+physical error rates where they are 10⁻⁸ to 10⁻¹², as needed for
+resource estimates. Sampling (1.8) needs about a hundred failures for a
+useful estimate: 10¹⁰ shots at a rate of 10⁻⁸.
+
+| Deliverable | Detail |
+|---|---|
+| Splitting | the splitting method of Bravyi and Vargo (Phys. Rev. A 88, 062308 (2013)): Metropolis chains over error configurations that the decoder fails on, along a sequence of error rates, with the ratios of consecutive failure probabilities and their standard errors |
+| Leading order | the number of failing configurations of the least weight, from the lightest logical errors (1.42) and the decoder, for the leading term `A·p^w` |
+| Decoders | matching for graph-like models, BP+OSD for the others |
+
+Validation: equal to the exact failure probability from enumerating all
+error configurations of small codes (repetition and distance-3 surface
+codes); equal to direct sampling within standard errors where that
+reaches; the leading coefficient equals the count of failing
+configurations of least weight; the estimate's standard error covers the
+reference in repeated runs at the stated rate.
+
+### Not in this stage
+
+Leakage out of the qubit space, which needs qudits in every simulator.
+Pretty good state transfer outside the cyclotomic families, which has no
+exact reference. Mixed Gaussian states with many photons in many modes,
+whose exact methods stay exponential. Noise learning for layers of
+non-Clifford gates. The GPU track, still parked (section 7).
+
 ## 5. Order and reasoning
 
 1. **1.2 first:** small, made every later release safer, and documentation
@@ -4567,6 +4696,16 @@ non-Clifford gates. The GPU track, still parked (section 7).
     first's tests of convergence. Optimal control of larger systems
     (1.46) needs the sparse blocks of 1.41, and circuit distances by
     symmetry (1.47) the search of 1.42; neither depends on the others.
+19. **Eleventh stage: walks first again, then magnetic resonance as
+    measured.** Open walks on large symmetric graphs (1.48) lift the
+    limit of 1.38 by finding orbitals from point stabilisers instead of
+    all pairs of nodes. Relaxation beyond isotropic tumbling (1.49) comes
+    before the two milestones that use relaxation, because both need its
+    spectral densities: reaction kinetics (1.50) needs product relaxation
+    during the reaction, and field profiles beyond six spins (1.51) need
+    the field dependence of the same superoperators. Logical error rates
+    below sampling (1.52) build on the distances and witnesses of 1.42
+    and 1.47 and are independent of the rest.
 
 ## 6. Measures of success
 
@@ -4653,7 +4792,12 @@ Taken (October 2026):
   bath with finite pulses by the generalised cluster-correlation
   expansion (1.45), optimal control of larger spin systems (1.46),
   circuit distances by symmetry (1.47). The ninth and tenth stages ship
-  together as one release.
+  together as one release (1.9.0).
+* Eleventh stage (November 2026, accepted as proposed): open walks on
+  large symmetric graphs (1.48), relaxation beyond isotropic tumbling
+  (1.49), hyperpolarisation with reaction kinetics (1.50), field profiles
+  with relaxation beyond six spins (1.51), logical error rates below
+  sampling (1.52).
 * The browser playground stays, because it costs little to maintain: it
   is plain HTML and JavaScript without dependencies or a build step, it
   uses only the npm package's JSON interface, which the package's tests
