@@ -6,6 +6,27 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.9.0] — 2026-11-01
+
+Milestones 1.38 to 1.47 of the [roadmap](docs/ROADMAP.md), its ninth and
+tenth stages, released together:
+
+- **ninth stage**: 1.38 (symmetry for driven and decoherent walks), 1.39
+  (the nuclear-spin bath of an NV centre), 1.40 (the optical cycle and
+  magnetometer sensitivity), 1.41 (relaxation of larger spin systems),
+  1.42 (exact distances of error-correcting circuits);
+- **tenth stage**: 1.43 (interacting walkers on symmetric graphs), 1.44
+  (slow noise, averaged exactly), 1.45 (the NV bath with finite pulses),
+  1.46 (optimal control of larger spin systems), 1.47 (circuit distances
+  by symmetry).
+
+New results are checked against closed forms from the literature, the
+computations of earlier milestones without symmetry reduction, dense
+propagation, enumeration, PyCCE, Stim and independent NumPy and SciPy
+builds; each milestone's section of the roadmap names its references.
+The validation tests of 1.8.0 still pass; they only grew. The public
+Rust API only grows (`cargo-semver-checks` against 1.8.0).
+
 ### Added
 
 - **Symmetry for driven and decoherent walks** (1.38, `walks::symmetric`,
@@ -120,6 +141,18 @@ All notable changes to this project are documented here. The format follows
     per orbit of the automorphisms, 37 times faster on the Paley graph of
     order 61 and beyond the dense limit, up to 8192 configurations.
 
+- **Slow noise, averaged exactly** (1.44, `noise::slow`): classical
+  Markov processes with finitely many states (`MarkovProcess`: telegraph
+  noise, Ornstein–Uhlenbeck noise as the Ehrenfest chain of `K`
+  fluctuators, quasi-static noise on the nodes of a Gauss rule, products
+  of independent processes), the exact coherence under ideal π pulses
+  (`dephasing`), independent fluctuators whose factors multiply
+  (`Fluctuators`, 1/f noise from rates spread evenly in their logarithm)
+  and Kubo's stochastic Liouville equation (`StochasticLiouville`: one
+  density matrix per joint state of the processes, Krylov steps on the
+  sparse generator). In Python: `MarkovProcess`, `Fluctuators`,
+  `StochasticLiouville`.
+
 - **The NV bath with the electron in every cluster** (1.45,
   `spin::generalised`, `spin.GeneralisedBath`): the generalised
   cluster-correlation expansion of Onizhuk et al. The electron (spin 1,
@@ -174,29 +207,28 @@ All notable changes to this project are documented here. The format follows
   symmetries=...)` and `error_model_symmetries`; on the command line
   `qso qec --symmetry`.
 
-- **Slow noise, averaged exactly** (1.44, `noise::slow`): classical
-  Markov processes with finitely many states (`MarkovProcess`: telegraph
-  noise, Ornstein–Uhlenbeck noise as the Ehrenfest chain of `K`
-  fluctuators, quasi-static noise on the nodes of a Gauss rule, products
-  of independent processes), the exact coherence under ideal π pulses
-  (`dephasing`), independent fluctuators whose factors multiply
-  (`Fluctuators`, 1/f noise from rates spread evenly in their logarithm)
-  and Kubo's stochastic Liouville equation (`StochasticLiouville`: one
-  density matrix per joint state of the processes, Krylov steps on the
-  sparse generator). In Python: `MarkovProcess`, `Fluctuators`,
-  `StochasticLiouville`.
-
 ### Changed
 
-- **Colour classes and deadlines in the automorphism search** (1.47):
-  the search keeps given colours of the nodes and stops at a deadline
-  (inside the crate), for the symmetries of error models.
+- **Redfield relaxation without a block-size limit** (1.41): the
+  superoperator's 30 terms are kept as sparse operators and its columns
+  computed from them where a block is used, so its memory grows with the
+  blocks' entries instead of their squares (it used to stop at six
+  relaxing protons). The terms' memory and work are estimated before they
+  are built. The drift uses `R(ρ_eq − 1/d)` (equal to `R(ρ_eq)`, without
+  the rounding of `R(1)`), and the rate bound comes from the terms.
 
-- **Rf control with relaxation beyond six spins** (1.46):
-  `control_transfer` and `optimize_control` with rf and relaxation run on
-  sparse blocks at every size, up to the work and memory limits, instead
-  of refusing more than six spins ½. Field profiles with relaxation keep
-  the dense generator and its limit.
+- **A faster exhaustive search** (1.42): `circuit_distance`'s search for
+  logical errors now runs on all threads and reuses its buffers. The
+  threads search ahead, but only the sets that the search in index order
+  visits count against `max_work`, so the bounds and the witness are
+  those of 1.22 on any number of threads. When no branch was cut by the
+  weight, the search proves that no logical error exists, beyond the
+  4096 detectors where linear algebra decides.
+
+- **The Hamiltonian of interacting walkers** is built one configuration
+  at a time by shared code (1.43). `certificate_tolerance` bounds `‖H‖` by
+  the largest absolute row sum instead of diagonalising (above the dense
+  limit it used to refuse); the tolerance can only grow.
 
 - **Density matrices average slow noise** (1.44):
   `DensityMatrix::apply_device`, `DensityMatrix.simulate` with a device
@@ -209,36 +241,17 @@ All notable changes to this project are documented here. The format follows
   density matrices accepts such devices too (on Pauli frames it still
   refuses them).
 
-- **The Hamiltonian of interacting walkers** is built one configuration
-  at a time by shared code (1.43). `certificate_tolerance` bounds `‖H‖` by
-  the largest absolute row sum instead of diagonalising (above the dense
-  limit it used to refuse); the tolerance can only grow.
+- **Rf control with relaxation beyond six spins** (1.46):
+  `control_transfer` and `optimize_control` with rf and relaxation run on
+  sparse blocks at every size, up to the work and memory limits, instead
+  of refusing more than six spins ½. Field profiles with relaxation keep
+  the dense generator and its limit.
 
-- **A faster exhaustive search** (1.42): `circuit_distance`'s search for
-  logical errors now runs on all threads and reuses its buffers. The
-  threads search ahead, but only the sets that the search in index order
-  visits count against `max_work`, so the bounds and the witness are
-  those of 1.22 on any number of threads. When no branch was cut by the
-  weight, the search proves that no logical error exists, beyond the
-  4096 detectors where linear algebra decides.
-
-- **Redfield relaxation without a block-size limit** (1.41): the
-  superoperator's 30 terms are kept as sparse operators and its columns
-  computed from them where a block is used, so its memory grows with the
-  blocks' entries instead of their squares (it used to stop at six
-  relaxing protons). The terms' memory and work are estimated before they
-  are built. The drift uses `R(ρ_eq − 1/d)` (equal to `R(ρ_eq)`, without
-  the rounding of `R(1)`), and the rate bound comes from the terms.
+- **Colour classes and deadlines in the automorphism search** (1.47):
+  the search keeps given colours of the nodes and stops at a deadline
+  (inside the crate), for the symmetries of error models.
 
 ### Fixed
-
-- **Optimal control at low polarisation** (1.46): the Taylor series of
-  `control_transfer` and `optimize_control` with relaxation stopped
-  relative to the trace of `[vec Δ; Tr ρ]` instead of the deviation: at
-  10⁻¹⁸ of the trace, only 10⁻⁹ of a thermal deviation at room
-  temperature and 1 mT. They now stop relative to the deviation, on the
-  dense path of 1.36 as well; SciPy agrees to 10⁻¹⁴ at 9.4 T, 0.1 T and
-  1 mT.
 
 - **Peak memory of sparse relaxation blocks** (1.41): their columns are
   now built in a few large buffers per task instead of a vector per
@@ -254,6 +267,14 @@ All notable changes to this project are documented here. The format follows
   the antipode with probability 0 instead of 1. Estimates at the level of
   rounding now count as converged, so that tight tolerances no longer
   shrink the steps forever.
+
+- **Optimal control at low polarisation** (1.46): the Taylor series of
+  `control_transfer` and `optimize_control` with relaxation stopped
+  relative to the trace of `[vec Δ; Tr ρ]` instead of the deviation: at
+  10⁻¹⁸ of the trace, only 10⁻⁹ of a thermal deviation at room
+  temperature and 1 mT. They now stop relative to the deviation, on the
+  dense path of 1.36 as well; SciPy agrees to 10⁻¹⁴ at 9.4 T, 0.1 T and
+  1 mT.
 
 ## [1.8.0] — 2026-10-30
 

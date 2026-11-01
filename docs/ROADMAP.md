@@ -1,6 +1,6 @@
 # QSO Roadmap (1.x)
 
-Status: October 2026. Milestones 1.1 to 1.13 delivered — 1.3 combined the
+Status: November 2026. Milestones 1.1 to 1.13 delivered — 1.3 combined the
 milestones planned as "quantum walks" and "simulation performance".
 Milestones 1.4 (noise at scale and error mitigation), 1.5 (algorithms and
 physics) and 1.6 (interoperability) shipped together as release 1.4.0.
@@ -15,9 +15,8 @@ finished milestones are released together, not one by one. The third
 (1.26 to 1.28) stages ship together as release 1.7.0. The seventh
 (1.29 to 1.33, section 4g) and eighth (1.34 to 1.37, magnetic resonance
 for medical research, section 4h) stages ship together as release
-1.8.0. The ninth stage (1.38 to 1.42, section 4i) is delivered; the
-tenth (1.43 to 1.47, section 4j) is planned, and both ship together as
-one release. Up to 1.3
+1.8.0. The ninth (1.38 to 1.42, section 4i) and tenth (1.43 to 1.47,
+section 4j) stages ship together as release 1.9.0. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
