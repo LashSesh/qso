@@ -382,8 +382,14 @@ pulse = s.control_events(c, r["controls"])           # for evolve
   the integral of `⟨λ(τ), E x(τ)⟩` over the step, taken by a ten-point
   Gauss–Legendre rule in every substep of `‖hL‖ ≤ 2`, with the state and
   costate at the nodes from the Taylor terms of the substep's
-  exponentials: exact to rounding (it equals the dense gradient to
-  4·10⁻¹⁵), at a sixth of the cost of the augmented exponentials.
+  exponentials: exact to the rounding of the deviation, also at room
+  temperature and millitesla fields (it equals the dense gradient to
+  4·10⁻¹⁵, and SciPy at 1 mT to 2·10⁻¹⁵), at a fifth of the cost of the
+  augmented exponentials. On four cores ten steps over 1 ms with rf of up
+  to 2.5 kHz and Redfield relaxation take 0.13 s for a methyl group with
+  a proton below it (five spins, on 385 orbits), 0.7 s with two, 3.5 s
+  with three (6145 orbits) and 31 s with four (eight spins, 24 577 orbits,
+  7·10⁶ entries); without the symmetry 0.44 s, 1.8 s, 10.5 s and 126 s.
   Declared symmetries (`set_symmetries`) apply when the Hamiltonian, the
   channels (whole isotopes) and the initial state respect them (thermal
   equilibrium does); the target need not. The controls are then optimised
@@ -423,18 +429,17 @@ print(cost["method"], cost["coefficients"])  # sparse 6145 (of 16 385)
 - **Cost.** One evaluation costs about 1 ms for two spins and 100 steps
   and 26 ms for four spins and 200 steps without relaxation. With
   relaxation it grows with the rf amplitude times the duration (more
-  substeps) and with the entries of the generator. On four cores, ten
-  steps over 1 ms with rf of up to 2.5 kHz and Redfield relaxation take
-  0.11 s for a methyl group with one proton below it (five spins, on
-  385 orbits), 0.6 s with two, 3 s with three (6145 orbits) and 25 s
-  with four (eight spins, 24 577 orbits, 7·10⁶ entries); without the
-  symmetry 0.34 s, 1.4 s, 8.5 s and 105 s. `control_cost` returns the
-  method, the coefficients per member, the operations (about 10⁹ per
-  0.1 s) and the bytes. Work and memory beyond the limits (1.5·10¹²
-  operations, 2 GiB) are refused before anything is allocated; an
-  evaluation the optimiser tries beyond them, possible with relaxation
-  and no `limit`, ends the run with an error. Ctrl-C reaches Python only
-  when an optimisation ends.
+  substeps) and with the entries of the generator (times for five to eight
+  spins above). `control_cost` returns the method, the coefficients per
+  member, the operations and the bytes of one evaluation. Problems
+  beyond the limits (1.5·10¹² operations, 2 GiB) are refused before the
+  generator is built, judged at the peak amplitude; each evaluation is
+  checked again with its own controls, and one whose series run longer
+  than estimated stops at the limit. `control_transfer` builds the sparse
+  generator at every call (0.5 s for seven spins, 4 s for eight),
+  `optimize_control` once. An evaluation the optimiser tries beyond the
+  limits, possible with relaxation and no `limit`, ends the run with an
+  error. Ctrl-C reaches Python only when an optimisation ends.
 - **The bound.** `spin.unitary_bound(ρ, C)` is the largest `Tr(C UρU†)`
   over all unitaries (Glaser et al., Science 280, 421 (1998)), the sum of
   the products of the ordered eigenvalues: no pulse sequence exceeds it.

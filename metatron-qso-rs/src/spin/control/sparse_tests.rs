@@ -223,6 +223,46 @@ fn sparse_gradients_equal_the_dense_ones_up_to_six_spins() {
     check("six protons", &six, &c, &c.random_start(5, 1000.0));
 }
 
+#[test]
+fn small_deviations_keep_their_digits() {
+    // Without a drift towards equilibrium (T₂ alone) the transfer is linear
+    // in the deviation: from 1/d + ε·F_z it is ε times that from F_z, to
+    // the rounding of the deviation however small ε is against the trace
+    // (ε = 2⁻⁴⁰, so that 1/d + ε·F_z holds the deviation exactly). Series
+    // that stopped relative to the trace lost digits in proportion.
+    let mut sys = SpinSystem::new(9.4);
+    sys.add_spin(Isotope::C13, 20.0).unwrap();
+    for _ in 0..3 {
+        let i = sys.add_spin(Isotope::H1, 1.2).unwrap();
+        sys.couple(0, i, 125.0).unwrap();
+        sys.set_relaxation(i, None, Some(0.01)).unwrap();
+    }
+    sys.set_relaxation(0, None, Some(0.02)).unwrap();
+    sys.set_symmetries(vec![vec![0, 2, 3, 1]]).unwrap();
+    let d = sys.dimension();
+    let fz = sys.fz(Isotope::H1).unwrap();
+    let eps = 2f64.powi(-40);
+    let mixed = CMatrix::identity(d, d) * C64::new(1.0 / d as f64, 0.0) + &fz * C64::new(eps, 0.0);
+    let target = sys.iz(0).unwrap();
+    let plain = Control::rf(channels(), None, 2e-3, 4, fz, target.clone());
+    let small = Control::rf(channels(), None, 2e-3, 4, mixed, target);
+    let u = plain.random_start(3, 1500.0);
+    for path in [SPARSE, FULL, Path::Dense] {
+        let (value, grad) = on(&sys, &plain, &u, path);
+        let (v, g) = on(&sys, &small, &u, path);
+        let largest = grad.iter().fold(0.0f64, |m, x| m.max(x.abs()));
+        let dv = (v - eps * value).abs() / (eps * value.abs());
+        let dg = g
+            .iter()
+            .zip(&grad)
+            .map(|(a, b)| (a - eps * b).abs())
+            .fold(0.0, f64::max)
+            / (eps * largest);
+        eprintln!("{path:?}: value {dv:.1e}, gradient {dg:.1e}");
+        assert!(dv < 1e-12 && dg < 1e-11, "{path:?}: {dv:e} {dg:e}");
+    }
+}
+
 /// `(f(u + hv) − f(u − hv))/2h` against `∇f·v` for a seeded direction.
 fn directional(
     sys: &SpinSystem,

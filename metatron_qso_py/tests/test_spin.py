@@ -907,7 +907,7 @@ def test_grape_with_relaxation_against_scipy():
             grad[4 * k + j] = np.vdot(lam, frechet @ states[k]).real
         lam = scipy_linalg.expm(gens[k] * dt).conj().T @ lam
     got, got_grad = sys.control_transfer(c, u)
-    assert got == pytest.approx(value, rel=1e-12)
+    assert got == pytest.approx(value, rel=1e-12, abs=0)
     assert np.abs(got_grad - grad).max() < 1e-10 * np.abs(grad).max()
     # A field profile at room temperature in the rotating frame without
     # offsets, where the gradient comes from the thermal rates alone.
@@ -975,7 +975,7 @@ def test_grape_on_the_orbits_of_a_methyl_group_against_scipy():
         u = c.random_start(seed=5, scale=1500.0)
         value, grad = _rf_reference(sys, rho0, target, u, 6, 4e-3)
         got, got_grad = sys.control_transfer(c, u)
-        assert got == pytest.approx(value, rel=1e-11)
+        assert got == pytest.approx(value, rel=1e-11, abs=0)
         assert np.abs(got_grad - grad).max() < 1e-10 * np.abs(grad).max()
 
 
@@ -995,11 +995,11 @@ def test_grape_beyond_six_relaxing_spins():
     v = np.random.default_rng(0).uniform(-1.0, 1.0, len(u))
     h = 1e-2
     fd = (sys.control_transfer(c, u + h * v)[0] - sys.control_transfer(c, u - h * v)[0]) / (2 * h)
-    assert fd == pytest.approx(grad @ v, rel=1e-6)
+    assert fd == pytest.approx(grad @ v, rel=1e-6, abs=0)
     r = sys.optimize_control(c, start=u, max_iterations=5)
     assert r["transfer"] > value
     after = sys.evolve(rho0, sys.control_events(c, r["controls"]))
-    assert np.trace(after @ target).real == pytest.approx(r["transfer"], rel=1e-9)
+    assert np.trace(after @ target).real == pytest.approx(r["transfer"], rel=1e-9, abs=0)
     # Without relaxation the controls stay in Hilbert space; field profiles
     # with relaxation within six spins.
     plain = q.SpinSystem(9.4)
@@ -1011,3 +1011,63 @@ def test_grape_beyond_six_relaxing_spins():
     f = spin.Control.field(9.0, 9.4, 1e-3, 2, rho0, target)
     with pytest.raises(ValueError, match="Liouville"):
         sys.control_cost(f, 9.4)
+
+
+def test_grape_keeps_its_digits_at_low_polarisation():
+    # Room temperature from 9.4 T down to 1 mT, where the deviation from
+    # 1/d is parts in 10⁹ of it: against SciPy on the generator of the
+    # deviation [vec(ρ − Tr ρ/d); Tr ρ] (the drift L(1/d) in the last
+    # column), propagated with expm and differentiated with expm_frechet.
+    scipy_linalg = pytest.importorskip("scipy.linalg")
+    for field in (9.4, 0.1, 1e-3):
+        sys = _methyl()
+        sys = sys.with_field(field)
+        d = sys.dimension
+        n = d * d
+        rho0, target = np.asarray(sys.thermal_state()), np.asarray(sys.spin_operator(0, "z"))
+        c = spin.Control.rf(["1H", "13C"], 4e-3, 6, rho0, target, limit=3000.0)
+        u = c.random_start(seed=8, scale=2500.0)
+        dt = 4e-3 / 6
+        rates, _ = _lindblad(sys, field)
+        base = np.zeros((n + 1, n + 1), complex)
+        base[:n, :n] = _superop(np.asarray(sys.hamiltonian())) + rates
+        # The drift L(1/d) = Σ_i 2 tanh(x_i/2)/T₁ I_z^(i)/d, written without
+        # the difference of the up and down rates, which would lose the
+        # polarisation's digits (3·10⁻⁸ of them at 1 mT).
+        drift = np.zeros((d, d), complex)
+        for i, (iso, shift, t1, _) in enumerate(sys.spins):
+            if t1 is not None:
+                x = 1.054571817e-34 * spin.gyromagnetic_ratio(iso) * (1 + shift * 1e-6) * field / (1.380649e-23 * sys.temperature)
+                drift += 2 * np.tanh(x / 2) / t1 * np.asarray(sys.spin_operator(i, "z")) / d
+        base[:n, n] = drift.reshape(-1)
+        dirs = []
+        for iso in ("1H", "13C"):
+            for w in "xy":
+                e = np.zeros((n + 1, n + 1), complex)
+                e[:n, :n] = _superop(2 * np.pi * np.asarray(sys.total_operator(iso, w)))
+                dirs.append(e)
+        x = np.zeros(n + 1, complex)
+        x[:n] = (rho0 - np.eye(d) * np.trace(rho0) / d).reshape(-1)
+        x[n] = np.trace(rho0)
+        states, gens = [x], []
+        for k in range(6):
+            gens.append(base + sum(u[4 * k + j] * dirs[j] for j in range(4)))
+            states.append(scipy_linalg.expm(gens[-1] * dt) @ states[-1])
+        lam = np.zeros(n + 1, complex)
+        lam[:n] = target.reshape(-1)
+        value = np.vdot(lam, states[-1]).real
+        grad = np.zeros(24)
+        for k in reversed(range(6)):
+            for j in range(4):
+                _, frechet = scipy_linalg.expm_frechet(gens[k] * dt, dirs[j] * dt)
+                grad[4 * k + j] = np.vdot(lam, frechet @ states[k]).real
+            lam = scipy_linalg.expm(gens[k] * dt).conj().T @ lam
+        got, got_grad = sys.control_transfer(c, u)
+        assert got == pytest.approx(value, rel=1e-13, abs=0), field
+        assert np.abs(got_grad - grad).max() < 1e-12 * np.abs(grad).max(), field
+        # evolve keeps ρ itself between steps, and forming the deviation
+        # from 1/d + Δ costs ε·Tr ρ/d of it at every step: 2·10⁻⁸ of a
+        # deviation of 10⁻⁹ (1 mT), 10⁻¹² at 9.4 T.
+        after = np.asarray(sys.evolve(rho0, sys.control_events(c, u)))
+        replay = np.trace(target @ after).real
+        assert replay == pytest.approx(value, rel=1e-10 if field > 1 else 1e-6, abs=0), field

@@ -18,8 +18,8 @@ use std::collections::BTreeMap;
 use num_complex::Complex64 as C64;
 
 use super::krylov::{
-    Accumulator, KRYLOV_STATIONARY, KRYLOV_TOLERANCE, Orbits, SparseBlock, accumulator_bytes,
-    column_ranges, expv, krylov_bytes, krylov_work,
+    Accumulator, ColumnRun, KRYLOV_STATIONARY, KRYLOV_TOLERANCE, Orbits, SparseBlock,
+    accumulator_bytes, column_ranges, expv, krylov_bytes, krylov_work,
 };
 use super::redfield::RedfieldBlocks;
 use super::{Frame, Isotope, ONE, SpinSystem, ZERO};
@@ -964,18 +964,19 @@ impl SpinSystem {
         (count, mean, norm)
     }
 
-    /// Every column of block `k` of the generator on `liouville` (as
-    /// [`SpinSystem::generator_entries`]), its diagonal less `shift`, as
-    /// `(row, value)` by ascending row, handed to `keep` (in parallel).
-    fn block_columns<T: Send>(
+    /// The columns of block `k` of the generator on `liouville` (as
+    /// [`SpinSystem::generator_entries`]), its diagonal less `shift`, built
+    /// in parallel ranges: with `keep` their entries (`(row, value)` by
+    /// ascending row) and lengths, else their lengths only.
+    fn block_columns(
         &self,
         liouville: &Liouville,
         k: usize,
         h: &Sparse,
         relaxation: &Relaxation,
         shift: C64,
-        keep: impl Fn(Vec<(u32, C64)>) -> T + Sync,
-    ) -> Vec<T> {
+        keep: bool,
+    ) -> Vec<ColumnRun> {
         let elements = &liouville.blocks[k].1;
         let n = elements.len();
         let locals = self.local_jumps(relaxation);
@@ -986,30 +987,33 @@ impl SpinSystem {
                 .collect()
         });
         let ranges = column_ranges(n);
-        let parts: Vec<Vec<T>> = map_tasks(ranges.len(), |c| {
+        map_tasks(ranges.len(), |c| {
             let mut acc = Accumulator::new(n);
-            ranges[c]
-                .clone()
-                .map(|j| {
-                    let (a, b) = elements[j];
-                    coherent_column(a, b, h, &locals, |r, e, v| {
+            let mut run = ColumnRun::default();
+            for j in ranges[c].clone() {
+                let (a, b) = elements[j];
+                coherent_column(a, b, h, &locals, |r, e, v| {
+                    acc.add(liouville.position_of(r, e), v)
+                });
+                if let Some(rf) = redfield {
+                    let q = rf.liouville.block_of(a, b).expect("every element");
+                    let jq = rf.liouville.position_of(a, b);
+                    rf.column(q, jq, &targets[q], -ONE, |r, e, v| {
                         acc.add(liouville.position_of(r, e), v)
                     });
-                    if let Some(rf) = redfield {
-                        let q = rf.liouville.block_of(a, b).expect("every element");
-                        let jq = rf.liouville.position_of(a, b);
-                        rf.column(q, jq, &targets[q], -ONE, |r, e, v| {
-                            acc.add(liouville.position_of(r, e), v)
-                        });
-                    }
-                    if shift != ZERO {
-                        acc.add(j, -shift);
-                    }
-                    keep(acc.take())
-                })
-                .collect()
-        });
-        parts.into_iter().flatten().collect()
+                }
+                if shift != ZERO {
+                    acc.add(j, -shift);
+                }
+                let length = if keep {
+                    acc.take_into(&mut run.rows, &mut run.vals)
+                } else {
+                    acc.take_count()
+                };
+                run.lengths.push(length as u32);
+            }
+            run
+        })
     }
 
     /// Block `k` of the generator on `liouville` (as
@@ -1027,20 +1031,18 @@ impl SpinSystem {
     ) -> SparseBlock {
         let elements = &liouville.blocks[k].1;
         let size = elements.len() + usize::from(drift.is_some());
-        let mut columns = self.block_columns(liouville, k, h, relaxation, shift, |c| c);
-        if let Some(factor) = drift {
-            columns.push(
-                elements
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(j, &(a, b))| {
-                        let v = relaxation.drift[(a, b)] * factor;
-                        (v != ZERO).then_some((j as u32, v))
-                    })
-                    .collect(),
-            );
-        }
-        SparseBlock::from_columns(size, &columns)
+        let runs = self.block_columns(liouville, k, h, relaxation, shift, true);
+        let last: Option<Vec<(u32, C64)>> = drift.map(|factor| {
+            elements
+                .iter()
+                .enumerate()
+                .filter_map(|(j, &(a, b))| {
+                    let v = relaxation.drift[(a, b)] * factor;
+                    (v != ZERO).then_some((j as u32, v))
+                })
+                .collect()
+        });
+        SparseBlock::from_column_runs(size, &runs, last.as_deref())
     }
 
     /// The entries of [`SpinSystem::sparse_block`] (with `drift`), counted
@@ -1054,8 +1056,9 @@ impl SpinSystem {
         drift: bool,
     ) -> usize {
         let columns: usize = self
-            .block_columns(liouville, k, h, relaxation, ZERO, |c| c.len())
-            .into_iter()
+            .block_columns(liouville, k, h, relaxation, ZERO, false)
+            .iter()
+            .flat_map(|run| run.lengths.iter().map(|&l| l as usize))
             .sum();
         let drift = if drift {
             liouville.blocks[k]

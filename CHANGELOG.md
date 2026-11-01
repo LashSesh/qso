@@ -151,8 +151,9 @@ All notable changes to this project are documented here. The format follows
   respect them, the controls are optimised on the orbits of the elements
   (a methyl group's 16 385 coefficients with three more protons: 6145).
   `SpinSystem::control_cost` estimates the operations and memory of one
-  evaluation, and the coefficients it propagates, before anything is
-  built. In Python: `SpinSystem.control_cost`.
+  evaluation, and the coefficients it propagates, before the generator is
+  built; an evaluation counts what it spends and stops at the limit. In
+  Python: `SpinSystem.control_cost`.
 
 - **Slow noise, averaged exactly** (1.44, `noise::slow`): classical
   Markov processes with finitely many states (`MarkovProcess`: telegraph
@@ -207,6 +208,19 @@ All notable changes to this project are documented here. The format follows
   the rounding of `R(1)`), and the rate bound comes from the terms.
 
 ### Fixed
+
+- **Optimal control at low polarisation** (1.46): the Taylor series of
+  `control_transfer` and `optimize_control` with relaxation stopped
+  relative to the trace of `[vec Δ; Tr ρ]` instead of the deviation: at
+  10⁻¹⁸ of the trace, only 10⁻⁹ of a thermal deviation at room
+  temperature and 1 mT. They now stop relative to the deviation, on the
+  dense path of 1.36 as well; SciPy agrees to 10⁻¹⁴ at 9.4 T, 0.1 T and
+  1 mT.
+
+- **Peak memory of sparse relaxation blocks** (1.41): their columns are
+  now built in a few large buffers per task instead of a vector per
+  column, which the allocator kept after the build (0.4 GB for eight
+  spins with dipolar relaxation).
 
 - **Krylov propagation** (`linalg::expm_multiply`, used by continuous,
   driven and interacting walks above the dense limit; 1.43): steps now

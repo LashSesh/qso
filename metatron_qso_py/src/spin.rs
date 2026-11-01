@@ -962,7 +962,7 @@ impl PySpinSystem {
 
     /// The estimated cost of one evaluation (transfer and gradient) with rf
     /// of at most `peak` Hz or fields of at most `peak` T, as it is checked
-    /// against the limits before anything is built: a dict with `method`
+    /// against the limits before the generator is built: a dict with `method`
     /// (`"hilbert"`, `"sparse"` or `"dense"`), `coefficients` (per member;
     /// the orbits of declared symmetries when they apply), `operations` and
     /// `bytes`.

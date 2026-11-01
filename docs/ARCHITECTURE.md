@@ -579,13 +579,21 @@ are summed by Horner at ten Gauss–Legendre nodes, the costate's likewise
 backwards, and every direction is paired with them at the nodes. That
 takes three products per term (forwards, forwards again, backwards)
 instead of the `3 + directions` of the augmented exponentials, and the
-rule's error stays below 10⁻¹⁸ of the integrand's scale. On the orbits
+rule's error stays below 5·10⁻¹⁸ of the integrand's scale. On the orbits
 of declared symmetries (when the Hamiltonian, the channels and the
 initial state are invariant, and the built block equals its images) the
 reduced matrices `M_OP = Σ_{c∈P} L_{o,c}` give an ordinary linear system
 whose transfer pairs the state with the target summed over each orbit.
-Work and memory are estimated from bounds on the entries; when a bound
-exceeds a limit the entries are counted column by column first.
+The series stop when a term falls below the rounding of the deviation:
+the trace in the last entry, which the generator keeps and no gradient
+reads, is left out of that scale, so thermal polarisation at low fields
+keeps its digits. Columns are built in runs per task (a few large buffers,
+not a vector per column). Work and memory are estimated before the
+generator is built, from its entries counted column by column (from bounds
+alone when those put the problem fourfold over a limit) and from the rf
+directions, built and reduced for their exact norms; an evaluation counts
+its operations and stops at the limit, as a series may need more terms
+than estimated.
 
 NV centres (`spin/nv.rs`) use the secular Hamiltonian, which is block
 diagonal in the electron level `a` (`m = +1, 0, −1`) and, within a block,

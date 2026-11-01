@@ -45,7 +45,7 @@ use crate::optimize::{GradObjective, Method, Options, minimize};
 
 mod sparse;
 
-use sparse::{Amplitudes, SparseControl};
+use sparse::{Amplitudes, Budget, SparseControl};
 
 /// What the controls drive.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -509,8 +509,18 @@ impl Generator<'_> {
     }
 }
 
-pub(super) fn max_abs(v: &DVector<C64>) -> f64 {
-    v.iter().fold(0.0f64, |m, z| m.max(z.norm()))
+/// The largest absolute entry of `v`, without the last when `trace`: in
+/// `[vec Δ; Tr ρ]` the trace stays as it is under the generator, and no
+/// control and no gradient reads the costate's last entry, so the series
+/// then stop relative to the deviation however small it is against the
+/// trace (thermal polarisation at low fields).
+pub(super) fn scale_of(v: &DVector<C64>, trace: bool) -> f64 {
+    let n = if trace {
+        v.len().saturating_sub(1)
+    } else {
+        v.len()
+    };
+    v.iter().take(n).fold(0.0f64, |m, z| m.max(z.norm()))
 }
 
 /// Substeps for a Taylor series of an exponential of 1-norm `norm`.
@@ -519,8 +529,14 @@ pub(super) fn substeps(norm: f64) -> usize {
 }
 
 /// `e^{tL} x` by Taylor series in `substeps(t‖L‖)` pieces, each summed to
-/// rounding.
-pub(super) fn expmv<G: Linear>(g: &G, x: &DVector<C64>, t: f64, norm: f64) -> DVector<C64> {
+/// rounding (relative to the deviation with `trace`, see [`scale_of`]).
+pub(super) fn expmv<G: Linear>(
+    g: &G,
+    x: &DVector<C64>,
+    t: f64,
+    norm: f64,
+    trace: bool,
+) -> DVector<C64> {
     let s = substeps(t * norm);
     let h = t / s as f64;
     let mut v = x.clone();
@@ -530,7 +546,7 @@ pub(super) fn expmv<G: Linear>(g: &G, x: &DVector<C64>, t: f64, norm: f64) -> DV
         for k in 1..100 {
             term = g.apply(&term, h / k as f64);
             acc += &term;
-            if max_abs(&term) <= f64::EPSILON * 1e-2 * max_abs(&acc) {
+            if scale_of(&term, trace) <= f64::EPSILON * 1e-2 * scale_of(&acc, trace) {
                 break;
             }
         }
@@ -541,14 +557,15 @@ pub(super) fn expmv<G: Linear>(g: &G, x: &DVector<C64>, t: f64, norm: f64) -> DV
 
 /// `Re λ† ∂(e^{tL} x)/∂u_j` for every direction `E_j = ∂L/∂u_j`: the
 /// upper block of `exp(t[[L, E_j], [0, L]])` applied to `[0; x]`. That
-/// block is linear in `E_j`, so the substeps follow `t‖L‖` alone.
+/// block is linear in `E_j`, so the substeps follow `t‖L‖` alone. With
+/// `trace`, the series stop relative to the deviation ([`scale_of`]).
 pub(super) fn frechet<G: Linear, D: Direction>(
     g: &G,
     directions: &[D],
     x: &DVector<C64>,
     lambda: &DVector<C64>,
-    t: f64,
-    norm: f64,
+    (t, norm): (f64, f64),
+    trace: bool,
 ) -> Vec<f64> {
     let s = substeps(t * norm);
     let h = t / s as f64;
@@ -566,12 +583,12 @@ pub(super) fn frechet<G: Linear, D: Direction>(
                 let mut next = g.apply(&tx[j], f);
                 e.apply_add(&ty, C64::new(f, 0.0), &mut next);
                 acc_x[j] += &next;
-                small &= max_abs(&next) <= f64::EPSILON * 1e-2 * max_abs(&acc_x[j]);
+                small &= scale_of(&next, trace) <= f64::EPSILON * 1e-2 * scale_of(&acc_x[j], trace);
                 tx[j] = next;
             }
             ty = g.apply(&ty, f);
             acc_y += &ty;
-            small &= max_abs(&ty) <= f64::EPSILON * 1e-2 * max_abs(&acc_y);
+            small &= scale_of(&ty, trace) <= f64::EPSILON * 1e-2 * scale_of(&acc_y, trace);
             if small {
                 break;
             }
@@ -894,7 +911,9 @@ impl SpinSystem {
 
     /// The estimated cost of one evaluation (the transfer and its
     /// gradient) with rf of at most `peak` Hz or fields of at most `peak`
-    /// T, as it is checked against the limits before anything is built.
+    /// T, as it is checked against the limits before the generator is
+    /// built. On sparse blocks the generator's entries are counted, and an
+    /// evaluation also counts what it spends and stops at the limit.
     pub fn control_cost(&self, c: &Control, peak: f64) -> Result<ControlCost> {
         self.check_control(c)?;
         if !peak.is_finite() {
@@ -1040,10 +1059,11 @@ impl SpinSystem {
             Drive::Rf { .. } => members.len(),
             Drive::Field { .. } => 1,
         };
+        let budget = Budget::new(super::MAX_RELAXATION_WORK);
         let results = crate::parallel::map_tasks(distinct, |k| match prepared {
             Prepared::Each(Path::Hilbert) => self.member_hilbert(c, &members[k], u),
             Prepared::Each(_) => self.member_liouville(c, &members[k], u),
-            Prepared::Sparse(blocks) => Ok(blocks.member(c, &members[k], u)),
+            Prepared::Sparse(blocks) => blocks.member(c, &members[k], u, &budget),
         });
         let mut results = results.into_iter().collect::<Result<Vec<_>>>()?;
         if distinct == 1 && members.len() > 1 {
@@ -1175,7 +1195,7 @@ impl SpinSystem {
                         u: &u[k * n..(k + 1) * n],
                         adjoint: false,
                     };
-                    let next = expmv(&g, &states[k], dt, g.one_norm(&norms, base));
+                    let next = expmv(&g, &states[k], dt, g.one_norm(&norms, base), true);
                     states.push(next);
                 }
                 let value = target.dotc(&states[c.steps]).re;
@@ -1190,10 +1210,10 @@ impl SpinSystem {
                         adjoint: false,
                     };
                     let norm = g.one_norm(&norms, base);
-                    let g_k = frechet(&g, &directions, &states[k], &lambda, dt, norm);
+                    let g_k = frechet(&g, &directions, &states[k], &lambda, (dt, norm), true);
                     grad[k * n..(k + 1) * n].copy_from_slice(&g_k);
                     let back = Generator { adjoint: true, ..g };
-                    lambda = expmv(&back, &lambda, dt, norm);
+                    lambda = expmv(&back, &lambda, dt, norm, true);
                 }
                 Ok((value, grad))
             }
@@ -1208,7 +1228,7 @@ impl SpinSystem {
                         u: &[],
                         adjoint: false,
                     };
-                    let next = expmv(&g, &states[k], dt, dense_norm(&dense));
+                    let next = expmv(&g, &states[k], dt, dense_norm(&dense), true);
                     states.push(next);
                 }
                 let value = target.dotc(&states[c.steps]).re;
@@ -1232,9 +1252,9 @@ impl SpinSystem {
                         adjoint: false,
                     };
                     let norm = dense_norm(&dense);
-                    grad[k] = frechet(&g, &[&deriv], &states[k], &lambda, dt, norm)[0];
+                    grad[k] = frechet(&g, &[&deriv], &states[k], &lambda, (dt, norm), true)[0];
                     let back = Generator { adjoint: true, ..g };
-                    lambda = expmv(&back, &lambda, dt, norm);
+                    lambda = expmv(&back, &lambda, dt, norm, true);
                 }
                 Ok((value, grad))
             }

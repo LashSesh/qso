@@ -1161,7 +1161,7 @@ impl Exchange {
                             u: &[],
                             adjoint: false,
                         };
-                        expmv(&forward, x, dt, crate::linalg::dense::one_norm(g))
+                        expmv(&forward, x, dt, crate::linalg::dense::one_norm(g), false)
                     }
                     None => x.clone(),
                 })
@@ -1188,14 +1188,14 @@ impl Exchange {
                     u: &[],
                     adjoint: false,
                 };
-                grad[k] += frechet(&forward, &[d], x, lambda, dt, norm)[0];
+                grad[k] += frechet(&forward, &[d], x, lambda, (dt, norm), false)[0];
                 let back = Generator {
                     dense: g,
                     ops: &no_ops,
                     u: &[],
                     adjoint: true,
                 };
-                *lambda = expmv(&back, lambda, dt, norm);
+                *lambda = expmv(&back, lambda, dt, norm, false);
             }
         }
         Ok((value, grad))

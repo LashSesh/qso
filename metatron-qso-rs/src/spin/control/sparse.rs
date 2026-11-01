@@ -23,9 +23,7 @@ use num_complex::Complex64 as C64;
 use super::super::blocks::{Liouville, SYMMETRY_TOLERANCE, Sparse};
 use super::super::krylov::{Orbits, SparseBlock, accumulator_bytes, row_dot, rows_per_task};
 use super::super::{ONE, SpinSystem, TWO_PI, ZERO};
-use super::{
-    Control, Direction, Drive, Linear, Member, augment, expmv, frechet, max_abs, substeps,
-};
+use super::{Control, Direction, Drive, Linear, Member, augment, expmv, frechet, scale_of};
 use crate::error::{QsoError, Result};
 use crate::linalg::CMatrix;
 use crate::parallel::{for_each_block, sum_chunks_c64, threads};
@@ -37,16 +35,18 @@ use crate::parallel::{for_each_block, sum_chunks_c64, threads};
 /// a third of its products per unit of `‖L‖t`.
 const SUBSTEP: f64 = 2.0;
 
-/// Terms of a substep's Taylor series, for the estimates: 9 to 11 were
-/// measured on methyl groups with up to eight spins, where the norm bound
-/// would allow 26 (the series stops when its terms vanish).
+/// Terms of a substep's Taylor series, for the estimates: about 14 on
+/// methyl groups with up to eight spins and thermal states, where the norm
+/// bound would allow 26 (the series stops when its terms vanish relative
+/// to the deviation; an evaluation counts what it spends).
 const TAYLOR_TERMS: f64 = 14.0;
 
 /// Gauss–Legendre nodes and weights on `[0, 1]`, ten points: exact for
 /// polynomials of degree 19. The integrand `⟨λ(τ), E x(τ)⟩` of a substep
-/// with `‖hL‖ ≤ 2` has a 20th derivative of at most `(2‖L‖)^20` times
-/// `‖λ‖‖E‖‖x‖`, so the rule's error stays below
-/// `h·4^20·(10!)⁴/(21·(20!)³) ≈ 6·10⁻¹⁹·h` of that: below rounding.
+/// with `‖hL‖ ≤ 2` has a 20th derivative of at most
+/// `(2‖L‖)^20 e^{h‖L‖}‖λ‖‖E‖‖x‖` (`λ` and `x` at the substep's ends), so the
+/// rule's error stays below `h·4^20·e²·(10!)⁴/(21·(20!)³) ≈ 5·10⁻¹⁸·h` of
+/// that: below rounding.
 const GAUSS: [(f64, f64); 10] = [
     (0.013046735741414128, 0.03333567215434407),
     (0.06746831665550773, 0.0747256745752902),
@@ -77,39 +77,78 @@ fn series<G: Linear>(
     v: &DVector<C64>,
     h: f64,
     mut each: impl FnMut(&DVector<C64>),
-) -> DVector<C64> {
+) -> (DVector<C64>, usize) {
     each(v);
     let mut term = v.clone();
     let mut acc = v.clone();
+    let mut products = 0;
     for k in 1..200 {
         term = g.apply(&term, h / k as f64);
+        products += 1;
         #[cfg(test)]
         PRODUCTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         acc += &term;
         each(&term);
-        if max_abs(&term) <= f64::EPSILON * 1e-2 * max_abs(&acc) {
+        if scale_of(&term, true) <= f64::EPSILON * 1e-2 * scale_of(&acc, true) {
             break;
         }
     }
-    acc
+    (acc, products)
 }
 
-/// `e^{tL} x` in substeps of [`SUBSTEP`].
-fn propagate<G: Linear>(g: &G, x: &DVector<C64>, t: f64, norm: f64) -> DVector<C64> {
+/// `e^{tL} x` in substeps of [`SUBSTEP`], and the generator products.
+fn propagate<G: Linear>(g: &G, x: &DVector<C64>, t: f64, norm: f64) -> (DVector<C64>, usize) {
     let s = substeps_of(t * norm);
     let h = t / s as f64;
     let mut v = x.clone();
+    let mut products = 0;
     for _ in 0..s {
-        v = series(g, &v, h, |_| {});
+        let (next, p) = series(g, &v, h, |_| {});
+        v = next;
+        products += p;
     }
-    v
+    (v, products)
 }
 
 /// `e^{hL} v` and its Taylor terms.
 fn taylor<G: Linear>(g: &G, v: &DVector<C64>, h: f64) -> (DVector<C64>, Vec<DVector<C64>>) {
     let mut terms = Vec::new();
-    let sum = series(g, v, h, |t| terms.push(t.clone()));
+    let (sum, _) = series(g, v, h, |t| terms.push(t.clone()));
     (sum, terms)
+}
+
+/// Operations an evaluation may still spend, shared by its members: the
+/// estimates before an evaluation take typical series, and this stops one
+/// whose series are longer.
+pub(super) struct Budget {
+    left: std::sync::Mutex<f64>,
+    limit: f64,
+}
+
+impl Budget {
+    pub(super) fn new(limit: f64) -> Self {
+        Budget {
+            left: std::sync::Mutex::new(limit),
+            limit,
+        }
+    }
+
+    /// Spend `ops`, or refuse once the limit is passed.
+    fn spend(&self, ops: f64) -> Result<()> {
+        let mut left = self.left.lock().expect("unpoisoned");
+        *left -= ops;
+        if *left < 0.0 {
+            return Err(QsoError::invalid(
+                "control",
+                format!(
+                    "this control problem needs more than {:.1e} operations per evaluation \
+                     (the limit); use fewer spins, steps or members, or weaker rf",
+                    self.limit
+                ),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// `Σ_k θ^k terms[k]` for every `θ` (Horner), rows in parallel.
@@ -168,13 +207,15 @@ fn step_gradient(
     lambda: &DVector<C64>,
     dt: f64,
     norm: f64,
-) -> (Vec<f64>, DVector<C64>) {
+) -> (Vec<f64>, DVector<C64>, (usize, usize)) {
     let s = substeps_of(dt * norm);
     let h = dt / s as f64;
     let mut nodes = Vec::with_capacity(s);
     let mut v = x.clone();
+    let mut products = 0;
     for _ in 0..s {
         let (next, terms) = taylor(forward, &v, h);
+        products += terms.len() - 1;
         nodes.push(horner(&terms, GAUSS.iter().map(|g| g.0)));
         v = next;
     }
@@ -182,6 +223,7 @@ fn step_gradient(
     let mut mu = lambda.clone();
     for at in nodes.iter().rev() {
         let (previous, terms) = taylor(backward, &mu, h);
+        products += terms.len() - 1;
         let costates = horner(&terms, GAUSS.iter().map(|g| 1.0 - g.0));
         for ((xq, lq), &(_, w)) in at.iter().zip(&costates).zip(&GAUSS) {
             for (g, e) in grad.iter_mut().zip(directions) {
@@ -190,7 +232,7 @@ fn step_gradient(
         }
         mu = previous;
     }
-    (grad, mu)
+    (grad, mu, (products, s))
 }
 
 /// `−i[A, ·]` on the row-major vectors of `d × d` matrices, with a last
@@ -425,11 +467,13 @@ impl SparseControl {
                         .zip(&self.op_norms)
                         .map(|((x, s), n)| (x * s).abs() * n)
                         .sum::<f64>();
-                let s = if self.quadrature {
-                    substeps_of(norm * c.step())
+                let unit = if self.quadrature { SUBSTEP } else { 0.5 };
+                let s = (norm * c.step() / unit).ceil();
+                let s = if s.is_finite() {
+                    s.max(1.0)
                 } else {
-                    substeps(norm * c.step())
-                } as f64;
+                    f64::INFINITY
+                };
                 substeps_total += s;
                 most = most.max(s);
             }
@@ -442,8 +486,29 @@ impl SparseControl {
     }
 
     /// Transfer and gradient of member `m` under the physical controls `u`.
-    pub(super) fn member(&self, c: &Control, m: &Member, u: &[f64]) -> (f64, Vec<f64>) {
+    pub(super) fn member(
+        &self,
+        c: &Control,
+        m: &Member,
+        u: &[f64],
+        budget: &Budget,
+    ) -> Result<(f64, Vec<f64>)> {
         let (p, dt) = (c.per_step(), c.step());
+        let size = self.size() as f64;
+        // Operations of one generator product with the controls of step k,
+        // and of the nodes and pairings of one substep of the gradient.
+        let product = |k: usize| -> f64 {
+            let active: usize = self
+                .ops
+                .iter()
+                .zip(&u[k * p..(k + 1) * p])
+                .filter(|&(_, &x)| x != 0.0)
+                .map(|(op, _)| op.nnz())
+                .sum();
+            8.0 * (self.base.nnz() + active) as f64 + 8.0 * size
+        };
+        let ops: f64 = self.ops.iter().map(|o| o.nnz() as f64).sum();
+        let pairing = GAUSS.len() as f64 * 8.0 * (ops + p as f64 * size);
         let (scales, diagonal) = self.member_terms(c, m);
         let conjugate: Option<Vec<C64>> = diagonal
             .as_ref()
@@ -489,9 +554,11 @@ impl SparseControl {
         states.push(self.start.clone());
         for k in 0..c.steps {
             let next = if self.quadrature {
-                propagate(&forward(k), &states[k], dt, norm(k))
+                let (next, products) = propagate(&forward(k), &states[k], dt, norm(k));
+                budget.spend(products as f64 * product(k))?;
+                next
             } else {
-                expmv(&forward(k), &states[k], dt, norm(k))
+                expmv(&forward(k), &states[k], dt, norm(k), true)
             };
             states.push(next);
         }
@@ -507,7 +574,7 @@ impl SparseControl {
         for k in (0..c.steps).rev() {
             let n = norm(k);
             let g = if self.quadrature {
-                let (g, previous) = step_gradient(
+                let (g, previous, (products, substeps)) = step_gradient(
                     &forward(k),
                     &backward(k),
                     &directions,
@@ -516,16 +583,19 @@ impl SparseControl {
                     dt,
                     n,
                 );
+                let horner = 4.0 * GAUSS.len() as f64 * size;
+                budget
+                    .spend(products as f64 * (product(k) + horner) + substeps as f64 * pairing)?;
                 lambda = previous;
                 g
             } else {
-                let g = frechet(&forward(k), &directions, &states[k], &lambda, dt, n);
-                lambda = expmv(&backward(k), &lambda, dt, n);
+                let g = frechet(&forward(k), &directions, &states[k], &lambda, (dt, n), true);
+                lambda = expmv(&backward(k), &lambda, dt, n, true);
                 g
             };
             grad[k * p..(k + 1) * p].copy_from_slice(&g);
         }
-        (value, grad)
+        Ok((value, grad))
     }
 }
 
@@ -575,10 +645,13 @@ pub(super) enum Amplitudes<'a> {
 /// them.
 struct Counted {
     /// Entries of the full `L₀` (with the drift column), of all control
-    /// directions, and of the largest.
+    /// directions in full and as propagated (on the orbits), and of the
+    /// largest; rf channels.
     base: f64,
     ops: f64,
+    ops_used: f64,
     largest_op: f64,
+    channels: f64,
     /// Work of building `L₀`.
     build: f64,
     /// Bound on `‖L₀‖`, on the norm of every direction per Hz of rf, and
@@ -594,12 +667,18 @@ struct Counted {
 }
 
 impl SpinSystem {
-    /// Count the sparse blocks of an rf control problem: their entries
-    /// column by column (`exact`: summed, else bounded with the Redfield
-    /// part's bound), the norm from the counted rows and the relaxation's
-    /// rate bound, and the orbits when the symmetry applies to the
+    /// Count the sparse blocks of an rf control problem: bounds on their
+    /// entries (the coherent ones with repeats, the Redfield part's bound),
+    /// replaced by the entries counted column by column when `exact` says
+    /// so of the bounds; the norm from the counted rows and the
+    /// relaxation's rate bound; the orbits when the symmetry applies to the
     /// Hamiltonian, the channels and the initial state.
-    fn count_sparse(&self, c: &Control, symmetric: bool, exact: bool) -> Result<Counted> {
+    fn count_sparse(
+        &self,
+        c: &Control,
+        symmetric: bool,
+        exact: impl Fn(&Counted) -> bool,
+    ) -> Result<Counted> {
         let Drive::Rf { targets, .. } = &c.drive else {
             return Err(QsoError::invalid(
                 "control",
@@ -614,49 +693,49 @@ impl SpinSystem {
         let sparse = Sparse::new(&h0);
         let (count, mean, spread) = self.block_estimate(&liouville, 0, &sparse, &relaxation);
         let (redfield, redfield_build) = relaxation.redfield_entries(&liouville, Some(0));
-        let base = if exact {
-            self.sparse_block_entries(&liouville, 0, &sparse, &relaxation, true) as f64
-        } else {
-            count as f64 + redfield + n as f64
-        };
-        let mut ops = 0.0;
-        let mut largest_op = 0.0f64;
-        let mut per_rf = Vec::with_capacity(2 * targets.len());
+        let base = count as f64 + redfield + n as f64;
         let mut per_offset = 0.0;
         let mut channels = Vec::new();
         for &t in targets {
             let [fx, fy, fz] = self.channel(t)?;
-            for f in [&fx, &fy] {
-                let entries = 2.0 * d as f64 * nonzeros(f) as f64;
-                ops += entries;
-                largest_op = largest_op.max(entries);
-                per_rf.push(2.0 * TWO_PI * crate::linalg::dense::one_norm(f));
-            }
             let z: Vec<f64> = (0..d).map(|s| fz[(s, s)].re).collect();
             let span = z.iter().fold(f64::MIN, |a, &b| a.max(b))
                 - z.iter().fold(f64::MAX, |a, &b| a.min(b));
             per_offset += TWO_PI * span;
             channels.extend([fx, fy, fz]);
         }
-        let mut share = 1.0;
+        let mut orbits = None;
         if symmetric
             && let Some(maps) = self.symmetry_maps(&h0)
             && channels.iter().all(|f| invariant(f, &maps))
         {
-            let orbits = Orbits::new(n, &element_images(&maps, d));
+            let o = Orbits::new(n, &element_images(&maps, d));
             let start = augment(&c.initial);
             let largest = start
                 .iter()
                 .take(n - 1)
                 .fold(0.0f64, |m, z| m.max(z.norm()));
-            if orbits.asymmetry(start.as_slice()) <= SYMMETRY_TOLERANCE * largest {
-                share = orbits.len() as f64 / n as f64;
+            if o.len() < n && o.asymmetry(start.as_slice()) <= SYMMETRY_TOLERANCE * largest {
+                orbits = Some(o);
             }
         }
-        Ok(Counted {
+        let share = orbits.as_ref().map_or(1.0, |o| o.len() as f64 / n as f64);
+        // Bounds first: `−i[A, ·]` has at most `2d` entries per one of `A`
+        // and a norm of at most `2‖A‖₁`.
+        let (mut ops, mut largest_op) = (0.0, 0.0f64);
+        let mut per_rf = Vec::with_capacity(2 * targets.len());
+        for f in channels.chunks(3).flat_map(|ch| [&ch[0], &ch[1]]) {
+            let entries = 2.0 * d as f64 * nonzeros(f) as f64;
+            ops += entries;
+            largest_op = largest_op.max(entries);
+            per_rf.push(2.0 * TWO_PI * crate::linalg::dense::one_norm(f));
+        }
+        let mut counted = Counted {
             base,
             ops,
+            ops_used: ops * share + if orbits.is_some() { n as f64 } else { 0.0 },
             largest_op,
+            channels: targets.len() as f64,
             build: 50.0 * count as f64 + redfield_build,
             base_norm: spread + mean.norm() + relaxation.rate,
             per_rf,
@@ -664,7 +743,30 @@ impl SpinSystem {
             n: n as f64,
             share,
             relaxation: self.held_bytes(&relaxation),
-        })
+        };
+        if exact(&counted) {
+            counted.base =
+                self.sparse_block_entries(&liouville, 0, &sparse, &relaxation, true) as f64;
+            counted.build += 50.0 * counted.base;
+            // The rf directions are small (a few per cent of the entries):
+            // built and reduced for their exact entries and norms (on the
+            // orbits up to a quarter larger than in full).
+            counted.ops_used = 0.0;
+            for (k, f) in channels
+                .chunks(3)
+                .flat_map(|ch| [&ch[0], &ch[1]])
+                .enumerate()
+            {
+                let full = commutator_block(&(f * C64::new(TWO_PI, 0.0)));
+                let used = match &orbits {
+                    Some(o) => o.reduce(&full),
+                    None => full,
+                };
+                counted.ops_used += used.nnz() as f64;
+                counted.per_rf[k] = norm_bound(&used);
+            }
+        }
+        Ok(counted)
     }
 
     /// Estimated operations and memory of one evaluation on sparse blocks
@@ -711,7 +813,12 @@ impl SpinSystem {
                             .zip(&counted.per_rf)
                             .map(|(x, n)| x.abs() * n)
                             .sum::<f64>();
-                substeps_of(norm * c.step()) as f64
+                let s = (norm * c.step() / SUBSTEP).ceil();
+                if s.is_finite() {
+                    s.max(1.0)
+                } else {
+                    f64::INFINITY
+                }
             };
             let (total, most) = match rf {
                 Amplitudes::Peak(peak) => {
@@ -725,44 +832,45 @@ impl SpinSystem {
             };
             let share = counted.share;
             let m = (counted.n * share).ceil();
-            let (base, ops) = (counted.base * share + m, counted.ops * share + m);
+            let (base, ops) = (counted.base * share + m, counted.ops_used);
             let (member_work, member_bytes) =
                 member_cost(c, m, base + ops + m, ops, total, most, true);
             let build = counted.build + 40.0 * (counted.ops + counted.base);
             let work = member_work * members.len() as f64 + build;
             let reduced = share < 1.0;
             let (full_base, full_ops) = (counted.base, counted.ops);
-            // L₀ as columns and as rows, with the relaxation; then the
-            // directions one by one; then the reduction next to the full
-            // blocks; then what stays (with the adjoints).
+            let offsets = 16.0 * counted.n * counted.channels;
+            // L₀ as runs of columns and as rows, with the relaxation; the
+            // directions one by one beside it; the reduction next to the full
+            // blocks; then what stays (with the adjoints) and the members.
+            let parallel = (members.len() as f64).min(threads() as f64);
             let phases = [
-                44.0 * full_base + accumulator_bytes(counted.n as usize) + counted.relaxation,
-                20.0 * full_base + 20.0 * full_ops + 24.0 * counted.largest_op,
+                40.0 * full_base + accumulator_bytes(counted.n as usize) + counted.relaxation,
+                20.0 * full_base + 20.0 * full_ops + 44.0 * counted.largest_op + offsets,
                 if reduced {
-                    20.0 * (full_base + full_ops) + 44.0 * (base + ops)
+                    20.0 * (full_base + full_ops) + offsets + 44.0 * (base + ops)
                 } else {
                     0.0
                 },
                 20.0 * (2.0 * base + ops * if reduced { 2.0 } else { 1.0 })
-                    + 16.0 * m * (c.per_step() as f64 / 2.0 + 2.0),
+                    + 8.0 * m * (2.0 + 2.0 * counted.channels * if reduced { 2.0 } else { 1.0 })
+                    + 16.0 * m * (counted.channels + 2.0)
+                    + parallel * member_bytes,
             ];
-            let parallel = (members.len() as f64).min(threads() as f64);
-            let memory = phases.into_iter().fold(0.0, f64::max) + parallel * member_bytes;
+            // A tenth more for temporaries and the allocator: measured peaks
+            // of seven and eight spins exceeded the phases by up to 6 %.
+            let memory = 1.1 * phases.into_iter().fold(0.0, f64::max);
             (work, memory, m as usize)
         };
-        let counted = self.count_sparse(c, symmetric, false)?;
-        let (work, memory, m) = estimate(&counted);
+        // The bounds on the entries can be twice their number: count them,
+        // unless the bounds give more than four times a limit.
         let (work_limit, memory_limit) =
             (super::super::MAX_RELAXATION_WORK, super::MAX_CONTROL_MEMORY);
-        // The bounds on the entries (the Redfield part's, and repeated
-        // ones) can be twice their number: count them before refusing,
-        // unless even a quarter of the estimate exceeds a limit.
-        let within = work <= work_limit && memory <= memory_limit;
-        let hopeless = work > 4.0 * work_limit || memory > 4.0 * memory_limit;
-        if within || hopeless {
-            return Ok((work, memory, m));
-        }
-        Ok(estimate(&self.count_sparse(c, symmetric, true)?))
+        let counted = self.count_sparse(c, symmetric, |bound| {
+            let (work, memory, _) = estimate(bound);
+            work <= 4.0 * work_limit && memory <= 4.0 * memory_limit
+        })?;
+        Ok(estimate(&counted))
     }
 
     /// The sparse blocks of an rf control problem with relaxation, on the

@@ -4121,7 +4121,7 @@ Delivered in `spin/control/sparse.rs`, with `spin/control.rs`,
   `Re ∫₀^Δt ⟨λ(τ), E_j x(τ)⟩ dτ`. In every substep of `‖hL‖ ≤ 2` a
   ten-point Gauss–Legendre rule takes the integral, with the state and
   the costate at its nodes summed by Horner from the Taylor terms of the
-  substep's exponentials. The rule's error stays below 10⁻¹⁸ of the
+  substep's exponentials. The rule's error stays below 5·10⁻¹⁸ of the
   integrand's scale. Three generator products per Taylor term (forwards,
   forwards again, backwards) replace the `3 + directions` of the
   augmented exponentials, which remain as the tested alternative.
@@ -4133,15 +4133,19 @@ Delivered in `spin/control/sparse.rs`, with `spin/control.rs`,
   explicit adjoints, the state holds one value per orbit, and the target
   is summed over each orbit, so it need not be symmetric.
 - **Limits.** `SpinSystem::control_cost` (Python `control_cost`)
-  estimates one evaluation before anything is built: its operations, its
-  bytes and the coefficients each member propagates. The estimate comes
-  from bounds on the entries; when a bound exceeds a limit, the entries
-  are counted column by column first. Memory counts the build of the
-  full block (as columns and rows), the reduction next to it, and what
-  stays. Evaluations beyond 1.5·10¹² operations or 2 GiB are refused,
-  with the substeps of every step taken from the controls tried. Field
-  profiles with relaxation keep the dense generator and its limit of six
-  spins ½.
+  estimates one evaluation before the generator is built: its
+  operations, its bytes and the coefficients each member propagates. The
+  generator's entries are counted column by column (bounds alone when they
+  put the problem more than fourfold over a limit, which is then refused
+  at once), and the rf directions are built and reduced for their exact
+  norms. Memory counts the build of the full block (columns in runs per
+  task, then rows), the reduction next to it, and what stays, with a
+  tenth for temporaries. Problems beyond 1.5·10¹² operations or 2 GiB
+  are refused, with the substeps of every step taken from the controls
+  tried, and an evaluation counts what it spends and stops at the limit.
+  `control_transfer` builds the blocks at every call, `optimize_control`
+  once. Field profiles with relaxation keep the dense generator and its
+  limit of six spins ½.
 - In Python: `SpinSystem.control_cost`.
 
 Changes to the plan:
@@ -4152,9 +4156,9 @@ Changes to the plan:
   (Goodwin and Kuprov). That takes one augmented propagation of twice
   the size per direction and step. The quadrature over a substep needs
   the forward and backward Taylor terms once for all directions. It was
-  5.6 to 7 times faster than the augmented exponentials (summed as
+  4.9 to 5.6 times faster than the augmented exponentials (summed as
   Taylor series, as in 1.36) on five to seven spins, to the same digits.
-  At `‖hL‖ ≤ 2` the series need 9 to 11 terms on average.
+  At `‖hL‖ ≤ 2` the series need about 14 terms on average.
 - **The cost estimate is public** (`control_cost`). The plan asked for
   estimates before anything is built; users can now see them too.
 - **Field profiles stay dense** (see below).
@@ -4168,9 +4172,10 @@ Not done, and why:
   dominate. An analytic field derivative of the Redfield rates would be
   needed first.
 - **Reduction without the full block.** The orbits are formed from the
-  full block, so eight spins with dipolar relaxation hold 1.4 GB while
-  it is built (31 million entries). Building only the representative
-  rows would need a lumpability check that sees every row.
+  full block, so eight spins with dipolar relaxation peak at 1.3 GB
+  while it is built (31 million entries), against 0.32 GB of reduced
+  matrices. Building only the representative rows would need a
+  lumpability check that sees every row.
 - **Krylov steps.** Arnoldi's process would take substeps of tens of
   radians where the Taylor series takes two, but the Gauss rule would
   then need many more nodes. Not tried.
@@ -4183,41 +4188,104 @@ brackets):
 
 | Spins | Orbits | Full | Augmented exponentials (orbits, full) |
 |---|---|---|---|
-| 5 | 0.11 (385) | 0.34 (1025) | 0.62, 2.38 |
-| 6 | 0.63 (1537) | 1.42 (4097) | 3.74, 8.86 |
-| 7 | 3.0 (6145) | 8.6 (16 385) | 18.8, refused |
-| 8 | 24.6 (24 577) | 105 (65 537) | refused |
+| 5 | 0.13 (385) | 0.44 (1025) | 0.64, 2.37 |
+| 6 | 0.71 (1537) | 1.78 (4097) | 3.85, 9.28 |
+| 7 | 3.5 (6145) | 10.5 (16 385) | 18.7, 59 |
+| 8 | 31 (24 577) | 126 (65 537) | refused (2.6·10¹², 9.7·10¹² operations) |
 
 - **The dense generator of 1.36** refuses this problem from five spins
   on (1.9·10¹² operations; six spins: 3.5·10¹³).
-- **Building** takes 0.5 s for seven spins and 3.5–4.4 s for eight: 31
+- **Building** takes 0.5 s for seven spins and 3.3–4.5 s for eight: 31
   million entries of `L₀`, 1.3 GB of matrices in full, 0.32 GB on the
   orbits.
-- **Estimates.** Evaluations ran at 9.4 to 13 GFlop/s of the operations
-  estimated from the blocks, so the limit of 1.5·10¹² is about two to
-  three minutes. The estimate before building exceeds the one from the
-  blocks by 1.2 to 2.3 times: the bound on the Redfield entries, and
-  every control at its peak.
+- **Estimates.** The operations estimated from the blocks ran at 3 to
+  11 GFlop/s, more for larger blocks, so the limit of 1.5·10¹²
+  operations is two to eight minutes for seven and eight spins. Before
+  building, with every control at its peak, the estimate equals the one
+  from the blocks within 2 % in full and exceeds it 1.6 times on the
+  orbits (it takes their share of the counted entries); for eight spins
+  in full at 5 kHz it is 6.2·10¹² from bounds alone, which put the problem
+  more than fourfold over the limit.
 - **Accuracy.** Transfer and gradient equal the dense generator's to
   4·10⁻¹⁵ on two to six spins (`T₁`/`T₂`, Redfield, a spin 1, thermal
   states at 50 mK, two members with offsets and rf errors), with both
-  gradients. On the orbits of the five-spin methyl group they equal the
-  full blocks to 1.1·10⁻¹³, with a target that breaks the symmetry, and
-  SciPy's `expm` and `expm_frechet` on the full Lindblad generator of a
-  four-spin methyl group to 3·10⁻¹³ (97 of 257 coefficients).
-  Seven spins agree with central differences along random directions to
-  2·10⁻⁹. Without relaxation, ¹H → ¹³C in a pair and in I₂S reach the
-  unitary bound to 10⁻⁹.
+  gradients. At room temperature from 9.4 T to 1 mT, where the deviation
+  is parts in 10⁹ of `1/d`, they equal SciPy on the generator of the
+  deviation to 10⁻¹⁴ (see the review). On the orbits of the five-spin
+  methyl group they equal the full blocks to 3·10⁻¹³, with a target that
+  breaks the symmetry, and SciPy's `expm` and `expm_frechet` on the full
+  Lindblad generator of a four-spin methyl group to 3·10⁻¹³ (97 of 257
+  coefficients). Seven spins agree with central differences along random
+  directions to 2·10⁻⁹. Without relaxation, ¹H → ¹³C in a pair and in
+  I₂S reach the unitary bound to 10⁻⁹.
 - **GRAPE against refocused INEPT** (thermal ¹H polarisation onto the
   methyl carbon, 5.57 ms, the duration of refocused INEPT with
   `τ = 1/(4J)` and the refocusing optimal for three protons). Seven spins
   (50 steps, rf up to 5 kHz, from a random start of 1 kHz): 60 iterations
-  of L-BFGS (83 evaluations, 11 s each, 15 min) reach 4.49 times the
+  of L-BFGS (83 evaluations, 11.5 s each, 16 min) reach 4.49 times the
   carbon's own polarisation, against 4.43 for INEPT with ideal pulses and
   7.77 for the unitary bound without relaxation; the optimiser had not
-  converged. `evolve` reproduces the transfer to 5·10⁻¹². Eight spins: the
-  same problem is refused before anything is built (6.7·10¹² operations
-  per evaluation at 5 kHz); INEPT gives 4.42 there.
+  converged. `evolve` reproduces the transfer to 4·10⁻¹². Eight spins: the
+  same problem is refused before anything is built (1.3·10¹³ operations
+  per evaluation at 5 kHz, from the bounds); INEPT gives 4.42 there.
+
+Review: an independent review built its own NumPy and SciPy reference
+(Lindblad `T₁` and `T₂`, row-major vectors, `expm` and `expm_frechet` on
+the full Liouville space) and checked transfer and gradient on a ¹³CH₃
+group on its 97 orbits with a three-member ensemble. The carbon's `z`
+magnetisation agreed to 2·10⁻¹⁴, a target that breaks the symmetry to
+4·10⁻¹⁵, and a non-Hermitian target to 6·10⁻¹⁵. A ¹³CD₂ group (spin 1),
+single-spin channels, a start that breaks the symmetry, zero controls
+and a member without rf all agreed within 6·10⁻¹⁴. Results were bitwise
+identical on one to eight threads. It found no serious fault and the
+following smaller ones; all are fixed or documented.
+
+- **Low polarisation.** The series stopped relative to the largest
+  entry of `[vec Δ; Tr ρ]`, which is the trace. Thermal deviations at room
+  temperature and low fields, parts in 10⁹ of it, kept fewer digits. The
+  dense path of 1.36 had the same rule. The series now stop relative to
+  the deviation (the trace's entry is constant, and no gradient reads the
+  costate's). A deviation of 2⁻⁴⁰ of the identity now gives exactly that
+  multiple of the transfer and gradient on all three paths (tested).
+  Against SciPy at room temperature, 9.4 T, 0.1 T and 1 mT agree to
+  7·10⁻¹⁵, 4·10⁻¹⁵ and 1.4·10⁻¹⁵ (tested to 10⁻¹³). The review's first
+  reference formed the drift `L(1/d)` from the difference of the up and
+  down rates, which loses 3·10⁻⁸ of it at 1 mT; QSO and the test write it
+  as `2 tanh(x/2)/T₁`.
+- **`evolve` at low polarisation** (documented, not changed). The review
+  saw `evolve` miss the replayed transfer by 3·10⁻⁹ at 0.1 T and 1.4·10⁻⁷
+  at 1 mT, and took it for the Krylov tolerance of 1.41. The cause is
+  that `evolve` keeps `ρ` itself between events: forming the deviation
+  from `1/d + Δ` costs `ε·Tr ρ/d` of it at every step, 2·10⁻⁸ of a
+  deviation of 10⁻⁹ of `1/d`. GRAPE keeps `[vec Δ; Tr ρ]` throughout.
+  The tests replay through `evolve` to 10⁻¹⁰ at 9.4 T and 10⁻⁶ below.
+- **Memory beyond the estimate.** Each column of the generator was a
+  vector of its own while the block was built, and for eight spins the
+  allocator kept 0.4 GB of them afterwards. The peak was 1.82 GB against
+  an estimate of 1.62. Columns are now built in runs per task (a few large
+  buffers, returned when dropped). The estimate counts every phase of the
+  build and the row pointers, and adds a tenth for temporaries and the
+  allocator. Eight spins now peak at 1.32 GB on the orbits and 1.47 GB in
+  full (estimates 1.38 and 1.69), seven at 0.17 and 0.21 GB (0.18 and
+  0.25).
+- **Work beyond the estimate.** Series can need up to 25 terms where the
+  estimate takes 14, and the directions on the orbits have norms up to
+  25 % larger than in full. An evaluation now counts the operations it
+  spends and stops at the limit. The estimate builds the rf directions
+  (a few per cent of the entries), reduces them, and takes their exact
+  norms.
+- **Counted entries.** The bounds on the entries can be twice their
+  number, and the estimate switched to counting only near a limit, so
+  `control_cost` could fall when members were added. It now always counts
+  the entries column by column, unless the bounds put the problem more
+  than fourfold over a limit. Those problems are refused at once: ten
+  relaxing protons took 69 s to refuse before.
+- **Documentation.** Several numbers were wrong or out of date: the
+  augmented exponentials of seven spins in full (59 s, not refused), the
+  speed range, the number of terms, the factor `e²` in the error bound
+  of the Gauss rule (5·10⁻¹⁸), the orbits' agreement, the memory of eight
+  spins, the fourfold shortcut, and that `control_transfer` rebuilds the
+  blocks at every call.
 
 ### 1.47 — Circuit distances by symmetry (M)
 

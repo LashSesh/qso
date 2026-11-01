@@ -43,6 +43,17 @@ pub(super) const KRYLOV_TOLERANCE: f64 = 1e-12;
 /// free induction decays keep the full tolerance.
 pub(super) const KRYLOV_STATIONARY: f64 = 1e-11;
 
+/// Consecutive columns of a sparse matrix, built by one task: the rows and
+/// values of its columns one after another, and the length of every
+/// column. A few large buffers instead of a vector per column, so that the
+/// allocator returns their memory when they are dropped.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ColumnRun {
+    pub rows: Vec<u32>,
+    pub vals: Vec<C64>,
+    pub lengths: Vec<u32>,
+}
+
 /// A square sparse matrix by rows.
 #[derive(Clone, Debug)]
 pub(crate) struct SparseBlock {
@@ -108,6 +119,55 @@ impl SparseBlock {
                 vals[k] = v;
                 next[r as usize] += 1;
             }
+        }
+        SparseBlock {
+            n,
+            indptr,
+            cols,
+            vals,
+        }
+    }
+
+    /// From runs of consecutive columns (each run the rows and values of
+    /// its columns one after another, `(row, value)` without repeated rows
+    /// or zeros, and the length of every column), and an optional last
+    /// column.
+    pub fn from_column_runs(n: usize, runs: &[ColumnRun], last: Option<&[(u32, C64)]>) -> Self {
+        let mut indptr = vec![0usize; n + 1];
+        for run in runs {
+            for &r in &run.rows {
+                indptr[r as usize + 1] += 1;
+            }
+        }
+        for &(r, _) in last.unwrap_or(&[]) {
+            indptr[r as usize + 1] += 1;
+        }
+        for r in 0..n {
+            indptr[r + 1] += indptr[r];
+        }
+        let nnz = indptr[n];
+        let mut next = indptr.clone();
+        let mut cols = vec![0u32; nnz];
+        let mut vals = vec![C64::new(0.0, 0.0); nnz];
+        // Columns in order: every row's entries come out sorted.
+        let mut column = 0u32;
+        for run in runs {
+            let mut at = 0;
+            for &len in &run.lengths {
+                for k in at..at + len as usize {
+                    let r = run.rows[k] as usize;
+                    cols[next[r]] = column;
+                    vals[next[r]] = run.vals[k];
+                    next[r] += 1;
+                }
+                at += len as usize;
+                column += 1;
+            }
+        }
+        for &(r, v) in last.unwrap_or(&[]) {
+            cols[next[r as usize]] = column;
+            vals[next[r as usize]] = v;
+            next[r as usize] += 1;
         }
         SparseBlock {
             n,
@@ -331,6 +391,35 @@ impl Accumulator {
             self.touched.push(i as u32);
         }
         self.values[i] += v;
+    }
+
+    /// Append the nonzero sums by ascending index to `rows` and `vals`,
+    /// leaving the accumulator empty; how many there were.
+    pub fn take_into(&mut self, rows: &mut Vec<u32>, vals: &mut Vec<C64>) -> usize {
+        self.touched.sort_unstable();
+        let before = rows.len();
+        for &i in &self.touched {
+            let v = std::mem::replace(&mut self.values[i as usize], C64::new(0.0, 0.0));
+            self.seen[i as usize] = false;
+            if v != C64::new(0.0, 0.0) {
+                rows.push(i);
+                vals.push(v);
+            }
+        }
+        self.touched.clear();
+        rows.len() - before
+    }
+
+    /// How many sums are nonzero, leaving the accumulator empty.
+    pub fn take_count(&mut self) -> usize {
+        let mut count = 0;
+        for &i in &self.touched {
+            let v = std::mem::replace(&mut self.values[i as usize], C64::new(0.0, 0.0));
+            self.seen[i as usize] = false;
+            count += usize::from(v != C64::new(0.0, 0.0));
+        }
+        self.touched.clear();
+        count
     }
 
     /// The nonzero sums by ascending index, leaving the accumulator empty.
