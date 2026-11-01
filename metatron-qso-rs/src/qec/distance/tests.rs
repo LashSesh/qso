@@ -76,6 +76,13 @@ fn random_model(rng: &mut Rng, n: usize, m: usize, widest: usize) -> DetectorErr
     model(n, errors)
 }
 
+/// The default options without a time limit: these tests check answers,
+/// and under coverage, with every test at once, a search can wait for the
+/// worker pool longer than the default minute.
+fn exact_options() -> ExactDistanceOptions {
+    ExactDistanceOptions::default().with_max_seconds(f64::INFINITY)
+}
+
 #[test]
 fn graph_search_matches_brute_force() {
     let mut rng = Rng::seed_from_u64(1);
@@ -320,9 +327,7 @@ fn every_exact_method_matches_brute_force() {
         let dem = random_model(&mut rng, n, m, 4);
         let want = brute_force(&dem);
         for method in methods {
-            let options = ExactDistanceOptions::default()
-                .with_method(method)
-                .with_bposd_trials(0);
+            let options = exact_options().with_method(method).with_bposd_trials(0);
             let r = exact_circuit_distance(&dem, &options).unwrap();
             check_witness(&dem, &r);
             match want {
@@ -344,7 +349,7 @@ fn exact_distances_of_codes() {
     ] {
         let dem = classical(&rows, n);
         for method in [DistanceMethod::Auto, DistanceMethod::BrouwerZimmermann] {
-            let options = ExactDistanceOptions::default().with_method(method);
+            let options = exact_options().with_method(method);
             let r = exact_circuit_distance(&dem, &options).unwrap();
             check_witness(&dem, &r);
             assert_eq!(r.distance(), Some(d), "{name}, {method:?}");
@@ -359,7 +364,7 @@ fn exact_distances_of_codes() {
     for (code, d) in cases {
         let c = css_code_memory(&code, 1, &CircuitNoise::data_only(0.01), MemoryBasis::Z).unwrap();
         let dem = detector_error_model(&c, false).unwrap();
-        let r = exact_circuit_distance(&dem, &ExactDistanceOptions::default()).unwrap();
+        let r = exact_circuit_distance(&dem, &exact_options()).unwrap();
         check_witness(&dem, &r);
         assert_eq!(r.distance(), Some(d), "[[{}, {}]]", code.n(), code.k());
     }
@@ -378,7 +383,7 @@ fn exact_circuit_distances_and_time_limits() {
     .unwrap();
     let dem = detector_error_model(&colour, false).unwrap();
     for method in [DistanceMethod::Auto, DistanceMethod::Search] {
-        let options = ExactDistanceOptions::default().with_method(method);
+        let options = exact_options().with_method(method);
         let r = exact_circuit_distance(&dem, &options).unwrap();
         check_witness(&dem, &r);
         assert_eq!(r.distance(), Some(3), "{method:?}");
@@ -393,7 +398,7 @@ fn exact_circuit_distances_and_time_limits() {
     )
     .unwrap();
     let dem = detector_error_model(&c, false).unwrap();
-    let r = exact_circuit_distance(&dem, &ExactDistanceOptions::default()).unwrap();
+    let r = exact_circuit_distance(&dem, &exact_options()).unwrap();
     check_witness(&dem, &r);
     assert_eq!(r.distance(), Some(6));
     // A time limit returns honest bounds at once.
@@ -408,9 +413,7 @@ fn exact_circuit_distances_and_time_limits() {
     .unwrap();
     let dem = detector_error_model(&c, false).unwrap();
     let start = std::time::Instant::now();
-    let options = ExactDistanceOptions::default()
-        .with_max_seconds(0.5)
-        .with_bposd_trials(1);
+    let options = exact_options().with_max_seconds(0.5).with_bposd_trials(1);
     let r = exact_circuit_distance(&dem, &options).unwrap();
     assert!(start.elapsed().as_secs_f64() < crate::time_limit(10.0));
     check_witness(&dem, &r);
@@ -454,7 +457,7 @@ fn witnesses_are_explained_by_circuit_faults() {
             assert!(f.paulis.iter().all(|&(_, c)| "XYZM".contains(c)));
         }
     }
-    let r = exact_circuit_distance(&dem, &ExactDistanceOptions::default()).unwrap();
+    let r = exact_circuit_distance(&dem, &exact_options()).unwrap();
     let w = r.witness.unwrap();
     let chosen: Vec<ErrorMechanism> = w.iter().map(|&k| dem.errors[k].clone()).collect();
     let faults = crate::qec::explain_errors(&colour, &chosen).unwrap();
@@ -475,7 +478,7 @@ fn exact_distance_ends_when_nothing_is_logical() {
     // time limit: the search stops once its weight passes the number of
     // errors, and at once when no error flips an observable.
     let n = MAX_EXISTENCE_DETECTORS + 10;
-    let unlimited = ExactDistanceOptions::default().with_max_seconds(f64::INFINITY);
+    let unlimited = exact_options().with_max_seconds(f64::INFINITY);
     for method in [
         DistanceMethod::Auto,
         DistanceMethod::Search,
@@ -568,7 +571,7 @@ fn bounds_and_witnesses_do_not_depend_on_the_threads() {
     assert!(!exact[0] && exact[exact.len() - 1], "{exact:?}");
     assert_eq!(on(1, 1 << 20).distance(), Some(4));
     // Without a limit the exact distance agrees.
-    let unlimited = ExactDistanceOptions::default()
+    let unlimited = exact_options()
         .with_method(DistanceMethod::Search)
         .with_bposd_trials(0);
     for threads in [1, 4] {
@@ -586,7 +589,7 @@ fn the_enumeration_keeps_the_time_limit() {
     // Level 2 alone is 7·10⁷ sums of 188 words; the deadline stops it.
     let mut rng = Rng::seed_from_u64(7);
     let dem = wide_model(&mut rng, 300, 12_000, 6);
-    let options = ExactDistanceOptions::default()
+    let options = exact_options()
         .with_method(DistanceMethod::BrouwerZimmermann)
         .with_max_seconds(0.3)
         .with_bposd_trials(0);
@@ -646,7 +649,7 @@ fn bicycle_circuits_keep_the_translations() {
 
 #[test]
 fn symmetric_searches_give_the_same_distances() {
-    let exact = ExactDistanceOptions::default().with_max_seconds(f64::INFINITY);
+    let exact = exact_options().with_max_seconds(f64::INFINITY);
     let on_orbits = exact.with_symmetry(true);
     // [[72, 12, 6]] has circuit distance 6 with and without symmetry.
     for rounds in [2, 3] {
@@ -732,7 +735,7 @@ fn cyclic_model(
 fn symmetric_searches_match_brute_force() {
     // Without BP+OSD the search alone settles the distance.
     let mut rng = Rng::seed_from_u64(47);
-    let options = ExactDistanceOptions::default()
+    let options = exact_options()
         .with_max_seconds(f64::INFINITY)
         .with_method(DistanceMethod::Search)
         .with_bposd_trials(0)
@@ -771,7 +774,7 @@ fn symmetric_searches_match_brute_force() {
 
 #[test]
 fn declared_symmetries_are_checked() {
-    let options = ExactDistanceOptions::default().with_max_seconds(f64::INFINITY);
+    let options = exact_options().with_max_seconds(f64::INFINITY);
     let dem = bicycle_circuit(72, 2);
     let n = dem.n_detectors;
     // The symmetries found, declared, give the same distance.
@@ -835,7 +838,7 @@ fn symmetric_searches_do_not_depend_on_the_threads() {
     // Without BP+OSD the search finds the witness; on every number of
     // threads the same one.
     let dem = bicycle_circuit(72, 3);
-    let options = ExactDistanceOptions::default()
+    let options = exact_options()
         .with_max_seconds(f64::INFINITY)
         .with_method(DistanceMethod::Search)
         .with_bposd_trials(0)
@@ -865,7 +868,7 @@ fn models_beyond_the_detector_limit_are_searched_without_symmetries() {
         n,
         vec![error(&[0, 1, 2], 1), error(&[0, 1], 0), error(&[2], 0)],
     );
-    let options = ExactDistanceOptions::default().with_bposd_trials(0);
+    let options = exact_options().with_bposd_trials(0);
     let plain = exact_circuit_distance(&dem, &options).unwrap();
     assert_eq!(plain.distance(), Some(3));
     let symmetric = exact_circuit_distance(&dem, &options.with_symmetry(true)).unwrap();
@@ -877,9 +880,7 @@ fn models_beyond_the_detector_limit_are_searched_without_symmetries() {
 
 #[test]
 fn a_passed_time_limit_returns_before_the_symmetries() {
-    let options = ExactDistanceOptions::default()
-        .with_bposd_trials(0)
-        .with_symmetry(true);
+    let options = exact_options().with_bposd_trials(0).with_symmetry(true);
     // A time limit that has passed returns at once, before the symmetries
     // (the search alone would take minutes; the bound leaves room for a
     // loaded machine).

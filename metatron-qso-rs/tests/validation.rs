@@ -1492,13 +1492,11 @@ fn circuit_distances_of_memory_experiments() {
         let bounded = circuit_distance(&dem, &DistanceOptions::default())
             .unwrap()
             .distance();
-        let exact = exact_circuit_distance(&dem, &ExactDistanceOptions::default())
+        let unlimited = ExactDistanceOptions::default().with_max_seconds(f64::INFINITY);
+        let exact = exact_circuit_distance(&dem, &unlimited).unwrap().distance();
+        let symmetric = exact_circuit_distance(&dem, &unlimited.with_symmetry(true))
             .unwrap()
             .distance();
-        let symmetric =
-            exact_circuit_distance(&dem, &ExactDistanceOptions::default().with_symmetry(true))
-                .unwrap()
-                .distance();
         assert_eq!(exact, bounded);
         assert_eq!(symmetric, exact);
         exact

@@ -116,15 +116,20 @@ def test_exact_and_expansion_against_numpy(pulses):
     coherence, signal = b.exact(seqs, pulses=pulses)
     full = b.signal(seqs, order=3, cutoff=math.inf, pulses=pulses)
     expanded = b.coherence(seqs, order=3, cutoff=math.inf, pulses=pulses)
+    # The reference diagonalises the Hamiltonian in the laboratory frame
+    # (D = 2.87 GHz): its phases after the 800 µs echo carry a rounding of
+    # ε‖H‖t ≈ 3·10⁻⁹, and it differs between platforms (8·10⁻¹⁰ on x86-64,
+    # 1.2·10⁻⁹ on aarch64).
+    tol = 1e-8
     for k, events in enumerate(seqs):
         s, rho_e, alpha, beta = reference(field, spins, events, pulses == "laboratory")
         _, rho_0, _, _ = reference(field, [], events, pulses == "laboratory")
-        assert abs(signal[k] - s) < 1e-9
-        assert abs(full[k] - s) < 1e-9
+        assert abs(signal[k] - s) < tol
+        assert abs(full[k] - s) < tol
         # The magnitude of the qubit's coherence relative to the electron
         # alone (|ρ_αβ| = |ρ_βα|: the branches' order does not matter).
         ratio = abs(rho_e[beta, alpha] / rho_0[beta, alpha])
-        assert abs(abs(coherence[k]) - ratio) < 1e-9
+        assert abs(abs(coherence[k]) - ratio) < tol
         assert abs(expanded[k] - coherence[k]) < 1e-10
 
 
