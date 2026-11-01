@@ -856,6 +856,26 @@ fn symmetric_searches_do_not_depend_on_the_threads() {
 }
 
 #[test]
+fn models_beyond_the_detector_limit_are_searched_without_symmetries() {
+    // Three errors on three of 4100 detectors make a logical error. The
+    // symmetries are not looked for (the search runs without them), and
+    // declared ones are refused, as is the question for them.
+    let n = MAX_SYMMETRY_DETECTORS + 4;
+    let dem = model(
+        n,
+        vec![error(&[0, 1, 2], 1), error(&[0, 1], 0), error(&[2], 0)],
+    );
+    let options = ExactDistanceOptions::default().with_bposd_trials(0);
+    let plain = exact_circuit_distance(&dem, &options).unwrap();
+    assert_eq!(plain.distance(), Some(3));
+    let symmetric = exact_circuit_distance(&dem, &options.with_symmetry(true)).unwrap();
+    assert_eq!(symmetric, plain);
+    assert!(error_model_symmetries(&dem).is_err());
+    let identity: Vec<usize> = (0..n).collect();
+    assert!(exact_circuit_distance_with_symmetries(&dem, &options, &[identity]).is_err());
+}
+
+#[test]
 fn a_passed_time_limit_returns_before_the_symmetries() {
     let options = ExactDistanceOptions::default()
         .with_bposd_trials(0)

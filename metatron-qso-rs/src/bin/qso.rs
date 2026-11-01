@@ -508,7 +508,8 @@ enum Command {
         #[arg(long, default_value_t = 60.0, requires = "circuit_distance")]
         max_seconds: f64,
         /// Search the circuit distance on the orbits of the circuit's
-        /// symmetries (such as the translations of a bicycle code).
+        /// symmetries (such as the translations of a bicycle code), up to
+        /// 4096 detectors.
         #[arg(long, requires = "circuit_distance")]
         symmetry: bool,
     },

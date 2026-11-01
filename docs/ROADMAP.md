@@ -57,7 +57,7 @@ which withdraws the results of version 1.
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18); interacting bosons, fermions and distinguishable particles with certificates for graph isomorphism (1.29); symmetry for driven walks, open walks on orbitals, coined walks with dephasing, hypercubes with dephasing up to d = 230 (1.38) | interacting walkers stop at 2²² configurations, without symmetry reduction; open walks on orbitals stop at 8192 nodes; pretty good transfer on other graphs has no exact reference |
 | Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37); the ¹³C bath of an NV centre by the cluster-correlation expansion (1.39); the optical cycle, ODMR, pulsed readout and magnetometer sensitivity in fields of any direction, and ensembles (1.40); sparse relaxation blocks propagated by Krylov steps, Redfield relaxation from sparse terms and equivalent spins: seven and eight relaxing protons for seconds (1.41); optimal control with relaxation on sparse blocks and on the orbits of equivalent spins, seven and eight spins (1.46) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the nested-commutator bound of product formulas (1.32) is tight for small Hamiltonians only, its tail ignoring which terms commute; Redfield relaxation assumes isotropic tumbling (1.34), and propagations beyond 1.5·10¹² operations or 2 GiB are refused (eleven protons with dipolar relaxation, nine for 100 s; 1.41); chemical exchange needs steady chemistry (no irreversible hydrogenation) and one block of at most 2048 elements over all sites; field profiles with relaxation are optimised in a dense Liouville space of up to six spins ½, and have many local optima; an evaluation of eight relaxing spins takes tens of seconds (1.46); the NV bath of 1.39 takes ideal pulses only (finite ones: the generalised expansion, 1.45), its expansion can diverge (results beyond `|L| = 1` are refused), and the nuclei next to the vacancy need given contact couplings (1.39); the optical model's rotating-wave approximation fails near the ground-state anticrossing (1.40) |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
-| Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22); exact circuit distances of any model by a parallel search or the Brouwer–Zimmermann enumeration, with the lightest logical error as circuit locations (1.42); the search on the orbits of an error model's symmetries: [[144, 12, 12]] over three rounds of the depth-8 cycle has circuit distance 10 (1.47) | exact circuit distances need time exponential in the distance (each weight about 17 times the last on bicycle circuits); symmetries divide it by at most their number |
+| Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22); exact circuit distances of any model by a parallel search or the Brouwer–Zimmermann enumeration, with the lightest logical error as circuit locations (1.42); the search on the orbits of an error model's symmetries: [[144, 12, 12]] over three rounds of the depth-8 cycle has circuit distance 10 (1.47) | exact circuit distances need time exponential in the distance (each weight about 17 times the last on bicycle circuits); symmetries divide it by a factor that grows with their number (41 to 43 for 72) |
 | Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9), in the browser build too (1.25) | — |
 | Documentation | user guide, executed tutorials and Python reference on GitHub Pages (1.2); Rust tutorials from the examples and the documentation of every release since 1.2.0 (1.25) | — |
 | Engineering | CI on Linux (x86_64, arm64), macOS and Windows; Miri, fuzzing, API checks, weekly cross-validation and benchmark tracking; Trusted Publishing (1.2); line and branch coverage, and differential tests of all simulators on random circuits (1.21); coverage of the CLI and of the Python tests (1.25) | — |
@@ -4359,6 +4359,9 @@ Changes to the plan:
   different observables already make a logical error of weight 2. Such
   models use no symmetry, and their declared permutations are checked on
   the detectors only.
+- **Symmetries are optional above the limit.** `symmetry` asks for a
+  faster search, so a model too large to check its symmetries is searched
+  without them rather than refused.
 - **The search is split by second errors** when it starts from orbits,
   for the threads (not in the plan).
 
@@ -4374,7 +4377,14 @@ Not done, and why:
   builds them; the exact function takes symmetries instead.
 - **Models beyond 4096 detectors.** The check eliminates the rows of the
   detectors over all errors, about `n² · m / 64` word operations, the
-  same bound as the test for any logical error of 1.42.
+  same bound as the test for any logical error of 1.42. Such models are
+  searched without the symmetries found; declared ones are refused.
+- **Every symmetry that passes.** Generators of the graph's
+  automorphisms that fail the check are dropped, and with them products
+  of theirs that would pass. The review found such losses in 49 of 262
+  random models with planted symmetries; the generators of the bicycle
+  circuits all pass. Enumerating small groups element by element would
+  recover them; meanwhile they can be declared.
 
 Measured (four cores; uniform circuit noise p = 0.001, Z memory, three
 rounds of the depth-8 cycle):
@@ -4418,6 +4428,50 @@ rounds of the depth-8 cycle):
   surface and repetition codes (a reflection or rotation each) and in
   [[72, 12, 6]] with the depth-8 cycle (its translations), none in the
   colour codes.
+
+Review: an independent review found no fault in the search on orbits, the
+check over GF(2), the accounting by parts or the automorphism search with
+colours. The reviewer checked:
+
+- the search at every weight on 1200 models against brute force, and
+  1500 shuffled models with planted symmetries (cyclic, dihedral, torus
+  and random groups; observables shared, scattered or marked) by all three
+  methods against brute force, 863 declared generators accepted and 637
+  refused correctly;
+- `Checker::check` against the definition (logical errors onto logical
+  errors) on 63 018 permutations of 260 random models, with twins,
+  duplicates, errors of probability zero or flipping nothing, and
+  detectors that no error flips; the same equivalence in NumPy on 696;
+- the parts against a sequential reference built from the walker, on one
+  to four threads and under eight work limits;
+- `coloured_group` against brute force on 150 small coloured graphs, the
+  unchanged `automorphism_group` and `stabilizer`, time limits down to
+  zero, the bicycle circuits' generators in NumPy, and semver.
+
+It found the following smaller points; all are fixed.
+
+- **Generators that fail.** The documentation called the generators kept
+  those of "the group of symmetries found". A symmetry that is a product
+  of generators that fail is lost with them (see above), so they generate
+  a group of symmetries, not always all; the documentation now says so.
+  The search stays exact on any group of symmetries.
+- **The factor of the work.** It was described as at most the order of
+  the group. The blocks also keep the errors of earlier orbits out of
+  later starts, so the factor can exceed the order (2.4 for the
+  reflection of a line, at weight 4). It is now described as growing with
+  the order, with the measured 41 to 43 for 72.
+- **Twins.** "Two errors on the same detectors" now reads "and different
+  observables" everywhere: duplicates of an error are merged and keep
+  their symmetries.
+- **The limit of 4096 detectors.** With `symmetry` it was checked after
+  the BP+OSD searches and ended the call with an error, and with it
+  `qso qec --symmetry`. Such models are now searched without the
+  symmetries found (tested); the option, the Python docstring and the
+  help of `--symmetry` name the limit.
+- **Documentation.** The growth per weight was 16 in one place and 17 in
+  others (17 measured), an order of blocks was compared with a reversed
+  order that no test measures, and declared permutations were described
+  as taken "instead" of those found, when both are used.
 
 ### Not in this stage
 

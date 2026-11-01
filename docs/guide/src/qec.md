@@ -569,19 +569,24 @@ qubits ("hook errors").
   returned, and `distance` is set only if they met.
 
   With `symmetry=True` the search starts only from one error of each
-  orbit of the model's symmetries, which divides its work by up to the
-  number of symmetries (see below).
+  orbit of the model's symmetries, which divides its work by a factor that
+  grows with their number (41 to 43 for the 72 translations of
+  [[144, 12, 12]]; see below). Models with more than 4096 detectors are
+  searched without them.
 - **`error_model_symmetries(model)`** finds the symmetries of a model:
   permutations of its detectors that map the detectors of every error
   onto those of an error and logical errors onto logical errors, as
-  lists `p` with detector `d` going to `p[d]` (generators of the group).
-  QSO's automorphism search finds generators of the symmetries of the
-  graph that joins every error to the detectors it flips; those that
-  pass a check over GF(2) are kept. The check asks that every observable,
-  read through the permutation, be a sum of detectors and observables.
-  Exactly then does every set of errors that fires no detector and flips
-  no observable map onto such a set. `exact_circuit_distance(model, symmetries=[...])` takes declared
-  permutations instead, checks them the same way and refuses those that
+  lists `p` with detector `d` going to `p[d]`. QSO's automorphism search
+  finds generators of the symmetries of the graph that joins every error
+  to the detectors it flips; those that pass a check over GF(2) are kept.
+  The check asks that every observable, read through the permutation, be
+  a sum of detectors and observables. Exactly then does every set of
+  errors that fires no detector and flips no observable map onto such a
+  set. The generators kept generate a group of symmetries, though not
+  always all of them: a symmetry that is a product of generators that
+  fail is lost with them. `exact_circuit_distance(model,
+  symmetries=[...])` takes declared permutations too (with or without
+  `symmetry=True`), checks them the same way and refuses those that
   fail.
 - **`explain_errors(circuit, model, indices)`** names the circuit faults
   behind errors of the model: for each error, every noise operation and

@@ -294,10 +294,10 @@ frame update for each gate is derived once.
     the second error the walker would add (`Unit`); the records are kept
     per part, in the same order as the sequential search, so the answer
     still does not depend on the threads. With two errors on the same
-    detectors no symmetry is used: the search finds them at weight 2.
-    Measured on [[144, 12, 12]], this order visits about half the sets
-    that starting from the lowest error of each orbit in the model's
-    order does, and a tenth of what the reversed order of blocks does.
+    detectors and different observables no symmetry is used: the search
+    finds them at weight 2. Measured on [[144, 12, 12]], this order visits
+    about half the sets that starting from the lowest error of each orbit
+    in the model's order does (`measure_orbit_search`).
 - **Circuit locations.** `explain_errors` replays each noise channel's
   components (`dem::each_channel`, also used to build the model). For
   every combination of a channel's Paulis it takes the XOR of their

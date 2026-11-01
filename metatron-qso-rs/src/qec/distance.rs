@@ -452,6 +452,8 @@ pub struct ExactDistanceOptions {
     /// Start the exhaustive search only from one error of each orbit of
     /// the model's symmetries, those [`error_model_symmetries`] finds (with
     /// those declared to [`exact_circuit_distance_with_symmetries`]).
+    /// Models with more than [`MAX_SYMMETRY_DETECTORS`] detectors are
+    /// searched without the symmetries found.
     pub symmetry: bool,
 }
 
@@ -518,8 +520,9 @@ const ENUMERATION_NANOS: f64 = 0.5;
 ///
 /// With [`ExactDistanceOptions::symmetry`] the search starts only from
 /// one error of each orbit of the model's symmetries (see
-/// [`error_model_symmetries`]), which divides its work by up to the order
-/// of their group.
+/// [`error_model_symmetries`]), which divides its work by a factor that
+/// grows with the order of their group (41 to 43 for the 72 translations
+/// of [[144, 12, 12]] with the depth-8 cycle).
 pub fn exact_circuit_distance(
     dem: &DetectorErrorModel,
     options: &ExactDistanceOptions,
@@ -529,17 +532,20 @@ pub fn exact_circuit_distance(
 
 /// Symmetries of a detector error model: permutations of its detectors
 /// (detector `d ↦ p[d]`) that map the detectors of every error onto those
-/// of an error, and logical errors onto logical errors. They generate the
-/// group of symmetries that QSO's automorphism search finds on the graph
-/// joining each error to its detectors and that pass that check (the
+/// of an error, and logical errors onto logical errors. QSO's automorphism
+/// search finds generators of the symmetries of the graph joining each
+/// error to its detectors; those that pass the second condition (the
 /// observables, read through the permutation, are sums of detectors and
-/// observables over GF(2)); the exhaustive search of
-/// [`exact_circuit_distance`] starts from one error of each of its orbits
-/// with [`ExactDistanceOptions::symmetry`].
+/// observables over GF(2)) are returned. They generate a group of
+/// symmetries of the model, though not always all of them: a symmetry
+/// that is a product of generators that fail is lost with them (it can be
+/// declared to [`exact_circuit_distance_with_symmetries`]). The
+/// exhaustive search of [`exact_circuit_distance`] starts from one error
+/// of each orbit of the group with [`ExactDistanceOptions::symmetry`].
 ///
-/// Empty when two errors flip the same detectors (and different
-/// observables): the distance is then at most 2 and needs no symmetry.
-/// Errors for more than [`MAX_SYMMETRY_DETECTORS`] detectors.
+/// Empty when two errors flip the same detectors and different
+/// observables: the distance is then at most 2 and needs no symmetry.
+/// Otherwise errors for more than [`MAX_SYMMETRY_DETECTORS`] detectors.
 ///
 /// ```
 /// use metatron_qso::qec::{
@@ -585,8 +591,10 @@ fn symmetry_limit(n: usize) -> Result<()> {
 /// [`error_model_symmetries`] and refused if it fails; the search starts
 /// from one error of each orbit of the group they generate (with those
 /// found, under [`ExactDistanceOptions::symmetry`]). When two errors flip
-/// the same detectors, only the detectors are checked: the distance is
-/// then at most 2 and the search uses no symmetry.
+/// the same detectors and different observables, only the detectors are
+/// checked: the distance is then at most 2 and the search uses no
+/// symmetry. Otherwise declared symmetries are refused for more than
+/// [`MAX_SYMMETRY_DETECTORS`] detectors.
 pub fn exact_circuit_distance_with_symmetries(
     dem: &DetectorErrorModel,
     options: &ExactDistanceOptions,
@@ -653,13 +661,14 @@ pub fn exact_circuit_distance_with_symmetries(
     {
         return Ok(CircuitDistance::none());
     }
-    // The symmetries found, unless two errors flip the same detectors
-    // (the search at weight 2 then finds a logical error at once).
+    // The symmetries found, unless two errors flip the same detectors and
+    // different observables (the search at weight 2 then finds a logical
+    // error at once) or the detectors are too many to check them.
     if options.symmetry
+        && n <= MAX_SYMMETRY_DETECTORS
         && let Some(checker) = checker.as_mut()
         && !checker.twins()
     {
-        symmetry_limit(n)?;
         match checker.find(deadline) {
             Some(found) => permutations.extend(found.into_iter().map(|(_, pi)| pi)),
             None => {
@@ -682,7 +691,7 @@ pub fn exact_circuit_distance_with_symmetries(
         }
     }
     let budget = Budget::new(u64::MAX, deadline);
-    // With two errors on the same detectors no permutation was kept.
+    // With twins no permutation was kept.
     let search = if permutations.is_empty() {
         Search::new(n, &errors)
     } else {

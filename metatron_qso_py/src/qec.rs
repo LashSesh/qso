@@ -941,9 +941,10 @@ fn circuit_distance(
 /// "brouwer_zimmermann") until it meets the lightest logical error found;
 /// after `max_seconds` (None: no limit) the bounds reached so far are
 /// returned. With `symmetry` the search starts only from one error of each
-/// orbit of the model's symmetries (those `error_model_symmetries` finds),
-/// with the detector permutations `symmetries` too (each checked, and
-/// refused if it is not a symmetry).
+/// orbit of the model's symmetries, those `error_model_symmetries` finds
+/// (up to 4096 detectors; larger models are searched without them).
+/// Detector permutations given as `symmetries` are used with or without
+/// `symmetry`: each is checked and refused if it is not a symmetry.
 #[pyfunction]
 #[pyo3(
     signature = (model, max_seconds = Some(60.0), method = "auto", bposd_trials = 4, seed = 0, symmetry = false, symmetries = None),
@@ -986,11 +987,13 @@ fn exact_circuit_distance(
 }
 
 /// Symmetries of a detector error model, as permutations of its detectors
-/// (detector `d` goes to `p[d]`) that generate them: those of QSO's
-/// automorphism search on the graph joining each error to its detectors
-/// that map logical errors onto logical errors. Empty when two errors flip
-/// the same detectors (the distance is then at most 2); refused beyond
-/// 4096 detectors.
+/// (detector `d` goes to `p[d]`): the generators that QSO's automorphism
+/// search finds on the graph joining each error to its detectors and that
+/// map logical errors onto logical errors. They generate a group of
+/// symmetries, though not always all of them (a product of generators
+/// that fail is lost with them; it can be declared). Empty when two errors
+/// flip the same detectors and different observables (the distance is then
+/// at most 2); otherwise refused beyond 4096 detectors.
 #[pyfunction]
 fn error_model_symmetries(
     py: Python<'_>,

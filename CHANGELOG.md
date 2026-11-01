@@ -157,14 +157,16 @@ All notable changes to this project are documented here. The format follows
 
 - **Circuit distances by symmetry** (1.47, `qec`): the exhaustive search
   of `exact_circuit_distance` starts from one error of each orbit of the
-  model's symmetries (`ExactDistanceOptions::symmetry`), with the errors
-  of each orbit in one block of its order. `error_model_symmetries` finds
-  them as automorphisms of the graph joining every error to its detectors
-  (detectors and errors kept apart) and keeps those under which every
-  observable is a sum of detectors and observables over GF(2), so that
-  logical errors map onto logical errors.
-  `exact_circuit_distance_with_symmetries` takes declared detector
-  permutations, checked the same way and refused when they fail. The
+  model's symmetries (`ExactDistanceOptions::symmetry`; models of more
+  than 4096 detectors are searched without them), with the errors of each
+  orbit in one block of its order. `error_model_symmetries` finds
+  generators of the automorphisms of the graph joining every error to its
+  detectors (detectors and errors kept apart) and keeps those under which
+  every observable is a sum of detectors and observables over GF(2), so
+  that logical errors map onto logical errors (a group of symmetries,
+  not always all of them). `exact_circuit_distance_with_symmetries` takes
+  declared detector permutations, checked the same way and refused when
+  they fail. The
   depth-8 cycle of the bicycle codes keeps their translations: the
   circuit of [[144, 12, 12]] over three rounds has circuit distance 10
   (12 minutes on four cores), where 1.42 reached 9 to 11 in twenty
