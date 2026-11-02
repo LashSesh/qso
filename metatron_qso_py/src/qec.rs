@@ -15,7 +15,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use crate::circuit::{PyCircuit, theta_or_empty};
-use crate::{Raise, RealArg, invalid};
+use crate::{Raise, RealArg, invalid, pydict};
 
 /// Most entries (shots × (detectors + observables)) one call returns as
 /// arrays.
@@ -1433,17 +1433,7 @@ fn logical_error_rate(
     seed: u64,
     decoder: &str,
 ) -> PyResult<PyLogicalErrorRate> {
-    let kind = match decoder {
-        "union_find" => DecoderChoice::UnionFind,
-        "matching" => DecoderChoice::Matching,
-        "correlated_matching" => DecoderChoice::CorrelatedMatching,
-        "bposd" => DecoderChoice::BpOsd,
-        other => {
-            return Err(invalid(format!(
-                "unknown decoder {other:?}; use \"union_find\", \"matching\", \"correlated_matching\" or \"bposd\""
-            )));
-        }
-    };
+    let kind = decoder_choice(decoder)?;
     let c = &circuit.inner;
     let r = py
         .detach(|| qec::logical_error_rate_using(c, shots, seed, kind))
@@ -1456,7 +1446,159 @@ fn logical_error_rate(
     })
 }
 
+/// A decoder by name.
+fn decoder_choice(decoder: &str) -> PyResult<DecoderChoice> {
+    Ok(match decoder {
+        "union_find" => DecoderChoice::UnionFind,
+        "matching" => DecoderChoice::Matching,
+        "correlated_matching" => DecoderChoice::CorrelatedMatching,
+        "bposd" => DecoderChoice::BpOsd,
+        other => {
+            return Err(invalid(format!(
+                "unknown decoder {other:?}; use \"union_find\", \"matching\", \"correlated_matching\" or \"bposd\""
+            )));
+        }
+    })
+}
+
+/// The logical failure probability per shot of the circuits
+/// `circuit_at(p)` at `target`, by the splitting method of Bravyi and
+/// Vargo from `start` (where it is sampled directly): Metropolis chains
+/// over the failing error configurations at falling rates, the ratios of
+/// consecutive failure probabilities by Bennett's acceptance ratio. A dict
+/// with `rate`, `standard_error`, `log_standard_error`, `start` (the
+/// direct sampling) and `rates` (per rate: `p`, `ratio`,
+/// `log_ratio_error`, `acceptance`, `mean_weight`, `weight_spread`), and
+/// `decodes`. `circuit_at` must give circuits with the same errors at
+/// every rate.
+#[pyfunction]
+#[pyo3(signature = (
+    circuit_at, start, target, decoder = "matching", start_shots = 100_000, chains = 16,
+    steps = 20_000, burn_in = 5000, batches = 1, seed = 0
+))]
+#[allow(clippy::too_many_arguments)]
+fn splitting_failure_rate<'py>(
+    py: Python<'py>,
+    circuit_at: Py<PyAny>,
+    start: f64,
+    target: f64,
+    decoder: &str,
+    start_shots: usize,
+    chains: usize,
+    steps: usize,
+    burn_in: usize,
+    batches: usize,
+    seed: u64,
+) -> PyResult<Bound<'py, PyDict>> {
+    let kind = decoder_choice(decoder)?;
+    let options = qec::SplittingOptions {
+        start_shots,
+        chains,
+        steps,
+        burn_in,
+        batches,
+        seed,
+    };
+    let at = |p: f64| -> metatron_qso::Result<DetectorCircuit> {
+        Python::attach(|py| {
+            circuit_at
+                .call1(py, (p,))
+                .and_then(|c| Ok(c.extract::<PyRef<'_, PyDetectorCircuit>>(py)?.inner.clone()))
+        })
+        .map_err(|e| metatron_qso::QsoError::invalid("circuit_at", e.to_string()))
+    };
+    let r = py
+        .detach(|| qec::splitting_failure_rate(&at, kind, start, target, &options))
+        .raise()?;
+    let rates = PyList::empty(py);
+    for x in &r.rates {
+        rates.append(pydict!(py, {
+            "p" => x.p,
+            "ratio" => x.ratio,
+            "log_ratio_error" => x.log_ratio_error,
+            "acceptance" => x.acceptance,
+            "mean_weight" => x.mean_weight,
+            "weight_spread" => x.weight_spread,
+        }))?;
+    }
+    Ok(pydict!(py, {
+        "p" => r.p,
+        "rate" => r.rate,
+        "standard_error" => r.standard_error,
+        "log_standard_error" => r.log_standard_error,
+        "start" => PyLogicalErrorRate {
+            shots: r.start.shots,
+            errors: r.start.errors,
+            rate: r.start.rate,
+            standard_error: r.start.standard_error,
+        },
+        "rates" => rates,
+        "decodes" => r.decodes,
+    }))
+}
+
+/// Every error configuration of at most `max_weight` errors of the
+/// circuit's detector error model, decoded: a dict with `rate` (their
+/// failure probability), `remainder` (the probability of all heavier
+/// configurations, so the exact rate lies in `[rate, rate + remainder]`),
+/// `failing` and `by_weight` (per weight) and `configurations`.
+#[pyfunction]
+#[pyo3(signature = (circuit, max_weight, decoder = "matching"))]
+fn enumerated_failure_rate<'py>(
+    py: Python<'py>,
+    circuit: &PyDetectorCircuit,
+    max_weight: usize,
+    decoder: &str,
+) -> PyResult<Bound<'py, PyDict>> {
+    let kind = decoder_choice(decoder)?;
+    let c = &circuit.inner;
+    let r = py
+        .detach(|| qec::enumerated_failure_rate(c, kind, max_weight))
+        .raise()?;
+    Ok(pydict!(py, {
+        "rate" => r.rate,
+        "remainder" => r.remainder,
+        "failing" => r.failing,
+        "by_weight" => r.by_weight,
+        "configurations" => r.configurations,
+    }))
+}
+
+/// The leading term of the failure probability: the distance, the weight
+/// `⌈d/2⌉`, the logical errors of at most twice that many errors, the
+/// failing configurations of that weight among their subsets and their
+/// summed probability `leading_term` (`A·p^w`) and `probability` (with
+/// the factors `1 − p` of the other errors: their exact share of the
+/// failure probability, a lower bound), as a dict (with `work`, the sets
+/// the enumeration visited, at most `max_work`).
+#[pyfunction]
+#[pyo3(signature = (circuit, decoder = "matching", max_work = 1_073_741_824))]
+fn leading_failures<'py>(
+    py: Python<'py>,
+    circuit: &PyDetectorCircuit,
+    decoder: &str,
+    max_work: u64,
+) -> PyResult<Bound<'py, PyDict>> {
+    let kind = decoder_choice(decoder)?;
+    let c = &circuit.inner;
+    let r = py
+        .detach(|| qec::leading_failures(c, kind, max_work))
+        .raise()?;
+    Ok(pydict!(py, {
+        "distance" => r.distance,
+        "weight" => r.weight,
+        "logicals" => r.logicals,
+        "configurations" => r.configurations,
+        "leading_term" => r.leading_term,
+        "probability" => r.probability,
+        "work" => r.work,
+    }))
+}
+
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(splitting_failure_rate, m)?)?;
+    m.add_function(wrap_pyfunction!(enumerated_failure_rate, m)?)?;
+    m.add_function(wrap_pyfunction!(leading_failures, m)?)?;
     m.add_class::<PyDetectorCircuit>()?;
     m.add_class::<PyCircuitNoise>()?;
     m.add_class::<PyDetectorErrorModel>()?;

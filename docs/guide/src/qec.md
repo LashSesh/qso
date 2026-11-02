@@ -694,6 +694,76 @@ The checks:
   with hyperedges and [[72, 12, 6]] included, with and without
   symmetries.
 
+## Failure rates below sampling
+
+Sampling needs about a hundred failures for a useful estimate, 10¹⁰
+shots at a failure rate of 10⁻⁸. Resource estimates need rates of 10⁻⁸
+to 10⁻¹², so QSO carries the rate down from where sampling reaches.
+
+- **`splitting_failure_rate(circuit_at, start, target)`** follows Bravyi
+  and Vargo (Phys. Rev. A 88, 062308 (2013)). `circuit_at(p)` builds the
+  circuit at noise strength `p`; its detector error model (without
+  decomposition) must have the same errors at every `p`, only their
+  probabilities change. At `start` the failure rate is sampled directly
+  (`start_shots`), and the failing configurations found start the chains.
+  The rates then fall by a factor `e^{−1/σ}`, where `σ` is the spread of
+  the number of errors the chains sampled (at most a factor of 4), down
+  to `target`. At each rate, independent Metropolis chains (`chains`,
+  run in parallel) sample the configurations the decoder of that rate
+  fails on, each with its probability `Π p_i Π (1 − p_j)`. A move removes
+  an error, adds one, or swaps one for a neighbour (an error sharing a
+  detector), with the Hastings factors of these choices. The ratio of
+  consecutive failure rates comes from the chains of both rates by
+  Bennett's acceptance ratio. Its standard error comes from the spread of
+  the chains, and the result's error is relative (`log_standard_error`).
+- **Burn-in matters.** Each chain starts from a configuration of the last
+  rate, heavier than the new rate's typical ones; too short a burn-in
+  biases the ratio downwards. With 5 000 steps after 1 000 of burn-in,
+  the surface code of distance 5 at `p = 10⁻⁴` came out up to 15 % low
+  (by up to four of its standard errors) in four of eight seeds.
+  The defaults are 16 chains of 20 000 steps after 5 000 of burn-in.
+- **`leading_failures(circuit)`** gives the leading term. It enumerates
+  the undetectable logical errors of at most `2⌈d/2⌉` errors and decodes
+  every subset of `⌈d/2⌉` of their errors. It returns the distance, the
+  failing configurations of that weight, their summed product of
+  probabilities (`leading_term`, the `A·p^w` of the failure rate) and
+  their exact share of it (`probability`, a lower bound). The count is
+  complete when the decoder never corrects with more errors than the
+  configuration has. For the circuits tested it equals the enumeration.
+- **`enumerated_failure_rate(circuit, max_weight)`** decodes every
+  configuration of at most `max_weight` errors. It also bounds the
+  probability of the heavier ones (`remainder`), so that the exact rate
+  lies in `[rate, rate + remainder]`. This is the reference for small
+  models.
+
+```python
+import metatron_qso as q
+
+at = lambda p: q.surface_code_memory(5, 5, p)
+r = q.splitting_failure_rate(at, 0.01, 1e-4)
+print(r["rate"], r["log_standard_error"])   # 1.3e-7, 2 %
+lead = q.leading_failures(at(1e-4))
+print(lead["configurations"], lead["probability"])   # 26384 of 3 errors, 1.3e-7
+```
+
+Measured on four cores, with circuit noise (rounds = d) and matching,
+from `start = 0.01`:
+
+| Code | p | Splitting | Time | Check |
+|---|---|---|---|---|
+| surface d = 3 | 10⁻³ | 7.93·10⁻⁴ ± 1.4 % | 0.5 s | sampled: 8.13·10⁻⁴ ± 2.5 % |
+| surface d = 3 | 10⁻⁴ | 8.12·10⁻⁶ ± 1.4 % | 0.5 s | weight-2 failures alone: 8.21·10⁻⁶ |
+| surface d = 5 | 10⁻³ | 1.31·10⁻⁴ ± 1.8 % | 4 s | sampled: 1.26·10⁻⁴ ± 6.3 % |
+| surface d = 5 | 10⁻⁴ | 1.34·10⁻⁷ ± 2.0 % | 5 s | weight-3 failures alone: 1.30·10⁻⁷ |
+| surface d = 7 | 10⁻³ | 1.81·10⁻⁵ ± 2.7 % | 18 s | |
+| surface d = 7 | 10⁻⁴ | 1.76·10⁻⁹ ± 3.0 % | 20 s | |
+| [[72, 12, 6]], data only, BP+OSD | 10⁻² | 4.52·10⁻⁴ ± 2.9 % | 20 s | sampled: 5.2·10⁻⁴ ± 9.8 % |
+| [[72, 12, 6]], data only, BP+OSD | 10⁻³ | 4.41·10⁻⁷ ± 4.2 % | 20 s | |
+
+The bicycle code starts from 0.06, with 20 000 start shots. Over eight
+seeds, the surface code of distance 5 at `10⁻⁴` gave 1.34 to 1.41·10⁻⁷,
+a spread of 1.6 % against the stated 1.9 %.
+
 ## Stim circuits and the command line
 
 `to_stim()` writes a circuit in Stim's text format, with relative

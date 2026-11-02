@@ -303,6 +303,32 @@ frame update for each gate is derived once.
   every combination of a channel's Paulis it takes the XOR of their
   signatures and keeps those equal to the error's effect, as
   `CircuitFault`s with the operation index.
+- **Failure rates below sampling** (`qec/splitting.rs`, 1.52). The model
+  without decomposition is the error distribution; the decoder is built
+  for each rate's circuit as `DecoderChoice::build_for` builds it, and a
+  configuration's syndrome is the XOR of its errors' detectors. The start
+  rate is sampled by geometric jumps per error over blocks of 16 384
+  shots (in parallel), which gives both the rate and failing
+  configurations to start from. A chain holds a configuration and its
+  membership bits; a step removes a member, adds a non-member or swaps a
+  member for a neighbour (precomputed lists of errors sharing a
+  detector), with the Hastings factors `|E|/(N − |E| + 1)`, `(N −
+  |E|)/(|E| + 1)` and the neighbour counts. The Metropolis test on the
+  probabilities comes first, so only moves it accepts are decoded. After
+  the burn-in, runs of one configuration are stored with their counts.
+  The samples of a rate are then decoded by the next rate's decoder
+  (each distinct configuration once per chain) for `x = ln(q₁/q₀)`, and
+  Bennett's `ln C` is iterated to the fixed point in logarithms (sigmoids
+  instead of exponentials). Chains of one rate run in parallel, each
+  with its own decoder and a forked stream of the seed.
+  `leading_failures` enumerates the logical errors that cannot be split
+  into undetectable parts by the search of the distance (growing from
+  the lowest fired detector by errors of higher index), deduplicated as
+  sorted sets, then the subsets of `⌈d/2⌉` errors; `enumerated_failure_rate`
+  walks all sets in lexicographic order from each first error, in
+  parallel, and bounds the rest by the distribution of the number of
+  errors (a Poisson-binomial with an absorbing last state, so the tail is
+  never a difference).
 
 ## Matrix-product states (`mps/`)
 

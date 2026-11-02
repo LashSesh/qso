@@ -159,3 +159,30 @@ def test_invalid_input_raises() -> None:
     decoder = q.UnionFindDecoder(bit_flip_repetition(3, 0.1).detector_error_model(True))
     with pytest.raises(ValueError, match="columns"):
         decoder.decode_batch(np.zeros((2, 3), dtype=bool))
+
+
+def test_splitting_reaches_rates_far_below_sampling() -> None:
+    # The repetition code of distance 3 over two rounds (15 errors) from 3 %
+    # down to 10⁻⁵, against the enumeration of all 2¹⁵ configurations; the
+    # leading term counts the failing pairs, and errors of the callable
+    # reach Python.
+    def at(p: float) -> q.DetectorCircuit:
+        return q.repetition_code_memory(3, 2, p)
+
+    exact = q.enumerated_failure_rate(at(1e-5), 15)
+    assert exact["remainder"] == 0.0 and exact["configurations"] == 2**15
+    est = q.splitting_failure_rate(at, 0.03, 1e-5, start_shots=20000, chains=8, steps=2000, burn_in=500, seed=3)
+    z = (math.log(est["rate"]) - math.log(exact["rate"])) / est["log_standard_error"]
+    assert abs(z) < 4.0, (est["rate"], exact["rate"])
+    assert est["rates"][-1]["p"] == 1e-5 and est["start"].errors > 0
+    lead = q.leading_failures(at(1e-5))
+    assert lead["distance"] == 3 and lead["weight"] == 2
+    assert lead["configurations"] == exact["failing"][2]
+
+    def broken(p: float) -> q.DetectorCircuit:
+        raise RuntimeError("no circuit")
+
+    with pytest.raises(ValueError, match="no circuit"):
+        q.splitting_failure_rate(broken, 0.03, 1e-3)
+    with pytest.raises(ValueError, match="decoder"):
+        q.leading_failures(at(1e-3), decoder="nearest")  # type: ignore[arg-type]

@@ -5137,7 +5137,7 @@ the error estimate and an older loss of digits; all are fixed or stated.
   interpolant's, whose derivative can err by about `N²` times the stated
   error (measured gradients agreed to 10⁻¹⁰ to 10⁻¹³).
 
-### 1.52 — Logical error rates below sampling (L)
+### 1.52 — Logical error rates below sampling (L, delivered)
 
 Use case: logical error rates of surface and bivariate bicycle codes at
 physical error rates where they are 10⁻⁸ to 10⁻¹², as needed for
@@ -5156,6 +5156,99 @@ codes); equal to direct sampling within standard errors where that
 reaches; the leading coefficient equals the count of failing
 configurations of least weight; the estimate's standard error covers the
 reference in repeated runs at the stated rate.
+
+Delivered in `qec/splitting.rs`:
+
+- **Splitting.** `splitting_failure_rate(circuit_at, decoder, start,
+  target, options)` takes a family of circuits `p ↦ circuit` whose
+  detector error models (without decomposition) have the same errors at
+  every rate. The start rate is sampled directly, which gives the rate
+  and failing configurations to start from. The rates then fall by
+  `e^{−1/σ}` (`σ` the spread of the number of errors sampled, at most a
+  factor of 4) down to the target. At each rate independent Metropolis
+  chains sample the configurations that rate's decoder fails on, with
+  probability `Π p_i Π (1 − p_j)`. A move removes an error, adds one, or
+  swaps one for an error that shares a detector with it, each with its
+  Hastings factor. The ratio of consecutive failure probabilities follows
+  from the chains of both rates by Bennett's acceptance ratio, its
+  standard error from the spread of the chains.
+- **Leading order.** `leading_failures` enumerates the undetectable
+  logical errors of at most `2⌈d/2⌉` errors (those that cannot be split
+  into two undetectable parts, by the search of 1.42). It then decodes
+  every subset of `w = ⌈d/2⌉` of their errors and returns their number,
+  `Σ Π p_i` (the leading term `A·p^w`) and their exact probability, a
+  lower bound of the failure rate. A configuration of `w` errors that
+  fails with a correction of at most `w` errors lies in such a logical
+  error, so the count is complete for decoders whose corrections are no
+  heavier than the configuration.
+- **Decoders.** Any `DecoderChoice`, built for each rate's circuit:
+  matching for graph-like models, BP+OSD for the others.
+- **Exact references.** `enumerated_failure_rate` decodes every
+  configuration up to a weight and bounds the probability of the rest by
+  the distribution of the number of errors.
+- In Python: `splitting_failure_rate` (with a callable), `leading_failures`
+  and `enumerated_failure_rate`.
+
+Changes to the plan:
+
+- **Moves that remove and add.** A first version toggled a uniformly
+  chosen error. A chain from a heavy configuration of the last rate then
+  rarely hit one of its own errors and kept its weight. The result came
+  out low, by a factor of 3 for the surface code of distance 7 at
+  `10⁻³`, with batch means inside one chain that hid it. Removal and
+  addition proposed on their own, standard errors from independent
+  chains, and a longer burn-in (5 000 of 25 000 steps) fixed it.
+- **The exact share as a lower bound.** `leading_failures` also returns
+  `Σ P(E)` of the failing configurations of least weight, a strict lower
+  bound of the failure rate. It is a check on splitting at low rates
+  where nothing else reaches.
+
+Not done, and why:
+
+- **Self-tuned burn-in.** The burn-in is an option: a check of
+  stationarity (the weights of the first against the second half of
+  each chain) would warn but not cure.
+- **Leading order for decoders with heavier corrections.** With unequal
+  weights a decoder may correct with more errors than the configuration
+  has, and failing configurations outside the logical errors enumerated
+  are not counted. For the circuits tested the count equals the
+  enumeration.
+
+Measured (four cores, release build), circuit noise with `d` rounds and
+matching from `start = 0.01` (default options):
+
+| Code | p | Splitting | Time | Check |
+|---|---|---|---|---|
+| surface d = 3 | 10⁻³ | 7.93·10⁻⁴ ± 1.4 % | 0.5 s | sampled 8.13·10⁻⁴ ± 2.5 % |
+| surface d = 3 | 10⁻⁴ | 8.12·10⁻⁶ ± 1.4 % | 0.5 s | weight 2 alone 8.21·10⁻⁶ (186 configurations) |
+| surface d = 5 | 10⁻³ | 1.31·10⁻⁴ ± 1.8 % | 4 s | sampled 1.26·10⁻⁴ ± 6.3 % |
+| surface d = 5 | 10⁻⁴ | 1.34·10⁻⁷ ± 2.0 % | 5 s | weight 3 alone 1.30·10⁻⁷ (26 384 configurations, 8172 logical errors, 0.2 s) |
+| surface d = 7 | 10⁻³ | 1.81·10⁻⁵ ± 2.7 % | 18 s | |
+| surface d = 7 | 10⁻⁴ | 1.76·10⁻⁹ ± 3.0 % | 20 s | |
+| [[72, 12, 6]], data noise, BP+OSD (from 0.06) | 10⁻² | 4.52·10⁻⁴ ± 2.9 % | 20 s | sampled 5.2·10⁻⁴ ± 9.8 % |
+| [[72, 12, 6]], data noise, BP+OSD | 10⁻³ | 4.41·10⁻⁷ ± 4.2 % | 20 s | |
+
+Over eight seeds the surface code of distance 5 at `10⁻⁴` gave 1.34 to
+1.41·10⁻⁷, a spread of 1.6 % against the stated 1.9 %.
+
+Validation:
+- **Against enumeration.** Splitting equals the enumeration of all 2¹⁵
+  configurations of the repetition code of distance 3 (two rounds) at
+  `p = 10⁻⁶` (5.4·10⁻¹¹) within 0.4 standard errors. It equals the
+  enumeration of all configurations of up to five errors of the surface
+  code of distance 3 (three rounds, remainder below 10⁻⁶ of the rate) at
+  `10⁻⁴` within 1.2.
+- **Against sampling.** It equals direct sampling of the circuit (4·10⁶
+  shots) at 0.5 %.
+- **Coverage.** In 20 runs with small chains, the exact rate at `10⁻⁴`
+  lies within two standard errors in at least 15.
+- **Leading term.** The failing configurations of least weight from the
+  subsets of the logical errors equal the enumerated ones in number and
+  probability (to 10⁻¹²): 33 and 352 for the repetition codes of distance
+  3 and 5, 186 for the surface code of distance 3, 9 for it with data
+  noise only. No configuration of fewer errors fails.
+- **Enumeration against sampling.** The enumeration brackets 10⁶
+  sampled shots.
 
 ### Not in this stage
 

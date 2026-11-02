@@ -24,6 +24,10 @@
 //!   [`logical_error_rate_using`]: sample, decode and count;
 //! * [`circuit_distance`] and [`graphlike_distance`]: the fewest errors
 //!   that flip a logical observable undetected;
+//! * [`splitting_failure_rate`], [`leading_failures`] and
+//!   [`enumerated_failure_rate`]: logical failure rates far below the
+//!   reach of sampling (splitting), their leading term, and exact
+//!   references for small models;
 //! * [`DetectorCircuit::to_stim`]: export in Stim's text format.
 
 pub mod bposd;
@@ -38,6 +42,7 @@ pub mod frame;
 mod gf2;
 pub mod matching;
 pub mod sparse;
+pub mod splitting;
 mod stim;
 
 pub use bposd::{
@@ -65,6 +70,11 @@ pub use distance::{
 pub use frame::{DetectorSamples, sample_detectors};
 pub use matching::{MAX_MATCHING_PAIRS, MatchingDecoder};
 pub use sparse::SparseMatchingDecoder;
+pub use splitting::{
+    EnumeratedFailureRate, LeadingFailures, MAX_SPLITTING_DECODES, MAX_SPLITTING_RATES,
+    SplittingEstimate, SplittingOptions, SplittingRate, enumerated_failure_rate, leading_failures,
+    splitting_failure_rate,
+};
 
 use crate::error::{QsoError, Result};
 use crate::rng::Rng;

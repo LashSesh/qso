@@ -2461,6 +2461,26 @@ def logical_error_rate(
     ] = "union_find",
 ) -> LogicalErrorRate: ...
 
+
+def splitting_failure_rate(
+    circuit_at: Callable[[float], DetectorCircuit],
+    start: float,
+    target: float,
+    decoder: Literal["union_find", "matching", "correlated_matching", "bposd"] = "matching",
+    start_shots: int = 100000,
+    chains: int = 16,
+    steps: int = 20000,
+    burn_in: int = 5000,
+    batches: int = 1,
+    seed: int = 0,
+) -> dict[str, Any]: ...
+def enumerated_failure_rate(
+    circuit: DetectorCircuit, max_weight: int, decoder: Literal["union_find", "matching", "correlated_matching", "bposd"] = "matching"
+) -> dict[str, Any]: ...
+def leading_failures(
+    circuit: DetectorCircuit, decoder: Literal["union_find", "matching", "correlated_matching", "bposd"] = "matching", max_work: int = 1073741824
+) -> dict[str, Any]: ...
+
 @final
 class MatrixProductState:
     def __new__(

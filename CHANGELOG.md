@@ -8,6 +8,21 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Logical error rates below sampling** (1.52, `qec::splitting`):
+  `splitting_failure_rate` carries the failure rate of a family of
+  circuits from a start rate, where it is sampled, down to rates of
+  10⁻⁹ and below by the splitting method of Bravyi and Vargo: Metropolis
+  chains over the failing error configurations at falling rates
+  (removals, additions and local swaps), the ratios of consecutive rates
+  by Bennett's acceptance ratio, standard errors from independent
+  chains, any decoder (matching, BP+OSD, …). `leading_failures` gives the
+  leading term `A·p^w` from the subsets of the lightest logical errors,
+  and `enumerated_failure_rate` the exact rate of small models with a
+  bound on the rest. Splitting equals the enumeration at 5·10⁻¹¹ and
+  direct sampling where that reaches; surface codes of distance 7 at
+  p = 10⁻⁴ take 20 s. In Python: `splitting_failure_rate`,
+  `leading_failures`, `enumerated_failure_rate`.
+
 - **Field profiles with relaxation beyond six spins** (1.51, `spin`):
   `control_transfer` and `optimize_control` take field profiles with
   relaxation on the sparse blocks of 1.46 instead of the dense generator
