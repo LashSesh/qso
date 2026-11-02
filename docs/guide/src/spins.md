@@ -355,8 +355,7 @@ What the model leaves out:
 
 - **Irreversible chemistry.** The amounts of the sites must be steady, so
   a hydrogenation that consumes its substrate (PHIP, PHIP-SAH) is not a
-  channel; simulate the product as a `SpinSystem` from the moment it
-  forms, or as a site that is formed and removed at the same rate.
+  channel; use `spin.Reactions` (next section).
 - **Partners.** A channel has one source: in a bimolecular step only the
   spins of that source keep their state, the partner's arrive fresh (a
   mean-field picture of the partner).
@@ -372,6 +371,73 @@ What the model leaves out:
   (10⁻¹⁰ at a millitesla) is resolved to about 10⁻¹⁵ by `steady_state`
   (checked against a 40-digit solution); long delays in the laboratory
   frame lose about `ε·ω·t`, 10⁻⁹ after 600 s at 1 T.
+
+## Reaction kinetics
+
+When the amounts change, `spin.Reactions` takes their place. It holds
+spin sites with initial amounts (zero for a product not yet formed),
+species without spins (substrate, parahydrogen, catalyst) and reactions
+of first and second order, `reactants → products` at `k Π c` (sites by
+index, species by name). At most one product is a site; it receives the
+carried spins of the first reactant site and fresh spins for the rest.
+PASADENA as it runs, parahydrogen in excess:
+
+```python
+import numpy as np
+import metatron_qso as q
+from metatron_qso import spin
+
+product = q.SpinSystem(9.4)
+a = product.add_spin("1H", 1.2)
+b = product.add_spin("1H", 2.9)
+product.couple(a, b, 7.2)
+for i in (a, b):
+    product.set_relaxation(i, 2.0, 0.5)
+r = spin.Reactions()
+p = r.add_site(product, 0.0)
+r.add_species("A", 1.0)
+r.add_species("H2", 10.0)                       # parahydrogen in excess
+r.add_reaction(["A", "H2"], [p], 0.2, parahydrogen=(a, b))
+zz = 4 * product.spin_operator(a, "z") @ product.spin_operator(b, "z")
+sigma, signal = [np.zeros((4, 4))], []
+for k in range(8):                              # 0.25 s at a time
+    sigma = r.advanced(0.25 * k).evolve(sigma, [spin.delay(0.25)])
+    signal.append(-np.trace(sigma[0] @ zz).real)
+print(np.round(signal, 3))   # [0.339 0.467 0.488 0.457 ...]: peaks at 0.75 s
+print(r.amounts(2.0)[0])     # 0.975 of the product formed by then
+```
+
+States are unnormalised: a site's trace is its amount, zero before the
+product forms. `amounts(t)` integrates the rate equations (Dormand–Prince,
+10⁻¹² of the amounts), `evolve` applies pulses on isotopes, delays, field
+jumps and sweeps from the initial amounts, and `advanced(t)` gives the
+same reactions starting with the amounts after `t`, to go on from states
+`evolve` returned. The spin equations are those of `Exchange` with
+pseudo-first-order rates that follow the amounts; they are propagated by
+exponentials of the joint blocks, the coefficients at each step's
+midpoint, the inhomogeneous terms (fresh spins, relaxation towards the
+thermal state of the current amount) integrated as quadratics, and the
+result extrapolated from steps `h` and `h/2`. The fast spin evolution is
+in the exponentials; the steps follow the kinetics (at most 2 % of the
+amounts turned over and 2 % change of every rate that matters), so a
+coherence formed by parahydrogen keeps its phase whatever the ratio of
+rate and frequency.
+
+- **Measured.** With parahydrogen in excess (k[H₂] = 2 s⁻¹) the PASADENA
+  signal peaks at 0.75 s, at 0.49 per molecule of substrate (0.76
+  formed); depleted (0.8 H₂ per substrate, k = 2.5) at 0.5 s and 0.35.
+  ALTADENA with the field rising from 10 mT to 1 T in 2 s during the
+  reaction: the population difference of `|βα⟩` and `|αβ⟩` per molecule
+  is 0.32 for k = 0.3 s⁻¹ and 0.95 for 30 s⁻¹, as later molecules miss the
+  adiabatic passage. SABRE (the model above at its anti-crossing, with a
+  free catalyst that binds the substrate at 200 per amount and second):
+  the free ¹⁵N reaches 73.9 % after 120 s, the steady state of
+  `Exchange`; with the free catalyst deactivated at 5 s⁻¹ it peaks near
+  70 % and falls to 62 % by 120 s as the complex is lost. All of it takes
+  5 s.
+- **Not modelled.** Correlated states of two reactants that both carry
+  spins (only the first reactant site carries; a partner's spins are
+  traced), reactions of third order, and spin-dependent chemistry.
 
 ## Long-lived states and transfer
 
@@ -1058,6 +1124,20 @@ converge for finite pulses).
   (written with NumPy alone, 4000 molecules) within its statistical error
   (about 1 % of the values), and the free ¹⁵N substrate is polarised most
   within 3 % of the level anti-crossing.
+- **Reaction kinetics.** Amounts follow the closed forms of first,
+  reversible, second (unequal amounts) and `2A →` reactions to 10⁻¹¹.
+  Parahydrogen forming a coupled pair at rate `k` gives
+  `c₀ ρ_mn k e^{−iωT}(1 − e^{−(k−iω)T})/(k − iω)` in the eigenbasis to
+  10⁻¹⁰ for `k` from 10² to 10⁸ s⁻¹ against `|ω|` = 3.8·10⁴ rad/s (the
+  PASADENA average and the coherent singlet of 1.33 in the limits), and
+  the two-spin order with `T₁` the convolution `c₀ k (e^{−Rt} −
+  e^{−kt})/(k − R)` to 10⁻¹⁰. Steady reactions equal `Exchange` to
+  10⁻¹², carried spins keep their state through a second-order reaction,
+  traces equal the amounts, thermal states stay thermal, and evolution in
+  two pieces equals one. A Monte Carlo of 600 molecules formed at times
+  drawn from the kinetics, each evolved alone with `T₁` and `T₂`, agrees
+  within four standard errors (plus 10⁻³).
+
 - **Exchange against a dense reference.** An independent NumPy
   implementation of the homogeneous equations (partial traces by
   `einsum`, spin orders by axis permutations) agrees with delays, sweeps,

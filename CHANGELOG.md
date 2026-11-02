@@ -8,6 +8,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Hyperpolarisation with reaction kinetics** (1.50, `spin::Reactions`):
+  spin sites whose amounts change by reactions of first and second order
+  with species without spins (`Participant`, `Reaction`, `Species`).
+  The amounts follow their rate equations; each site's density matrix is
+  unnormalised, its trace its amount, and every reaction event creates
+  the product with the carried spins of its source and fresh spins (the
+  parahydrogen singlet) for the rest. Propagated by exponentials of the
+  joint blocks with the inhomogeneous terms integrated as quadratics and
+  steps that follow the kinetics, so that formation at any rate keeps the
+  phase of the coherences. `amounts`, `evolve` (pulses, delays, fields,
+  sweeps), `advanced`. PASADENA, ALTADENA with a field ramp during the
+  reaction and SABRE with a consumed catalyst; closed forms to 10⁻¹⁰, the
+  steady case equal to `Exchange`. In Python: `spin.Reactions`.
+
 - **Relaxation beyond isotropic tumbling** (1.49, `spin`): Redfield
   relaxation with anisotropic rotational diffusion
   (`SpinSystem::with_diffusion`, any symmetric diffusion tensor in the

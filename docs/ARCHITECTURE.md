@@ -576,6 +576,21 @@ column. Steady states replace one population equation per site by
 `Tr Δ_s = 0`, scale rows and columns, and solve by fully pivoted LU,
 refusing pivots below 10⁻¹² of the largest.
 
+Reaction kinetics (`spin/exchange/kinetics.rs`) uses the same joint
+blocks with amounts that change. The amounts follow their rate equations
+alone (Dormand–Prince, 10⁻¹²). The deviation `σ_s − c_s(t)/d_s` stays
+traceless: the gains and losses of `c_s/d_s` and `−ċ_s/d_s` cancel in its
+identity part, so `Tr σ_s = c_s` exactly. A step of `h` takes the
+generator with the amounts at its midpoint and the inhomogeneous terms
+(the relaxation's drift times `c_s`, gains and losses of `c_s/d_s`, fresh
+states of reactions without a source, `−ċ_s/d_s`) as the quadratic
+through their values at the start, midpoint and end, integrated exactly
+by two more coordinates `u₁ = s/h`, `u₂ = (s/h)²/2` in the augmented
+exponential (dimensionless, so that fast reactions do not unbalance the
+exponential); steps `h` and `h/2` are extrapolated (the rule is
+symmetric). Steps follow the kinetics: at most 2 % of the amounts turned
+over and 2 % change of every reaction rate that still matters.
+
 Optimal control (`spin/control.rs`) evaluates the transfer `Re Tr(C†
 ρ(T))` of piecewise-constant controls and its gradient in one forward and
 one backward pass. Without relaxation each step's `H_k` is diagonalised:

@@ -123,6 +123,7 @@ mod tests;
 mod transfer_tests;
 
 pub use control::{Control, ControlCost, Drive, Member, Optimized, unitary_bound};
+pub use exchange::kinetics::{Participant, Reaction, Reactions, Species};
 pub use exchange::{Channel, Exchange, Fresh, Profile, Site};
 pub use nv::{
     Carbon, FieldNoise, MAX_NV_DIMENSION, Microwave, NV_GYROMAGNETIC_RATIO,

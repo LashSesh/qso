@@ -4817,7 +4817,7 @@ are fixed or documented.
   `#[non_exhaustive]`, and a group without interactions is refused in
   JSON.
 
-### 1.50 — Hyperpolarisation with reaction kinetics (M)
+### 1.50 — Hyperpolarisation with reaction kinetics (M, delivered)
 
 Use case: PASADENA and ALTADENA as they run: parahydrogen adds
 irreversibly to a substrate at a finite rate, the product accumulates
@@ -4836,6 +4836,88 @@ product with `T₁` relaxation the accumulated polarisation follows its
 closed form (a convolution of exponentials); fast reactions give the
 results of 1.33; a Monte Carlo of reaction events (as in 1.35) agrees
 within its standard error; the product's trace equals its amount.
+
+Delivered in `spin/exchange/kinetics.rs`, with the blocks of
+`spin/exchange.rs`:
+
+- **Kinetics.** `Reactions` holds spin sites with initial amounts (zero
+  for a product not yet formed), species without spins and reactions of
+  first and second order (`k Π c`, a reactant may appear twice;
+  reversible reactions as two). The amounts follow the rate equations
+  alone, by Dormand–Prince steps to 10⁻¹² of the amounts (`amounts(t)`).
+- **Spin source.** Each site's density matrix is unnormalised, its trace
+  its amount. A reaction's reactant sites react at the pseudo-first-order
+  rate `k` times the other reactants; its product site (at most one)
+  gains the carried spins of the first reactant site and fresh spins
+  (thermal or the parahydrogen singlet) for the rest, or the fresh state
+  of every spin times `k Π c` when no reactant has spins. The deviation
+  `σ_s − c_s(t)/d_s` stays traceless, so the trace equals the amount
+  exactly. A step takes the generator with the amounts at its midpoint
+  and the inhomogeneous terms as the quadratic through their values at
+  the start, midpoint and end, integrated exactly by the augmented
+  exponential; steps `h` and `h/2` are extrapolated. The steps follow the
+  kinetics (at most 2 % of the amounts turned over, 2 % change of every
+  rate that matters), not the spin frequencies.
+- **Experiments.** `evolve` takes pulses on isotopes, delays, field jumps
+  and sweeps (so field ramps during the reaction), and `advanced(t)` goes
+  on from a state returned after `t`. PASADENA, ALTADENA and SABRE with a
+  consumed catalyst are measured below. In Python: `spin.Reactions`.
+
+Changes to the plan:
+
+- **Inhomogeneous terms as quadratics.** A first version froze every
+  coefficient at the step's midpoint and extrapolated; the coherence of a
+  pair formed at 10⁶ s⁻¹ then erred by 2·10⁻⁵, independent of the step,
+  because the source of the coherence oscillates within a step at the
+  pair's frequency. The quadratic source with dimensionless coordinates
+  (with `u₁ = s` the exponential's entries grew as `k²h` and it lost
+  digits) brought every rate from 10² to 10⁸ s⁻¹ to 10⁻¹¹.
+- **Going on in pieces.** `advanced(t)` was not planned; observing a
+  signal during the reaction needs it.
+
+Not done, and why:
+
+- **Two reactants that both carry spins.** The product would need the
+  product of two states, a quadratic term in the spins; only the first
+  reactant site carries spins, a partner's are traced out (as in 1.35).
+- **Third-order and spin-dependent chemistry.** Rates depend on the
+  amounts only.
+- **Pulses during a reaction other than ideal ones on an isotope**, as in
+  1.35.
+
+Measured (four cores, release build):
+
+- **PASADENA** at 9.4 T, the product two protons (1.2 and 2.9 ppm, J =
+  7.2 Hz, `T₁` = 2 s, `T₂` = 0.5 s), signal `−⟨4I_zS_z⟩` per molecule of
+  substrate: with parahydrogen in excess (k[H₂] = 2 s⁻¹) it peaks at
+  0.75 s at 0.488, when 0.76 is formed, and is 0.24 at 2 s and 0.04 at
+  4 s; depleted (0.8 H₂ per substrate, k = 2.5) it peaks at 0.5 s at
+  0.347, and 0.799 of the substrate is converted in all.
+- **ALTADENA**, the reaction running while the field rises from 10 mT to
+  1 T in 2 s, then 9.4 T: the population difference of `|βα⟩` and `|αβ⟩`
+  per molecule formed is 0.32, 0.41, 0.61 and 0.95 for k = 0.3, 1, 3 and
+  30 s⁻¹ (molecules formed later miss the adiabatic passage).
+- **SABRE** (1.35's model at the anti-crossing, the free catalyst binding
+  the substrate at 200 per amount and second): the free ¹⁵N has 53.0,
+  72.4, 73.9 and 73.9 % after 10, 30, 60 and 120 s, the 74 % steady state
+  of 1.35; with the free catalyst deactivated at 5 s⁻¹, 52.0, 69.9, 68.7
+  and 62.3 %, the complex falling to 0.56 of its amount.
+- The three take 5.2 s together.
+
+Validation: amounts follow the closed forms of first, reversible, second
+(unequal amounts) and `2A →` kinetics to 10⁻¹¹. Parahydrogen forming a
+coupled pair at rate `k` follows `c₀ ρ_mn k e^{−iωT}(1 − e^{−(k−iω)T})/(k −
+iω)` in the eigenbasis to 10⁻¹⁰ for `k` = 10², 10⁴, 10⁶ and 10⁸ s⁻¹
+against `|ω|` = 3.8·10⁴ rad/s; at 10⁸ the coherent singlet of 1.33 to
+`|ω|/k`. The two-spin order with `T₁` follows the convolution
+`c₀ k(e^{−Rt} − e^{−kt})/(k − R)` to 10⁻¹⁰. Steady reactions equal 1.35's
+exchange to 10⁻¹², carried ¹³C polarisation stays through a second-order
+reaction with depleted parahydrogen to 10⁻⁹, traces equal the amounts
+through pulses and sweeps, thermal states stay thermal, and evolution in
+two pieces equals one. A NumPy Monte Carlo of 600 molecules formed at
+times drawn from the kinetics (second order, depleted parahydrogen), each
+evolved alone with `T₁` and `T₂`, agrees within four standard errors (plus
+10⁻³).
 
 ### 1.51 — Field profiles with relaxation beyond six spins (M–L)
 

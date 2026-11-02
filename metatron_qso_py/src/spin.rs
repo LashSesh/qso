@@ -5,9 +5,9 @@ use metatron_qso::linalg::CMatrix;
 use metatron_qso::optimize::Options;
 use metatron_qso::spin::{
     Channel, Control, Drive, Event, Exchange, Frame, Fresh, Interaction, Isotope, Member,
-    ModelFree, Optimized, Profile, Segment, Spectrum, SpinSystem, Target, axial_csa,
-    axial_diffusion, inept, inept_cycle, inversion_recovery, m2s, s2m, spin_echo, spin_lock,
-    unitary_bound,
+    ModelFree, Optimized, Participant, Profile, Reaction, Reactions, Segment, Spectrum, SpinSystem,
+    Target, axial_csa, axial_diffusion, inept, inept_cycle, inversion_recovery, m2s, s2m,
+    spin_echo, spin_lock, unitary_bound,
 };
 use numpy::{IntoPyArray, PyArray1, PyArray2};
 use pyo3::exceptions::PyValueError;
@@ -1218,6 +1218,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_s2m, m)?)?;
     m.add_function(wrap_pyfunction!(py_spin_lock, m)?)?;
     m.add_class::<PyExchange>()?;
+    m.add_class::<PyReactions>()?;
     m.add_class::<PyControl>()?;
     m.add_class::<PyProfile>()?;
     m.add_function(wrap_pyfunction!(rf_pulse, m)?)?;
@@ -1229,6 +1230,214 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 /// space): sites with concentrations and first-order channels that carry
 /// some spins over and bring others in fresh (thermal or parahydrogen).
 /// States are lists of density matrices, one per site, trace 1 each.
+/// Spin sites whose amounts change by reactions of first and second order
+/// with species without spins (parahydrogen, a catalyst). States are
+/// unnormalised: each site's trace is its amount.
+#[pyclass(name = "Reactions", module = "metatron_qso")]
+#[derive(Clone)]
+pub struct PyReactions {
+    inner: Reactions,
+}
+
+impl PyReactions {
+    /// A participant: a site index (int) or a species name (str).
+    fn participant(&self, x: &Bound<'_, PyAny>) -> PyResult<Participant> {
+        if x.is_instance_of::<PyBool>() {
+            return Err(invalid(
+                "a participant is a site index or a species name, not a bool",
+            ));
+        }
+        if let Ok(i) = x.extract::<usize>() {
+            return Ok(Participant::Site(i));
+        }
+        if let Ok(name) = x.extract::<String>() {
+            return self
+                .inner
+                .species()
+                .iter()
+                .position(|s| s.name == name)
+                .map(Participant::Species)
+                .ok_or_else(|| invalid(format!("no species named {name:?}")));
+        }
+        Err(invalid("a participant is a site index or a species name"))
+    }
+
+    fn states(&self, states: &[ComplexMatrixArg<'_>]) -> PyResult<Vec<CMatrix>> {
+        if states.len() != self.inner.sites().len() {
+            return Err(invalid(format!(
+                "{} states for {} sites",
+                states.len(),
+                self.inner.sites().len()
+            )));
+        }
+        states
+            .iter()
+            .zip(self.inner.sites())
+            .map(|(m, site)| {
+                let (d, data) = square_complex("states", m)?;
+                if d != site.system.dimension() {
+                    return Err(invalid(format!(
+                        "a state of this site is {0}×{0}, got {d}×{d}",
+                        site.system.dimension()
+                    )));
+                }
+                Ok(CMatrix::from_row_slice(d, d, &data))
+            })
+            .collect()
+    }
+}
+
+#[pymethods]
+impl PyReactions {
+    #[new]
+    fn new() -> Self {
+        Self {
+            inner: Reactions::new(),
+        }
+    }
+
+    /// Add a spin site with its initial amount (≥ 0); returns its index.
+    fn add_site(&mut self, system: PyRef<'_, PySpinSystem>, amount: f64) -> PyResult<usize> {
+        self.inner.add_site(system.inner.clone(), amount).raise()
+    }
+
+    /// Add a species without spins with its initial amount; returns its
+    /// index.
+    fn add_species(&mut self, name: &str, amount: f64) -> PyResult<usize> {
+        if self.inner.species().iter().any(|s| s.name == name) {
+            return Err(invalid(format!("a species named {name:?} exists")));
+        }
+        self.inner.add_species(name, amount).raise()
+    }
+
+    /// Add `reactants → products` (sites by index, species by name) at rate
+    /// `k Π c_reactants` (s⁻¹ for one reactant, per amount and second for
+    /// two). The product site, if any, takes the spin pairs `carried`
+    /// `[(spin of the first reactant site, spin of the product)]`; its other
+    /// spins arrive thermal, or two of them (`parahydrogen=(i, j)`) in the
+    /// singlet with probability `fraction` (default 1).
+    #[pyo3(signature = (reactants, products, rate, carried = Vec::new(), parahydrogen = None, fraction = None))]
+    fn add_reaction(
+        &mut self,
+        reactants: Vec<Bound<'_, PyAny>>,
+        products: Vec<Bound<'_, PyAny>>,
+        rate: f64,
+        carried: Vec<(usize, usize)>,
+        parahydrogen: Option<(usize, usize)>,
+        fraction: Option<f64>,
+    ) -> PyResult<()> {
+        let fresh = match (parahydrogen, fraction) {
+            (None, None) => Fresh::Thermal,
+            (None, Some(_)) => {
+                return Err(PyValueError::new_err(
+                    "fraction: only with parahydrogen=(i, j)",
+                ));
+            }
+            (Some((i, j)), fraction) => Fresh::Parahydrogen {
+                spins: [i, j],
+                fraction: fraction.unwrap_or(1.0),
+            },
+        };
+        let reactants = reactants
+            .iter()
+            .map(|x| self.participant(x))
+            .collect::<PyResult<Vec<_>>>()?;
+        let products = products
+            .iter()
+            .map(|x| self.participant(x))
+            .collect::<PyResult<Vec<_>>>()?;
+        self.inner
+            .add_reaction(Reaction {
+                reactants,
+                products,
+                rate,
+                carried,
+                fresh,
+            })
+            .raise()?;
+        Ok(())
+    }
+
+    /// The amounts after `t` (s): the sites', then the species'.
+    fn amounts<'py>(&self, py: Python<'py>, t: f64) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        Ok(self.inner.amounts(t).raise()?.into_pyarray(py))
+    }
+
+    /// The same reactions starting with the amounts after `t` (s), to go
+    /// on from states returned by `evolve` after delays of `t`.
+    fn advanced(&self, t: f64) -> PyResult<Self> {
+        Ok(Self {
+            inner: self.inner.advanced(t).raise()?,
+        })
+    }
+
+    /// The names of the species without spins.
+    #[getter]
+    fn species(&self) -> Vec<String> {
+        self.inner
+            .species()
+            .iter()
+            .map(|s| s.name.clone())
+            .collect()
+    }
+
+    /// `[(SpinSystem, initial amount)]`.
+    #[getter]
+    fn sites(&self) -> Vec<(PySpinSystem, f64)> {
+        self.inner
+            .sites()
+            .iter()
+            .map(|s| {
+                (
+                    PySpinSystem {
+                        inner: s.system.clone(),
+                    },
+                    s.concentration,
+                )
+            })
+            .collect()
+    }
+
+    /// Thermal equilibrium of every site times its initial amount.
+    fn thermal_state<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyArray2<C64>>>> {
+        Ok(matrices(py, &self.inner.thermal_state().raise()?))
+    }
+
+    /// Apply pulses on isotopes, delays, fields and sweeps from the initial
+    /// amounts; states unnormalised (trace = amount), in and out.
+    fn evolve<'py>(
+        &self,
+        py: Python<'py>,
+        states: Vec<ComplexMatrixArg<'py>>,
+        events: Vec<PyRef<'py, PyEvent>>,
+    ) -> PyResult<Vec<Bound<'py, PyArray2<C64>>>> {
+        let states = self.states(&states)?;
+        let ev = self::events(&events);
+        let x = &self.inner;
+        Ok(matrices(py, &py.detach(|| x.evolve(&states, &ev)).raise()?))
+    }
+
+    fn to_json(&self) -> String {
+        self.inner.to_json()
+    }
+
+    #[staticmethod]
+    fn from_json(text: &str) -> PyResult<Self> {
+        Ok(Self {
+            inner: Reactions::from_json(text).raise()?,
+        })
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Reactions(sites={}, species={}, reactions={})",
+            self.inner.sites().len(),
+            self.inner.species().len(),
+            self.inner.reactions().len()
+        )
+    }
+}
+
 #[pyclass(name = "Exchange", module = "metatron_qso")]
 #[derive(Clone)]
 pub struct PyExchange {

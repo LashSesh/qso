@@ -1165,3 +1165,67 @@ def test_interaction_arguments_are_unambiguous():
     for bad in ([True], [(0, False)], [(0, 1, 2)], [-1]):
         with pytest.raises(ValueError):
             sys.set_internal_motion(bad, m)
+
+
+def test_reactions_match_a_monte_carlo_of_reaction_events():
+    # PASADENA as it runs: A + H2 -> P with parahydrogen depleted (second
+    # order), the product two protons with J, T1 and T2, formed in the
+    # singlet. Each molecule formed at s evolves alone from the singlet
+    # for T - s; the average of 600 molecules, times the amount formed,
+    # against the unnormalised state of Reactions.
+    product = q.SpinSystem(9.4)
+    a = product.add_spin("1H", 1.2)
+    b = product.add_spin("1H", 2.9)
+    product.couple(a, b, 7.2)
+    product.set_relaxation(a, 1.1, 0.4)
+    product.set_relaxation(b, 0.9, 0.3)
+    r = spin.Reactions()
+    p = r.add_site(product, 0.0)
+    r.add_species("A", 1.0)
+    r.add_species("H2", 0.7)
+    r.add_reaction(["A", "H2"], [p], 4.0, parahydrogen=(0, 1))
+    total = 0.8
+    got = r.evolve([np.zeros((4, 4))], [spin.delay(total)])[0]
+    formed = r.amounts(total)[0]
+    assert abs(np.trace(got).real - formed) < 1e-10
+    # Formation times by inverse sampling of the formed amount.
+    grid = np.linspace(0.0, total, 801)
+    curve = np.array([r.amounts(t)[0] for t in grid])
+    rng = np.random.default_rng(3)
+    times = np.interp(rng.uniform(0.0, formed, 600), curve, grid)
+    singlet = product.parahydrogen_state(a, b, 1.0)
+    samples = np.array([product.evolve(singlet, [spin.delay(total - s)]) for s in times])
+    mean = samples.mean(axis=0) * formed
+    err = samples.std(axis=0) / math.sqrt(len(times)) * formed
+    assert np.all(np.abs(mean - got) < 4 * err + 1e-3), np.max(np.abs(mean - got) / (err + 1e-9))
+    # The two-spin order <4 Iz Sz> closely.
+    zz = 4 * product.spin_operator(a, "z") @ product.spin_operator(b, "z")
+    z_got = np.trace(got @ zz).real
+    z_mc = np.array([np.trace(m @ zz).real for m in samples])
+    assert abs(z_mc.mean() * formed - z_got) < 4 * z_mc.std() / math.sqrt(len(times)) * formed
+
+
+def test_reactions_bindings():
+    r = spin.Reactions()
+    sys = q.SpinSystem(14.1)
+    sys.add_spin("1H", 2.0)
+    s = r.add_site(sys, 1.0)
+    r.add_species("B", 0.0)
+    with pytest.raises(ValueError):
+        r.add_species("B", 1.0)
+    r.add_reaction([s], ["B"], 2.0)
+    assert r.species == ["B"]
+    assert r.amounts(0.5) == pytest.approx([math.exp(-1.0), 1 - math.exp(-1.0)], rel=1e-10)
+    with pytest.raises(ValueError):
+        r.add_reaction(["C"], [s], 1.0)
+    with pytest.raises(ValueError):
+        r.add_reaction([True], [s], 1.0)
+    back = spin.Reactions.from_json(r.to_json())
+    assert back.species == ["B"] and len(back.sites) == 1
+    start = r.thermal_state()
+    out = r.evolve(start, [spin.delay(0.5)])
+    assert np.trace(out[0]).real == pytest.approx(math.exp(-1.0), rel=1e-10)
+    # In two pieces.
+    half = r.evolve(start, [spin.delay(0.2)])
+    rest = r.advanced(0.2).evolve(half, [spin.delay(0.3)])
+    assert np.allclose(rest[0], out[0], atol=1e-11)

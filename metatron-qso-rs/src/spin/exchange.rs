@@ -1274,5 +1274,7 @@ fn check_work(what: &str, work: f64) -> Result<()> {
     Ok(())
 }
 
+pub mod kinetics;
+
 #[cfg(test)]
 mod tests;
