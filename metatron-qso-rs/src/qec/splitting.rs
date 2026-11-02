@@ -54,8 +54,8 @@ const LARGEST_STEP: f64 = 4.0;
 pub struct SplittingOptions {
     /// Shots sampled at the start rate.
     pub start_shots: usize,
-    /// Independent chains at each rate (run in parallel); the standard
-    /// errors come from their spread.
+    /// Independent chains at each rate (run in parallel, at least 2); the
+    /// standard errors come from their spread.
     pub chains: usize,
     /// Metropolis steps of each chain at each rate, after `burn_in`.
     pub steps: usize,
@@ -64,22 +64,17 @@ pub struct SplittingOptions {
     /// rate's typical ones, and too short a burn-in biases the ratio
     /// downwards.
     pub burn_in: usize,
-    /// Batches of each chain for the standard errors (1: the chains alone;
-    /// more batches of one chain are correlated and understate the error).
-    pub batches: usize,
     pub seed: u64,
 }
 
 impl Default for SplittingOptions {
-    /// 10⁵ start shots, 16 chains of 20 000 steps after 5000 of burn-in,
-    /// one batch each.
+    /// 10⁵ start shots, 16 chains of 20 000 steps after 5000 of burn-in.
     fn default() -> Self {
         SplittingOptions {
             start_shots: 100_000,
             chains: 16,
             steps: 20_000,
             burn_in: 5000,
-            batches: 1,
             seed: 0,
         }
     }
@@ -288,9 +283,9 @@ fn model_at(
 }
 
 /// The samples of one chain after its burn-in: runs of one configuration
-/// and the batch they belong to.
+/// and their length.
 struct ChainRun {
-    runs: Vec<(Vec<u32>, usize, usize)>,
+    runs: Vec<(Vec<u32>, usize)>,
     end: Vec<u32>,
     proposed: u64,
     accepted: u64,
@@ -307,7 +302,6 @@ fn run_chain(
     start: &[u32],
     steps: usize,
     burn_in: usize,
-    batches: usize,
     rng: &mut Rng,
 ) -> Result<ChainRun> {
     let n = s.detectors.len();
@@ -316,7 +310,6 @@ fn run_chain(
     for &k in &set {
         member[k as usize] = true;
     }
-    let per_batch = steps.div_ceil(batches.max(1)).max(1);
     let mut out = ChainRun {
         runs: Vec::new(),
         end: Vec::new(),
@@ -392,10 +385,9 @@ fn run_chain(
             }
         }
         if step >= burn_in {
-            let batch = (step - burn_in) / per_batch;
             match out.runs.last_mut() {
-                Some((_, count, b)) if !changed && *b == batch => *count += 1,
-                _ => out.runs.push((set.clone(), 1, batch)),
+                Some((_, count)) if !changed => *count += 1,
+                _ => out.runs.push((set.clone(), 1)),
             }
             changed = false;
         }
@@ -404,26 +396,25 @@ fn run_chain(
     Ok(out)
 }
 
-/// Samples seen from another rate: `(x, count, group)`.
+/// Samples seen from another rate: `(x, count, chain)`.
 type Samples = Vec<(f64, usize, usize)>;
 
 /// The samples of chains at rate `from` seen from rate `to`: per run,
 /// `ln(q_to/q_from)` (−∞ where `to`'s decoder does not fail), its count
-/// and its group (chain and batch).
+/// and its chain.
 fn cross(
     s: &Structure,
     from: &Rate,
     to: &Rate,
     choice: DecoderChoice,
     runs: &[ChainRun],
-    batches: usize,
 ) -> Result<(Samples, u64)> {
     let parts = map_tasks(runs.len(), |c| -> Result<(Samples, u64)> {
         let mut decoder = to.decoder(choice)?;
         let mut seen: HashMap<Vec<u32>, bool> = HashMap::new();
         let mut decodes = 0;
         let mut out = Vec::with_capacity(runs[c].runs.len());
-        for (set, count, batch) in &runs[c].runs {
+        for (set, count) in &runs[c].runs {
             let fails = match seen.get(set) {
                 Some(&f) => f,
                 None => {
@@ -438,7 +429,7 @@ fn cross(
             } else {
                 f64::NEG_INFINITY
             };
-            out.push((x, *count, c * batches + batch));
+            out.push((x, *count, c));
         }
         Ok((out, decodes))
     });
@@ -461,13 +452,26 @@ fn sigmoid(x: f64) -> f64 {
     }
 }
 
-/// Bennett's acceptance ratio: `ln(Z₁/Z₀)` and its standard error from
-/// the samples of rate 0 (`x = ln(q₁/q₀)`) and of rate 1 (`x = ln(q₀/q₁)`),
-/// grouped in equal batches.
+/// Bennett's acceptance ratio between two rates.
+struct Bennett {
+    /// `ln(Z₁/Z₀)`.
+    log_ratio: f64,
+    /// Its standard error with the chains of each rate independent.
+    error: f64,
+    /// `⟨σ(x − ln C)⟩₀` per chain of rate 0 over its whole, and
+    /// `⟨σ(x + ln C)⟩₁` per chain of rate 1 over its whole, less one: each
+    /// chain's relative deviation, for the error of a product of ratios.
+    forward: Vec<f64>,
+    backward: Vec<f64>,
+}
+
+/// Bennett's acceptance ratio from the samples of `chains` chains of rate
+/// 0 (`x = ln(q₁/q₀)`) and of rate 1 (`x = ln(q₀/q₁)`).
 fn bennett(
     forward: &[(f64, usize, usize)],
     backward: &[(f64, usize, usize)],
-) -> Result<(f64, f64)> {
+    chains: usize,
+) -> Result<Bennett> {
     let finite = |v: &[(f64, usize, usize)]| {
         let (sum, n) = v
             .iter()
@@ -489,7 +493,7 @@ fn bennett(
         s / n as f64
     };
     let mut log_c = 0.5 * (f - b);
-    for _ in 0..200 {
+    for _ in 0..1000 {
         let next = log_c + mean(forward, -log_c).ln() - mean(backward, log_c).ln();
         if !next.is_finite() {
             break;
@@ -508,24 +512,43 @@ fn bennett(
             "the chains of two consecutive rates do not overlap; use more steps or chains",
         ));
     }
-    // Batch means.
-    let batch_error = |v: &[(f64, usize, usize)], shift: f64, whole: f64| {
-        let mut groups: HashMap<usize, (f64, usize)> = HashMap::new();
+    // Each chain's mean relative to the whole.
+    let per_chain = |v: &[(f64, usize, usize)], shift: f64, whole: f64| {
+        let mut sums = vec![(0.0, 0usize); chains];
         for t in v {
-            let g = groups.entry(t.2).or_default();
-            g.0 += sigmoid(t.0 + shift) * t.1 as f64;
-            g.1 += t.1;
+            sums[t.2].0 += sigmoid(t.0 + shift) * t.1 as f64;
+            sums[t.2].1 += t.1;
         }
-        let means: Vec<f64> = groups.values().map(|(s, n)| s / *n as f64).collect();
-        let k = means.len() as f64;
-        if k < 2.0 {
-            return f64::INFINITY;
-        }
-        let var = means.iter().map(|m| (m - whole).powi(2)).sum::<f64>() / (k - 1.0);
-        var / k / (whole * whole)
+        sums.into_iter()
+            .map(|(s, n)| {
+                if n > 0 {
+                    s / n as f64 / whole - 1.0
+                } else {
+                    0.0
+                }
+            })
+            .collect::<Vec<f64>>()
     };
-    let var = batch_error(forward, -log_c, a) + batch_error(backward, log_c, bb);
-    Ok((log_c, var.sqrt()))
+    let forward = per_chain(forward, -log_c, a);
+    let backward = per_chain(backward, log_c, bb);
+    let error = (mean_variance(&forward) + mean_variance(&backward)).sqrt();
+    // At the fixed point; otherwise the estimate of the last iterate.
+    Ok(Bennett {
+        log_ratio: log_c + a.ln() - bb.ln(),
+        error,
+        forward,
+        backward,
+    })
+}
+
+/// The variance of the mean of `x` (sample variance over its count).
+fn mean_variance(x: &[f64]) -> f64 {
+    let k = x.len() as f64;
+    if k < 2.0 {
+        return f64::INFINITY;
+    }
+    let m = x.iter().sum::<f64>() / k;
+    x.iter().map(|v| (v - m).powi(2)).sum::<f64>() / (k - 1.0) / k
 }
 
 /// Sample `shots` configurations of `rate`'s model, decode them, and keep
@@ -619,15 +642,19 @@ pub fn splitting_failure_rate(
             "need 0 < target ≤ start (the rates are carried downwards)",
         ));
     }
-    if options.start_shots == 0
-        || options.chains == 0
-        || options.steps == 0
-        || options.batches == 0
-        || options.batches > options.steps
-    {
+    if options.start_shots == 0 || options.chains < 2 || options.steps == 0 {
         return Err(QsoError::invalid(
             "options",
-            "need start shots, chains and steps, and 1 ≤ batches ≤ steps",
+            "need start shots, at least two chains and steps",
+        ));
+    }
+    // The decodes of the start and of one rate's chains, before anything.
+    let first_decodes = options.start_shots as f64
+        + options.chains as f64 * (options.steps + options.burn_in) as f64;
+    if first_decodes > MAX_SPLITTING_DECODES as f64 {
+        return Err(QsoError::invalid(
+            "options",
+            format!("about {first_decodes:.1e} decodes per rate (limit {MAX_SPLITTING_DECODES})"),
         ));
     }
     let (first, structure) = model_at(circuit_at, start, None)?;
@@ -685,7 +712,6 @@ pub fn splitting_failure_rate(
                 begin,
                 options.steps,
                 options.burn_in,
-                options.batches,
                 &mut rng,
             )
         });
@@ -693,12 +719,14 @@ pub fn splitting_failure_rate(
     };
     let mut current = first;
     let mut runs = run_all(&current, &starts, 0)?;
+    // The deviations of the current rate's chains in the last ratio.
+    let mut previous: Vec<f64> = Vec::new();
     for level in 1..=MAX_SPLITTING_RATES {
         decodes += runs.iter().map(|r| r.decodes).sum::<u64>();
         // The spread of the weights sampled sets the next step.
         let (mut sum, mut sq, mut count) = (0.0, 0.0, 0usize);
         for r in &runs {
-            for (set, n, _) in &r.runs {
+            for (set, n) in &r.runs {
                 let w = set.len() as f64;
                 sum += w * *n as f64;
                 sq += w * w * *n as f64;
@@ -740,8 +768,8 @@ pub fn splitting_failure_rate(
             ));
         }
         let next_runs = run_all(&next, &begins, level)?;
-        let (forward, d1) = cross(&s, &current, &next, decoder, &runs, options.batches)?;
-        let (backward, d2) = cross(&s, &next, &current, decoder, &next_runs, options.batches)?;
+        let (forward, d1) = cross(&s, &current, &next, decoder, &runs)?;
+        let (backward, d2) = cross(&s, &next, &current, decoder, &next_runs)?;
         decodes += d1 + d2;
         if decodes > MAX_SPLITTING_DECODES {
             return Err(QsoError::invalid(
@@ -749,15 +777,27 @@ pub fn splitting_failure_rate(
                 format!("more than {MAX_SPLITTING_DECODES} decodes"),
             ));
         }
-        let (log_ratio, error) = bennett(&forward, &backward)?;
+        let fit = bennett(&forward, &backward, options.chains)?;
+        let (log_ratio, error) = (fit.log_ratio, fit.error);
         log_rate += log_ratio;
-        log_var += error * error;
+        // The chains of the current rate entered the last ratio (backward,
+        // with a minus sign) and this one (forward): their deviations add
+        // per chain before the spread, so that the covariance of
+        // consecutive ratios counts.
+        let mixed: Vec<f64> = fit
+            .forward
+            .iter()
+            .zip(previous.iter().chain(std::iter::repeat(&0.0)))
+            .map(|(f, b)| f - b)
+            .collect();
+        log_var += mean_variance(&mixed);
+        previous = fit.backward;
         let (proposed, accepted) = next_runs
             .iter()
             .fold((0u64, 0u64), |(p, a), r| (p + r.proposed, a + r.accepted));
         let (mut sum, mut sq, mut count) = (0.0, 0.0, 0usize);
         for r in &next_runs {
-            for (set, n, _) in &r.runs {
+            for (set, n) in &r.runs {
                 let w = set.len() as f64;
                 sum += w * *n as f64;
                 sq += w * w * *n as f64;
@@ -777,6 +817,7 @@ pub fn splitting_failure_rate(
         runs = next_runs;
         if p <= target {
             decodes += runs.iter().map(|r| r.decodes).sum::<u64>();
+            log_var += mean_variance(&previous);
             let rate = log_rate.exp();
             let log_standard_error = log_var.sqrt();
             return Ok(SplittingEstimate {
@@ -860,57 +901,7 @@ pub fn enumerated_failure_rate(
         }
     }
     let remainder = dist[max_weight + 1];
-    // Configurations by their first error, in parallel.
-    let parts = map_tasks(n.max(1), |first| -> Result<(Vec<u64>, Vec<f64>, u64)> {
-        let mut failing = vec![0u64; max_weight + 1];
-        let mut by_weight = vec![0.0; max_weight + 1];
-        let mut count = 0u64;
-        let mut dec = rate.decoder(decoder)?;
-        if first == 0 {
-            // The empty configuration.
-            count += 1;
-        }
-        if n == 0 {
-            return Ok((failing, by_weight, count));
-        }
-        let mut set = vec![first as u32];
-        // Depth-first over increasing indices.
-        loop {
-            count += 1;
-            let k = set.len();
-            if s.fails(dec.as_mut(), &set)? {
-                failing[k] += 1;
-                by_weight[k] += rate.log_probability(&set).exp();
-            }
-            // Next set: extend, or advance the last, or backtrack.
-            if k < max_weight && (*set.last().unwrap() as usize) + 1 < n {
-                let next = set.last().unwrap() + 1;
-                set.push(next);
-                continue;
-            }
-            loop {
-                if set.len() == 1 {
-                    return Ok((failing, by_weight, count));
-                }
-                let last = set.pop().unwrap();
-                if (last as usize) + 1 < n {
-                    set.push(last + 1);
-                    break;
-                }
-            }
-        }
-    });
-    let mut failing = vec![0u64; max_weight + 1];
-    let mut by_weight = vec![0.0; max_weight + 1];
-    let mut configurations = 0;
-    for part in parts {
-        let (f, b, c) = part?;
-        for k in 0..=max_weight {
-            failing[k] += f[k];
-            by_weight[k] += b[k];
-        }
-        configurations += c;
-    }
+    let (failing, by_weight, _, configurations) = enumerate(&s, &rate, decoder, max_weight)?;
     Ok(EnumeratedFailureRate {
         rate: by_weight.iter().sum(),
         remainder,
@@ -920,16 +911,93 @@ pub fn enumerated_failure_rate(
     })
 }
 
+/// Per weight the failing configurations, their probability and `Σ Π p_i`,
+/// and the configurations decoded.
+type Enumerated = (Vec<u64>, Vec<f64>, Vec<f64>, u64);
+
+/// Every configuration of at most `max_weight` errors decoded: per
+/// weight, the failing ones, their probability and `Σ Π p_i`; and the
+/// configurations decoded (the empty one included).
+fn enumerate(
+    s: &Structure,
+    rate: &Rate,
+    decoder: DecoderChoice,
+    max_weight: usize,
+) -> Result<Enumerated> {
+    let n = s.detectors.len();
+    let mut failing = vec![0u64; max_weight + 1];
+    let mut by_weight = vec![0.0; max_weight + 1];
+    let mut terms = vec![0.0; max_weight + 1];
+    if max_weight == 0 || n == 0 {
+        return Ok((failing, by_weight, terms, 1));
+    }
+    // Configurations by their first error, in parallel, each walked in
+    // lexicographic order.
+    let parts = map_tasks(n, |first| {
+        let mut failing = vec![0u64; max_weight + 1];
+        let mut by_weight = vec![0.0; max_weight + 1];
+        let mut terms = vec![0.0; max_weight + 1];
+        let mut count = 0u64;
+        let mut dec = rate.decoder(decoder)?;
+        let mut set = vec![first as u32];
+        loop {
+            count += 1;
+            let k = set.len();
+            if s.fails(dec.as_mut(), &set)? {
+                failing[k] += 1;
+                by_weight[k] += rate.log_probability(&set).exp();
+                terms[k] += set
+                    .iter()
+                    .map(|&i| rate.probabilities[i as usize])
+                    .product::<f64>();
+            }
+            // Next set: extend, or advance the last, or backtrack.
+            if k < max_weight && (*set.last().unwrap() as usize) + 1 < n {
+                let next = set.last().unwrap() + 1;
+                set.push(next);
+                continue;
+            }
+            loop {
+                if set.len() == 1 {
+                    return Ok::<_, QsoError>((failing, by_weight, terms, count));
+                }
+                let last = set.pop().unwrap();
+                if (last as usize) + 1 < n {
+                    set.push(last + 1);
+                    break;
+                }
+            }
+        }
+    });
+    let mut configurations = 1;
+    for part in parts {
+        let (f, b, t, c) = part?;
+        for k in 0..=max_weight {
+            failing[k] += f[k];
+            by_weight[k] += b[k];
+            terms[k] += t[k];
+        }
+        configurations += c;
+    }
+    Ok((failing, by_weight, terms, configurations))
+}
+
 /// The leading term of the failure probability.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LeadingFailures {
     /// The fewest errors of an undetectable logical error.
     pub distance: usize,
-    /// `⌈distance/2⌉`, the weight of the failing configurations counted.
+    /// The fewest errors of a failing configuration: `⌈distance/2⌉` from
+    /// the logical errors, or found by enumeration (with unequal weights a
+    /// decoder may fail on fewer).
     pub weight: usize,
-    /// Undetectable logical errors of at most `2·weight` errors.
+    /// Whether every configuration of at most `weight` errors was decoded
+    /// (the count is then exact); otherwise only the subsets of the
+    /// logical errors of at most `2⌈d/2⌉` errors, a lower bound.
+    pub exhaustive: bool,
+    /// Undetectable logical errors of at most `2⌈d/2⌉` errors.
     pub logicals: usize,
-    /// Failing configurations of `weight` errors among their subsets.
+    /// Failing configurations of `weight` errors found.
     pub configurations: usize,
     /// `Σ Π_{i∈E} p_i` over them: the leading term `A·p^w` of the failure
     /// probability.
@@ -1059,34 +1127,40 @@ fn logical_errors(s: &Structure, limit: usize, max_work: u64) -> Option<(Vec<Vec
 }
 
 /// The leading term of the failure probability of the circuit's detector
-/// error model (without decomposition) under `decoder`: the distance `d`
-/// and every undetectable logical error of at most `2⌈d/2⌉` errors, by
-/// enumeration (at most `max_work` sets), then every subset of `⌈d/2⌉` of
-/// their errors, decoded. A configuration of `w` errors on which a
-/// decoder fails, with a correction of at most `w` errors, lies in such a
-/// logical error, so the count is complete for decoders whose
-/// corrections never have more errors than the configuration (minimum-
-/// weight decoders with equal weights; with unequal weights it counts
-/// those within the logical errors enumerated).
+/// error model (without decomposition) under `decoder`. The distance `d`
+/// comes from the undetectable logical errors, enumerated by weight (at
+/// most `max_work` sets in all). When every configuration of at most
+/// `⌈d/2⌉` errors is at most `max_configurations`, all of them are decoded
+/// and the fewest errors that fail, their number and their probability are
+/// exact (`exhaustive`). Otherwise the subsets of `⌈d/2⌉` errors of every
+/// logical error of at most `2⌈d/2⌉` errors are decoded: a configuration of
+/// `w` errors that fails with a correction of at most `w` errors lies in
+/// such a logical error, so the count is complete only for decoders whose
+/// corrections never have more errors than the configuration (with
+/// unequal weights, as in circuit noise, or with BP+OSD, it is a lower
+/// bound, and fewer errors may fail).
 pub fn leading_failures(
     circuit: &DetectorCircuit,
     decoder: DecoderChoice,
     max_work: u64,
+    max_configurations: u64,
 ) -> Result<LeadingFailures> {
     let dem = detector_error_model(circuit, false)?;
     let s = Structure::new(&dem);
     let rate = Rate::new(0.0, circuit.clone(), &dem)?;
+    let n = s.detectors.len();
     let out_of_work = || {
         QsoError::invalid(
             "max_work",
             format!("the logical errors need more than {max_work} sets to enumerate"),
         )
     };
-    // The distance by increasing weight.
+    // The distance by increasing weight, within one budget.
     let mut distance = None;
-    let mut work = 0;
-    for limit in 1..=s.detectors.len() {
-        let (found, w) = logical_errors(&s, limit, max_work).ok_or_else(out_of_work)?;
+    let mut work = 0u64;
+    for limit in 1..=n {
+        let (found, w) =
+            logical_errors(&s, limit, max_work.saturating_sub(work)).ok_or_else(out_of_work)?;
         work += w;
         if !found.is_empty() {
             distance = Some(limit);
@@ -1099,9 +1173,31 @@ pub fn leading_failures(
             "no undetectable logical error: the model never fails",
         ));
     };
-    let weight = distance.div_ceil(2);
-    let (logicals, w) = logical_errors(&s, 2 * weight, max_work).ok_or_else(out_of_work)?;
+    let half = distance.div_ceil(2);
+    let (logicals, w) =
+        logical_errors(&s, 2 * half, max_work.saturating_sub(work)).ok_or_else(out_of_work)?;
     work += w;
+    let all: f64 = (0..=half).map(|k| binomial(n, k)).sum();
+    if all <= max_configurations as f64 {
+        let (failing, by_weight, terms, _) = enumerate(&s, &rate, decoder, half)?;
+        let Some(weight) = (1..=half).find(|&k| failing[k] > 0) else {
+            return Err(QsoError::invalid(
+                "decoder",
+                format!("no configuration of at most {half} errors fails"),
+            ));
+        };
+        return Ok(LeadingFailures {
+            distance,
+            weight,
+            exhaustive: true,
+            logicals: logicals.len(),
+            configurations: failing[weight] as usize,
+            leading_term: terms[weight],
+            probability: by_weight[weight],
+            work,
+        });
+    }
+    let weight = half;
     let mut candidates: HashSet<Vec<u32>> = HashSet::new();
     for l in &logicals {
         if l.len() < weight {
@@ -1152,6 +1248,7 @@ pub fn leading_failures(
     Ok(LeadingFailures {
         distance,
         weight,
+        exhaustive: false,
         logicals: logicals.len(),
         configurations,
         leading_term,

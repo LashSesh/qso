@@ -5170,17 +5170,21 @@ Delivered in `qec/splitting.rs`:
   probability `Π p_i Π (1 − p_j)`. A move removes an error, adds one, or
   swaps one for an error that shares a detector with it, each with its
   Hastings factor. The ratio of consecutive failure probabilities follows
-  from the chains of both rates by Bennett's acceptance ratio, its
-  standard error from the spread of the chains.
-- **Leading order.** `leading_failures` enumerates the undetectable
-  logical errors of at most `2⌈d/2⌉` errors (those that cannot be split
-  into two undetectable parts, by the search of 1.42). It then decodes
-  every subset of `w = ⌈d/2⌉` of their errors and returns their number,
-  `Σ Π p_i` (the leading term `A·p^w`) and their exact probability, a
-  lower bound of the failure rate. A configuration of `w` errors that
-  fails with a correction of at most `w` errors lies in such a logical
-  error, so the count is complete for decoders whose corrections are no
-  heavier than the configuration.
+  from the chains of both rates by Bennett's acceptance ratio, the
+  standard error of the product from each chain's influence on it (a
+  chain enters two consecutive ratios).
+- **Leading order.** `leading_failures` finds the distance from the
+  undetectable logical errors (those that cannot be split into two
+  undetectable parts, by the search of 1.42). When the configurations of
+  at most `⌈d/2⌉` errors are few enough (`max_configurations`), it
+  decodes all of them: the fewest errors that fail, their number, `Σ Π
+  p_i` (the leading term `A·p^w`) and their exact probability, a lower
+  bound of the failure rate, all exact. Otherwise it decodes the subsets
+  of `⌈d/2⌉` errors of the logical errors of at most `2⌈d/2⌉` errors. A
+  configuration of `w` errors that fails with a correction of at most
+  `w` errors lies in such a logical error, so that count is complete only
+  for decoders whose corrections are no heavier than the configuration,
+  and a lower bound otherwise.
 - **Decoders.** Any `DecoderChoice`, built for each rate's circuit:
   matching for graph-like models, BP+OSD for the others.
 - **Exact references.** `enumerated_failure_rate` decodes every
@@ -5208,28 +5212,29 @@ Not done, and why:
 - **Self-tuned burn-in.** The burn-in is an option: a check of
   stationarity (the weights of the first against the second half of
   each chain) would warn but not cure.
-- **Leading order for decoders with heavier corrections.** With unequal
-  weights a decoder may correct with more errors than the configuration
-  has, and failing configurations outside the logical errors enumerated
-  are not counted. For the circuits tested the count equals the
-  enumeration.
+- **Leading order for large models with heavier corrections.** Beyond
+  `max_configurations`, with unequal weights or BP+OSD, failing
+  configurations outside the logical errors enumerated are not counted
+  (a lower bound).
 
 Measured (four cores, release build), circuit noise with `d` rounds and
 matching from `start = 0.01` (default options):
 
 | Code | p | Splitting | Time | Check |
 |---|---|---|---|---|
-| surface d = 3 | 10⁻³ | 7.93·10⁻⁴ ± 1.4 % | 0.5 s | sampled 8.13·10⁻⁴ ± 2.5 % |
-| surface d = 3 | 10⁻⁴ | 8.12·10⁻⁶ ± 1.4 % | 0.5 s | weight 2 alone 8.21·10⁻⁶ (186 configurations) |
-| surface d = 5 | 10⁻³ | 1.31·10⁻⁴ ± 1.8 % | 4 s | sampled 1.26·10⁻⁴ ± 6.3 % |
-| surface d = 5 | 10⁻⁴ | 1.34·10⁻⁷ ± 2.0 % | 5 s | weight 3 alone 1.30·10⁻⁷ (26 384 configurations, 8172 logical errors, 0.2 s) |
-| surface d = 7 | 10⁻³ | 1.81·10⁻⁵ ± 2.7 % | 18 s | |
-| surface d = 7 | 10⁻⁴ | 1.76·10⁻⁹ ± 3.0 % | 20 s | |
-| [[72, 12, 6]], data noise, BP+OSD (from 0.06) | 10⁻² | 4.52·10⁻⁴ ± 2.9 % | 20 s | sampled 5.2·10⁻⁴ ± 9.8 % |
-| [[72, 12, 6]], data noise, BP+OSD | 10⁻³ | 4.41·10⁻⁷ ± 4.2 % | 20 s | |
+| surface d = 3 | 10⁻³ | 7.93·10⁻⁴ ± 1.4 % | 0.4 s | sampled 8.13·10⁻⁴ ± 2.5 % |
+| surface d = 3 | 10⁻⁴ | 8.12·10⁻⁶ ± 1.4 % | 0.6 s | exact 8.28·10⁻⁶ (−1.4 σ) |
+| surface d = 5 | 10⁻³ | 1.31·10⁻⁴ ± 2.2 % | 4 s | sampled 1.26·10⁻⁴ ± 6.3 % |
+| surface d = 5 | 10⁻⁴ | 1.34·10⁻⁷ ± 2.5 % | 4 s | weight 3 alone at least 1.30·10⁻⁷ (26 384 configurations among the subsets of 8172 logical errors, 0.2 s) |
+| surface d = 7 | 10⁻³ | 1.81·10⁻⁵ ± 3.5 % | 18 s | |
+| surface d = 7 | 10⁻⁴ | 1.76·10⁻⁹ ± 4.0 % | 20 s | |
+| [[72, 12, 6]], data noise, BP+OSD (from 0.06) | 10⁻² | 4.52·10⁻⁴ ± 3.0 % | 20 s | sampled 5.2·10⁻⁴ ± 9.8 % |
+| [[72, 12, 6]], data noise, BP+OSD | 10⁻³ | 4.41·10⁻⁷ ± 4.2 % | 20 s | exact 4.484 to 4.501·10⁻⁷ |
+| [[72, 12, 6]], data noise, BP+OSD | 10⁻⁵ | 4.69·10⁻¹³ ± 8.7 % | 26 s | exact 4.498·10⁻¹³ |
 
 Over eight seeds the surface code of distance 5 at `10⁻⁴` gave 1.34 to
-1.41·10⁻⁷, a spread of 1.6 % against the stated 1.9 %.
+1.41·10⁻⁷, a spread of 1.7 % against the stated 2.3 %; with 5000 steps
+after 1000 of burn-in 1.17 to 1.39·10⁻⁷, a spread of 5.7 % against 4.3 %.
 
 Validation:
 - **Against enumeration.** Splitting equals the enumeration of all 2¹⁵
@@ -5240,15 +5245,58 @@ Validation:
   `10⁻⁴` within 1.2.
 - **Against sampling.** It equals direct sampling of the circuit (4·10⁶
   shots) at 0.5 %.
-- **Coverage.** In 20 runs with small chains, the exact rate at `10⁻⁴`
-  lies within two standard errors in at least 15.
-- **Leading term.** The failing configurations of least weight from the
-  subsets of the logical errors equal the enumerated ones in number and
-  probability (to 10⁻¹²): 33 and 352 for the repetition codes of distance
-  3 and 5, 186 for the surface code of distance 3, 9 for it with data
-  noise only. No configuration of fewer errors fails.
+- **Far below.** The surface code of distance 3 at `10⁻⁶` (8·10⁻¹⁰)
+  equals the enumeration of all configurations of up to five errors
+  within four standard errors.
+- **Coverage.** In 20 runs with small chains, the deviations from the
+  exact rate at `10⁻⁴` have a spread of at most 1.5 standard errors (1.07
+  measured), and at least 16 lie within two.
+- **Leading term.** The failing configurations of least weight equal the
+  enumerated ones in number and probability (to 10⁻¹²), exhaustively and
+  from the subsets of the logical errors: 33 and 352 for the repetition
+  codes of distance 3 and 5, 186 for the surface code of distance 3, 9
+  for it with data noise only. No configuration of fewer errors fails.
+  With unequal weights (measurements 5000 times likelier to err than
+  gates) a repetition code of distance 5 fails at two errors, which the
+  exhaustive count finds; under BP+OSD the subsets of [[72, 12, 6]] miss
+  failing configurations that it finds.
 - **Enumeration against sampling.** The enumeration brackets 10⁶
   sampled shots.
+
+Review: an independent review found the Markov chain (detailed balance of
+every move with its Hastings factor, the restriction to failing
+configurations, empty and full sets, errors without detectors) and
+Bennett's estimator (signs, the fixed point, configurations that fail at
+one rate only, the delta method of one ratio) correct. Splitting matched
+its exact enumerations from 10⁻⁸ to 10⁻¹³: the surface code of distance 3
+at 10⁻⁶, distance 5 over three rounds at 10⁻⁵, [[72, 12, 6]] under BP+OSD
+at 10⁻⁴ and 10⁻⁵, a repetition code at 10⁻¹⁵. It found two faults and
+smaller points; all are fixed.
+
+- **The standard error left out a covariance.** The chains of one rate
+  give the backward samples of one ratio and the forward samples of the
+  next, and the variances of the ratios were added as if independent:
+  over 60 seeds the spread of `ln rate` was 1.2 to 1.3 times the stated
+  error (consecutive ratios correlated by 0.14 to 0.62). Each chain's
+  deviations in the two ratios are now combined before their spread; the
+  `batches` option, whose batches of one chain were correlated, is gone.
+  The coverage test checks the spread of the deviations (1.07), not only
+  how many lie within two errors (test).
+- **Wrong leading counts.** The subsets of the logical errors missed
+  failing configurations under BP+OSD (799 of 1519 for [[72, 12, 6]])
+  and with the unequal weights of circuit noise (26 384 of 26 963 for the
+  surface code of distance 5 at 10⁻³), and with very unequal weights
+  fewer errors fail than `⌈d/2⌉`. The configurations are now decoded
+  exhaustively when they are few enough, and the result says which
+  (`exhaustive`); the subsets are documented as a lower bound (tests).
+- **Smaller points.** `enumerated_failure_rate` with `max_weight = 0`
+  panicked; one chain gave an infinite error silently (two are needed);
+  the decodes of the start and of one rate are checked before anything
+  runs; `max_work` of `leading_failures` is one budget for all its
+  searches; Python checks for Ctrl-C at every rate and its imports are
+  sorted; the check of the surface code at 10⁻⁴ is the exact rate rather
+  than the lower bound below which splitting lay; the claims of the
+  eight seeds come from the measurement.
 
 ### Not in this stage
 

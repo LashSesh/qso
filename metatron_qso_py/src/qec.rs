@@ -1474,7 +1474,7 @@ fn decoder_choice(decoder: &str) -> PyResult<DecoderChoice> {
 #[pyfunction]
 #[pyo3(signature = (
     circuit_at, start, target, decoder = "matching", start_shots = 100_000, chains = 16,
-    steps = 20_000, burn_in = 5000, batches = 1, seed = 0
+    steps = 20_000, burn_in = 5000, seed = 0
 ))]
 #[allow(clippy::too_many_arguments)]
 fn splitting_failure_rate<'py>(
@@ -1487,7 +1487,6 @@ fn splitting_failure_rate<'py>(
     chains: usize,
     steps: usize,
     burn_in: usize,
-    batches: usize,
     seed: u64,
 ) -> PyResult<Bound<'py, PyDict>> {
     let kind = decoder_choice(decoder)?;
@@ -1496,11 +1495,11 @@ fn splitting_failure_rate<'py>(
         chains,
         steps,
         burn_in,
-        batches,
         seed,
     };
     let at = |p: f64| -> metatron_qso::Result<DetectorCircuit> {
         Python::attach(|py| {
+            py.check_signals()?;
             circuit_at
                 .call1(py, (p,))
                 .and_then(|c| Ok(c.extract::<PyRef<'_, PyDetectorCircuit>>(py)?.inner.clone()))
@@ -1564,29 +1563,34 @@ fn enumerated_failure_rate<'py>(
     }))
 }
 
-/// The leading term of the failure probability: the distance, the weight
-/// `⌈d/2⌉`, the logical errors of at most twice that many errors, the
-/// failing configurations of that weight among their subsets and their
+/// The leading term of the failure probability: the distance, the fewest
+/// errors that fail (`weight`), the logical errors of at most `2⌈d/2⌉`
+/// errors, the failing configurations of that weight (all of them when the
+/// configurations of at most `⌈d/2⌉` errors number at most
+/// `max_configurations`, `exhaustive`; otherwise among the subsets of the
+/// logical errors, a lower bound for BP+OSD and unequal weights) and their
 /// summed probability `leading_term` (`A·p^w`) and `probability` (with
 /// the factors `1 − p` of the other errors: their exact share of the
 /// failure probability, a lower bound), as a dict (with `work`, the sets
 /// the enumeration visited, at most `max_work`).
 #[pyfunction]
-#[pyo3(signature = (circuit, decoder = "matching", max_work = 1_073_741_824))]
+#[pyo3(signature = (circuit, decoder = "matching", max_work = 1_073_741_824, max_configurations = 16_777_216))]
 fn leading_failures<'py>(
     py: Python<'py>,
     circuit: &PyDetectorCircuit,
     decoder: &str,
     max_work: u64,
+    max_configurations: u64,
 ) -> PyResult<Bound<'py, PyDict>> {
     let kind = decoder_choice(decoder)?;
     let c = &circuit.inner;
     let r = py
-        .detach(|| qec::leading_failures(c, kind, max_work))
+        .detach(|| qec::leading_failures(c, kind, max_work, max_configurations))
         .raise()?;
     Ok(pydict!(py, {
         "distance" => r.distance,
         "weight" => r.weight,
+        "exhaustive" => r.exhaustive,
         "logicals" => r.logicals,
         "configurations" => r.configurations,
         "leading_term" => r.leading_term,

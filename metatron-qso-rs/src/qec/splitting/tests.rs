@@ -19,7 +19,6 @@ fn options(seed: u64) -> SplittingOptions {
         chains: 8,
         steps: 4000,
         burn_in: 1000,
-        batches: 1,
         seed,
     }
 }
@@ -110,26 +109,42 @@ fn splitting_equals_direct_sampling_where_that_reaches() {
 #[test]
 fn the_standard_error_covers_the_reference_in_repeated_runs() {
     // Twenty runs of the repetition code from 3 % to 10⁻⁴ with smaller
-    // chains: the exact rate lies within two standard errors in most.
+    // chains: the deviations from the exact rate in standard errors have a
+    // spread near one, and most lie within two.
     let at = repetition(3);
     let exact = enumerated_failure_rate(&at(1e-4).unwrap(), DecoderChoice::Matching, 15).unwrap();
-    let mut inside = 0;
     let runs = 20;
-    for seed in 0..runs {
-        let o = SplittingOptions {
-            start_shots: 20_000,
-            chains: 8,
-            steps: 1000,
-            burn_in: 300,
-            batches: 1,
-            seed,
-        };
-        let est = splitting_failure_rate(&at, DecoderChoice::Matching, 0.03, 1e-4, &o).unwrap();
-        if (est.rate.ln() - exact.rate.ln()).abs() < 2.0 * est.log_standard_error {
-            inside += 1;
-        }
-    }
-    assert!(inside >= 15, "{inside} of {runs}");
+    let z: Vec<f64> = (0..runs)
+        .map(|seed| {
+            let o = SplittingOptions {
+                start_shots: 20_000,
+                chains: 8,
+                steps: 1000,
+                burn_in: 300,
+                seed,
+            };
+            let est = splitting_failure_rate(&at, DecoderChoice::Matching, 0.03, 1e-4, &o).unwrap();
+            (est.rate.ln() - exact.rate.ln()) / est.log_standard_error
+        })
+        .collect();
+    let inside = z.iter().filter(|z| z.abs() < 2.0).count();
+    let spread = (z.iter().map(|z| z * z).sum::<f64>() / runs as f64).sqrt();
+    eprintln!("z: {z:.2?}, spread {spread:.2}");
+    assert!(inside >= 16, "{inside} of {runs}");
+    assert!(spread < 1.5, "{spread}");
+}
+
+#[test]
+fn splitting_follows_enumeration_at_rates_of_ten_to_the_minus_nine() {
+    // The surface code of distance 3 over three rounds at 10⁻⁶ (about
+    // 8·10⁻¹⁰), all configurations to five errors.
+    let at = surface(3);
+    let exact = enumerated_failure_rate(&at(1e-6).unwrap(), DecoderChoice::Matching, 5).unwrap();
+    assert!(exact.remainder < 1e-9 * exact.rate);
+    let est =
+        splitting_failure_rate(&at, DecoderChoice::Matching, 0.01, 1e-6, &options(4)).unwrap();
+    let z = (est.rate.ln() - exact.rate.ln()) / est.log_standard_error;
+    assert!(z.abs() < 4.0, "{} vs {}: {z}", est.rate, exact.rate);
 }
 
 #[test]
@@ -145,7 +160,12 @@ fn the_leading_coefficient_counts_the_failing_configurations_of_least_weight() {
             surface_code_memory(3, 1, &CircuitNoise::data_only(1e-3)).unwrap(),
         ),
     ] {
-        let lead = leading_failures(&circuit, DecoderChoice::Matching, 1 << 30).unwrap();
+        let lead = leading_failures(&circuit, DecoderChoice::Matching, 1 << 30, 1 << 30).unwrap();
+        assert!(lead.exhaustive);
+        // From the subsets of the logical errors alone, the same here.
+        let subsets = leading_failures(&circuit, DecoderChoice::Matching, 1 << 30, 0).unwrap();
+        assert!(!subsets.exhaustive);
+        assert_eq!(subsets.configurations, lead.configurations, "{name}");
         let exact =
             enumerated_failure_rate(&circuit, DecoderChoice::Matching, lead.weight).unwrap();
         eprintln!("{name}: {lead:?}, enumerated {:?}", exact.failing);
@@ -171,12 +191,54 @@ fn the_leading_coefficient_counts_the_failing_configurations_of_least_weight() {
 }
 
 #[test]
+fn unequal_weights_and_bposd_need_the_exhaustive_count() {
+    // Measurement errors 10⁴ times likelier than gate errors: two errors
+    // fail the repetition code of distance 5, not three. And BP+OSD on
+    // [[72, 12, 6]] with data noise fails on configurations outside the
+    // logical errors of six errors: the subsets count fewer.
+    let noisy = CircuitNoise {
+        after_gate2: 1e-5,
+        measurement: 0.05,
+        ..CircuitNoise::default()
+    };
+    let rep5 = repetition_code_memory(5, 3, &noisy).unwrap();
+    let lead = leading_failures(&rep5, DecoderChoice::Matching, 1 << 30, 1 << 30).unwrap();
+    let exact = enumerated_failure_rate(&rep5, DecoderChoice::Matching, 3).unwrap();
+    assert!(lead.exhaustive && lead.weight == 2, "{lead:?}");
+    assert_eq!(lead.configurations as u64, exact.failing[2]);
+    let (code, _) = crate::qec::CssCode::bivariate_bicycle_code(72).unwrap();
+    let bb = crate::qec::css_code_memory(
+        &code,
+        1,
+        &CircuitNoise::data_only(1e-3),
+        crate::qec::MemoryBasis::Z,
+    )
+    .unwrap();
+    let all = leading_failures(&bb, DecoderChoice::BpOsd, 1 << 30, 1 << 30).unwrap();
+    let subsets = leading_failures(&bb, DecoderChoice::BpOsd, 1 << 30, 0).unwrap();
+    let exact = enumerated_failure_rate(&bb, DecoderChoice::BpOsd, all.weight).unwrap();
+    assert_eq!(all.configurations as u64, exact.failing[all.weight]);
+    assert!(
+        subsets.configurations < all.configurations,
+        "{subsets:?} vs {all:?}"
+    );
+}
+
+#[test]
 fn inputs_are_refused() {
     let at = repetition(3);
     let o = SplittingOptions::default();
     assert!(splitting_failure_rate(&at, DecoderChoice::Matching, 1e-3, 1e-2, &o).is_err());
-    let none = SplittingOptions { chains: 0, ..o };
-    assert!(splitting_failure_rate(&at, DecoderChoice::Matching, 0.03, 1e-3, &none).is_err());
+    let one = SplittingOptions { chains: 1, ..o };
+    assert!(splitting_failure_rate(&at, DecoderChoice::Matching, 0.03, 1e-3, &one).is_err());
+    let huge = SplittingOptions {
+        steps: usize::MAX / 64,
+        ..o
+    };
+    assert!(splitting_failure_rate(&at, DecoderChoice::Matching, 0.03, 1e-3, &huge).is_err());
+    // Weight zero: the empty configuration alone.
+    let zero = enumerated_failure_rate(&at(0.01).unwrap(), DecoderChoice::Matching, 0).unwrap();
+    assert_eq!((zero.configurations, zero.rate), (1, 0.0));
     // No failure at the start.
     let few = SplittingOptions {
         start_shots: 10,
@@ -242,7 +304,7 @@ fn measure_splitting() {
         let p = 1e-4;
         let circuit = surface_code_memory(d, d, &CircuitNoise::uniform(p)).unwrap();
         let clock = std::time::Instant::now();
-        let lead = leading_failures(&circuit, DecoderChoice::Matching, 1 << 34).unwrap();
+        let lead = leading_failures(&circuit, DecoderChoice::Matching, 1 << 34, 0).unwrap();
         eprintln!(
             "surface d = {d}, p = {p:e}: leading {} configurations of {} errors among {} logical \
              errors, term {:.3e}, probability {:.3e} ({:.1} s)",
@@ -275,6 +337,55 @@ fn measure_splitting() {
             0.06,
             target,
             &fewer,
+        );
+    }
+    // [[72, 12, 6]] at 10⁻³ and 10⁻⁵ against enumeration to four errors.
+    for target in [1e-3, 1e-5] {
+        let clock = std::time::Instant::now();
+        let e = enumerated_failure_rate(&at(target).unwrap(), DecoderChoice::BpOsd, 4).unwrap();
+        eprintln!(
+            "[[72,12,6]], p = {target:e}: enumerated [{:.4e}, {:.4e}] ({:.1} s)",
+            e.rate,
+            e.rate + e.remainder,
+            clock.elapsed().as_secs_f64()
+        );
+    }
+    run(
+        "[[72,12,6]], data only, BP+OSD",
+        &at,
+        DecoderChoice::BpOsd,
+        0.06,
+        1e-5,
+        &fewer,
+    );
+    // Eight seeds of the surface code of distance 5 at 10⁻⁴, with the
+    // default chains and with shorter ones.
+    let d5 = |p: f64| surface_code_memory(5, 5, &CircuitNoise::uniform(p));
+    for (steps, burn_in) in [(20_000, 5000), (5000, 1000)] {
+        let estimates: Vec<(f64, f64)> = (0..8)
+            .map(|seed| {
+                let o = SplittingOptions {
+                    steps,
+                    burn_in,
+                    seed,
+                    ..o
+                };
+                let e =
+                    splitting_failure_rate(&d5, DecoderChoice::Matching, 0.01, 1e-4, &o).unwrap();
+                (e.rate, e.log_standard_error)
+            })
+            .collect();
+        let logs: Vec<f64> = estimates.iter().map(|e| e.0.ln()).collect();
+        let mean = logs.iter().sum::<f64>() / 8.0;
+        let spread = (logs.iter().map(|l| (l - mean).powi(2)).sum::<f64>() / 7.0).sqrt();
+        let stated = estimates.iter().map(|e| e.1).sum::<f64>() / 8.0;
+        eprintln!(
+            "surface d = 5, p = 1e-4, {steps} steps after {burn_in}: {:.3e} to {:.3e}, spread \
+             {:.1} % against {:.1} % stated",
+            estimates.iter().map(|e| e.0).fold(f64::INFINITY, f64::min),
+            estimates.iter().map(|e| e.0).fold(0.0, f64::max),
+            100.0 * spread,
+            100.0 * stated
         );
     }
     // Direct sampling where it reaches.

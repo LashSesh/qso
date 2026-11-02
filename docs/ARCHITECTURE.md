@@ -320,11 +320,16 @@ frame update for each gate is derived once.
   (each distinct configuration once per chain) for `x = ln(q₁/q₀)`, and
   Bennett's `ln C` is iterated to the fixed point in logarithms (sigmoids
   instead of exponentials). Chains of one rate run in parallel, each
-  with its own decoder and a forked stream of the seed.
-  `leading_failures` enumerates the logical errors that cannot be split
-  into undetectable parts by the search of the distance (growing from
-  the lowest fired detector by errors of higher index), deduplicated as
-  sorted sets, then the subsets of `⌈d/2⌉` errors; `enumerated_failure_rate`
+  with its own decoder and a forked stream of the seed. A chain of rate
+  `k` enters ratio `k` forward and ratio `k − 1` backward; its relative
+  deviations in the two (`A_c/a − 1` and `B_c/b − 1`) are subtracted per
+  chain before their spread, so the covariance of consecutive ratios is
+  in the error. `leading_failures` enumerates the logical errors that
+  cannot be split into undetectable parts by the search of the distance
+  (growing from the lowest fired detector by errors of higher index),
+  deduplicated as sorted sets; it decodes every configuration of at most
+  `⌈d/2⌉` errors when they are few enough, else the subsets of `⌈d/2⌉`
+  errors of those logical errors; `enumerated_failure_rate`
   walks all sets in lexicographic order from each first error, in
   parallel, and bounds the rest by the distribution of the number of
   errors (a Poisson-binomial with an absorbing last state, so the tail is

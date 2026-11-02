@@ -714,22 +714,34 @@ to 10⁻¹², so QSO carries the rate down from where sampling reaches.
   an error, adds one, or swaps one for a neighbour (an error sharing a
   detector), with the Hastings factors of these choices. The ratio of
   consecutive failure rates comes from the chains of both rates by
-  Bennett's acceptance ratio. Its standard error comes from the spread of
-  the chains, and the result's error is relative (`log_standard_error`).
+  Bennett's acceptance ratio. The chains of one rate enter two
+  consecutive ratios, so the standard error comes from each chain's
+  influence on the whole product (its deviations in both ratios added,
+  then the spread over the chains). The result's error is relative
+  (`log_standard_error`).
 - **Burn-in matters.** Each chain starts from a configuration of the last
   rate, heavier than the new rate's typical ones; too short a burn-in
   biases the ratio downwards. With 5 000 steps after 1 000 of burn-in,
-  the surface code of distance 5 at `p = 10⁻⁴` came out up to 15 % low
-  (by up to four of its standard errors) in four of eight seeds.
-  The defaults are 16 chains of 20 000 steps after 5 000 of burn-in.
-- **`leading_failures(circuit)`** gives the leading term. It enumerates
-  the undetectable logical errors of at most `2⌈d/2⌉` errors and decodes
-  every subset of `⌈d/2⌉` of their errors. It returns the distance, the
-  failing configurations of that weight, their summed product of
-  probabilities (`leading_term`, the `A·p^w` of the failure rate) and
-  their exact share of it (`probability`, a lower bound). The count is
-  complete when the decoder never corrects with more errors than the
-  configuration has. For the circuits tested it equals the enumeration.
+  eight seeds of the surface code of distance 5 at `p = 10⁻⁴` gave 1.17
+  to 1.39·10⁻⁷, a spread of 5.7 % against 4.3 % stated. The defaults
+  are 16 chains of 20 000 steps after 5 000 of burn-in; with them the
+  eight seeds gave 1.34 to 1.41·10⁻⁷, a spread of 1.7 % against 2.3 %
+  stated.
+- **`leading_failures(circuit)`** gives the leading term: the fewest
+  errors that fail, the failing configurations of that weight, their
+  summed product of probabilities (`leading_term`, the `A·p^w` of the
+  failure rate) and their exact share of it (`probability`, a lower
+  bound). When the configurations of at most `⌈d/2⌉` errors number at
+  most `max_configurations`, every one is decoded and the result is exact
+  (`exhaustive`). Otherwise the subsets of `⌈d/2⌉` errors of every
+  undetectable logical error of at most `2⌈d/2⌉` errors are decoded. That
+  count is complete only when the decoder never corrects with more errors
+  than the configuration has. BP+OSD, and matching with the unequal
+  probabilities of circuit noise, can correct with more. Then the subsets
+  give a lower bound: under BP+OSD they miss failing configurations of
+  [[72, 12, 6]]. Fewer errors can then also fail: two, not three, for a
+  repetition code of distance 5 whose measurements err 5 000 times more
+  often than its gates.
 - **`enumerated_failure_rate(circuit, max_weight)`** decodes every
   configuration of at most `max_weight` errors. It also bounds the
   probability of the heavier ones (`remainder`), so that the exact rate
@@ -751,18 +763,19 @@ from `start = 0.01`:
 
 | Code | p | Splitting | Time | Check |
 |---|---|---|---|---|
-| surface d = 3 | 10⁻³ | 7.93·10⁻⁴ ± 1.4 % | 0.5 s | sampled: 8.13·10⁻⁴ ± 2.5 % |
-| surface d = 3 | 10⁻⁴ | 8.12·10⁻⁶ ± 1.4 % | 0.5 s | weight-2 failures alone: 8.21·10⁻⁶ |
-| surface d = 5 | 10⁻³ | 1.31·10⁻⁴ ± 1.8 % | 4 s | sampled: 1.26·10⁻⁴ ± 6.3 % |
-| surface d = 5 | 10⁻⁴ | 1.34·10⁻⁷ ± 2.0 % | 5 s | weight-3 failures alone: 1.30·10⁻⁷ |
-| surface d = 7 | 10⁻³ | 1.81·10⁻⁵ ± 2.7 % | 18 s | |
-| surface d = 7 | 10⁻⁴ | 1.76·10⁻⁹ ± 3.0 % | 20 s | |
-| [[72, 12, 6]], data only, BP+OSD | 10⁻² | 4.52·10⁻⁴ ± 2.9 % | 20 s | sampled: 5.2·10⁻⁴ ± 9.8 % |
-| [[72, 12, 6]], data only, BP+OSD | 10⁻³ | 4.41·10⁻⁷ ± 4.2 % | 20 s | |
+| surface d = 3 | 10⁻³ | 7.93·10⁻⁴ ± 1.4 % | 0.4 s | sampled: 8.13·10⁻⁴ ± 2.5 % |
+| surface d = 3 | 10⁻⁴ | 8.12·10⁻⁶ ± 1.4 % | 0.6 s | exact: 8.28·10⁻⁶ (the test's enumeration) |
+| surface d = 5 | 10⁻³ | 1.31·10⁻⁴ ± 2.2 % | 4 s | sampled: 1.26·10⁻⁴ ± 6.3 % |
+| surface d = 5 | 10⁻⁴ | 1.34·10⁻⁷ ± 2.5 % | 4 s | weight-3 failures alone: at least 1.30·10⁻⁷ |
+| surface d = 7 | 10⁻³ | 1.81·10⁻⁵ ± 3.5 % | 18 s | |
+| surface d = 7 | 10⁻⁴ | 1.76·10⁻⁹ ± 4.0 % | 20 s | |
+| [[72, 12, 6]], data only, BP+OSD | 10⁻² | 4.52·10⁻⁴ ± 3.0 % | 20 s | sampled: 5.2·10⁻⁴ ± 9.8 % |
+| [[72, 12, 6]], data only, BP+OSD | 10⁻³ | 4.41·10⁻⁷ ± 4.2 % | 20 s | exact: 4.484 to 4.501·10⁻⁷ |
+| [[72, 12, 6]], data only, BP+OSD | 10⁻⁵ | 4.69·10⁻¹³ ± 8.7 % | 26 s | exact: 4.498·10⁻¹³ |
 
-The bicycle code starts from 0.06, with 20 000 start shots. Over eight
-seeds, the surface code of distance 5 at `10⁻⁴` gave 1.34 to 1.41·10⁻⁷,
-a spread of 1.6 % against the stated 1.9 %.
+The bicycle code starts from 0.06, with 20 000 start shots; its exact
+rates are enumerations of all configurations of up to four errors (5 s
+each).
 
 ## Stim circuits and the command line
 

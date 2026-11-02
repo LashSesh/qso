@@ -14,12 +14,15 @@ All notable changes to this project are documented here. The format follows
   10⁻⁹ and below by the splitting method of Bravyi and Vargo: Metropolis
   chains over the failing error configurations at falling rates
   (removals, additions and local swaps), the ratios of consecutive rates
-  by Bennett's acceptance ratio, standard errors from independent
-  chains, any decoder (matching, BP+OSD, …). `leading_failures` gives the
-  leading term `A·p^w` from the subsets of the lightest logical errors,
-  and `enumerated_failure_rate` the exact rate of small models with a
-  bound on the rest. Splitting equals the enumeration at 5·10⁻¹¹ and
-  direct sampling where that reaches; surface codes of distance 7 at
+  by Bennett's acceptance ratio, standard errors from each chain's
+  influence on the whole product, any decoder (matching, BP+OSD, …).
+  `leading_failures` gives the leading term `A·p^w`, exactly by decoding
+  every configuration of at most `⌈d/2⌉` errors when they are few
+  enough, otherwise as a lower bound from the subsets of the lightest
+  logical errors; `enumerated_failure_rate` gives the exact rate of small
+  models with a bound on the rest. Splitting equals the enumeration from
+  5·10⁻¹¹ (repetition code) to 4.5·10⁻¹³ ([[72, 12, 6]] under BP+OSD)
+  and direct sampling where that reaches; surface codes of distance 7 at
   p = 10⁻⁴ take 20 s. In Python: `splitting_failure_rate`,
   `leading_failures`, `enumerated_failure_rate`.
 
