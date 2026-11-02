@@ -18,7 +18,7 @@ for medical research, section 4h) stages ship together as release
 1.8.0. The ninth (1.38 to 1.42, section 4i) and tenth (1.43 to 1.47,
 section 4j) stages ship together as release 1.9.0. The eleventh stage
 (1.48 to 1.52, section 4k) is delivered, and the twelfth (1.53 to 1.57,
-section 4l) is proposed. Up to 1.3
+section 4l) is planned; the two ship together as release 1.10.0. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -5307,9 +5307,9 @@ exact reference. Mixed Gaussian states with many photons in many modes,
 whose exact methods stay exponential. Noise learning for layers of
 non-Clifford gates. The GPU track, still parked (section 7).
 
-## 4l. Twelfth stage (1.53 to 1.57, proposed)
+## 4l. Twelfth stage (1.53 to 1.57)
 
-Proposed November 2026, after the eleventh stage, from the gaps that
+Planned November 2026, after the eleventh stage, from the gaps that
 remain in the table of section 1. As before, the stage starts with walks
 on graphs. Two milestones then take the magnetic-resonance work to the
 spin systems chemists use: exchange and reactions on sparse blocks, and
@@ -5511,7 +5511,7 @@ still parked (section 7).
     the field dependence of the same superoperators. Logical error rates
     below sampling (1.52) build on the distances and witnesses of 1.42
     and 1.47 and are independent of the rest.
-20. **Twelfth stage (proposed): walks first again, then the spin systems
+20. **Twelfth stage: walks first again, then the spin systems
     of real experiments.** Interacting walkers without visiting every
     configuration (1.53) join the orbit generation of 1.48 to the
     many-particle walks of 1.43. Exchange and reactions on sparse blocks
@@ -5612,12 +5612,12 @@ Taken (October 2026):
   (1.49), hyperpolarisation with reaction kinetics (1.50), field profiles
   with relaxation beyond six spins (1.51), logical error rates below
   sampling (1.52).
-* Twelfth stage (November 2026, proposed): interacting walkers without
+* Twelfth stage (November 2026, accepted as proposed): interacting walkers without
   visiting every configuration (1.53), exchange and reactions on sparse
   blocks (1.54), relaxation applied without storing it (1.55),
   product-formula bounds that know which terms commute (1.56), decoding
-  in windows (1.57). The eleventh and twelfth stages would ship together
-  as one release (1.10.0), as the ninth and tenth did.
+  in windows (1.57). The eleventh and twelfth stages ship together as
+  one release (1.10.0), as the ninth and tenth did.
 * The browser playground stays, because it costs little to maintain: it
   is plain HTML and JavaScript without dependencies or a build step, it
   uses only the npm package's JSON interface, which the package's tests
