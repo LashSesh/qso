@@ -1001,7 +1001,8 @@ def test_grape_beyond_six_relaxing_spins():
     after = sys.evolve(rho0, sys.control_events(c, r["controls"]))
     assert np.trace(after @ target).real == pytest.approx(r["transfer"], rel=1e-9, abs=0)
     # Without relaxation the controls stay in Hilbert space; field profiles
-    # with relaxation within six spins.
+    # with relaxation go on sparse blocks too (1.51), the relaxation
+    # interpolated over the range.
     plain = q.SpinSystem(9.4)
     plain.add_spin("1H", 0.0)
     plain.add_spin("13C", 0.0)
@@ -1009,8 +1010,12 @@ def test_grape_beyond_six_relaxing_spins():
     rf = spin.Control.rf(["1H", "13C"], 1e-3, 4, plain.thermal_state(), plain.spin_operator(1, "z"))
     assert plain.control_cost(rf, 1000.0)["method"] == "hilbert"
     f = spin.Control.field(9.0, 9.4, 1e-3, 2, rho0, target)
-    with pytest.raises(ValueError, match="Liouville"):
-        sys.control_cost(f, 9.4)
+    cost = sys.control_cost(f, 9.4)
+    assert cost["method"] == "sparse" and cost["coefficients"] == 16385
+    error, nodes = sys.field_relaxation_error(f)
+    assert error <= spin.FIELD_TOLERANCE and nodes in (5, 9, 17, 33)
+    with pytest.raises(ValueError, match="does not relax"):
+        plain.field_relaxation_error(spin.Control.field(9.0, 9.4, 1e-3, 2, plain.thermal_state(), plain.spin_operator(1, "z")))
 
 
 def test_grape_keeps_its_digits_at_low_polarisation():

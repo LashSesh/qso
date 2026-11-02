@@ -8,6 +8,22 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Field profiles with relaxation beyond six spins** (1.51, `spin`):
+  `control_transfer` and `optimize_control` take field profiles with
+  relaxation on the sparse blocks of 1.46 instead of the dense generator
+  (six spins ½ at most). The relaxation (Lindblad, Redfield and the drift
+  towards the thermal state) is interpolated over the profile's field
+  range by Chebyshev polynomials on 5 to 33 nested Lobatto nodes, built
+  once per optimisation, with a stated error below `FIELD_TOLERANCE`
+  (10⁻¹⁰ of its largest entry); ranges whose error stays above
+  `MAX_FIELD_ERROR` (10⁻⁶) are refused. The field derivative is the
+  interpolant's, paired by the Gauss–Legendre gradients of 1.46.
+  `SpinSystem::field_relaxation_error` gives the stated error and the
+  nodes; `control_cost` reports `"sparse"`. Gradients equal the dense
+  generator's, seven relaxing spins follow central differences, and the
+  SABRE-SHEATH transfer peaks at the level anti-crossing. In Python:
+  `field_relaxation_error`, `spin.FIELD_TOLERANCE`, `spin.MAX_FIELD_ERROR`.
+
 - **Hyperpolarisation with reaction kinetics** (1.50, `spin::Reactions`):
   spin sites whose amounts change by reactions of first and second order
   with species without spins (`Participant`, `Reaction`, `Species`).
@@ -16,8 +32,11 @@ All notable changes to this project are documented here. The format follows
   the product with the carried spins of its source and fresh spins (the
   parahydrogen singlet) for the rest. Propagated by exponentials of the
   joint blocks with the inhomogeneous terms integrated as quadratics and
-  steps that follow the kinetics, so that formation at any rate keeps the
-  phase of the coherences. `amounts`, `evolve` (pulses, delays, fields,
+  steps that follow the kinetics (and, for spins carried at a rate that
+  changes, the frequencies of the blocks they feed), so that coherences
+  formed or carried at any rate keep their phase; steady chemistry takes
+  one step however fast, stiff kinetics are refused, and the work of all
+  events is checked before the first step. `amounts`, `evolve` (pulses, delays, fields,
   sweeps), `advanced`. PASADENA, ALTADENA with a field ramp during the
   reaction and SABRE with a consumed catalyst; closed forms to 10⁻¹⁰, the
   steady case equal to `Exchange`. In Python: `spin.Reactions`.
@@ -58,6 +77,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Field profiles with relaxation no longer use the dense generator, so
+  `MAX_CONTROL_LIOUVILLE` (six spins ½) no longer limits them; their cost
+  is estimated and checked as for rf controls (`control_cost` reports
+  `"sparse"` with `d² + 1` coefficients). Declared symmetries are not
+  used for field profiles.
 - `coordinate_permutations` takes up to 20 coordinates (was 13).
 - Beyond 8192 nodes, `SymmetricOpenWalk` checks the dephasing term by
   term (every symmetry maps each partition onto one of the same rate,

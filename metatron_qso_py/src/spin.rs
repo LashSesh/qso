@@ -4,10 +4,10 @@ use metatron_qso::C64;
 use metatron_qso::linalg::CMatrix;
 use metatron_qso::optimize::Options;
 use metatron_qso::spin::{
-    Channel, Control, Drive, Event, Exchange, Frame, Fresh, Interaction, Isotope, Member,
-    ModelFree, Optimized, Participant, Profile, Reaction, Reactions, Segment, Spectrum, SpinSystem,
-    Target, axial_csa, axial_diffusion, inept, inept_cycle, inversion_recovery, m2s, s2m,
-    spin_echo, spin_lock, unitary_bound,
+    Channel, Control, Drive, Event, Exchange, FIELD_TOLERANCE, Frame, Fresh, Interaction, Isotope,
+    MAX_FIELD_ERROR, Member, ModelFree, Optimized, Participant, Profile, Reaction, Reactions,
+    Segment, Spectrum, SpinSystem, Target, axial_csa, axial_diffusion, inept, inept_cycle,
+    inversion_recovery, m2s, s2m, spin_echo, spin_lock, unitary_bound,
 };
 use numpy::{IntoPyArray, PyArray1, PyArray2};
 use pyo3::exceptions::PyValueError;
@@ -1161,6 +1161,19 @@ impl PySpinSystem {
         }))
     }
 
+    /// The stated error of the relaxation interpolated over the field range
+    /// of a field profile (relative to its largest entry) and the number of
+    /// fields it was built from: `(error, nodes)`; a `ValueError` without
+    /// relaxation or when the error would exceed `spin.MAX_FIELD_ERROR`.
+    fn field_relaxation_error(
+        &self,
+        py: Python<'_>,
+        control: PyRef<'_, PyControl>,
+    ) -> PyResult<(f64, usize)> {
+        let (sys, c) = (&self.inner, &control.inner);
+        py.detach(|| sys.field_relaxation_error(c)).raise()
+    }
+
     /// The events that apply controls `u` in `evolve`.
     fn control_events(
         &self,
@@ -1223,13 +1236,11 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyProfile>()?;
     m.add_function(wrap_pyfunction!(rf_pulse, m)?)?;
     m.add_function(wrap_pyfunction!(py_unitary_bound, m)?)?;
+    m.add("FIELD_TOLERANCE", FIELD_TOLERANCE)?;
+    m.add("MAX_FIELD_ERROR", MAX_FIELD_ERROR)?;
     Ok(())
 }
 
-/// Chemical exchange between spin systems (Bloch–McConnell in Liouville
-/// space): sites with concentrations and first-order channels that carry
-/// some spins over and bring others in fresh (thermal or parahydrogen).
-/// States are lists of density matrices, one per site, trace 1 each.
 /// Spin sites whose amounts change by reactions of first and second order
 /// with species without spins (parahydrogen, a catalyst). States are
 /// unnormalised: each site's trace is its amount.
@@ -1360,14 +1371,16 @@ impl PyReactions {
 
     /// The amounts after `t` (s): the sites', then the species'.
     fn amounts<'py>(&self, py: Python<'py>, t: f64) -> PyResult<Bound<'py, PyArray1<f64>>> {
-        Ok(self.inner.amounts(t).raise()?.into_pyarray(py))
+        let x = &self.inner;
+        Ok(py.detach(|| x.amounts(t)).raise()?.into_pyarray(py))
     }
 
     /// The same reactions starting with the amounts after `t` (s), to go
     /// on from states returned by `evolve` after delays of `t`.
-    fn advanced(&self, t: f64) -> PyResult<Self> {
+    fn advanced(&self, py: Python<'_>, t: f64) -> PyResult<Self> {
+        let x = &self.inner;
         Ok(Self {
-            inner: self.inner.advanced(t).raise()?,
+            inner: py.detach(|| x.advanced(t)).raise()?,
         })
     }
 
@@ -1438,6 +1451,10 @@ impl PyReactions {
     }
 }
 
+/// Chemical exchange between spin systems (Bloch–McConnell in Liouville
+/// space): sites with concentrations and first-order channels that carry
+/// some spins over and bring others in fresh (thermal or parahydrogen).
+/// States are lists of density matrices, one per site, trace 1 each.
 #[pyclass(name = "Exchange", module = "metatron_qso")]
 #[derive(Clone)]
 pub struct PyExchange {

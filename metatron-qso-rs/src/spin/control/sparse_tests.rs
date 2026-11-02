@@ -531,8 +531,10 @@ fn large_problems_are_estimated_before_anything_is_built() {
         seven.iz(0).unwrap(),
         seven.iz(1).unwrap(),
     );
-    let err = seven.control_transfer(&field, &[9.2, 9.3]).unwrap_err();
-    assert!(err.to_string().contains("Liouville"), "{err}");
+    // Field profiles of seven relaxing spins run on sparse blocks too
+    // (1.51; refused before as dense).
+    assert!(seven.control_transfer(&field, &[9.2, 9.3]).is_ok());
+    assert_eq!(seven.control_cost(&field, 9.4).unwrap().method, "sparse");
     // Ten relaxing protons over 10⁵ steps: refused from the bounds alone,
     // in about a second (69 s when the entries were counted first; the
     // bound leaves room for a loaded machine running the other tests).

@@ -29,9 +29,14 @@
 //! Rf controls with relaxation keep the generator as sparse matrices,
 //! built once per optimisation and applied to vectors only, and propagate
 //! on the orbits of declared equivalent spins when the system, the rf
-//! channels and the initial state respect them (see the `sparse` source);
-//! field profiles with relaxation use the dense generator, up to six
-//! spins ½.
+//! channels and the initial state respect them (see the `sparse` source).
+//! Field profiles with relaxation propagate on the same sparse blocks: the
+//! relaxation (with its thermal drift) is interpolated over the profile's
+//! field range by Chebyshev polynomials on nested Lobatto nodes, built once
+//! per optimisation: nodes are added until the stated error is below
+//! [`FIELD_TOLERANCE`], and a range whose error stays above
+//! [`MAX_FIELD_ERROR`] is refused. The field derivative is the
+//! interpolant's (see the `sparse/field` source).
 
 use nalgebra::DVector;
 use num_complex::Complex64 as C64;
@@ -45,7 +50,8 @@ use crate::optimize::{GradObjective, Method, Options, minimize};
 
 mod sparse;
 
-use sparse::{Amplitudes, Budget, SparseControl};
+use sparse::{Amplitudes, Budget, SparseControl, SparseField};
+pub use sparse::{FIELD_TOLERANCE, MAX_FIELD_ERROR};
 
 /// What the controls drive.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -620,8 +626,10 @@ fn augment(m: &CMatrix) -> DVector<C64> {
     v
 }
 
-/// Largest Liouville space (`d²` elements) for field profiles with
-/// relaxation, whose generator is dense: six spins ½. It takes 270 MB.
+/// Largest Liouville space (`d²` elements) of the dense generator: six
+/// spins ½, 270 MB. Field profiles with relaxation were limited to it
+/// before 1.51; they propagate on sparse blocks now, and only the dense
+/// comparisons of the tests use it.
 pub const MAX_CONTROL_LIOUVILLE: usize = 4096;
 
 /// How the evaluations of a control problem propagate.
@@ -629,11 +637,16 @@ pub const MAX_CONTROL_LIOUVILLE: usize = 4096;
 pub(super) enum Path {
     /// Hilbert space (without relaxation).
     Hilbert,
-    /// The dense Liouville generator (up to six spins ½).
+    /// The dense Liouville generator (up to six spins ½): field profiles
+    /// before 1.51, kept for comparison (tests).
+    #[cfg_attr(not(test), allow(dead_code))]
     Dense,
     /// Sparse blocks (rf), on the orbits of the declared symmetries when
     /// `symmetric` and they apply.
     Sparse { symmetric: bool },
+    /// Sparse blocks of a field profile, the relaxation interpolated over
+    /// the field.
+    SparseField,
 }
 
 /// What the evaluations of a control problem share.
@@ -641,6 +654,7 @@ enum Prepared {
     /// Nothing: every evaluation builds what it needs.
     Each(Path),
     Sparse(Box<SparseControl>),
+    Field(Box<SparseField>),
 }
 
 /// Most memory (bytes) one evaluation of a control problem may keep:
@@ -787,13 +801,13 @@ impl SpinSystem {
     }
 
     /// The path of [`SpinSystem::control_transfer`]: Hilbert space without
-    /// relaxation; with it, sparse blocks for rf and the dense generator
-    /// for field profiles.
+    /// relaxation; with it, sparse blocks for rf and for field profiles
+    /// (the relaxation interpolated over the field).
     fn control_path(&self, c: &Control) -> Path {
         match c.drive {
             _ if !self.relaxes() => Path::Hilbert,
             Drive::Rf { .. } => Path::Sparse { symmetric: true },
-            Drive::Field { .. } => Path::Dense,
+            Drive::Field { .. } => Path::SparseField,
         }
     }
 
@@ -924,6 +938,10 @@ impl SpinSystem {
         let rf = Amplitudes::Peak(peak.abs());
         let (method, (operations, bytes, coefficients)) = match path {
             Path::Sparse { symmetric } => ("sparse", self.sparse_estimate(c, rf, symmetric)?),
+            Path::SparseField => {
+                let (work, memory) = self.path_cost(c, rf, path)?;
+                ("sparse", (work, memory, d * d + 1))
+            }
             Path::Hilbert | Path::Dense => {
                 let (work, memory) = self.path_cost(c, rf, path)?;
                 match path {
@@ -945,6 +963,12 @@ impl SpinSystem {
     fn path_cost(&self, c: &Control, rf: Amplitudes<'_>, path: Path) -> Result<(f64, f64)> {
         if let Path::Sparse { symmetric } = path {
             return self.sparse_cost(c, rf, symmetric);
+        }
+        if path == Path::SparseField {
+            return match rf {
+                Amplitudes::Controls(u) => self.field_estimate(c, Some(u)),
+                Amplitudes::Peak(peak) => self.field_estimate(c, Some(&vec![peak; c.steps])),
+            };
         }
         let peak = match rf {
             Amplitudes::Peak(peak) => peak,
@@ -1035,6 +1059,9 @@ impl SpinSystem {
             Path::Sparse { symmetric } => {
                 Prepared::Sparse(Box::new(self.sparse_control(c, symmetric)?))
             }
+            Path::SparseField => {
+                Prepared::Field(Box::new(self.sparse_field(c, MAX_CONTROL_MEMORY)?))
+            }
             other => Prepared::Each(other),
         })
     }
@@ -1052,6 +1079,10 @@ impl SpinSystem {
             let (work, memory) = blocks.cost(c, u);
             check_cost("this control problem", work, memory)?;
         }
+        if let Prepared::Field(blocks) = prepared {
+            let (work, memory) = blocks.cost(c, u);
+            check_cost("this control problem", work, memory)?;
+        }
         let members = c.members();
         let total: f64 = members.iter().map(|m| m.weight).sum();
         // Field profiles of one system: the members differ by weight only.
@@ -1064,6 +1095,7 @@ impl SpinSystem {
             Prepared::Each(Path::Hilbert) => self.member_hilbert(c, &members[k], u),
             Prepared::Each(_) => self.member_liouville(c, &members[k], u),
             Prepared::Sparse(blocks) => blocks.member(c, &members[k], u, &budget),
+            Prepared::Field(blocks) => blocks.member(c, u, &budget),
         });
         let mut results = results.into_iter().collect::<Result<Vec<_>>>()?;
         if distinct == 1 && members.len() > 1 {
@@ -1415,3 +1447,6 @@ mod tests;
 
 #[cfg(test)]
 mod sparse_tests;
+
+#[cfg(test)]
+mod field_tests;

@@ -4844,7 +4844,7 @@ Delivered in `spin/exchange/kinetics.rs`, with the blocks of
   for a product not yet formed), species without spins and reactions of
   first and second order (`k Π c`, a reactant may appear twice;
   reversible reactions as two). The amounts follow the rate equations
-  alone, by Dormand–Prince steps to 10⁻¹² of the amounts (`amounts(t)`).
+  alone, by Dormand–Prince steps to 10⁻¹² of each amount (`amounts(t)`).
 - **Spin source.** Each site's density matrix is unnormalised, its trace
   its amount. A reaction's reactant sites react at the pseudo-first-order
   rate `k` times the other reactants; its product site (at most one)
@@ -4856,8 +4856,12 @@ Delivered in `spin/exchange/kinetics.rs`, with the blocks of
   and the inhomogeneous terms as the quadratic through their values at
   the start, midpoint and end, integrated exactly by the augmented
   exponential; steps `h` and `h/2` are extrapolated. The steps follow the
-  kinetics (at most 2 % of the amounts turned over, 2 % change of every
-  rate that matters), not the spin frequencies.
+  kinetics: every reactant of a reaction that matters changes by at most
+  2 % of itself in a step, so steady chemistry takes one step however
+  fast. A reaction that carries spins from a source at a pseudo-rate that
+  changes also keeps `h‖M‖ ≤ 1/4` for the blocks it feeds (see the
+  review below). Work and steps are estimated for all events before the
+  first step.
 - **Experiments.** `evolve` takes pulses on isotopes, delays, field jumps
   and sweeps (so field ramps during the reaction), and `advanced(t)` goes
   on from a state returned after `t`. PASADENA, ALTADENA and SABRE with a
@@ -4902,7 +4906,9 @@ Measured (four cores, release build):
   72.4, 73.9 and 73.9 % after 10, 30, 60 and 120 s, the 74 % steady state
   of 1.35; with the free catalyst deactivated at 5 s⁻¹, 52.0, 69.9, 68.7
   and 62.3 %, the complex falling to 0.56 of its amount.
-- The three take 5.2 s together.
+- The three take 52 s together (5 s before the review's step rule for
+  carried coherences, which SABRE's substrate binding to a catalyst whose
+  amount changes needs).
 
 Validation: amounts follow the closed forms of first, reversible, second
 (unequal amounts) and `2A →` kinetics to 10⁻¹¹. Parahydrogen forming a
@@ -4919,7 +4925,57 @@ times drawn from the kinetics (second order, depleted parahydrogen), each
 evolved alone with `T₁` and `T₂`, agrees within four standard errors (plus
 10⁻³).
 
-### 1.51 — Field profiles with relaxation beyond six spins (M–L)
+Review: an independent review wrote a dense NumPy reference (its own
+Lindblad generator, partial traces and fresh states, the amounts
+integrated jointly with every site's vectorised σ by DOP853 to 10⁻¹²)
+and found the equations, the traces (10⁻¹⁵ against the reference
+amounts), the quadratic inhomogeneous terms, the Dormand–Prince tableau
+and every measured number correct: PASADENA, the cases with `2A →`,
+renewal, partial carry, pulses mid-reaction and lab-frame sweeps agree
+to 10⁻¹² to 6·10⁻¹⁰. It found four faults and smaller points; all are
+fixed.
+
+- **Carried coherence at a changing rate.** The transfer rate of a
+  reaction that carries spins was frozen at each step's midpoint. When
+  source and product precess at different frequencies (`Δω h ≫ 1`) and
+  the rate changes (the source's partner is consumed), that errs as
+  `ġh/Δω`, first order in `h`: the coherence carried from a proton at
+  1 ppm into one at 3 ppm at 9.4 T by S + H₂ → P was off by 1.5 %. Such
+  reactions now also keep `h‖M‖ ≤ 1/4` for the blocks they feed; the
+  error then falls as `h⁴` (16 per halving), to 10⁻¹² of the coherence
+  carried, against a closed-form integral (test). A first-order reaction,
+  whose rate is constant, keeps the steps of the kinetics.
+- **Steady fast chemistry.** The step was bounded by the gross flux,
+  `0.02 Σc/Σv`, even when no amount changed: A ⇌ B at 10⁴ s⁻¹ took 37 s
+  for one second and 10⁵ s⁻¹ was refused after 79 s. Only the relative
+  change of the reactants bounds a step now: 10⁵ s⁻¹ at equilibrium takes
+  one step and equals `Exchange` to 10⁻¹² (test).
+- **Stiff kinetics.** The explicit Dormand–Prince steps of the amounts
+  had no limit: A ⇌ B at 10⁸ s⁻¹ over 10 s would have run for about
+  twelve minutes, holding the GIL. They stop at `MAX_KINETIC_STEPS` with
+  an error naming stiff kinetics (10⁹ s⁻¹ over 10 s is refused, test),
+  and Python's `amounts` and `advanced` release the GIL.
+- **The work check.** The work of a delay was extrapolated from its first
+  step (refusing runs that would have taken seconds), sweeps were checked
+  per step (a sweep of 200 000 steps that `Exchange` refuses ran on), and
+  the message named `exchange` and suggested the rotating frame in it.
+  The step rule now runs over the amounts of all events before the first
+  step, and the work of every delay and sweep is summed and checked
+  (test); the message names the reactions and suggests the rotating
+  frame only in the laboratory frame.
+- **Smaller points.** The `Reactions` docstring in Python had taken the
+  place of `Exchange`'s; a site's trace is checked against its own amount
+  (it was 10⁻⁹ of all amounts, species included); pulses turn the
+  traceless deviation of a site without amount (they skipped it);
+  duplicate species names are refused in JSON and in `add_species`;
+  overflowing amounts are refused (they returned infinities), `amounts`
+  cuts rounding below zero, and the Dormand–Prince tolerance is relative
+  to each amount (it was to the largest, so a product of 10⁻³ of a
+  thousandfold substrate erred by 3·10⁻¹⁰). `advanced` documents that
+  the sites keep their own field. The tests of the convolution (10⁻¹⁰)
+  and of the coherent singlet (`|ω|/k`) assert what the documents state.
+
+### 1.51 — Field profiles with relaxation beyond six spins (M–L, delivered)
 
 Use case: field cycling for seven and eight relaxing spins (SABRE-SHEATH
 at microtesla fields, ALTADENA ramps, the field steps that store and
@@ -4941,6 +4997,94 @@ equals direct builds within its stated error; optimised profiles replayed
 by `evolve` give the objective the optimiser reported; SABRE-SHEATH
 transfer peaks at the level anticrossing of the closed-form two- and
 three-spin models.
+
+Delivered in `spin/control/sparse/field.rs`, with `spin/control.rs`,
+`spin/control/sparse.rs` and `spin/krylov.rs`:
+
+- **Relaxation over the field.** The relaxation of a field profile (the
+  Lindblad terms, Redfield, and the drift column towards the thermal
+  state, built by the column builder of 1.41 without the Hamiltonian) is
+  interpolated over the profile's range by the Chebyshev polynomial
+  through the Chebyshev–Lobatto nodes, 5, 9, 17 or 33 of them. Each level
+  contains the last's nodes, so it reuses their builds; it stops when the
+  two highest Chebyshev coefficients fall below `FIELD_TOLERANCE`
+  (10⁻¹⁰) of the relaxation's largest entry, the interpolant's stated
+  error, and a range whose error stays above `MAX_FIELD_ERROR` (10⁻⁶) at
+  33 nodes is refused. The node matrices are kept on the union of their
+  patterns (`SparseFamily`), so `R(B)`, `R(B)†` and `R'(B)` are weighted
+  sums of value arrays with the interpolant's weights and their
+  derivatives. `SpinSystem::field_relaxation_error` (Python
+  `field_relaxation_error`) gives the error and the nodes.
+- **Gradients on sparse blocks.** A step's generator is
+  `−i[H₀, ·] + B·(−i[H_Z, ·]) + R(B)`, applied to vectors as in 1.46; the
+  gradient pairs the costate with the two directions `−i[H_Z, ·]` and
+  `R'(B)` by the Gauss–Legendre rule of 1.46. All field profiles with
+  relaxation take this path; the dense generator of 1.36 remains for the
+  tests' comparisons.
+- **Limits.** `control_cost` estimates the work and memory of one
+  evaluation from the relaxation built at the middle of the range, its
+  entries counted column by column, with five nodes; the levels beyond are
+  checked as they are built, and each evaluation counts its operations as
+  in 1.46.
+
+Changes to the plan:
+
+- **An interpolant, not the eigenbasis.** The analytic field derivative
+  of the Redfield superoperator in the Hamiltonian's eigenbasis would
+  need the derivative of every eigenvector and is undefined at
+  crossings, which field profiles pass by design (the anti-crossings of
+  SABRE-SHEATH); the interpolant needs only builds of the relaxation and
+  states its error. The thermal drift and Lindblad terms are interpolated
+  with it.
+- **No symmetry for field profiles.** The orbits of 1.46 would need the
+  invariance checked at every node; field profiles propagate all
+  `d² + 1` coefficients.
+
+Not done, and why:
+
+- **Exchange models.** `Exchange.optimize_profile` keeps its block
+  exponentials with the derivative by extrapolated differences (its
+  blocks are small).
+- **Ranges where the relaxation changes faster than 33 nodes resolve**
+  (slow motion from zero to high field) are refused rather than split
+  into pieces.
+- **Eight spins with Redfield relaxation.** The node matrices are held
+  side by side (5.6 GB for eight spins with dipolar relaxation); fewer
+  nodes held at a time, or building `R(B)` on the fly from the spectral
+  densities, would be needed.
+
+Measured (four cores, release build), SABRE-SHEATH from the parahydrogen
+singlet of two hydrides to the ¹⁵N of a bound pyridine with four or
+five of its ring protons, in the laboratory frame between 0 and twice
+the anti-crossing (0.139 µT), every spin with `T₁` and `T₂`, ten steps:
+
+- **Seven spins** with Redfield relaxation of the dipolar pairs (τ_c =
+  10⁻¹⁰ s), 0.5 s: 5·10¹¹ operations and 0.86 GB estimated, the
+  interpolant converged at five nodes (fast motion does not disperse at
+  microtesla fields) to 5·10⁻¹⁶ in 4.7 s, one evaluation 82 s; `⟨N_z⟩`
+  0.028 at the constant anti-crossing field, 0.055 after five L-BFGS
+  iterations (16 evaluations, 24 min), replayed by `evolve` to 2·10⁻¹⁶.
+- **Eight spins** with `T₁` and `T₂` alone, 0.2 s: 7·10¹⁰ operations and
+  0.28 GB, one evaluation 17 s. With Redfield relaxation the five node
+  matrices need about 5.6 GB, over the limit of 2 GB, and are refused
+  before anything is propagated.
+
+Validation: built directly at seven fields between 1 and 100 µT (¹H–¹H–¹³C
+in the laboratory frame, Redfield relaxation with τ_c = 3·10⁻⁵ s, so that
+the spectral densities disperse in the range, `T₁` of the carbon, the
+thermal drift at 1 K) the relaxation equals the interpolant within ten
+times its stated error, which is below 10⁻¹⁰; slow motion (τ_c =
+10⁻⁷ s) from 0 to 9.4 T is refused. For a random profile of eight steps
+the transfer and gradient equal those of the dense generator of 1.36
+(the relaxation's field derivative by Richardson-extrapolated
+differences) to 10⁻¹⁰ and 10⁻⁷ of the largest component. Seven relaxing
+spins (six ¹H and a ¹³C between 5 and 20 µT, where their Zeeman
+difference is comparable to the couplings) follow Richardson-extrapolated
+central differences along a direction to 10⁻⁶. An optimised profile
+replayed by `evolve` gives the transfer the optimiser reported to 10⁻⁹,
+and the SABRE-SHEATH transfer of two hydrides and a ¹⁵N (`T₁` = 30 s)
+after 0.5 s at a constant field peaks within 3 % of the anti-crossing
+`ν_N − ν_H = ±(J_HH − J_HN/4)` of the three-spin model.
 
 ### 1.52 — Logical error rates below sampling (L)
 

@@ -20,6 +20,11 @@
 use nalgebra::DVector;
 use num_complex::Complex64 as C64;
 
+mod field;
+
+pub(super) use field::SparseField;
+pub use field::{FIELD_TOLERANCE, MAX_FIELD_ERROR};
+
 use super::super::blocks::{Liouville, SYMMETRY_TOLERANCE, Sparse};
 use super::super::krylov::{Orbits, SparseBlock, accumulator_bytes, row_dot, rows_per_task};
 use super::super::{ONE, SpinSystem, TWO_PI, ZERO};

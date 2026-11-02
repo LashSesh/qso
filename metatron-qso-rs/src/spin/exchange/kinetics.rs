@@ -5,7 +5,7 @@
 //! catalyst) and reactions of first and second order among them. The
 //! amounts follow the rate equations `dc_i/dt = Σ_r ν_ir k_r Π c_reactants`,
 //! independent of the spins, integrated by Dormand–Prince steps to 10⁻¹²
-//! of the amounts. Each site's density matrix `σ_s` is unnormalised, its
+//! of each amount. Each site's density matrix `σ_s` is unnormalised, its
 //! trace the site's amount, and
 //!
 //! ```text
@@ -23,28 +23,39 @@
 //! The spin equations are linear with coefficients that follow the
 //! amounts. They are propagated as the deviation `σ_s − c_s(t)/d_s` (its
 //! trace stays zero, so `Tr σ_s = c_s` exactly) by exponentials of the
-//! joint blocks with the coefficients at each step's midpoint, extrapolated
-//! from steps `h` and `h/2` (Richardson; the midpoint rule is symmetric, so
-//! the result is of fourth order in `h`). The fast spin evolution is in the
-//! exponentials; the steps follow only the kinetics, at most a fiftieth of
-//! the time in which the reactions turn over the amounts present
-//! ([`STEP_FRACTION`]).
+//! joint blocks with the coefficients at each step's midpoint and the
+//! inhomogeneous terms as quadratics, extrapolated from steps `h` and `h/2`
+//! (Richardson; the midpoint rule is symmetric). The fast spin evolution is
+//! in the exponentials, and the steps follow the kinetics: the amount of
+//! every reactant changes by at most [`STEP_FRACTION`] of itself in a step,
+//! so steady chemistry, however fast, takes one step. A reaction that
+//! carries spins from a source at a pseudo-rate that changes (the source's
+//! partner is consumed) is the exception: the rate frozen at the midpoint
+//! would miss the phase of the coherences it carries, so its steps also
+//! resolve the frequencies of the blocks it feeds (`‖h M‖ ≤ 1/4`).
 
 use serde::{Deserialize, Serialize};
 
 use super::super::blocks::{LiouvilleBlock, Sparse};
 use super::super::{Event, SpinSystem, Target, ZERO, check_field, check_time};
-use super::{Channel, Exchange, Fresh, Site, check_work};
+use super::{Channel, Exchange, Fresh, Site};
 use crate::error::{QsoError, Result};
 use crate::linalg::CMatrix;
 use num_complex::Complex64 as C64;
 
-/// The largest fraction of the amounts the reactions may turn over in one
-/// step: `h ≤ STEP_FRACTION · Σ c / Σ_r v_r`.
+/// The largest relative change of a reactant's amount in one step:
+/// `h ≤ STEP_FRACTION · c_i / |ċ_i|`.
 pub const STEP_FRACTION: f64 = 0.02;
 
-/// Most steps of a delay.
+/// Most steps of a delay, and most Dormand–Prince steps of the amounts
+/// over one interval (stiff kinetics beyond are refused).
 pub const MAX_KINETIC_STEPS: usize = 1_000_000;
+
+/// The largest `h‖M‖` of a step for the blocks fed by a reaction that
+/// carries spins at a pseudo-rate that changes: the frozen rate then errs
+/// as `h⁴` after extrapolation (a quarter gives 10⁻¹² of the coherence
+/// carried).
+const COHERENT_PHASE: f64 = 0.25;
 
 /// Relative tolerance of the Dormand–Prince steps of the amounts.
 const KINETIC_TOLERANCE: f64 = 1e-12;
@@ -154,10 +165,16 @@ impl Reactions {
         Ok(self.sites.len() - 1)
     }
 
-    /// Add a species without spins with its initial amount (≥ 0); returns
-    /// its index.
+    /// Add a species without spins with its initial amount (≥ 0) and a
+    /// name of its own; returns its index.
     pub fn add_species(&mut self, name: &str, amount: f64) -> Result<usize> {
         check_amount(amount)?;
+        if self.species.iter().any(|s| s.name == name) {
+            return Err(QsoError::invalid(
+                "species",
+                format!("a species is already named {name:?}"),
+            ));
+        }
         self.species.push(Species {
             name: name.to_string(),
             amount,
@@ -278,8 +295,14 @@ impl Reactions {
         for s in &self.sites {
             check_amount(s.concentration)?;
         }
-        for s in &self.species {
+        for (k, s) in self.species.iter().enumerate() {
             check_amount(s.amount)?;
+            if self.species[..k].iter().any(|t| t.name == s.name) {
+                return Err(QsoError::invalid(
+                    "species",
+                    format!("two species are named {:?}", s.name),
+                ));
+            }
         }
         for r in &self.reactions {
             self.check_reaction(r)?;
@@ -335,8 +358,10 @@ impl Reactions {
     }
 
     /// Advance the amounts from `t0` to `t1` by Dormand–Prince steps
-    /// (relative tolerance 10⁻¹² of the largest amount).
-    fn advance(&self, c: &mut [f64], t0: f64, t1: f64) {
+    /// (tolerance 10⁻¹² of each amount, and of 10⁻⁶ of the largest for
+    /// amounts near zero); refused beyond [`MAX_KINETIC_STEPS`] steps
+    /// (stiff kinetics) and when the amounts overflow.
+    fn advance(&self, c: &mut [f64], t0: f64, t1: f64) -> Result<()> {
         // Dormand–Prince 5(4) tableau.
         const A: [[f64; 6]; 6] = [
             [1.0 / 5.0, 0.0, 0.0, 0.0, 0.0, 0.0],
@@ -383,7 +408,20 @@ impl Reactions {
         let mut t = t0;
         let mut h = (t1 - t0) / 16.0;
         let n = c.len();
+        let mut steps = 0usize;
         while t < t1 {
+            steps += 1;
+            if steps > MAX_KINETIC_STEPS {
+                return Err(QsoError::invalid(
+                    "reactions",
+                    format!(
+                        "the amounts need more than {MAX_KINETIC_STEPS} steps over {:.3e} s: the \
+                         kinetics are stiff (rates far faster than the time); use slower rates \
+                         or shorter times",
+                        t1 - t0
+                    ),
+                ));
+            }
             if t + h > t1 {
                 h = t1 - t;
             }
@@ -398,10 +436,19 @@ impl Reactions {
             let next: Vec<f64> = (0..n)
                 .map(|i| c[i] + h * k.iter().zip(&A[5]).map(|(ki, a)| a * ki[i]).sum::<f64>())
                 .collect();
+            if !next.iter().all(|x| x.is_finite()) {
+                return Err(QsoError::invalid(
+                    "reactions",
+                    "the amounts overflow (rate constants times amounts beyond the range of \
+                     floating point)",
+                ));
+            }
             let error = (0..n)
-                .map(|i| (h * k.iter().zip(&E).map(|(ki, e)| e * ki[i]).sum::<f64>()).abs())
-                .fold(0.0, f64::max)
-                / (KINETIC_TOLERANCE * scale);
+                .map(|i| {
+                    let e = (h * k.iter().zip(&E).map(|(ki, e)| e * ki[i]).sum::<f64>()).abs();
+                    e / (KINETIC_TOLERANCE * (c[i].abs().max(next[i].abs()) + 1e-6 * scale))
+                })
+                .fold(0.0, f64::max);
             if error <= 1.0 || h <= 1e-14 * (t1 - t0).abs().max(f64::MIN_POSITIVE) {
                 t += h;
                 c.copy_from_slice(&next);
@@ -413,30 +460,34 @@ impl Reactions {
             };
             h *= factor;
         }
+        Ok(())
     }
 
-    /// The amounts after `t` (s): the sites', then the species'.
+    /// The amounts after `t` (s): the sites', then the species' (rounding
+    /// below zero is cut off).
     pub fn amounts(&self, t: f64) -> Result<Vec<f64>> {
         self.validate()?;
         check_time("t", t)?;
         let mut c = self.initial();
         if t > 0.0 {
-            self.advance(&mut c, 0.0, t);
+            self.advance(&mut c, 0.0, t)?;
         }
-        Ok(c)
+        Ok(c.into_iter().map(|x| x.max(0.0)).collect())
     }
 
     /// The same reactions starting with the amounts after `t` (s), to go on
     /// from states returned by [`Reactions::evolve`] after delays of `t`.
+    /// The sites keep their own field: after `Field` or `Sweep` events, set
+    /// the field again with an event at the start of the next `evolve`.
     pub fn advanced(&self, t: f64) -> Result<Self> {
         let c = self.amounts(t)?;
         let mut out = self.clone();
         let n = out.sites.len();
         for (site, &a) in out.sites.iter_mut().zip(&c) {
-            site.concentration = a.max(0.0);
+            site.concentration = a;
         }
         for (species, &a) in out.species.iter_mut().zip(&c[n..]) {
-            species.amount = a.max(0.0);
+            species.amount = a;
         }
         Ok(out)
     }
@@ -735,11 +786,18 @@ impl Reactions {
     }
 
     /// One step of `h` from `t` (amounts `c` at `t`).
-    fn midpoint(&self, base: &Base, x: &[CMatrix], c: &[f64], t: f64, h: f64) -> Vec<CMatrix> {
+    fn midpoint(
+        &self,
+        base: &Base,
+        x: &[CMatrix],
+        c: &[f64],
+        t: f64,
+        h: f64,
+    ) -> Result<Vec<CMatrix>> {
         let mut mid = c.to_vec();
-        self.advance(&mut mid, t, t + h / 2.0);
+        self.advance(&mut mid, t, t + h / 2.0)?;
         let mut end = mid.clone();
-        self.advance(&mut end, t + h / 2.0, t + h);
+        self.advance(&mut end, t + h / 2.0, t + h)?;
         let blocks = self.step_blocks(base, c, &mid, &end, h);
         let mut out: Vec<CMatrix> = x
             .iter()
@@ -760,43 +818,203 @@ impl Reactions {
                 out[s][(a, b)] = v;
             }
         }
-        out
+        Ok(out)
     }
 
-    /// The step from `t` with amounts `c`, at most `left`: the reactions
-    /// turn over at most [`STEP_FRACTION`] of the amounts, and the rate of
-    /// every reaction that still matters (more than 10⁻¹⁴ of the amounts
-    /// over the rest of the delay) changes by at most that fraction.
-    fn step_size(&self, c: &[f64], left: f64) -> f64 {
+    /// Per reaction that carries spins from a source into a product site:
+    /// a bound on the frequencies of the blocks its transfers feed (the
+    /// one-norm of the block without its mean phase), zero otherwise.
+    fn coherence(&self, base: &Base) -> Vec<f64> {
+        let norms: Vec<f64> = base
+            .matrices
+            .iter()
+            .zip(&base.joint.blocks)
+            .map(|(full, (_, _, n))| {
+                let n = *n;
+                let mut m = full.view((0, 0), (n, n)).into_owned();
+                let mean = (0..n).map(|i| m[(i, i)].im).sum::<f64>() / n.max(1) as f64;
+                for i in 0..n {
+                    m[(i, i)] -= C64::new(0.0, mean);
+                }
+                crate::linalg::dense::one_norm(&m)
+            })
+            .collect();
+        base.transfers
+            .iter()
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(|&(j, _, _, _)| norms[j])
+                    .fold(0.0, f64::max)
+            })
+            .collect()
+    }
+
+    /// The step from `t` with amounts `c`, at most `left`: for every
+    /// reaction that still matters (more than 10⁻¹⁴ of the amounts over the
+    /// rest of the delay) the amounts of its reactants change by at most
+    /// [`STEP_FRACTION`] of themselves, so its rate changes by about that
+    /// fraction; a reaction that carries spins at a pseudo-rate that
+    /// changes also keeps `h` within `COHERENT_PHASE / coherence` (see
+    /// [`Self::coherence`]).
+    fn step_size(&self, c: &[f64], left: f64, coherence: &[f64]) -> f64 {
         let total: f64 = c.iter().map(|x| x.abs()).sum();
         let velocities = self.velocities(c);
-        let flux: f64 = velocities.iter().sum();
-        if flux <= 0.0 || total <= 0.0 {
+        if total <= 0.0 {
             return left;
         }
-        let mut h = (STEP_FRACTION * total / flux).min(left);
+        let mut h = left;
         let rate = self.derivative(c);
-        for (reaction, &v) in self.reactions.iter().zip(&velocities) {
+        let relative = |p: &Participant| {
+            let i = self.index(p);
+            if c[i] > 0.0 {
+                (rate[i] / c[i]).abs()
+            } else {
+                0.0
+            }
+        };
+        for (r, (reaction, &v)) in self.reactions.iter().zip(&velocities).enumerate() {
             if v * left <= 1e-14 * total {
                 continue;
             }
-            let change: f64 = reaction
-                .reactants
-                .iter()
-                .map(|p| {
-                    let i = self.index(p);
-                    if c[i] > 0.0 {
-                        (rate[i] / c[i]).abs()
-                    } else {
-                        0.0
-                    }
-                })
-                .sum();
+            let change: f64 = reaction.reactants.iter().map(relative).sum();
             if change > 0.0 {
                 h = h.min(STEP_FRACTION / change);
             }
+            if let Some((pos, _)) = reaction.source()
+                && coherence[r] > 0.0
+            {
+                let partners: f64 = reaction
+                    .reactants
+                    .iter()
+                    .enumerate()
+                    .filter(|&(q, _)| q != pos)
+                    .map(|(_, p)| relative(p))
+                    .sum();
+                if partners * left > 1e-12 {
+                    h = h.min(COHERENT_PHASE / coherence[r]);
+                }
+            }
         }
         h
+    }
+
+    /// Estimated operations of the delays and sweeps of `events` and the
+    /// steps of the longest delay, from a run of the step rule over the
+    /// amounts alone; refused beyond [`super::super::MAX_RELAXATION_WORK`]
+    /// or [`MAX_KINETIC_STEPS`] steps in a delay.
+    fn check_events(&self, events: &[Event]) -> Result<()> {
+        let mut b = self.field();
+        let mut c = self.initial();
+        let mut now = 0.0;
+        let mut work = 0.0;
+        // The steps of a delay of `t` from `now` (amounts advanced) and the
+        // first.
+        let run = |c: &mut Vec<f64>, now: f64, t: f64, coherence: &[f64]| -> Result<(f64, f64)> {
+            let (mut s, end) = (now, now + t);
+            let mut steps = 0usize;
+            let mut first = None;
+            while s < end {
+                let h = self.step_size(c, end - s, coherence);
+                first.get_or_insert(h);
+                steps += 1;
+                if steps > MAX_KINETIC_STEPS {
+                    return Err(QsoError::invalid(
+                        "reactions",
+                        format!("more than {MAX_KINETIC_STEPS} steps in a delay of {t} s"),
+                    ));
+                }
+                self.advance(c, s, s + h)?;
+                s += h;
+            }
+            Ok((steps as f64, first.unwrap_or(t)))
+        };
+        // Three exponentials per step, the most of the fields' blocks.
+        let per_step = |bases: &[Base], c: &[f64], h: f64| {
+            bases
+                .iter()
+                .map(|base| {
+                    let probe = self.step_blocks(base, c, c, c, h);
+                    3.0 * probe.iter().map(LiouvilleBlock::work).sum::<f64>()
+                })
+                .fold(0.0, f64::max)
+        };
+        let coherence = |bases: &[Base]| -> Vec<f64> {
+            bases
+                .iter()
+                .map(|b| self.coherence(b))
+                .fold(vec![0.0; self.reactions.len()], |m, x| {
+                    m.iter().zip(x).map(|(a, b)| a.max(b)).collect()
+                })
+        };
+        for e in events {
+            match e {
+                Event::Delay(t) => {
+                    check_time("delay", *t)?;
+                    if *t > 0.0 {
+                        let bases = [self.base(b)?];
+                        let start = c.clone();
+                        let (steps, h) = run(&mut c, now, *t, &coherence(&bases))?;
+                        work += steps * per_step(&bases, &start, h);
+                    }
+                    now += t;
+                }
+                Event::Field(to) => b = *to,
+                Event::Sweep {
+                    to,
+                    duration,
+                    steps,
+                } => {
+                    check_field(*to)?;
+                    check_time("duration", *duration)?;
+                    if *steps == 0 || *steps > super::super::MAX_SEGMENTS {
+                        return Err(QsoError::invalid(
+                            "steps",
+                            format!("a sweep takes 1..={} steps", super::super::MAX_SEGMENTS),
+                        ));
+                    }
+                    // Each sweep step holds a field; the work and the
+                    // frequencies are taken as the most of the ends'.
+                    let bases = [self.base(b)?, self.base(*to)?];
+                    let bound = coherence(&bases);
+                    let dt = duration / *steps as f64;
+                    let start = c.clone();
+                    let (mut total, mut first) = (0.0, f64::INFINITY);
+                    for _ in 0..*steps {
+                        if dt > 0.0 {
+                            let (n, h) = run(&mut c, now, dt, &bound)?;
+                            total += n;
+                            first = first.min(h);
+                        }
+                        now += dt;
+                    }
+                    if total > 0.0 {
+                        work += total * per_step(&bases, &start, first);
+                    }
+                    b = *to;
+                }
+                _ => {}
+            }
+            if work > super::super::MAX_RELAXATION_WORK {
+                break;
+            }
+        }
+        if work > super::super::MAX_RELAXATION_WORK {
+            let lab = self
+                .sites
+                .iter()
+                .any(|s| s.system.frame() == super::super::Frame::Laboratory);
+            return Err(QsoError::invalid(
+                "reactions",
+                format!(
+                    "these events need about {work:.1e} operations (limit {:.1e}); use fewer \
+                     spins, shorter delays or fewer sweep steps{}",
+                    super::super::MAX_RELAXATION_WORK,
+                    if lab { ", or the rotating frame" } else { "" }
+                ),
+            ));
+        }
+        Ok(())
     }
 
     /// Reactions, evolution and relaxation for `t` at field `b` from time
@@ -813,12 +1031,13 @@ impl Reactions {
             return Ok(x.to_vec());
         }
         let base = self.base(b)?;
+        let coherence = self.coherence(&base);
         let mut now = t0;
         let end = t0 + t;
         let mut x = x.to_vec();
         let mut steps = 0usize;
         while now < end {
-            let h = self.step_size(c, end - now);
+            let h = self.step_size(c, end - now, &coherence);
             steps += 1;
             if steps > MAX_KINETIC_STEPS {
                 return Err(QsoError::invalid(
@@ -826,27 +1045,18 @@ impl Reactions {
                     format!("more than {MAX_KINETIC_STEPS} steps in a delay of {t} s"),
                 ));
             }
-            if steps == 1 {
-                let probe = self.step_blocks(&base, c, c, c, h);
-                let work: f64 = probe.iter().map(LiouvilleBlock::work).sum();
-                // Three exponentials per step, about t/h steps.
-                check_work(
-                    &format!("reactions over {t} s"),
-                    3.0 * work * (t / h).min(MAX_KINETIC_STEPS as f64),
-                )?;
-            }
-            let full = self.midpoint(&base, &x, c, now, h);
-            let half = self.midpoint(&base, &x, c, now, h / 2.0);
+            let full = self.midpoint(&base, &x, c, now, h)?;
+            let half = self.midpoint(&base, &x, c, now, h / 2.0)?;
             let mut c_half = c.clone();
-            self.advance(&mut c_half, now, now + h / 2.0);
-            let half = self.midpoint(&base, &half, &c_half, now + h / 2.0, h / 2.0);
+            self.advance(&mut c_half, now, now + h / 2.0)?;
+            let half = self.midpoint(&base, &half, &c_half, now + h / 2.0, h / 2.0)?;
             x = half
                 .iter()
                 .zip(&full)
                 .map(|(a, f)| (a * C64::new(4.0, 0.0) - f) * C64::new(1.0 / 3.0, 0.0))
                 .collect();
             *c = c_half;
-            self.advance(c, now + h / 2.0, now + h);
+            self.advance(c, now + h / 2.0, now + h)?;
             now += h;
         }
         Ok(x)
@@ -859,8 +1069,11 @@ impl Reactions {
                 format!("{} states for {} sites", states.len(), self.sites.len()),
             ));
         }
-        let total: f64 = self.initial().iter().sum::<f64>().max(f64::MIN_POSITIVE);
+        // Each site's trace to 10⁻⁹ of its own amount (of 10⁻¹² of all
+        // sites' for a site without).
+        let sites: f64 = self.sites.iter().map(|s| s.concentration).sum();
         for (rho, site) in states.iter().zip(&self.sites) {
+            let total = site.concentration.max(1e-3 * sites).max(f64::MIN_POSITIVE);
             let d = site.system.dimension();
             if rho.shape() != (d, d) {
                 return Err(QsoError::DimensionMismatch {
@@ -891,6 +1104,7 @@ impl Reactions {
     pub fn evolve(&self, states: &[CMatrix], events: &[Event]) -> Result<Vec<CMatrix>> {
         self.validate()?;
         self.check_states(states)?;
+        self.check_events(events)?;
         let mut b = self.field();
         let mut c = self.initial();
         let mut now = 0.0;
@@ -913,11 +1127,24 @@ impl Reactions {
                             continue;
                         }
                         any = true;
-                        // A pulse is linear: it acts on σ = c·ρ as on ρ.
+                        // A pulse is linear: it acts on σ = c·ρ as on ρ, and
+                        // on a site without amount (σ traceless) through
+                        // 1/d + ασ.
                         if amounts[s] > 0.0 {
                             let rho = &sigma[s] * C64::new(1.0 / amounts[s], 0.0);
                             sigma[s] = site.system.evolve(&rho, std::slice::from_ref(e))?
                                 * C64::new(amounts[s], 0.0);
+                        } else {
+                            let largest = sigma[s].iter().fold(0.0f64, |m, v| m.max(v.norm()));
+                            if largest > 0.0 {
+                                let d = sigma[s].nrows();
+                                let alpha = 1.0 / (2.0 * d as f64 * d as f64 * largest);
+                                let identity =
+                                    CMatrix::identity(d, d) * C64::new(1.0 / d as f64, 0.0);
+                                let rho = &identity + &sigma[s] * C64::new(alpha, 0.0);
+                                let moved = site.system.evolve(&rho, std::slice::from_ref(e))?;
+                                sigma[s] = (moved - identity) * C64::new(1.0 / alpha, 0.0);
+                            }
                         }
                     }
                     if !any {

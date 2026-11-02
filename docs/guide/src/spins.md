@@ -409,19 +409,25 @@ print(r.amounts(2.0)[0])     # 0.975 of the product formed by then
 
 States are unnormalised: a site's trace is its amount, zero before the
 product forms. `amounts(t)` integrates the rate equations (Dormand–Prince,
-10⁻¹² of the amounts), `evolve` applies pulses on isotopes, delays, field
-jumps and sweeps from the initial amounts, and `advanced(t)` gives the
-same reactions starting with the amounts after `t`, to go on from states
-`evolve` returned. The spin equations are those of `Exchange` with
+10⁻¹² of each amount; stiff kinetics that need more than 10⁶ steps are
+refused), `evolve` applies pulses on isotopes, delays, field jumps and
+sweeps from the initial amounts, and `advanced(t)` gives the same
+reactions starting with the amounts after `t`, to go on from states
+`evolve` returned (the sites keep their own field: set it again after
+field events). The spin equations are those of `Exchange` with
 pseudo-first-order rates that follow the amounts; they are propagated by
 exponentials of the joint blocks, the coefficients at each step's
 midpoint, the inhomogeneous terms (fresh spins, relaxation towards the
 thermal state of the current amount) integrated as quadratics, and the
 result extrapolated from steps `h` and `h/2`. The fast spin evolution is
-in the exponentials; the steps follow the kinetics (at most 2 % of the
-amounts turned over and 2 % change of every rate that matters), so a
-coherence formed by parahydrogen keeps its phase whatever the ratio of
-rate and frequency.
+in the exponentials, and the steps follow the kinetics (every reactant
+changes by at most 2 % in a step), so a coherence formed by parahydrogen
+keeps its phase whatever the ratio of rate and frequency, and steady
+chemistry takes one step however fast. Spins carried from a source at a
+rate that changes (its partner consumed) also take steps of at most a
+quarter of the inverse frequency of the blocks they feed, so their
+coherences keep their phase too. Work and steps are estimated for all
+events before the first step (limit 1.5·10¹² operations).
 
 - **Measured.** With parahydrogen in excess (k[H₂] = 2 s⁻¹) the PASADENA
   signal peaks at 0.75 s, at 0.49 per molecule of substrate (0.76
@@ -434,7 +440,7 @@ rate and frequency.
   the free ¹⁵N reaches 73.9 % after 120 s, the steady state of
   `Exchange`; with the free catalyst deactivated at 5 s⁻¹ it peaks near
   70 % and falls to 62 % by 120 s as the complex is lost. All of it takes
-  5 s.
+  52 s.
 - **Not modelled.** Correlated states of two reactants that both carry
   spins (only the first reactant site carries; a partner's spins are
   traced), reactions of third order, and spin-dependent chemistry.
@@ -502,13 +508,29 @@ pulse = s.control_events(c, r["controls"])           # for evolve
 - **Relaxation.** If the system relaxes (`T₁`, `T₂`, Redfield theory),
   the controls are optimised in Liouville space, with the same relaxation
   as `evolve` (free precession's, during the pulses as well), the state
-  propagated as its deviation from the identity. Rf controls keep the
-  generator as sparse matrices (see below); field profiles keep it dense,
-  up to six spins ½. The field derivative of relaxation and of thermal
-  populations, in field profiles, is taken by Richardson-extrapolated
-  central differences; against the derivative of the Boltzmann rates
-  written out it agrees to 10⁻¹⁴ from 1 K to room temperature and from
-  millitesla to 20 T. Everything else is exact.
+  propagated as its deviation from the identity. Both rf controls and
+  field profiles keep the generator as sparse matrices (see below).
+  Everything else is exact.
+- **Field profiles.** The relaxation of a field profile (`T₁`, `T₂`,
+  Redfield, and the drift towards the thermal state, which all change
+  with the field) is built at the Chebyshev–Lobatto nodes of the
+  profile's range, 5, 9, 17 or 33 of them, once per optimisation, and
+  interpolated: nodes are added until the interpolant's two highest
+  Chebyshev coefficients fall below 10⁻¹⁰ of its largest entry
+  (`spin.FIELD_TOLERANCE`), and a range whose stated error stays above
+  10⁻⁶ (`spin.MAX_FIELD_ERROR`) is refused (slow motion over a wide range
+  of fields: narrow the range). `field_relaxation_error(control)` gives
+  the stated error and the nodes. The field derivative is the
+  interpolant's, so gradients are exact to that error; built directly at
+  other fields the relaxation agrees within ten times the stated error.
+  Fast motion (τ_c = 10⁻¹⁰ s) at microtesla fields needs five nodes (the
+  spectral densities do not disperse there), to 5·10⁻¹⁶. On four cores
+  one evaluation of ten steps over 0.5 s takes 82 s for seven spins with
+  Redfield relaxation (SABRE-SHEATH: two hydrides, a ¹⁵N and four ring
+  protons, below 0.3 µT), and 17 s over 0.2 s for eight with `T₁` and
+  `T₂`; eight with Redfield relaxation need 5.6 GB and are refused. The
+  cost grows with the duration times the couplings and fields. Declared
+  symmetries are not used for field profiles.
 - **Larger systems.** With rf and relaxation, the generator of the
   master equation (with the drift towards equilibrium) and the rf
   directions `−i[2πF_{x,y}, ·]` are sparse matrices, built once per
@@ -1131,8 +1153,11 @@ converge for finite pulses).
   10⁻¹⁰ for `k` from 10² to 10⁸ s⁻¹ against `|ω|` = 3.8·10⁴ rad/s (the
   PASADENA average and the coherent singlet of 1.33 in the limits), and
   the two-spin order with `T₁` the convolution `c₀ k (e^{−Rt} −
-  e^{−kt})/(k − R)` to 10⁻¹⁰. Steady reactions equal `Exchange` to
-  10⁻¹², carried spins keep their state through a second-order reaction,
+  e^{−kt})/(k − R)` to 10⁻¹⁰. A coherence carried by S + H₂ → P from a
+  proton at 1 ppm into one at 3 ppm (9.4 T) while H₂ is consumed follows
+  its closed-form integral to 10⁻¹² of the coherence carried. Steady
+  reactions equal `Exchange` to 10⁻¹² (also at 10⁵ s⁻¹ each way, in one
+  step), carried spins keep their state through a second-order reaction,
   traces equal the amounts, thermal states stay thermal, and evolution in
   two pieces equals one. A Monte Carlo of 600 molecules formed at times
   drawn from the kinetics, each evolved alone with `T₁` and `T₂`, agrees

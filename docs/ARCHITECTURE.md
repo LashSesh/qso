@@ -642,6 +642,25 @@ directions, built and reduced for their exact norms; an evaluation counts
 its operations and stops at the limit, as a series may need more terms
 than estimated.
 
+Field profiles with relaxation (`spin/control/sparse/field.rs`) use the
+same blocks. The generator of a field `B` is `−i[H₀ + B·H_Z, ·] + R(B)`:
+the Hamiltonian part is two fixed sparse operators, and the relaxation
+`R(B)` (Lindblad, Redfield and the drift column towards the thermal
+state) is built once per optimisation at the Chebyshev–Lobatto nodes of
+the profile's range, 5, 9, 17 or 33 (each level contains the last's
+nodes, so a level reuses the builds before it). The level stops when the
+interpolant's two highest Chebyshev coefficients fall below `10⁻¹⁰` of
+the relaxation's largest entry; that size is its stated error, and a
+range whose error stays above `10⁻⁶` at 33 nodes is refused. The node
+matrices are kept on the union of their patterns (`SparseFamily` in
+`krylov.rs`), so `R(B)`, its adjoint and its derivative `R'(B)` are
+weighted sums of value arrays with the weights
+`a_j(x) = Σ_m α_mj T_m(x)` of the interpolant (and `T'_m = m U_{m−1}`
+for the derivative). A step's gradient pairs the costate with the two
+directions `−i[H_Z, ·]` and `R'(B)` by the Gauss–Legendre rule of the rf
+case, so the field derivative is the interpolant's, exact to rounding,
+instead of the Richardson differences of the dense generator.
+
 NV centres (`spin/nv.rs`) use the secular Hamiltonian, which is block
 diagonal in the electron level `a` (`m = +1, 0, −1`) and, within a block,
 a sum of one term per nucleus (`S_z` alone couples to the nuclei, and

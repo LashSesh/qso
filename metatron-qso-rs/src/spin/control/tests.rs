@@ -456,8 +456,9 @@ fn control_input_is_checked() {
     ];
     assert!(sys.control_transfer(&huge, &u).is_err());
     // Problems too large for memory are refused before anything is
-    // allocated: a field profile of seven relaxing spins (whose generator is
-    // dense), and a million steps of eight spins without relaxation.
+    // allocated: a million steps of eight spins without relaxation. (A
+    // field profile of seven relaxing spins, refused while its generator
+    // was dense, runs on sparse blocks since 1.51.)
     let mut seven = SpinSystem::new(9.4);
     for k in 0..7 {
         seven.add_spin(Isotope::H1, k as f64).unwrap();
@@ -471,8 +472,7 @@ fn control_input_is_checked() {
         seven.iz(0).unwrap(),
         seven.iz(1).unwrap(),
     );
-    let err = seven.control_transfer(&big, &[9.2; 4]).unwrap_err();
-    assert!(err.to_string().contains("Liouville"), "{err}");
+    assert!(seven.control_transfer(&big, &[9.2; 4]).is_ok());
     let mut eight = SpinSystem::new(9.4);
     for k in 0..8 {
         eight.add_spin(Isotope::H1, k as f64).unwrap();

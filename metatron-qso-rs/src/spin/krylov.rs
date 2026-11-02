@@ -367,6 +367,139 @@ pub(super) fn accumulator_bytes(n: usize) -> f64 {
     threads() as f64 * 17.0 * n as f64
 }
 
+/// Sparse matrices of one size on a shared pattern (the union of theirs),
+/// combined with weights: `Σ_j w_j A_j` and its adjoint, each in one pass
+/// over the entries.
+pub(super) struct SparseFamily {
+    n: usize,
+    indptr: Vec<usize>,
+    cols: Vec<u32>,
+    /// The values of every member on the pattern.
+    values: Vec<Vec<C64>>,
+    /// The pattern of the transpose, and for each of its entries the entry
+    /// of the pattern it reads.
+    adjoint_indptr: Vec<usize>,
+    adjoint_cols: Vec<u32>,
+    to_adjoint: Vec<u32>,
+}
+
+impl SparseFamily {
+    /// The members on the union of their patterns (all `n × n`).
+    pub fn new(blocks: &[SparseBlock]) -> Self {
+        let n = blocks[0].n;
+        let mut indptr = vec![0usize; n + 1];
+        let mut cols: Vec<u32> = Vec::new();
+        let mut row: Vec<u32> = Vec::new();
+        for r in 0..n {
+            row.clear();
+            for b in blocks {
+                row.extend_from_slice(b.row_parts(r).0);
+            }
+            row.sort_unstable();
+            row.dedup();
+            cols.extend_from_slice(&row);
+            indptr[r + 1] = cols.len();
+        }
+        let values = blocks
+            .iter()
+            .map(|b| {
+                let mut v = vec![C64::new(0.0, 0.0); cols.len()];
+                for r in 0..n {
+                    let (bc, bv) = b.row_parts(r);
+                    let start = indptr[r];
+                    let pattern = &cols[start..indptr[r + 1]];
+                    let mut k = 0;
+                    for (c, x) in bc.iter().zip(bv) {
+                        while pattern[k] != *c {
+                            k += 1;
+                        }
+                        v[start + k] = *x;
+                    }
+                }
+                v
+            })
+            .collect();
+        let mut adjoint_indptr = vec![0usize; n + 1];
+        for &c in &cols {
+            adjoint_indptr[c as usize + 1] += 1;
+        }
+        for r in 0..n {
+            adjoint_indptr[r + 1] += adjoint_indptr[r];
+        }
+        let mut next = adjoint_indptr.clone();
+        let mut adjoint_cols = vec![0u32; cols.len()];
+        let mut to_adjoint = vec![0u32; cols.len()];
+        for r in 0..n {
+            for (k, &c) in cols.iter().enumerate().take(indptr[r + 1]).skip(indptr[r]) {
+                let c = c as usize;
+                adjoint_cols[next[c]] = r as u32;
+                to_adjoint[next[c]] = k as u32;
+                next[c] += 1;
+            }
+        }
+        SparseFamily {
+            n,
+            indptr,
+            cols,
+            values,
+            adjoint_indptr,
+            adjoint_cols,
+            to_adjoint,
+        }
+    }
+
+    /// Entries of the pattern.
+    pub fn nnz(&self) -> usize {
+        self.cols.len()
+    }
+
+    /// Bytes held.
+    pub fn bytes(&self) -> usize {
+        (self.cols.len() * (8 + 16 * self.values.len()))
+            + 16 * (self.indptr.len() + self.adjoint_indptr.len())
+    }
+
+    /// `Σ_j w_j` times the values of member `j`, at each entry of the
+    /// pattern.
+    fn sum(&self, w: &[f64]) -> Vec<C64> {
+        let mut out = vec![C64::new(0.0, 0.0); self.cols.len()];
+        for (values, &wj) in self.values.iter().zip(w) {
+            if wj == 0.0 {
+                continue;
+            }
+            for (o, v) in out.iter_mut().zip(values) {
+                *o += v * wj;
+            }
+        }
+        out
+    }
+
+    /// `Σ_j w_j A_j`.
+    pub fn combine(&self, w: &[f64]) -> SparseBlock {
+        SparseBlock {
+            n: self.n,
+            indptr: self.indptr.clone(),
+            cols: self.cols.clone(),
+            vals: self.sum(w),
+        }
+    }
+
+    /// `(Σ_j w_j A_j)†`.
+    pub fn combine_adjoint(&self, w: &[f64]) -> SparseBlock {
+        let sum = self.sum(w);
+        SparseBlock {
+            n: self.n,
+            indptr: self.adjoint_indptr.clone(),
+            cols: self.adjoint_cols.clone(),
+            vals: self
+                .to_adjoint
+                .iter()
+                .map(|&k| sum[k as usize].conj())
+                .collect(),
+        }
+    }
+}
+
 /// Sums over a block's elements that remember which they touched, for
 /// building a sparse column.
 pub(super) struct Accumulator {
