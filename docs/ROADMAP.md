@@ -17,7 +17,8 @@ finished milestones are released together, not one by one. The third
 for medical research, section 4h) stages ship together as release
 1.8.0. The ninth (1.38 to 1.42, section 4i) and tenth (1.43 to 1.47,
 section 4j) stages ship together as release 1.9.0. The eleventh stage
-(1.48 to 1.52, section 4k) is planned. Up to 1.3
+(1.48 to 1.52, section 4k) is delivered, and the twelfth (1.53 to 1.57,
+section 4l) is proposed. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -54,10 +55,10 @@ which withdraws the results of version 1.
 | Statevector speed | specialised kernels (1.1); gate fusion and cache blocking (1.3.0): 16-qubit layers 4.7× and 18–24-qubit layers 1.6–2.6× faster than in 1.2; batched evaluation; AVX and NEON kernels close to memory bandwidth and a blocked adjoint pass (1.11); single precision, one more qubit and about twice the speed on large registers (1.20); a worker pool that stays awake between short simulations (1.24) | spinning workers cost CPU time between simulations (`QSO_POOL_SPIN_US=0` turns it off) |
 | Boson sampling | exact probabilities and exact sampling (1.1); partial distinguishability, loss and Gaussian boson sampling with hafnians and torontonians (1.14) | mixed Gaussian states with many photons spread over many modes are impractical (10¹² operations at 20 photons in 10 modes) |
 | Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4); slow noise from Markov processes (telegraph, Ornstein–Uhlenbeck, quasi-static, 1/f) averaged exactly on density matrices (1.44) | noise learning for layers of two-qubit Clifford gates only, on density matrices up to 10 qubits and Pauli frames up to 64 (1.12, 1.31), with non-Pauli channels twirled one at a time; mitigation with the learned model above 24 qubits only on matrix-product states, for channels that are mixtures of unitaries (1.31); no leakage; channels on at most four qubits (1.30); slow noise averaged exactly up to 12 qubits and processes with finitely many states (1.44), sampled on trajectories beyond (1.30); virtual distillation (1.17) mitigates only its measured copies' preparation |
-| Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18); interacting bosons, fermions and distinguishable particles with certificates for graph isomorphism (1.29); symmetry for driven walks, open walks on orbitals, coined walks with dephasing, hypercubes with dephasing up to d = 230 (1.38); interacting walkers on the orbits of automorphisms (three bosons on Q₉: 2284 orbits of 22.5 million configurations) and up to four particles on hypercubes (1.43) | interacting walkers stop at 2²² configurations without symmetry and 2²⁷ with it, whose orbits come from a union–find over every configuration (1.43); open walks on orbitals stop at 8192 nodes; pretty good transfer on other graphs has no exact reference |
-| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37); the ¹³C bath of an NV centre by the cluster-correlation expansion (1.39); the optical cycle, ODMR, pulsed readout and magnetometer sensitivity in fields of any direction, and ensembles (1.40); sparse relaxation blocks propagated by Krylov steps, Redfield relaxation from sparse terms and equivalent spins: seven and eight relaxing protons for seconds (1.41); optimal control with relaxation on sparse blocks and on the orbits of equivalent spins, seven and eight spins (1.46) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the nested-commutator bound of product formulas (1.32) is tight for small Hamiltonians only, its tail ignoring which terms commute; Redfield relaxation assumes isotropic tumbling (1.34), and propagations beyond 1.5·10¹² operations or 2 GiB are refused (eleven protons with dipolar relaxation, nine for 100 s; 1.41); chemical exchange needs steady chemistry (no irreversible hydrogenation) and one block of at most 2048 elements over all sites; field profiles with relaxation are optimised in a dense Liouville space of up to six spins ½, and have many local optima; an evaluation of eight relaxing spins takes tens of seconds (1.46); the NV bath of 1.39 takes ideal pulses only (finite ones: the generalised expansion, 1.45), its expansion can diverge (results beyond `|L| = 1` are refused), and the nuclei next to the vacancy need given contact couplings (1.39); the optical model's rotating-wave approximation fails near the ground-state anticrossing (1.40) |
+| Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18); interacting bosons, fermions and distinguishable particles with certificates for graph isomorphism (1.29); symmetry for driven walks, open walks on orbitals, coined walks with dephasing, hypercubes with dephasing up to d = 230 (1.38); interacting walkers on the orbits of automorphisms (three bosons on Q₉: 2284 orbits of 22.5 million configurations) and up to four particles on hypercubes (1.43); open walks on large symmetric graphs from point stabilisers (Q₁₈, H(4, 10), J(24, 4); 1.48) | interacting walkers stop at 2²² configurations without symmetry and 2²⁷ with it, whose orbits come from a union–find over every configuration (1.43); open walks beyond 8192 nodes need a start whose stabiliser leaves few orbitals (dense graphs and circulants stay at 8192 nodes; 1.48); pretty good transfer on other graphs has no exact reference |
+| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37); the ¹³C bath of an NV centre by the cluster-correlation expansion (1.39); the optical cycle, ODMR, pulsed readout and magnetometer sensitivity in fields of any direction, and ensembles (1.40); sparse relaxation blocks propagated by Krylov steps, Redfield relaxation from sparse terms and equivalent spins: seven and eight relaxing protons for seconds (1.41); optimal control with relaxation on sparse blocks and on the orbits of equivalent spins, seven and eight spins (1.46); Redfield relaxation with anisotropic diffusion and model-free internal motion (1.49); reaction kinetics with spins: PASADENA, ALTADENA and SABRE as they run (1.50); field profiles with relaxation beyond six spins, the relaxation interpolated over the field (1.51) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the nested-commutator bound of product formulas (1.32) is tight for small Hamiltonians only, its tail ignoring which terms commute; Redfield relaxation takes rigid-body diffusion and model-free internal motion, not correlated motions of groups (1.49), and propagations beyond 1.5·10¹² operations or 2 GiB are refused (eleven protons with dipolar relaxation, nine for 100 s; 1.41); chemical exchange and reaction kinetics (1.50) need one block of at most 2048 elements over all sites, and only one reactant of a reaction carries spins; field profiles with relaxation hold the relaxation at up to 33 fields (eight spins with dipolar relaxation would need 9.4 GB; 1.51) and have many local optima; an evaluation of eight relaxing spins takes tens of seconds (1.46); the NV bath of 1.39 takes ideal pulses only (finite ones: the generalised expansion, 1.45), its expansion can diverge (results beyond `|L| = 1` are refused), and the nuclei next to the vacancy need given contact couplings (1.39); the optical model's rotating-wave approximation fails near the ground-state anticrossing (1.40) |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
-| Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22); exact circuit distances of any model by a parallel search or the Brouwer–Zimmermann enumeration, with the lightest logical error as circuit locations (1.42); the search on the orbits of an error model's symmetries: [[144, 12, 12]] over three rounds of the depth-8 cycle has circuit distance 10 (1.47) | exact circuit distances need time exponential in the distance (each weight about 17 times the last on bicycle circuits); symmetries divide it by a factor that grows with their number (41 to 43 for 72) |
+| Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22); exact circuit distances of any model by a parallel search or the Brouwer–Zimmermann enumeration, with the lightest logical error as circuit locations (1.42); the search on the orbits of an error model's symmetries: [[144, 12, 12]] over three rounds of the depth-8 cycle has circuit distance 10 (1.47); logical failure rates far below sampling by splitting, with their leading term (surface codes to 10⁻⁹, [[72, 12, 6]] to 10⁻¹³; 1.52) | exact circuit distances need time exponential in the distance (each weight about 17 times the last on bicycle circuits); symmetries divide it by a factor that grows with their number (41 to 43 for 72); splitting needs a burn-in long enough, which its error does not show (1.52); decoders take a whole experiment at once, so long memories and BP+OSD over many rounds grow beyond time and memory |
 | Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9), in the browser build too (1.25) | — |
 | Documentation | user guide, executed tutorials and Python reference on GitHub Pages (1.2); Rust tutorials from the examples and the documentation of every release since 1.2.0 (1.25) | — |
 | Engineering | CI on Linux (x86_64, arm64), macOS and Windows; Miri, fuzzing, API checks, weekly cross-validation and benchmark tracking; Trusted Publishing (1.2); line and branch coverage, and differential tests of all simulators on random circuits (1.21); coverage of the CLI and of the Python tests (1.25) | — |
@@ -5306,6 +5307,113 @@ exact reference. Mixed Gaussian states with many photons in many modes,
 whose exact methods stay exponential. Noise learning for layers of
 non-Clifford gates. The GPU track, still parked (section 7).
 
+## 4l. Twelfth stage (1.53 to 1.57, proposed)
+
+Proposed November 2026, after the eleventh stage, from the gaps that
+remain in the table of section 1. As before, the stage starts with walks
+on graphs. Two milestones then take the magnetic-resonance work to the
+spin systems chemists use: exchange and reactions on sparse blocks, and
+relaxation that is applied without being stored. A tighter bound for
+product formulas closes an old gap of the physics row, and decoding in
+windows lets error correction reach long experiments. The rules stay: no
+new dependency of the crate, an independent reference for every
+deliverable, reference tools in the cross-validation only.
+
+### 1.53 — Interacting walkers without visiting every configuration (M)
+
+Use case: three to five interacting walkers on graphs of 10⁴ to 10⁶
+nodes with large groups (hypercubes, Hamming and Johnson graphs):
+scattering, bound states and isomorphism certificates on larger graph
+families. 1.43 finds the orbits of configurations by a union–find over
+every configuration and stops at 2²⁷ of them.
+
+| Deliverable | Detail |
+|---|---|
+| Orbit representatives | the orbits of particle configurations generated from orbit representatives: the first particle's orbit, then the orbits of the point stabiliser of 1.48 on the next particle, and so on, with a canonical image for deduplication, so that the work grows with the orbits rather than with the configurations |
+| Generator on the orbits | the hopping and interaction terms per representative, from the canonical images of its neighbours, as in 1.43 |
+| Limits | orbits and work estimated before anything is built |
+
+Validation: equal to 1.43 where both run; orbit counts equal Burnside's
+count from the group; non-interacting bosons and fermions equal the
+permanents and determinants of the single-particle walk.
+
+### 1.54 — Exchange and reactions on sparse blocks (M–L)
+
+Use case: SABRE and PHIP with the spin systems of real catalysts: an
+iridium complex with two hydrides, the bound substrate's ¹⁵N and its ring
+protons beside the free substrate, seven to nine spins per site. 1.35
+and 1.50 stop at one joint block of 2048 elements over all sites.
+
+| Deliverable | Detail |
+|---|---|
+| Sparse blocks | the joint generator of exchange (1.35) and of reaction kinetics (1.50) as sparse blocks, propagated by the Krylov steps of 1.41, with the reactions' inhomogeneous terms in augmented columns |
+| Steady states | of exchange by an iterative solver on the sparse generator |
+| Field profiles | of exchange on the sparse blocks with the interpolated relaxation of 1.51 |
+
+Validation: equal to the dense blocks of 1.35 and 1.50 where both run;
+steady states equal the dense solve; traces equal the amounts; a Monte
+Carlo of reaction events agrees within its standard error.
+
+### 1.55 — Relaxation applied without storing it (M)
+
+Use case: field cycling and long propagations of eight to ten spins
+with dipolar Redfield relaxation, where the stored superoperator of 1.41
+and its field nodes in 1.51 exceed memory (eight spins at 33 fields:
+9.4 GB).
+
+| Deliverable | Detail |
+|---|---|
+| Matrix-free relaxation | the Redfield superoperator applied to a state as sums of double commutators with sparse spin operators, weighted by the spectral densities (with the anisotropic and model-free modes of 1.49), at any field |
+| Field derivative | from the derivatives of the spectral densities and the field dependence of the frequencies, analytically, so that field profiles need no interpolant |
+| Limits | time and memory per application estimated, and the cheaper of stored and matrix-free chosen |
+
+Validation: equal to the stored sparse superoperator of 1.41 where both
+fit; the field derivative against central differences; optimised
+profiles replayed by `evolve`; memory measured.
+
+### 1.56 — Product-formula bounds that know which terms commute (S–M)
+
+Use case: the number of Trotter steps for spin and molecular
+Hamiltonians of tens of qubits, where the nested-commutator bound of 1.32
+is loose because its tail ignores which terms commute.
+
+| Deliverable | Detail |
+|---|---|
+| Commutator sums | the second- and fourth-order error bounds of Childs et al. (Phys. Rev. X 11, 011020 (2021)) as exact sums over the non-commuting pairs and triples of Pauli terms, from their Pauli algebra |
+| Average error | the error on typical states (normalised Frobenius norm) beside the worst case |
+| Step counts | the steps for a target error from both |
+
+Validation: never below the exact operator norm of the error for small
+Hamiltonians (dense), never above the bound of 1.32; the published
+bounds of Childs et al. for Heisenberg chains; the average error against
+random states.
+
+### 1.57 — Decoding in windows (M)
+
+Use case: memory experiments of thousands of rounds, and BP+OSD over
+many rounds of bicycle codes, which decoding a whole experiment at once
+cannot reach in time or memory; streaming as on hardware.
+
+| Deliverable | Detail |
+|---|---|
+| Sliding windows | decode a window of rounds, commit the corrections of its first part, carry the remaining syndrome forward (Skoric et al., Nat. Commun. 14, 7040 (2023)), for matching and BP+OSD |
+| Costs | time linear in the rounds and memory per window |
+| Streaming | detection events given round by round |
+
+Validation: equal to decoding the whole experiment when the window
+covers it; logical error rates approach those of the whole decoding as
+the window grows; streaming equals the batch; time per round constant in
+the rounds.
+
+### Not in this stage
+
+Leakage out of the qubit space, which needs qudits in every simulator.
+Pretty good state transfer outside the cyclotomic families, which has no
+exact reference. Mixed Gaussian states with many photons in many modes.
+Noise learning for layers of non-Clifford gates. Correlated motions of
+groups and the fitting of model-free parameters (1.49). The GPU track,
+still parked (section 7).
+
 ## 5. Order and reasoning
 
 1. **1.2 first:** small, made every later release safer, and documentation
@@ -5403,6 +5511,15 @@ non-Clifford gates. The GPU track, still parked (section 7).
     the field dependence of the same superoperators. Logical error rates
     below sampling (1.52) build on the distances and witnesses of 1.42
     and 1.47 and are independent of the rest.
+20. **Twelfth stage (proposed): walks first again, then the spin systems
+    of real experiments.** Interacting walkers without visiting every
+    configuration (1.53) join the orbit generation of 1.48 to the
+    many-particle walks of 1.43. Exchange and reactions on sparse blocks
+    (1.54) come before relaxation applied without storing it (1.55),
+    because the first gives the large SABRE models and the second makes
+    their relaxation affordable; both build on 1.41. The product-formula
+    bounds (1.56) and decoding in windows (1.57) are independent of the
+    rest.
 
 ## 6. Measures of success
 
@@ -5495,6 +5612,12 @@ Taken (October 2026):
   (1.49), hyperpolarisation with reaction kinetics (1.50), field profiles
   with relaxation beyond six spins (1.51), logical error rates below
   sampling (1.52).
+* Twelfth stage (November 2026, proposed): interacting walkers without
+  visiting every configuration (1.53), exchange and reactions on sparse
+  blocks (1.54), relaxation applied without storing it (1.55),
+  product-formula bounds that know which terms commute (1.56), decoding
+  in windows (1.57). The eleventh and twelfth stages would ship together
+  as one release (1.10.0), as the ninth and tenth did.
 * The browser playground stays, because it costs little to maintain: it
   is plain HTML and JavaScript without dependencies or a build step, it
   uses only the npm package's JSON interface, which the package's tests
