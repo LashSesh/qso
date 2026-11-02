@@ -516,19 +516,25 @@ pulse = s.control_events(c, r["controls"])           # for evolve
   with the field) is built at the Chebyshev–Lobatto nodes of the
   profile's range, 5, 9, 17 or 33 of them, once per optimisation, and
   interpolated: nodes are added until the interpolant's two highest
-  Chebyshev coefficients fall below 10⁻¹⁰ of its largest entry
-  (`spin.FIELD_TOLERANCE`), and a range whose stated error stays above
-  10⁻⁶ (`spin.MAX_FIELD_ERROR`) is refused (slow motion over a wide range
-  of fields: narrow the range). `field_relaxation_error(control)` gives
-  the stated error and the nodes. The field derivative is the
-  interpolant's, so gradients are exact to that error; built directly at
-  other fields the relaxation agrees within ten times the stated error.
+  Chebyshev coefficients fall below 10⁻¹⁰ of its largest entry, and of
+  the drift column's own (`spin.FIELD_TOLERANCE`), and a range whose
+  stated error stays above 10⁻⁶ (`spin.MAX_FIELD_ERROR`) is refused (slow
+  motion over a wide range of fields: narrow the range); so is a level
+  that memory or its build work would stop, with that reason.
+  `field_relaxation_error(control)` gives the stated error and the nodes.
+  The error is an estimate from the node values: it holds where the
+  relaxation varies smoothly on the scale of the node spacing, and a
+  narrower feature (a level crossing under very slow motion) can pass
+  unseen. The field derivative is the interpolant's (its error can be
+  about `N²` times the stated one; measured gradients agree to 10⁻¹⁰);
+  built directly at other fields the relaxation agrees within ten times
+  the stated error.
   Fast motion (τ_c = 10⁻¹⁰ s) at microtesla fields needs five nodes (the
   spectral densities do not disperse there), to 5·10⁻¹⁶. On four cores
   one evaluation of ten steps over 0.5 s takes 82 s for seven spins with
   Redfield relaxation (SABRE-SHEATH: two hydrides, a ¹⁵N and four ring
   protons, below 0.3 µT), and 17 s over 0.2 s for eight with `T₁` and
-  `T₂`; eight with Redfield relaxation need 5.6 GB and are refused. The
+  `T₂`; eight with Redfield relaxation need 9.4 GB and are refused. The
   cost grows with the duration times the couplings and fields. Declared
   symmetries are not used for field profiles.
 - **Larger systems.** With rf and relaxation, the generator of the

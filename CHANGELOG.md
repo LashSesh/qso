@@ -15,8 +15,9 @@ All notable changes to this project are documented here. The format follows
   towards the thermal state) is interpolated over the profile's field
   range by Chebyshev polynomials on 5 to 33 nested Lobatto nodes, built
   once per optimisation, with a stated error below `FIELD_TOLERANCE`
-  (10⁻¹⁰ of its largest entry); ranges whose error stays above
-  `MAX_FIELD_ERROR` (10⁻⁶) are refused. The field derivative is the
+  (10⁻¹⁰ of its largest entry and of the drift column's); ranges whose
+  error stays above `MAX_FIELD_ERROR` (10⁻⁶) are refused, and so are
+  levels that memory or build work would stop. The field derivative is the
   interpolant's, paired by the Gauss–Legendre gradients of 1.46.
   `SpinSystem::field_relaxation_error` gives the stated error and the
   nodes; `control_cost` reports `"sparse"`. Gradients equal the dense
@@ -87,6 +88,13 @@ All notable changes to this project are documented here. The format follows
   term (every symmetry maps each partition onto one of the same rate,
   terms with equal partitions merged), and `Orbitals::coefficients` and
   `Orbitals::operator`, which are dense, refuse such sizes.
+
+### Fixed
+
+- The thermal drift of Redfield relaxation keeps its digits at low
+  polarisation: `ρ_eq − 1/d` is formed by `expm1` and `log1p` instead of
+  a difference that cancelled (at 300 K it erred by 4·10⁻³ of itself at
+  10 nT and 2·10⁻⁵ at 1 µT, in `evolve` and in optimal control).
 
 ## [1.9.0] — 2026-11-01
 

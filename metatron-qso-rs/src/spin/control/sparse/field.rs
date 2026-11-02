@@ -238,6 +238,16 @@ impl SparseField {
     }
 }
 
+/// The estimated cost of a field profile with relaxation: one evaluation
+/// (operations and bytes, the interpolant's first level included) and the
+/// first level's build alone.
+pub(in crate::spin::control) struct FieldCost {
+    pub work: f64,
+    pub memory: f64,
+    pub build: f64,
+    pub build_memory: f64,
+}
+
 /// Substeps over all steps under the fields `u`, and the most of one.
 fn substeps(c: &Control, u: &[f64], relaxation: f64, ops: [f64; 2]) -> (f64, f64) {
     u.iter().fold((0.0, 0.0f64), |(t, m), &b| {
@@ -272,7 +282,7 @@ impl SpinSystem {
         &self,
         c: &Control,
         u: Option<&[f64]>,
-    ) -> Result<(f64, f64)> {
+    ) -> Result<FieldCost> {
         let Drive::Field { min, max } = c.drive else {
             return Err(QsoError::invalid("control", "a field profile"));
         };
@@ -299,11 +309,21 @@ impl SpinSystem {
         let nodes = LEVELS[0] as f64;
         let builds = nodes * (50.0 * entries + redfield_build) + 8.0 * nodes * entries;
         let sums = 3.0 * 8.0 * nodes * entries * c.steps as f64;
-        let held = (8.0 + 16.0 * nodes) * entries + 40.0 * ops + 60.0 * entries;
+        // The build holds the node blocks (20 bytes per entry) and their
+        // family (12 plus 16 per node) at once; an evaluation the family and
+        // three combined blocks.
+        let held = (12.0 + 36.0 * nodes) * entries + 40.0 * ops + 60.0 * entries;
         let memory = 1.1 * (held + bytes + self.held_bytes(&relaxation));
+        let build_memory =
+            1.1 * ((12.0 + 36.0 * nodes) * entries + 40.0 * ops + self.held_bytes(&relaxation));
         // The interpolant's levels beyond the first are checked as they
         // are built.
-        Ok((work + builds + sums, memory))
+        Ok(FieldCost {
+            work: work + builds + sums,
+            memory,
+            build: builds,
+            build_memory,
+        })
     }
 
     /// The sparse blocks of a field profile with relaxation, the
@@ -331,21 +351,66 @@ impl SpinSystem {
         let mut blocks: Vec<SparseBlock> = (0..LEVELS[0])
             .map(|j| self.relaxation_block(&liouville, field(angle(j, LEVELS[0]))))
             .collect::<Result<_>>()?;
+        // The work of one build, as `field_estimate` counts it.
+        let entries = blocks[0].nnz() as f64;
+        let (_, redfield_build) = self
+            .relaxation(0.5 * (min + max))?
+            .redfield_entries(&liouville, Some(0));
+        let build = 50.0 * entries + redfield_build;
+        let mut built = LEVELS[0] as f64 * build;
         let mut level = 0;
+        // Why the levels stopped short of the tolerance, if they did.
+        let mut short = None;
         let (family, error) = loop {
             let nodes = LEVELS[level];
             let family = SparseFamily::new(&blocks);
-            let largest = blocks.iter().map(SparseBlock::largest).fold(0.0, f64::max);
-            let tail = [nodes - 1, nodes - 2]
+            // The relaxation relative to its largest entry, and the drift
+            // column (the last) relative to its own.
+            let (largest, largest_drift) = blocks
                 .iter()
-                .map(|&m| family.combine(&coefficient(nodes, m)).largest())
+                .map(|b| b.largest_split(n))
+                .fold((0.0f64, 0.0f64), |(a, b), (x, y)| (a.max(x), b.max(y)));
+            let error = [nodes - 1, nodes - 2]
+                .iter()
+                .map(|&m| {
+                    let (tail, tail_drift) =
+                        family.combine(&coefficient(nodes, m)).largest_split(n);
+                    let rest = if largest > 0.0 { tail / largest } else { 0.0 };
+                    let drift = if largest_drift > 0.0 {
+                        tail_drift / largest_drift
+                    } else {
+                        0.0
+                    };
+                    rest.max(drift)
+                })
                 .fold(0.0, f64::max);
-            let error = if largest > 0.0 { tail / largest } else { 0.0 };
-            let next_bytes =
-                family.bytes() as f64 * (2.0 * nodes as f64 - 1.0) / nodes as f64 * 2.0;
-            if error <= FIELD_TOLERANCE || level + 1 == LEVELS.len() || next_bytes > memory {
+            if error <= FIELD_TOLERANCE || level + 1 == LEVELS.len() {
                 break (family, error);
             }
+            // The next level holds its blocks and its family at once.
+            let next = LEVELS[level + 1];
+            let per_block =
+                blocks.iter().map(SparseBlock::bytes).sum::<usize>() as f64 / nodes as f64;
+            let union = family.nnz() as f64;
+            let next_bytes = next as f64 * per_block + union * (12.0 + 16.0 * next as f64);
+            let next_work = built + (next - nodes) as f64 * build;
+            if next_bytes > memory {
+                short = Some(format!(
+                    "the next level of {next} fields needs about {:.1} GB (limit {:.0} GB)",
+                    next_bytes / 1e9,
+                    memory / 1e9
+                ));
+                break (family, error);
+            }
+            if next_work > super::super::super::MAX_RELAXATION_WORK {
+                short = Some(format!(
+                    "the next level of {next} fields needs about {next_work:.1e} operations to \
+                     build (limit {:.1e})",
+                    super::super::super::MAX_RELAXATION_WORK
+                ));
+                break (family, error);
+            }
+            built = next_work;
             // The next level: the old nodes at the even places.
             drop(family);
             let next = LEVELS[level + 1];
@@ -361,6 +426,17 @@ impl SpinSystem {
             blocks = grown;
             level += 1;
         };
+        if let Some(why) = short {
+            return Err(QsoError::invalid(
+                "field",
+                format!(
+                    "the relaxation over {min} to {max} T through {} fields errs by {error:.1e} \
+                     (tolerance {FIELD_TOLERANCE:e}), and {why}; use fewer spins or a narrower \
+                     range",
+                    LEVELS[level]
+                ),
+            ));
+        }
         if error > MAX_FIELD_ERROR {
             return Err(QsoError::invalid(
                 "field",
@@ -373,6 +449,7 @@ impl SpinSystem {
             ));
         }
         let relaxation_norm = blocks.iter().map(norm_bound).fold(0.0, f64::max);
+        drop(blocks);
         let start = augment(&c.initial);
         let target = DVector::from_iterator(
             n + 1,
@@ -410,6 +487,14 @@ impl SpinSystem {
                 "the system does not relax: field profiles propagate in Hilbert space",
             ));
         }
+        // The interpolant's first level checked before anything is built
+        // (nothing is propagated, so the evaluations' cost does not count).
+        let cost = self.field_estimate(c, None)?;
+        super::super::check_cost(
+            "the relaxation over the field",
+            cost.build,
+            cost.build_memory,
+        )?;
         let f = self.sparse_field(c, super::super::MAX_CONTROL_MEMORY)?;
         Ok((f.error, f.nodes()))
     }

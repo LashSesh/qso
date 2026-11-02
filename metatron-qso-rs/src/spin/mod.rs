@@ -947,6 +947,46 @@ impl SpinSystem {
         })
     }
 
+    /// The diagonal of `ρ_eq − 1/d` at field `b` without cancellation:
+    /// each spin's `L p_k − 1 = Σ_j w_j expm1(x(m_k − m_j)) / Σ_j w_j`, and
+    /// the product `(Π_i (1 + L_i p_i − 1) − 1)/d` as `expm1(Σ log1p)/d`, so
+    /// that thermal polarisation keeps its digits at any field and
+    /// temperature.
+    fn thermal_deviation_at(&self, b: f64) -> Vec<f64> {
+        let d = self.dimension();
+        let n = self.spins.len();
+        let excess: Vec<Vec<f64>> = (0..n)
+            .map(|i| {
+                let x = self.boltzmann(i, b);
+                let s = self.spins[i].isotope.spin();
+                let levels = self.spins[i].isotope.levels();
+                let top = x.abs() * s;
+                let m = |k: usize| s - k as f64;
+                let w: Vec<f64> = (0..levels).map(|k| (x * m(k) - top).exp()).collect();
+                let z: f64 = w.iter().sum();
+                (0..levels)
+                    .map(|k| {
+                        (0..levels)
+                            .map(|j| w[j] * (x * (m(k) - m(j))).exp_m1())
+                            .sum::<f64>()
+                            / z
+                    })
+                    .collect()
+            })
+            .collect();
+        (0..d)
+            .map(|r| {
+                let sum: f64 = (0..n)
+                    .map(|i| {
+                        let k = (r / self.stride(i)) % self.spins[i].isotope.levels();
+                        excess[i][k].ln_1p()
+                    })
+                    .sum();
+                sum.exp_m1() / d as f64
+            })
+            .collect()
+    }
+
     /// The maximally mixed state `1/d`.
     pub fn identity_state(&self) -> CMatrix {
         let d = self.dimension();

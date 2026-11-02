@@ -965,10 +965,11 @@ impl SpinSystem {
             return self.sparse_cost(c, rf, symmetric);
         }
         if path == Path::SparseField {
-            return match rf {
-                Amplitudes::Controls(u) => self.field_estimate(c, Some(u)),
-                Amplitudes::Peak(peak) => self.field_estimate(c, Some(&vec![peak; c.steps])),
+            let cost = match rf {
+                Amplitudes::Controls(u) => self.field_estimate(c, Some(u))?,
+                Amplitudes::Peak(peak) => self.field_estimate(c, Some(&vec![peak; c.steps]))?,
             };
+            return Ok((cost.work, cost.memory));
         }
         let peak = match rf {
             Amplitudes::Peak(peak) => peak,

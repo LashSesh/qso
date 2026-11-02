@@ -650,8 +650,14 @@ state) is built once per optimisation at the Chebyshev–Lobatto nodes of
 the profile's range, 5, 9, 17 or 33 (each level contains the last's
 nodes, so a level reuses the builds before it). The level stops when the
 interpolant's two highest Chebyshev coefficients fall below `10⁻¹⁰` of
-the relaxation's largest entry; that size is its stated error, and a
-range whose error stays above `10⁻⁶` at 33 nodes is refused. The node
+the relaxation's largest entry, and of the drift column's own; that size
+is its stated error (an estimate from the node values), and a range
+whose error stays above `10⁻⁶` at 33 nodes is refused, as is a level
+whose memory (its blocks and their family at once) or build work would
+exceed the limits. `ρ_eq − 1/d` of the drift is formed per diagonal
+entry as `expm1(Σ_i log1p(L_i p_i − 1))/d`, each spin's excess from
+`expm1` of its level differences, so that it keeps its digits at any
+polarisation. The node
 matrices are kept on the union of their patterns (`SparseFamily` in
 `krylov.rs`), so `R(B)`, its adjoint and its derivative `R'(B)` are
 weighted sums of value arrays with the weights

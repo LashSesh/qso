@@ -60,6 +60,67 @@ fn the_relaxation_over_the_field_equals_direct_builds_within_its_error() {
 }
 
 #[test]
+fn limits_are_checked_before_the_interpolant_and_named_when_they_stop_it() {
+    // Eight spins with Redfield relaxation: the five node matrices need
+    // about 9.4 GB, refused by field_relaxation_error before any is built.
+    let (sys, lac) = sheath(5, true);
+    let start = sys.parahydrogen_state(0, 1, 1.0).unwrap();
+    let c = Control::field(0.0, 2.0 * lac, 0.2, 10, start, sys.iz(2).unwrap());
+    let clock = std::time::Instant::now();
+    let err = sys.field_relaxation_error(&c).unwrap_err();
+    assert!(err.to_string().contains("GB"), "{err}");
+    assert!(clock.elapsed().as_secs_f64() < 30.0);
+    // A level stopped by memory says so, rather than to narrow the range.
+    let slow = relaxing().with_correlation_time(Some(1e-7)).unwrap();
+    let wide = Control::field(0.0, 9.4, 0.1, 4, c_initial(&slow), slow.iz(2).unwrap());
+    let err = slow.sparse_field(&wide, 1.0).err().unwrap();
+    assert!(err.to_string().contains("next level"), "{err}");
+}
+
+fn c_initial(sys: &SpinSystem) -> CMatrix {
+    sys.parahydrogen_state(0, 1, 1.0).unwrap()
+}
+
+#[test]
+fn thermal_deviations_keep_their_digits_at_low_polarisation() {
+    // Two protons and a ¹³C at 300 K: ρ_eq − 1/d against the product of
+    // tanh(x/2) written out, from 10 nT (polarisation 3·10⁻¹⁴) to 10 T.
+    let mut sys = SpinSystem::new(1.0);
+    sys.add_spin(Isotope::H1, 0.0).unwrap();
+    sys.add_spin(Isotope::H1, 3.0).unwrap();
+    sys.add_spin(Isotope::C13, 0.0).unwrap();
+    for b in [1e-8, 1e-6, 1e-4, 1.0, 10.0] {
+        let got = sys.thermal_deviation_at(b);
+        let t: Vec<f64> = (0..3).map(|i| (sys.boltzmann(i, b) / 2.0).tanh()).collect();
+        for (r, g) in got.iter().enumerate() {
+            // Level k = 0 (m = +½) of each spin adds +t, k = 1 adds −t.
+            let f: Vec<f64> = (0..3)
+                .map(|i| if (r >> (2 - i)) & 1 == 0 { t[i] } else { -t[i] })
+                .collect();
+            let want =
+                (f[0] + f[1] + f[2] + f[0] * f[1] + f[0] * f[2] + f[1] * f[2] + f[0] * f[1] * f[2])
+                    / 8.0;
+            assert!(
+                (g - want).abs() <= 4e-15 * want.abs(),
+                "{b} T, {r}: {g} vs {want}"
+            );
+        }
+    }
+    // A spin 1 (²H) at a moderate exponent against the populations.
+    let mut deuteron = SpinSystem::new(5.0).with_temperature(1e-3).unwrap();
+    deuteron.add_spin(Isotope::H2, 0.0).unwrap();
+    let got = deuteron.thermal_deviation_at(5.0);
+    let p = deuteron.populations(0, 5.0);
+    for (g, p) in got.iter().zip(&p) {
+        assert!(
+            (g - (p - 1.0 / 3.0)).abs() < 1e-15,
+            "{g} vs {}",
+            p - 1.0 / 3.0
+        );
+    }
+}
+
+#[test]
 fn sparse_field_gradients_equal_the_dense_ones() {
     // The dense generator of 1.36 with the relaxation's derivative by
     // extrapolated differences against the interpolated one on sparse
@@ -220,9 +281,21 @@ fn sheath(protons: usize, redfield: bool) -> (SpinSystem, f64) {
 #[test]
 #[ignore]
 fn measure_field_profiles() {
-    // Eight spins with Redfield relaxation need about 5.6 GB (five node
+    // Eight spins with Redfield relaxation need about 9.4 GB (five node
     // matrices of the dipolar relaxation), over the limit: measured with
     // T₁ and T₂ alone.
+    for (protons, duration, redfield) in [(4, 0.5, true), (5, 0.2, false), (5, 0.2, true)] {
+        let (sys, lac) = sheath(protons, redfield);
+        let start = sys.parahydrogen_state(0, 1, 1.0).unwrap();
+        let c = Control::field(0.0, 2.0 * lac, duration, 10, start, sys.iz(2).unwrap());
+        let cost = sys.control_cost(&c, 2.0 * lac).unwrap();
+        eprintln!(
+            "{} spins (Redfield {redfield}, {duration} s): estimate {:.2e} operations {:.2} GB",
+            sys.spins().len(),
+            cost.operations,
+            cost.bytes / 1e9
+        );
+    }
     for (protons, duration, redfield) in [(4, 0.5, true), (5, 0.2, false)] {
         let (sys, lac) = sheath(protons, redfield);
         let n = sys.spins().len();

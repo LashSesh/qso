@@ -313,6 +313,20 @@ impl SparseBlock {
         self.vals.iter().fold(0.0, |m, z| m.max(z.norm()))
     }
 
+    /// The largest absolute entry outside column `col` and in it.
+    pub fn largest_split(&self, col: usize) -> (f64, f64) {
+        self.cols
+            .iter()
+            .zip(&self.vals)
+            .fold((0.0f64, 0.0f64), |(rest, own), (&c, z)| {
+                if c as usize == col {
+                    (rest, own.max(z.norm()))
+                } else {
+                    (rest.max(z.norm()), own)
+                }
+            })
+    }
+
     /// The largest absolute row sum.
     pub fn norm_inf(&self) -> f64 {
         (0..self.n)
@@ -455,8 +469,9 @@ impl SparseFamily {
 
     /// Bytes held.
     pub fn bytes(&self) -> usize {
-        (self.cols.len() * (8 + 16 * self.values.len()))
-            + 16 * (self.indptr.len() + self.adjoint_indptr.len())
+        // `cols`, `adjoint_cols` and `to_adjoint` (u32), and the values.
+        (self.cols.len() * (12 + 16 * self.values.len()))
+            + 8 * (self.indptr.len() + self.adjoint_indptr.len())
     }
 
     /// `Σ_j w_j` times the values of member `j`, at each entry of the

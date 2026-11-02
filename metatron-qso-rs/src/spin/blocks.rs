@@ -849,10 +849,10 @@ impl SpinSystem {
         for (i, x) in self.jump_drift(b).into_iter().enumerate() {
             drift[(i, i)] = C64::new(x, 0.0);
         }
-        let thermal = self.thermal_at(b);
-        let mut equilibrium = thermal.clone();
-        for i in 0..d {
-            equilibrium[(i, i)] -= 1.0 / d as f64;
+        // ρ_eq − 1/d without the cancellation of the difference.
+        let mut equilibrium = CMatrix::zeros(d, d);
+        for (i, x) in self.thermal_deviation_at(b).into_iter().enumerate() {
+            equilibrium[(i, i)] = C64::new(x, 0.0);
         }
         // −R(ρ − ρ_eq) = −R(Δ) + R(ρ_eq − 1/d), as R(1) = 0: without the
         // identity, whose image would be rounding of R's size.

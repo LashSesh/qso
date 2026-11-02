@@ -5008,9 +5008,12 @@ Delivered in `spin/control/sparse/field.rs`, with `spin/control.rs`,
   through the Chebyshev–Lobatto nodes, 5, 9, 17 or 33 of them. Each level
   contains the last's nodes, so it reuses their builds; it stops when the
   two highest Chebyshev coefficients fall below `FIELD_TOLERANCE`
-  (10⁻¹⁰) of the relaxation's largest entry, the interpolant's stated
-  error, and a range whose error stays above `MAX_FIELD_ERROR` (10⁻⁶) at
-  33 nodes is refused. The node matrices are kept on the union of their
+  (10⁻¹⁰) of the relaxation's largest entry, and of the drift column's
+  own (the interpolant's stated error), and a range whose error stays
+  above `MAX_FIELD_ERROR` (10⁻⁶) at 33 nodes is refused. The error is an
+  estimate from the node values: it holds where the relaxation varies
+  smoothly on the scale of the node spacing, and a feature narrower than
+  that (a level crossing with very slow motion) can pass unseen. The node matrices are kept on the union of their
   patterns (`SparseFamily`), so `R(B)`, `R(B)†` and `R'(B)` are weighted
   sums of value arrays with the interpolant's weights and their
   derivatives. `SpinSystem::field_relaxation_error` (Python
@@ -5021,11 +5024,13 @@ Delivered in `spin/control/sparse/field.rs`, with `spin/control.rs`,
   `R'(B)` by the Gauss–Legendre rule of 1.46. All field profiles with
   relaxation take this path; the dense generator of 1.36 remains for the
   tests' comparisons.
-- **Limits.** `control_cost` estimates the work and memory of one
-  evaluation from the relaxation built at the middle of the range, its
-  entries counted column by column, with five nodes; the levels beyond are
-  checked as they are built, and each evaluation counts its operations as
-  in 1.46.
+- **Limits.** `control_cost` (and `field_relaxation_error`, before it
+  builds anything) estimates the work and memory of one evaluation from
+  the relaxation built at the middle of the range, its entries counted
+  column by column, with five nodes, the node blocks and their family
+  held at once. Each further level is checked for its memory and its
+  build work before it is built; a level stopped by them is refused with
+  that reason. Each evaluation counts its operations as in 1.46.
 
 Changes to the plan:
 
@@ -5049,7 +5054,8 @@ Not done, and why:
   (slow motion from zero to high field) are refused rather than split
   into pieces.
 - **Eight spins with Redfield relaxation.** The node matrices are held
-  side by side (5.6 GB for eight spins with dipolar relaxation); fewer
+  side by side (9.4 GB estimated for eight spins with dipolar relaxation,
+  the node blocks and their family at once); fewer
   nodes held at a time, or building `R(B)` on the fly from the spectral
   densities, would be needed.
 
@@ -5059,15 +5065,15 @@ five of its ring protons, in the laboratory frame between 0 and twice
 the anti-crossing (0.139 µT), every spin with `T₁` and `T₂`, ten steps:
 
 - **Seven spins** with Redfield relaxation of the dipolar pairs (τ_c =
-  10⁻¹⁰ s), 0.5 s: 5·10¹¹ operations and 0.86 GB estimated, the
+  10⁻¹⁰ s), 0.5 s: 5·10¹¹ operations and 1.4 GB estimated, the
   interpolant converged at five nodes (fast motion does not disperse at
   microtesla fields) to 5·10⁻¹⁶ in 4.7 s, one evaluation 82 s; `⟨N_z⟩`
   0.028 at the constant anti-crossing field, 0.055 after five L-BFGS
   iterations (16 evaluations, 24 min), replayed by `evolve` to 2·10⁻¹⁶.
 - **Eight spins** with `T₁` and `T₂` alone, 0.2 s: 7·10¹⁰ operations and
-  0.28 GB, one evaluation 17 s. With Redfield relaxation the five node
-  matrices need about 5.6 GB, over the limit of 2 GB, and are refused
-  before anything is propagated.
+  0.32 GB, one evaluation 17 s. With Redfield relaxation the five node
+  matrices need about 9.4 GB, over the limit of 2 GB, and are refused
+  before anything is built.
 
 Validation: built directly at seven fields between 1 and 100 µT (¹H–¹H–¹³C
 in the laboratory frame, Redfield relaxation with τ_c = 3·10⁻⁵ s, so that
@@ -5085,6 +5091,51 @@ replayed by `evolve` gives the transfer the optimiser reported to 10⁻⁹,
 and the SABRE-SHEATH transfer of two hydrides and a ¹⁵N (`T₁` = 30 s)
 after 0.5 s at a constant field peaks within 3 % of the anti-crossing
 `ν_N − ν_H = ±(J_HH − J_HN/4)` of the three-spin model.
+
+Review: an independent review found the generator, the gradient, the
+Lobatto weights (equal to the barycentric Lagrange basis to 6·10⁻¹⁵,
+their derivative to 7·10⁻¹⁶·N²), the nesting and the adjoint of the
+combined relaxation correct. Against its own dense NumPy and SciPy
+generator (`hamiltonian()` and the relaxation rates, an analytic thermal
+drift, `expm` and `expm_frechet`) transfers agree to 10⁻¹³ and gradients
+to 10⁻¹¹ in the laboratory frame with dispersing Redfield relaxation,
+ranges and profiles at zero field, 1 K and 300 K, and to 7·10⁻¹⁰ in the
+rotating frame; on 400 fields of 25 cases the error was at most four
+times the stated one or at rounding; seven spins equal `evolve` to
+9·10⁻¹⁵ and Richardson differences of it to 1.3·10⁻¹⁰; the measured
+numbers reproduce. It found three faults in the limits, a weakness of
+the error estimate and an older loss of digits; all are fixed or stated.
+
+- **`field_relaxation_error` without a cost check.** It built the five
+  node matrices of eight spins with Redfield relaxation (73 s, 9 GB)
+  where an evaluation refuses them at once. It checks the estimate first
+  now (test).
+- **Memory stopping a level.** When the next level would exceed the
+  memory, the loop ended unconverged: above 10⁻⁶ the message said to
+  narrow the range (a seven-spin range converges at 33 nodes with 2.75
+  GB), between 10⁻¹⁰ and 10⁻⁶ the problem ran at lower accuracy
+  silently. A level stopped by memory or by its build work, which was
+  not checked, is refused with that reason now (test).
+- **The memory estimate** missed that the node blocks and their family
+  are held at once (0.86 GB estimated against a peak of 1.26 GB; now
+  1.4 GB) and
+  counted 8 instead of 12 bytes of indices per entry. Both are counted.
+- **The stated error** came from the relaxation's largest entry, so the
+  drift column, which is smaller by the polarisation, was not controlled
+  on its own scale (10⁻⁴ of it in one case); it is now. A feature
+  narrower than the node spacing still passes unseen (a crossing of two
+  protons with τ_c = 100 s: stated 10⁻¹², actual 3.5·10⁻⁶); the error is
+  documented as an estimate that holds where the relaxation varies
+  smoothly on the node spacing.
+- **Thermal drift at low polarisation** (from 1.34). `ρ_eq − 1/d` was the
+  difference of the populations and `1/d`, which cancels: at 300 K the
+  Redfield drift erred by 4·10⁻³ of itself at 10 nT and 2·10⁻⁵ at 1 µT,
+  in `evolve` as well. Each spin's excess is formed from `expm1` and the
+  product as `expm1(Σ log1p)`, equal to the product of `tanh(x/2)`
+  written out to 4·10⁻¹⁵ from 10 nT to 10 T (test).
+- **Documents.** A missing full stop in the README; the gradient is the
+  interpolant's, whose derivative can err by about `N²` times the stated
+  error (measured gradients agreed to 10⁻¹⁰ to 10⁻¹³).
 
 ### 1.52 — Logical error rates below sampling (L)
 
