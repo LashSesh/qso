@@ -729,6 +729,28 @@ directions `−i[H_Z, ·]` and `R'(B)` by the Gauss–Legendre rule of the rf
 case, so the field derivative is the interpolant's, exact to rounding,
 instead of the Richardson differences of the dense generator.
 
+Redfield relaxation applied without storing it
+(`RedfieldBlocks::apply_products` in `spin/redfield.rs`) works on the
+block's `d × d` matrix `X` in the positions of the grouping: an index of
+the block's entries (and of their transpose), then per term `XY`
+(a row of `Y` per element) and `𝒬(XY)` (each row of `𝒬` on a live row
+meets only the span of its target label), and `(𝒬X†Y)†` read through the
+transposed index; the left products `Σ w 𝒬Y` within labels (as 1.41
+keeps them) for `𝒬Y X + X(𝒬Y)†`, their adjoint for `R†`. The terms run in
+parallel, each into its own vector of the block, summed in order.
+`MatrixFree` in `blocks.rs` is the Krylov `Operator` of a block planned
+that way: `sparse_base` (the columns without Redfield) plus the products.
+`redfield_field` builds the terms of `R(B)` and `R'(B)` from the
+interactions per unit field (so the modes and weights hold at every
+field, the shielding's scaled by `B`), with `spectral_derivative` for
+`∂Y`: per pair of eigenblocks `Ỹ = J∘X̃`, `P = ω∘[H̃_Z, Ỹ] + [H̃_Z, ω∘Ỹ]`,
+`∂Ỹ = −P/(λ² + ω²)`. Field profiles past the interpolant's memory
+(`control/sparse/free.rs`) keep only the coherent operators; each step
+builds `J(B)` (the jumps and their drift, a sparse block), the Redfield
+terms and `R(B)(ρ_eq − 1/d)`, and the backward pass also the derivative
+terms, `J'` and `Δ'_eq` by Richardson differences; `step_gradient` is
+generic over the generator (`Linear`) and the direction (`Pairing`).
+
 NV centres (`spin/nv.rs`) use the secular Hamiltonian, which is block
 diagonal in the electron level `a` (`m = +1, 0, −1`) and, within a block,
 a sum of one term per nucleus (`S_z` alone couples to the nuclei, and

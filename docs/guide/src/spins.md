@@ -266,6 +266,24 @@ block and of the terms are estimated: eleven protons with dipolar
 relaxation are refused for the memory of the terms alone, and nine
 relaxing protons over 100 s at 9.4 T for work.
 
+When a stored block would exceed the memory limit, the Krylov steps
+apply its Redfield part from the terms at every product instead,
+`Σ w 𝒬Y X + X(Σ w 𝒬Y)† − Σ w(𝒬(XY) + (𝒬X†Y)†)` on the block's matrix
+`X`, and store only the rest of the generator (coherent part,
+dissipators, drift). Each application then costs a few times a product
+with the stored block but needs no memory beyond the terms. On four
+cores, a chain of protons and a ¹³C with dipolar relaxation and shielding
+anisotropy (τ_c = 3·10⁻¹¹ s):
+
+| Spins | Stored superoperator | Matrix-free, 10 µT (laboratory) | Matrix-free, 9.4 T (rotating, after inversion) |
+|---|---|---|---|
+| 8 | 0.7 GB (stored) | 0.1 s in 19 s | 0.1 s in 4.7 s |
+| 9 | 6.1 to 6.9 GB | 10 ms in 44 s | 10 ms in 9.3 s |
+| 10 | 55 to 74 GB | refused for work at 1 ms | 1 ms in 24 s |
+
+at most 1.5 GB. Longer intervals are refused by the work limit
+(1.5·10¹² operations), not by memory.
+
 Equivalent spins reduce the blocks further. Declare the permutations of
 the spins that leave the system unchanged: each spin onto one of its
 isotope with the same shift, relaxation times and couplings, and the
@@ -561,9 +579,22 @@ pulse = s.control_events(c, r["controls"])           # for evolve
   one evaluation of ten steps over 0.5 s takes 82 s for seven spins with
   Redfield relaxation (SABRE-SHEATH: two hydrides, a ¹⁵N and four ring
   protons, below 0.3 µT), and 17 s over 0.2 s for eight with `T₁` and
-  `T₂`; eight with Redfield relaxation need 9.4 GB and are refused. The
-  cost grows with the duration times the couplings and fields. Declared
-  symmetries are not used for field profiles.
+  `T₂`. The cost grows with the duration times the couplings and
+  fields. Declared symmetries are not used for field profiles.
+- **Beyond the interpolant's memory.** Where its nodes would not fit
+  (eight spins with Redfield relaxation: 9.4 GB), a field profile
+  applies the Redfield relaxation from its terms, built anew at every
+  step's field, and never stores it (`control_cost` names the method
+  `matrix-free`). The field derivative of the Redfield part is
+  analytic: the dipolar operators are fixed and the shielding's grow
+  with the field, and the spectral densities' operator
+  `Y = λ(λ² + [H₀, ·]²)⁻¹` is differentiated through its resolvent in
+  the eigenbasis of `H₀`, which needs no derivative of the eigenvectors
+  and holds at level crossings; the `T₁`/`T₂` jumps and the thermal
+  populations, closed forms, by extrapolated differences. Eight spins of
+  SABRE-SHEATH take 0.45 GB; two steps over 0.04 s take 24 s, while ten
+  steps over 0.2 s need about 6.5·10¹² operations and are refused by the
+  work limit.
 - **Larger systems.** With rf and relaxation, the generator of the
   master equation (with the drift towards equilibrium) and the rf
   directions `−i[2πF_{x,y}, ·]` are sparse matrices, built once per
@@ -1201,6 +1232,15 @@ converge for finite pulses).
   drawn from the kinetics, each evolved alone with `T₁` and `T₂`, agrees
   within four standard errors (plus 10⁻³).
 
+- **Relaxation without storing it** (1.55). Matrix-free Krylov steps
+  equal the stored Redfield blocks to 10⁻⁹ (both frames, 1 mT to 9.4 T,
+  a Hamiltonian that mixes the orders, the free induction decay);
+  `R(B)` from the affine operators equals the stored blocks to 10⁻¹⁵,
+  its adjoint pairs correctly, and `R'(B)` equals extrapolated
+  differences to 10⁻⁷ from 9.4 T to zero field; field profiles without
+  the interpolant equal the dense generator and the interpolant to
+  10⁻¹⁰ (transfer) and 10⁻⁷ (gradient), and six spins follow differences
+  to 10⁻⁵ and are replayed by `evolve`.
 - **Sparse blocks** (1.54). Krylov steps equal the dense blocks to 10⁻⁹
   of the deviation for SABRE with one and two ring protons (laboratory
   frame at 0.14 and 20 µT with sweeps, rotating frame at 9.4 T with a

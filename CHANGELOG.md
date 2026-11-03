@@ -8,6 +8,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Relaxation applied without storing it** (1.55): the Redfield
+  superoperator applied from its terms by operator products where a
+  stored block would exceed memory (Krylov propagation of nine and ten
+  relaxing spins whose superoperator would need 6 to 74 GB, at most
+  1.5 GB), its field derivative analytically (the affine operators and
+  the resolvent of the spectral densities, defined at level crossings),
+  and field profiles that build the relaxation at every step's field
+  instead of interpolating it where the nodes would not fit (eight spins
+  of SABRE-SHEATH in 0.45 GB instead of 9.4 GB; `control_cost` names the
+  method `matrix-free`).
+
 - **Exchange and reactions on sparse blocks** (1.54, `spin::Exchange`,
   `spin::Reactions`): the joint blocks of chemical exchange and reaction
   kinetics beyond 2048 elements, propagated by Krylov steps (or dense

@@ -56,7 +56,7 @@ which withdraws the results of version 1.
 | Boson sampling | exact probabilities and exact sampling (1.1); partial distinguishability, loss and Gaussian boson sampling with hafnians and torontonians (1.14) | mixed Gaussian states with many photons spread over many modes are impractical (10¹² operations at 20 photons in 10 modes) |
 | Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4); slow noise from Markov processes (telegraph, Ornstein–Uhlenbeck, quasi-static, 1/f) averaged exactly on density matrices (1.44) | noise learning for layers of two-qubit Clifford gates only, on density matrices up to 10 qubits and Pauli frames up to 64 (1.12, 1.31), with non-Pauli channels twirled one at a time; mitigation with the learned model above 24 qubits only on matrix-product states, for channels that are mixtures of unitaries (1.31); no leakage; channels on at most four qubits (1.30); slow noise averaged exactly up to 12 qubits and processes with finitely many states (1.44), sampled on trajectories beyond (1.30); virtual distillation (1.17) mitigates only its measured copies' preparation |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18); interacting bosons, fermions and distinguishable particles with certificates for graph isomorphism (1.29); symmetry for driven walks, open walks on orbitals, coined walks with dephasing, hypercubes with dephasing up to d = 230 (1.38); interacting walkers on the orbits of automorphisms (three bosons on Q₉: 2284 orbits of 22.5 million configurations) and up to four particles on hypercubes (1.43); open walks on large symmetric graphs from point stabilisers (Q₁₈, H(4, 10), J(24, 4); 1.48) | interacting walkers stop at 2²² configurations without symmetry and 2²⁷ with it, whose orbits come from a union–find over every configuration (1.43); open walks beyond 8192 nodes need a start whose stabiliser leaves few orbitals (dense graphs and circulants stay at 8192 nodes; 1.48); pretty good transfer on other graphs has no exact reference |
-| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37); the ¹³C bath of an NV centre by the cluster-correlation expansion (1.39); the optical cycle, ODMR, pulsed readout and magnetometer sensitivity in fields of any direction, and ensembles (1.40); sparse relaxation blocks propagated by Krylov steps, Redfield relaxation from sparse terms and equivalent spins: seven and eight relaxing protons for seconds (1.41); optimal control with relaxation on sparse blocks and on the orbits of equivalent spins, seven and eight spins (1.46); Redfield relaxation with anisotropic diffusion and model-free internal motion (1.49); reaction kinetics with spins: PASADENA, ALTADENA and SABRE as they run (1.50); field profiles with relaxation beyond six spins, the relaxation interpolated over the field (1.51); exchange and reactions on sparse blocks with iterative steady states and field profiles: SABRE with nine spins in the complex beside seven in the substrate (1.54) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the nested-commutator bound of product formulas (1.32) is tight for small Hamiltonians only, its tail ignoring which terms commute; Redfield relaxation takes rigid-body diffusion and model-free internal motion, not correlated motions of groups (1.49), and propagations beyond 1.5·10¹² operations or 2 GiB are refused (eleven protons with dipolar relaxation, nine for 100 s; 1.41); chemical exchange and reaction kinetics take Krylov steps beyond 2048 elements per block (1.54), unaffordable in the laboratory frame at millitesla fields and more, and only one reactant of a reaction carries spins; field profiles with relaxation hold the relaxation at up to 33 fields (eight spins with dipolar relaxation would need 9.4 GB; 1.51) and have many local optima; an evaluation of eight relaxing spins takes tens of seconds (1.46); the NV bath of 1.39 takes ideal pulses only (finite ones: the generalised expansion, 1.45), its expansion can diverge (results beyond `|L| = 1` are refused), and the nuclei next to the vacancy need given contact couplings (1.39); the optical model's rotating-wave approximation fails near the ground-state anticrossing (1.40) |
+| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37); the ¹³C bath of an NV centre by the cluster-correlation expansion (1.39); the optical cycle, ODMR, pulsed readout and magnetometer sensitivity in fields of any direction, and ensembles (1.40); sparse relaxation blocks propagated by Krylov steps, Redfield relaxation from sparse terms and equivalent spins: seven and eight relaxing protons for seconds (1.41); optimal control with relaxation on sparse blocks and on the orbits of equivalent spins, seven and eight spins (1.46); Redfield relaxation with anisotropic diffusion and model-free internal motion (1.49); reaction kinetics with spins: PASADENA, ALTADENA and SABRE as they run (1.50); field profiles with relaxation beyond six spins, the relaxation interpolated over the field (1.51); exchange and reactions on sparse blocks with iterative steady states and field profiles: SABRE with nine spins in the complex beside seven in the substrate (1.54); Redfield relaxation applied without storing it, with its analytic field derivative: nine and ten relaxing spins whose superoperator would need 6 to 74 GB (1.55) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the nested-commutator bound of product formulas (1.32) is tight for small Hamiltonians only, its tail ignoring which terms commute; Redfield relaxation takes rigid-body diffusion and model-free internal motion, not correlated motions of groups (1.49), and propagations beyond 1.5·10¹² operations or 2 GiB are refused (eleven protons with dipolar relaxation, nine for 100 s; 1.41); chemical exchange and reaction kinetics take Krylov steps beyond 2048 elements per block (1.54), unaffordable in the laboratory frame at millitesla fields and more, and only one reactant of a reaction carries spins; field profiles with relaxation hold the relaxation at up to 33 fields (1.51), or apply Redfield relaxation without storing it where those would not fit (1.55), where work bounds them (eight spins with dipolar relaxation: two steps per evaluation within the limit), and have many local optima; an evaluation of eight relaxing spins takes tens of seconds (1.46); the NV bath of 1.39 takes ideal pulses only (finite ones: the generalised expansion, 1.45), its expansion can diverge (results beyond `|L| = 1` are refused), and the nuclei next to the vacancy need given contact couplings (1.39); the optical model's rotating-wave approximation fails near the ground-state anticrossing (1.40) |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
 | Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22); exact circuit distances of any model by a parallel search or the Brouwer–Zimmermann enumeration, with the lightest logical error as circuit locations (1.42); the search on the orbits of an error model's symmetries: [[144, 12, 12]] over three rounds of the depth-8 cycle has circuit distance 10 (1.47); logical failure rates far below sampling by splitting, with their leading term (surface codes to 10⁻⁹, [[72, 12, 6]] to 10⁻¹³; 1.52) | exact circuit distances need time exponential in the distance (each weight about 17 times the last on bicycle circuits); symmetries divide it by a factor that grows with their number (41 to 43 for 72); splitting needs a burn-in long enough, which its error does not show (1.52); decoders take a whole experiment at once, so long memories and BP+OSD over many rounds grow beyond time and memory |
 | Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9), in the browser build too (1.25) | — |
@@ -5631,7 +5631,7 @@ populations to the norm bound of the Taylor substeps and doubles them
 (the review found the profiles accurate to 2·10⁻¹⁴ against replays at
 concentrations of 10⁻⁹).
 
-### 1.55 — Relaxation applied without storing it (M)
+### 1.55 — Relaxation applied without storing it (M, delivered)
 
 Use case: field cycling and long propagations of eight to ten spins
 with dipolar Redfield relaxation, where the stored superoperator of 1.41
@@ -5647,6 +5647,105 @@ and its field nodes in 1.51 exceed memory (eight spins at 33 fields:
 Validation: equal to the stored sparse superoperator of 1.41 where both
 fit; the field derivative against central differences; optimised
 profiles replayed by `evolve`; memory measured.
+
+Delivered in `spin/redfield.rs`, `spin/blocks.rs` and
+`spin/control/sparse/free.rs`:
+
+- **Matrix-free relaxation.** `R(X)` of a block of coherence order from
+  the terms `(𝒬, Y(𝒬), w)` of 1.41 by operator products:
+  `Σ w 𝒬Y X + X(Σ w 𝒬Y)† − Σ_t w_t(𝒬(XY) + (𝒬X†Y)†)` on the block's
+  `d × d` matrix, the product `XY` shared by every entry it feeds, read
+  back on the block (which is the secular projection in the rotating
+  frame), the terms in parallel. Krylov steps take it when a stored block
+  would exceed the memory limit: the rest of the generator (coherent
+  part, dissipators, drift) stays a sparse block, the Redfield part is
+  applied at every product. Its work per application is counted from the
+  rows of the terms the block meets.
+- **Field derivative.** `SpinSystem::redfield_field` builds `R(B)` and
+  `R'(B)` together: the operators are affine in the field,
+  `𝒬(B) = 𝒬_D + B·𝒬_C` (dipolar couplings fixed, shielding anisotropies
+  `∝ B`, the modes of 1.49 taken per unit field), and
+  `Y = λ(λ² + L²)⁻¹𝒬` with `L = [H₀, ·]` is differentiated through the
+  resolvent, `∂Y = −(λ² + L²)⁻¹(LL' + L'L)Y`, in the eigenbasis of the
+  laboratory `H₀`, where `L` is diagonal and `L' = [H_Z, ·]` keeps the
+  labels: no derivative of the eigenvectors, defined at degeneracies and
+  level crossings. `R'` is again a set of terms, `(𝒬_C, Y)` and `(𝒬, Y')`
+  with `Y' = Y(𝒬_C) + ∂Y(𝒬)`, applied by the same products.
+- **Field profiles without an interpolant.** Where the nodes of 1.51
+  would not fit, a field profile with Redfield relaxation builds the terms
+  at every step's field and applies them: the generator
+  `−i[H₀ + BH_Z, ·] + J(B) − R(B) + Tr ρ·R(B)(ρ_eq − 1/d)`, the gradient
+  paired with `−i[H_Z, ·] + J' − R' + R'(Δ_eq) + R(Δ'_eq)` by the
+  Gauss–Legendre rule of 1.46 (generic now over the generator and the
+  pairing), the backward pass with the adjoints. The `T₁`/`T₂` jumps
+  `J(B)` and the thermal deviation `Δ_eq`, closed forms that are cheap to
+  build, take Richardson-extrapolated central differences.
+- **Limits.** The work per application from the terms, the substeps from
+  the rate bounds, and the memory (the states of every step, the
+  quadrature's nodes, the terms) are estimated before an evaluation and
+  spent during it; `control_cost` names the method `matrix-free`.
+
+Changes to the plan:
+
+- **Operator products instead of double commutators with spin
+  operators.** `Y(𝒬)` fills the label blocks at low field, where the
+  eigenbasis mixes the spins, so the double commutators are taken with
+  the terms as sparse matrices; a first version that built every column
+  from the terms (as 1.41 builds the stored blocks) cost about 40 times
+  more per application at nine spins than products that share `XY`.
+- **Differences for the closed forms.** The jumps and the thermal
+  populations have closed forms in the field and cost little to build;
+  their derivative by extrapolated differences is accurate to about
+  10⁻¹⁰ and saves deriving the Boltzmann factors of every jump. The
+  Redfield part, which is costly and where differences of the eigenbasis
+  would need many builds, is analytic.
+
+Not done, and why:
+
+- **Work, not memory, bounds eight spins.** A field profile of eight
+  spins with Redfield relaxation now fits (0.45 GB instead of 9.4 GB),
+  but ten steps over 0.2 s need about 6.5·10¹² operations per evaluation
+  (an application of `R` takes 0.08 s, and the couplings and the field
+  near the anti-crossing take about 4600 of them), above the limit of
+  1.5·10¹²; two steps over 0.04 s run in 24 s. The estimate is about
+  three times above what an evaluation spends (its Taylor series stop
+  earlier than the 14 terms it assumes), so the limit bites early.
+- **Exchange (1.54) keeps stored Redfield columns**; its sites are
+  smaller.
+- **Dormand–Prince steps** (for Hamiltonians that mix the orders over
+  long times) still keep the Redfield blocks they apply.
+
+Measured (four cores, release build): a chain of protons and a ¹³C with
+dipolar Redfield relaxation and its shielding anisotropy (τ_c =
+3·10⁻¹¹ s), the stored superoperator against matrix-free Krylov steps:
+
+| Spins | Stored superoperator | 10 µT, laboratory frame, 70° pulse | 9.4 T, rotating frame, inversion |
+|---|---|---|---|
+| 8 | 3.7·10⁷ entries, 0.7 GB (stored) | 0.1 s in 19 s | 0.1 s in 4.7 s |
+| 9 | 3.0 to 3.5·10⁸ entries, 6.1 to 6.9 GB | 10 ms in 44 s | 10 ms in 9.3 s |
+| 10 | 2.7 to 3.7·10⁹ entries, 55 to 74 GB | refused for work at 1 ms | 1 ms in 24 s |
+
+The terms take 0.01 to 0.1 GB, the runs at most 1.5 GB. One
+application of `R` to a state of eight spins of SABRE-SHEATH takes
+0.083 s (1.4·10⁹ estimated operations). Applied without storing it, a
+propagation of eight spins at 10 µT took 20 s instead of 5.9 s stored.
+
+Validation: matrix-free Krylov steps equal the stored blocks to 10⁻⁹ in
+both frames at 1 mT, 2 T and 9.4 T, with a Hamiltonian that mixes the
+orders and for the free induction decay, and are never further from the
+dense exponentials than the stored Krylov steps (2·10⁻⁹ in the
+laboratory frame at 2 T, from the Krylov tolerance). `R(B)` from the
+affine operators equals the stored blocks to 10⁻¹⁵, the adjoint pairing
+`⟨z, Rx⟩ = ⟨R†z, x⟩` holds, and `R'(B)` equals Richardson-extrapolated
+differences to 10⁻⁷ at 9.4 T, 2 mT, 30 µT and zero field (the
+differences limited by rounding: the error falls as their step grows).
+Field profiles without the interpolant equal the dense generator of
+1.36 and the interpolant of 1.51 to 10⁻¹⁰ (transfer) and 10⁻⁷
+(gradient) between 1 and 100 µT where the spectral densities disperse,
+at 1 K where the thermal drift counts; six spins of SABRE-SHEATH follow
+Richardson-extrapolated differences along a direction to 10⁻⁵ and are
+replayed by `evolve` to 10⁻⁹; eight spins are replayed to the printed
+digits.
 
 ### 1.56 — Product-formula bounds that know which terms commute (S–M)
 
