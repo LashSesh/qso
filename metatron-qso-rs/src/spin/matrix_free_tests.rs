@@ -150,3 +150,72 @@ fn measure_matrix_free() {
         }
     }
 }
+
+/// `R(x)` (or `R†(x)`) of a whole `d × d` matrix, block by block, from the
+/// terms.
+fn apply_all(r: &redfield::RedfieldBlocks, x: &CMatrix, adjoint: bool) -> CMatrix {
+    let d = x.nrows();
+    let mut out = vec![C64::new(0.0, 0.0); d * d];
+    for (q, (_, elements)) in r.liouville.blocks.iter().enumerate() {
+        let v: Vec<C64> = elements.iter().map(|&(a, b)| x[(a, b)]).collect();
+        let positions: Vec<u32> = elements.iter().map(|&(a, b)| (a * d + b) as u32).collect();
+        r.apply_products(q, &v, C64::new(1.0, 0.0), &positions, adjoint, &mut out);
+    }
+    CMatrix::from_fn(d, d, |a, b| out[a * d + b])
+}
+
+/// A pseudo-random matrix.
+fn random(d: usize, seed: u64) -> CMatrix {
+    let mut rng = crate::rng::Rng::seed_from_u64(seed);
+    CMatrix::from_fn(d, d, |_, _| C64::new(rng.normal(), rng.normal()))
+}
+
+#[test]
+fn the_field_derivative_of_redfield_relaxation_is_exact() {
+    // R(B) from the affine operators equals the stored blocks of 1.41; its
+    // adjoint is the adjoint; R'(B) equals Richardson-extrapolated central
+    // differences, at high field, at low field where the eigenbasis mixes
+    // the spins, and at zero field (the shielding then contributes only to
+    // the derivative).
+    for (b, frame) in [
+        (9.4, Frame::Rotating),
+        (2e-3, Frame::Laboratory),
+        (3e-5, Frame::Laboratory),
+        (0.0, Frame::Laboratory),
+    ] {
+        let sys = chain(3, b, 3e-11, frame);
+        let d = sys.dimension();
+        let x = random(d, 3);
+        let z = random(d, 5);
+        let (r, dr) = sys.redfield_field(b).unwrap().unwrap();
+        let stored = sys.redfield(b).unwrap().unwrap();
+        let mut want = CMatrix::zeros(d, d);
+        stored.apply(&x, &mut want, 1.0);
+        let got = apply_all(&r, &x, false);
+        let size = want.iter().fold(0.0f64, |m, v| m.max(v.norm()));
+        let e = (&got - &want).iter().fold(0.0f64, |m, v| m.max(v.norm())) / size;
+        assert!(e < 1e-12, "{b}: R {e:e}");
+        // ⟨z, R x⟩ = ⟨R† z, x⟩.
+        let lhs = (z.adjoint() * &got).trace();
+        let rhs = (apply_all(&r, &z, true).adjoint() * &x).trace();
+        assert!(
+            (lhs - rhs).norm() < 1e-12 * lhs.norm().max(size),
+            "{b}: {lhs} vs {rhs}"
+        );
+        // The derivative.
+        // Steps below 10⁻⁵ T lose more to rounding than they gain.
+        let span = 1e-2 * b.abs().max(1e-3);
+        let at = |f: f64| {
+            let mut m = CMatrix::zeros(d, d);
+            sys.redfield(f).unwrap().unwrap().apply(&x, &mut m, 1.0);
+            m
+        };
+        let central = |h: f64| (at(b + h) - at(b - h)) * C64::new(0.5 / h, 0.0);
+        let fd = central(span / 2.0) * C64::new(4.0 / 3.0, 0.0)
+            - central(span) * C64::new(1.0 / 3.0, 0.0);
+        let exact = apply_all(&dr, &x, false);
+        let scale = fd.iter().fold(0.0f64, |m, v| m.max(v.norm()));
+        let e = (&exact - &fd).iter().fold(0.0f64, |m, v| m.max(v.norm())) / scale;
+        assert!(e < 1e-6, "{b}: R' {e:e} of {scale:e}");
+    }
+}

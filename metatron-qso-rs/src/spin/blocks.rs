@@ -710,7 +710,7 @@ impl Operator for MatrixFree<'_> {
         for (q, positions) in &self.parts {
             let v: Vec<C64> = positions.iter().map(|&p| x[p as usize]).collect();
             self.redfield
-                .apply_products(*q, &v, -ONE, positions, &mut y[..n]);
+                .apply_products(*q, &v, -ONE, positions, false, &mut y[..n]);
         }
     }
 

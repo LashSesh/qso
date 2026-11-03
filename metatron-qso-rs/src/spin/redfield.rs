@@ -188,6 +188,8 @@ pub(super) struct RedfieldBlocks {
     terms: Vec<Term>,
     /// Column `a` of `Σ w 𝒬 Y(𝒬)` within the label of `a`, as row `a`.
     left: SparseBlock,
+    /// The same of `(Σ w 𝒬 Y(𝒬))†`, for the adjoint (built when needed).
+    left_adjoint: OnceLock<SparseBlock>,
     /// The union of the terms' patterns, for estimates.
     pattern: SparseBlock,
     /// The blocks of coherence order.
@@ -386,9 +388,10 @@ impl RedfieldBlocks {
         (count.0, count.1 + pairs)
     }
 
-    /// `out[i] += scale · R(x)` on block `k`: `x` the values of its elements
-    /// (in its order), `position[j]` where element `j` of the block lies in
-    /// `out`, applied from the terms by operator products without storing
+    /// `out[i] += scale · R(x)` (with `adjoint`, `R†(x)`: the left products
+    /// adjoint, the rest self-adjoint) on block `k`: `x` the values of its
+    /// elements (in its order), `position[j]` where element `j` of the block
+    /// lies in `out`, applied from the terms by operator products without storing
     /// the block: `Σ w 𝒬Y X + X (Σ w 𝒬Y)† − Σ_t w_t (𝒬 X Y + Y X 𝒬)` on the
     /// `d × d` matrix `X` of the block, each `𝒬 X Y` as `𝒬 (X Y)` with the
     /// product `X Y` shared by the entries it feeds, read back on the
@@ -399,8 +402,14 @@ impl RedfieldBlocks {
         x: &[C64],
         scale: C64,
         position: &[u32],
+        adjoint: bool,
         out: &mut [C64],
     ) {
+        let left = if adjoint {
+            self.left_adjoint.get_or_init(|| self.left.adjoint())
+        } else {
+            &self.left
+        };
         let g = &self.grouping;
         let d = g.order.len();
         let elements = &self.liouville.blocks[k].1;
@@ -499,13 +508,13 @@ impl RedfieldBlocks {
                         continue;
                     }
                     let (pa, pb) = (g.rank[a] as usize, g.rank[b] as usize);
-                    for (pc, w) in self.left.row(pa) {
+                    for (pc, w) in left.row(pa) {
                         let i = index[pc * d + pb];
                         if i != u32::MAX {
                             acc[i as usize] += w * v;
                         }
                     }
-                    for (pe, w) in self.left.row(pb) {
+                    for (pe, w) in left.row(pb) {
                         let i = index[pa * d + pe];
                         if i != u32::MAX {
                             acc[i as usize] += w.conj() * v;
@@ -687,6 +696,111 @@ fn spectral(x: &SparseBlock, eigen: &[Eigenblock], grouping: &Grouping, tau: f64
     SparseBlock::from_triplets(d, parts.into_iter().flatten().collect())
 }
 
+/// `∂Y(X)/∂B` of [`spectral`] for the field derivative `H_Z` of the
+/// laboratory `H₀` (`hz[k]`: its block in the eigenbasis of eigenblock
+/// `k`), from the resolvent: `Y = λ(λ² + L²)⁻¹X` with `L = [H₀, ·]`, so
+/// `∂Y = −(λ² + L²)⁻¹(L L' + L' L) Y` with `L' = [H_Z, ·]`. In the
+/// eigenbasis `L` is `ω∘` and `L'` the commutator with `H̃_Z`, which keeps
+/// the labels: no derivative of the eigenvectors, and defined at
+/// degeneracies and crossings.
+fn spectral_derivative(
+    x: &SparseBlock,
+    eigen: &[Eigenblock],
+    hz: &[CMatrix],
+    grouping: &Grouping,
+    tau: f64,
+) -> SparseBlock {
+    let d = x.n;
+    let mut home = vec![(0u32, 0u32); d];
+    for (k, block) in eigen.iter().enumerate() {
+        for (i, &s) in block.states.iter().enumerate() {
+            home[s] = (k as u32, i as u32);
+        }
+    }
+    let lambda = 1.0 / tau;
+    let parts: Vec<Vec<(u32, u32, C64)>> = map_tasks(eigen.len(), |ka| {
+        let a = &eigen[ka];
+        let mut subs: BTreeMap<u32, CMatrix> = BTreeMap::new();
+        for (i, &s) in a.states.iter().enumerate() {
+            for (pc, v) in x.row(grouping.rank[s] as usize) {
+                let (kb, j) = home[grouping.order[pc]];
+                subs.entry(kb).or_insert_with(|| {
+                    CMatrix::zeros(a.states.len(), eigen[kb as usize].states.len())
+                })[(i, j as usize)] = v;
+            }
+        }
+        let mut out = Vec::new();
+        for (kb, sub) in subs {
+            let b = &eigen[kb as usize];
+            let t = cmul(&cmul(&a.vectors.adjoint(), &sub), &b.vectors);
+            let (m, n) = (a.values.len(), b.values.len());
+            let omega = CMatrix::from_fn(m, n, |r, c| {
+                C64::new((a.shift - b.shift) + a.values[r] - b.values[c], 0.0)
+            });
+            // Ỹ = J∘X̃, then P = ω∘(L'Ỹ) + L'(ω∘Ỹ), ∂Ỹ = −G∘P.
+            let y = CMatrix::from_fn(m, n, |r, c| {
+                let w = omega[(r, c)].re;
+                t[(r, c)] * (lambda / (lambda * lambda + w * w))
+            });
+            let commutator = |z: &CMatrix| cmul(&hz[ka], z) - cmul(z, &hz[kb as usize]);
+            let wy = omega.component_mul(&y);
+            let p = omega.component_mul(&commutator(&y)) + commutator(&wy);
+            let dy = CMatrix::from_fn(m, n, |r, c| {
+                let w = omega[(r, c)].re;
+                -p[(r, c)] / (lambda * lambda + w * w)
+            });
+            let back = cmul(&cmul(&a.vectors, &dy), &b.vectors.adjoint());
+            let floor = 1e-15 * back.iter().fold(0.0f64, |m, z| m.max(z.norm()));
+            for (r, &s) in a.states.iter().enumerate() {
+                for (c, &e) in b.states.iter().enumerate() {
+                    let v = back[(r, c)];
+                    if v.norm() > floor {
+                        out.push((grouping.rank[s], grouping.rank[e], v));
+                    }
+                }
+            }
+        }
+        out
+    });
+    SparseBlock::from_triplets(d, parts.into_iter().flatten().collect())
+}
+
+/// Redfield theory needs fast motion: `|H₁| τ ≪ 1` for the slowest
+/// correlation time `τ`.
+fn check_narrowing(
+    interactions: &[([[f64; 3]; 3], Interaction)],
+    modes: &[motion::Mode],
+) -> Result<()> {
+    let strength = interactions
+        .iter()
+        .map(|(a, _)| a.iter().flatten().map(|x| x * x).sum::<f64>().sqrt())
+        .fold(0.0, f64::max);
+    let tau = modes.iter().map(|m| 1.0 / m.rate).fold(0.0, f64::max);
+    let narrowing = strength * tau;
+    if narrowing.is_nan() || narrowing > MAX_NARROWING {
+        return Err(QsoError::invalid(
+            "redfield",
+            format!(
+                "an interaction of {strength:.3e} rad/s with a correlation time of {tau:e} s \
+                 is outside Redfield theory, which needs |H₁|·τ_c ≪ 1 (here \
+                 {narrowing:.3e})"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// `A + B` of two sparse matrices of one size.
+fn add_blocks(a: &SparseBlock, b: &SparseBlock) -> SparseBlock {
+    let mut triplets = Vec::with_capacity(a.nnz() + b.nnz());
+    for m in [a, b] {
+        for r in 0..m.n {
+            triplets.extend(m.row(r).map(|(c, v)| (r as u32, c as u32, v)));
+        }
+    }
+    SparseBlock::from_triplets(a.n, triplets)
+}
+
 /// Column `a` of `Σ w 𝒬 Y(𝒬)` within the label of `a` (the part a
 /// column of a block can reach), as row `a`: `(𝒬Y)_ca = Σ_m conj(𝒬_mc
 /// Y_am)`.
@@ -723,6 +837,55 @@ fn left_products(terms: &[Term], g: &Grouping) -> SparseBlock {
     .flatten()
     .collect();
     SparseBlock::from_rows(d, rows)
+}
+
+/// The Redfield blocks from their terms: the left products, the pattern,
+/// the rate bound and the (unbuilt) blocks of coherence order.
+fn assemble(grouping: Grouping, terms: Vec<Term>, labels: &[Vec<i32>]) -> Result<RedfieldBlocks> {
+    let d = grouping.order.len();
+    let left = left_products(&terms, &grouping);
+    let finite = |m: &SparseBlock| {
+        (0..m.n).all(|r| m.row(r).all(|(_, v)| v.re.is_finite() && v.im.is_finite()))
+    };
+    if !(finite(&left) && terms.iter().all(|t| finite(&t.q) && finite(&t.y))) {
+        return Err(QsoError::invalid(
+            "redfield",
+            "the Redfield superoperator is not finite",
+        ));
+    }
+    let mut triplets = Vec::new();
+    for t in &terms {
+        for m in [&t.q, &t.y] {
+            for r in 0..d {
+                triplets.extend(m.row(r).map(|(c, _)| (r as u32, c as u32, ONE)));
+            }
+        }
+    }
+    let pattern = SparseBlock::from_triplets(d, triplets);
+    // Σ_ce |R_ce,ab| ≤ |𝒬Y col a| + |𝒬Y col b| + Σ w (‖𝒬‖‖Y‖ + ‖Y‖‖𝒬‖).
+    let rate = 2.0 * left.norm_inf()
+        + terms
+            .iter()
+            .map(|t| 2.0 * t.w * t.q.norm_inf() * t.y.norm_inf())
+            .sum::<f64>();
+    let liouville = Liouville::new(labels, None);
+    let built = (0..liouville.blocks.len())
+        .map(|_| OnceLock::new())
+        .collect();
+    let counts = (0..liouville.blocks.len())
+        .map(|_| OnceLock::new())
+        .collect();
+    Ok(RedfieldBlocks {
+        grouping,
+        terms,
+        left,
+        left_adjoint: OnceLock::new(),
+        pattern,
+        liouville,
+        built,
+        counts,
+        rate,
+    })
 }
 
 impl SpinSystem {
@@ -969,24 +1132,7 @@ impl SpinSystem {
             return Ok(None);
         }
         let modes = self.modes(&interactions);
-        // Redfield theory needs fast motion: |H₁| τ ≪ 1 for the slowest
-        // correlation time τ.
-        let strength = interactions
-            .iter()
-            .map(|(a, _)| a.iter().flatten().map(|x| x * x).sum::<f64>().sqrt())
-            .fold(0.0, f64::max);
-        let tau = modes.iter().map(|m| 1.0 / m.rate).fold(0.0, f64::max);
-        let narrowing = strength * tau;
-        if narrowing.is_nan() || narrowing > MAX_NARROWING {
-            return Err(QsoError::invalid(
-                "redfield",
-                format!(
-                    "an interaction of {strength:.3e} rad/s with a correlation time of {tau:e} s \
-                     is outside Redfield theory, which needs |H₁|·τ_c ≪ 1 (here \
-                     {narrowing:.3e})"
-                ),
-            ));
-        }
+        check_narrowing(&interactions, &modes)?;
         if modes.is_empty() {
             return Ok(None);
         }
@@ -1042,48 +1188,117 @@ impl SpinSystem {
                 });
             }
         }
-        let left = left_products(&terms, &grouping);
-        let finite = |m: &SparseBlock| {
-            (0..m.n).all(|r| m.row(r).all(|(_, v)| v.re.is_finite() && v.im.is_finite()))
-        };
-        if !(finite(&left) && terms.iter().all(|t| finite(&t.q) && finite(&t.y))) {
-            return Err(QsoError::invalid(
-                "redfield",
-                "the Redfield superoperator is not finite",
-            ));
+        assemble(grouping, terms, &labels).map(Some)
+    }
+
+    /// The Redfield superoperator at field `b` and its derivative with
+    /// respect to the field, both as terms (for application without
+    /// storing them): the operators `𝒬(B) = 𝒬_D + B·𝒬_C` are affine (the
+    /// dipolar part fixed, the shielding's `∝ B`), so
+    /// `R'(B) = R[𝒬_C, Y(𝒬)] + R[𝒬, Y'(𝒬)]` with
+    /// `Y'(𝒬) = Y(𝒬_C) + (∂_B Y)(𝒬)` (see [`spectral_derivative`]), each a
+    /// set of terms `w·(A B X + X B A − A X B − B X A)`. `None` without
+    /// Redfield relaxation.
+    pub(super) fn redfield_field(
+        &self,
+        b: f64,
+    ) -> Result<Option<(RedfieldBlocks, RedfieldBlocks)>> {
+        if !self.has_motion() {
+            return Ok(None);
         }
-        let mut triplets = Vec::new();
-        for t in &terms {
-            for m in [&t.q, &t.y] {
-                for r in 0..d {
-                    triplets.extend(m.row(r).map(|(c, _)| (r as u32, c as u32, ONE)));
+        // The interactions per unit field, so that the modes and their
+        // weights are those of every field (the shielding's ∝ B).
+        let unit = self.interactions(1.0);
+        if unit.is_empty() {
+            return Ok(None);
+        }
+        let modes = self.modes(&unit);
+        // Redfield theory at this field, as `redfield` checks it.
+        let here = self.interactions(b);
+        check_narrowing(&here, &self.modes(&here))?;
+        if modes.is_empty() {
+            return Ok(None);
+        }
+        let labels = self.labels();
+        let mut lab = self.clone();
+        lab.frame = Frame::Laboratory;
+        let d = self.dimension();
+        let h = lab.hamiltonian_at(b);
+        let eigen = lab.eigenblocks(&h);
+        let hz_full = lab.hamiltonian_at(1.0) - lab.hamiltonian_at(0.0);
+        let hz: Vec<CMatrix> = eigen
+            .iter()
+            .map(|e| {
+                let sub = CMatrix::from_fn(e.states.len(), e.states.len(), |r, c| {
+                    hz_full[(e.states[r], e.states[c])]
+                });
+                cmul(&cmul(&e.vectors.adjoint(), &sub), &e.vectors)
+            })
+            .collect();
+        let grouping = Grouping::new(&labels);
+        let locals: Vec<(Vec<usize>, Vec<CMatrix>)> =
+            unit.iter().map(|&(_, c)| self.local_tensor(c)).collect();
+        let shielding: Vec<bool> = unit
+            .iter()
+            .map(|(_, c)| matches!(c, Interaction::Shielding(_)))
+            .collect();
+        let pairs = [(0, 0), (1, 1), (2, 2), (0, 1), (0, 2), (1, 2)];
+        let build = |weights: &[f64], p: usize, only_shielding: bool, field: f64| {
+            let mut triplets = Vec::new();
+            for (((spins, local), &weight), &csa) in locals.iter().zip(weights).zip(&shielding) {
+                if weight == 0.0 || (only_shielding && !csa) {
+                    continue;
+                }
+                let scale = if csa { field } else { 1.0 };
+                if scale == 0.0 {
+                    continue;
+                }
+                for (r, c, v) in self.embed_local(spins, &local[p]) {
+                    triplets.push((grouping.rank[r], grouping.rank[c], v * weight * scale));
+                }
+            }
+            SparseBlock::from_triplets(d, triplets)
+        };
+        let mut terms = Vec::new();
+        let mut derivative = Vec::new();
+        for mode in &modes {
+            let tau = 1.0 / mode.rate;
+            for (p, &(x, y)) in pairs.iter().enumerate() {
+                let weight = if x == y { 1.0 } else { 2.0 } / 5.0;
+                let q = build(&mode.weights, p, false, b);
+                let qc = build(&mode.weights, p, true, 1.0);
+                let yq = spectral(&q, &eigen, &grouping, tau);
+                if qc.nnz() > 0 {
+                    derivative.push(Term {
+                        q: qc.clone(),
+                        y: yq.clone(),
+                        w: weight,
+                    });
+                }
+                if q.nnz() > 0 {
+                    let mut dy = spectral_derivative(&q, &eigen, &hz, &grouping, tau);
+                    if qc.nnz() > 0 {
+                        let yc = spectral(&qc, &eigen, &grouping, tau);
+                        dy = add_blocks(&dy, &yc);
+                    }
+                    derivative.push(Term {
+                        q: q.clone(),
+                        y: dy,
+                        w: weight,
+                    });
+                    terms.push(Term {
+                        q,
+                        y: yq,
+                        w: weight,
+                    });
                 }
             }
         }
-        let pattern = SparseBlock::from_triplets(d, triplets);
-        // Σ_ce |R_ce,ab| ≤ |𝒬Y col a| + |𝒬Y col b| + Σ w (‖𝒬‖‖Y‖ + ‖Y‖‖𝒬‖).
-        let rate = 2.0 * left.norm_inf()
-            + terms
-                .iter()
-                .map(|t| 2.0 * t.w * t.q.norm_inf() * t.y.norm_inf())
-                .sum::<f64>();
-        let liouville = Liouville::new(&labels, None);
-        let built = (0..liouville.blocks.len())
-            .map(|_| OnceLock::new())
-            .collect();
-        let counts = (0..liouville.blocks.len())
-            .map(|_| OnceLock::new())
-            .collect();
-        Ok(Some(RedfieldBlocks {
-            grouping,
-            terms,
-            left,
-            pattern,
-            liouville,
-            built,
-            counts,
-            rate,
-        }))
+        let grouping_d = Grouping::new(&labels);
+        Ok(Some((
+            assemble(grouping, terms, &labels)?,
+            assemble(grouping_d, derivative, &labels)?,
+        )))
     }
 
     /// Whether the Redfield relaxation is unchanged by the spin
