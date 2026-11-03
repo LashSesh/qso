@@ -8,6 +8,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Exchange and reactions on sparse blocks** (1.54, `spin::Exchange`,
+  `spin::Reactions`): the joint blocks of chemical exchange and reaction
+  kinetics beyond 2048 elements, propagated by Krylov steps (or dense
+  exponentials, whichever costs less), for delays, sweeps and free
+  induction decays; steady states of exchange by GMRES with a
+  preconditioner in the eigenbasis of every site's Hamiltonian; field
+  profiles of exchange on sparse blocks with the relaxation and exchange
+  interpolated over the field range (`Exchange.profile_relaxation_error`
+  in Rust and Python). SABRE-SHEATH with nine spins in the complex and
+  seven in the free substrate: the steady state in 94 s, a second of
+  build-up in 6 s, a field-profile evaluation with its gradient in 56 s.
+  Equal to the dense blocks where both run, and to a Monte Carlo of
+  reaction events within its standard error.
+
 - **Interacting walkers without visiting every configuration** (1.53,
   `walks::CoordinateInteractingWalk`): bosons, fermions or distinguishable
   particles with on-site and neighbour interaction on Hamming graphs

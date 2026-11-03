@@ -56,7 +56,7 @@ which withdraws the results of version 1.
 | Boson sampling | exact probabilities and exact sampling (1.1); partial distinguishability, loss and Gaussian boson sampling with hafnians and torontonians (1.14) | mixed Gaussian states with many photons spread over many modes are impractical (10¹² operations at 20 photons in 10 modes) |
 | Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4); slow noise from Markov processes (telegraph, Ornstein–Uhlenbeck, quasi-static, 1/f) averaged exactly on density matrices (1.44) | noise learning for layers of two-qubit Clifford gates only, on density matrices up to 10 qubits and Pauli frames up to 64 (1.12, 1.31), with non-Pauli channels twirled one at a time; mitigation with the learned model above 24 qubits only on matrix-product states, for channels that are mixtures of unitaries (1.31); no leakage; channels on at most four qubits (1.30); slow noise averaged exactly up to 12 qubits and processes with finitely many states (1.44), sampled on trajectories beyond (1.30); virtual distillation (1.17) mitigates only its measured copies' preparation |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18); interacting bosons, fermions and distinguishable particles with certificates for graph isomorphism (1.29); symmetry for driven walks, open walks on orbitals, coined walks with dephasing, hypercubes with dephasing up to d = 230 (1.38); interacting walkers on the orbits of automorphisms (three bosons on Q₉: 2284 orbits of 22.5 million configurations) and up to four particles on hypercubes (1.43); open walks on large symmetric graphs from point stabilisers (Q₁₈, H(4, 10), J(24, 4); 1.48) | interacting walkers stop at 2²² configurations without symmetry and 2²⁷ with it, whose orbits come from a union–find over every configuration (1.43); open walks beyond 8192 nodes need a start whose stabiliser leaves few orbitals (dense graphs and circulants stay at 8192 nodes; 1.48); pretty good transfer on other graphs has no exact reference |
-| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37); the ¹³C bath of an NV centre by the cluster-correlation expansion (1.39); the optical cycle, ODMR, pulsed readout and magnetometer sensitivity in fields of any direction, and ensembles (1.40); sparse relaxation blocks propagated by Krylov steps, Redfield relaxation from sparse terms and equivalent spins: seven and eight relaxing protons for seconds (1.41); optimal control with relaxation on sparse blocks and on the orbits of equivalent spins, seven and eight spins (1.46); Redfield relaxation with anisotropic diffusion and model-free internal motion (1.49); reaction kinetics with spins: PASADENA, ALTADENA and SABRE as they run (1.50); field profiles with relaxation beyond six spins, the relaxation interpolated over the field (1.51) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the nested-commutator bound of product formulas (1.32) is tight for small Hamiltonians only, its tail ignoring which terms commute; Redfield relaxation takes rigid-body diffusion and model-free internal motion, not correlated motions of groups (1.49), and propagations beyond 1.5·10¹² operations or 2 GiB are refused (eleven protons with dipolar relaxation, nine for 100 s; 1.41); chemical exchange and reaction kinetics (1.50) need one block of at most 2048 elements over all sites, and only one reactant of a reaction carries spins; field profiles with relaxation hold the relaxation at up to 33 fields (eight spins with dipolar relaxation would need 9.4 GB; 1.51) and have many local optima; an evaluation of eight relaxing spins takes tens of seconds (1.46); the NV bath of 1.39 takes ideal pulses only (finite ones: the generalised expansion, 1.45), its expansion can diverge (results beyond `|L| = 1` are refused), and the nuclei next to the vacancy need given contact couplings (1.39); the optical model's rotating-wave approximation fails near the ground-state anticrossing (1.40) |
+| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37); the ¹³C bath of an NV centre by the cluster-correlation expansion (1.39); the optical cycle, ODMR, pulsed readout and magnetometer sensitivity in fields of any direction, and ensembles (1.40); sparse relaxation blocks propagated by Krylov steps, Redfield relaxation from sparse terms and equivalent spins: seven and eight relaxing protons for seconds (1.41); optimal control with relaxation on sparse blocks and on the orbits of equivalent spins, seven and eight spins (1.46); Redfield relaxation with anisotropic diffusion and model-free internal motion (1.49); reaction kinetics with spins: PASADENA, ALTADENA and SABRE as they run (1.50); field profiles with relaxation beyond six spins, the relaxation interpolated over the field (1.51); exchange and reactions on sparse blocks with iterative steady states and field profiles: SABRE with nine spins in the complex beside seven in the substrate (1.54) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the nested-commutator bound of product formulas (1.32) is tight for small Hamiltonians only, its tail ignoring which terms commute; Redfield relaxation takes rigid-body diffusion and model-free internal motion, not correlated motions of groups (1.49), and propagations beyond 1.5·10¹² operations or 2 GiB are refused (eleven protons with dipolar relaxation, nine for 100 s; 1.41); chemical exchange and reaction kinetics take Krylov steps beyond 2048 elements per block (1.54), unaffordable in the laboratory frame at millitesla fields and more, and only one reactant of a reaction carries spins; field profiles with relaxation hold the relaxation at up to 33 fields (eight spins with dipolar relaxation would need 9.4 GB; 1.51) and have many local optima; an evaluation of eight relaxing spins takes tens of seconds (1.46); the NV bath of 1.39 takes ideal pulses only (finite ones: the generalised expansion, 1.45), its expansion can diverge (results beyond `|L| = 1` are refused), and the nuclei next to the vacancy need given contact couplings (1.39); the optical model's rotating-wave approximation fails near the ground-state anticrossing (1.40) |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
 | Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22); exact circuit distances of any model by a parallel search or the Brouwer–Zimmermann enumeration, with the lightest logical error as circuit locations (1.42); the search on the orbits of an error model's symmetries: [[144, 12, 12]] over three rounds of the depth-8 cycle has circuit distance 10 (1.47); logical failure rates far below sampling by splitting, with their leading term (surface codes to 10⁻⁹, [[72, 12, 6]] to 10⁻¹³; 1.52) | exact circuit distances need time exponential in the distance (each weight about 17 times the last on bicycle circuits); symmetries divide it by a factor that grows with their number (41 to 43 for 72); splitting needs a burn-in long enough, which its error does not show (1.52); decoders take a whole experiment at once, so long memories and BP+OSD over many rounds grow beyond time and memory |
 | Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9), in the browser build too (1.25) | — |
@@ -5452,7 +5452,7 @@ every measured figure was reproduced. Findings, all fixed:
 - **Overflow.** `CoordinateGraph::num_nodes` and `degree` on unchecked
   parameters overflowed; they saturate.
 
-### 1.54 — Exchange and reactions on sparse blocks (M–L)
+### 1.54 — Exchange and reactions on sparse blocks (M–L, delivered)
 
 Use case: SABRE and PHIP with the spin systems of real catalysts: an
 iridium complex with two hydrides, the bound substrate's ¹⁵N and its ring
@@ -5468,6 +5468,113 @@ and 1.50 stop at one joint block of 2048 elements over all sites.
 Validation: equal to the dense blocks of 1.35 and 1.50 where both run;
 steady states equal the dense solve; traces equal the amounts; a Monte
 Carlo of reaction events agrees within its standard error.
+
+Delivered in `spin/exchange/sparse.rs` (with `sparse/secular.rs` and
+`sparse/field.rs`), `spin/exchange/kinetics.rs` and `spin/krylov.rs`:
+
+- **Sparse blocks.** The joint generator of exchange is built from one
+  term emitter for the dense and the sparse blocks: each site's evolution
+  and relaxation, the channels' losses and transfers, and the drift of the
+  zero-order block. Each block of coherence order over all sites
+  propagates by a dense exponential or by the Krylov steps of 1.41,
+  whichever is estimated to cost less (Krylov alone beyond 2048
+  elements), for delays, sweeps and free induction decays. The drift is
+  an augmented coordinate scaled to the size of the deviation, so the
+  Krylov tolerance is relative to the deviation and not to `c_s/d_s`.
+  Reactions keep the generator's parts on one sparse pattern (each
+  site's evolution, the losses of every reactant site and the transfers
+  of every reaction), combined with the pseudo-rates at every step's
+  midpoint; the quadratic inhomogeneous term of 1.50 enters through three
+  augmented coordinates of the Krylov operator. The 2048-element limit of
+  both gives way to estimates of memory (2 GiB) and work.
+- **Steady states.** Beyond the dense limit, by GMRES on
+  `(G + Σ_s ρ_s t_s t_sᵀ) x = −f`, `t_s` the trace of site `s`: the
+  chemistry makes `G` singular, `Tr Δ_s = 0` completes it, and this
+  system is not singular and has the same solution. The preconditioner
+  works in the eigenbasis of every site's Hamiltonian, where `−i[H, ·]` is
+  diagonal: the slow elements (populations of the eigenstates and
+  coherences within ten times the site's fastest rate, at most 4096) of
+  all sites are solved exactly by dense LU with the trace terms, the fast
+  coherences divided by `−iω − γ̄`. GMRES restarts only beyond a quarter of
+  the memory limit and stops at 10⁻¹³ of the right-hand side; the residual
+  is then checked against the generator as in the dense solve.
+- **Field profiles** of exchange take the sparse blocks with the
+  interpolated relaxation of 1.51: the coherent parts `C₀ + B·C_Z` are
+  affine in the field, the rest `R(B)` (relaxation, exchange with the
+  channels' fresh thermal states, the drift) is interpolated once per
+  profile over its range on Chebyshev–Lobatto nodes, and the gradient
+  pairs the costate with `C_Z + R'(B)` by the Gauss–Legendre rule of
+  1.46. `Exchange::profile_relaxation_error` (Python too) gives the
+  interpolant's stated error and its nodes; the work and the memory of an
+  evaluation (the quadrature's states in every substep included) are
+  checked before it starts.
+
+Changes to the plan:
+
+- **GMRES with a secular preconditioner instead of a generic one.** An
+  incomplete LU factorisation of the generator (ILU(0)) stalled at
+  microtesla fields, where the coherent part dominates and is indefinite:
+  restarted GMRES did not reduce the residual below 40 %, and without
+  restarts it needed as many iterations as the block has elements. With
+  the eigenbasis preconditioner the same blocks converge to 10⁻¹³.
+- **Rows replaced by traces** (the dense solve) made the preconditioned
+  operator singular, since the preconditioner drops a different equation
+  than the system; the rank-`sites` term `ρ_s t_s t_sᵀ` lies on the
+  populations in every basis and keeps the two consistent.
+- **Field profiles always on sparse blocks**, as in 1.51; the dense path
+  with its extrapolated differences remains for the tests.
+
+Not done, and why:
+
+- **Krylov steps in the laboratory frame at millitesla fields and
+  more.** The coherences between isotopes precess at their Larmor
+  difference, and Krylov steps resolve it; there the dense exponentials
+  win while they fit, and beyond 2048 elements such delays are refused by
+  the work limit (the rotating frame is the remedy at high field).
+- **Equivalent spins.** The orbits of 1.41 are not used for exchange: the
+  channels would need the symmetry checked across sites.
+- **More than 4096 slow elements** in a steady state (many degenerate
+  eigenstates) are refused rather than solved with a coarser
+  preconditioner.
+
+Measured (four cores, release build): SABRE-SHEATH at 0.14 µT in the
+laboratory frame, two hydrides from parahydrogen (90 %), the bound ¹⁵N and
+its ring protons beside the free substrate, every spin with `T₁` and
+`T₂`, exchange at 2 s⁻¹ and hydride renewal at 0.5 s⁻¹:
+
+| Complex, substrate | Zero-order block | Steady state | 1 s from thermal | Profile of 5 steps over 1 s (interpolant, evaluation with gradient) |
+|---|---|---|---|---|
+| 7 and 5 spins | 3 684 | 4.9 s | 0.3 s | 0.2 s, 5.1 s |
+| 8 and 6 spins | 13 794 | 73 s | 1.3 s | 1.3 s, 15 s |
+| 9 and 7 spins | 52 052 | 94 s | 6.1 s | 6.2 s, 56 s |
+
+At most 1.1 GB. The interpolant converged at five nodes to 3·10⁻¹⁶ (the
+relaxation is field-independent there, the fresh thermal states nearly
+linear). PHIP (`S → P` at 1 s⁻¹, the hydrides from parahydrogen, with
+spectator protons) at 5 µT: a product of seven spins (largest block
+3684) over 1 s in 5.4 s, eight (13 794) over 0.5 s in 9.8 s, nine
+(52 052) over 0.2 s in 18 s.
+
+Validation: Krylov blocks equal the dense blocks of 1.35 to 10⁻⁹ of the
+deviation for SABRE with one and two ring protons at 0.14 and 20 µT in
+the laboratory frame (delays and sweeps) and at 9.4 T in the rotating
+frame (delays and a pulse), and so do the free induction decays; the
+traces stay 1. The GMRES steady states equal the dense solve to 10⁻¹³ (to
+3·10⁻¹⁴ with three ring protons at 0.14 µT, where ILU(0) failed).
+Beyond the dense limit (seven spins) the steady state is stationary
+under 2 s of evolution to 10⁻⁸, and thermal states approach it. Reactions
+on Krylov steps equal the dense steps of 1.50 to 10⁻⁹ (PHIP at 5 µT
+with a sweep, second order with parahydrogen consumed, and at 9.4 T with
+a pulse), the product's trace equals the amount formed to 10⁻¹²; three
+uncoupled spectator protons (a zero-order block of 3684 elements) leave
+the core's polarisations equal to those of the model without them to
+10⁻⁹; a Monte Carlo of 4000 molecules that react at exponential times,
+carried and fresh spins mapped by hand, agrees with `Reactions` within
+four standard errors. Field profiles on sparse blocks equal the dense
+blocks' transfer to 10⁻¹⁰ and gradient to 10⁻⁶ (the dense derivative
+by differences), are replayed by `evolve` to 10⁻¹⁰, and beyond the
+dense limit follow Richardson-extrapolated central differences along a
+direction to 10⁻⁶.
 
 ### 1.55 — Relaxation applied without storing it (M)
 

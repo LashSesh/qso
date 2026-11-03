@@ -363,10 +363,30 @@ What the model leaves out:
   populations, or as the parahydrogen singlet.
 - **Events.** Pulses act on an isotope in every site; there are no
   selective or shaped pulses or spin locks during exchange.
-- **Size and cost.** One block of coherence order over all sites holds at
-  most 2048 elements (about six plus four spins ½ in the laboratory
-  frame); every step of a sweep rebuilds and exponentiates all blocks,
-  and sweeps beyond the work limit are refused before they start.
+- **Size and cost.** Each block of coherence order over all sites
+  propagates by a dense exponential or by Krylov steps on its sparse
+  matrix, whichever costs less; beyond 2048 elements only Krylov steps,
+  so larger models need frequencies that Krylov steps can follow (the
+  rotating frame, or the laboratory frame at microtesla fields). Every
+  step of a sweep rebuilds all blocks, and delays and sweeps beyond the
+  work limit (1.5·10¹² operations) or 2 GiB are refused before they
+  start.
+- **Large models.** SABRE-SHEATH at 0.14 µT in the laboratory frame
+  (four cores, release build; two hydrides, the ¹⁵N and its ring protons
+  beside the free substrate, every spin relaxing):
+
+  | Complex, substrate | Zero-order block | Steady state | 1 s from thermal | Profile of 5 steps (evaluation with gradient) |
+  |---|---|---|---|---|
+  | 7 and 5 spins | 3 684 | 4.9 s | 0.3 s | 5.1 s |
+  | 8 and 6 spins | 13 794 | 73 s | 1.3 s | 15 s |
+  | 9 and 7 spins | 52 052 | 94 s | 6.1 s | 56 s |
+
+  Beyond 2048 elements `steady_state` solves by GMRES, preconditioned in
+  the eigenbasis of every site's Hamiltonian: the populations of the
+  eigenstates and the coherences slower than ten times the fastest rate
+  exactly (at most 4096 of them), the faster coherences by their
+  frequency and mean decay. It converges to 10⁻¹³ of the equations and
+  is checked as the dense solve is.
 - **Precision.** Next to parahydrogen order of 1, thermal polarisation
   (10⁻¹⁰ at a millitesla) is resolved to about 10⁻¹⁵ by `steady_state`
   (checked against a 40-digit solution); long delays in the laboratory
@@ -441,6 +461,11 @@ events before the first step (limit 1.5·10¹² operations).
   `Exchange`; with the free catalyst deactivated at 5 s⁻¹ it peaks near
   70 % and falls to 62 % by 120 s as the complex is lost. All of it takes
   52 s.
+- **Size.** As for `Exchange`, blocks beyond 2048 elements take Krylov
+  steps (the generator's parts combined with the pseudo-rates at each
+  step's midpoint, the inhomogeneous term in three augmented
+  coordinates). PHIP at 5 µT with spectator protons: a product of seven
+  spins over 1 s in 5.4 s, of nine spins over 0.2 s in 18 s.
 - **Not modelled.** Correlated states of two reactants that both carry
   spins (only the first reactant site carries; a partner's spins are
   traced), reactions of third order, and spin-dependent chemistry.
@@ -584,7 +609,12 @@ print(cost["method"], cost["coefficients"])  # sparse 6145 (of 16 385)
   the transfer.
 - **Exchange.** `Exchange.optimize_profile` shapes the field of a
   chemical-exchange model (`spin.Profile`: range, steps, states and one
-  target operator per site), e.g. for SABRE.
+  target operator per site), e.g. for SABRE. It works on the sparse
+  blocks: the coherent part is affine in the field, and the relaxation,
+  the exchange (with its fresh thermal states) and the drift are
+  interpolated over the profile's range once per optimisation, as for a
+  single system; `Exchange.profile_relaxation_error(profile)` gives the
+  interpolant's stated error and its fields.
 - **Local optima.** L-BFGS finds a local optimum from each start: take
   the best of several seeds for pulses. Field profiles are strongly
   multimodal; start them where the physics starts (parahydrogen at zero
@@ -1169,6 +1199,17 @@ converge for finite pulses).
   drawn from the kinetics, each evolved alone with `T₁` and `T₂`, agrees
   within four standard errors (plus 10⁻³).
 
+- **Sparse blocks** (1.54). Krylov steps equal the dense blocks to 10⁻⁹
+  of the deviation for SABRE with one and two ring protons (laboratory
+  frame at 0.14 and 20 µT with sweeps, rotating frame at 9.4 T with a
+  pulse) and for the free induction decay, GMRES steady states equal the
+  dense solve to 10⁻¹³, and reaction steps on Krylov blocks equal the
+  dense steps of 1.50 to 10⁻⁹. Beyond the dense limit three uncoupled
+  spectator protons leave the core's polarisations unchanged to 10⁻⁹,
+  and a Monte Carlo of 4000 molecules reacting at exponential times
+  agrees with `Reactions` within four standard errors. Field profiles on
+  sparse blocks equal the dense transfer to 10⁻¹⁰ and follow
+  Richardson-extrapolated differences to 10⁻⁶ beyond the dense limit.
 - **Exchange against a dense reference.** An independent NumPy
   implementation of the homogeneous equations (partial traces by
   `einsum`, spin orders by axis permutations) agrees with delays, sweeps,

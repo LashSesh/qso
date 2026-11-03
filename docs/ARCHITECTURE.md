@@ -607,6 +607,29 @@ column. Steady states replace one population equation per site by
 `Tr Δ_s = 0`, scale rows and columns, and solve by fully pivoted LU,
 refusing pivots below 10⁻¹² of the largest.
 
+One term emitter (`Exchange::terms`) feeds both the dense blocks and the
+sparse ones (`spin/exchange/sparse.rs`): triplets per joint block, counted
+first so that the memory is known before they are kept, the mean
+precession of a coherence block subtracted from its diagonal and the
+drift of the zero-order block kept as a column. A block propagates by a
+dense exponential or by `expv` (`krylov.rs`, generic over an `Operator`),
+whichever the estimates make cheaper; the drift enters `expv` as an
+augmented coordinate (`Augmented`: a sparse block, extra columns and the
+coordinates' own small matrix) whose value is the size of the deviation,
+so the tolerance follows the deviation. Steady states beyond the dense
+limit solve `(G + Σ_s ρ_s t_s t_sᵀ) x = −f` by GMRES with full
+orthogonalisation (restarted beyond a quarter of the memory limit),
+preconditioned in the eigenbasis of every site's Hamiltonian
+(`sparse/secular.rs`): per label block `V† X V`, the slow elements of all
+sites through one dense LU of the generator restricted to them (its
+columns from sparse products with the eigen-elements, in parallel), the
+fast coherences divided by `−iω − γ̄`. Field profiles (`sparse/field.rs`)
+split every joint block into the coherent `C₀` and `C_Z` (from
+`generator_entries` with no relaxation) and the rest `R(B)` (the terms
+with zero Hamiltonians), interpolate `R` on Chebyshev–Lobatto nodes in a
+`SparseFamily` per block, and evaluate with the Taylor substeps and
+Gauss–Legendre pairing of `control/sparse.rs`.
+
 Reaction kinetics (`spin/exchange/kinetics.rs`) uses the same joint
 blocks with amounts that change. The amounts follow their rate equations
 alone (Dormand–Prince, 10⁻¹²). The deviation `σ_s − c_s(t)/d_s` stays
@@ -620,7 +643,14 @@ by two more coordinates `u₁ = s/h`, `u₂ = (s/h)²/2` in the augmented
 exponential (dimensionless, so that fast reactions do not unbalance the
 exponential); steps `h` and `h/2` are extrapolated (the rule is
 symmetric). Steps follow the kinetics: at most 2 % of the amounts turned
-over and 2 % change of every reaction rate that still matters.
+over and 2 % change of every reaction rate that still matters. The
+generator's parts (each site's evolution and relaxation, `−1` on the
+elements of every reactant site, the transfer of every reaction with a
+source) are kept per joint block on their shared pattern
+(`SparseFamily`) and combined with the pseudo-rates at a step's
+midpoint; the step's block is then exponentiated densely, as before, or
+by `expv` on an `Augmented` operator with the three coordinates
+`[u₁, u₂, 1]`, scaled to the deviation.
 
 Optimal control (`spin/control.rs`) evaluates the transfer `Re Tr(C†
 ρ(T))` of piecewise-constant controls and its gradient in one forward and
@@ -638,10 +668,10 @@ derivative act on vectors only: `e^{LΔt}x` and the upper block of
 substeps of norm ½, summed until a term falls below rounding. Bounded
 amplitudes and fields are mapped by a sine from free variables (Hz for
 rf, a twentieth of the range for fields), and L-BFGS sees the objective
-divided by its natural size. Field profiles of an exchange use the same
-block exponentials per coherence-order block (a field keeps the orders),
-with the field derivative of the whole generator by Richardson-
-extrapolated central differences.
+divided by its natural size. Field profiles of an exchange take the
+sparse joint blocks with the interpolated rest (see above); the dense
+block exponentials with the field derivative of the whole generator by
+Richardson-extrapolated central differences remain for the tests.
 
 Rf controls with relaxation (`spin/control/sparse.rs`) keep that
 generator sparse: one block of all `d² + 1` elements from the column
