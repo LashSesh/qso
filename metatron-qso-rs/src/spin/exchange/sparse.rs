@@ -18,7 +18,7 @@ use super::super::blocks::LiouvilleBlock;
 use super::super::krylov::{
     Augmented, KRYLOV_STATIONARY, KRYLOV_TOLERANCE, SparseBlock, expv, krylov_bytes, krylov_work,
 };
-use super::super::{MAX_LIOUVILLE_BLOCK, MAX_RELAXATION_MEMORY, ZERO};
+use super::super::{MAX_LIOUVILLE_BLOCK, MAX_RELAXATION_MEMORY, MAX_RELAXATION_WORK, ZERO};
 use super::{Exchange, Joint};
 use crate::error::{QsoError, Result};
 use crate::linalg::CMatrix;
@@ -70,17 +70,19 @@ impl SparseJoint {
         self.n + usize::from(self.drift.is_some())
     }
 
-    /// `‖[A, drift]‖∞`.
+    /// A bound on `‖[A, drift/s]‖∞` with the drift scaled as
+    /// [`Self::propagate`] scales it (`s ≥ ‖drift‖/‖A‖∞`, so each of its
+    /// entries is at most `‖A‖∞`): independent of the concentrations' unit.
     fn norm(&self) -> f64 {
-        let mut rows: Vec<f64> = (0..self.n)
-            .map(|r| self.a.row(r).map(|(_, v)| v.norm()).sum())
-            .collect();
-        if let Some(d) = &self.drift {
-            for (r, v) in rows.iter_mut().zip(d) {
-                *r += v.norm();
-            }
-        }
-        rows.into_iter().fold(0.0, f64::max)
+        let a = self.a.norm_inf();
+        if self.drift.is_some() { 2.0 * a } else { a }
+    }
+
+    /// The augmented coordinate for the deviation `x`: its size, or the
+    /// drift's equilibrium value over the rates.
+    fn scale(&self, x: &[C64], drift: &[C64]) -> f64 {
+        let rates = self.a.norm_inf().max(f64::MIN_POSITIVE);
+        norm2(x).max(norm2(drift) / rates)
     }
 
     /// Operations of a dense exponential over `t`, if the block may be
@@ -129,8 +131,8 @@ impl SparseJoint {
         }
     }
 
-    /// The dense generator `[A, drift; 0, 0]` (shifted) times `t`.
-    fn dense(&self, t: f64) -> CMatrix {
+    /// The dense generator `[A, drift/s; 0, 0]` (shifted) times `t`.
+    fn dense(&self, t: f64, s: f64) -> CMatrix {
         let m = self.dense_size();
         let mut g = CMatrix::zeros(m, m);
         for r in 0..self.n {
@@ -140,15 +142,21 @@ impl SparseJoint {
         }
         if let Some(d) = &self.drift {
             for (r, v) in d.iter().enumerate() {
-                g[(r, self.n)] = v * t;
+                g[(r, self.n)] = v * (t / s);
             }
         }
         g
     }
 
-    /// The dense block as [`LiouvilleBlock`] (for the dense code paths).
+    /// The dense block as [`LiouvilleBlock`], its drift unscaled (for
+    /// blocks without one: free induction decays).
     pub fn liouville_block(&self, t: f64) -> LiouvilleBlock {
-        LiouvilleBlock::shifted(self.n, self.dense(t), self.shift * t, self.drift.is_some())
+        LiouvilleBlock::shifted(
+            self.n,
+            self.dense(t, 1.0),
+            self.shift * t,
+            self.drift.is_some(),
+        )
     }
 
     /// The block's elements after `t` from `x`, densely or by Krylov steps.
@@ -156,12 +164,19 @@ impl SparseJoint {
         debug_assert_eq!(x.len(), self.n);
         let phase = (self.shift * t).exp();
         if dense {
-            let p = expm(&self.dense(t));
+            let s = match &self.drift {
+                Some(d) => self.scale(x, d),
+                None => 1.0,
+            };
+            if s == 0.0 {
+                return Ok(x.to_vec());
+            }
+            let p = expm(&self.dense(t, s));
             let n = self.n;
             return Ok((0..n)
                 .map(|i| {
                     let mut v = if self.drift.is_some() {
-                        p[(i, n)]
+                        p[(i, n)] * s
                     } else {
                         ZERO
                     };
@@ -189,8 +204,7 @@ impl SparseJoint {
             Some(drift) => {
                 // The augmented coordinate at the deviation's size (or its
                 // equilibrium value, the drift over the rates).
-                let rates = self.a.norm_inf().max(f64::MIN_POSITIVE);
-                let s = norm2(x).max(norm2(drift) / rates);
+                let s = self.scale(x, drift);
                 if s == 0.0 {
                     return Ok(x.to_vec());
                 }
@@ -323,6 +337,7 @@ impl Exchange {
                 }
             }
             let pre = Secular::new(self, joint, j, block, b)?;
+            // G − Σ_s ρ_s t_s t_sᵀ (`pre.rho` holds −ρ_s).
             let apply = |x: &[C64], y: &mut [C64]| {
                 block.a.apply(x, y);
                 for (d, &rho) in diagonal.iter().zip(&pre.rho) {
@@ -332,7 +347,34 @@ impl Exchange {
                     }
                 }
             };
-            let x = gmres(n, apply, |r| pre.apply(r), &want).ok_or_else(refuse)?;
+            // Memory: the blocks, the preconditioner and the GMRES basis
+            // (as many vectors as fit beside them, at most a quarter of the
+            // limit); work: the build and every iteration.
+            let held: f64 = blocks.iter().map(|b| b.bytes(false)).sum::<f64>() + pre.bytes;
+            let room = ((MAX_RELAXATION_MEMORY / 4.0).min(MAX_RELAXATION_MEMORY - held)
+                / (16.0 * n.max(1) as f64))
+                .max(0.0) as usize;
+            if room < GMRES_RESTART.min(n) {
+                return Err(QsoError::invalid(
+                    "steady state",
+                    format!(
+                        "needs more than {:.1} GB (limit {:.1} GB); use fewer spins or the \
+                         rotating frame",
+                        held / 1e9,
+                        MAX_RELAXATION_MEMORY / 1e9
+                    ),
+                ));
+            }
+            let iteration = pre.apply_work + 8.0 * (block.a.nnz() + 8 * n) as f64;
+            let x = gmres(
+                n,
+                apply,
+                |r| pre.apply(r),
+                &want,
+                room,
+                (iteration, MAX_RELAXATION_WORK - pre.build_work),
+            )?
+            .ok_or_else(refuse)?;
             // The equations hold, relative to the generator applied to the
             // whole state (as the dense solve checks).
             let max_norm = |v: &[C64]| v.iter().fold(0.0f64, |m, z| m.max(z.norm()));
@@ -365,23 +407,26 @@ impl Exchange {
 }
 
 /// `A x = b` by GMRES (`apply`: `y = A x`), preconditioned on the right by
-/// `precondition`, restarted after as many basis vectors as a quarter of
-/// the memory limit holds (at least [`GMRES_RESTART`]), to
-/// [`GMRES_TOLERANCE`] of `‖b‖`; `None` if it does not converge within
-/// [`GMRES_ITERATIONS`].
+/// `precondition`, restarted after `room` basis vectors (at least
+/// [`GMRES_RESTART`]), to [`GMRES_TOLERANCE`] of `‖b‖`; `None` if it does
+/// not converge within [`GMRES_ITERATIONS`], an error once its iterations
+/// (`work.0` operations each, besides the orthogonalisation) would pass
+/// `work.1`.
 fn gmres(
     n: usize,
     apply: impl Fn(&[C64], &mut [C64]),
     precondition: impl Fn(&[C64]) -> Vec<C64>,
     b: &[C64],
-) -> Option<Vec<C64>> {
+    room: usize,
+    (per, limit): (f64, f64),
+) -> Result<Option<Vec<C64>>> {
     let target = GMRES_TOLERANCE * norm2(b);
     let mut x = vec![ZERO; n];
     if target == 0.0 {
-        return Some(x);
+        return Ok(Some(x));
     }
-    let room = (MAX_RELAXATION_MEMORY / 4.0 / (16.0 * n.max(1) as f64)) as usize;
     let restart = room.max(GMRES_RESTART).min(n.max(1));
+    let mut spent = 0.0;
     let mut iterations = 0;
     let mut w = vec![ZERO; n];
     loop {
@@ -389,10 +434,10 @@ fn gmres(
         let r: Vec<C64> = b.iter().zip(&w).map(|(b, ax)| b - ax).collect();
         let beta = norm2(&r);
         if beta <= target {
-            return Some(x);
+            return Ok(Some(x));
         }
         if iterations >= GMRES_ITERATIONS {
-            return None;
+            return Ok(None);
         }
         let mut basis: Vec<Vec<C64>> = vec![r.iter().map(|v| v / beta).collect()];
         let mut h: Vec<Vec<C64>> = Vec::new();
@@ -402,6 +447,17 @@ fn gmres(
         let mut k = 0;
         while k < restart && iterations < GMRES_ITERATIONS {
             iterations += 1;
+            spent += per + 16.0 * ((k + 1) * n) as f64;
+            if spent > limit {
+                return Err(QsoError::invalid(
+                    "steady state",
+                    format!(
+                        "GMRES needs more than {:.1e} operations after {iterations} \
+                         iterations; use fewer spins",
+                        MAX_RELAXATION_WORK
+                    ),
+                ));
+            }
             let z = precondition(&basis[k]);
             apply(&z, &mut w);
             let mut column = vec![ZERO; k + 2];
@@ -448,7 +504,7 @@ fn gmres(
                 acc -= h[j][i] * y[j];
             }
             if h[i][i].norm() == 0.0 {
-                return None;
+                return Ok(None);
             }
             y[i] = acc / h[i][i];
         }

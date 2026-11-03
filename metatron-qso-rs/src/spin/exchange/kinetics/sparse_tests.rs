@@ -245,7 +245,11 @@ fn reaction_events_sampled_one_by_one_agree() {
         )
         .unwrap();
     let start = [tipped.clone(), CMatrix::zeros(4, 4)];
-    let exact = r.evolve(&start, &[Event::Delay(total)]).unwrap();
+    // The exact ensemble on Krylov steps (the dense steps agree with them,
+    // see above).
+    let exact = r
+        .evolve_with(&start, &[Event::Delay(total)], Propagation::Krylov)
+        .unwrap();
     // The fresh spin: thermal populations of B's spin 1 alone.
     let fresh = {
         let p = b_sys.populations(1, 9.4);

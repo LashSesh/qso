@@ -289,13 +289,46 @@ impl Exchange {
         let field = |x: f64| 0.5 * (min + max) + 0.5 * (max - min) * x;
         let angle =
             |j: usize, levels: usize| (std::f64::consts::PI * j as f64 / (levels - 1) as f64).cos();
+        // The drift's coordinate at the size of the deviation (or of its
+        // equilibrium value, the drift over the rates, at the middle of the
+        // range), so that rounding follows the deviation: the drift column
+        // divided by it, the coordinate starting at it.
+        let middle = self.rest_blocks(&joint, 0.5 * (min + max), &sizes)?;
+        let scales: Vec<f64> = joint
+            .blocks
+            .iter()
+            .zip(&sizes)
+            .zip(&middle)
+            .zip(&starts)
+            .map(|((((_, _, n), &m), r), x)| {
+                if m == *n {
+                    return 1.0;
+                }
+                let size = x.rows(0, *n).norm();
+                let (rest, drift) = r.largest_split(*n);
+                let s = size.max(if rest > 0.0 { drift / rest } else { drift });
+                if s > 0.0 { s } else { 1.0 }
+            })
+            .collect();
+        drop(middle);
+        for (((_, _, n), x), &s) in joint.blocks.iter().zip(starts.iter_mut()).zip(&scales) {
+            if x.len() > *n {
+                x[*n] = C64::new(s, 0.0);
+            }
+        }
         // Node builds per kept block.
         let build = |b: f64| -> Result<Vec<SparseBlock>> {
             Ok(self
                 .rest_blocks(&joint, b, &sizes)?
                 .into_iter()
                 .zip(&keep)
-                .filter_map(|(r, &k)| k.then_some(r))
+                .zip(joint.blocks.iter().zip(&sizes).zip(&scales))
+                .filter_map(|((mut r, &k), (((_, _, n), &m), &s))| {
+                    if m > *n && s != 1.0 {
+                        r.scale_column(*n, 1.0 / s);
+                    }
+                    k.then_some(r)
+                })
                 .collect())
         };
         let mut nodes: Vec<Vec<SparseBlock>> = (0..LEVELS[0])

@@ -3,9 +3,14 @@
 //!
 //! The steady-state equations `G x = −f` are singular (the chemistry
 //! conserves the amounts) and complete only with `Tr Δ_s = 0` for every
-//! site; the solution is that of `(G + Σ_s ρ_s t_s t_sᵀ) x = −f`, `t_s`
-//! the trace of site `s` and `ρ_s` its fastest rate over its dimension,
-//! which is not singular. In the eigenbasis of every site's Hamiltonian
+//! site; the solution is that of `(G − Σ_s ρ_s t_s t_sᵀ) x = −f`, `t_s`
+//! the trace of site `s` and `ρ_s` its fastest rate over its dimension.
+//! On the traces this system is the chemistry's rate matrix `K` (columns
+//! summing to zero, off-diagonal entries non-negative) less
+//! `diag(ρ_s d_s)`, strictly diagonally dominant and so never singular;
+//! the rest is singular only where the steady state is not unique, which
+//! the factorisation of the slow elements detects (a conserved quantity
+//! commutes with the Hamiltonian and lies among them). In the eigenbasis of every site's Hamiltonian
 //! `−i[H_s, ·]` is diagonal, `−iω_αβ` on `|α⟩⟨β|`, and `t_s` lies on the
 //! populations. The slow elements (the populations of the eigenstates and
 //! the coherences with `|ω_αβ|` within ten times the site's fastest rate)
@@ -18,8 +23,8 @@
 use nalgebra::DVector;
 use num_complex::Complex64 as C64;
 
-use super::super::super::ZERO;
 use super::super::super::blocks::Eigenblock;
+use super::super::super::{MAX_RELAXATION_MEMORY, MAX_RELAXATION_WORK, ZERO};
 use super::super::{Exchange, Joint};
 use super::SparseJoint;
 use crate::error::{QsoError, Result};
@@ -32,6 +37,10 @@ const SLOW: f64 = 10.0;
 
 /// Most slow elements solved densely.
 const MAX_SLOW: usize = 4096;
+
+/// Smallest pivot, relative to the largest, of the scaled slow equations
+/// that counts as nonzero (as in the dense solve).
+const SINGULAR: f64 = 1e-12;
 
 /// One eigenblock of a site: its states' positions in the joint block
 /// (`at[i·m + j]` for `|s_i⟩⟨s_j|`), eigenvectors and energies.
@@ -72,9 +81,17 @@ pub(super) struct Secular {
     /// The slow elements `(part, α, β)` and the factorised generator on
     /// them, trace rows included.
     slow: Vec<(usize, usize, usize)>,
-    lu: nalgebra::LU<C64, nalgebra::Dyn, nalgebra::Dyn>,
-    /// `ρ_s` of each site.
+    lu: nalgebra::linalg::FullPivLU<C64, nalgebra::Dyn, nalgebra::Dyn>,
+    /// The scales of the slow equations' rows and unknowns.
+    rows: Vec<f64>,
+    columns: Vec<f64>,
+    /// `−ρ_s` of each site, the coefficient of `t_s t_sᵀ`.
     pub rho: Vec<f64>,
+    /// Operations of one application.
+    pub apply_work: f64,
+    /// Operations and bytes of the build.
+    pub build_work: f64,
+    pub bytes: f64,
 }
 
 impl Secular {
@@ -165,11 +182,27 @@ impl Secular {
             .sites
             .iter()
             .zip(&fastest)
-            .map(|(site, &f)| f.max(f64::MIN_POSITIVE) / site.system.dimension() as f64)
+            .map(|(site, &f)| -f.max(f64::MIN_POSITIVE) / site.system.dimension() as f64)
             .collect();
         // The generator on the slow elements: G applied to each, read back
-        // in the eigenbasis.
+        // in the eigenbasis. Refused before it starts beyond the limits.
         let m = slow.len();
+        let cubes: f64 = parts.iter().map(|p| 16.0 * (p.m as f64).powi(3)).sum();
+        let apply_work = 2.0 * cubes + 8.0 * (m * m) as f64 + 8.0 * n as f64;
+        let build_work = m as f64 * (8.0 * block.a.nnz() as f64 + cubes) + 8.0 * (m as f64).powi(3);
+        let bytes = 3.0 * 16.0 * (m * m) as f64
+            + parts.iter().map(|p| 24.0 * (p.m * p.m) as f64).sum::<f64>();
+        if build_work > MAX_RELAXATION_WORK || bytes > MAX_RELAXATION_MEMORY {
+            return Err(QsoError::invalid(
+                "steady state",
+                format!(
+                    "the preconditioner of {m} slow elements needs about {build_work:.1e} \
+                     operations and {:.1} GB (limits {MAX_RELAXATION_WORK:.1e}, {:.1} GB)",
+                    bytes / 1e9,
+                    MAX_RELAXATION_MEMORY / 1e9
+                ),
+            ));
+        }
         let mut index = std::collections::HashMap::new();
         for (q, &e) in slow.iter().enumerate() {
             index.insert(e, q);
@@ -207,7 +240,7 @@ impl Secular {
                 k[(row, q)] = v;
             }
         }
-        // ρ_s t_s t_sᵀ on the populations of each site (the trace is the
+        // −ρ_s t_s t_sᵀ on the populations of each site (the trace is the
         // same in every basis).
         for (q, &(p, a, c)) in slow.iter().enumerate() {
             if a != c {
@@ -220,17 +253,55 @@ impl Secular {
                 }
             }
         }
+        // Rows and then columns scaled to 1, fully pivoted: a pivot below
+        // 10⁻¹² of the largest means the steady state is not unique.
+        let refuse = || {
+            QsoError::invalid(
+                "steady state",
+                "no unique steady state: some populations neither exchange nor relax",
+            )
+        };
+        let mut rows = vec![1.0f64; m];
+        for (i, r) in rows.iter_mut().enumerate() {
+            let size = k.row(i).iter().fold(0.0f64, |a, z| a.max(z.norm()));
+            if size == 0.0 {
+                return Err(refuse());
+            }
+            *r = 1.0 / size;
+            k.row_mut(i).scale_mut(*r);
+        }
+        let mut columns = vec![1.0f64; m];
+        for (j, c) in columns.iter_mut().enumerate() {
+            let size = k.column(j).iter().fold(0.0f64, |a, z| a.max(z.norm()));
+            if size == 0.0 {
+                return Err(refuse());
+            }
+            *c = 1.0 / size;
+            k.column_mut(j).scale_mut(*c);
+        }
+        let lu = k.full_piv_lu();
+        let pivots: Vec<f64> = lu.u().diagonal().iter().map(|z| z.norm()).collect();
+        let largest = pivots.iter().fold(0.0f64, |a, &p| a.max(p));
+        let smallest = pivots.iter().fold(f64::INFINITY, |a, &p| a.min(p));
+        if smallest.is_nan() || smallest <= SINGULAR * largest {
+            return Err(refuse());
+        }
         Ok(Secular {
             n,
             parts,
             decay,
             slow,
-            lu: k.lu(),
+            lu,
+            rows,
+            columns,
             rho,
+            apply_work,
+            build_work,
+            bytes,
         })
     }
 
-    /// The approximate solution `z` of `(G + Σ_s ρ_s t_s t_sᵀ) z = r`.
+    /// The approximate solution `z` of `(G − Σ_s ρ_s t_s t_sᵀ) z = r`.
     pub fn apply(&self, r: &[C64]) -> Vec<C64> {
         let mut eigen: Vec<CMatrix> = self.parts.iter().map(|p| p.to_eigen(r)).collect();
         // Fast coherences.
@@ -238,9 +309,12 @@ impl Secular {
             let gamma = self.decay[part.site];
             for a in 0..part.m {
                 for c in 0..part.m {
-                    if a != c {
-                        let w = part.values[a] - part.values[c];
-                        y[(a, c)] /= C64::new(-gamma, -w);
+                    let d = C64::new(-gamma, part.values[c] - part.values[a]);
+                    // A coherence that neither precesses nor decays (only
+                    // left among the fast ones when the slow are too many)
+                    // is left as it is.
+                    if a != c && d != ZERO {
+                        y[(a, c)] /= d;
                     }
                 }
             }
@@ -253,17 +327,24 @@ impl Secular {
                 let gamma = self.decay[part.site];
                 let w = part.values[a] - part.values[c];
                 // Undo the division above for slow coherences.
-                if a == c {
+                let d = C64::new(-gamma, -w);
+                if a == c || d == ZERO {
                     eigen[p][(a, c)]
                 } else {
-                    eigen[p][(a, c)] * C64::new(-gamma, -w)
+                    eigen[p][(a, c)] * d
                 }
             }),
         );
-        if let Some(w) = self.lu.solve(&rhs) {
-            for (&(p, a, c), v) in self.slow.iter().zip(w.iter()) {
-                eigen[p][(a, c)] = *v;
-            }
+        let scaled =
+            DVector::from_iterator(rhs.len(), rhs.iter().zip(&self.rows).map(|(v, r)| v * *r));
+        // The factorisation was checked: a solve that fails anyway poisons
+        // the result, and the residual check refuses it.
+        let solved = self.lu.solve(&scaled);
+        for (q, &(p, a, c)) in self.slow.iter().enumerate() {
+            eigen[p][(a, c)] = match &solved {
+                Some(w) => w[q] * self.columns[q],
+                None => C64::new(f64::NAN, f64::NAN),
+            };
         }
         let mut out = vec![ZERO; self.n];
         for (part, y) in self.parts.iter().zip(&eigen) {

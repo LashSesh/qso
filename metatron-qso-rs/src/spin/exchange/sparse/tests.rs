@@ -133,7 +133,7 @@ fn krylov_blocks_equal_dense_blocks() {
         let a = x.steady_state_with(Propagation::Dense).unwrap();
         let b = x.steady_state_with(Propagation::Krylov).unwrap();
         let e = difference(&a, &b);
-        assert!(e < 1e-8, "steady {field} {frame:?} {ring}: {e:e}");
+        assert!(e < 1e-10, "steady {field} {frame:?} {ring}: {e:e}");
         if frame == Frame::Rotating {
             let tipped = x
                 .evolve(
@@ -315,4 +315,143 @@ fn measure_sparse_exchange() {
             field.error
         );
     }
+}
+
+/// One ¹H that relaxes beside an uncoupled ¹³C, with or without its
+/// relaxation, at `field` in the rotating frame.
+fn pair_site(c13_relaxes: bool) -> SpinSystem {
+    let mut s = SpinSystem::new(9.4);
+    s.add_spin(Isotope::H1, 1.0).unwrap();
+    s.add_spin(Isotope::C13, 30.0).unwrap();
+    s.set_relaxation(0, Some(2.0), Some(1.0)).unwrap();
+    if c13_relaxes {
+        s.set_relaxation(1, Some(5.0), Some(1.0)).unwrap();
+    }
+    s
+}
+
+#[test]
+fn steady_states_that_are_not_unique_are_refused() {
+    // A spin that neither relaxes nor exchanges keeps any polarisation:
+    // the dense solve refuses, and so must GMRES.
+    for relaxes in [false, true] {
+        let mut x = Exchange::new();
+        x.add_site(pair_site(relaxes), 1.0).unwrap();
+        let dense = x.steady_state_with(Propagation::Dense);
+        let krylov = x.steady_state_with(Propagation::Krylov);
+        assert_eq!(dense.is_ok(), relaxes);
+        assert_eq!(krylov.is_ok(), relaxes, "{relaxes}: {krylov:?}");
+        let mut lone = Exchange::new();
+        let mut s = SpinSystem::new(9.4);
+        s.add_spin(Isotope::H1, 1.0).unwrap();
+        lone.add_site(s, 1.0).unwrap();
+        assert!(lone.steady_state_with(Propagation::Krylov).is_err());
+    }
+    // Beyond the dense limit: SABRE beside a site whose ¹³C is left alone.
+    let mut x = sabre_ring(1.4e-7, Frame::Laboratory, 4);
+    let mut s = SpinSystem::new(1.4e-7).with_frame(Frame::Laboratory);
+    s.add_spin(Isotope::C13, 30.0).unwrap();
+    x.add_site(s, 1.0).unwrap();
+    assert!(x.steady_state().is_err());
+}
+
+#[test]
+fn steady_states_hold_where_the_trace_terms_cancel_the_chemistry() {
+    // Two one-proton sites exchanging at k = 2 each way, T₁ tuned so that
+    // each site's fastest rate is 2k: with ρ_s of the other sign the trace
+    // equations would be singular.
+    let site = || {
+        let mut s = SpinSystem::new(9.4);
+        s.add_spin(Isotope::H1, 1.0).unwrap();
+        s.set_relaxation(0, Some(0.25000000000085665), None)
+            .unwrap();
+        s
+    };
+    let mut x = Exchange::new();
+    x.add_site(site(), 1.0).unwrap();
+    x.add_site(site(), 1.0).unwrap();
+    for (from, to) in [(0, 1), (1, 0)] {
+        x.add_channel(Channel {
+            from,
+            to,
+            rate: 2.0,
+            carried: vec![(0, 0)],
+            fresh: Fresh::Thermal,
+        })
+        .unwrap();
+    }
+    let a = x.steady_state_with(Propagation::Dense).unwrap();
+    let b = x.steady_state_with(Propagation::Krylov).unwrap();
+    let e = difference(&a, &b);
+    assert!(e < 1e-10, "{e:e}");
+}
+
+#[test]
+fn results_do_not_depend_on_the_unit_of_the_concentrations() {
+    // The normalised dynamics are the same for concentrations of any
+    // unit; neither the results nor the estimates may change.
+    let base = sabre_ring(1.4e-7, Frame::Laboratory, 1);
+    let start = base.thermal_state().unwrap();
+    let events = [Event::Delay(0.3)];
+    let want = base
+        .evolve_with(&start, &events, Propagation::Krylov)
+        .unwrap();
+    for unit in [1e-9, 1e6, 1e12] {
+        let mut x = base.clone();
+        for site in &mut x.sites {
+            site.concentration *= unit;
+        }
+        for method in [Propagation::Dense, Propagation::Krylov] {
+            let got = x.evolve_with(&start, &events, method).unwrap();
+            let e = difference(&want, &got);
+            assert!(e < 1e-9, "{unit} {method:?}: {e:e}");
+        }
+        let steady = x.steady_state_with(Propagation::Krylov).unwrap();
+        let e = difference(&base.steady_state().unwrap(), &steady);
+        assert!(e < 1e-10, "{unit}: {e:e}");
+    }
+}
+
+#[test]
+fn field_profiles_with_field_dependent_relaxation() {
+    // From 0 to 1 mT the fresh thermal states and the relaxation's drift
+    // change with the field: the interpolant's derivative carries part of
+    // the gradient. Against the replay, the dense blocks' gradient (their
+    // field derivative by differences) and Richardson-extrapolated central
+    // differences, with steps below the 5·10⁻⁷ T over which the Larmor
+    // phase of 0.05 s turns once.
+    let x = sabre_ring(1e-4, Frame::Laboratory, 0);
+    let p = profile(&x, 1e-3, 0.2, 4);
+    let fields = [2e-4, 6e-4, 9e-4, 4e-4];
+    let (value, grad) = x.profile_transfer(&p, &fields).unwrap();
+    // The transfer, 4·10⁻¹⁰, beside parahydrogen order of 1 in the state:
+    // replays agree to rounding of the deviation.
+    let events: Vec<Event> = fields
+        .iter()
+        .flat_map(|&b| [Event::Field(b), Event::Delay(0.05)])
+        .collect();
+    for method in [Propagation::Dense, Propagation::Krylov] {
+        let end = x.evolve_with(&p.initial, &events, method).unwrap();
+        let want = x.polarization(&end, 1, 0).unwrap();
+        assert!(
+            (value - want).abs() < 1e-14,
+            "{method:?}: {value} vs {want}"
+        );
+    }
+    let (_, dense) = x.profile_transfer_dense(&p, &fields).unwrap();
+    let scale = dense.iter().fold(0.0f64, |m, g| m.max(g.abs()));
+    for (a, b) in grad.iter().zip(&dense) {
+        assert!((a - b).abs() < 1e-8 * scale, "{a} vs {b}");
+    }
+    let dir = [0.3, -1.0, 0.6, 0.8];
+    let along = |h: f64| {
+        let up: Vec<f64> = fields.iter().zip(&dir).map(|(b, d)| b + h * d).collect();
+        let down: Vec<f64> = fields.iter().zip(&dir).map(|(b, d)| b - h * d).collect();
+        (x.profile_transfer(&p, &up).unwrap().0 - x.profile_transfer(&p, &down).unwrap().0)
+            / (2.0 * h)
+    };
+    let h = 4e-9;
+    let fd = (4.0 * along(h / 2.0) - along(h)) / 3.0;
+    let exact: f64 = grad.iter().zip(&dir).map(|(g, d)| g * d).sum();
+    assert!((fd - exact).abs() < 1e-5 * exact.abs(), "{fd} vs {exact}");
 }

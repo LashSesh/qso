@@ -45,7 +45,7 @@ use super::Propagation;
 use super::{Channel, Exchange, Fresh, Site};
 use crate::error::{QsoError, Result};
 use crate::linalg::CMatrix;
-use crate::linalg::dense::expm_squarings;
+use crate::linalg::dense::{expm, expm_squarings};
 use num_complex::Complex64 as C64;
 
 /// The largest relative change of a reactant's amount in one step:
@@ -186,32 +186,6 @@ struct StepBlock {
 }
 
 impl StepBlock {
-    /// The dense generator times `h` as 1.50 builds it: shifted by its
-    /// mean precession, or for populations augmented by
-    /// `u₁ = s/h`, `u₂ = (s/h)²/2` and the constant.
-    fn dense(&self) -> LiouvilleBlock {
-        let n = self.n;
-        let mat = self.a.to_dense();
-        let Some([f0, fm, f1]) = &self.drift else {
-            return LiouvilleBlock::sized(n, mat, false, self.h);
-        };
-        let mut m = CMatrix::zeros(n + 3, n + 3);
-        m.view_mut((0, 0), (n, n)).copy_from(&mat);
-        // f(s) = a + b s + e s² through the three values, with the
-        // dimensionless u₁ = s/h and u₂ = (s/h)²/2 (u₁' = 1/h, u₂' = u₁/h):
-        // f = a + (b h) u₁ + (2 e h²) u₂, all entries of the order of f,
-        // however fast f changes.
-        for i in 0..n {
-            let (f_0, f_m, f_1) = (f0[i], fm[i], f1[i]);
-            m[(i, n + 2)] = f_0;
-            m[(i, n)] = f_m * 4.0 - f_0 * 3.0 - f_1;
-            m[(i, n + 1)] = (f_0 * 2.0 - f_m * 4.0 + f_1 * 2.0) * 2.0;
-        }
-        m[(n, n + 2)] = C64::new(1.0 / self.h, 0.0);
-        m[(n + 1, n)] = C64::new(1.0 / self.h, 0.0);
-        LiouvilleBlock::sized(n + 2, m, true, self.h)
-    }
-
     /// Mean precession of the diagonal (zero for populations).
     fn shift(&self) -> C64 {
         if self.drift.is_some() || self.n == 0 {
@@ -243,10 +217,14 @@ impl StepBlock {
     fn plan(&self, method: Propagation) -> (bool, f64) {
         let extra = if self.drift.is_some() { 3 } else { 0 };
         let m = self.n + extra;
+        // The inhomogeneous columns as `propagate` scales them (by at least
+        // `h` times their size): at most 25/h a row, whatever the amounts'
+        // unit.
         let drift_norm = self.drift.as_ref().map_or(0.0, |[f0, fm, f1]| {
-            (0..self.n)
+            let unscaled = (0..self.n)
                 .map(|i| 8.0 * (f0[i].norm() + fm[i].norm() + f1[i].norm()))
-                .fold(0.0, f64::max)
+                .fold(0.0, f64::max);
+            unscaled.min(25.0 / self.h)
         });
         let norm = self.a.norm_inf().max(self.a.norm_one()) + drift_norm + 1.0 / self.h;
         let krylov = krylov_work(m, self.a.nnz() + extra * self.n, norm, self.h);
@@ -269,13 +247,9 @@ impl StepBlock {
 
     /// The block's elements after the step from `x`.
     fn propagate(&self, x: &[C64], dense: bool) -> Result<Vec<C64>> {
-        if dense {
-            return Ok(
-                self.dense().apply(|i| x.get(i).copied().unwrap_or(ZERO))[..self.n].to_vec(),
-            );
-        }
         let norm2 = |v: &[C64]| v.iter().map(|z| z.norm_sqr()).sum::<f64>().sqrt();
-        let shift = self.shift();
+        // The constant coordinate at the size of the deviation (or of what
+        // the inhomogeneous term adds over the step).
         let scale = match &self.drift {
             None => norm2(x),
             Some([f0, fm, f1]) => norm2(x).max(self.h * norm2(f0).max(norm2(fm)).max(norm2(f1))),
@@ -283,6 +257,41 @@ impl StepBlock {
         if scale == 0.0 {
             return Ok(x.to_vec());
         }
+        let n = self.n;
+        if dense {
+            let mat = self.a.to_dense();
+            let Some((columns, coordinates)) = self.augmented(scale) else {
+                let block = LiouvilleBlock::sized(n, mat, false, self.h);
+                return Ok(block.apply(|i| x[i]));
+            };
+            // f(s) = a + b s + e s² through the three values, with the
+            // dimensionless u₁ = s/h and u₂ = (s/h)²/2 (u₁' = 1/h,
+            // u₂' = u₁/h): f = a + (b h) u₁ + (2 e h²) u₂, all entries of
+            // the order of the deviation however fast f changes.
+            let mut m = CMatrix::zeros(n + 3, n + 3);
+            m.view_mut((0, 0), (n, n)).copy_from(&mat);
+            for (c, column) in columns.iter().enumerate() {
+                for (i, v) in column.iter().enumerate() {
+                    m[(i, n + c)] = *v;
+                }
+            }
+            for (r, row) in coordinates.iter().enumerate() {
+                for (c, v) in row.iter().enumerate() {
+                    m[(n + r, n + c)] = *v;
+                }
+            }
+            let p = expm(&(m * C64::new(self.h, 0.0)));
+            return Ok((0..n)
+                .map(|i| {
+                    let mut v = p[(i, n + 2)] * scale;
+                    for (j, xj) in x.iter().enumerate() {
+                        v += p[(i, j)] * xj;
+                    }
+                    v
+                })
+                .collect());
+        }
+        let shift = self.shift();
         let (columns, coordinates) = self.augmented(scale).unwrap_or_default();
         let op = Augmented::new(&self.a, shift, columns, coordinates);
         let mut v = x.to_vec();
@@ -671,13 +680,13 @@ impl Reactions {
                 |_, _, _, _| entries += 1,
             );
         }
-        let members = self
+        let member_count = self
             .reactions
             .iter()
             .map(|r| r.reactants.len() + 1)
             .sum::<usize>() as f64;
         let elements_total: usize = joint.blocks.iter().map(|(_, _, n)| n + 3).sum();
-        let bytes = entries as f64 * (12.0 + 20.0 + 16.0 * (1.0 + members))
+        let bytes = entries as f64 * (12.0 + 20.0 + 16.0 * (1.0 + member_count))
             + krylov_bytes(elements_total)
             + 16.0 * 6.0 * elements_total as f64;
         if bytes > super::super::MAX_RELAXATION_MEMORY {
@@ -801,6 +810,26 @@ impl Reactions {
                 members.push(Member::Transfer { r });
                 parts.push(per);
             }
+        }
+        // Again with the members' entries, which the shared pattern holds
+        // as well.
+        let extra: usize = parts
+            .iter()
+            .map(|per| per.iter().map(Vec::len).sum::<usize>())
+            .sum();
+        let full = (entries + extra) as f64 * (12.0 + 20.0 + 16.0 * (1.0 + member_count))
+            + krylov_bytes(elements_total)
+            + 16.0 * 6.0 * elements_total as f64;
+        if full > super::super::MAX_RELAXATION_MEMORY {
+            return Err(QsoError::invalid(
+                "reactions",
+                format!(
+                    "the joint blocks need about {:.1} GB (limit {:.1} GB); use fewer spins or \
+                     the rotating frame",
+                    full / 1e9,
+                    super::super::MAX_RELAXATION_MEMORY / 1e9
+                ),
+            ));
         }
         let mut norms = Vec::with_capacity(joint.blocks.len());
         let family = triplets
@@ -1147,9 +1176,17 @@ impl Reactions {
                         ));
                     }
                     // Each sweep step holds a field; the work and the
-                    // frequencies are taken as the most of the ends'.
-                    let bases = [self.base(b)?, self.base(*to)?];
-                    let bound = coherence(&bases);
+                    // frequencies are taken as the most of the ends', one
+                    // base held at a time.
+                    let bound = {
+                        let first = coherence(&[self.base(b)?]);
+                        let second = coherence(&[self.base(*to)?]);
+                        first
+                            .iter()
+                            .zip(second)
+                            .map(|(a, b)| a.max(b))
+                            .collect::<Vec<_>>()
+                    };
                     let dt = duration / *steps as f64;
                     let start = c.clone();
                     let (mut total, mut first) = (0.0, f64::INFINITY);
@@ -1162,7 +1199,12 @@ impl Reactions {
                         now += dt;
                     }
                     if total > 0.0 {
-                        work += total * per_step(&bases, &start, first);
+                        let most = per_step(&[self.base(b)?], &start, first).max(per_step(
+                            &[self.base(*to)?],
+                            &start,
+                            first,
+                        ));
+                        work += total * most;
                     }
                     b = *to;
                 }
