@@ -3,7 +3,8 @@
 
 use metatron_qso::walks::driven::{DrivenEvolution, DrivenWalk, MagnusOptions, Term};
 use metatron_qso::walks::interacting::{
-    HypercubeParticles, InteractingWalk, Statistics, SymmetricInteractingWalk, certificate_distance,
+    CoordinateGraph, CoordinateInteractingWalk, HypercubeParticles, InteractingWalk, Statistics,
+    SymmetricInteractingWalk, certificate_distance,
 };
 use metatron_qso::walks::{
     ContinuousWalk, DephasingWalk, Generator, SpatialSearch, classical_hitting_times,
@@ -1040,6 +1041,266 @@ impl PySymmetricInteractingWalk {
     }
 }
 
+/// Interacting particles on a Hamming, Johnson or Kneser graph, whose
+/// symmetries act on the places of its nodes' words, on the orbits of the
+/// start's pointwise stabiliser found from canonical forms (the graph is
+/// never built): `hamming(d, q, start)`, `johnson(n, k, start)`,
+/// `kneser(n, k, start)`. Nodes are numbered as the graph generators
+/// number them (`word`, `node`).
+#[pyclass(name = "CoordinateInteractingWalk", module = "metatron_qso", frozen)]
+pub struct PyCoordinateInteractingWalk {
+    inner: CoordinateInteractingWalk,
+}
+
+impl PyCoordinateInteractingWalk {
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        py: Python<'_>,
+        graph: CoordinateGraph,
+        start: Vec<u64>,
+        statistics: &str,
+        generator: &str,
+        gamma: f64,
+        on_site: f64,
+        neighbour: f64,
+    ) -> PyResult<Self> {
+        let (s, gen_) = (self::statistics(statistics)?, self::generator(generator)?);
+        let inner = py
+            .detach(|| {
+                CoordinateInteractingWalk::from_start(graph, gen_, gamma, s, &start)?
+                    .with_interaction(on_site, neighbour)
+            })
+            .raise()?;
+        Ok(Self { inner })
+    }
+}
+
+#[pymethods]
+impl PyCoordinateInteractingWalk {
+    /// On the Hamming graph `H(d, q)` (`Q_d` for `q = 2`, `K_q` for
+    /// `d = 1`), node `Σ x_j q^j`.
+    #[staticmethod]
+    #[pyo3(signature = (d, q, start, statistics = "bosons", generator = "adjacency", gamma = 1.0, on_site = 0.0, neighbour = 0.0))]
+    #[allow(clippy::too_many_arguments)]
+    fn hamming(
+        py: Python<'_>,
+        d: usize,
+        q: usize,
+        start: Vec<u64>,
+        statistics: &str,
+        generator: &str,
+        gamma: f64,
+        on_site: f64,
+        neighbour: f64,
+    ) -> PyResult<Self> {
+        Self::build(
+            py,
+            CoordinateGraph::Hamming { d, q },
+            start,
+            statistics,
+            generator,
+            gamma,
+            on_site,
+            neighbour,
+        )
+    }
+
+    /// On the Johnson graph `J(n, k)`, nodes in colex order.
+    #[staticmethod]
+    #[pyo3(signature = (n, k, start, statistics = "bosons", generator = "adjacency", gamma = 1.0, on_site = 0.0, neighbour = 0.0))]
+    #[allow(clippy::too_many_arguments)]
+    fn johnson(
+        py: Python<'_>,
+        n: usize,
+        k: usize,
+        start: Vec<u64>,
+        statistics: &str,
+        generator: &str,
+        gamma: f64,
+        on_site: f64,
+        neighbour: f64,
+    ) -> PyResult<Self> {
+        Self::build(
+            py,
+            CoordinateGraph::Johnson { n, k },
+            start,
+            statistics,
+            generator,
+            gamma,
+            on_site,
+            neighbour,
+        )
+    }
+
+    /// On the Kneser graph `K(n, k)`, nodes in colex order.
+    #[staticmethod]
+    #[pyo3(signature = (n, k, start, statistics = "bosons", generator = "adjacency", gamma = 1.0, on_site = 0.0, neighbour = 0.0))]
+    #[allow(clippy::too_many_arguments)]
+    fn kneser(
+        py: Python<'_>,
+        n: usize,
+        k: usize,
+        start: Vec<u64>,
+        statistics: &str,
+        generator: &str,
+        gamma: f64,
+        on_site: f64,
+        neighbour: f64,
+    ) -> PyResult<Self> {
+        Self::build(
+            py,
+            CoordinateGraph::Kneser { n, k },
+            start,
+            statistics,
+            generator,
+            gamma,
+            on_site,
+            neighbour,
+        )
+    }
+
+    /// The orbit state of the configuration `sites` (the start's is the
+    /// start).
+    fn state_of<'py>(
+        &self,
+        py: Python<'py>,
+        sites: Vec<u64>,
+    ) -> PyResult<Bound<'py, PyArray1<metatron_qso::C64>>> {
+        Ok(complex_array(py, self.inner.state_of(&sites).raise()?))
+    }
+
+    /// `exp(−iHt)` applied to `x0`.
+    fn evolve<'py>(
+        &self,
+        py: Python<'py>,
+        x0: ComplexArg<'_>,
+        t: f64,
+    ) -> PyResult<Bound<'py, PyArray1<metatron_qso::C64>>> {
+        let x0 = complex_vec(&x0);
+        let w = &self.inner;
+        Ok(complex_array(py, py.detach(|| w.evolve(&x0, t)).raise()?))
+    }
+
+    fn orbit_probabilities<'py>(
+        &self,
+        py: Python<'py>,
+        x: ComplexArg<'_>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let x = complex_vec(&x);
+        Ok(real_array(py, self.inner.orbit_probabilities(&x).raise()?))
+    }
+
+    /// The probability of the configuration `sites`.
+    fn probability_of(&self, x: ComplexArg<'_>, sites: Vec<u64>) -> PyResult<f64> {
+        let x = complex_vec(&x);
+        self.inner.probability_of(&x, &sites).raise()
+    }
+
+    /// Per orbit of nodes: its smallest node among the representatives,
+    /// its size and the density on each of its nodes.
+    fn node_densities(&self, x: ComplexArg<'_>) -> PyResult<Vec<(u64, f64, f64)>> {
+        let x = complex_vec(&x);
+        self.inner.node_densities(&x).raise()
+    }
+
+    fn representative(&self, o: usize) -> PyResult<Vec<u64>> {
+        if o >= self.inner.num_orbits() {
+            return Err(invalid(format!("orbit {o} of {}", self.inner.num_orbits())));
+        }
+        Ok(self.inner.representative(o).to_vec())
+    }
+
+    /// The configurations in orbit `o` (a float: they can be many).
+    fn orbit_size(&self, o: usize) -> PyResult<f64> {
+        if o >= self.inner.num_orbits() {
+            return Err(invalid(format!("orbit {o} of {}", self.inner.num_orbits())));
+        }
+        Ok(self.inner.orbit_size(o))
+    }
+
+    /// The word (letters, or bits of the subset) of `node`.
+    fn word(&self, node: u64) -> PyResult<Vec<usize>> {
+        self.inner.graph().word(node).raise()
+    }
+
+    /// The node of a word.
+    fn node(&self, word: Vec<usize>) -> PyResult<u64> {
+        self.inner.graph().node(&word).raise()
+    }
+
+    #[getter]
+    fn spectrum<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<f64>>> {
+        self.inner.spectrum().map(|v| real_array(py, v.to_vec()))
+    }
+
+    #[getter]
+    fn num_orbits(&self) -> usize {
+        self.inner.num_orbits()
+    }
+
+    #[getter]
+    fn num_nodes(&self) -> u64 {
+        self.inner.graph().num_nodes()
+    }
+
+    /// `ln` of the number of configurations.
+    #[getter]
+    fn log_num_configurations(&self) -> f64 {
+        self.inner.log_num_configurations()
+    }
+
+    /// `ln` of the order of the group.
+    #[getter]
+    fn log_group_order(&self) -> f64 {
+        self.inner.log_group_order()
+    }
+
+    #[getter]
+    fn start(&self) -> Vec<u64> {
+        self.inner.start().to_vec()
+    }
+
+    #[getter]
+    fn particles(&self) -> usize {
+        self.inner.particles()
+    }
+
+    #[getter]
+    fn statistics(&self) -> &'static str {
+        self.inner.statistics().name()
+    }
+
+    #[getter]
+    fn generator(&self) -> &'static str {
+        generator_name(self.inner.generator())
+    }
+
+    #[getter]
+    fn gamma(&self) -> f64 {
+        self.inner.gamma()
+    }
+
+    #[getter]
+    fn on_site(&self) -> f64 {
+        self.inner.on_site()
+    }
+
+    #[getter]
+    fn neighbour(&self) -> f64 {
+        self.inner.neighbour()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "CoordinateInteractingWalk({:?}, {} {}, {} orbits)",
+            self.inner.graph(),
+            self.inner.particles(),
+            self.inner.statistics().name(),
+            self.inner.num_orbits()
+        )
+    }
+}
+
 /// `particles` (1 to 4) interacting particles on the hypercube `Q_d`, on
 /// states invariant under the permutations of the coordinates, written down
 /// as compositions of `d` without building the graph (`Q_40` with two
@@ -1210,6 +1471,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyInteractingWalk>()?;
     m.add_class::<PySymmetricInteractingWalk>()?;
     m.add_class::<PyHypercubeParticles>()?;
+    m.add_class::<PyCoordinateInteractingWalk>()?;
     m.add_function(wrap_pyfunction!(certificate_distance_py, m)?)?;
     m.add_class::<PySpatialSearch>()?;
     m.add_class::<PyDephasingWalk>()?;

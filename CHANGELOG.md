@@ -8,6 +8,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Interacting walkers without visiting every configuration** (1.53,
+  `walks::CoordinateInteractingWalk`): bosons, fermions or distinguishable
+  particles with on-site and neighbour interaction on Hamming graphs
+  (with hypercubes and complete graphs), Johnson and Kneser graphs, from
+  any start, reduced by the start's pointwise stabiliser in the
+  permutations of the places. Orbits are named by canonical forms of the
+  configurations (with the stabiliser's order and the fermionic sign) and
+  found by breadth-first search, so neither the graph nor the
+  configurations are listed: three bosons on `Q₂₀` (1.9·10¹⁷
+  configurations) have 156 240 orbits in 13 s. Equal to the full walk on
+  small graphs and to the closed-form permanents and determinants of free
+  particles on `Q₂₀` and `H(8, 4)`. In Python:
+  `CoordinateInteractingWalk.hamming`, `.johnson`, `.kneser`.
+
 - **Logical error rates below sampling** (1.52, `qec::splitting`):
   `splitting_failure_rate` carries the failure rate of a family of
   circuits from a start rate, where it is sampled, down to rates of

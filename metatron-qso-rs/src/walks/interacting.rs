@@ -1003,9 +1003,13 @@ pub fn certificate_distance(a: &[f64], b: &[f64]) -> f64 {
     max
 }
 
+pub mod coordinates;
 pub mod hypercube;
 pub mod symmetric;
 
+pub use coordinates::{
+    CoordinateGraph, CoordinateInteractingWalk, MAX_COORDINATE_ORBITS, MAX_COORDINATE_PARTICLES,
+};
 pub use hypercube::HypercubeParticles;
 pub use symmetric::{ConfigurationOrbits, SymmetricInteractingWalk};
 

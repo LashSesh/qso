@@ -71,7 +71,10 @@ pub use decoherent::DecoherentCoinedWalk;
 pub use dephasing::DephasingWalk;
 pub use discrete::{Coin, CoinedWalk, DiscreteSearchResult, LineWalk, SzegedyWalk};
 pub use driven::{DrivenEvolution, DrivenWalk, MagnusOptions, QuotientDrivenWalk, QuotientTerm};
-pub use interacting::{HypercubeParticles, InteractingWalk, Statistics, SymmetricInteractingWalk};
+pub use interacting::{
+    CoordinateGraph, CoordinateInteractingWalk, HypercubeParticles, InteractingWalk, Statistics,
+    SymmetricInteractingWalk,
+};
 pub use pretty_good::{PrettyGoodTransfer, TransferDecision};
 pub use quotient::{Quotient, QuotientSearch, QuotientWalk};
 pub use search::{MAX_RESOLUTION, SearchResult, SpatialSearch};

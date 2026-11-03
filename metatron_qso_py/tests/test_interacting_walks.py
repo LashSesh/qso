@@ -162,3 +162,44 @@ def test_certificates_by_orbits():
     assert q.interacting_certificate_distance(full, reduced) < w.certificate_tolerance(times)
     with pytest.raises(ValueError):
         w.certificate_by_orbits(times, [[1, 0] + list(range(2, 16))])
+
+
+def test_coordinate_walks_equal_the_full_walk_and_reach_large_graphs() -> None:
+    # Three bosons on H(3, 3) and two fermions on J(6, 2) against the full
+    # walk, configuration by configuration; three bosons from one node of
+    # Q20 have the 156 240 states of HypercubeParticles; inputs are checked.
+    for walk, graph, start, statistics in [
+        (
+            q.CoordinateInteractingWalk.hamming(3, 3, [2, 2, 13], on_site=0.7),
+            q.Graph.hamming(3, 3),
+            [2, 2, 13],
+            "bosons",
+        ),
+        (
+            q.CoordinateInteractingWalk.johnson(6, 2, [0, 7], statistics="fermions", neighbour=-0.3),
+            q.Graph.johnson(6, 2),
+            [0, 7],
+            "fermions",
+        ),
+    ]:
+        full = q.InteractingWalk(
+            graph,
+            len(start),
+            statistics=statistics,
+            on_site=walk.on_site,
+            neighbour=walk.neighbour,
+        )
+        psi = full.evolve(full.basis_state(start), 0.9)
+        x = walk.evolve(walk.state_of(start), 0.9)
+        for i in range(full.dimension):
+            sites = full.configuration(i)
+            assert walk.probability_of(x, sites) == pytest.approx(abs(psi[i]) ** 2, abs=1e-12)
+        total = sum(size * d for _, size, d in walk.node_densities(x))
+        assert total == pytest.approx(len(start), abs=1e-10)
+    cube = q.CoordinateInteractingWalk.hamming(20, 2, [0, 0, 0])
+    assert cube.num_orbits == q.HypercubeParticles(20, 3).num_states == 156240
+    assert cube.num_nodes == 2**20 and cube.node(cube.word(12345)) == 12345
+    with pytest.raises(ValueError):
+        q.CoordinateInteractingWalk.hamming(3, 2, [1, 1], statistics="fermions")
+    with pytest.raises(ValueError):
+        q.CoordinateInteractingWalk.kneser(5, 3, [0])

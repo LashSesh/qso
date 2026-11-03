@@ -312,6 +312,47 @@ weight, `pair_distances` the distribution of the distance between two
 particles. With the same 2²⁶ entries, two bosons reach `Q₄₄₄`, three
 `Q₃₂` and four `Q₁₂`.
 
+Beyond the hypercube from node 0, `CoordinateInteractingWalk` takes any
+start on a graph whose symmetries act on the places of its nodes' words:
+Hamming graphs `H(d, q)` (with `Q_d` and the complete graph `K_q`),
+Johnson graphs `J(n, k)` and Kneser graphs `K(n, k)`, numbered as
+`Graph.hamming`, `Graph.johnson` and `Graph.kneser` number them (`word`
+and `node` convert). The group is the start's pointwise stabiliser in the
+permutations of the places (with, for Hamming graphs, the symbols renamed
+in each place). A configuration with the start's nodes above it is a
+matrix of letters, and its canonical form, the columns renamed in order
+of first appearance and sorted, minimised over the orders of the
+particles, names its orbit. The same form counts its stabiliser, which
+gives the orbit's size, and for fermions the parity of the order gives its
+sign. The orbits are found by breadth-first search from the start, a
+canonical form per hop, so neither the graph nor the configurations are
+ever listed:
+
+```python
+import metatron_qso as q
+
+walk = q.CoordinateInteractingWalk.johnson(40, 3, [0, 0, 1], on_site=1.0)
+print(walk.num_nodes, walk.num_orbits)   # 9880 1674 (1.6·10¹¹ configurations)
+x = walk.evolve(walk.state_of([0, 0, 1]), 1.0)
+print(round(walk.probability_of(x, [0, 0, 1]), 4))   # 0.7273
+```
+
+`node_densities` gives the density per orbit of nodes. On four cores
+(release build) the orbits took:
+
+| Graph | Particles from | Configurations | Orbits | Search | Evolution to t = 1 |
+|---|---|---|---|---|---|
+| `Q₂₀` (10⁶ nodes) | 3 bosons, node 0 | 1.9·10¹⁷ | 156 240 | 13 s | 3.0 s |
+| `Q₁₂` | 3 fermions, nodes 0, 1, 2 | 1.1·10¹⁰ | 199 000 | 9.8 s | 0.6 s |
+| `H(8, 4)` (65 536 nodes) | 3 fermions, nodes 0, 1, 2 | 4.7·10¹³ | 1 204 136 | 145 s | 19 s |
+| `Q₆` | 5 bosons, node 0 | 1.0·10⁷ | 28 576 | 5.5 s | 0.6 s |
+| `J(40, 3)` | 3 bosons, nodes 0, 0, 1 | 1.6·10¹¹ | 1674 | 0.8 s | 4.3 s |
+| `K(30, 3)` | 2 distinguishable, nodes 0, 1 | 1.6·10⁷ | 228 | 0.7 s | < 0.1 s |
+
+At most six particles and 2²² orbits; a start whose stabiliser is small
+leaves many orbits (three bosons on three different nodes of `Q₂₀`, more
+than 10⁷). The complement of `J(2k, k)` is not used.
+
 Certificates need every configuration as a start, but the
 automorphisms of the graph map starts onto starts with the same
 transition probabilities. `certificate_by_orbits(times, generators)`
@@ -328,6 +369,13 @@ The checks:
   a permutation, for all three statistics, two and three particles, both
   generators and `U` and `V` both on; under the whole automorphism group
   too, orbit by orbit, with the fermionic signs.
+- `CoordinateInteractingWalk` equals the full walk configuration by
+  configuration on `Q₄`, `H(3, 3)`, `K₅`, `J(6, 2)` and `K(7, 2)` for all
+  three statistics with `U` and `V` (starts with repeated and distinct
+  nodes), with the orbit counts of `SymmetricInteractingWalk`. Free
+  particles follow the permanents and determinants of the walker's
+  closed-form amplitudes on `Q₂₀` (three bosons from node 0, the 156 240
+  states of `HypercubeParticles`), `H(8, 4)`, `Q₁₀` and `H(6, 4)`.
 - `HypercubeParticles` equals the reduction of the graph `Q₃` and `Q₄` by
   the stabiliser of node 0, for bosons and distinguishable particles (two
   and three) and fermions (two to four), and the full walk on `Q₈` for

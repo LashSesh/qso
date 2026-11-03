@@ -5319,7 +5319,7 @@ windows lets error correction reach long experiments. The rules stay: no
 new dependency of the crate, an independent reference for every
 deliverable, reference tools in the cross-validation only.
 
-### 1.53 — Interacting walkers without visiting every configuration (M)
+### 1.53 — Interacting walkers without visiting every configuration (M, delivered)
 
 Use case: three to five interacting walkers on graphs of 10⁴ to 10⁶
 nodes with large groups (hypercubes, Hamming and Johnson graphs):
@@ -5336,6 +5336,78 @@ every configuration and stops at 2²⁷ of them.
 Validation: equal to 1.43 where both run; orbit counts equal Burnside's
 count from the group; non-interacting bosons and fermions equal the
 permanents and determinants of the single-particle walk.
+
+Delivered in `walks/interacting/coordinates.rs`:
+
+- **Orbits from canonical forms.** `CoordinateInteractingWalk` takes a
+  Hamming graph `H(d, q)` (with `Q_d` and `K_q`), a Johnson graph
+  `J(n, k)` or a Kneser graph `K(n, k)`, given by its parameters, and a
+  start. The group is the start's pointwise stabiliser in the
+  permutations of the places of the nodes' words (with, for Hamming
+  graphs, the symbols renamed in each place): all automorphisms of
+  Hamming graphs, and the point permutations `S_n` of Johnson and Kneser
+  graphs. A configuration, with the start's distinct nodes above it, is
+  a matrix of letters; its key is the smallest, over the orders of the
+  particles, of its columns renamed by first appearance and sorted. The
+  key names the orbit. The orders that reach it, times the column runs'
+  factorials and `(q − u)!` per column, give the stabiliser and so the
+  orbit's size, and for fermions the parity of the order gives the sign
+  (an orbit reached with both parities drops out).
+- **Generator on the orbits.** As in 1.43, read off at each orbit's
+  representative, `√(|O|/|O′|)` from the stabilisers; the orbits are
+  found by breadth-first search from the start, the canonical forms of a
+  level's hops in parallel, without the graph or the configurations.
+- **Limits.** At most six particles, 2²² orbits and the 2²⁶ entries of
+  1.43; a lower bound on the orbits (configurations over the group's
+  order) is checked before the search.
+- In Python: `CoordinateInteractingWalk.hamming`, `.johnson`, `.kneser`,
+  with `node_densities` per orbit of nodes and `word`/`node`.
+
+Changes to the plan:
+
+- **Canonical forms instead of point stabilisers.** Orbits generated from
+  the point stabilisers of 1.48 need, for a deduplication that is exact,
+  either all configurations or stabiliser chains with base changes
+  (Schreier–Sims) on up to 10⁶ points; the random elements of 1.48 would
+  leave finer classes, which the reduction of 1.43 cannot use (its
+  entries are read off at one representative). For graphs whose
+  automorphisms act on coordinates the canonical form is exact and
+  costs `k!` orders of `k` particles per configuration, so the milestone
+  covers those families, which are its use case.
+- **Burnside's count** needs the group's elements; the orbit counts are
+  checked against 1.43's union–find and 1.43's `HypercubeParticles`
+  instead.
+
+Not done, and why:
+
+- **Other groups.** Graphs whose automorphisms do not act on
+  coordinates keep 1.43's limit of 2²⁷ configurations; a Schreier–Sims
+  with base changes would lift it.
+- **The complement of `J(2k, k)`** is not used (the reduction is exact
+  with `S_n` alone).
+- **Starts with little symmetry.** Three bosons on three different
+  nodes of `Q₂₀` leave more than 10⁷ orbits.
+
+Measured (four cores, release build), adjacency hopping:
+
+| Graph | Particles from | Configurations | Orbits | Search | Evolution to t = 1 |
+|---|---|---|---|---|---|
+| `Q₂₀` | 3 bosons, node 0, U = 1 | 1.9·10¹⁷ | 156 240 | 13 s | 3.0 s |
+| `Q₁₂` | 3 fermions, nodes 0, 1, 2 | 1.1·10¹⁰ | 199 000 | 9.8 s | 0.6 s |
+| `H(8, 4)` | 3 fermions, nodes 0, 1, 2 | 4.7·10¹³ | 1 204 136 | 145 s | 19 s |
+| `Q₆` | 5 bosons, node 0, U = 1 | 1.0·10⁷ | 28 576 | 5.5 s | 0.6 s |
+| `J(40, 3)` | 3 bosons, nodes 0, 0, 1, U = 1 | 1.6·10¹¹ | 1674 | 0.8 s | 4.3 s |
+| `K(30, 3)` | 2 distinguishable, nodes 0, 1, U = 0.5 | 1.6·10⁷ | 228 | 0.7 s | < 0.1 s |
+
+Validation: every configuration's probability equals the full walk of
+1.29 to 10⁻¹² on `Q₄`, `H(3, 3)`, `K₅`, `J(6, 2)` and `K(7, 2)`, for
+bosons, fermions and distinguishable particles with `U` and `V` and
+starts with repeated and distinct nodes; the orbit counts equal those
+of 1.43's `SymmetricInteractingWalk`. Without interaction, configurations
+on `Q₂₀` (three bosons from node 0, with the 156 240 states of 1.43's
+`HypercubeParticles`), `H(8, 4)`, `Q₁₀` and `H(6, 4)` have the
+probabilities of the permanents and determinants of the walker's
+closed-form amplitudes `Π_j e^{−iγt}(δ + (e^{iγtq} − 1)/q)` to 10⁻¹¹.
 
 ### 1.54 — Exchange and reactions on sparse blocks (M–L)
 
