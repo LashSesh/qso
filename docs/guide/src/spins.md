@@ -377,16 +377,18 @@ What the model leaves out:
 
   | Complex, substrate | Zero-order block | Steady state | 1 s from thermal | Profile of 5 steps (evaluation with gradient) |
   |---|---|---|---|---|
-  | 7 and 5 spins | 3 684 | 4.9 s | 0.3 s | 5.1 s |
-  | 8 and 6 spins | 13 794 | 73 s | 1.3 s | 15 s |
-  | 9 and 7 spins | 52 052 | 94 s | 6.1 s | 56 s |
+  | 7 and 5 spins | 3 684 | 12 s | 0.4 s | 5.3 s |
+  | 8 and 6 spins | 13 794 | 151 s | 1.5 s | 15 s |
+  | 9 and 7 spins | 52 052 | 166 s | 5.3 s | 56 s |
 
   Beyond 2048 elements `steady_state` solves by GMRES, preconditioned in
   the eigenbasis of every site's Hamiltonian: the populations of the
   eigenstates and the coherences slower than ten times the fastest rate
   exactly (at most 4096 of them), the faster coherences by their
-  frequency and mean decay. It converges to 10⁻¹³ of the equations and
-  is checked as the dense solve is.
+  frequency and mean decay. It converges to 10⁻¹³ of the equations, its
+  residual is checked as the dense solve checks it, and a steady state
+  that is not unique (a spin that neither relaxes nor exchanges) is
+  refused by the factorisation of the slow elements.
 - **Precision.** Next to parahydrogen order of 1, thermal polarisation
   (10⁻¹⁰ at a millitesla) is resolved to about 10⁻¹⁵ by `steady_state`
   (checked against a 40-digit solution); long delays in the laboratory
@@ -465,7 +467,7 @@ events before the first step (limit 1.5·10¹² operations).
   steps (the generator's parts combined with the pseudo-rates at each
   step's midpoint, the inhomogeneous term in three augmented
   coordinates). PHIP at 5 µT with spectator protons: a product of seven
-  spins over 1 s in 5.4 s, of nine spins over 0.2 s in 18 s.
+  spins over 1 s in 4.7 s, of nine spins over 0.2 s in 17 s.
 - **Not modelled.** Correlated states of two reactants that both carry
   spins (only the first reactant site carries; a partner's spins are
   traced), reactions of third order, and spin-dependent chemistry.
@@ -1203,7 +1205,9 @@ converge for finite pulses).
   of the deviation for SABRE with one and two ring protons (laboratory
   frame at 0.14 and 20 µT with sweeps, rotating frame at 9.4 T with a
   pulse) and for the free induction decay, GMRES steady states equal the
-  dense solve to 10⁻¹³, and reaction steps on Krylov blocks equal the
+  dense solve to 10⁻¹⁰ (and refuse where it refuses), results do not
+  depend on the unit of the concentrations, and reaction steps on Krylov
+  blocks equal the
   dense steps of 1.50 to 10⁻⁹. Beyond the dense limit three uncoupled
   spectator protons leave the core's polarisations unchanged to 10⁻⁹,
   and a Monte Carlo of 4000 molecules reacting at exponential times

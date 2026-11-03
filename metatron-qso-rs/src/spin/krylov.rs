@@ -299,15 +299,6 @@ impl SparseBlock {
         }
     }
 
-    /// Column `col` times `f`.
-    pub fn scale_column(&mut self, col: usize, f: f64) {
-        for (c, v) in self.cols.iter().zip(self.vals.iter_mut()) {
-            if *c as usize == col {
-                *v *= f;
-            }
-        }
-    }
-
     /// The largest absolute column sum.
     pub fn norm_one(&self) -> f64 {
         let mut sums = vec![0.0f64; self.n];

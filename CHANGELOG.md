@@ -17,8 +17,8 @@ All notable changes to this project are documented here. The format follows
   profiles of exchange on sparse blocks with the relaxation and exchange
   interpolated over the field range (`Exchange.profile_relaxation_error`
   in Rust and Python). SABRE-SHEATH with nine spins in the complex and
-  seven in the free substrate: the steady state in 94 s, a second of
-  build-up in 6 s, a field-profile evaluation with its gradient in 56 s.
+  seven in the free substrate: the steady state in 166 s, a second of
+  build-up in 5 s, a field-profile evaluation with its gradient in 56 s.
   Equal to the dense blocks where both run, and to a Monte Carlo of
   reaction events within its standard error.
 

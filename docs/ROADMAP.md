@@ -5488,16 +5488,23 @@ Delivered in `spin/exchange/sparse.rs` (with `sparse/secular.rs` and
   augmented coordinates of the Krylov operator. The 2048-element limit of
   both gives way to estimates of memory (2 GiB) and work.
 - **Steady states.** Beyond the dense limit, by GMRES on
-  `(G + Σ_s ρ_s t_s t_sᵀ) x = −f`, `t_s` the trace of site `s`: the
-  chemistry makes `G` singular, `Tr Δ_s = 0` completes it, and this
-  system is not singular and has the same solution. The preconditioner
+  `(G − Σ_s ρ_s t_s t_sᵀ) x = −f`, `t_s` the trace of site `s` and `ρ_s`
+  its fastest rate over its dimension: the chemistry makes `G` singular,
+  `Tr Δ_s = 0` completes it, and on the traces this system is the rate
+  matrix of the chemistry less a positive diagonal, strictly diagonally
+  dominant, so it is singular only where the steady state is not unique.
+  That shows in the slow elements below (a conserved quantity commutes
+  with the Hamiltonian), whose scaled, fully pivoted factorisation refuses
+  pivots below 10⁻¹² of the largest, as the dense solve does. The preconditioner
   works in the eigenbasis of every site's Hamiltonian, where `−i[H, ·]` is
   diagonal: the slow elements (populations of the eigenstates and
   coherences within ten times the site's fastest rate, at most 4096) of
   all sites are solved exactly by dense LU with the trace terms, the fast
-  coherences divided by `−iω − γ̄`. GMRES restarts only beyond a quarter of
-  the memory limit and stops at 10⁻¹³ of the right-hand side; the residual
-  is then checked against the generator as in the dense solve.
+  coherences divided by `−iω − γ̄`. GMRES restarts only beyond what memory
+  allows (at most a quarter of the limit) and stops at 10⁻¹³ of the
+  right-hand side; the residual is then checked against the generator as
+  in the dense solve. The preconditioner's build, its factorisation and
+  every iteration count against the work and memory limits.
 - **Field profiles** of exchange take the sparse blocks with the
   interpolated relaxation of 1.51: the coherent parts `C₀ + B·C_Z` are
   affine in the field, the rest `R(B)` (relaxation, exchange with the
@@ -5519,7 +5526,7 @@ Changes to the plan:
   the eigenbasis preconditioner the same blocks converge to 10⁻¹³.
 - **Rows replaced by traces** (the dense solve) made the preconditioned
   operator singular, since the preconditioner drops a different equation
-  than the system; the rank-`sites` term `ρ_s t_s t_sᵀ` lies on the
+  than the system; the rank-`sites` term `−ρ_s t_s t_sᵀ` lies on the
   populations in every basis and keeps the two consistent.
 - **Field profiles always on sparse blocks**, as in 1.51; the dense path
   with its extrapolated differences remains for the tests.
@@ -5544,23 +5551,27 @@ its ring protons beside the free substrate, every spin with `T₁` and
 
 | Complex, substrate | Zero-order block | Steady state | 1 s from thermal | Profile of 5 steps over 1 s (interpolant, evaluation with gradient) |
 |---|---|---|---|---|
-| 7 and 5 spins | 3 684 | 4.9 s | 0.3 s | 0.2 s, 5.1 s |
-| 8 and 6 spins | 13 794 | 73 s | 1.3 s | 1.3 s, 15 s |
-| 9 and 7 spins | 52 052 | 94 s | 6.1 s | 6.2 s, 56 s |
+| 7 and 5 spins | 3 684 | 12 s | 0.4 s | 0.3 s, 5.3 s |
+| 8 and 6 spins | 13 794 | 151 s | 1.5 s | 1.2 s, 15 s |
+| 9 and 7 spins | 52 052 | 166 s | 5.3 s | 6.2 s, 56 s |
 
 At most 1.1 GB. The interpolant converged at five nodes to 3·10⁻¹⁶ (the
 relaxation is field-independent there, the fresh thermal states nearly
 linear). PHIP (`S → P` at 1 s⁻¹, the hydrides from parahydrogen, with
 spectator protons) at 5 µT: a product of seven spins (largest block
-3684) over 1 s in 5.4 s, eight (13 794) over 0.5 s in 9.8 s, nine
-(52 052) over 0.2 s in 18 s.
+3684) over 1 s in 4.7 s, eight (13 794) over 0.5 s in 9.9 s, nine
+(52 052) over 0.2 s in 17 s.
 
 Validation: Krylov blocks equal the dense blocks of 1.35 to 10⁻⁹ of the
 deviation for SABRE with one and two ring protons at 0.14 and 20 µT in
 the laboratory frame (delays and sweeps) and at 9.4 T in the rotating
 frame (delays and a pulse), and so do the free induction decays; the
-traces stay 1. The GMRES steady states equal the dense solve to 10⁻¹³ (to
-3·10⁻¹⁴ with three ring protons at 0.14 µT, where ILU(0) failed).
+traces stay 1. The GMRES steady states equal the dense solve to 10⁻¹⁰
+(measured 3·10⁻¹⁴ with three ring protons at 0.14 µT, where ILU(0)
+failed), also for concentrations from 10⁻⁹ to 10¹² of any unit; steady
+states that are not unique (a spin that neither relaxes nor exchanges,
+also beside SABRE beyond the dense limit) are refused as by the dense
+solve.
 Beyond the dense limit (seven spins) the steady state is stationary
 under 2 s of evolution to 10⁻⁸, and thermal states approach it. Reactions
 on Krylov steps equal the dense steps of 1.50 to 10⁻⁹ (PHIP at 5 µT
@@ -5574,7 +5585,51 @@ four standard errors. Field profiles on sparse blocks equal the dense
 blocks' transfer to 10⁻¹⁰ and gradient to 10⁻⁶ (the dense derivative
 by differences), are replayed by `evolve` to 10⁻¹⁰, and beyond the
 dense limit follow Richardson-extrapolated central differences along a
-direction to 10⁻⁶.
+direction to 10⁻⁶. From 0 to 1 mT, where the fresh thermal states and
+the drift change with the field, the gradient equals the dense
+blocks' to 10⁻⁸ and fine differences (steps below the 5·10⁻⁷ T over
+which the Larmor phase turns once) to 10⁻⁵.
+
+Review (independent, after delivery): the shared term emitter, the shift
+and drift handling, the augmented coordinates of the reaction steps, the
+Krylov tolerance, the GMRES rotations and restarts, the consistency of
+the preconditioner and the interpolant's inputs were found correct; 30
+random exchange models and 15 reaction models agreed between dense and
+Krylov blocks to 10⁻¹¹, profile gradients with Redfield relaxation
+(rotating frame, 17 nodes) agreed with differences to 5·10⁻⁹. Findings,
+all fixed:
+
+- **Non-unique steady states were returned** where the dense solve
+  refuses: a spin that neither relaxes nor exchanges (the residual check
+  passes any element of the null space). The slow block is now scaled
+  and fully pivoted and refuses small pivots.
+- **The sign of the trace terms.** With `+ρ_s` the trace equations are
+  the rate matrix plus a positive diagonal, which can be singular (two
+  sites at `k = 2` each way with `T₁` tuned to `0.25` s); with `−ρ_s`
+  they are strictly diagonally dominant.
+- **Estimates depended on the unit of the concentrations**: the Krylov
+  estimates took the unscaled drift, so concentrations times 10¹² were
+  refused at 5·10¹⁶ operations. They now bound the scaled operator, and
+  the dense exchange and reaction paths scale the drift's coordinate too
+  (their results agree for concentrations from 10⁻⁹ to 10¹²).
+- **Steady states had no work or memory estimate** (the preconditioner's
+  columns, its LU, the GMRES basis and iterations); they are counted
+  now. The full pivoting of the slow block doubles the time of the
+  steady states in the table above (it was 4.9, 73 and 94 s).
+- **Sweeps held two kinetics bases at once**, each checked alone; one at
+  a time now, and the base's memory is checked again with the members'
+  entries.
+- **Tests.** The steady-state test's tolerance and the documented
+  accuracy differed; the Monte Carlo compared against dense steps (now
+  Krylov steps); no test had a field-dependent `R`; a coherence that
+  neither precesses nor decays could be divided by zero when the slow
+  elements are truncated.
+
+Not changed: the drift's coordinate of field profiles stays 1, as
+scaling it to the deviation adds the drift column's sum over the
+populations to the norm bound of the Taylor substeps and doubles them
+(the review found the profiles accurate to 2·10⁻¹⁴ against replays at
+concentrations of 10⁻⁹).
 
 ### 1.55 — Relaxation applied without storing it (M)
 

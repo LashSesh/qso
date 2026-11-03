@@ -617,13 +617,14 @@ whichever the estimates make cheaper; the drift enters `expv` as an
 augmented coordinate (`Augmented`: a sparse block, extra columns and the
 coordinates' own small matrix) whose value is the size of the deviation,
 so the tolerance follows the deviation. Steady states beyond the dense
-limit solve `(G + Σ_s ρ_s t_s t_sᵀ) x = −f` by GMRES with full
+limit solve `(G − Σ_s ρ_s t_s t_sᵀ) x = −f` by GMRES with full
 orthogonalisation (restarted beyond a quarter of the memory limit),
 preconditioned in the eigenbasis of every site's Hamiltonian
 (`sparse/secular.rs`): per label block `V† X V`, the slow elements of all
-sites through one dense LU of the generator restricted to them (its
-columns from sparse products with the eigen-elements, in parallel), the
-fast coherences divided by `−iω − γ̄`. Field profiles (`sparse/field.rs`)
+sites through one scaled, fully pivoted LU of the generator restricted
+to them (its columns from sparse products with the eigen-elements, in
+parallel; small pivots refuse the steady state as not unique), the fast
+coherences divided by `−iω − γ̄`. Field profiles (`sparse/field.rs`)
 split every joint block into the coherent `C₀` and `C_Z` (from
 `generator_entries` with no relaxation) and the rest `R(B)` (the terms
 with zero Hamiltonians), interpolate `R` on Chebyshev–Lobatto nodes in a
