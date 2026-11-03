@@ -190,12 +190,21 @@ impl SpinSystem {
     /// The generator's parts at field `b`.
     fn at_field(&self, liouville: &Liouville, b: f64) -> Result<(AtField, Vec<Vec<u32>>)> {
         let d = self.dimension();
-        let redfield = self.redfield(b)?.ok_or_else(|| {
-            QsoError::invalid(
-                "control",
-                "matrix-free relaxation needs Redfield relaxation",
-            )
-        })?;
+        // Where the shielding alone relaxes, it vanishes at zero field: the
+        // terms of `redfield_field` hold there (and are empty).
+        let redfield = match self.redfield(b)? {
+            Some(r) => r,
+            None => {
+                self.redfield_field(b)?
+                    .ok_or_else(|| {
+                        QsoError::invalid(
+                            "control",
+                            "matrix-free relaxation needs Redfield relaxation",
+                        )
+                    })?
+                    .0
+            }
+        };
         let places = positions(&redfield, d);
         let mut drift = vec![ZERO; d * d];
         let eq = self.equilibrium_vector(b);
@@ -270,6 +279,14 @@ impl SpinSystem {
         let ops_adjoint = [ops[0].adjoint(), ops[1].adjoint()];
         let op_norms = [norm_bound(&ops[0]), norm_bound(&ops[1])];
         let middle = 0.5 * (min + max);
+        // The ends first: `redfield` refuses beyond its limits before it
+        // builds anything.
+        let mut ends = 0.0f64;
+        for b in [min, max] {
+            if let Some(rb) = self.redfield(b)? {
+                ends = ends.max(rb.rate());
+            }
+        }
         let (r, dr) = self.redfield_field(middle)?.ok_or_else(|| {
             QsoError::invalid(
                 "control",
@@ -282,14 +299,17 @@ impl SpinSystem {
                 .sum::<f64>()
         };
         let apply_work = [work(&r), work(&dr)];
-        let terms_bytes = (r.terms_bytes() + dr.terms_bytes()) as f64;
+        let scratch = |r: &RedfieldBlocks| {
+            r.liouville
+                .blocks
+                .iter()
+                .map(|(_, e)| r.apply_bytes(e.len()))
+                .fold(0.0, f64::max)
+        };
+        let terms_bytes =
+            (r.terms_bytes() + dr.terms_bytes()) as f64 + scratch(&r).max(scratch(&dr));
         // The rate bound at the ends and the middle.
-        let mut relaxation_norm = r.rate();
-        for b in [min, max] {
-            if let Some(rb) = self.redfield(b)? {
-                relaxation_norm = relaxation_norm.max(rb.rate());
-            }
-        }
+        let mut relaxation_norm = r.rate().max(ends);
         let liouville = Liouville::new(&vec![Vec::new(); d], None);
         relaxation_norm += norm_bound(&self.jump_block(&liouville, max));
         let start = augment(&c.initial);
@@ -333,11 +353,12 @@ impl FreeField {
         for &b in u {
             let s = self.substeps(c, b);
             // Forward twice and backward once, the pairing at ten nodes per
-            // substep, and three builds of the terms per step.
+            // substep, and about six builds of the terms per step (R forward
+            // and backward, R' with its two spectral transforms).
             work += s * (3.0 * TAYLOR_TERMS * product + GAUSS.len() as f64 * pairing);
             most = most.max(s);
         }
-        work += 3.0 * c.steps as f64 * 50.0 * self.terms_bytes;
+        work += 6.0 * c.steps as f64 * 50.0 * self.terms_bytes;
         let nodes = GAUSS.len() as f64 * most;
         let bytes = 16.0 * m * (c.steps as f64 + 1.0 + nodes + 30.0)
             + 2.0 * self.terms_bytes

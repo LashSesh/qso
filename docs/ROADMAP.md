@@ -5730,7 +5730,7 @@ application of `R` to a state of eight spins of SABRE-SHEATH takes
 0.083 s (1.4·10⁹ estimated operations). Applied without storing it, a
 propagation of eight spins at 10 µT took 20 s instead of 5.9 s stored.
 
-Validation: matrix-free Krylov steps equal the stored blocks to 10⁻⁹ in
+Validation: matrix-free Krylov steps equal the stored blocks to 3·10⁻⁹ in
 both frames at 1 mT, 2 T and 9.4 T, with a Hamiltonian that mixes the
 orders and for the free induction decay, and are never further from the
 dense exponentials than the stored Krylov steps (2·10⁻⁹ in the
@@ -5746,6 +5746,34 @@ at 1 K where the thermal drift counts; six spins of SABRE-SHEATH follow
 Richardson-extrapolated differences along a direction to 10⁻⁵ and are
 replayed by `evolve` to 10⁻⁹; eight spins are replayed to the printed
 digits.
+
+Review (independent, after delivery): the operator products, the
+adjoint for the secular blocks, the affine operators, the resolvent
+derivative and the generator's signs were found correct: against the
+stored blocks to 2·10⁻¹⁵ (with ²H, shielding on two spins, both frames,
+anisotropic diffusion and model-free motion with 120 terms), `R'` against
+differences to 3·10⁻¹¹ to 6·10⁻⁸ with the motions of 1.49, matrix-free
+Krylov steps against stored ones to 8·10⁻¹³, results bitwise equal on 1,
+3 and 4 threads, and field profiles with anisotropic diffusion and
+internal motion equal to the dense generator to 2·10⁻¹³ (transfer) and
+5·10⁻¹⁰ (gradient). Findings, all fixed:
+
+- **The build of `R` and `R'` was not checked against the limits**: a
+  field profile of eleven spins held 3.3 GB for 37 s before it was
+  refused. `redfield_field` now refuses from the estimate of 1.41 (scaled
+  for the derivative's terms), and the profile checks the ends first.
+- **The memory estimate of a matrix-free block counted the threads
+  twice** (refusing nine spins on 32 threads) and missed the products'
+  scratch. The terms now run in fixed groups of four (one vector of the
+  block per group, each product's scratch freed before the next), and
+  the estimate counts the indices, the groups' vectors and two `d²`
+  products per thread; the work counts the scratch it clears.
+- **A profile with only shielding relaxation failed at zero field**,
+  where the shielding vanishes; the empty terms hold there now.
+- **Docs and tests.** The work comment counted three builds of the terms
+  per step instead of about six; the documentation said column by column;
+  no test covered the automatic choice of the matrix-free paths, or the
+  motions of 1.49 in the derivative (both do now).
 
 ### 1.56 — Product-formula bounds that know which terms commute (S–M)
 

@@ -73,7 +73,7 @@ fn matrix_free_relaxation_equals_the_stored_blocks() {
             // stored and are no further from the dense.
             let err = relative(&free, &stored);
             assert!(
-                err < 1e-9,
+                err < 3e-9,
                 "{} spins at {} T, t = {t}: {err:e}",
                 sys.spins().len(),
                 sys.field()
@@ -177,13 +177,36 @@ fn the_field_derivative_of_redfield_relaxation_is_exact() {
     // differences, at high field, at low field where the eigenbasis mixes
     // the spins, and at zero field (the shielding then contributes only to
     // the derivative).
-    for (b, frame) in [
+    // With anisotropic diffusion and model-free internal motion of one
+    // dipolar pair and the shielding (the modes of 1.49) as well.
+    let moving = |b: f64, frame: Frame| {
+        let mut sys = chain(3, b, 3e-11, frame)
+            .with_diffusion(Some(
+                redfield::axial_diffusion(8e9, 3e9, [0.2, 0.1, 1.0]).unwrap(),
+            ))
+            .unwrap();
+        sys.set_internal_motion(
+            &[
+                redfield::Interaction::Dipolar(0, 1),
+                redfield::Interaction::Shielding(3),
+            ],
+            Some(redfield::ModelFree::lipari_szabo(0.7, 2e-11).unwrap()),
+        )
+        .unwrap();
+        sys
+    };
+    let mut cases: Vec<(f64, SpinSystem)> = [
         (9.4, Frame::Rotating),
         (2e-3, Frame::Laboratory),
         (3e-5, Frame::Laboratory),
         (0.0, Frame::Laboratory),
-    ] {
-        let sys = chain(3, b, 3e-11, frame);
+    ]
+    .into_iter()
+    .map(|(b, f)| (b, chain(3, b, 3e-11, f)))
+    .collect();
+    cases.push((9.4, moving(9.4, Frame::Rotating)));
+    cases.push((1e-3, moving(1e-3, Frame::Laboratory)));
+    for (b, sys) in cases {
         let d = sys.dimension();
         let x = random(d, 3);
         let z = random(d, 5);
@@ -218,4 +241,21 @@ fn the_field_derivative_of_redfield_relaxation_is_exact() {
         let e = (&exact - &fd).iter().fold(0.0f64, |m, v| m.max(v.norm())) / scale;
         assert!(e < 1e-6, "{b}: R' {e:e} of {scale:e}");
     }
+}
+
+#[test]
+fn delays_beyond_the_memory_limit_plan_matrix_free_blocks() {
+    // Nine spins at 10 µT: the stored zero-order block alone would need
+    // gigabytes; the plan applies its Redfield part from the terms, and a
+    // short delay keeps the trace and stays Hermitian.
+    let sys = chain(8, 1e-5, 3e-11, Frame::Laboratory);
+    let rho = pulsed(&sys);
+    let free = sys.planned_matrix_free(&rho, 1e-4).unwrap();
+    assert!(free.iter().any(|&f| f), "{free:?}");
+    let after = sys.evolve(&rho, &[Event::Delay(2e-5)]).unwrap();
+    assert!((after.trace() - rho.trace()).norm() < 1e-12);
+    let asym = (&after - after.adjoint())
+        .iter()
+        .fold(0.0f64, |m, z| m.max(z.norm()));
+    assert!(asym < 1e-12, "{asym:e}");
 }

@@ -63,6 +63,40 @@ fn beyond_the_interpolant_profiles_apply_the_relaxation_from_its_terms() {
     assert!((fd - exact).abs() < 1e-5 * exact.abs(), "{fd} vs {exact}");
 }
 
+#[test]
+fn profiles_past_the_interpolants_memory_take_the_matrix_free_path() {
+    // Eight spins of SABRE-SHEATH with Redfield relaxation: the nodes of
+    // the interpolant would need 9.4 GB; the problem is costed on the
+    // matrix-free path instead of refused. A field profile with only the
+    // shielding relaxing passes zero field, where it vanishes.
+    let (sys, lac) = sheath(5, true);
+    let start = sys.parahydrogen_state(0, 1, 1.0).unwrap();
+    let c = Control::field(0.0, 2.0 * lac, 0.04, 2, start, sys.iz(2).unwrap());
+    let cost = sys.control_cost(&c, 2.0 * lac).unwrap();
+    assert_eq!(cost.method, "matrix-free");
+    assert!(cost.bytes < 1e9, "{}", cost.bytes);
+    let mut csa = SpinSystem::new(1e-3).with_frame(Frame::Laboratory);
+    csa.add_spin(crate::spin::Isotope::H1, 1.0).unwrap();
+    csa.add_spin(crate::spin::Isotope::C13, 60.0).unwrap();
+    csa.couple(0, 1, 140.0).unwrap();
+    csa.set_csa(
+        1,
+        Some(crate::spin::axial_csa(80.0, [0.0, 0.0, 1.0]).unwrap()),
+    )
+    .unwrap();
+    csa.set_relaxation(1, Some(2.0), None).unwrap();
+    let csa = csa.with_correlation_time(Some(3e-9)).unwrap();
+    let start = csa.thermal_state().unwrap();
+    let c = Control::field(0.0, 1e-3, 0.002, 3, start, csa.iz(1).unwrap());
+    let u = [5e-4, 0.0, 1e-3];
+    let (free, _, _) = csa.control_members_on(&c, &u, Path::FreeField).unwrap();
+    let (dense, _, _) = csa.control_members_on(&c, &u, Path::Dense).unwrap();
+    assert!(
+        (free - dense).abs() < 1e-10 * dense.abs(),
+        "{free} vs {dense}"
+    );
+}
+
 /// SABRE-SHEATH with eight spins and dipolar Redfield relaxation (the
 /// interpolant of 1.51 would need 9.4 GB): the cost of ten steps over
 /// 0.2 s, and two steps over 0.04 s evaluated and replayed by `evolve`,

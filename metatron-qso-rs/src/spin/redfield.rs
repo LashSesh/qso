@@ -60,6 +60,10 @@ use crate::linalg::dense::cmul;
 use crate::linalg::{CMatrix, RMatrix};
 use crate::parallel::map_tasks;
 
+/// Terms of the Redfield superoperator one task of
+/// [`RedfieldBlocks::apply_products`] applies.
+pub(super) const TERMS_PER_TASK: usize = 4;
+
 /// `μ₀/4π` (T² m³ J⁻¹, CODATA 2018).
 pub const MU0_OVER_4PI: f64 = 1.000_000_000_55e-7;
 /// Largest `|H₁|·τ_c` (Frobenius norm of an interaction's spatial tensor
@@ -323,8 +327,8 @@ impl RedfieldBlocks {
         self.counts[k].get_or_init(|| self.bound(k)).0
     }
 
-    /// How many products its columns take: the work of applying block `k`
-    /// from the terms, without storing it.
+    /// The products of applying block `k` from the terms without storing
+    /// it ([`RedfieldBlocks::apply_products`]), with the scratch it clears.
     pub fn products_of(&self, k: usize) -> usize {
         self.counts[k].get_or_init(|| self.bound(k)).1
     }
@@ -385,7 +389,23 @@ impl RedfieldBlocks {
                 }
             }
         }
-        (count.0, count.1 + pairs)
+        // The scratch every application clears: the indices (d²) and two
+        // products per term (2·d² each), at about a quarter of a product
+        // an entry.
+        let d = g.order.len();
+        let scratch = (2 + 4 * self.terms.len()) * d * d / 4;
+        (count.0, count.1 + pairs + scratch)
+    }
+
+    /// Bytes [`RedfieldBlocks::apply_products`] holds for a block of `n`
+    /// elements: the indices, one vector of the block per group of terms,
+    /// and two products of `d²` per running task.
+    pub fn apply_bytes(&self, n: usize) -> f64 {
+        let d = self.grouping.order.len() as f64;
+        let groups = 1 + self.terms.len().div_ceil(TERMS_PER_TASK);
+        8.0 * d * d
+            + 16.0 * groups as f64 * n as f64
+            + crate::parallel::threads() as f64 * 32.0 * d * d
     }
 
     /// `out[i] += scale · R(x)` (with `adjoint`, `R†(x)`: the left products
@@ -496,10 +516,13 @@ impl RedfieldBlocks {
             }
             (z, live)
         };
-        let tasks = self.terms.len() + 1;
-        let parts: Vec<Vec<C64>> = map_tasks(tasks, |t| {
+        // The left products, then the terms in fixed groups of
+        // `TERMS_PER_TASK` (one vector of the block per group, the same
+        // groups whatever the threads, so the sums are reproducible).
+        let groups = 1 + self.terms.len().div_ceil(TERMS_PER_TASK);
+        let parts: Vec<Vec<C64>> = map_tasks(groups, |group| {
             let mut acc = vec![ZERO; n];
-            if t == self.terms.len() {
+            if group == 0 {
                 // Σ w 𝒬Y X + X (Σ w 𝒬Y)†: the left products within labels,
                 // `left.row(pa)` holding `(𝒬Y)_ca`.
                 for (j, &(a, b)) in elements.iter().enumerate() {
@@ -523,15 +546,19 @@ impl RedfieldBlocks {
                 }
                 return acc;
             }
-            let term = &self.terms[t];
-            let f = C64::new(-term.w, 0.0);
-            // 𝒬 X Y = 𝒬 (X Y), read on the block.
-            let (z, live) = times(&term.y, false);
-            pair(&term.q, &z, &live, &index, &targets, f, false, &mut acc);
-            // Y X 𝒬 = (𝒬 X† Y)†: entry (c, e) is conj((𝒬 X† Y)_ec), read on
-            // the transposed block.
-            let (z, live) = times(&term.y, true);
-            pair(&term.q, &z, &live, &transposed, &sources, f, true, &mut acc);
+            let first = (group - 1) * TERMS_PER_TASK;
+            for term in &self.terms[first..(first + TERMS_PER_TASK).min(self.terms.len())] {
+                let f = C64::new(-term.w, 0.0);
+                // 𝒬 X Y = 𝒬 (X Y), read on the block.
+                {
+                    let (z, live) = times(&term.y, false);
+                    pair(&term.q, &z, &live, &index, &targets, f, false, &mut acc);
+                }
+                // Y X 𝒬 = (𝒬 X† Y)†: entry (c, e) is conj((𝒬 X† Y)_ec), read
+                // on the transposed block.
+                let (z, live) = times(&term.y, true);
+                pair(&term.q, &z, &live, &transposed, &sources, f, true, &mut acc);
+            }
             acc
         });
         for part in parts {
@@ -1216,6 +1243,29 @@ impl SpinSystem {
         // Redfield theory at this field, as `redfield` checks it.
         let here = self.interactions(b);
         check_narrowing(&here, &self.modes(&here))?;
+        // The build, refused beyond the limits before anything is built:
+        // R' holds twice the terms of R, and ∂Y costs about twice Y.
+        {
+            let mut lab = self.clone();
+            lab.frame = Frame::Laboratory;
+            let (work, memory) =
+                redfield_cost(&lab.labels(), &self.labels(), unit.len(), modes.len());
+            let (work, memory) = (4.0 * work, 3.0 * memory);
+            if work > super::MAX_RELAXATION_WORK || memory > super::MAX_RELAXATION_MEMORY {
+                return Err(QsoError::invalid(
+                    "redfield",
+                    format!(
+                        "the Redfield superoperator and its field derivative at dimension {} \
+                         need about {work:.1e} operations and {:.1} GB to build (limits \
+                         {:.1e} and {:.1} GB)",
+                        self.dimension(),
+                        memory / 1e9,
+                        super::MAX_RELAXATION_WORK,
+                        super::MAX_RELAXATION_MEMORY / 1e9
+                    ),
+                ));
+            }
+        }
         if modes.is_empty() {
             return Ok(None);
         }

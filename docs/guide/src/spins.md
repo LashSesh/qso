@@ -271,7 +271,8 @@ apply its Redfield part from the terms at every product instead,
 `Σ w 𝒬Y X + X(Σ w 𝒬Y)† − Σ w(𝒬(XY) + (𝒬X†Y)†)` on the block's matrix
 `X`, and store only the rest of the generator (coherent part,
 dissipators, drift). Each application then costs a few times a product
-with the stored block but needs no memory beyond the terms. On four
+with the stored block but needs no memory beyond the terms and a few
+`d × d` arrays per thread. On four
 cores, a chain of protons and a ¹³C with dipolar relaxation and shielding
 anisotropy (τ_c = 3·10⁻¹¹ s):
 
@@ -1233,7 +1234,7 @@ converge for finite pulses).
   within four standard errors (plus 10⁻³).
 
 - **Relaxation without storing it** (1.55). Matrix-free Krylov steps
-  equal the stored Redfield blocks to 10⁻⁹ (both frames, 1 mT to 9.4 T,
+  equal the stored Redfield blocks to 3·10⁻⁹ (both frames, 1 mT to 9.4 T,
   a Hamiltonian that mixes the orders, the free induction decay);
   `R(B)` from the affine operators equals the stored blocks to 10⁻¹⁵,
   its adjoint pairs correctly, and `R'(B)` equals extrapolated

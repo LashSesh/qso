@@ -655,7 +655,7 @@ fn norm2(x: &[C64]) -> f64 {
 /// A block of the generator with its Redfield part applied from the terms
 /// at every product, the blocks of the superoperator never stored: the
 /// coherent part, the dissipators and the drift as a sparse block, and
-/// `−R` column by column.
+/// `−R` by operator products ([`RedfieldBlocks::apply_products`]).
 pub(super) struct MatrixFree<'a> {
     base: SparseBlock,
     redfield: &'a RedfieldBlocks,
@@ -1445,14 +1445,14 @@ impl SpinSystem {
             };
         // Beyond the memory limit, Krylov steps that apply the Redfield
         // part from its terms at every product: the block of the coherent
-        // part and the dissipators stored, the Redfield entries not (four
-        // vectors per thread to sum the columns into).
-        if relaxation.redfield.is_some() && memory > super::MAX_RELAXATION_MEMORY {
+        // part and the dissipators stored, the Redfield entries not (the
+        // products' scratch instead).
+        if let Some(redfield) = relaxation.redfield.as_ref()
+            && memory > super::MAX_RELAXATION_MEMORY
+        {
             let products = relaxation.redfield_products(liouville, k);
             let base = count + n;
-            let free_memory = 44.0 * base as f64
-                + krylov_bytes(size)
-                + 4.0 * crate::parallel::threads() as f64 * accumulator_bytes(size);
+            let free_memory = 44.0 * base as f64 + krylov_bytes(size) + redfield.apply_bytes(n);
             // A product applies the base (8 operations an entry) and the
             // terms' operator products (about 12 with their indexing).
             let entries = base as f64 + 1.5 * products;
@@ -1804,6 +1804,31 @@ impl SpinSystem {
                 (size, p.orbits.as_ref().map_or(size, |(o, _)| o.len()))
             })
             .collect())
+    }
+
+    /// For the blocks that move under the free Hamiltonian from `rho` over
+    /// `t`: whether each applies its Redfield part without storing it.
+    #[cfg(test)]
+    pub(super) fn planned_matrix_free(&self, rho: &CMatrix, t: f64) -> Result<Vec<bool>> {
+        let d = self.dimension();
+        let h = self.hamiltonian_at(self.field);
+        let relaxation = self.relaxation(self.field)?;
+        let trace = rho.trace();
+        let mut delta = rho.clone();
+        for i in 0..d {
+            delta[(i, i)] -= trace / d as f64;
+        }
+        let liouville = Liouville::new(&self.labels(), None);
+        let plans = self.plans(
+            &delta,
+            trace,
+            &liouville,
+            &Sparse::new(&h),
+            &relaxation,
+            t,
+            None,
+        );
+        Ok(plans.iter().map(|p| p.matrix_free).collect())
     }
 
     /// Entries (at most) and build work of the Redfield blocks on which `x`
