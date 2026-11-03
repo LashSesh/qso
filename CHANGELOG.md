@@ -17,7 +17,7 @@ All notable changes to this project are documented here. The format follows
   configurations (with the stabiliser's order and the fermionic sign) and
   found by breadth-first search, so neither the graph nor the
   configurations are listed: three bosons on `Q₂₀` (1.9·10¹⁷
-  configurations) have 156 240 orbits in 13 s. Equal to the full walk on
+  configurations) have 156 240 orbits in 9 s. Equal to the full walk on
   small graphs and to the closed-form permanents and determinants of free
   particles on `Q₂₀` and `H(8, 4)`. In Python:
   `CoordinateInteractingWalk.hamming`, `.johnson`, `.kneser`.

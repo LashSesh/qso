@@ -364,3 +364,26 @@ fn measure_coordinates() {
         );
     }
 }
+
+/// The search's memory on Kneser graphs of large degree, for the review
+/// (`/usr/bin/time -v cargo test --release -- --ignored measure_kneser --nocapture`).
+#[test]
+#[ignore]
+fn measure_kneser() {
+    for n in [40, 46] {
+        let clock = std::time::Instant::now();
+        let walk = CoordinateInteractingWalk::from_start(
+            CoordinateGraph::Kneser { n, k: 4 },
+            Generator::Adjacency,
+            1.0,
+            Statistics::Distinguishable,
+            &[0, 1],
+        )
+        .unwrap();
+        eprintln!(
+            "K({n}, 4), 2 distinguishable from [0, 1]: {} orbits in {:.1} s",
+            walk.num_orbits(),
+            clock.elapsed().as_secs_f64()
+        );
+    }
+}

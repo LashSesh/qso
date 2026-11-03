@@ -352,6 +352,20 @@ struct Canon {
     rows_fixed: usize,
 }
 
+/// The hops from one orbit into another, merged.
+struct Hop {
+    /// The target's key.
+    key: Vec<u64>,
+    /// The first configuration met in the target.
+    sites: Vec<u64>,
+    /// Its parity and `ln |Stab|`.
+    odd: bool,
+    log_stabiliser: f64,
+    /// The summed amplitude, each signed by its form's parity for
+    /// fermions.
+    amplitude: f64,
+}
+
 /// Where a configuration lies.
 enum Lookup {
     /// In an orbit found, with its sign relative to the representative.
@@ -738,7 +752,7 @@ impl CoordinateInteractingWalk {
                     // In order of first appearance, so the orbits are
                     // numbered the same on every run.
                     let mut seen: HashMap<Vec<u64>, usize> = HashMap::new();
-                    let mut hops: Vec<(Vec<u64>, Vec<u64>, bool, f64, f64)> = Vec::new();
+                    let mut hops: Vec<Hop> = Vec::new();
                     for (k, &j) in sites.iter().enumerate() {
                         if statistics == Statistics::Bosons && k > 0 && sites[k - 1] == j {
                             continue;
@@ -771,16 +785,16 @@ impl CoordinateInteractingWalk {
                                     amplitude
                                 };
                                 let h = *seen.entry(form.key).or_insert_with_key(|key| {
-                                    hops.push((
-                                        key.clone(),
-                                        moved,
-                                        form.odd,
-                                        form.log_stabiliser,
-                                        0.0,
-                                    ));
+                                    hops.push(Hop {
+                                        key: key.clone(),
+                                        sites: moved,
+                                        odd: form.odd,
+                                        log_stabiliser: form.log_stabiliser,
+                                        amplitude: 0.0,
+                                    });
                                     hops.len() - 1
                                 });
-                                hops[h].4 += signed;
+                                hops[h].amplitude += signed;
                             }
                         });
                     }
@@ -795,7 +809,14 @@ impl CoordinateInteractingWalk {
                     self.adjacent.push(adjacent as f64);
                     self.potential.push(diagonal * self.start.len() as f64);
                     let size_log = self.orbits[o].log_stabiliser;
-                    for (key, moved, odd, log_stabiliser, signed) in hops {
+                    for Hop {
+                        key,
+                        sites: moved,
+                        odd,
+                        log_stabiliser,
+                        amplitude: signed,
+                    } in hops
+                    {
                         let target = match self.index.get(&key) {
                             Some(&t) => t,
                             None => {

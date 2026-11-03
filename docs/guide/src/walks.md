@@ -342,12 +342,12 @@ print(round(walk.probability_of(x, [0, 0, 1]), 4))   # 0.7273
 
 | Graph | Particles from | Configurations | Orbits | Search | Evolution to t = 1 |
 |---|---|---|---|---|---|
-| `Q₂₀` (10⁶ nodes) | 3 bosons, node 0 | 1.9·10¹⁷ | 156 240 | 13 s | 3.0 s |
-| `Q₁₂` | 3 fermions, nodes 0, 1, 2 | 1.1·10¹⁰ | 199 000 | 9.8 s | 0.6 s |
-| `H(8, 4)` (65 536 nodes) | 3 fermions, nodes 0, 1, 2 | 4.7·10¹³ | 1 204 136 | 145 s | 19 s |
-| `Q₆` | 5 bosons, node 0 | 1.0·10⁷ | 28 576 | 5.5 s | 0.6 s |
-| `J(40, 3)` | 3 bosons, nodes 0, 0, 1 | 1.6·10¹¹ | 1674 | 0.8 s | 4.3 s |
-| `K(30, 3)` | 2 distinguishable, nodes 0, 1 | 1.6·10⁷ | 228 | 0.7 s | < 0.1 s |
+| `Q₂₀` (10⁶ nodes) | 3 bosons, node 0 | 1.9·10¹⁷ | 156 240 | 9.0 s | 2.3 s |
+| `Q₁₂` | 3 fermions, nodes 0, 1, 2 | 1.1·10¹⁰ | 199 000 | 6.7 s | 0.4 s |
+| `H(8, 4)` (65 536 nodes) | 3 fermions, nodes 0, 1, 2 | 4.7·10¹³ | 1 204 136 | 104 s | 18 s |
+| `Q₆` | 5 bosons, node 0 | 1.0·10⁷ | 28 576 | 4.7 s | 0.5 s |
+| `J(40, 3)` | 3 bosons, nodes 0, 0, 1 | 1.6·10¹¹ | 1674 | 0.5 s | 4.4 s |
+| `K(30, 3)` | 2 distinguishable, nodes 0, 1 | 1.6·10⁷ | 228 | 0.4 s | < 0.1 s |
 
 At most six particles, 2²² orbits and 2²⁶ entries. Only a lower bound
 on the orbits is checked before the search, so a start whose stabiliser
