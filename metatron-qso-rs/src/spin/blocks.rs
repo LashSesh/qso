@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use num_complex::Complex64 as C64;
 
 use super::krylov::{
-    Accumulator, ColumnRun, KRYLOV_STATIONARY, KRYLOV_TOLERANCE, Orbits, SparseBlock,
+    Accumulator, ColumnRun, KRYLOV_STATIONARY, KRYLOV_TOLERANCE, Operator, Orbits, SparseBlock,
     accumulator_bytes, column_ranges, expv, krylov_bytes, krylov_work,
 };
 use super::redfield::RedfieldBlocks;
@@ -291,6 +291,24 @@ impl Relaxation {
         }
         (entries, 16.0 * r.terms() as f64 * entries)
     }
+
+    /// Products of applying the Redfield blocks inside block `k` of
+    /// `liouville` once from their terms, without storing them.
+    pub(super) fn redfield_products(&self, liouville: &Liouville, k: usize) -> f64 {
+        let Some(r) = &self.redfield else {
+            return 0.0;
+        };
+        r.liouville
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, elements))| {
+                let (a, b) = elements[0];
+                liouville.block_of(a, b) == Some(k)
+            })
+            .map(|(q, _)| r.products_of(q) as f64)
+            .sum()
+    }
 }
 
 /// A jump operator with `A†A`, on its spin, for building generators.
@@ -520,6 +538,9 @@ pub(super) enum Method {
     Steps,
     /// The blocks as planned, without the symmetry.
     Full,
+    /// Krylov steps with the Redfield terms applied without storing the
+    /// blocks.
+    MatrixFree,
 }
 
 /// How one block of the deviation propagates, with its estimated cost.
@@ -536,6 +557,8 @@ struct BlockPlan {
     /// reduces.
     orbits: Option<(Orbits, Vec<Vec<u32>>)>,
     dense: bool,
+    /// Krylov steps with the Redfield part applied from its terms.
+    matrix_free: bool,
     /// Taken as stationary below this fraction (the populations of one
     /// propagation; 0 otherwise).
     stationary: f64,
@@ -544,9 +567,16 @@ struct BlockPlan {
     memory: f64,
 }
 
-enum Propagator {
+enum Propagator<'a> {
     /// `exp(tA)`.
     Dense(CMatrix),
+    /// [`Propagator::Krylov`] with the Redfield part applied from its terms.
+    MatrixFree {
+        op: MatrixFree<'a>,
+        t: f64,
+        tol: f64,
+        stationary: f64,
+    },
     /// `A`, applied by Krylov steps over `t` to `tol` (and taken as
     /// stationary below `stationary`, see [`expv`]).
     Krylov {
@@ -558,8 +588,8 @@ enum Propagator {
 }
 
 /// A block's propagator over one interval, on the orbits when reduced.
-struct Stepper {
-    kind: Propagator,
+struct Stepper<'a> {
+    kind: Propagator<'a>,
     orbits: Option<Orbits>,
     /// The start vector (reduced and augmented).
     start: Vec<C64>,
@@ -568,7 +598,7 @@ struct Stepper {
     phase: C64,
 }
 
-impl Stepper {
+impl Stepper<'_> {
     fn step(&self, y: &[C64]) -> Result<Vec<C64>> {
         let mut out = match &self.kind {
             Propagator::Dense(p) => (0..y.len())
@@ -580,6 +610,12 @@ impl Stepper {
                 tol,
                 stationary,
             } => expv(a, y, *t, *tol, *stationary)?,
+            Propagator::MatrixFree {
+                op,
+                t,
+                tol,
+                stationary,
+            } => expv(op, y, *t, *tol, *stationary)?,
         };
         if self.phase != ONE {
             for v in out.iter_mut() {
@@ -614,6 +650,73 @@ impl Stepper {
 
 fn norm2(x: &[C64]) -> f64 {
     x.iter().map(|z| z.norm_sqr()).sum::<f64>().sqrt()
+}
+
+/// A block of the generator with its Redfield part applied from the terms
+/// at every product, the blocks of the superoperator never stored: the
+/// coherent part, the dissipators and the drift as a sparse block, and
+/// `−R` column by column.
+pub(super) struct MatrixFree<'a> {
+    base: SparseBlock,
+    redfield: &'a RedfieldBlocks,
+    /// The Redfield blocks inside, with the positions of their elements in
+    /// this block.
+    parts: Vec<(usize, Vec<u32>)>,
+    /// Elements of the block (the base may carry the drift's coordinate
+    /// after them).
+    n: usize,
+    norm: f64,
+}
+
+impl<'a> MatrixFree<'a> {
+    fn new(
+        base: SparseBlock,
+        redfield: &'a RedfieldBlocks,
+        liouville: &Liouville,
+        k: usize,
+    ) -> Self {
+        let parts = redfield
+            .liouville
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, elements))| {
+                let (a, b) = elements[0];
+                liouville.block_of(a, b) == Some(k)
+            })
+            .map(|(q, (_, elements))| {
+                let positions = elements
+                    .iter()
+                    .map(|&(a, b)| liouville.position_of(a, b) as u32)
+                    .collect();
+                (q, positions)
+            })
+            .collect();
+        let norm = base.norm_inf() + redfield.rate();
+        MatrixFree {
+            base,
+            redfield,
+            parts,
+            n: liouville.blocks[k].1.len(),
+            norm,
+        }
+    }
+}
+
+impl Operator for MatrixFree<'_> {
+    fn apply(&self, x: &[C64], y: &mut [C64]) {
+        self.base.apply(x, y);
+        let n = self.n;
+        for (q, positions) in &self.parts {
+            let v: Vec<C64> = positions.iter().map(|&p| x[p as usize]).collect();
+            self.redfield
+                .apply_products(*q, &v, -ONE, positions, &mut y[..n]);
+        }
+    }
+
+    fn norm_inf(&self) -> f64 {
+        self.norm
+    }
 }
 
 impl SpinSystem {
@@ -985,6 +1088,7 @@ impl SpinSystem {
     /// [`SpinSystem::generator_entries`]), its diagonal less `shift`, built
     /// in parallel ranges: with `keep` their entries (`(row, value)` by
     /// ascending row) and lengths, else their lengths only.
+    #[allow(clippy::too_many_arguments)]
     fn block_columns(
         &self,
         liouville: &Liouville,
@@ -993,11 +1097,12 @@ impl SpinSystem {
         relaxation: &Relaxation,
         shift: C64,
         keep: bool,
+        with_redfield: bool,
     ) -> Vec<ColumnRun> {
         let elements = &liouville.blocks[k].1;
         let n = elements.len();
         let locals = self.local_jumps(relaxation);
-        let redfield = relaxation.redfield.as_ref();
+        let redfield = relaxation.redfield.as_ref().filter(|_| with_redfield);
         let targets: Vec<Vec<Option<u32>>> = redfield.map_or(Vec::new(), |r| {
             (0..r.liouville.blocks.len())
                 .map(|q| r.targets(q))
@@ -1048,7 +1153,35 @@ impl SpinSystem {
     ) -> SparseBlock {
         let elements = &liouville.blocks[k].1;
         let size = elements.len() + usize::from(drift.is_some());
-        let runs = self.block_columns(liouville, k, h, relaxation, shift, true);
+        let runs = self.block_columns(liouville, k, h, relaxation, shift, true, true);
+        let last: Option<Vec<(u32, C64)>> = drift.map(|factor| {
+            elements
+                .iter()
+                .enumerate()
+                .filter_map(|(j, &(a, b))| {
+                    let v = relaxation.drift[(a, b)] * factor;
+                    (v != ZERO).then_some((j as u32, v))
+                })
+                .collect()
+        });
+        SparseBlock::from_column_runs(size, &runs, last.as_deref())
+    }
+
+    /// [`SpinSystem::sparse_block`] without the Redfield terms (which a
+    /// matrix-free propagation applies from the terms): the coherent part,
+    /// the Lindblad dissipators and the drift.
+    pub(super) fn sparse_base(
+        &self,
+        liouville: &Liouville,
+        k: usize,
+        h: &Sparse,
+        relaxation: &Relaxation,
+        shift: C64,
+        drift: Option<C64>,
+    ) -> SparseBlock {
+        let elements = &liouville.blocks[k].1;
+        let size = elements.len() + usize::from(drift.is_some());
+        let runs = self.block_columns(liouville, k, h, relaxation, shift, true, false);
         let last: Option<Vec<(u32, C64)>> = drift.map(|factor| {
             elements
                 .iter()
@@ -1073,7 +1206,7 @@ impl SpinSystem {
         drift: bool,
     ) -> usize {
         let columns: usize = self
-            .block_columns(liouville, k, h, relaxation, ZERO, false)
+            .block_columns(liouville, k, h, relaxation, ZERO, false, true)
             .iter()
             .flat_map(|run| run.lengths.iter().map(|&l| l as usize))
             .sum();
@@ -1289,6 +1422,35 @@ impl SpinSystem {
             } else {
                 krylov_bytes(m)
             };
+        // Beyond the memory limit, Krylov steps that apply the Redfield
+        // part from its terms at every product: the block of the coherent
+        // part and the dissipators stored, the Redfield entries not (four
+        // vectors per thread to sum the columns into).
+        if relaxation.redfield.is_some() && memory > super::MAX_RELAXATION_MEMORY {
+            let products = relaxation.redfield_products(liouville, k);
+            let base = count + n;
+            let free_memory = 44.0 * base as f64
+                + krylov_bytes(size)
+                + 4.0 * crate::parallel::threads() as f64 * accumulator_bytes(size);
+            // A product applies the base (8 operations an entry) and the
+            // terms' operator products (about 12 with their indexing).
+            let entries = base as f64 + 1.5 * products;
+            let free = repeats as f64 * krylov_work(size, entries as usize, norm, t);
+            if free_memory <= super::MAX_RELAXATION_MEMORY {
+                return BlockPlan {
+                    k,
+                    x,
+                    shift,
+                    augmented,
+                    orbits: None,
+                    dense: false,
+                    matrix_free: true,
+                    stationary,
+                    work: 50.0 * count as f64 + free,
+                    memory: free_memory,
+                };
+            }
+        }
         BlockPlan {
             k,
             x,
@@ -1296,6 +1458,7 @@ impl SpinSystem {
             augmented,
             orbits,
             dense,
+            matrix_free: false,
             stationary,
             work: build + dense_work.min(krylov),
             memory,
@@ -1304,16 +1467,37 @@ impl SpinSystem {
 
     /// The propagator over `t` of a planned block, to the Krylov tolerance
     /// spread over `repeats` steps.
-    fn stepper(
+    fn stepper<'a>(
         &self,
         plan: &BlockPlan,
-        liouville: &Liouville,
+        liouville: &'a Liouville,
         h: &Sparse,
-        relaxation: &Relaxation,
+        relaxation: &'a Relaxation,
         t: f64,
         repeats: usize,
-    ) -> Result<Stepper> {
+    ) -> Result<Stepper<'a>> {
         let drift = plan.augmented.map(|(trace, s)| trace / s);
+        if plan.matrix_free
+            && let Some(redfield) = relaxation.redfield.as_ref()
+        {
+            let base = self.sparse_base(liouville, plan.k, h, relaxation, plan.shift, drift);
+            let op = MatrixFree::new(base, redfield, liouville, plan.k);
+            let mut start = plan.x.clone();
+            start.extend(plan.augmented.map(|(_, s)| C64::new(s, 0.0)));
+            let tol = KRYLOV_TOLERANCE * norm2(&start) / repeats.max(1) as f64;
+            return Ok(Stepper {
+                kind: Propagator::MatrixFree {
+                    op,
+                    t,
+                    tol,
+                    stationary: plan.stationary,
+                },
+                orbits: None,
+                start,
+                n: plan.x.len(),
+                phase: (plan.shift * t).exp(),
+            });
+        }
         let mut a = self.sparse_block(liouville, plan.k, h, relaxation, plan.shift, drift);
         let mut orbits = None;
         if let Some((o, images)) = &plan.orbits {
@@ -1464,8 +1648,19 @@ impl SpinSystem {
         let mut plans = self.plans(&delta, trace, &liouville, &sparse, relaxation, t, maps);
         for plan in &mut plans {
             match force {
-                Some(Method::Dense) => plan.dense = true,
-                Some(Method::Krylov) => plan.dense = false,
+                Some(Method::Dense) => {
+                    plan.dense = true;
+                    plan.matrix_free = false;
+                }
+                Some(Method::Krylov) => {
+                    plan.dense = false;
+                    plan.matrix_free = false;
+                }
+                Some(Method::MatrixFree) if relaxation.redfield.is_some() => {
+                    plan.dense = false;
+                    plan.matrix_free = true;
+                    plan.orbits = None;
+                }
                 _ => {}
             }
         }
@@ -1692,8 +1887,19 @@ impl SpinSystem {
                 maps.as_deref(),
             );
             match force {
-                Some(Method::Dense) => plan.dense = true,
-                Some(Method::Krylov) => plan.dense = false,
+                Some(Method::Dense) => {
+                    plan.dense = true;
+                    plan.matrix_free = false;
+                }
+                Some(Method::Krylov) => {
+                    plan.dense = false;
+                    plan.matrix_free = false;
+                }
+                Some(Method::MatrixFree) if relaxation.redfield.is_some() => {
+                    plan.dense = false;
+                    plan.matrix_free = true;
+                    plan.orbits = None;
+                }
                 Some(Method::Steps) => plan.memory = f64::INFINITY,
                 _ => {}
             }

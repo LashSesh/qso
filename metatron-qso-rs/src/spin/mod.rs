@@ -114,6 +114,8 @@ mod exchange;
 pub(crate) mod krylov;
 #[cfg(test)]
 mod large_tests;
+#[cfg(test)]
+mod matrix_free_tests;
 mod nv;
 mod redfield;
 mod symmetry;

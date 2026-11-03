@@ -193,7 +193,9 @@ pub(super) struct RedfieldBlocks {
     /// The blocks of coherence order.
     pub liouville: Liouville,
     built: Vec<OnceLock<SparseBlock>>,
-    counts: Vec<OnceLock<usize>>,
+    /// Per block, at most how many entries it has and how many products its
+    /// columns take.
+    counts: Vec<OnceLock<(usize, usize)>>,
     rate: f64,
 }
 
@@ -279,9 +281,22 @@ impl RedfieldBlocks {
     /// Products `X_ca Z_be` the union pattern gives for the element at
     /// positions `(pa, pb)`: a bound on the entries of its column.
     fn products(&self, pa: usize, pb: usize, targets: &[Option<u32>]) -> usize {
+        self.cross_count(&self.pattern, &self.pattern, pa, pb, targets)
+    }
+
+    /// The products [`Self::cross`] takes for `X|a⟩⟨b|Z` at positions
+    /// `(pa, pb)`.
+    fn cross_count(
+        &self,
+        x: &SparseBlock,
+        z: &SparseBlock,
+        pa: usize,
+        pb: usize,
+        targets: &[Option<u32>],
+    ) -> usize {
         let g = &self.grouping;
-        let (xc, _) = self.pattern.row_parts(pa);
-        let (zc, _) = self.pattern.row_parts(pb);
+        let (xc, _) = x.row_parts(pa);
+        let (zc, _) = z.row_parts(pb);
         let mut count = 0;
         let mut i = 0;
         while i < xc.len() {
@@ -303,29 +318,220 @@ impl RedfieldBlocks {
 
     /// At most how many entries block `k` has (without building it).
     pub fn count(&self, k: usize) -> usize {
-        *self.counts[k].get_or_init(|| self.bound(k))
+        self.counts[k].get_or_init(|| self.bound(k)).0
     }
 
-    fn bound(&self, k: usize) -> usize {
+    /// How many products its columns take: the work of applying block `k`
+    /// from the terms, without storing it.
+    pub fn products_of(&self, k: usize) -> usize {
+        self.counts[k].get_or_init(|| self.bound(k)).1
+    }
+
+    fn bound(&self, k: usize) -> (usize, usize) {
         let g = &self.grouping;
         let elements = &self.liouville.blocks[k].1;
         let n = elements.len();
         let targets = self.targets(k);
         let chunk = 1024;
-        map_tasks(n.div_ceil(chunk), |c| {
+        let count = map_tasks(n.div_ceil(chunk), |c| {
             (c * chunk..((c + 1) * chunk).min(n))
                 .map(|j| {
                     let (a, b) = elements[j];
                     let (pa, pb) = (g.rank[a] as usize, g.rank[b] as usize);
-                    let total = self.left.row_parts(pa).0.len()
-                        + self.left.row_parts(pb).0.len()
-                        + self.products(pa, pb, &targets);
-                    total.min(n)
+                    let left = self.left.row_parts(pa).0.len() + self.left.row_parts(pb).0.len();
+                    let entries = left + self.products(pa, pb, &targets);
+                    // `X Y` and `X† Y` of every term take a row of Y per
+                    // element.
+                    let rows: usize = self
+                        .terms
+                        .iter()
+                        .map(|t| t.y.row_parts(pb).0.len() + t.y.row_parts(pa).0.len())
+                        .sum();
+                    (entries.min(n), left + rows)
                 })
-                .sum::<usize>()
+                .fold((0, 0), |(a, b), (x, y)| (a + x, b + y))
         })
         .into_iter()
-        .sum()
+        .fold((0, 0), |(a, b), (x, y)| (a + x, b + y));
+        // `𝒬 (X Y)` and `𝒬 (X† Y)`: each row of 𝒬 on a row of the block
+        // meets the span of its target label.
+        let mut rows = vec![false; g.order.len()];
+        let mut columns = vec![false; g.order.len()];
+        for &(a, b) in elements {
+            rows[g.rank[a] as usize] = true;
+            columns[g.rank[b] as usize] = true;
+        }
+        let mut sources = vec![None; targets.len()];
+        for (l, t) in targets.iter().enumerate() {
+            if let Some(t) = t {
+                sources[*t as usize] = Some(l as u32);
+            }
+        }
+        let width = |labels: &[Option<u32>], p: u32| {
+            labels[g.label[p as usize] as usize]
+                .map_or(0, |t| g.starts[t as usize + 1] - g.starts[t as usize])
+        };
+        let mut pairs = 0usize;
+        for t in &self.terms {
+            for (m, (&r, &c)) in rows.iter().zip(&columns).enumerate() {
+                let (qc, _) = t.q.row_parts(m);
+                if r {
+                    pairs += qc.iter().map(|&p| width(&targets, p)).sum::<usize>();
+                }
+                if c {
+                    pairs += qc.iter().map(|&p| width(&sources, p)).sum::<usize>();
+                }
+            }
+        }
+        (count.0, count.1 + pairs)
+    }
+
+    /// `out[i] += scale · R(x)` on block `k`: `x` the values of its elements
+    /// (in its order), `position[j]` where element `j` of the block lies in
+    /// `out`, applied from the terms by operator products without storing
+    /// the block: `Σ w 𝒬Y X + X (Σ w 𝒬Y)† − Σ_t w_t (𝒬 X Y + Y X 𝒬)` on the
+    /// `d × d` matrix `X` of the block, each `𝒬 X Y` as `𝒬 (X Y)` with the
+    /// product `X Y` shared by the entries it feeds, read back on the
+    /// block. The terms run in parallel.
+    pub fn apply_products(
+        &self,
+        k: usize,
+        x: &[C64],
+        scale: C64,
+        position: &[u32],
+        out: &mut [C64],
+    ) {
+        let g = &self.grouping;
+        let d = g.order.len();
+        let elements = &self.liouville.blocks[k].1;
+        let n = elements.len();
+        if x.iter().all(|z| *z == ZERO) {
+            return;
+        }
+        let targets = self.targets(k);
+        // The index of every entry of the block in the positions of the
+        // grouping, and of its transpose (u32::MAX: not in it).
+        let mut index = vec![u32::MAX; d * d];
+        let mut transposed = vec![u32::MAX; d * d];
+        for (j, &(a, b)) in elements.iter().enumerate() {
+            let (pa, pb) = (g.rank[a] as usize, g.rank[b] as usize);
+            index[pa * d + pb] = j as u32;
+            transposed[pb * d + pa] = j as u32;
+        }
+        // The columns a row of the block reaches (its target label), and
+        // the rows a column reaches (the label the order leads back to).
+        let sources: Vec<Option<u32>> = {
+            let mut back = vec![None; targets.len()];
+            for (l, t) in targets.iter().enumerate() {
+                if let Some(t) = t {
+                    back[*t as usize] = Some(l as u32);
+                }
+            }
+            back
+        };
+        let span = |labels: &[Option<u32>], p: usize| -> Option<(usize, usize)> {
+            labels[g.label[p] as usize].map(|t| (g.starts[t as usize], g.starts[t as usize + 1]))
+        };
+        // `acc[idx(c, e)] += f · Σ_m A_cm Z_me` with `A_cm = conj(A_mc)`
+        // (A Hermitian, by rows), for the rows `m` of `z` that are not
+        // empty, `e` within the span of `c`.
+        let pair = |a: &SparseBlock,
+                    z: &[C64],
+                    live: &[bool],
+                    idx: &[u32],
+                    labels: &[Option<u32>],
+                    f: C64,
+                    conj: bool,
+                    acc: &mut [C64]| {
+            for pm in 0..d {
+                if !live[pm] {
+                    continue;
+                }
+                let zrow = &z[pm * d..(pm + 1) * d];
+                for (pc, v) in a.row(pm) {
+                    let Some((lo, hi)) = span(labels, pc) else {
+                        continue;
+                    };
+                    let w = v.conj();
+                    let at = &idx[pc * d + lo..pc * d + hi];
+                    for (i, zv) in at.iter().zip(&zrow[lo..hi]) {
+                        if *i != u32::MAX {
+                            let p = w * zv;
+                            acc[*i as usize] += f * if conj { p.conj() } else { p };
+                        }
+                    }
+                }
+            }
+        };
+        // `X B` for a Hermitian `B` by rows, and its rows that are not
+        // empty; with `adjoint`, `X† B`.
+        let times = |b: &SparseBlock, adjoint: bool| -> (Vec<C64>, Vec<bool>) {
+            let mut z = vec![ZERO; d * d];
+            let mut live = vec![false; d];
+            for (j, &(a, bb)) in elements.iter().enumerate() {
+                let v = x[j];
+                if v == ZERO {
+                    continue;
+                }
+                let (pa, pb) = (g.rank[a] as usize, g.rank[bb] as usize);
+                let (row, mid, v) = if adjoint {
+                    (pb, pa, v.conj())
+                } else {
+                    (pa, pb, v)
+                };
+                live[row] = true;
+                let zrow = &mut z[row * d..(row + 1) * d];
+                for (pe, w) in b.row(mid) {
+                    zrow[pe] += v * w;
+                }
+            }
+            (z, live)
+        };
+        let tasks = self.terms.len() + 1;
+        let parts: Vec<Vec<C64>> = map_tasks(tasks, |t| {
+            let mut acc = vec![ZERO; n];
+            if t == self.terms.len() {
+                // Σ w 𝒬Y X + X (Σ w 𝒬Y)†: the left products within labels,
+                // `left.row(pa)` holding `(𝒬Y)_ca`.
+                for (j, &(a, b)) in elements.iter().enumerate() {
+                    let v = x[j];
+                    if v == ZERO {
+                        continue;
+                    }
+                    let (pa, pb) = (g.rank[a] as usize, g.rank[b] as usize);
+                    for (pc, w) in self.left.row(pa) {
+                        let i = index[pc * d + pb];
+                        if i != u32::MAX {
+                            acc[i as usize] += w * v;
+                        }
+                    }
+                    for (pe, w) in self.left.row(pb) {
+                        let i = index[pa * d + pe];
+                        if i != u32::MAX {
+                            acc[i as usize] += w.conj() * v;
+                        }
+                    }
+                }
+                return acc;
+            }
+            let term = &self.terms[t];
+            let f = C64::new(-term.w, 0.0);
+            // 𝒬 X Y = 𝒬 (X Y), read on the block.
+            let (z, live) = times(&term.y, false);
+            pair(&term.q, &z, &live, &index, &targets, f, false, &mut acc);
+            // Y X 𝒬 = (𝒬 X† Y)†: entry (c, e) is conj((𝒬 X† Y)_ec), read on
+            // the transposed block.
+            let (z, live) = times(&term.y, true);
+            pair(&term.q, &z, &live, &transposed, &sources, f, true, &mut acc);
+            acc
+        });
+        for part in parts {
+            for (j, v) in part.into_iter().enumerate() {
+                if v != ZERO {
+                    out[position[j] as usize] += v * scale;
+                }
+            }
+        }
     }
 
     /// Block `k` as a sparse matrix (columns in parallel).
