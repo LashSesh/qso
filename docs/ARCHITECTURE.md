@@ -1081,10 +1081,12 @@ agree with brute force on random graphs.
   parity; orders that swap equal sites skipped) is the orbit's key in a
   hash map. The number of orders reaching it times `Π runs! · Π (q − u)!`
   is the stabiliser, so orbit sizes and the ratios `√(|O|/|O′|)` come as
-  logarithms. The orbits are found level by level from the start: the
-  forms of every hop of a level's orbits in parallel, then new orbits
-  numbered in order; neighbours are generated from the words, never from
-  a graph.
+  logarithms. The orbits are found breadth-first from the start, the
+  queue worked in batches of about 2²² hops: the forms of a batch's hops
+  in parallel, merged per source orbit by target key in order of first
+  appearance (one configuration and a summed amplitude, signed by the
+  form's parity for fermions), then new orbits numbered in order;
+  neighbours are generated from the words, never from a graph.
 * Certificates by orbits (`InteractingWalk::certificate_by_orbits`): one
   row of transition probabilities per orbit of the automorphisms, by
   Krylov steps to 10⁻¹⁴ per unit time unless the walk was diagonalised

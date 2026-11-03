@@ -6,23 +6,38 @@ use crate::walks::{InteractingWalk, SymmetricInteractingWalk};
 
 /// Every configuration's probability after `t` against the full walk of
 /// 1.29, and the orbit count against 1.43.
-fn compare(graph: CoordinateGraph, statistics: Statistics, start: &[u64], u: f64, v: f64) {
+fn compare(
+    graph: CoordinateGraph,
+    generator: Generator,
+    statistics: Statistics,
+    start: &[u64],
+    u: f64,
+    v: f64,
+) {
     let g = graph.graph().unwrap();
     let starts: Vec<usize> = start.iter().map(|&s| s as usize).collect();
-    let ours =
-        CoordinateInteractingWalk::from_start(graph, Generator::Adjacency, 0.7, statistics, start)
-            .unwrap()
-            .with_interaction(u, v)
-            .unwrap();
+    let ours = CoordinateInteractingWalk::from_start(graph, generator, 0.7, statistics, start)
+        .unwrap()
+        .with_interaction(u, v)
+        .unwrap();
     let theirs =
-        SymmetricInteractingWalk::from_start(&g, Generator::Adjacency, 0.7, statistics, &starts)
-            .unwrap();
-    assert_eq!(
-        ours.num_orbits(),
-        theirs.num_orbits(),
-        "{graph:?} {statistics:?} {start:?}"
-    );
-    let full = InteractingWalk::new(&g, Generator::Adjacency, 0.7, statistics, start.len())
+        SymmetricInteractingWalk::from_start(&g, generator, 0.7, statistics, &starts).unwrap();
+    // On J(2k, k) 1.43 also uses the complement, so its orbits are
+    // coarser; on K(2k, k), a perfect matching, it counts the orbits of
+    // every configuration, ours only those the start reaches.
+    match graph {
+        CoordinateGraph::Kneser { n, k } if n == 2 * k => {}
+        CoordinateGraph::Johnson { n, k } if n == 2 * k => assert!(
+            ours.num_orbits() >= theirs.num_orbits(),
+            "{graph:?} {statistics:?} {start:?}"
+        ),
+        _ => assert_eq!(
+            ours.num_orbits(),
+            theirs.num_orbits(),
+            "{graph:?} {statistics:?} {start:?}"
+        ),
+    }
+    let full = InteractingWalk::new(&g, generator, 0.7, statistics, start.len())
         .unwrap()
         .with_interaction(u, v)
         .unwrap();
@@ -42,7 +57,7 @@ fn compare(graph: CoordinateGraph, statistics: Statistics, start: &[u64], u: f64
     }
     assert!(
         worst < 1e-12,
-        "{graph:?} {statistics:?} {start:?}: {worst:e}"
+        "{graph:?} {generator:?} {statistics:?} {start:?}: {worst:e}"
     );
     // Densities per orbit of nodes add up to the particles.
     let total: f64 = ours
@@ -62,6 +77,11 @@ fn walkers_equal_the_full_walk_on_every_family() {
     let k5 = CoordinateGraph::Hamming { d: 1, q: 5 };
     let j62 = CoordinateGraph::Johnson { n: 6, k: 2 };
     let kn72 = CoordinateGraph::Kneser { n: 7, k: 2 };
+    // The exceptions: the complement of J(4, 2) is not in the group,
+    // K(4, 2) is a perfect matching, K_2 = H(1, 2) a single edge.
+    let j42 = CoordinateGraph::Johnson { n: 4, k: 2 };
+    let kn42 = CoordinateGraph::Kneser { n: 4, k: 2 };
+    let k2 = CoordinateGraph::Hamming { d: 1, q: 2 };
     for (graph, start) in [
         (q4, vec![0, 0, 0]),
         (q4, vec![0, 3, 5]),
@@ -70,6 +90,12 @@ fn walkers_equal_the_full_walk_on_every_family() {
         (k5, vec![1, 1, 3]),
         (j62, vec![0, 7, 7]),
         (kn72, vec![0, 3, 9]),
+        (j42, vec![0, 0, 5]),
+        (j42, vec![1, 2, 3]),
+        (kn42, vec![0, 0, 1]),
+        (kn42, vec![0, 2, 5]),
+        (k2, vec![0, 0, 1]),
+        (k2, vec![0, 1]),
     ] {
         for statistics in [Bosons, Fermions, Distinguishable] {
             let mut distinct = start.clone();
@@ -78,9 +104,39 @@ fn walkers_equal_the_full_walk_on_every_family() {
             if statistics == Fermions && distinct.len() < start.len() {
                 continue;
             }
-            compare(graph, statistics, &start, 0.9, -0.4);
+            for generator in [Generator::Adjacency, Generator::Laplacian] {
+                compare(graph, generator, statistics, &start, 0.9, -0.4);
+            }
         }
     }
+}
+
+#[test]
+fn a_perfect_matching_keeps_its_components() {
+    // K(2k, k) pairs each subset with its complement: the start reaches
+    // only configurations on its pairs, and the lower bound on the orbits
+    // (from all configurations) must not refuse it.
+    let graph = CoordinateGraph::Kneser { n: 40, k: 20 };
+    let walk = CoordinateInteractingWalk::from_start(
+        graph,
+        Generator::Adjacency,
+        1.0,
+        Statistics::Bosons,
+        &[0, 0],
+    )
+    .unwrap();
+    assert_eq!(walk.num_orbits(), 3);
+    let x = walk.evolve(&walk.state_of(&[0, 0]).unwrap(), 0.4).unwrap();
+    let partner = graph.num_nodes() - 1;
+    let total: f64 = [[0, 0], [0, partner], [partner, partner]]
+        .iter()
+        .map(|c| walk.probability_of(&x, c).unwrap())
+        .sum();
+    assert!((total - 1.0).abs() < 1e-12, "{total}");
+    // Off the start's pair: probability zero, and no state to start from.
+    assert_eq!(walk.probability_of(&x, &[0, 1]).unwrap(), 0.0);
+    assert!(walk.state_of(&[0, 1]).is_err());
+    assert!(walk.locate(&[0, 1]).is_err());
 }
 
 /// `⟨y|e^{iγtA}|x⟩` on `H(d, q)`: per place `e^{−iγt}(δ + (e^{iγtq} − 1)/q)`.

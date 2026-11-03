@@ -349,9 +349,14 @@ print(round(walk.probability_of(x, [0, 0, 1]), 4))   # 0.7273
 | `J(40, 3)` | 3 bosons, nodes 0, 0, 1 | 1.6·10¹¹ | 1674 | 0.8 s | 4.3 s |
 | `K(30, 3)` | 2 distinguishable, nodes 0, 1 | 1.6·10⁷ | 228 | 0.7 s | < 0.1 s |
 
-At most six particles and 2²² orbits; a start whose stabiliser is small
-leaves many orbits (three bosons on three different nodes of `Q₂₀`, more
-than 10⁷). The complement of `J(2k, k)` is not used.
+At most six particles, 2²² orbits and 2²⁶ entries. Only a lower bound
+on the orbits is checked before the search, so a start whose stabiliser
+is small can search for minutes before it is refused (three bosons on
+nodes 0, 1 and 2 of `Q₂₀` exceed the entries). The complement of
+`J(2k, k)` and the pair swaps of `K(2k, k)` are not used; on `K(2k, k)`,
+a perfect matching, the start reaches only the configurations on its own
+pairs, `num_orbits` counts those, and other configurations have
+probability zero (`state_of` refuses them).
 
 Certificates need every configuration as a start, but the
 automorphisms of the graph map starts onto starts with the same
@@ -370,9 +375,13 @@ The checks:
   generators and `U` and `V` both on; under the whole automorphism group
   too, orbit by orbit, with the fermionic signs.
 - `CoordinateInteractingWalk` equals the full walk configuration by
-  configuration on `Q₄`, `H(3, 3)`, `K₅`, `J(6, 2)` and `K(7, 2)` for all
-  three statistics with `U` and `V` (starts with repeated and distinct
-  nodes), with the orbit counts of `SymmetricInteractingWalk`. Free
+  configuration on `Q₄`, `H(3, 3)`, `K₅`, `J(6, 2)`, `K(7, 2)`,
+  `J(4, 2)`, `K(4, 2)` and `K₂` for all three statistics and both
+  generators with `U` and `V` (starts with repeated and distinct nodes),
+  with the orbit counts of `SymmetricInteractingWalk` (finer ones on
+  `J(2k, k)`, whose complement 1.43 uses; on `K(2k, k)` only the
+  reachable ones). Two bosons
+  on `K(40, 20)` stay on their start's pair. Free
   particles follow the permanents and determinants of the walker's
   closed-form amplitudes on `Q₂₀` (three bosons from node 0, the 156 240
   states of `HypercubeParticles`), `H(8, 4)`, `Q₁₀` and `H(6, 4)`.

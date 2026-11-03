@@ -5356,10 +5356,12 @@ Delivered in `walks/interacting/coordinates.rs`:
 - **Generator on the orbits.** As in 1.43, read off at each orbit's
   representative, `√(|O|/|O′|)` from the stabilisers; the orbits are
   found by breadth-first search from the start, the canonical forms of a
-  level's hops in parallel, without the graph or the configurations.
+  batch's hops in parallel and merged by target orbit, without the graph
+  or the configurations.
 - **Limits.** At most six particles, 2²² orbits and the 2²⁶ entries of
   1.43; a lower bound on the orbits (configurations over the group's
-  order) is checked before the search.
+  order) is checked before the search (not on `K(2k, k)`, where the
+  start reaches only its own pairs).
 - In Python: `CoordinateInteractingWalk.hamming`, `.johnson`, `.kneser`,
   with `node_densities` per orbit of nodes and `word`/`node`.
 
@@ -5377,16 +5379,21 @@ Changes to the plan:
 - **Burnside's count** needs the group's elements; the orbit counts are
   checked against 1.43's union–find and 1.43's `HypercubeParticles`
   instead.
+- **Limits estimated, not known, before the search.** The plan asked for
+  the orbits and the work before anything is built. Only a lower bound is
+  known in advance (configurations over the group's order); the true
+  count is the search's result. A start above the limits can therefore
+  search for minutes before it is refused.
 
 Not done, and why:
 
 - **Other groups.** Graphs whose automorphisms do not act on
   coordinates keep 1.43's limit of 2²⁷ configurations; a Schreier–Sims
   with base changes would lift it.
-- **The complement of `J(2k, k)`** is not used (the reduction is exact
-  with `S_n` alone).
-- **Starts with little symmetry.** Three bosons on three different
-  nodes of `Q₂₀` leave more than 10⁷ orbits.
+- **The complement of `J(2k, k)` and the pair swaps of `K(2k, k)`** are
+  not used (the reduction is exact with `S_n` alone).
+- **Starts with little symmetry.** Three bosons on nodes 0, 1 and 2 of
+  `Q₂₀` exceed the 2²⁶ entries; the search refuses them after minutes.
 
 Measured (four cores, release build), adjacency hopping:
 
@@ -5408,6 +5415,41 @@ on `Q₂₀` (three bosons from node 0, with the 156 240 states of 1.43's
 `HypercubeParticles`), `H(8, 4)`, `Q₁₀` and `H(6, 4)` have the
 probabilities of the permanents and determinants of the walker's
 closed-form amplitudes `Π_j e^{−iγt}(δ + (e^{iγtq} − 1)/q)` to 10⁻¹¹.
+`J(4, 2)`, `K(4, 2)` and `K₂` and the Laplacian join the comparison
+with the full walk (on `J(2k, k)` the orbits are finer than 1.43's,
+which also uses the complement; on `K(2k, k)` 1.43 counts every
+configuration's orbit, this walk only those the start reaches); two bosons on `K(40, 20)`
+keep to their start's pair.
+
+Review (independent, after delivery): the canonical form, the
+stabilisers, the fermionic signs and the Hamiltonian were found correct:
+315 random cases on 30 Hamming, Johnson and Kneser graphs (with
+`n = 2k`, `q ≤ 5`, two to five particles, both generators, `U` and `V`)
+matched the full walk amplitude by amplitude to 10⁻¹⁰, the permanents
+and determinants held on eight further graphs up to six particles, and
+every measured figure was reproduced. Findings, all fixed:
+
+- **Memory per level.** Every hop of a level was held with its
+  configuration and form before merging, so the memory grew with the
+  level's width times the degree, not with the entries the limits bound:
+  two distinguishable particles on `K(40, 4)` (580 orbits) peaked at
+  8.9 GB, on `K(46, 4)` the process aborted. The hops are now merged by
+  target orbit inside each task and the queue is worked in batches of
+  about 2²² hops.
+- **`K(2k, k)`.** The lower bound on the orbits counts all
+  configurations, but on a perfect matching the start reaches only its
+  own pairs, so starts that run in milliseconds were refused; the bound
+  is skipped there. `probability_of` raised an error for configurations
+  the start cannot reach; it now gives zero (`state_of` and `locate`
+  still refuse them, as documented).
+- **Docs.** "More than 10⁷ orbits" for three bosons on three nodes of
+  `Q₂₀` was not measured; they exceed the 2²⁶ entries after minutes,
+  which is now said, with the lower bound named as the only check before
+  the search. The module documentation names `K(2k, k)` beside `J(2k, k)`.
+- **Tests.** The Laplacian and `J(2k, k)`, `K(2k, k)` and `K₂` were not
+  compared; they are now.
+- **Overflow.** `CoordinateGraph::num_nodes` and `degree` on unchecked
+  parameters overflowed; they saturate.
 
 ### 1.54 — Exchange and reactions on sparse blocks (M–L)
 

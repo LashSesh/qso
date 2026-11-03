@@ -8,8 +8,11 @@
 //! symbols (`S_q ≀ S_d`). The nodes of the Johnson graph `J(n, k)` and the
 //! Kneser graph `K(n, k)` are the `k`-subsets of `n` points, words of `n`
 //! bits with `k` ones; the permutations of the points act on them by
-//! permuting places alone (`S_n`, all their automorphisms except the
-//! complement of `J(2k, k)`).
+//! permuting places alone (`S_n`). That is every automorphism except the
+//! complement of `J(2k, k)` and those of `K(2k, k)`, a perfect matching
+//! whose group swaps the pairs freely; the reduction with `S_n` alone is
+//! exact there too, and on `K(2k, k)` the start reaches only the
+//! configurations on its own pairs.
 //!
 //! A configuration of particles on the nodes, with the start's distinct
 //! nodes above it in a fixed order, is a matrix of letters with a column
@@ -33,6 +36,12 @@
 //! whose keys either name an orbit already found or a new one. Their number
 //! and the entries of the reduced Hamiltonian are bounded; the work is a
 //! canonical form per hop, `k!` orders of `k` particles times the places.
+//! Before the search only a lower bound on the orbits (the configurations
+//! over the group's order) is checked, so a search can run for minutes
+//! before it stops at the limits. The hops of each orbit are merged by
+//! target as they are found, and the queue is worked in batches of about
+//! 2²² hops, so the memory beyond the orbits and the entries stays
+//! bounded.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -138,22 +147,29 @@ impl CoordinateGraph {
         }
     }
 
-    /// Number of nodes.
+    /// Number of nodes (saturating at `u64::MAX` for graphs too large to
+    /// build a walk on).
     pub fn num_nodes(&self) -> u64 {
         match *self {
-            CoordinateGraph::Hamming { d, q } => (q as u64).pow(d as u32),
+            CoordinateGraph::Hamming { d, q } => {
+                (q as u64).saturating_pow(u32::try_from(d).unwrap_or(u32::MAX))
+            }
             CoordinateGraph::Johnson { n, k } | CoordinateGraph::Kneser { n, k } => {
                 binomial(n as u64, k as u64)
             }
         }
     }
 
-    /// Neighbours of every node.
+    /// Neighbours of every node (saturating, like [`Self::num_nodes`]).
     pub fn degree(&self) -> u64 {
         match *self {
-            CoordinateGraph::Hamming { d, q } => (d * (q - 1)) as u64,
-            CoordinateGraph::Johnson { n, k } => (k * (n - k)) as u64,
-            CoordinateGraph::Kneser { n, k } => binomial((n - k) as u64, k as u64),
+            CoordinateGraph::Hamming { d, q } => {
+                (d as u64).saturating_mul(q.saturating_sub(1) as u64)
+            }
+            CoordinateGraph::Johnson { n, k } => {
+                (k as u64).saturating_mul(n.saturating_sub(k) as u64)
+            }
+            CoordinateGraph::Kneser { n, k } => binomial(n.saturating_sub(k) as u64, k as u64),
         }
     }
 
@@ -334,6 +350,16 @@ struct Canon {
     /// The letters of the start's distinct nodes, row by row.
     fixed: Vec<u8>,
     rows_fixed: usize,
+}
+
+/// Where a configuration lies.
+enum Lookup {
+    /// In an orbit found, with its sign relative to the representative.
+    Found(usize, f64),
+    /// In no invariant state (a symmetry maps it to minus itself).
+    NoInvariant,
+    /// In no orbit reachable from the start.
+    Unreachable,
 }
 
 /// A configuration's canonical form.
@@ -613,7 +639,10 @@ impl CoordinateInteractingWalk {
             Statistics::Bosons => log_binomial(nodes + k as f64 - 1.0, k),
             Statistics::Fermions => log_binomial(nodes, k),
         };
-        if log_configurations - start_key > (MAX_COORDINATE_ORBITS as f64).ln() {
+        // `K(2k, k)` is a perfect matching: the start reaches a sliver of
+        // the configurations, and the bound says nothing.
+        let matching = matches!(graph, CoordinateGraph::Kneser { n, k } if n == 2 * k);
+        if !matching && log_configurations - start_key > (MAX_COORDINATE_ORBITS as f64).ln() {
             return Err(QsoError::invalid(
                 "start",
                 format!(
@@ -669,15 +698,22 @@ impl CoordinateInteractingWalk {
             Generator::Laplacian => self.gamma * self.graph.degree() as f64,
         };
         let graph = self.graph;
+        let fermions = statistics == Statistics::Fermions;
+        // Orbits per batch: about 2^22 hops held at once, whatever the
+        // width of a level.
+        let per_orbit = (self.start.len() as u64).saturating_mul(graph.degree().max(1));
+        let batch = ((1u64 << 22) / per_orbit).clamp(1, 1 << 16) as usize;
         let mut lo = 0;
         while lo < self.orbits.len() {
-            let hi = self.orbits.len();
+            let hi = self.orbits.len().min(lo + batch);
             let tasks = (crate::parallel::threads() * 8).max(1);
             let per = (hi - lo).div_ceil(tasks).max(1);
             let chunks = (hi - lo).div_ceil(per);
             let orbits = &self.orbits;
             // Per orbit: the pairs on one site and on adjacent sites, and
-            // every hop's target with its form and amplitude.
+            // per target orbit one configuration in it with its parity and
+            // stabiliser and the summed amplitude (signed by the parity for
+            // fermions).
             let found = crate::parallel::map_tasks(chunks, |c| {
                 let mut out = Vec::new();
                 for orbit in &orbits[lo + c * per..(lo + (c + 1) * per).min(hi)] {
@@ -699,7 +735,10 @@ impl CoordinateInteractingWalk {
                         }
                     }
                     let occupation = |u: u64| sites.iter().filter(|&&s| s == u).count();
-                    let mut hops: Vec<(Vec<u64>, Form, f64)> = Vec::new();
+                    // In order of first appearance, so the orbits are
+                    // numbered the same on every run.
+                    let mut seen: HashMap<Vec<u64>, usize> = HashMap::new();
+                    let mut hops: Vec<(Vec<u64>, Vec<u64>, bool, f64, f64)> = Vec::new();
                     for (k, &j) in sites.iter().enumerate() {
                         if statistics == Statistics::Bosons && k > 0 && sites[k - 1] == j {
                             continue;
@@ -726,7 +765,22 @@ impl CoordinateInteractingWalk {
                                 moved.sort_unstable();
                             }
                             if let Some(form) = canon.form(&moved, statistics) {
-                                hops.push((moved, form, amplitude));
+                                let signed = if fermions && form.odd {
+                                    -amplitude
+                                } else {
+                                    amplitude
+                                };
+                                let h = *seen.entry(form.key).or_insert_with_key(|key| {
+                                    hops.push((
+                                        key.clone(),
+                                        moved,
+                                        form.odd,
+                                        form.log_stabiliser,
+                                        0.0,
+                                    ));
+                                    hops.len() - 1
+                                });
+                                hops[h].4 += signed;
                             }
                         });
                     }
@@ -741,9 +795,8 @@ impl CoordinateInteractingWalk {
                     self.adjacent.push(adjacent as f64);
                     self.potential.push(diagonal * self.start.len() as f64);
                     let size_log = self.orbits[o].log_stabiliser;
-                    let mut row: HashMap<u32, f64> = HashMap::new();
-                    for (moved, form, amplitude) in hops {
-                        let target = match self.index.get(&form.key) {
+                    for (key, moved, odd, log_stabiliser, signed) in hops {
+                        let target = match self.index.get(&key) {
                             Some(&t) => t,
                             None => {
                                 if self.orbits.len() >= MAX_COORDINATE_ORBITS {
@@ -755,26 +808,20 @@ impl CoordinateInteractingWalk {
                                 let t = self.orbits.len() as u32;
                                 self.orbits.push(Orbit {
                                     sites: moved,
-                                    odd: form.odd,
-                                    log_stabiliser: form.log_stabiliser,
+                                    odd,
+                                    log_stabiliser,
                                 });
-                                self.index.insert(form.key, t);
+                                self.index.insert(key, t);
                                 t
                             }
                         };
                         let rep = &self.orbits[target as usize];
-                        let sign = if statistics == Statistics::Fermions && form.odd != rep.odd {
-                            -1.0
-                        } else {
-                            1.0
-                        };
+                        let sign = if fermions && rep.odd { -1.0 } else { 1.0 };
                         // √(|O|/|O′|) = √(|Stab(c′)|/|Stab(c)|).
                         let ratio = (0.5 * (rep.log_stabiliser - size_log)).exp();
-                        *row.entry(target).or_default() += sign * ratio * amplitude;
-                    }
-                    for (t, v) in row {
+                        let v = sign * ratio * signed;
                         if v != 0.0 {
-                            self.hopping.push((t as usize, o, v));
+                            self.hopping.push((target as usize, o, v));
                         }
                     }
                     if self.hopping.len() + self.orbits.len() > MAX_ORBIT_ENTRIES {
@@ -857,7 +904,8 @@ impl CoordinateInteractingWalk {
         &self.start
     }
 
-    /// Number of orbits that carry an invariant state.
+    /// Number of orbits reachable from the start that carry an invariant
+    /// state.
     pub fn num_orbits(&self) -> usize {
         self.orbits.len()
     }
@@ -920,8 +968,20 @@ impl CoordinateInteractingWalk {
 
     /// The orbit and the sign of the configuration `sites` relative to
     /// its representative; `None` if no invariant state holds it, an error
-    /// if it lies in no orbit found (not reachable from the start).
+    /// if it lies in no orbit found (not reachable from the start: on
+    /// `K(2k, k)` the start's component, for example).
     pub fn locate(&self, sites: &[u64]) -> Result<Option<(usize, f64)>> {
+        match self.lookup(sites)? {
+            Lookup::Found(o, sign) => Ok(Some((o, sign))),
+            Lookup::NoInvariant => Ok(None),
+            Lookup::Unreachable => Err(QsoError::invalid(
+                "sites",
+                "the configuration is not reachable from the start",
+            )),
+        }
+    }
+
+    fn lookup(&self, sites: &[u64]) -> Result<Lookup> {
         if sites.len() != self.start.len() {
             return Err(QsoError::DimensionMismatch {
                 expected: self.start.len(),
@@ -944,13 +1004,10 @@ impl CoordinateInteractingWalk {
         }
         let canon = Canon::new(self.graph, &self.fixed);
         let Some(form) = canon.form(&sorted, self.statistics) else {
-            return Ok(None);
+            return Ok(Lookup::NoInvariant);
         };
         let Some(&o) = self.index.get(&form.key) else {
-            return Err(QsoError::invalid(
-                "sites",
-                "the configuration is not reachable from the start",
-            ));
+            return Ok(Lookup::Unreachable);
         };
         let sign =
             if self.statistics == Statistics::Fermions && form.odd != self.orbits[o as usize].odd {
@@ -958,7 +1015,7 @@ impl CoordinateInteractingWalk {
             } else {
                 1.0
             };
-        Ok(Some((o as usize, sign)))
+        Ok(Lookup::Found(o as usize, sign))
     }
 
     /// The orbit state of the configuration `sites` (the start's alone is
@@ -999,12 +1056,13 @@ impl CoordinateInteractingWalk {
     }
 
     /// The probability of the configuration `sites` (its orbit's over its
-    /// size).
+    /// size; zero for a configuration no invariant state holds or the
+    /// start cannot reach).
     pub fn probability_of(&self, x: &[C64], sites: &[u64]) -> Result<f64> {
         self.check_state(x)?;
-        Ok(match self.locate(sites)? {
-            Some((o, _)) => x[o].norm_sqr() / self.orbit_size(o),
-            None => 0.0,
+        Ok(match self.lookup(sites)? {
+            Lookup::Found(o, _) => x[o].norm_sqr() / self.orbit_size(o),
+            Lookup::NoInvariant | Lookup::Unreachable => 0.0,
         })
     }
 
