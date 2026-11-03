@@ -56,9 +56,12 @@ fn trotter_error_bound(
 /// The bounds on ‖U − exp(−iHt)‖ for `trotter_circuit` with the same
 /// arguments: a dict with `nested` (from the nested commutators of the
 /// step's error, computed exactly up to a degree, infinite when out of
-/// reach), `stages` (commutator bounds of orders 1 and 2, stage by stage
-/// above), `taylor` (Taylor remainder) and `bound`, the smallest (at most
-/// 2).
+/// reach), `commutators` (the same coefficients with a remainder from the
+/// nested commutators of the Pauli terms that do not commute, at most
+/// `nested`), `stages` (commutator bounds of orders 1 and 2, stage by
+/// stage above), `taylor` (Taylor remainder), `bound`, the smallest (at
+/// most 2), and `average`, a bound on the error averaged over states
+/// (‖U − exp(−iHt)‖_F/√d, the root mean square over random states).
 #[pyfunction]
 #[pyo3(signature = (hamiltonian, t, steps = 1, order = 2))]
 fn trotter_error_bounds<'py>(
@@ -77,6 +80,31 @@ fn trotter_error_bounds<'py>(
         "nested" => b.nested,
         "stages" => b.stages,
         "taylor" => b.taylor,
+        "commutators" => b.commutators,
+        "average" => b.average,
+    }))
+}
+
+/// The numbers of Trotter steps for which the bounds of
+/// `trotter_error_bounds` on the error of exp(−iHt) are at most `epsilon`:
+/// a dict with `worst` (from `bound`, the worst case over states) and
+/// `average` (from `average`).
+#[pyfunction]
+#[pyo3(signature = (hamiltonian, t, epsilon, order = 2))]
+fn trotter_steps<'py>(
+    py: Python<'py>,
+    hamiltonian: &PyPauliSum,
+    t: f64,
+    epsilon: f64,
+    order: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let h = &hamiltonian.inner;
+    let r = py
+        .detach(|| time_evolution::trotter_steps(h, t, epsilon, order))
+        .raise()?;
+    Ok(pydict!(py, {
+        "worst" => r.worst,
+        "average" => r.average,
     }))
 }
 
@@ -288,6 +316,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(trotter_circuit, m)?)?;
     m.add_function(wrap_pyfunction!(trotter_error_bound, m)?)?;
     m.add_function(wrap_pyfunction!(trotter_error_bounds, m)?)?;
+    m.add_function(wrap_pyfunction!(trotter_steps, m)?)?;
     m.add_function(wrap_pyfunction!(qdrift_circuit, m)?)?;
     m.add_function(wrap_pyfunction!(qdrift_error_bound, m)?)?;
     m.add_function(wrap_pyfunction!(quantum_fisher_information, m)?)?;

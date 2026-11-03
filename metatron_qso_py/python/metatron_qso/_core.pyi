@@ -1834,10 +1834,20 @@ class TrotterBounds(TypedDict):
     nested: float
     stages: float
     taylor: float
+    commutators: float
+    average: float
 
 def trotter_error_bounds(
     hamiltonian: PauliSum, t: float, steps: int = 1, order: int = 2
 ) -> TrotterBounds: ...
+@type_check_only
+class TrotterSteps(TypedDict):
+    worst: int
+    average: int
+
+def trotter_steps(
+    hamiltonian: PauliSum, t: float, epsilon: float, order: int = 2
+) -> TrotterSteps: ...
 def qdrift_circuit(
     hamiltonian: PauliSum, n_qubits: int, t: float, samples: int, seed: int = 0
 ) -> Circuit: ...

@@ -9,7 +9,9 @@ use serde_json::{Value, json};
 
 use metatron_qso::algorithms::ansatz::{self, Entanglement};
 use metatron_qso::algorithms::qaoa::{MaxCutQaoa, QaoaConfig, optimize_layerwise_at};
-use metatron_qso::algorithms::time_evolution::{trotter_circuit, trotter_error_bounds};
+use metatron_qso::algorithms::time_evolution::{
+    trotter_circuit, trotter_error_bounds, trotter_steps,
+};
 use metatron_qso::algorithms::{grover, models, vqe::Vqe};
 use metatron_qso::backend::{Backend, DensityMatrixBackend, DeviceBackend, StatevectorBackend};
 use metatron_qso::chemistry::adapt::{AdaptOptions, adapt_vqe_molecule};
@@ -456,6 +458,10 @@ enum Command {
         /// Write the circuit as OpenQASM 2.0.
         #[arg(long)]
         output: Option<std::path::PathBuf>,
+        /// Also report the steps for which the error bounds (worst case
+        /// and averaged over states) are at most this target.
+        #[arg(long)]
+        epsilon: Option<f64>,
     },
     /// Memory experiment of a repetition, rotated surface, triangular
     /// colour or bivariate bicycle code under circuit-level depolarizing
@@ -1899,6 +1905,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             steps,
             order,
             output,
+            epsilon,
         } => {
             let h: PauliSum = hamiltonian.parse()?;
             let n = qubits.unwrap_or(h.min_qubits().max(1));
@@ -1932,12 +1939,23 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 std::fs::write(path, to_qasm2(&c, &[], false)?)
                     .map_err(|e| QsoError::invalid("output", format!("{}: {e}", path.display())))?;
             }
+            let needed = epsilon
+                .map(|e| trotter_steps(&h, *time, e, *order))
+                .transpose()?;
             let text = format!(
-                "order {order}, {steps} steps, t = {time}: {} gates, depth {}, error bound {bound:.3e}{}",
+                "order {order}, {steps} steps, t = {time}: {} gates, depth {}, error bound {bound:.3e} \
+                 (averaged over states {:.3e}){}{}",
                 c.len(),
                 c.depth(),
+                bounds.average,
                 actual.map_or(String::new(), |a| format!(
                     ", largest column error {a:.3e} (a lower bound on ‖U − exp(−iHt)‖)"
+                )),
+                needed.map_or(String::new(), |r| format!(
+                    "; error {} needs {} steps ({} averaged over states)",
+                    epsilon.unwrap_or_default(),
+                    r.worst,
+                    r.average
                 ))
             );
             Ok((
@@ -1951,8 +1969,11 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                         "nested": bounds.nested.is_finite().then_some(bounds.nested),
                         "stages": bounds.stages.is_finite().then_some(bounds.stages),
                         "taylor": bounds.taylor.is_finite().then_some(bounds.taylor),
+                        "commutators": bounds.commutators.is_finite().then_some(bounds.commutators),
+                        "average": bounds.average,
                     },
-                    "column_error": actual
+                    "column_error": actual,
+                    "steps_needed": needed.map(|r| json!({"worst": r.worst, "average": r.average})),
                 }),
                 text,
             ))

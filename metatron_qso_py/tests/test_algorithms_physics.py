@@ -50,8 +50,15 @@ def test_pauli_rotation_and_trotter_bounds():
         errors.append(err)
     assert errors[0] > errors[1] > errors[2]
     b = q.trotter_error_bounds(ham, 1.0, steps=8, order=4)
-    assert b["bound"] == min(b["nested"], b["stages"], b["taylor"], 2.0)
-    assert errors[2] <= b["nested"] < b["stages"]
+    assert b["bound"] == min(b["commutators"], b["stages"], b["taylor"], 2.0)
+    assert errors[2] <= b["commutators"] <= b["nested"] < b["stages"]
+    assert b["average"] <= b["bound"]
+    r = q.trotter_steps(ham, 1.0, 1e-4, order=4)
+    assert r["average"] <= r["worst"]
+    assert q.trotter_error_bounds(ham, 1.0, steps=r["worst"], order=4)["bound"] <= 1e-4
+    assert q.trotter_error_bounds(ham, 1.0, steps=r["worst"] - 1, order=4)["bound"] > 1e-4
+    with pytest.raises(ValueError):
+        q.trotter_steps(ham, 1.0, 0.0)
     assert q.qdrift_error_bound(ham, 1.0, 1000) < q.qdrift_error_bound(ham, 1.0, 100)
     assert len(q.qdrift_circuit(ham, 3, 1.0, 50, seed=1)) >= 50
     with pytest.raises(ValueError):

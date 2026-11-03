@@ -874,6 +874,19 @@ until the multinomial tail is small, and a budget of operations ends the
 attempt early (the bound is then infinite and the stage-by-stage one
 applies).
 
+The commutator bound runs the same Horner scheme in place on two series
+at once, the exact one and a majorant with absolute values: an
+exponential `exp(τ ad_B)` only touches the strings that anticommute with
+B, each a two-dimensional rotation `Q ↦ cos(2bτ) Q − iφ sin(2bτ) R`
+whose Taylor coefficients go to higher degrees (processed from the top
+degree down, so nothing is conjugated twice). Every coefficient keeps
+its entries in a vector with a hash index and a list per qubit, so an
+exponential looks only at the strings on its own qubits. The majorant's
+coefficient of degree D is the sum of the norms of the nested
+commutators in the remainder of the commutator expansion. A second pass
+factors the step in the middle (`S' − AS = L T R`): forwards over the
+right half, backwards over the left half from `−A`.
+
 The repulsion integrals are screened before they are computed: one pass
 over the diagonal quartets `(ab|ab)` gives the Schwarz factor of every
 pair of shell groups, and the list of quartets keeps only those whose

@@ -8,6 +8,23 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Product-formula bounds that know which terms commute** (1.56,
+  `TrotterBounds::commutators`, `TrotterBounds::average`,
+  `trotter_steps`): the error series of a Trotter–Suzuki step with exact
+  coefficients up to a degree and the remainder of the commutator
+  expansion of Childs, Su, Tran, Wiebe and Zhu (Phys. Rev. X 11, 011020
+  (2021)), summed over the nested commutators of the Pauli terms that do
+  not commute (computed in place, indexed by qubit), with the error
+  generator also factored in the middle of the formula; a bound on the
+  error averaged over states (the normalised Frobenius norm, the root mean
+  square over random states); and the steps for a target error from both
+  (`trotter_steps` in Rust and Python, `qso trotter --epsilon`).
+  Heisenberg chains of Childs et al. at fourth order, t = n, ε = 10⁻³:
+  295 steps at n = 10 against 645 published (126 empirical) and 5330 at
+  n = 64 against 11 198, in about 5 to 16 s per chain; at eight spins the
+  bound is 30 times the exact error where that of 1.32 was 10⁶ to 10⁷
+  times.
+
 - **Relaxation applied without storing it** (1.55): the Redfield
   superoperator applied from its terms by operator products where a
   stored block would exceed memory (Krylov propagation of nine and ten

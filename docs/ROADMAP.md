@@ -56,7 +56,7 @@ which withdraws the results of version 1.
 | Boson sampling | exact probabilities and exact sampling (1.1); partial distinguishability, loss and Gaussian boson sampling with hafnians and torontonians (1.14) | mixed Gaussian states with many photons spread over many modes are impractical (10¹² operations at 20 photons in 10 modes) |
 | Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4); slow noise from Markov processes (telegraph, Ornstein–Uhlenbeck, quasi-static, 1/f) averaged exactly on density matrices (1.44) | noise learning for layers of two-qubit Clifford gates only, on density matrices up to 10 qubits and Pauli frames up to 64 (1.12, 1.31), with non-Pauli channels twirled one at a time; mitigation with the learned model above 24 qubits only on matrix-product states, for channels that are mixtures of unitaries (1.31); no leakage; channels on at most four qubits (1.30); slow noise averaged exactly up to 12 qubits and processes with finitely many states (1.44), sampled on trajectories beyond (1.30); virtual distillation (1.17) mitigates only its measured copies' preparation |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18); interacting bosons, fermions and distinguishable particles with certificates for graph isomorphism (1.29); symmetry for driven walks, open walks on orbitals, coined walks with dephasing, hypercubes with dephasing up to d = 230 (1.38); interacting walkers on the orbits of automorphisms (three bosons on Q₉: 2284 orbits of 22.5 million configurations) and up to four particles on hypercubes (1.43); open walks on large symmetric graphs from point stabilisers (Q₁₈, H(4, 10), J(24, 4); 1.48) | interacting walkers stop at 2²² configurations without symmetry and 2²⁷ with it, whose orbits come from a union–find over every configuration (1.43); open walks beyond 8192 nodes need a start whose stabiliser leaves few orbitals (dense graphs and circulants stay at 8192 nodes; 1.48); pretty good transfer on other graphs has no exact reference |
-| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37); the ¹³C bath of an NV centre by the cluster-correlation expansion (1.39); the optical cycle, ODMR, pulsed readout and magnetometer sensitivity in fields of any direction, and ensembles (1.40); sparse relaxation blocks propagated by Krylov steps, Redfield relaxation from sparse terms and equivalent spins: seven and eight relaxing protons for seconds (1.41); optimal control with relaxation on sparse blocks and on the orbits of equivalent spins, seven and eight spins (1.46); Redfield relaxation with anisotropic diffusion and model-free internal motion (1.49); reaction kinetics with spins: PASADENA, ALTADENA and SABRE as they run (1.50); field profiles with relaxation beyond six spins, the relaxation interpolated over the field (1.51); exchange and reactions on sparse blocks with iterative steady states and field profiles: SABRE with nine spins in the complex beside seven in the substrate (1.54); Redfield relaxation applied without storing it, with its analytic field derivative: nine and ten relaxing spins whose superoperator would need 6 to 74 GB (1.55) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the nested-commutator bound of product formulas (1.32) is tight for small Hamiltonians only, its tail ignoring which terms commute; Redfield relaxation takes rigid-body diffusion and model-free internal motion, not correlated motions of groups (1.49), and propagations beyond 1.5·10¹² operations or 2 GiB are refused (eleven protons with dipolar relaxation, nine for 100 s; 1.41); chemical exchange and reaction kinetics take Krylov steps beyond 2048 elements per block (1.54), unaffordable in the laboratory frame at millitesla fields and more, and only one reactant of a reaction carries spins; field profiles with relaxation hold the relaxation at up to 33 fields (1.51), or apply Redfield relaxation without storing it where those would not fit (1.55), where work bounds them (eight spins with dipolar relaxation: two steps over 0.02 s per evaluation within the limit), and have many local optima; an evaluation of eight relaxing spins takes tens of seconds (1.46); the NV bath of 1.39 takes ideal pulses only (finite ones: the generalised expansion, 1.45), its expansion can diverge (results beyond `|L| = 1` are refused), and the nuclei next to the vacancy need given contact couplings (1.39); the optical model's rotating-wave approximation fails near the ground-state anticrossing (1.40) |
+| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37); the ¹³C bath of an NV centre by the cluster-correlation expansion (1.39); the optical cycle, ODMR, pulsed readout and magnetometer sensitivity in fields of any direction, and ensembles (1.40); sparse relaxation blocks propagated by Krylov steps, Redfield relaxation from sparse terms and equivalent spins: seven and eight relaxing protons for seconds (1.41); optimal control with relaxation on sparse blocks and on the orbits of equivalent spins, seven and eight spins (1.46); Redfield relaxation with anisotropic diffusion and model-free internal motion (1.49); reaction kinetics with spins: PASADENA, ALTADENA and SABRE as they run (1.50); field profiles with relaxation beyond six spins, the relaxation interpolated over the field (1.51); exchange and reactions on sparse blocks with iterative steady states and field profiles: SABRE with nine spins in the complex beside seven in the substrate (1.54); Redfield relaxation applied without storing it, with its analytic field derivative: nine and ten relaxing spins whose superoperator would need 6 to 74 GB (1.55); product-formula bounds whose remainder runs over the terms that do not commute, the error averaged over states, and step counts for a target error: half the steps of the bounds of Childs et al. for Heisenberg chains of 10 to 64 spins (1.56) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the commutator bound of product formulas (1.56) still sums its remainder by the triangle inequality, about 2.3 times the empirical step counts of Heisenberg chains and loose at few steps and order 6, where its budget stops the degree early; Redfield relaxation takes rigid-body diffusion and model-free internal motion, not correlated motions of groups (1.49), and propagations beyond 1.5·10¹² operations or 2 GiB are refused (eleven protons with dipolar relaxation, nine for 100 s; 1.41); chemical exchange and reaction kinetics take Krylov steps beyond 2048 elements per block (1.54), unaffordable in the laboratory frame at millitesla fields and more, and only one reactant of a reaction carries spins; field profiles with relaxation hold the relaxation at up to 33 fields (1.51), or apply Redfield relaxation without storing it where those would not fit (1.55), where work bounds them (eight spins with dipolar relaxation: two steps over 0.02 s per evaluation within the limit), and have many local optima; an evaluation of eight relaxing spins takes tens of seconds (1.46); the NV bath of 1.39 takes ideal pulses only (finite ones: the generalised expansion, 1.45), its expansion can diverge (results beyond `|L| = 1` are refused), and the nuclei next to the vacancy need given contact couplings (1.39); the optical model's rotating-wave approximation fails near the ground-state anticrossing (1.40) |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
 | Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22); exact circuit distances of any model by a parallel search or the Brouwer–Zimmermann enumeration, with the lightest logical error as circuit locations (1.42); the search on the orbits of an error model's symmetries: [[144, 12, 12]] over three rounds of the depth-8 cycle has circuit distance 10 (1.47); logical failure rates far below sampling by splitting, with their leading term (surface codes to 10⁻⁹, [[72, 12, 6]] to 10⁻¹³; 1.52) | exact circuit distances need time exponential in the distance (each weight about 17 times the last on bicycle circuits); symmetries divide it by a factor that grows with their number (41 to 43 for 72); splitting needs a burn-in long enough, which its error does not show (1.52); decoders take a whole experiment at once, so long memories and BP+OSD over many rounds grow beyond time and memory |
 | Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9), in the browser build too (1.25) | — |
@@ -251,7 +251,7 @@ the release.
 
 | Deliverable | Delivered | Not done, and why |
 |---|---|---|
-| Hamiltonian simulation | `Circuit::pauli_rotation`; product formulas of order 1, 2, 4, 6, …; `trotter_error_bound` with the commutator bounds of Childs et al. (2021) for orders 1 and 2 and the smaller of a stage-wise and a Taylor-remainder bound above; qDRIFT with Campbell's bound | a tight commutator bound for order ≥ 4 (the paper's Appendix J is heuristic in its constants); the bound QSO gives there is rigorous but loose (1.32 adds a bound from the exact nested commutators, tight for small Hamiltonians) |
+| Hamiltonian simulation | `Circuit::pauli_rotation`; product formulas of order 1, 2, 4, 6, …; `trotter_error_bound` with the commutator bounds of Childs et al. (2021) for orders 1 and 2 and the smaller of a stage-wise and a Taylor-remainder bound above; qDRIFT with Campbell's bound | a tight commutator bound for order ≥ 4 (the paper's Appendix J is heuristic in its constants); the bound QSO gives there is rigorous but loose (1.32 adds a bound from the exact nested commutators, tight for small Hamiltonians; 1.56 one whose remainder runs over the terms that do not commute, about 30 times the error at eight spins) |
 | Fermions | `FermionOperator` with normal ordering; Jordan–Wigner, parity and Bravyi–Kitaev mappings as binary transforms; two-qubit reduction; `MolecularIntegrals` from FCIDUMP files with Hartree–Fock states and energies and full CI; UCCSD, k-UpCCGSD, ADAPT-VQE; FCIDUMP files of H₂, LiH and BeH₂ with PySCF reference energies | computing integrals (that needs a quantum-chemistry code; FCIDUMP is the exchange format, as OpenQASM is for circuits); unrestricted orbitals |
 | Excited states and geometry | VQD, weighted SSVQE; exact state derivatives, quantum Fisher information, quantum natural gradient; McLachlan imaginary-time evolution (RK4) | — |
 | Optimisation problems | `Qubo`/`Ising` with exact enumeration; QAOA for any diagonal cost with X, ring and complete XY mixers from Dicke states, and the warm-start mixer | a built-in continuous relaxation for warm starts: the user supplies `c ∈ [0, 1]ⁿ` |
@@ -5776,7 +5776,7 @@ internal motion equal to the dense generator to 2·10⁻¹³ (transfer) and
   no test covered the automatic choice of the matrix-free paths, or the
   motions of 1.49 in the derivative (both do now).
 
-### 1.56 — Product-formula bounds that know which terms commute (S–M)
+### 1.56 — Product-formula bounds that know which terms commute (S–M, delivered)
 
 Use case: the number of Trotter steps for spin and molecular
 Hamiltonians of tens of qubits, where the nested-commutator bound of 1.32
@@ -5792,6 +5792,101 @@ Validation: never below the exact operator norm of the error for small
 Hamiltonians (dense), never above the bound of 1.32; the published
 bounds of Childs et al. for Heisenberg chains; the average error against
 random states.
+
+Delivered in `algorithms/time_evolution.rs` (`TrotterBounds::commutators`,
+`TrotterBounds::average`, `trotter_steps`):
+
+- **Commutator sums.** The error generator `T` of a step
+  (`S' = (A + T)S`, `A = −iH`) is expanded with its Taylor coefficients
+  `C_m` exact below a degree D (as in 1.32) and the remainder of every
+  conjugation `Ad_{E_J⋯E_{j+1}}(B_j)` in integral form, bounded by
+  `σ^D Σ_{|q|=D} ‖ad_{B_J}^{q_J} ⋯ ad_{B_{j+1}}^{q_{j+1}} B_j‖/q!` (the
+  commutator expansion of a conjugation of exponentials of Childs et al.,
+  anti-Hermitian case). Every exponential is one Pauli rotation, so each
+  nested commutator is a single string or zero, and the sum is a second
+  power series with absolute values carried through the same Horner
+  scheme as the exact one. An exponential only touches the strings that
+  anticommute with it (a rotation of the pair `Q`, `PQ`), so the series
+  is updated in place, and a list of entries per qubit lets it look only
+  at the strings on its own qubits. The generator is also factored in the
+  middle of the formula, `S' − AS = L T R` with L and R unitary halves (as
+  Childs et al. do for their fourth-order bounds), which halves the
+  depth of the conjugations; the smaller of the two bounds is taken. D
+  starts at p + 1 (or the degree of the nested bound) and rises while
+  each degree lowers the bound by 5 %, within about a second of work;
+  the series are cached per Hamiltonian, so step searches pay once.
+- **Average error.** The same expansion with the Frobenius norm, which
+  is unitarily invariant: `‖S(τ) − e^{−iHτ}‖_F/√d` is bounded with the
+  root sum of squares of the Pauli coefficients of `C_m` in place of
+  their sum (the remainder's strings each count with their absolute
+  value either way), times the steps. This is the root mean square of
+  `‖(U − e^{−iHt})ψ‖` over Haar-random states.
+- **Step counts.** `trotter_steps(h, t, ε, order)` doubles and bisects
+  the steps for the worst-case and the average bound, and reports r with
+  the bound at most ε at r and above it at r − 1. Python
+  `trotter_steps`, `trotter_error_bounds` with `commutators` and
+  `average`, and `qso trotter --epsilon`.
+
+Changes to the plan:
+
+- **The remainder of the commutator expansion, not the published
+  coefficients.** The fourth-order bounds of Childs et al.
+  (Propositions for two and three summands, their Appendix J) are sums of
+  norms of nested commutators of the groups A and B (or H₁, H₂, H₃) with
+  fixed coefficients, for those groupings only. QSO's terms are single
+  Pauli strings in any order and any order p, so it takes the general
+  remainder with exact leading coefficients instead; for the Heisenberg
+  chains of the paper it asks for half their steps (below).
+- **Pairs and triples are a special case.** The nested commutators of
+  the remainder have D + 1 factors (D ≥ p + 1), not two or three; they
+  are enumerated implicitly by the series, never listed.
+
+Not done, and why:
+
+- **The triangle inequality over the remainder.** Paths through
+  different exponentials that end on the same string add their absolute
+  values instead of cancelling; the step counts for Heisenberg chains are
+  therefore still about 2.3 times the empirical ones (126 at n = 10).
+- **Few steps and order 6.** Where λτ is large (eight spins, t = 2, order
+  4 at 8 steps: 60 to 860 times the error) or the formula has 50 stages
+  (order 6), the remainder needs high degrees and the budget stops it
+  early; the stage-by-stage bound is then smaller.
+- **Grouped exponentials.** Terms that commute are separate rotations;
+  grouping them (as the paper's A and B) would keep the cancellations
+  inside a group but needs operator-valued nested commutators per
+  multi-index.
+
+Measured (four cores, release build), Heisenberg chains with random
+fields `Σ_j (X_jX_{j+1} + Y_jY_{j+1} + Z_jZ_{j+1} + h_j Z_j)`, `h_j`
+uniform in [−1, 1], fourth order, `t = n`, ε = 10⁻³, mean of five
+chains, against the bound of Childs et al. (their Fig. 5):
+
+| n | even-odd: steps (average) | published | X-Y-Z: steps (average) | published | time per chain |
+|---|---|---|---|---|---|
+| 10 | 295 (151) | 645 | 323 (161) | 968 | 5 s |
+| 16 | 629 (322) | 1348 | 691 (396) | 2020 | 5 s |
+| 23 | 1116 (624) | 2357 | 1214 (639) | 3506 | 6 s |
+| 32 | 1881 (1278) | 3897 | 2042 (1293) | 5834 | 5 s |
+| 45 | 3135 (1998) | 6554 | 3409 (2023) | 9784 | 6 s |
+| 64 | 5330 (3163) | 11 198 | 5796 (3204) | 16 682 | 16 s |
+
+The published empirical counts at n = 10 are 126 and 134. On eight
+spins (dense, t = 2, order 4, 32 steps) the commutator bound is 30 to 33
+times the exact error, the nested bound of 1.32 3.6·10⁶ to 1.7·10⁷
+times, the stage-by-stage bound about 7500 times; the average bound is 7
+to 10 times the exact average error. At order 2 and 16 steps the
+commutator bound is 10 to 12 times the error (the nested one 490 to 1280
+times, Proposition 16 about 11 times).
+
+Validation: never below the exact spectral error (and the average bound
+never below the exact normalised Frobenius error) for Heisenberg, Ising,
+random and Childs's Hamiltonians on four qubits at orders 1, 2, 4 and 6
+and 1 to 16 steps; never above the nested bound; the majorant at least
+the exact coefficients, which vanish below order p; the average error of
+400 Haar-random states equal to the normalised Frobenius norm within four
+standard errors; at n = 8 the instance's own empirical step count (dense)
+at most the bound's and within 15 % of the published one; at n = 10
+between the published empirical counts and bounds.
 
 ### 1.57 — Decoding in windows (M)
 

@@ -366,11 +366,18 @@ fn chemistry_and_dynamics() {
         "4",
         "--output",
         out.path(),
+        "--epsilon",
+        "1e-6",
     ]);
     assert!(f(&t["column_error"]) <= f(&t["error_bound"]));
-    // Order 4 at 20 steps: the nested bound is the smallest.
-    assert_eq!(f(&t["bounds"]["nested"]), f(&t["error_bound"]));
+    // Order 4 at 20 steps: the commutator bound is the smallest, at most
+    // the nested one.
+    assert_eq!(f(&t["bounds"]["commutators"]), f(&t["error_bound"]));
+    assert!(f(&t["bounds"]["commutators"]) <= f(&t["bounds"]["nested"]));
+    assert!(f(&t["bounds"]["average"]) <= f(&t["error_bound"]));
     assert!(f(&t["bounds"]["stages"]) > 10.0 * f(&t["error_bound"]));
+    let needed = &t["steps_needed"];
+    assert!(needed["average"].as_u64().unwrap() <= needed["worst"].as_u64().unwrap());
     assert!(
         std::fs::read_to_string(&out.0)
             .unwrap()

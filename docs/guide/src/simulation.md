@@ -20,7 +20,7 @@ ladder and one `rz`.
 | 2k ≥ 4 (Suzuki) | `S₂ₖ(τ) = S₂ₖ₋₂(uτ)² S₂ₖ₋₂((1 − 4u)τ) S₂ₖ₋₂(uτ)²`, `u = 1/(4 − 4^{1/(2k−1)})` |
 
 `trotter_error_bound` returns an upper bound on the spectral-norm distance
-between the circuit and `exp(−iHt)`: the smallest of three bounds, which
+between the circuit and `exp(−iHt)`: the smallest of four bounds, which
 `trotter_error_bounds` returns one by one. The commutators in them are
 computed exactly in the Pauli algebra.
 
@@ -40,6 +40,18 @@ computed exactly in the Pauli algebra.
   steps or the time and is cached, so a loop over step counts pays once.
   It is computed for `H/λ` (`λ = Σ|h_γ|`), so the units of `H` do not
   matter.
+- **`commutators`**, for every order p: the same coefficients up to a
+  degree D, and the rest from the remainder of the commutator expansion
+  of Childs et al.: for every exponential, the nested commutators of
+  degree D with the exponentials it is conjugated by, each one Pauli
+  string or zero, their absolute values summed. Strings that commute
+  drop out, so the rest grows with the terms that do not commute instead
+  of with all of them. The step's error is also factored in the middle of
+  the formula (as Childs et al. do at fourth order), which halves the
+  depth of the conjugations, and the smaller result is taken. D rises
+  while that lowers the bound by 5 %, within a budget of about a second;
+  the series is cached. At most `nested`, and far below it beyond a few
+  spins.
 - **`stages`**: order 1, `τ²/2 · Σ_γ ‖[Σ_{γ'>γ} H_γ', H_γ]‖` (Proposition
   15 there); order 2, the nested-commutator bound of their Proposition 16;
   order 4 and higher, the order-2 bound summed over the second-order
@@ -47,6 +59,29 @@ computed exactly in the Pauli algebra.
 - **`taylor`**: the Taylor remainder of a formula exact to order p.
 
 Each bound is multiplied by the number of steps.
+
+`average` bounds the error on a typical state: the normalised Frobenius
+norm `‖U − exp(−iHt)‖_F/√d`, which is the root mean square of
+`‖(U − exp(−iHt))ψ‖` over random states ψ. It is the commutator bound
+with the root sum of squares of each coefficient's Pauli terms for their
+sum; for a chain of n spins the sum grows as n and the root sum of
+squares as √n. `trotter_steps(h, t, epsilon, order)` returns the steps
+for which the worst-case bound (`worst`) and the average one (`average`)
+reach a target error.
+
+```python
+import metatron_qso as q
+
+h = q.heisenberg_xxz(8, 1.0, 0.5)
+r = q.trotter_steps(h, 8.0, 1e-3, order=4)
+b = q.trotter_error_bounds(h, 8.0, steps=r["worst"], order=4)
+print(r, b["commutators"], b["average"])
+```
+
+On the Heisenberg chains with random fields of Childs et al. (fourth
+order, `t = n`, ε = 10⁻³), `trotter_steps` asks for 295 steps at n = 10,
+where the paper's bound asks for 645 and the empirical count is 126, and
+for 5330 at n = 64 against 11 198; a chain takes 5 to 16 seconds.
 
 ```python
 import numpy as np
@@ -81,7 +116,11 @@ From 8 to 32 steps the nested bound is 7 to 11 times the actual error at
 order 4 and 8 to 24 times at order 6, and it falls as `r^{−p}` like the
 error. The stage-by-stage bound of these orders falls only as `r⁻²` and
 is 780 to 10⁹ times the error. Doubling the steps divides the actual
-error by `2^order`, and the tests check this.
+error by `2^order`, and the tests check this. On eight spins (t = 2,
+order 4, 32 steps) the commutator bound is 30 to 33 times the actual
+error, the nested one 10⁶ to 10⁷ times, and the average bound 7 to 10
+times the average error.
+
 
 ## qDRIFT
 
@@ -111,4 +150,5 @@ $ qso trotter --hamiltonian "Z0 Z1 + 0.5 X0 + 0.5 X1" --time 1 --steps 10 --orde
 order 2, 10 steps, t = 1: 41 gates, depth 31, error bound 5.000e-3, largest column error 1.938e-3 (a lower bound on ‖U − exp(−iHt)‖)
 ```
 
-`--output FILE` writes the circuit as OpenQASM 2.0.
+`--output FILE` writes the circuit as OpenQASM 2.0, and `--epsilon E`
+adds the steps for which the bounds reach the error E.
