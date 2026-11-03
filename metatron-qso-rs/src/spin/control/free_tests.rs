@@ -99,7 +99,7 @@ fn profiles_past_the_interpolants_memory_take_the_matrix_free_path() {
 
 /// SABRE-SHEATH with eight spins and dipolar Redfield relaxation (the
 /// interpolant of 1.51 would need 9.4 GB): the cost of ten steps over
-/// 0.2 s, and two steps over 0.04 s evaluated and replayed by `evolve`,
+/// 0.2 s, and two steps over 0.02 s evaluated and replayed by `evolve`,
 /// for the documentation (`cargo test --release -- --ignored
 /// measure_free_field --nocapture`).
 #[test]
@@ -107,7 +107,7 @@ fn profiles_past_the_interpolants_memory_take_the_matrix_free_path() {
 fn measure_free_field() {
     let (sys, lac) = sheath(5, true);
     let start = sys.parahydrogen_state(0, 1, 1.0).unwrap();
-    for (steps, duration) in [(10usize, 0.2), (2, 0.04)] {
+    for (steps, duration) in [(10usize, 0.2), (2, 0.02)] {
         let c = Control::field(
             0.0,
             2.0 * lac,

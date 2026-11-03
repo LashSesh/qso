@@ -278,9 +278,9 @@ anisotropy (τ_c = 3·10⁻¹¹ s):
 
 | Spins | Stored superoperator | Matrix-free, 10 µT (laboratory) | Matrix-free, 9.4 T (rotating, after inversion) |
 |---|---|---|---|
-| 8 | 0.7 GB (stored) | 0.1 s in 19 s | 0.1 s in 4.7 s |
-| 9 | 6.1 to 6.9 GB | 10 ms in 44 s | 10 ms in 9.3 s |
-| 10 | 55 to 74 GB | refused for work at 1 ms | 1 ms in 24 s |
+| 8 | 0.7 GB (stored) | 0.1 s in 18 s | 0.1 s in 4.5 s |
+| 9 | 6.1 to 6.9 GB | 10 ms in 40 s | 10 ms in 8.9 s |
+| 10 | 55 to 74 GB | refused for work at 1 ms | 1 ms in 22 s |
 
 at most 1.5 GB. Longer intervals are refused by the work limit
 (1.5·10¹² operations), not by memory.
@@ -593,8 +593,8 @@ pulse = s.control_events(c, r["controls"])           # for evolve
   the eigenbasis of `H₀`, which needs no derivative of the eigenvectors
   and holds at level crossings; the `T₁`/`T₂` jumps and the thermal
   populations, closed forms, by extrapolated differences. Eight spins of
-  SABRE-SHEATH take 0.45 GB; two steps over 0.04 s take 24 s, while ten
-  steps over 0.2 s need about 6.5·10¹² operations and are refused by the
+  SABRE-SHEATH take 0.45 GB; two steps over 0.02 s take 12 s, while ten
+  steps over 0.2 s need about 8·10¹² operations and are refused by the
   work limit.
 - **Larger systems.** With rf and relaxation, the generator of the
   master equation (with the drift towards equilibrium) and the rf

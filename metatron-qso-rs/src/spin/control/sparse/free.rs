@@ -43,6 +43,8 @@ pub(in crate::spin::control) struct FreeField {
     /// terms, from the relaxation at the middle of the range.
     apply_work: [f64; 2],
     terms_bytes: f64,
+    /// Bytes the products of one application hold besides the terms.
+    scratch_bytes: f64,
     /// A bound on the generator's relaxation over the range.
     relaxation_norm: f64,
 }
@@ -306,8 +308,8 @@ impl SpinSystem {
                 .map(|(_, e)| r.apply_bytes(e.len()))
                 .fold(0.0, f64::max)
         };
-        let terms_bytes =
-            (r.terms_bytes() + dr.terms_bytes()) as f64 + scratch(&r).max(scratch(&dr));
+        let terms_bytes = (r.terms_bytes() + dr.terms_bytes()) as f64;
+        let scratch_bytes = scratch(&r).max(scratch(&dr));
         // The rate bound at the ends and the middle.
         let mut relaxation_norm = r.rate().max(ends);
         let liouville = Liouville::new(&vec![Vec::new(); d], None);
@@ -330,6 +332,7 @@ impl SpinSystem {
             span: max - min,
             apply_work,
             terms_bytes,
+            scratch_bytes,
             relaxation_norm,
         })
     }
@@ -362,6 +365,7 @@ impl FreeField {
         let nodes = GAUSS.len() as f64 * most;
         let bytes = 16.0 * m * (c.steps as f64 + 1.0 + nodes + 30.0)
             + 2.0 * self.terms_bytes
+            + self.scratch_bytes
             + 6.0 * 20.0 * ops;
         (work, bytes)
     }
