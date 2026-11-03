@@ -555,6 +555,7 @@ fn field_profiles_have_exact_gradients_and_find_the_best_constant_field() {
     };
     for fields in [[1e-2, 1e-7], [1e-7, 1e-2]] {
         let err = x.profile_transfer(&strong, &fields).unwrap_err();
-        assert!(err.to_string().contains("operations"), "{err}");
+        let text = err.to_string();
+        assert!(text.contains("operations") || text.contains("GB"), "{err}");
     }
 }

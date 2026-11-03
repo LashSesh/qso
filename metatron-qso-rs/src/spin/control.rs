@@ -50,7 +50,11 @@ use crate::optimize::{GradObjective, Method, Options, minimize};
 
 mod sparse;
 
-use sparse::{Amplitudes, Budget, SparseControl, SparseField};
+use sparse::{Amplitudes, SparseControl, SparseField};
+pub(in crate::spin) use sparse::{
+    Budget, GAUSS, LEVELS, SUBSTEP, Scaled, SparseGenerator, TAYLOR_TERMS, coefficient, norm_bound,
+    propagate, step_gradient, weights,
+};
 pub use sparse::{FIELD_TOLERANCE, MAX_FIELD_ERROR};
 
 /// What the controls drive.

@@ -241,6 +241,18 @@ pub(super) struct Relaxation {
 }
 
 impl Relaxation {
+    /// No relaxation of a `d`-level system.
+    pub(super) fn none(d: usize) -> Self {
+        Relaxation {
+            jumps: Vec::new(),
+            prepared: Vec::new(),
+            redfield: None,
+            drift: CMatrix::zeros(d, d),
+            rate: 0.0,
+            equilibrium: 0.0,
+        }
+    }
+
     /// `out += D(x)`: the dissipators and `−R(x)`, without the drift; the
     /// Redfield blocks it uses are kept for the next call.
     fn dissipate_into(&self, out: &mut CMatrix, x: &CMatrix) {

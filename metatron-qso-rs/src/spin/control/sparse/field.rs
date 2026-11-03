@@ -37,13 +37,13 @@ pub const FIELD_TOLERANCE: f64 = 1e-10;
 pub const MAX_FIELD_ERROR: f64 = 1e-6;
 
 /// The numbers of Chebyshev–Lobatto nodes tried.
-const LEVELS: [usize; 4] = [5, 9, 17, 33];
+pub(in crate::spin) const LEVELS: [usize; 4] = [5, 9, 17, 33];
 
 /// `(a_j(x), a'_j(x))`: the weights of the node values in the interpolant
 /// through `N` Chebyshev–Lobatto nodes and in its derivative,
 /// `a_j(x) = Σ_m α_mj T_m(x)`, `α_mj = (2/(N−1)) ε_j ε_m cos(πmj/(N−1))`
 /// (`ε = ½` at the ends).
-fn weights(n: usize, x: f64) -> (Vec<f64>, Vec<f64>) {
+pub(in crate::spin) fn weights(n: usize, x: f64) -> (Vec<f64>, Vec<f64>) {
     let mut t = vec![0.0; n];
     let mut dt = vec![0.0; n];
     // T_m and T'_m = m U_{m−1}.
@@ -81,7 +81,7 @@ fn weights(n: usize, x: f64) -> (Vec<f64>, Vec<f64>) {
 }
 
 /// The weights of the node values in the Chebyshev coefficient `m`.
-fn coefficient(n: usize, m: usize) -> Vec<f64> {
+pub(in crate::spin) fn coefficient(n: usize, m: usize) -> Vec<f64> {
     let edge = |k: usize| if k == 0 || k == n - 1 { 0.5 } else { 1.0 };
     (0..n)
         .map(|j| {

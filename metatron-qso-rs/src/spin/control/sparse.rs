@@ -24,6 +24,7 @@ mod field;
 
 pub(super) use field::SparseField;
 pub use field::{FIELD_TOLERANCE, MAX_FIELD_ERROR};
+pub(in crate::spin) use field::{LEVELS, coefficient, weights};
 
 use super::super::blocks::{Liouville, SYMMETRY_TOLERANCE, Sparse};
 use super::super::krylov::{Orbits, SparseBlock, accumulator_bytes, row_dot, rows_per_task};
@@ -38,13 +39,13 @@ use crate::parallel::{for_each_block, sum_chunks_c64, threads};
 /// and once a term falls below the rounding of the sum the rest add at
 /// most `e²` times as much. Four times the substep of [`expmv`], at about
 /// a third of its products per unit of `‖L‖t`.
-const SUBSTEP: f64 = 2.0;
+pub(in crate::spin) const SUBSTEP: f64 = 2.0;
 
 /// Terms of a substep's Taylor series, for the estimates: about 14 on
 /// methyl groups with up to eight spins and thermal states, where the norm
 /// bound would allow 26 (the series stops when its terms vanish relative
 /// to the deviation; an evaluation counts what it spends).
-const TAYLOR_TERMS: f64 = 14.0;
+pub(in crate::spin) const TAYLOR_TERMS: f64 = 14.0;
 
 /// Gauss–Legendre nodes and weights on `[0, 1]`, ten points: exact for
 /// polynomials of degree 19. The integrand `⟨λ(τ), E x(τ)⟩` of a substep
@@ -52,7 +53,7 @@ const TAYLOR_TERMS: f64 = 14.0;
 /// `(2‖L‖)^20 e^{h‖L‖}‖λ‖‖E‖‖x‖` (`λ` and `x` at the substep's ends), so the
 /// rule's error stays below `h·4^20·e²·(10!)⁴/(21·(20!)³) ≈ 5·10⁻¹⁸·h` of
 /// that: below rounding.
-const GAUSS: [(f64, f64); 10] = [
+pub(in crate::spin) const GAUSS: [(f64, f64); 10] = [
     (0.013046735741414128, 0.03333567215434407),
     (0.06746831665550773, 0.0747256745752902),
     (0.16029521585048778, 0.109543181257991),
@@ -102,7 +103,12 @@ fn series<G: Linear>(
 }
 
 /// `e^{tL} x` in substeps of [`SUBSTEP`], and the generator products.
-fn propagate<G: Linear>(g: &G, x: &DVector<C64>, t: f64, norm: f64) -> (DVector<C64>, usize) {
+pub(in crate::spin) fn propagate<G: Linear>(
+    g: &G,
+    x: &DVector<C64>,
+    t: f64,
+    norm: f64,
+) -> (DVector<C64>, usize) {
     let s = substeps_of(t * norm);
     let h = t / s as f64;
     let mut v = x.clone();
@@ -125,13 +131,13 @@ fn taylor<G: Linear>(g: &G, v: &DVector<C64>, h: f64) -> (DVector<C64>, Vec<DVec
 /// Operations an evaluation may still spend, shared by its members: the
 /// estimates before an evaluation take typical series, and this stops one
 /// whose series are longer.
-pub(super) struct Budget {
+pub(in crate::spin) struct Budget {
     left: std::sync::Mutex<f64>,
     limit: f64,
 }
 
 impl Budget {
-    pub(super) fn new(limit: f64) -> Self {
+    pub(in crate::spin) fn new(limit: f64) -> Self {
         Budget {
             left: std::sync::Mutex::new(limit),
             limit,
@@ -139,7 +145,7 @@ impl Budget {
     }
 
     /// Spend `ops`, or refuse once the limit is passed.
-    fn spend(&self, ops: f64) -> Result<()> {
+    pub(in crate::spin) fn spend(&self, ops: f64) -> Result<()> {
         let mut left = self.left.lock().expect("unpoisoned");
         *left -= ops;
         if *left < 0.0 {
@@ -204,7 +210,7 @@ fn pair(e: &Scaled<'_>, lambda: &DVector<C64>, x: &DVector<C64>) -> C64 {
 /// term (forwards again and backwards) instead of `2 + directions`, and
 /// four times longer substeps.
 #[allow(clippy::too_many_arguments)]
-fn step_gradient(
+pub(in crate::spin) fn step_gradient(
     forward: &SparseGenerator<'_>,
     backward: &SparseGenerator<'_>,
     directions: &[Scaled<'_>],
@@ -289,7 +295,7 @@ fn hermitian(a: &CMatrix) -> bool {
 
 /// `max(‖A‖₁, ‖A‖∞)`: bounds every norm the Taylor series of `A` and `A†`
 /// meet.
-fn norm_bound(a: &SparseBlock) -> f64 {
+pub(in crate::spin) fn norm_bound(a: &SparseBlock) -> f64 {
     a.norm_one().max(a.norm_inf())
 }
 
@@ -314,11 +320,11 @@ fn element_images(maps: &[Vec<usize>], d: usize) -> Vec<Vec<u32>> {
 
 /// `L = base + diag(diagonal) + Σ_j c_j ops_j`, applied to vectors in one
 /// pass over the rows.
-struct SparseGenerator<'a> {
-    base: &'a SparseBlock,
-    diagonal: Option<&'a [C64]>,
-    ops: &'a [SparseBlock],
-    coefficients: Vec<f64>,
+pub(in crate::spin) struct SparseGenerator<'a> {
+    pub base: &'a SparseBlock,
+    pub diagonal: Option<&'a [C64]>,
+    pub ops: &'a [SparseBlock],
+    pub coefficients: Vec<f64>,
 }
 
 impl Linear for SparseGenerator<'_> {
@@ -357,7 +363,7 @@ impl Linear for SparseGenerator<'_> {
 }
 
 /// A control direction `s·E_j`.
-struct Scaled<'a>(&'a SparseBlock, f64);
+pub(in crate::spin) struct Scaled<'a>(pub &'a SparseBlock, pub f64);
 
 impl Direction for Scaled<'_> {
     fn apply_add(&self, x: &DVector<C64>, s: C64, y: &mut DVector<C64>) {

@@ -464,8 +464,10 @@ fn gmres(
     }
 }
 
+mod field;
 mod secular;
 
+pub(in crate::spin) use field::ExchangeField;
 use secular::Secular;
 
 #[cfg(test)]

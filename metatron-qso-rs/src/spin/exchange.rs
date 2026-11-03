@@ -1175,10 +1175,61 @@ impl Exchange {
     }
 
     /// `Σ_s Re Tr(C_s† ρ_s(T))` under the field profile `fields` and its
-    /// gradient with respect to the fields: exact up to rounding for the
-    /// coherent part, the field dependence of relaxation and fresh thermal
-    /// states by extrapolated central differences (near 10⁻⁸ of it).
+    /// gradient with respect to the fields, on sparse blocks: exact up to
+    /// rounding for the coherent part, the relaxation, exchange and fresh
+    /// thermal states interpolated over the profile's range within the
+    /// stated error of [`Exchange::profile_relaxation_error`].
     pub fn profile_transfer(&self, p: &Profile, fields: &[f64]) -> Result<(f64, Vec<f64>)> {
+        self.check_profile(p, fields)?;
+        let field = self.exchange_field(p)?;
+        self.field_transfer(&field, p, fields)
+    }
+
+    /// One evaluation on a built [`ExchangeField`], its work checked first.
+    fn field_transfer(
+        &self,
+        field: &ExchangeField,
+        p: &Profile,
+        fields: &[f64],
+    ) -> Result<(f64, Vec<f64>)> {
+        let dt = p.duration / p.steps as f64;
+        check_work(
+            &format!("a field profile of {} steps", p.steps),
+            field.work(fields, dt),
+        )?;
+        let memory = field.memory(fields, dt);
+        if memory > super::MAX_RELAXATION_MEMORY {
+            return Err(QsoError::invalid(
+                "profile",
+                format!(
+                    "needs about {:.1} GB (limit {:.1} GB); use more steps, weaker fields or \
+                     fewer spins",
+                    memory / 1e9,
+                    super::MAX_RELAXATION_MEMORY / 1e9
+                ),
+            ));
+        }
+        field.transfer(fields, dt)
+    }
+
+    /// The stated error of the relaxation and exchange interpolated over
+    /// the profile's field range (relative to their largest entry) and the
+    /// number of fields it was built from.
+    pub fn profile_relaxation_error(&self, p: &Profile) -> Result<(f64, usize)> {
+        self.check_profile(p, &vec![p.min; p.steps])?;
+        let field = self.exchange_field(p)?;
+        Ok((field.error, field.nodes()))
+    }
+
+    /// [`Self::profile_transfer`] on the dense blocks of 1.36, the field
+    /// derivative of relaxation and fresh thermal states by extrapolated
+    /// central differences (near 10⁻⁸ of it), for the tests' comparisons.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) fn profile_transfer_dense(
+        &self,
+        p: &Profile,
+        fields: &[f64],
+    ) -> Result<(f64, Vec<f64>)> {
         self.check_profile(p, fields)?;
         let dt = p.duration / p.steps as f64;
         let joint = self.joint(None);
@@ -1308,7 +1359,8 @@ impl Exchange {
         self.check_profile(p, start)?;
         let shape = p.shape();
         let start = shape.inside(start)?;
-        let (first, _) = self.profile_transfer(p, &start)?;
+        let field = self.exchange_field(p)?;
+        let (first, _) = self.field_transfer(&field, p, &start)?;
         // The optimiser sees the transfer in units of its starting size.
         let norm: f64 = p
             .target
@@ -1324,7 +1376,7 @@ impl Exchange {
         let failure = std::sync::Mutex::new(None);
         let objective = GradObjective::new(p.steps, |v: &[f64]| {
             let (u, jac) = shape.physical(v);
-            match self.profile_transfer(p, &u) {
+            match self.field_transfer(&field, p, &u) {
                 Ok((value, grad)) => {
                     let (pen, pg) = shape.penalty(&u);
                     let g: Vec<f64> = grad.iter().zip(&pg).map(|(a, b)| (b - a) / size).collect();
@@ -1341,7 +1393,7 @@ impl Exchange {
             return Err(e);
         }
         let (controls, _) = shape.physical(&result.x);
-        let (transfer, _) = self.profile_transfer(p, &controls)?;
+        let (transfer, _) = self.field_transfer(&field, p, &controls)?;
         Ok(Optimized {
             objective: transfer - shape.penalty(&controls).0,
             members: vec![transfer],
@@ -1398,7 +1450,7 @@ pub mod kinetics;
 mod sparse;
 
 pub(in crate::spin) use sparse::Propagation;
-use sparse::SparseJoint;
+use sparse::{ExchangeField, SparseJoint};
 
 #[cfg(test)]
 mod tests;

@@ -191,3 +191,128 @@ fn beyond_the_dense_limit_the_steady_state_is_reached() {
         last = q;
     }
 }
+
+/// A profile from thermal towards the free substrate's ¹⁵N polarisation.
+fn profile(x: &Exchange, max: f64, duration: f64, steps: usize) -> Profile {
+    let mut target: Vec<CMatrix> = x
+        .sites()
+        .iter()
+        .map(|s| CMatrix::zeros(s.system.dimension(), s.system.dimension()))
+        .collect();
+    target[1] = x.sites()[1].system.iz(0).unwrap() * C64::new(2.0, 0.0);
+    Profile {
+        min: 0.0,
+        max,
+        duration,
+        steps,
+        initial: x.thermal_state().unwrap(),
+        target,
+        smoothness: 0.0,
+    }
+}
+
+#[test]
+fn field_profiles_on_sparse_blocks_equal_the_dense_blocks() {
+    // Two ring protons, every spin relaxing, between 0 and 0.4 μT.
+    let x = sabre_ring(1.4e-7, Frame::Laboratory, 2);
+    let p = profile(&x, 4e-7, 2.0, 6);
+    let fields: Vec<f64> = (0..6).map(|k| 0.5e-7 + 0.5e-7 * k as f64).collect();
+    let (value, grad) = x.profile_transfer(&p, &fields).unwrap();
+    let (dense, dense_grad) = x.profile_transfer_dense(&p, &fields).unwrap();
+    assert!((value - dense).abs() < 1e-10, "{value} vs {dense}");
+    let scale = dense_grad.iter().fold(0.0f64, |m, g| m.max(g.abs()));
+    for (a, b) in grad.iter().zip(&dense_grad) {
+        assert!((a - b).abs() < 1e-6 * scale, "{a} vs {b}");
+    }
+    // Replayed by evolve.
+    let events: Vec<Event> = fields
+        .iter()
+        .flat_map(|&b| [Event::Field(b), Event::Delay(2.0 / 6.0)])
+        .collect();
+    let want = x
+        .polarization(&x.evolve(&p.initial, &events).unwrap(), 1, 0)
+        .unwrap();
+    assert!((value - want).abs() < 1e-10, "{value} vs {want}");
+    let (error, nodes) = x.profile_relaxation_error(&p).unwrap();
+    assert!(error < 1e-10 && nodes >= 5, "{error} {nodes}");
+}
+
+#[test]
+fn field_profiles_beyond_the_dense_limit_follow_central_differences() {
+    // Four ring protons: a zero-order block of 3684 elements.
+    let x = sabre_ring(1.4e-7, Frame::Laboratory, 4);
+    let p = profile(&x, 3e-7, 0.4, 4);
+    assert!(x.profile_transfer_dense(&p, &[1e-7; 4]).is_err());
+    let fields = [0.8e-7, 1.2e-7, 1.6e-7, 1.0e-7];
+    let (value, grad) = x.profile_transfer(&p, &fields).unwrap();
+    let events: Vec<Event> = fields
+        .iter()
+        .flat_map(|&b| [Event::Field(b), Event::Delay(0.1)])
+        .collect();
+    let want = x
+        .polarization(&x.evolve(&p.initial, &events).unwrap(), 1, 0)
+        .unwrap();
+    assert!(
+        (value - want).abs() < 1e-10 * want.abs().max(1e-6),
+        "{value} vs {want}"
+    );
+    // Along a direction, Richardson-extrapolated central differences.
+    let dir = [1.0, -0.5, 0.25, 0.7];
+    let along = |h: f64| {
+        let up: Vec<f64> = fields.iter().zip(&dir).map(|(b, d)| b + h * d).collect();
+        let down: Vec<f64> = fields.iter().zip(&dir).map(|(b, d)| b - h * d).collect();
+        (x.profile_transfer(&p, &up).unwrap().0 - x.profile_transfer(&p, &down).unwrap().0)
+            / (2.0 * h)
+    };
+    let h = 2e-9;
+    let fd = (4.0 * along(h / 2.0) - along(h)) / 3.0;
+    let exact: f64 = grad.iter().zip(&dir).map(|(g, d)| g * d).sum();
+    assert!((fd - exact).abs() < 1e-6 * exact.abs(), "{fd} vs {exact}");
+}
+
+/// SABRE with seven to nine spins in the complex, for the documentation
+/// (`cargo test --release -- --ignored measure_sparse_exchange --nocapture`).
+#[test]
+#[ignore]
+fn measure_sparse_exchange() {
+    for ring in [4usize, 5, 6] {
+        let x = sabre_ring(1.4e-7, Frame::Laboratory, ring);
+        let joint = x.joint(None);
+        let zero = joint
+            .blocks
+            .iter()
+            .filter(|(order, _, _)| order.iter().all(|&q| q == 0))
+            .map(|(_, _, n)| *n)
+            .sum::<usize>();
+        let total: usize = joint.blocks.iter().map(|(_, _, n)| *n).sum();
+        let clock = std::time::Instant::now();
+        let steady = x.steady_state().unwrap();
+        let t_steady = clock.elapsed().as_secs_f64();
+        let p = x.polarization(&steady, 1, 0).unwrap();
+        let clock = std::time::Instant::now();
+        let later = x
+            .evolve(&x.thermal_state().unwrap(), &[Event::Delay(1.0)])
+            .unwrap();
+        let t_delay = clock.elapsed().as_secs_f64();
+        let q = x.polarization(&later, 1, 0).unwrap();
+        let prof = profile(&x, 3e-7, 1.0, 5);
+        let clock = std::time::Instant::now();
+        let field = x.exchange_field(&prof).unwrap();
+        let t_build = clock.elapsed().as_secs_f64();
+        let clock = std::time::Instant::now();
+        let (value, _) = x
+            .field_transfer(&field, &prof, &[1.0e-7, 1.2e-7, 1.4e-7, 1.6e-7, 1.4e-7])
+            .unwrap();
+        let t_eval = clock.elapsed().as_secs_f64();
+        eprintln!(
+            "complex of {} spins, substrate of {}: zero-order block {zero}, all blocks {total}; \
+             steady state {t_steady:.1} s (P_N = {p:.4}); 1 s from thermal {t_delay:.1} s \
+             (P_N = {q:.3e}); profile of 5 steps over 1 s: interpolant {t_build:.1} s ({} \
+             fields, error {:.1e}), evaluation with gradient {t_eval:.1} s (⟨2N_z⟩ = {value:.3e})",
+            3 + ring,
+            1 + ring,
+            field.nodes(),
+            field.error
+        );
+    }
+}

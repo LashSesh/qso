@@ -817,6 +817,8 @@ def test_grape_reaches_the_unitary_bound_and_profiles_bindings():
     assert grad.shape == (4,)
     r = x.optimize_profile(p, fields, max_iterations=5)
     assert r["controls"].shape == (4,) and r["transfer"] >= value - 1e-18
+    error, nodes = x.profile_relaxation_error(p)
+    assert 0.0 < error < 1e-10 and nodes >= 5
 
 
 def _superop(h):

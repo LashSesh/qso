@@ -1649,6 +1649,18 @@ impl PyExchange {
         Ok((value, real_array(py, grad)))
     }
 
+    /// The stated error of the relaxation and exchange interpolated over
+    /// the profile's field range (relative to their largest entry) and the
+    /// number of fields it was built from.
+    fn profile_relaxation_error(
+        &self,
+        py: Python<'_>,
+        profile: PyRef<'_, PyProfile>,
+    ) -> PyResult<(f64, usize)> {
+        let (x, p) = (&self.inner, &profile.inner);
+        py.detach(|| x.profile_relaxation_error(p)).raise()
+    }
+
     /// Optimise a field profile with L-BFGS from `start` (fields within
     /// the range): a dict as `SpinSystem.optimize_control` returns.
     #[pyo3(signature = (profile, start, max_iterations = 500))]
