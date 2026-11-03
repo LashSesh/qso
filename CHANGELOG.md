@@ -20,8 +20,8 @@ All notable changes to this project are documented here. The format follows
   square over random states); and the steps for a target error from both
   (`trotter_steps` in Rust and Python, `qso trotter --epsilon`).
   Heisenberg chains of Childs et al. at fourth order, t = n, ε = 10⁻³:
-  295 steps at n = 10 against 645 published (126 empirical) and 5330 at
-  n = 64 against 11 198, in about 5 to 16 s per chain; at eight spins the
+  295 steps at n = 10 against 645 published (126 empirical) and 5853 at
+  n = 64 against 11 198, in 1 to 4 s per chain; at eight spins the
   bound is 30 times the exact error where that of 1.32 was 10⁶ to 10⁷
   times.
 

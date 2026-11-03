@@ -1952,7 +1952,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                     ", largest column error {a:.3e} (a lower bound on ‖U − exp(−iHt)‖)"
                 )),
                 needed.map_or(String::new(), |r| format!(
-                    "; error {} needs {} steps ({} averaged over states)",
+                    "; error {:e} needs {} steps ({} averaged over states)",
                     epsilon.unwrap_or_default(),
                     r.worst,
                     r.average

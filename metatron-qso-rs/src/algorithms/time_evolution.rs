@@ -41,9 +41,9 @@
 //!   generator is also factored in the middle of the formula,
 //!   `S' − AS = L T R` with L and R the halves (as Childs et al. do at
 //!   fourth order), which halves the depth of the conjugations; the
-//!   smaller of the two is taken. D starts at the degree of the nested
-//!   bound and rises while that helps, within a work budget. At most the
-//!   nested bound, and far below it for larger Hamiltonians.
+//!   smaller of the two is taken. D rises from p to the degree of the
+//!   nested bound and beyond while that helps, within a work budget. At
+//!   most the nested bound, and far below it for larger Hamiltonians.
 //! * **Stage by stage** ([`TrotterBounds::stages`]). Order 1:
 //!   `τ²/2 · Σ_γ ‖[Σ_{γ'>γ} H_γ', H_γ]‖` (Proposition 15 there); order 2:
 //!   `τ³/12 · Σ_γ ‖[B_γ, [B_γ, H_γ]]‖ + τ³/24 · Σ_γ ‖[H_γ, [H_γ, B_γ]]‖`
@@ -72,9 +72,10 @@
 //! normalised Frobenius norm `‖U − exp(−iHt)‖_F/√d` (the root mean square
 //! of `‖(U − exp(−iHt))ψ‖` over Haar-random ψ): the commutator bound
 //! with the root sum of squares of the Pauli coefficients of `C_m` for
-//! their sum (the Frobenius norm is unitarily invariant too). For a chain
-//! of n spins the coefficients' sum grows as n and their root sum of
-//! squares as √n. [`trotter_steps`] finds the steps for a target error
+//! their sum (the Frobenius norm is unitarily invariant too); the
+//! remainder counts as in the worst case. For a chain of n spins the
+//! exact coefficients' sum grows as n and their root sum of squares as √n,
+//! so the average bound gains where they dominate (many steps). [`trotter_steps`] finds the steps for a target error
 //! from both.
 //!
 //! [`qdrift_circuit`] samples `N` terms with probabilities `|h_γ|/λ`,
@@ -97,13 +98,13 @@
 //! let bound = trotter_error_bound(&h, 1.0, 20, 2).unwrap();
 //! assert!((bound - 0.0214).abs() < 1e-4);
 //! assert_eq!(c.n_qubits(), 4);
-//! // Fourth order: 1.8·10⁻⁵ from the commutator sums, 2.0·10⁻⁵ from the
-//! // nested commutators, 0.013 stage by stage.
+//! // Fourth order: 1.8·10⁻⁵ from the commutator bound, 2.0·10⁻⁵ from the
+//! // nested one, 0.013 stage by stage.
 //! let b = trotter_error_bounds(&h, 1.0, 20, 4).unwrap();
 //! assert!((b.commutators - 1.77e-5).abs() < 1e-7 && (b.nested - 2.02e-5).abs() < 1e-7);
 //! assert!((b.stages - 0.0131).abs() < 1e-4);
-//! // Eight spins, t = 2, 32 steps: 6.5·10⁻⁴ from the commutator sums
-//! // (72 from the nested commutators), 5.3·10⁻⁵ averaged over states.
+//! // Eight spins, t = 2, 32 steps: 6.5·10⁻⁴ from the commutator bound
+//! // (72 from the nested one), 5.3·10⁻⁵ averaged over states.
 //! let h8 = heisenberg_xxz(8, 1.0, 0.5, false);
 //! let b = trotter_error_bounds(&h8, 2.0, 32, 4).unwrap();
 //! assert!((b.commutators - 6.50e-4).abs() < 1e-5 && b.nested > 70.0);
@@ -259,7 +260,7 @@ pub fn trotter_circuit(
 
 /// `‖[Σ_{γ'>γ} H_γ', H_γ]‖` summed over γ, and the two sums of the
 /// second-order bound, for unit time.
-fn commutator_sums(terms: &[(f64, PauliString)], second: bool) -> (f64, f64, f64) {
+fn stage_sums(terms: &[(f64, PauliString)], second: bool) -> (f64, f64, f64) {
     let ops: Vec<QubitOperator> = terms
         .iter()
         .map(|&(c, s)| QubitOperator::from_terms([(C64::new(c, 0.0), s)]))
@@ -434,23 +435,29 @@ pub struct TrotterBounds {
     /// Pauli algebra (those of commuting strings vanish): the
     /// commutator-scaling bound of Childs et al. (the remainder of their
     /// commutator expansion of a conjugation of exponentials, Sec. III)
-    /// with exact leading terms. At most `nested`. Infinite when the series exceeds
-    /// [`MAX_COMMUTATOR_TERMS`] strings per coefficient or the work
-    /// budget. Not capped at 2.
+    /// with exact leading terms. At most `nested`; infinite only when
+    /// `nested` is too and the series exceeds [`MAX_COMMUTATOR_TERMS`]
+    /// strings per coefficient or the work budget. Not capped at 2.
     #[serde(default = "infinite")]
     pub commutators: f64,
     /// Bound on the error averaged over states, `‖U − exp(−iHt)‖_F/√d`
     /// (`d = 2ⁿ`; the root mean square of `‖(U − exp(−iHt))ψ‖` over
     /// Haar-random ψ): the bound of `commutators` with the root sum of
-    /// squares of the Pauli coefficients for their sum, or `bound` if
-    /// smaller. Typically smaller than `bound` by about the square root
-    /// of the number of terms.
-    #[serde(default = "infinite")]
+    /// squares of the Pauli coefficients of the exact coefficients for
+    /// their sum (the remainder counts as in `commutators`), or `bound` if
+    /// smaller. Smaller than `bound` where the exact coefficients
+    /// dominate: 1.5 to 12 times in the tests. At most 2 (the trivial
+    /// bound when read from JSON without it).
+    #[serde(default = "two")]
     pub average: f64,
 }
 
 fn infinite() -> f64 {
     f64::INFINITY
+}
+
+fn two() -> f64 {
+    2.0
 }
 
 /// Upper bound on `‖U_circuit − exp(−iHt)‖` (spectral norm, ignoring the
@@ -489,7 +496,7 @@ pub fn trotter_error_bounds(
         });
     }
     let tau = t.abs() / steps as f64;
-    let (first, bba, aab) = commutator_sums(&terms, order > 1);
+    let (first, bba, aab) = stage_sums(&terms, order > 1);
     let lambda: f64 = terms.iter().map(|(c, _)| c.abs()).sum();
     let (stage_step, taylor_step) = if order == 1 {
         (tau * tau / 2.0 * first, taylor_tail(lambda * tau, 1))
@@ -522,8 +529,13 @@ pub fn trotter_error_bounds(
     })
 }
 
-/// Most steps [`trotter_steps`] considers.
-pub const MAX_STEPS: usize = 1 << 40;
+/// Most steps [`trotter_steps`] considers (2⁴⁰; 2³⁰ on 32-bit targets).
+pub const MAX_STEPS: usize = 1
+    << if usize::BITS > 42 {
+        40
+    } else {
+        usize::BITS - 2
+    };
 
 /// Step counts of [`trotter_steps`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -549,7 +561,7 @@ pub fn trotter_steps(h: &PauliSum, t: f64, epsilon: f64, order: usize) -> Result
     if !(epsilon > 0.0 && epsilon.is_finite()) {
         return Err(QsoError::invalid(
             "epsilon",
-            format!("target error must be positive and finite, got {epsilon}"),
+            format!("target error must be positive and finite, got {epsilon:e}"),
         ));
     }
     let mut seen: HashMap<usize, TrotterBounds> = HashMap::new();
@@ -568,7 +580,7 @@ pub fn trotter_steps(h: &PauliSum, t: f64, epsilon: f64, order: usize) -> Result
                 return Err(QsoError::invalid(
                     "epsilon",
                     format!(
-                        "no number of steps up to {MAX_STEPS} brings the {name} bound to {epsilon}"
+                        "no number of steps up to {MAX_STEPS} brings the {name} bound to {epsilon:e}"
                     ),
                 ));
             }
@@ -760,8 +772,8 @@ fn cached_series(
 /// [`TrotterBounds::commutators`]; larger series are not computed.
 pub const MAX_COMMUTATOR_TERMS: usize = 1 << 19;
 /// Most operations on strings (scans and updates) the commutator series of
-/// one bound may take together, about two seconds (series are cached
-/// across calls).
+/// one bound may take together: 0.4 to 7 s, as an operation costs 8 to
+/// 145 ns with the size of the series (series are cached across calls).
 const MAX_COMMUTATOR_WORK: f64 = 5e7;
 
 /// One coefficient of a power series in τ: per Pauli string, the exact
@@ -841,14 +853,6 @@ struct CommutatorSeries {
 }
 
 impl CommutatorSeries {
-    fn truncated(&self, degree: usize) -> Self {
-        Self {
-            one: self.one[..=degree].to_vec(),
-            two: self.two[..=degree].to_vec(),
-            majorant: self.majorant[..=degree].to_vec(),
-        }
-    }
-
     fn degree(&self) -> usize {
         self.one.len() - 1
     }
@@ -957,6 +961,15 @@ fn commutator_series(
     Some((series, work))
 }
 
+/// Empties the commutator cache (tests of its determinism).
+#[cfg(test)]
+fn clear_commutator_cache() {
+    COMMUTATOR_CACHE
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clear();
+}
+
 /// Commutator series of the last calls (see [`SERIES_CACHE`]).
 /// Cached series per Hamiltonian and factorisation.
 type CommutatorEntries = Vec<((SeriesKey, usize), Vec<CachedCommutators>)>;
@@ -965,13 +978,19 @@ static COMMUTATOR_CACHE: Mutex<CommutatorEntries> = Mutex::new(Vec::new());
 
 #[derive(Clone)]
 enum CachedCommutators {
-    Done(CommutatorSeries),
-    OutOfReach { degree: usize, budget: f64 },
+    /// A series and the work it took.
+    Done(CommutatorSeries, f64),
+    OutOfReach {
+        degree: usize,
+        budget: f64,
+    },
 }
 
 /// The commutator series to `degree` factored at `split`, from the cache
 /// or computed within what is left of [`MAX_COMMUTATOR_WORK`] (`spent`
-/// counts the work of this bound).
+/// counts the work of this bound). A cached series is charged the work it
+/// took, and a series out of reach takes all that was left, so that the
+/// result depends on the arguments only, not on earlier calls.
 fn cached_commutators(
     key: &SeriesKey,
     rotations: &[(PauliString, f64)],
@@ -987,24 +1006,32 @@ fn cached_commutators(
         if let Some((_, entries)) = cache.iter().find(|(k, _)| *k == key) {
             for e in entries {
                 match e {
-                    CachedCommutators::Done(s) if s.degree() >= degree => {
-                        return Some(s.truncated(degree));
+                    CachedCommutators::Done(s, work) if s.degree() == degree => {
+                        if *work > budget {
+                            *spent = MAX_COMMUTATOR_WORK;
+                            return None;
+                        }
+                        *spent += work;
+                        return Some(s.clone());
                     }
                     CachedCommutators::OutOfReach {
                         degree: d,
                         budget: b,
-                    } if *d <= degree && *b >= budget => return None,
+                    } if *d <= degree && *b >= budget => {
+                        *spent = MAX_COMMUTATOR_WORK;
+                        return None;
+                    }
                     _ => {}
                 }
             }
         }
     }
-    let result = commutator_series(rotations, terms, degree, budget, split).map(|(s, work)| {
-        *spent += work;
-        s
-    });
+    let result = commutator_series(rotations, terms, degree, budget, split);
     let entry = match &result {
-        Some(s) => CachedCommutators::Done(s.clone()),
+        Some((s, work)) => {
+            *spent += work;
+            CachedCommutators::Done(s.clone(), *work)
+        }
         None => {
             *spent = MAX_COMMUTATOR_WORK;
             CachedCommutators::OutOfReach { degree, budget }
@@ -1020,7 +1047,7 @@ fn cached_commutators(
             cache.push((key, vec![entry]));
         }
     }
-    result
+    result.map(|(s, _)| s)
 }
 
 /// λ, the terms of `H/λ` and the exponentials of one unit step.
@@ -1040,10 +1067,10 @@ fn unit_step(terms: &[(f64, PauliString)], order: usize) -> UnitStep {
 }
 
 /// The factorisations of the error generator tried (see
-/// [`commutator_series`]): all exponentials on the right, and a split in
-/// the middle.
+/// [`commutator_series`]): a split in the middle, and all exponentials on
+/// the right.
 fn splits(rotations: usize) -> Vec<usize> {
-    let mut out = vec![rotations, rotations / 2];
+    let mut out = vec![rotations / 2, rotations];
     out.dedup();
     out
 }
@@ -1058,11 +1085,11 @@ fn splits(rotations: usize) -> Vec<usize> {
 /// `∫₀^τ ‖T‖ ≤ Σ_{m<D} ‖C_m‖ x^{m+1}/(m+1) + M_D x^{D+1}/(D+1)`, and the
 /// same with the Frobenius norm, whose unitary invariance carries the
 /// integral representation over. The series is computed for both
-/// factorisations of [`splits`], to the degree of the nested bound (at
-/// least p + 1) and higher while the remainder is above 1 % of the rest
-/// and each degree lowers the bound by 5 %; the smallest value over the
-/// degrees D from p up is taken. A series out of reach at the first
-/// degree is tried at p + 1 and p.
+/// factorisations of [`splits`] within one budget, from degree p up to
+/// the degree of the nested bound (at least p + 1) and higher while the
+/// remainder is above 1 % of the rest and each degree lowers the bound by
+/// 5 %, until a series is out of reach; the smallest value over the
+/// degrees D is taken.
 fn commutator_step_bounds(
     terms: &[(f64, PauliString)],
     tau: f64,
@@ -1100,40 +1127,35 @@ fn commutator_step_bounds(
         }
         best
     };
+    // Both factorisations share one budget, the middle one first. Degrees
+    // rise from p: up to the degree of the nested bound (at least p + 1),
+    // then on while the remainder is more than 1 % of the rest and each
+    // degree lowers the bound by 5 % (each costs about twice the last),
+    // until a series is out of reach.
+    let first = degree.clamp(order + 1, MAX_SERIES_DEGREE);
     let (mut worst, mut average) = (f64::INFINITY, f64::INFINITY);
+    let mut spent = 0.0;
     for split in splits(rotations.len()) {
-        // From the degree of the nested bound (at least p + 1) up while the
-        // remainder is more than 1 % of the rest and each degree gains 5 %
-        // (each costs about twice the last), within the limits; out of
-        // reach at the first degree, p + 1 and p are tried.
-        let first = degree.clamp(order + 1, MAX_SERIES_DEGREE);
-        let mut tries = vec![first, order + 1, order];
-        tries.dedup();
-        // Each split, and each first degree tried, has the whole budget; a
-        // series out of reach takes all that was left.
-        let mut spent = 0.0;
-        let Some((mut d, series)) = tries.iter().find_map(|&d| {
-            spent = 0.0;
-            cached_commutators(&key, &rotations, &scaled, d, split, &mut spent).map(|s| (d, s))
-        }) else {
-            continue;
-        };
-        let mut best = evaluate(&series);
-        while d < MAX_SERIES_DEGREE && best.2 > 0.01 * best.1 && d >= first {
-            d += 1;
-            let Some(series) = cached_commutators(&key, &rotations, &scaled, d, split, &mut spent)
-            else {
-                break;
-            };
+        let mut best: Option<(f64, f64, f64, f64)> = None;
+        let mut d = order;
+        while let Some(series) = cached_commutators(&key, &rotations, &scaled, d, split, &mut spent)
+        {
             let next = evaluate(&series);
-            let gain = next.0 < 0.95 * best.0;
-            best = (next.0.min(best.0), next.1, next.2, next.3.min(best.3));
-            if !gain {
+            let gain = best.is_none_or(|b| next.0 < 0.95 * b.0);
+            let rest_small = next.2 <= 0.01 * next.1;
+            best = Some(match best {
+                None => next,
+                Some(b) => (next.0.min(b.0), next.1, next.2, next.3.min(b.3)),
+            });
+            if d >= MAX_SERIES_DEGREE || (d >= first && (!gain || rest_small)) {
                 break;
             }
+            d += 1;
         }
-        worst = worst.min(best.0);
-        average = average.min(best.3);
+        if let Some(b) = best {
+            worst = worst.min(b.0);
+            average = average.min(b.3);
+        }
     }
     (worst, average)
 }

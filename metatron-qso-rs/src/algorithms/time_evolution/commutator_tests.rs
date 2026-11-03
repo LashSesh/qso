@@ -67,11 +67,16 @@ fn random_hamiltonian(n: usize, terms: usize, seed: u64) -> PauliSum {
     h
 }
 
-/// The Heisenberg chain of Childs et al. (their Eq. (39)),
+/// The Heisenberg chain of Childs et al. (their Sec. V),
 /// `Σ_{j<n} (X_j X_{j+1} + Y_j Y_{j+1} + Z_j Z_{j+1} + h_j Z_j)`, `h_j`
 /// uniform in [−1, 1], its terms in the even-odd order (bonds from an even
 /// site first, each with the field on its left site) or in the X-Y-Z
-/// order.
+/// order. The X-Y-Z groups commute within themselves, so the formula is
+/// theirs; in the even-odd order a field anticommutes with the XX and YY
+/// terms of its bond, so the rotations of a group are not the exact
+/// exponential of the group that the paper takes, and the formula has a
+/// little more error (at n = 8 a mean empirical count of 88.8 against
+/// 86.8 for five chains).
 pub(super) fn childs_heisenberg(n: usize, seed: u64, even_odd: bool) -> PauliSum {
     let mut rng = Rng::seed_from_u64(seed);
     let fields: Vec<f64> = (0..n - 1).map(|_| rng.uniform_range(-1.0, 1.0)).collect();
@@ -207,8 +212,9 @@ fn average_error_is_the_error_on_random_states() {
     assert!(b.bound >= worst);
 }
 
-/// Published step counts of Childs et al. (their Fig. 5; mean of five
-/// random instances): n, the empirical r, their bound.
+/// Published step counts of Childs et al. (the figure comparing Trotter
+/// numbers in their Sec. V; mean of five random instances): n, the
+/// empirical r, their bound.
 const CHILDS_EVEN_ODD: [(usize, f64, f64); 2] = [(8, 86.4, f64::NAN), (10, 126.4, 645.4)];
 const CHILDS_XYZ: [(usize, f64, f64); 2] = [(8, 99.2, f64::NAN), (10, 134.4, 968.066)];
 
@@ -312,4 +318,21 @@ fn measure_tightness() {
             );
         }
     }
+}
+
+#[test]
+fn bounds_do_not_depend_on_earlier_calls() {
+    // Series cached by earlier calls are charged their work, so a warm
+    // call returns what a cold one does.
+    let h = childs_heisenberg(16, 4, false);
+    let (t, order) = (16.0, 4);
+    clear_commutator_cache();
+    let cold = trotter_error_bounds(&h, t, 1500, order).unwrap();
+    for steps in [400usize, 3000, 800] {
+        trotter_error_bounds(&h, t, steps, order).unwrap();
+    }
+    let warm = trotter_error_bounds(&h, t, 1500, order).unwrap();
+    assert_eq!(cold, warm);
+    clear_commutator_cache();
+    assert_eq!(trotter_error_bounds(&h, t, 1500, order).unwrap(), cold);
 }

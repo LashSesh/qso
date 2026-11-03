@@ -5812,9 +5812,11 @@ Delivered in `algorithms/time_evolution.rs` (`TrotterBounds::commutators`,
   middle of the formula, `S' − AS = L T R` with L and R unitary halves (as
   Childs et al. do for their fourth-order bounds), which halves the
   depth of the conjugations; the smaller of the two bounds is taken. D
-  starts at p + 1 (or the degree of the nested bound) and rises while
-  each degree lowers the bound by 5 %, within about a second of work;
-  the series are cached per Hamiltonian, so step searches pay once.
+  rises from p to the degree of the nested bound (at least p + 1) and on
+  while each degree lowers the bound by 5 %, within one budget of work
+  for both factorisations (0.4 to 7 s); the series are cached per
+  Hamiltonian with the work they took, so step searches pay once and a
+  call returns the same whatever came before.
 - **Average error.** The same expansion with the Frobenius norm, which
   is unitarily invariant: `‖S(τ) − e^{−iHτ}‖_F/√d` is bounded with the
   root sum of squares of the Pauli coefficients of `C_m` in place of
@@ -5859,16 +5861,21 @@ Not done, and why:
 Measured (four cores, release build), Heisenberg chains with random
 fields `Σ_j (X_jX_{j+1} + Y_jY_{j+1} + Z_jZ_{j+1} + h_j Z_j)`, `h_j`
 uniform in [−1, 1], fourth order, `t = n`, ε = 10⁻³, mean of five
-chains, against the bound of Childs et al. (their Fig. 5):
+chains, against the bound of Childs et al. (the figure comparing Trotter
+numbers in their Sec. V). The X-Y-Z order is their formula; in the
+even-odd order QSO's groups are rotations of single strings, and a field
+does not commute with the XX and YY terms of its bond, so its formula has
+a little more error than theirs, which takes the exact exponential of a
+group (at n = 8 a mean empirical count of 88.8 against 86.8):
 
 | n | even-odd: steps (average) | published | X-Y-Z: steps (average) | published | time per chain |
 |---|---|---|---|---|---|
-| 10 | 295 (151) | 645 | 323 (161) | 968 | 5 s |
-| 16 | 629 (322) | 1348 | 691 (396) | 2020 | 5 s |
-| 23 | 1116 (624) | 2357 | 1214 (639) | 3506 | 6 s |
-| 32 | 1881 (1278) | 3897 | 2042 (1293) | 5834 | 5 s |
-| 45 | 3135 (1998) | 6554 | 3409 (2023) | 9784 | 6 s |
-| 64 | 5330 (3163) | 11 198 | 5796 (3204) | 16 682 | 16 s |
+| 10 | 295 (169) | 645 | 323 (176) | 968 | 1.7 s |
+| 16 | 632 (388) | 1348 | 691 (396) | 2020 | 1.2 s |
+| 23 | 1141 (822) | 2357 | 1231 (831) | 3506 | 1.1 s |
+| 32 | 1881 (1278) | 3897 | 2042 (1293) | 5834 | 1.3 s |
+| 45 | 3135 (1998) | 6554 | 3409 (2023) | 9784 | 1.2 s |
+| 64 | 5853 (4882) | 11 198 | 6188 (4909) | 16 682 | 4.1 s |
 
 The published empirical counts at n = 10 are 126 and 134. On eight
 spins (dense, t = 2, order 4, 32 steps) the commutator bound is 30 to 33
@@ -5887,6 +5894,43 @@ the exact coefficients, which vanish below order p; the average error of
 standard errors; at n = 8 the instance's own empirical step count (dense)
 at most the bound's and within 15 % of the published one; at n = 10
 between the published empirical counts and bounds.
+
+Review (independent, after delivery): the error representation, the
+middle factorisation's three sums and their conjugation directions, the
+phases of the in-place rotation, the descending update, the mixing of
+exact coefficients with the majorant at any degree, the λ scaling and
+the Frobenius argument were rederived and found correct. Numerically the
+remainder `‖T(σ) − Σ_{m<D} C_m σ^m‖ ≤ M_D|σ|^D` held against dense `T`
+for 300 random Hamiltonians (both factorisations, D up to p + 4,
+negative and large σ) to rounding, and 2179 end-to-end cases (3 to 6
+qubits, non-local and repeated strings, identity terms, times from
+10⁻⁴ to 100 and negative, orders 1 to 8) never fell below the exact
+spectral or Frobenius error; `trotter_steps` matched an exhaustive scan
+in 108 cases. Findings, all fixed:
+
+- **32-bit targets no longer compiled**: `MAX_STEPS = 1 << 40` overflows
+  `usize` on wasm32; it is 2³⁰ there now.
+- **Results depended on earlier calls**: series served from the cache
+  were not charged their work, so a warm call reached higher degrees
+  than a cold one (5.9·10⁻³ and then 1.2·10⁻³ for the same chain of 40
+  spins). The cache now stores the work of each degree and charges it,
+  and a test compares cold and warm calls.
+- **An out-of-reach series cost up to six budgets** (25 s before
+  returning infinity for a chain of 64 spins at order 8): degrees now
+  rise from p and stop at the first that is out of reach, both
+  factorisations share one budget (the middle one first), and the
+  budget's time is stated as measured (0.4 to 7 s). Chains of 64 spins
+  now take 4 s instead of 16 s, for 10 % more steps.
+- **The even-odd comparison is not quite the paper's formula**: its
+  groups are exponentiated exactly there, while QSO's rotations of single
+  strings do not commute within a group (the field against XX and YY of
+  its bond); documented, with the X-Y-Z order as the exact comparison.
+- **Docs**: the figure was cited by a wrong number (now by section); the
+  average bound's gain was overstated (it is 1.5 to 12 times the worst
+  case in the tests, as the remainder still counts every string); the
+  `commutators` field is infinite only when `nested` is; old JSON reads
+  `average` as 2, the trivial bound; targets are printed in scientific
+  notation; the stage-by-stage sums are named `stage_sums`.
 
 ### 1.57 — Decoding in windows (M)
 

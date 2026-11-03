@@ -49,8 +49,8 @@ computed exactly in the Pauli algebra.
   of with all of them. The step's error is also factored in the middle of
   the formula (as Childs et al. do at fourth order), which halves the
   depth of the conjugations, and the smaller result is taken. D rises
-  while that lowers the bound by 5 %, within a budget of about a second;
-  the series is cached. At most `nested`, and far below it beyond a few
+  while that lowers the bound by 5 %, within a budget of 0.4 to 7
+  seconds; the series is cached. At most `nested`, and far below it beyond a few
   spins.
 - **`stages`**: order 1, `τ²/2 · Σ_γ ‖[Σ_{γ'>γ} H_γ', H_γ]‖` (Proposition
   15 there); order 2, the nested-commutator bound of their Proposition 16;
@@ -63,9 +63,10 @@ Each bound is multiplied by the number of steps.
 `average` bounds the error on a typical state: the normalised Frobenius
 norm `‖U − exp(−iHt)‖_F/√d`, which is the root mean square of
 `‖(U − exp(−iHt))ψ‖` over random states ψ. It is the commutator bound
-with the root sum of squares of each coefficient's Pauli terms for their
-sum; for a chain of n spins the sum grows as n and the root sum of
-squares as √n. `trotter_steps(h, t, epsilon, order)` returns the steps
+with the root sum of squares of each exact coefficient's Pauli terms for
+their sum (the remainder counts as in the worst case); for a chain of n
+spins the sum grows as n and the root sum of squares as √n, so the
+average bound gains most at many steps, 1.5 to 12 times in the tests. `trotter_steps(h, t, epsilon, order)` returns the steps
 for which the worst-case bound (`worst`) and the average one (`average`)
 reach a target error.
 
@@ -81,7 +82,7 @@ print(r, b["commutators"], b["average"])
 On the Heisenberg chains with random fields of Childs et al. (fourth
 order, `t = n`, ε = 10⁻³), `trotter_steps` asks for 295 steps at n = 10,
 where the paper's bound asks for 645 and the empirical count is 126, and
-for 5330 at n = 64 against 11 198; a chain takes 5 to 16 seconds.
+for 5853 at n = 64 against 11 198; a chain takes 1 to 4 seconds.
 
 ```python
 import numpy as np
