@@ -301,3 +301,36 @@ fn reaction_events_sampled_one_by_one_agree() {
         assert!(error < 0.05 * want[i].abs().max(1e-3), "{i}: {error}");
     }
 }
+
+/// PHIP with three to five spectators (products of seven to nine spins),
+/// for the documentation (`cargo test --release -- --ignored
+/// measure_sparse_reactions --nocapture`).
+#[test]
+#[ignore]
+fn measure_sparse_reactions() {
+    for (spectators, delay) in [(3usize, 1.0), (4, 0.5), (5, 0.2)] {
+        let (r, _, p) = phip(5e-6, Frame::Laboratory, spectators, false);
+        let clock = std::time::Instant::now();
+        let end = r
+            .evolve(&r.thermal_state().unwrap(), &[Event::Delay(delay)])
+            .unwrap();
+        let t = clock.elapsed().as_secs_f64();
+        let sys = &r.sites()[p].system;
+        let rho = &end[p] * C64::new(1.0 / end[p].trace().re, 0.0);
+        let zz = (&rho * sys.iz(0).unwrap() * sys.iz(1).unwrap()).trace().re;
+        let largest = r
+            .base(5e-6)
+            .unwrap()
+            .joint
+            .blocks
+            .iter()
+            .map(|(_, _, n)| *n)
+            .max()
+            .unwrap();
+        eprintln!(
+            "product of {} spins: largest block {largest}, {delay} s of S → P (k = 1) at 5 μT \
+             in {t:.1} s, ⟨I₁zI₂z⟩ of the hydrides {zz:.4}",
+            4 + spectators
+        );
+    }
+}
