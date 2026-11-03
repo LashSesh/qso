@@ -599,6 +599,102 @@ fn round2(t: f64) -> f64 {
     (t / s).ceil() * s
 }
 
+/// A linear operator [`expv`] propagates: `y = A x` and a bound on
+/// `‖A‖∞`.
+pub(crate) trait Operator {
+    fn apply(&self, x: &[C64], y: &mut [C64]);
+    fn norm_inf(&self) -> f64;
+}
+
+impl Operator for SparseBlock {
+    fn apply(&self, x: &[C64], y: &mut [C64]) {
+        SparseBlock::apply(self, x, y);
+    }
+    fn norm_inf(&self) -> f64 {
+        SparseBlock::norm_inf(self)
+    }
+}
+
+/// A sparse block `A` (`n × n`, less `shift` on its diagonal) augmented by
+/// `k` coordinates `u`: `[A − shift; C][x; u]` over `[0; E]`, with the
+/// columns `C` (`n` entries each) and the `k × k` matrix `E` of the
+/// coordinates' own derivatives. The drift columns of populations and the
+/// polynomial inhomogeneous terms of reaction steps take this form.
+pub(crate) struct Augmented<'a> {
+    pub a: &'a SparseBlock,
+    pub shift: C64,
+    pub columns: Vec<Vec<C64>>,
+    pub coordinates: Vec<Vec<C64>>,
+    /// `‖[A − shift, C]‖∞` and `‖E‖∞`, bounds computed once.
+    norm: f64,
+}
+
+impl<'a> Augmented<'a> {
+    pub fn new(
+        a: &'a SparseBlock,
+        shift: C64,
+        columns: Vec<Vec<C64>>,
+        coordinates: Vec<Vec<C64>>,
+    ) -> Self {
+        let n = a.n;
+        let mut rows: Vec<f64> = (0..n)
+            .map(|r| {
+                a.row(r)
+                    .map(|(c, v)| if c == r { (v - shift).norm() } else { v.norm() })
+                    .sum::<f64>()
+                    + if a.get(r, r) == C64::new(0.0, 0.0) {
+                        shift.norm()
+                    } else {
+                        0.0
+                    }
+            })
+            .collect();
+        for col in &columns {
+            for (r, v) in rows.iter_mut().zip(col) {
+                *r += v.norm();
+            }
+        }
+        let own = coordinates
+            .iter()
+            .map(|row| row.iter().map(|z| z.norm()).sum::<f64>())
+            .fold(0.0, f64::max);
+        let norm = rows.into_iter().fold(own, f64::max);
+        Augmented {
+            a,
+            shift,
+            columns,
+            coordinates,
+            norm,
+        }
+    }
+}
+
+impl Operator for Augmented<'_> {
+    fn apply(&self, x: &[C64], y: &mut [C64]) {
+        let n = self.a.n;
+        let (head, tail) = y.split_at_mut(n);
+        self.a.apply(&x[..n], head);
+        if self.shift != C64::new(0.0, 0.0) {
+            for (o, v) in head.iter_mut().zip(&x[..n]) {
+                *o -= self.shift * v;
+            }
+        }
+        for (col, &u) in self.columns.iter().zip(&x[n..]) {
+            if u != C64::new(0.0, 0.0) {
+                for (o, c) in head.iter_mut().zip(col) {
+                    *o += c * u;
+                }
+            }
+        }
+        for (o, row) in tail.iter_mut().zip(&self.coordinates) {
+            *o = row.iter().zip(&x[n..]).map(|(e, u)| e * u).sum();
+        }
+    }
+    fn norm_inf(&self) -> f64 {
+        self.norm
+    }
+}
+
 /// Estimated operations of [`expv`] for a block of `n` elements with
 /// `nnz` entries and `‖A‖∞ = norm` over `t`: a Krylov step covers about
 /// `m/4` of `‖A‖ t`, and costs `m + 1` products, the orthogonalisation and
@@ -620,8 +716,8 @@ pub(super) fn krylov_bytes(n: usize) -> f64 {
 /// `tol` in the 2-norm. With `stationary` > 0, a vector that moves by less
 /// than that fraction of itself over the rest of the interval is taken as
 /// it is (see [`KRYLOV_STATIONARY`]).
-pub(crate) fn expv(
-    a: &SparseBlock,
+pub(crate) fn expv<A: Operator + ?Sized>(
+    a: &A,
     v: &[C64],
     t: f64,
     tol: f64,

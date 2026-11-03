@@ -36,11 +36,16 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::super::blocks::{LiouvilleBlock, Sparse};
+use super::super::blocks::LiouvilleBlock;
+use super::super::krylov::{
+    Augmented, KRYLOV_TOLERANCE, SparseBlock, SparseFamily, expv, krylov_bytes, krylov_work,
+};
 use super::super::{Event, SpinSystem, Target, ZERO, check_field, check_time};
+use super::Propagation;
 use super::{Channel, Exchange, Fresh, Site};
 use crate::error::{QsoError, Result};
 use crate::linalg::CMatrix;
+use crate::linalg::dense::expm_squarings;
 use num_complex::Complex64 as C64;
 
 /// The largest relative change of a reactant's amount in one step:
@@ -133,7 +138,15 @@ pub struct Reactions {
 /// relaxation, and the transfers of the reactions.
 struct Base {
     joint: super::Joint,
-    matrices: Vec<CMatrix>,
+    /// Per joint block, the generator's parts on their shared pattern:
+    /// each site's evolution and relaxation, then the members of
+    /// [`Base::members`].
+    family: Vec<SparseFamily>,
+    /// What each member after the first is.
+    members: Vec<Member>,
+    /// Per joint block, the one-norm of the first member less its mean
+    /// precession: a bound on the block's frequencies.
+    norms: Vec<f64>,
     augmented: Vec<bool>,
     /// The relaxation's drift of each site per unit amount: `(block,
     /// position, value)`.
@@ -146,6 +159,147 @@ struct Base {
     /// entries per unit rate.
     transfers: Vec<Vec<(usize, usize, usize, C64)>>,
     drift_transfers: Vec<Vec<(usize, usize, C64)>>,
+}
+
+/// A part of the generator that scales with the amounts.
+#[derive(Clone, Copy)]
+enum Member {
+    /// `−1` on the elements of the site reacting as reactant `pos` of
+    /// reaction `r` (times its pseudo-rate).
+    Loss { r: usize, pos: usize },
+    /// The transfer of reaction `r` from its source (times its
+    /// pseudo-rate).
+    Transfer { r: usize },
+}
+
+/// The columns of augmented coordinates and their own derivatives.
+type Coordinates = (Vec<Vec<C64>>, Vec<Vec<C64>>);
+
+/// One step's block: the generator with the amounts at the midpoint and,
+/// for zero-order blocks, the inhomogeneous term's quadratic.
+struct StepBlock {
+    n: usize,
+    a: SparseBlock,
+    /// `(f₀, f_m, f₁)` at the step's start, midpoint and end.
+    drift: Option<[Vec<C64>; 3]>,
+    h: f64,
+}
+
+impl StepBlock {
+    /// The dense generator times `h` as 1.50 builds it: shifted by its
+    /// mean precession, or for populations augmented by
+    /// `u₁ = s/h`, `u₂ = (s/h)²/2` and the constant.
+    fn dense(&self) -> LiouvilleBlock {
+        let n = self.n;
+        let mat = self.a.to_dense();
+        let Some([f0, fm, f1]) = &self.drift else {
+            return LiouvilleBlock::sized(n, mat, false, self.h);
+        };
+        let mut m = CMatrix::zeros(n + 3, n + 3);
+        m.view_mut((0, 0), (n, n)).copy_from(&mat);
+        // f(s) = a + b s + e s² through the three values, with the
+        // dimensionless u₁ = s/h and u₂ = (s/h)²/2 (u₁' = 1/h, u₂' = u₁/h):
+        // f = a + (b h) u₁ + (2 e h²) u₂, all entries of the order of f,
+        // however fast f changes.
+        for i in 0..n {
+            let (f_0, f_m, f_1) = (f0[i], fm[i], f1[i]);
+            m[(i, n + 2)] = f_0;
+            m[(i, n)] = f_m * 4.0 - f_0 * 3.0 - f_1;
+            m[(i, n + 1)] = (f_0 * 2.0 - f_m * 4.0 + f_1 * 2.0) * 2.0;
+        }
+        m[(n, n + 2)] = C64::new(1.0 / self.h, 0.0);
+        m[(n + 1, n)] = C64::new(1.0 / self.h, 0.0);
+        LiouvilleBlock::sized(n + 2, m, true, self.h)
+    }
+
+    /// Mean precession of the diagonal (zero for populations).
+    fn shift(&self) -> C64 {
+        if self.drift.is_some() || self.n == 0 {
+            return ZERO;
+        }
+        let mean = (0..self.n).map(|i| self.a.get(i, i)).sum::<C64>() / self.n as f64;
+        C64::new(0.0, mean.im)
+    }
+
+    /// The columns of the augmented coordinates `[u₁, u₂, 1]` divided by
+    /// `scale`, and their own derivatives.
+    fn augmented(&self, scale: f64) -> Option<Coordinates> {
+        let [f0, fm, f1] = self.drift.as_ref()?;
+        let w = 1.0 / scale;
+        let u1 = (0..self.n)
+            .map(|i| (fm[i] * 4.0 - f0[i] * 3.0 - f1[i]) * w)
+            .collect();
+        let u2 = (0..self.n)
+            .map(|i| (f0[i] * 2.0 - fm[i] * 4.0 + f1[i] * 2.0) * 2.0 * w)
+            .collect();
+        let one = f0.iter().map(|v| v * w).collect();
+        let r = C64::new(1.0 / self.h, 0.0);
+        let coordinates = vec![vec![ZERO, ZERO, r], vec![r, ZERO, ZERO], vec![ZERO; 3]];
+        Some((vec![u1, u2, one], coordinates))
+    }
+
+    /// Whether to exponentiate densely (by `method`, or whichever is
+    /// cheaper), and the operations.
+    fn plan(&self, method: Propagation) -> (bool, f64) {
+        let extra = if self.drift.is_some() { 3 } else { 0 };
+        let m = self.n + extra;
+        let drift_norm = self.drift.as_ref().map_or(0.0, |[f0, fm, f1]| {
+            (0..self.n)
+                .map(|i| 8.0 * (f0[i].norm() + fm[i].norm() + f1[i].norm()))
+                .fold(0.0, f64::max)
+        });
+        let norm = self.a.norm_inf().max(self.a.norm_one()) + drift_norm + 1.0 / self.h;
+        let krylov = krylov_work(m, self.a.nnz() + extra * self.n, norm, self.h);
+        let dense = (self.n <= super::super::MAX_LIOUVILLE_BLOCK).then(|| {
+            let mf = m as f64;
+            (6.0 + f64::from(expm_squarings(norm * self.h))) * 6.0 * mf * mf * mf
+        });
+        match (method, dense) {
+            (Propagation::Krylov, _) | (_, None) => (false, krylov),
+            (Propagation::Dense, Some(d)) => (true, d),
+            (Propagation::Auto, Some(d)) => {
+                if d <= krylov {
+                    (true, d)
+                } else {
+                    (false, krylov)
+                }
+            }
+        }
+    }
+
+    /// The block's elements after the step from `x`.
+    fn propagate(&self, x: &[C64], dense: bool) -> Result<Vec<C64>> {
+        if dense {
+            return Ok(
+                self.dense().apply(|i| x.get(i).copied().unwrap_or(ZERO))[..self.n].to_vec(),
+            );
+        }
+        let norm2 = |v: &[C64]| v.iter().map(|z| z.norm_sqr()).sum::<f64>().sqrt();
+        let shift = self.shift();
+        let scale = match &self.drift {
+            None => norm2(x),
+            Some([f0, fm, f1]) => norm2(x).max(self.h * norm2(f0).max(norm2(fm)).max(norm2(f1))),
+        };
+        if scale == 0.0 {
+            return Ok(x.to_vec());
+        }
+        let (columns, coordinates) = self.augmented(scale).unwrap_or_default();
+        let op = Augmented::new(&self.a, shift, columns, coordinates);
+        let mut v = x.to_vec();
+        if self.drift.is_some() {
+            v.extend([ZERO, ZERO, C64::new(scale, 0.0)]);
+        }
+        let tol = KRYLOV_TOLERANCE * norm2(&v);
+        let mut y = expv(&op, &v, self.h, tol, 0.0)?;
+        y.truncate(self.n);
+        let phase = (shift * self.h).exp();
+        if phase != C64::new(1.0, 0.0) {
+            for z in &mut y {
+                *z *= phase;
+            }
+        }
+        Ok(y)
+    }
 }
 
 impl Reactions {
@@ -505,13 +659,35 @@ impl Reactions {
     fn base(&self, b: f64) -> Result<Base> {
         let shadow = self.shadow();
         let joint = shadow.joint(None);
-        let largest = joint.blocks.iter().map(|(_, _, n)| *n).max().unwrap_or(0);
-        if largest > super::super::MAX_LIOUVILLE_BLOCK {
+        let parts = shadow.site_parts(b)?;
+        // Count the entries first: the triplets, the family on their
+        // pattern (one value array per member) and the Krylov workspaces.
+        let mut entries = 0usize;
+        for (s, (site, (sparse, relaxation))) in self.sites.iter().zip(&parts).enumerate() {
+            site.system.generator_entries(
+                &joint.liouvilles[s],
+                sparse,
+                relaxation,
+                |_, _, _, _| entries += 1,
+            );
+        }
+        let members = self
+            .reactions
+            .iter()
+            .map(|r| r.reactants.len() + 1)
+            .sum::<usize>() as f64;
+        let elements_total: usize = joint.blocks.iter().map(|(_, _, n)| n + 3).sum();
+        let bytes = entries as f64 * (12.0 + 20.0 + 16.0 * (1.0 + members))
+            + krylov_bytes(elements_total)
+            + 16.0 * 6.0 * elements_total as f64;
+        if bytes > super::super::MAX_RELAXATION_MEMORY {
             return Err(QsoError::invalid(
                 "reactions",
                 format!(
-                    "a block of coherence order over all sites has {largest} elements (at most {})",
-                    super::super::MAX_LIOUVILLE_BLOCK
+                    "the joint blocks need about {:.1} GB (limit {:.1} GB); use fewer spins or \
+                     the rotating frame",
+                    bytes / 1e9,
+                    super::super::MAX_RELAXATION_MEMORY / 1e9
                 ),
             ));
         }
@@ -520,12 +696,7 @@ impl Reactions {
             .iter()
             .map(|(order, _, _)| order.iter().all(|&q| q == 0))
             .collect();
-        let mut matrices: Vec<CMatrix> = joint
-            .blocks
-            .iter()
-            .zip(&augmented)
-            .map(|((_, _, n), &a)| CMatrix::zeros(n + usize::from(a), n + usize::from(a)))
-            .collect();
+        let mut triplets: Vec<Vec<(u32, u32, C64)>> = vec![Vec::new(); joint.blocks.len()];
         let at = |s: usize, a: usize, a2: usize| -> Option<(usize, usize)> {
             let l = &joint.liouvilles[s];
             let k = l.block_of(a, a2)?;
@@ -534,14 +705,11 @@ impl Reactions {
         };
         let mut drift = Vec::with_capacity(self.sites.len());
         let mut elements = Vec::with_capacity(self.sites.len());
-        for (s, site) in self.sites.iter().enumerate() {
+        for (s, (site, (sparse, relaxation))) in self.sites.iter().zip(&parts).enumerate() {
             let sys = &site.system;
-            let h = sys.hamiltonian_at(b);
-            let relaxation = sys.relaxation(b)?;
-            let sparse = Sparse::new(&h);
-            sys.generator_entries(&joint.liouvilles[s], &sparse, &relaxation, |k, r, c, v| {
+            sys.generator_entries(&joint.liouvilles[s], sparse, relaxation, |k, r, c, v| {
                 let (j, offset) = joint.place[s][k];
-                matrices[j][(offset + r, offset + c)] += v;
+                triplets[j].push(((offset + r) as u32, (offset + c) as u32, v));
             });
             let d = sys.dimension();
             let mut here = Vec::new();
@@ -611,9 +779,49 @@ impl Reactions {
             transfers.push(entries);
             drift_transfers.push(drifts);
         }
+        // The members: losses of every site reactant, transfers of every
+        // reaction with a source, each block on the union of the patterns.
+        let mut members = Vec::new();
+        let mut parts: Vec<Vec<Vec<(u32, u32, C64)>>> = Vec::new();
+        for (r, reaction) in self.reactions.iter().enumerate() {
+            for (pos, p) in reaction.reactants.iter().enumerate() {
+                let Participant::Site(s) = *p else { continue };
+                let mut per = vec![Vec::new(); joint.blocks.len()];
+                for &(j, i, _) in &elements[s] {
+                    per[j].push((i as u32, i as u32, C64::new(-1.0, 0.0)));
+                }
+                members.push(Member::Loss { r, pos });
+                parts.push(per);
+            }
+            if reaction.target().is_some() && reaction.source().is_some() {
+                let mut per = vec![Vec::new(); joint.blocks.len()];
+                for &(j, row, col, w) in &transfers[r] {
+                    per[j].push((row as u32, col as u32, w));
+                }
+                members.push(Member::Transfer { r });
+                parts.push(per);
+            }
+        }
+        let mut norms = Vec::with_capacity(joint.blocks.len());
+        let family = triplets
+            .into_iter()
+            .enumerate()
+            .map(|(j, t)| {
+                let n = joint.blocks[j].2;
+                let first = SparseBlock::from_triplets(n, t);
+                norms.push(precession_norm(&first));
+                let mut blocks = vec![first];
+                for per in &mut parts {
+                    blocks.push(SparseBlock::from_triplets(n, std::mem::take(&mut per[j])));
+                }
+                SparseFamily::new(&blocks)
+            })
+            .collect();
         Ok(Base {
             joint,
-            matrices,
+            family,
+            members,
+            norms,
             augmented,
             drift,
             elements,
@@ -624,36 +832,19 @@ impl Reactions {
 
     /// The part of the generator that acts on the deviation, with the
     /// amounts `c` (each block `n × n`).
-    fn matrix(&self, base: &Base, c: &[f64]) -> Vec<CMatrix> {
-        let mut m: Vec<CMatrix> = base
-            .matrices
-            .iter()
-            .zip(&base.joint.blocks)
-            .map(|(full, (_, _, n))| full.view((0, 0), (*n, *n)).into_owned())
-            .collect();
-        for (r, reaction) in self.reactions.iter().enumerate() {
-            // Each reactant site reacts at k times the other reactants.
-            for (pos, p) in reaction.reactants.iter().enumerate() {
-                let Participant::Site(s) = *p else { continue };
-                let kappa = self.pseudo_rate(reaction, pos, c);
-                if kappa == 0.0 {
-                    continue;
+    fn matrix(&self, base: &Base, c: &[f64]) -> Vec<SparseBlock> {
+        let mut w = vec![1.0];
+        for m in &base.members {
+            w.push(match *m {
+                Member::Loss { r, pos } => self.pseudo_rate(&self.reactions[r], pos, c),
+                Member::Transfer { r } => {
+                    let reaction = &self.reactions[r];
+                    let (pos, _) = reaction.source().expect("a source");
+                    self.pseudo_rate(reaction, pos, c)
                 }
-                for &(j, i, _) in &base.elements[s] {
-                    m[j][(i, i)] -= kappa;
-                }
-            }
-            if reaction.target().is_none() {
-                continue;
-            }
-            if let Some((pos, _)) = reaction.source() {
-                let g = self.pseudo_rate(reaction, pos, c);
-                for &(j, row, col, w) in &base.transfers[r] {
-                    m[j][(row, col)] += w * g;
-                }
-            }
+            });
         }
-        m
+        base.family.iter().map(|f| f.combine(&w)).collect()
     }
 
     /// `k_r` times the amounts of the reactants other than the one at
@@ -749,43 +940,39 @@ impl Reactions {
         cm: &[f64],
         c1: &[f64],
         h: f64,
-    ) -> Vec<LiouvilleBlock> {
+    ) -> Vec<StepBlock> {
         let matrices = self.matrix(base, cm);
         let (f0, fm, f1) = (
             self.drift(base, c0),
             self.drift(base, cm),
             self.drift(base, c1),
         );
+        let mut f0 = f0.into_iter();
+        let mut fm = fm.into_iter();
+        let mut f1 = f1.into_iter();
         base.joint
             .blocks
             .iter()
             .zip(matrices)
             .enumerate()
-            .map(|(j, ((_, _, n), mat))| {
-                let n = *n;
-                if !base.augmented[j] {
-                    return LiouvilleBlock::sized(n, mat, false, h);
+            .map(|(j, ((_, _, n), a))| {
+                let (x0, xm, x1) = (
+                    f0.next().expect("a block"),
+                    fm.next().expect("a block"),
+                    f1.next().expect("a block"),
+                );
+                StepBlock {
+                    n: *n,
+                    a,
+                    drift: base.augmented[j].then_some([x0, xm, x1]),
+                    h,
                 }
-                let mut m = CMatrix::zeros(n + 3, n + 3);
-                m.view_mut((0, 0), (n, n)).copy_from(&mat);
-                // f(s) = a + b s + e s² through the three values, with the
-                // dimensionless u₁ = s/h and u₂ = (s/h)²/2 (u₁' = 1/h,
-                // u₂' = u₁/h): f = a + (b h) u₁ + (2 e h²) u₂, all entries of
-                // the order of f, however fast f changes.
-                for i in 0..n {
-                    let (f_0, f_m, f_1) = (f0[j][i], fm[j][i], f1[j][i]);
-                    m[(i, n + 2)] = f_0;
-                    m[(i, n)] = f_m * 4.0 - f_0 * 3.0 - f_1;
-                    m[(i, n + 1)] = (f_0 * 2.0 - f_m * 4.0 + f_1 * 2.0) * 2.0;
-                }
-                m[(n, n + 2)] = C64::new(1.0 / h, 0.0);
-                m[(n + 1, n)] = C64::new(1.0 / h, 0.0);
-                LiouvilleBlock::sized(n + 2, m, true, h)
             })
             .collect()
     }
 
     /// One step of `h` from `t` (amounts `c` at `t`).
+    #[allow(clippy::too_many_arguments)]
     fn midpoint(
         &self,
         base: &Base,
@@ -793,6 +980,7 @@ impl Reactions {
         c: &[f64],
         t: f64,
         h: f64,
+        method: Propagation,
     ) -> Result<Vec<CMatrix>> {
         let mut mid = c.to_vec();
         self.advance(&mut mid, t, t + h / 2.0)?;
@@ -810,10 +998,9 @@ impl Reactions {
                     elements.push((s, a, b));
                 }
             }
-            let moved = block.apply(|i| match elements.get(i) {
-                Some(&(s, a, b)) => x[s][(a, b)],
-                None => ZERO,
-            });
+            let v: Vec<C64> = elements.iter().map(|&(s, a, b)| x[s][(a, b)]).collect();
+            let (dense, _) = block.plan(method);
+            let moved = block.propagate(&v, dense)?;
             for (&(s, a, b), v) in elements.iter().zip(moved) {
                 out[s][(a, b)] = v;
             }
@@ -825,26 +1012,12 @@ impl Reactions {
     /// a bound on the frequencies of the blocks its transfers feed (the
     /// one-norm of the block without its mean phase), zero otherwise.
     fn coherence(&self, base: &Base) -> Vec<f64> {
-        let norms: Vec<f64> = base
-            .matrices
-            .iter()
-            .zip(&base.joint.blocks)
-            .map(|(full, (_, _, n))| {
-                let n = *n;
-                let mut m = full.view((0, 0), (n, n)).into_owned();
-                let mean = (0..n).map(|i| m[(i, i)].im).sum::<f64>() / n.max(1) as f64;
-                for i in 0..n {
-                    m[(i, i)] -= C64::new(0.0, mean);
-                }
-                crate::linalg::dense::one_norm(&m)
-            })
-            .collect();
         base.transfers
             .iter()
             .map(|entries| {
                 entries
                     .iter()
-                    .map(|&(j, _, _, _)| norms[j])
+                    .map(|&(j, _, _, _)| base.norms[j])
                     .fold(0.0, f64::max)
             })
             .collect()
@@ -903,7 +1076,7 @@ impl Reactions {
     /// steps of the longest delay, from a run of the step rule over the
     /// amounts alone; refused beyond [`super::super::MAX_RELAXATION_WORK`]
     /// or [`MAX_KINETIC_STEPS`] steps in a delay.
-    fn check_events(&self, events: &[Event]) -> Result<()> {
+    fn check_events(&self, events: &[Event], method: Propagation) -> Result<()> {
         let mut b = self.field();
         let mut c = self.initial();
         let mut now = 0.0;
@@ -935,7 +1108,7 @@ impl Reactions {
                 .iter()
                 .map(|base| {
                     let probe = self.step_blocks(base, c, c, c, h);
-                    3.0 * probe.iter().map(LiouvilleBlock::work).sum::<f64>()
+                    3.0 * probe.iter().map(|b| b.plan(method).1).sum::<f64>()
                 })
                 .fold(0.0, f64::max)
         };
@@ -1019,6 +1192,7 @@ impl Reactions {
 
     /// Reactions, evolution and relaxation for `t` at field `b` from time
     /// `t0`, amounts `c` (advanced).
+    #[allow(clippy::too_many_arguments)]
     fn delay(
         &self,
         x: &[CMatrix],
@@ -1026,6 +1200,7 @@ impl Reactions {
         t0: f64,
         t: f64,
         b: f64,
+        method: Propagation,
     ) -> Result<Vec<CMatrix>> {
         if t == 0.0 {
             return Ok(x.to_vec());
@@ -1045,11 +1220,11 @@ impl Reactions {
                     format!("more than {MAX_KINETIC_STEPS} steps in a delay of {t} s"),
                 ));
             }
-            let full = self.midpoint(&base, &x, c, now, h)?;
-            let half = self.midpoint(&base, &x, c, now, h / 2.0)?;
+            let full = self.midpoint(&base, &x, c, now, h, method)?;
+            let half = self.midpoint(&base, &x, c, now, h / 2.0, method)?;
             let mut c_half = c.clone();
             self.advance(&mut c_half, now, now + h / 2.0)?;
-            let half = self.midpoint(&base, &half, &c_half, now + h / 2.0, h / 2.0)?;
+            let half = self.midpoint(&base, &half, &c_half, now + h / 2.0, h / 2.0, method)?;
             x = half
                 .iter()
                 .zip(&full)
@@ -1102,9 +1277,19 @@ impl Reactions {
     /// with the trace of its site's initial amount, and so are the states
     /// returned (traces the amounts at the end).
     pub fn evolve(&self, states: &[CMatrix], events: &[Event]) -> Result<Vec<CMatrix>> {
+        self.evolve_with(states, events, Propagation::Auto)
+    }
+
+    /// [`Self::evolve`] with the blocks propagated by `method`.
+    pub(in crate::spin) fn evolve_with(
+        &self,
+        states: &[CMatrix],
+        events: &[Event],
+        method: Propagation,
+    ) -> Result<Vec<CMatrix>> {
         self.validate()?;
         self.check_states(states)?;
-        self.check_events(events)?;
+        self.check_events(events, method)?;
         let mut b = self.field();
         let mut c = self.initial();
         let mut now = 0.0;
@@ -1157,7 +1342,7 @@ impl Reactions {
                 }
                 Event::Delay(t) => {
                     check_time("delay", *t)?;
-                    x = self.delay(&x, &mut c, now, *t, b)?;
+                    x = self.delay(&x, &mut c, now, *t, b, method)?;
                     now += t;
                 }
                 Event::Field(to) => {
@@ -1181,7 +1366,7 @@ impl Reactions {
                     let dt = duration / *steps as f64;
                     for k in 0..*steps {
                         let field = from + (to - from) * (k as f64 + 0.5) / *steps as f64;
-                        x = self.delay(&x, &mut c, now, dt, field)?;
+                        x = self.delay(&x, &mut c, now, dt, field, method)?;
                         now += dt;
                     }
                     b = *to;
@@ -1196,6 +1381,33 @@ impl Reactions {
         }
         Ok(sigmas(x, &c[..self.sites.len()]))
     }
+}
+
+/// The one-norm of `a` less its mean precession `i·mean(Im a_ii)`.
+fn precession_norm(a: &SparseBlock) -> f64 {
+    let n = a.n;
+    if n == 0 {
+        return 0.0;
+    }
+    let mean = (0..n).map(|i| a.get(i, i).im).sum::<f64>() / n as f64;
+    let mut sums = vec![0.0f64; n];
+    let mut diagonal = vec![false; n];
+    for (r, has) in diagonal.iter_mut().enumerate() {
+        for (c, v) in a.row(r) {
+            if c == r {
+                sums[c] += (v - C64::new(0.0, mean)).norm();
+                *has = true;
+            } else {
+                sums[c] += v.norm();
+            }
+        }
+    }
+    for (s, d) in sums.iter_mut().zip(&diagonal) {
+        if !d {
+            *s += mean.abs();
+        }
+    }
+    sums.into_iter().fold(0.0, f64::max)
 }
 
 fn check_amount(amount: f64) -> Result<()> {
@@ -1240,3 +1452,6 @@ fn sigmas(x: Vec<CMatrix>, c: &[f64]) -> Vec<CMatrix> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod sparse_tests;

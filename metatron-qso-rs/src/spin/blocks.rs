@@ -24,7 +24,7 @@ use super::krylov::{
 use super::redfield::RedfieldBlocks;
 use super::{Frame, Isotope, ONE, SpinSystem, ZERO};
 use crate::error::{QsoError, Result};
-use crate::linalg::dense::{cmul, expm, expm_squarings, one_norm};
+use crate::linalg::dense::{cmul, expm, expm_squarings};
 use crate::linalg::{CMatrix, eigh};
 use crate::parallel::map_tasks;
 
@@ -466,6 +466,17 @@ impl LiouvilleBlock {
         }
     }
 
+    /// A block of `n` elements whose generator times `t` is `m` (shifted
+    /// already by `shift`, also times `t`).
+    pub(super) fn shifted(n: usize, m: CMatrix, shift: C64, augmented: bool) -> Self {
+        LiouvilleBlock {
+            size: n,
+            generator: m,
+            shift,
+            augmented,
+        }
+    }
+
     /// `x(t)` from `x(0)` given by `value(element)`: `P x` (plus the drift
     /// column for populations), times the shift's phase.
     pub(super) fn apply(&self, value: impl Fn(usize) -> C64) -> Vec<C64> {
@@ -482,12 +493,6 @@ impl LiouvilleBlock {
                 v * w
             })
             .collect()
-    }
-
-    /// Floating-point operations of its exponential.
-    pub(super) fn work(&self) -> f64 {
-        let n = self.generator.nrows() as f64;
-        (6.0 + f64::from(expm_squarings(one_norm(&self.generator)))) * 6.0 * n * n * n
     }
 }
 

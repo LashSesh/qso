@@ -33,7 +33,7 @@ use nalgebra::DVector;
 use num_complex::Complex64 as C64;
 use serde::{Deserialize, Serialize};
 
-use super::blocks::{Liouville, LiouvilleBlock, Sparse};
+use super::blocks::{Liouville, LiouvilleBlock, Relaxation, Sparse};
 use super::control::{Control, Entries, Generator, Optimized, expmv, frechet, substeps};
 use super::{Event, Frame, Isotope, ONE, SpinSystem, Target, ZERO, check_field, check_time};
 use crate::error::{QsoError, Result};
@@ -494,6 +494,96 @@ impl Exchange {
         }
     }
 
+    /// Each site's Hamiltonian (by entries) and relaxation at field `b`.
+    fn site_parts(&self, b: f64) -> Result<Vec<(Sparse, Relaxation)>> {
+        self.sites
+            .iter()
+            .map(|site| {
+                let sys = &site.system;
+                Ok((Sparse::new(&sys.hamiltonian_at(b)), sys.relaxation(b)?))
+            })
+            .collect()
+    }
+
+    /// The entries of the joint generator at field `b` on `joint`, from
+    /// the sites' `parts` (see [`Self::site_parts`]): `add(block, row,
+    /// column, value)`, the column `n` of a zero-order block of `n`
+    /// elements being its drift (the inhomogeneous term of the deviation's
+    /// equation). Repeated entries add up.
+    fn terms(
+        &self,
+        joint: &Joint,
+        b: f64,
+        parts: &[(Sparse, Relaxation)],
+        mut add: impl FnMut(usize, usize, usize, C64),
+    ) {
+        let at = |s: usize, a: usize, b: usize| -> Option<(usize, usize)> {
+            let l = &joint.liouvilles[s];
+            let k = l.block_of(a, b)?;
+            let (j, offset) = joint.place[s][k];
+            Some((j, offset + l.position_of(a, b)))
+        };
+        // Each site's own evolution and relaxation, and the drift of its
+        // relaxation for c_s/d_s.
+        let mut drift: Vec<BTreeMap<usize, C64>> = vec![BTreeMap::new(); joint.blocks.len()];
+        for (s, (site, (sparse, relaxation))) in self.sites.iter().zip(parts).enumerate() {
+            let sys = &site.system;
+            sys.generator_entries(&joint.liouvilles[s], sparse, relaxation, |k, r, c, v| {
+                let (j, offset) = joint.place[s][k];
+                add(j, offset + r, offset + c, v);
+            });
+            let d = sys.dimension();
+            for a in 0..d {
+                for a2 in 0..d {
+                    let v = relaxation.drift[(a, a2)];
+                    if v != ZERO
+                        && let Some((j, i)) = at(s, a, a2)
+                    {
+                        *drift[j].entry(i).or_insert(ZERO) += v * site.concentration;
+                    }
+                }
+            }
+        }
+        // Exchange: losses, gains, and the gains from c_A/d_A.
+        for c in &self.channels {
+            if c.rate == 0.0 {
+                continue;
+            }
+            let from = &self.sites[c.from];
+            let da = from.system.dimension();
+            let level = from.concentration / da as f64;
+            for a in 0..da {
+                for a2 in 0..da {
+                    if let Some((j, i)) = at(c.from, a, a2) {
+                        add(j, i, i, C64::new(-c.rate, 0.0));
+                        // The loss of c_A/d_A.
+                        if a == a2 {
+                            *drift[j].entry(i).or_insert(ZERO) -= C64::new(c.rate * level, 0.0);
+                        }
+                    }
+                }
+            }
+            self.transfer(c, b, |a, a2, t1, t2, w| {
+                let (Some((j, col)), Some((j2, row))) = (at(c.from, a, a2), at(c.to, t1, t2))
+                else {
+                    return;
+                };
+                debug_assert_eq!(j, j2, "exchange keeps the coherence order");
+                add(j, row, col, w * c.rate);
+                if a == a2 {
+                    *drift[j].entry(row).or_insert(ZERO) += w * c.rate * level;
+                }
+            });
+        }
+        for (j, (order, _, n)) in joint.blocks.iter().enumerate() {
+            if order.iter().all(|&q| q == 0) {
+                for (&i, &v) in &drift[j] {
+                    add(j, i, *n, v);
+                }
+            }
+        }
+    }
+
     /// The joint blocks of the generator at field `b`, scaled by `t`
     /// (`only`: a single coherence order).
     fn generators(
@@ -524,74 +614,8 @@ impl Exchange {
                 )
             })
             .collect();
-        let at = |s: usize, a: usize, b: usize| -> Option<(usize, usize)> {
-            let l = &joint.liouvilles[s];
-            let k = l.block_of(a, b)?;
-            let (j, offset) = joint.place[s][k];
-            Some((j, offset + l.position_of(a, b)))
-        };
-        // Each site's own evolution and relaxation, and the drift of its
-        // relaxation for c_s/d_s.
-        let mut drift: Vec<BTreeMap<usize, C64>> = vec![BTreeMap::new(); joint.blocks.len()];
-        for (s, site) in self.sites.iter().enumerate() {
-            let sys = &site.system;
-            let h = sys.hamiltonian_at(b);
-            let relaxation = sys.relaxation(b)?;
-            let sparse = Sparse::new(&h);
-            sys.generator_entries(&joint.liouvilles[s], &sparse, &relaxation, |k, r, c, v| {
-                let (j, offset) = joint.place[s][k];
-                matrices[j].0[(offset + r, offset + c)] += v;
-            });
-            let d = sys.dimension();
-            for a in 0..d {
-                for a2 in 0..d {
-                    let v = relaxation.drift[(a, a2)];
-                    if v != ZERO
-                        && let Some((j, i)) = at(s, a, a2)
-                    {
-                        *drift[j].entry(i).or_insert(ZERO) += v * site.concentration;
-                    }
-                }
-            }
-        }
-        // Exchange: losses, gains, and the gains from c_A/d_A.
-        for c in &self.channels {
-            if c.rate == 0.0 {
-                continue;
-            }
-            let from = &self.sites[c.from];
-            let da = from.system.dimension();
-            let level = from.concentration / da as f64;
-            for a in 0..da {
-                for a2 in 0..da {
-                    if let Some((j, i)) = at(c.from, a, a2) {
-                        matrices[j].0[(i, i)] -= c.rate;
-                        // The loss of c_A/d_A.
-                        if a == a2 {
-                            *drift[j].entry(i).or_insert(ZERO) -= C64::new(c.rate * level, 0.0);
-                        }
-                    }
-                }
-            }
-            self.transfer(c, b, |a, a2, t1, t2, w| {
-                let (Some((j, col)), Some((j2, row))) = (at(c.from, a, a2), at(c.to, t1, t2))
-                else {
-                    return;
-                };
-                debug_assert_eq!(j, j2, "exchange keeps the coherence order");
-                matrices[j].0[(row, col)] += w * c.rate;
-                if a == a2 {
-                    *drift[j].entry(row).or_insert(ZERO) += w * c.rate * level;
-                }
-            });
-        }
-        for (j, (order, _, n)) in joint.blocks.iter().enumerate() {
-            if order.iter().all(|&q| q == 0) {
-                for (&i, &v) in &drift[j] {
-                    matrices[j].0[(i, *n)] += v;
-                }
-            }
-        }
+        let parts = self.site_parts(b)?;
+        self.terms(&joint, b, &parts, |j, r, c, v| matrices[j].0[(r, c)] += v);
         let blocks = joint
             .blocks
             .iter()
@@ -632,29 +656,39 @@ impl Exchange {
             .collect()
     }
 
-    /// Free evolution with exchange and relaxation for `t` at field `b`.
-    fn delay(&self, deviations: &[CMatrix], t: f64, b: f64) -> Result<Vec<CMatrix>> {
+    /// Free evolution with exchange and relaxation for `t` at field `b`,
+    /// each joint block densely or by Krylov steps.
+    fn delay(
+        &self,
+        deviations: &[CMatrix],
+        t: f64,
+        b: f64,
+        method: Propagation,
+    ) -> Result<Vec<CMatrix>> {
         if t == 0.0 {
             return Ok(deviations.to_vec());
         }
-        let (joint, blocks) = self.generators(b, t, None)?;
-        let work: f64 = blocks.iter().map(LiouvilleBlock::work).sum();
+        let (joint, blocks) = self.sparse_generators(b, None)?;
+        let plans: Vec<(bool, f64)> = blocks.iter().map(|x| x.plan(t, method)).collect();
+        let work: f64 = plans.iter().map(|p| p.1).sum();
         check_work(&format!("exchange over {t} s"), work)?;
+        check_memory(&blocks, &plans)?;
         let mut out: Vec<CMatrix> = deviations
             .iter()
             .map(|x| CMatrix::zeros(x.nrows(), x.ncols()))
             .collect();
-        for ((_, parts, n), block) in joint.blocks.iter().zip(&blocks) {
+        for (((_, parts, n), block), &(dense, _)) in joint.blocks.iter().zip(&blocks).zip(&plans) {
             let mut elements: Vec<(usize, usize, usize)> = Vec::with_capacity(*n);
             for &(s, k, _) in parts {
                 for &(a, b) in &joint.liouvilles[s].blocks[k].1 {
                     elements.push((s, a, b));
                 }
             }
-            let moved = block.apply(|i| {
-                let (s, a, b) = elements[i];
-                deviations[s][(a, b)]
-            });
+            let x: Vec<C64> = elements
+                .iter()
+                .map(|&(s, a, b)| deviations[s][(a, b)])
+                .collect();
+            let moved = block.propagate(&x, t, dense)?;
             for (&(s, a, b), v) in elements.iter().zip(moved) {
                 out[s][(a, b)] = v;
             }
@@ -667,6 +701,16 @@ impl Exchange {
     /// exchange and relaxation, field jumps and sweeps. The field starts at
     /// the sites' and may change; the sites keep their own.
     pub fn evolve(&self, states: &[CMatrix], events: &[Event]) -> Result<Vec<CMatrix>> {
+        self.evolve_with(states, events, Propagation::Auto)
+    }
+
+    /// [`Self::evolve`] with the blocks propagated by `method`.
+    pub(super) fn evolve_with(
+        &self,
+        states: &[CMatrix],
+        events: &[Event],
+        method: Propagation,
+    ) -> Result<Vec<CMatrix>> {
         self.validate()?;
         self.check_states(states)?;
         let mut b = self.field();
@@ -699,7 +743,7 @@ impl Exchange {
                 }
                 Event::Delay(t) => {
                     check_time("delay", *t)?;
-                    x = self.delay(&x, *t, b)?;
+                    x = self.delay(&x, *t, b, method)?;
                 }
                 Event::Field(to) => {
                     check_field(*to)?;
@@ -724,11 +768,11 @@ impl Exchange {
                     // Every step is as costly as the one at the strongest
                     // field, or less.
                     let strongest = if to.abs() > from.abs() { *steps - 1 } else { 0 };
-                    let (_, blocks) = self.generators(at(strongest), dt, None)?;
-                    let work: f64 = blocks.iter().map(LiouvilleBlock::work).sum();
+                    let (_, blocks) = self.sparse_generators(at(strongest), None)?;
+                    let work: f64 = blocks.iter().map(|x| x.plan(dt, method).1).sum();
                     check_work(&format!("a sweep of {steps} steps"), work * *steps as f64)?;
                     for k in 0..*steps {
-                        x = self.delay(&x, dt, at(k))?;
+                        x = self.delay(&x, dt, at(k), method)?;
                     }
                     b = *to;
                 }
@@ -747,12 +791,37 @@ impl Exchange {
     /// coherences where exchange and relaxation balance, other coherences
     /// zero. An error if it is not unique (nothing exchanges or relaxes).
     pub fn steady_state(&self) -> Result<Vec<CMatrix>> {
+        self.steady_state_with(Propagation::Auto)
+    }
+
+    /// [`Self::steady_state`] solved densely (up to
+    /// [`MAX_LIOUVILLE_BLOCK`](super::MAX_LIOUVILLE_BLOCK) elements per
+    /// block) or by GMRES on the sparse blocks (`method`: `Krylov`, or
+    /// `Auto` beyond that size).
+    pub(super) fn steady_state_with(&self, method: Propagation) -> Result<Vec<CMatrix>> {
         self.validate()?;
         let b = self.field();
         let zero: Vec<i32> = match self.sites[0].system.frame() {
             Frame::Laboratory => vec![0],
             Frame::Rotating => vec![0; self.isotopes().len()],
         };
+        let largest = self
+            .joint(Some(&zero))
+            .blocks
+            .iter()
+            .map(|(_, _, n)| *n)
+            .max()
+            .unwrap_or(0);
+        if method == Propagation::Krylov
+            || (method == Propagation::Auto && largest > super::MAX_LIOUVILLE_BLOCK)
+        {
+            let (joint, blocks) = self.sparse_generators(b, Some(&zero))?;
+            let mut out = self.sparse_steady(&joint, &blocks, b)?;
+            for x in &mut out {
+                *x = (&*x + x.adjoint()) * C64::new(0.5, 0.0);
+            }
+            return Ok(self.states(out));
+        }
         let (joint, blocks) = self.generators(b, 1.0, Some(&zero))?;
         let mut out: Vec<CMatrix> = self
             .sites
@@ -868,6 +937,18 @@ impl Exchange {
         dwell: f64,
         points: usize,
     ) -> Result<Vec<C64>> {
+        self.fid_with(states, isotope, dwell, points, Propagation::Auto)
+    }
+
+    /// [`Self::fid`] with the blocks propagated by `method`.
+    pub(super) fn fid_with(
+        &self,
+        states: &[CMatrix],
+        isotope: Isotope,
+        dwell: f64,
+        points: usize,
+        method: Propagation,
+    ) -> Result<Vec<C64>> {
         self.validate()?;
         self.check_states(states)?;
         if !(dwell.is_finite() && dwell > 0.0) || points == 0 || points > super::MAX_FID_POINTS {
@@ -894,38 +975,53 @@ impl Exchange {
                 format!("no site has a {} spin", isotope.name()),
             ));
         }
-        let (joint, blocks) = self.generators(self.field(), dwell, Some(&order))?;
-        let work: f64 = blocks
+        let (joint, blocks) = self.sparse_generators(self.field(), Some(&order))?;
+        // Per block: one dense exponential and a product per point, or
+        // Krylov steps per point, whichever costs less.
+        let plans: Vec<(bool, f64)> = blocks
             .iter()
-            .map(|block| block.work() + 8.0 * (points * block.generator.len()) as f64)
-            .sum();
+            .map(|block| {
+                let (dense, w) = block.plan(dwell, method);
+                let n = block.n as f64;
+                if dense {
+                    (true, w + 8.0 * points as f64 * n * n)
+                } else {
+                    (false, w * points as f64)
+                }
+            })
+            .collect();
+        let work: f64 = plans.iter().map(|p| p.1).sum();
         check_work(&format!("an exchange FID of {points} points"), work)?;
+        check_memory(&blocks, &plans)?;
         let x = self.deviations(states);
+        let fps: Vec<Option<CMatrix>> = self
+            .sites
+            .iter()
+            .map(|s| s.system.fplus(isotope).ok())
+            .collect();
         let mut out = vec![ZERO; points];
-        for ((_, parts, n), block) in joint.blocks.iter().zip(&blocks) {
+        for (((_, parts, n), block), &(dense, _)) in joint.blocks.iter().zip(&blocks).zip(&plans) {
             let mut elements: Vec<(usize, usize, usize)> = Vec::with_capacity(*n);
             for &(s, k, _) in parts {
                 for &(a, b) in &joint.liouvilles[s].blocks[k].1 {
                     elements.push((s, a, b));
                 }
             }
-            let fps: Vec<Option<CMatrix>> = self
-                .sites
-                .iter()
-                .map(|s| s.system.fplus(isotope).ok())
-                .collect();
             let weights: Vec<C64> = elements
                 .iter()
                 .map(|&(s, a, b)| fps[s].as_ref().map_or(ZERO, |f| f[(b, a)]))
                 .collect();
-            let p = crate::linalg::dense::expm(&block.generator) * block.shift.exp();
-            let mut v = nalgebra::DVector::from_iterator(
-                *n,
-                elements.iter().map(|&(s, a, b)| x[s][(a, b)]),
-            );
+            let mut v: Vec<C64> = elements.iter().map(|&(s, a, b)| x[s][(a, b)]).collect();
+            let p = dense.then(|| {
+                let lb = block.liouville_block(dwell);
+                crate::linalg::dense::expm(&lb.generator) * lb.shift.exp()
+            });
             for (k, o) in out.iter_mut().enumerate() {
                 if k > 0 {
-                    v = &p * v;
+                    v = match &p {
+                        Some(p) => (p * nalgebra::DVector::from_vec(v)).data.into(),
+                        None => block.propagate(&v, dwell, false)?,
+                    };
                 }
                 *o += v.iter().zip(&weights).map(|(a, w)| a * w).sum::<C64>();
             }
@@ -1274,7 +1370,35 @@ fn check_work(what: &str, work: f64) -> Result<()> {
     Ok(())
 }
 
+/// Refuse blocks whose propagation would hold more than
+/// [`MAX_RELAXATION_MEMORY`](super::MAX_RELAXATION_MEMORY): every sparse
+/// block, and the largest workspace of one at a time.
+fn check_memory(blocks: &[SparseJoint], plans: &[(bool, f64)]) -> Result<()> {
+    let held: f64 = blocks.iter().map(|b| b.bytes(false)).sum();
+    let most = blocks
+        .iter()
+        .zip(plans)
+        .map(|(b, &(dense, _))| b.bytes(dense) - b.bytes(false))
+        .fold(0.0, f64::max);
+    let total = held + most;
+    if total > super::MAX_RELAXATION_MEMORY {
+        return Err(QsoError::invalid(
+            "exchange",
+            format!(
+                "needs about {:.1} GB (limit {:.1} GB); use fewer spins or the rotating frame",
+                total / 1e9,
+                super::MAX_RELAXATION_MEMORY / 1e9
+            ),
+        ));
+    }
+    Ok(())
+}
+
 pub mod kinetics;
+mod sparse;
+
+pub(in crate::spin) use sparse::Propagation;
+use sparse::SparseJoint;
 
 #[cfg(test)]
 mod tests;
