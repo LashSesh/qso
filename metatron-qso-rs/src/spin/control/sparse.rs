@@ -21,10 +21,12 @@ use nalgebra::DVector;
 use num_complex::Complex64 as C64;
 
 mod field;
+mod free;
 
 pub(super) use field::SparseField;
 pub use field::{FIELD_TOLERANCE, MAX_FIELD_ERROR};
 pub(in crate::spin) use field::{LEVELS, coefficient, weights};
+pub(super) use free::FreeField;
 
 use super::super::blocks::{Liouville, SYMMETRY_TOLERANCE, Sparse};
 use super::super::krylov::{Orbits, SparseBlock, accumulator_bytes, row_dot, rows_per_task};
@@ -184,6 +186,17 @@ fn horner(terms: &[DVector<C64>], thetas: impl Iterator<Item = f64>) -> Vec<DVec
         .collect()
 }
 
+/// A direction of the gradient: `⟨λ, E x⟩`.
+pub(in crate::spin) trait Pairing {
+    fn pair(&self, lambda: &DVector<C64>, x: &DVector<C64>) -> C64;
+}
+
+impl Pairing for Scaled<'_> {
+    fn pair(&self, lambda: &DVector<C64>, x: &DVector<C64>) -> C64 {
+        pair(self, lambda, x)
+    }
+}
+
 /// `s·⟨λ, E x⟩` of a direction `s·E`, rows in parallel and summed in a
 /// fixed order.
 fn pair(e: &Scaled<'_>, lambda: &DVector<C64>, x: &DVector<C64>) -> C64 {
@@ -210,10 +223,10 @@ fn pair(e: &Scaled<'_>, lambda: &DVector<C64>, x: &DVector<C64>) -> C64 {
 /// term (forwards again and backwards) instead of `2 + directions`, and
 /// four times longer substeps.
 #[allow(clippy::too_many_arguments)]
-pub(in crate::spin) fn step_gradient(
-    forward: &SparseGenerator<'_>,
-    backward: &SparseGenerator<'_>,
-    directions: &[Scaled<'_>],
+pub(in crate::spin) fn step_gradient<G: Linear, P: Pairing>(
+    forward: &G,
+    backward: &G,
+    directions: &[P],
     x: &DVector<C64>,
     lambda: &DVector<C64>,
     dt: f64,
@@ -238,7 +251,7 @@ pub(in crate::spin) fn step_gradient(
         let costates = horner(&terms, GAUSS.iter().map(|g| 1.0 - g.0));
         for ((xq, lq), &(_, w)) in at.iter().zip(&costates).zip(&GAUSS) {
             for (g, e) in grad.iter_mut().zip(directions) {
-                *g += h * w * pair(e, lq, xq).re;
+                *g += h * w * e.pair(lq, xq).re;
             }
         }
         mu = previous;

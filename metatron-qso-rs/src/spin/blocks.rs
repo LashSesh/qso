@@ -959,6 +959,27 @@ impl SpinSystem {
         out
     }
 
+    /// The relaxation at field `b` without its Redfield part: the `T₁` and
+    /// `T₂` jumps and their drift (for applying the Redfield part apart).
+    pub(super) fn jump_relaxation(&self, b: f64) -> Relaxation {
+        let d = self.dimension();
+        let jumps = self.jumps(b);
+        let prepared = self.prepare(&jumps);
+        let mut drift = CMatrix::zeros(d, d);
+        for (i, x) in self.jump_drift(b).into_iter().enumerate() {
+            drift[(i, i)] = C64::new(x, 0.0);
+        }
+        let rate = jumps.iter().map(|(_, a)| a.norm_squared()).sum::<f64>();
+        Relaxation {
+            jumps,
+            prepared,
+            redfield: None,
+            drift,
+            rate,
+            equilibrium: 0.0,
+        }
+    }
+
     /// What relaxes the state at field `b`.
     pub(super) fn relaxation(&self, b: f64) -> Result<Relaxation> {
         let d = self.dimension();

@@ -50,7 +50,7 @@ use crate::optimize::{GradObjective, Method, Options, minimize};
 
 mod sparse;
 
-use sparse::{Amplitudes, SparseControl, SparseField};
+use sparse::{Amplitudes, FreeField, SparseControl, SparseField};
 pub(in crate::spin) use sparse::{
     Budget, GAUSS, LEVELS, SUBSTEP, Scaled, SparseGenerator, TAYLOR_TERMS, coefficient, norm_bound,
     propagate, step_gradient, weights,
@@ -651,6 +651,10 @@ pub(super) enum Path {
     /// Sparse blocks of a field profile, the relaxation interpolated over
     /// the field.
     SparseField,
+    /// A field profile with the Redfield relaxation applied from its terms
+    /// at every step's field, never stored (when the interpolant's nodes
+    /// would not fit).
+    FreeField,
 }
 
 /// What the evaluations of a control problem share.
@@ -659,6 +663,7 @@ enum Prepared {
     Each(Path),
     Sparse(Box<SparseControl>),
     Field(Box<SparseField>),
+    Free(Box<FreeField>),
 }
 
 /// Most memory (bytes) one evaluation of a control problem may keep:
@@ -811,7 +816,18 @@ impl SpinSystem {
         match c.drive {
             _ if !self.relaxes() => Path::Hilbert,
             Drive::Rf { .. } => Path::Sparse { symmetric: true },
-            Drive::Field { .. } => Path::SparseField,
+            Drive::Field { .. } => {
+                // Beyond memory the nodes of the interpolant give way to
+                // Redfield relaxation applied without storing it.
+                let fits = self
+                    .field_estimate(c, None)
+                    .is_ok_and(|cost| cost.memory <= MAX_CONTROL_MEMORY);
+                if !fits && self.redfield_active() {
+                    Path::FreeField
+                } else {
+                    Path::SparseField
+                }
+            }
         }
     }
 
@@ -946,6 +962,10 @@ impl SpinSystem {
                 let (work, memory) = self.path_cost(c, rf, path)?;
                 ("sparse", (work, memory, d * d + 1))
             }
+            Path::FreeField => {
+                let (work, memory) = self.path_cost(c, rf, path)?;
+                ("matrix-free", (work, memory, d * d + 1))
+            }
             Path::Hilbert | Path::Dense => {
                 let (work, memory) = self.path_cost(c, rf, path)?;
                 match path {
@@ -967,6 +987,14 @@ impl SpinSystem {
     fn path_cost(&self, c: &Control, rf: Amplitudes<'_>, path: Path) -> Result<(f64, f64)> {
         if let Path::Sparse { symmetric } = path {
             return self.sparse_cost(c, rf, symmetric);
+        }
+        if path == Path::FreeField {
+            let free = self.free_field(c)?;
+            let u = match rf {
+                Amplitudes::Controls(u) => u.to_vec(),
+                Amplitudes::Peak(peak) => vec![peak; c.steps],
+            };
+            return Ok(free.cost(c, &u));
         }
         if path == Path::SparseField {
             let cost = match rf {
@@ -1067,6 +1095,7 @@ impl SpinSystem {
             Path::SparseField => {
                 Prepared::Field(Box::new(self.sparse_field(c, MAX_CONTROL_MEMORY)?))
             }
+            Path::FreeField => Prepared::Free(Box::new(self.free_field(c)?)),
             other => Prepared::Each(other),
         })
     }
@@ -1088,6 +1117,10 @@ impl SpinSystem {
             let (work, memory) = blocks.cost(c, u);
             check_cost("this control problem", work, memory)?;
         }
+        if let Prepared::Free(free) = prepared {
+            let (work, memory) = free.cost(c, u);
+            check_cost("this control problem", work, memory)?;
+        }
         let members = c.members();
         let total: f64 = members.iter().map(|m| m.weight).sum();
         // Field profiles of one system: the members differ by weight only.
@@ -1101,6 +1134,7 @@ impl SpinSystem {
             Prepared::Each(_) => self.member_liouville(c, &members[k], u),
             Prepared::Sparse(blocks) => blocks.member(c, &members[k], u, &budget),
             Prepared::Field(blocks) => blocks.member(c, u, &budget),
+            Prepared::Free(free) => free.member(self, c, u, &budget),
         });
         let mut results = results.into_iter().collect::<Result<Vec<_>>>()?;
         if distinct == 1 && members.len() > 1 {
@@ -1455,3 +1489,6 @@ mod sparse_tests;
 
 #[cfg(test)]
 mod field_tests;
+
+#[cfg(test)]
+mod free_tests;

@@ -8,7 +8,7 @@ use crate::spin::Isotope;
 /// and Redfield relaxation of the dipolar pairs and the carbon's shielding
 /// (τ_c = 3·10⁻⁵ s, so that the spectral densities disperse between 1
 /// and 100 µT), at 1 K so that the thermal drift counts.
-fn relaxing() -> SpinSystem {
+pub(super) fn relaxing() -> SpinSystem {
     let mut sys = SpinSystem::new(5e-5).with_frame(Frame::Laboratory);
     sys.add_spin(Isotope::H1, 2.0).unwrap();
     sys.add_spin(Isotope::H1, 4.0).unwrap();
@@ -242,7 +242,7 @@ fn sabre_sheath_transfer_peaks_at_the_anti_crossing() {
 /// a bound pyridine and `protons` of its ring protons, in the laboratory
 /// frame at microtesla fields, every spin with `T₁` and `T₂`, and with
 /// `redfield` Redfield relaxation of the dipolar pairs (τ_c = 10⁻¹⁰ s).
-fn sheath(protons: usize, redfield: bool) -> (SpinSystem, f64) {
+pub(super) fn sheath(protons: usize, redfield: bool) -> (SpinSystem, f64) {
     let nu = |x: Isotope, shift: f64| -x.larmor(1.0) * (1.0 + shift * 1e-6);
     let slope = nu(Isotope::N15, 250.0) - nu(Isotope::H1, -22.0);
     let lac = ((-7.0 + 2.0 / 4.0) / slope).abs();
