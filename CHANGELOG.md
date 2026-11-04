@@ -8,6 +8,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Interacting walkers on any symmetric graph** (1.58,
+  `walks::GroupInteractingWalk`, Python `GroupInteractingWalk`): bosons,
+  fermions or distinguishable particles with on-site and neighbour
+  interaction on any graph, reduced by a group of its automorphisms (the
+  start's stabiliser, or the whole group with orbit states), on the
+  orbits reachable from the start found from minimal images along a chain
+  of point stabilisers (Jefferson et al., J. Algebra 521, 481 (2019)),
+  each stabiliser built exactly by a randomised Schreier–Sims run that
+  stops at the known order. Three fermions on Paley(3209): 5.5·10⁹
+  configurations on 1068 orbits in 13 s; three bosons on a circulant of
+  2000 nodes: 334 334 orbits in 12 s. Equal to the full walk, to 1.43's
+  union–find orbits, to Burnside's lemma and to permanents and
+  determinants of closed-form amplitudes.
+
 - **Decoding in windows** (1.57, `qec::WindowDecoder`, `WindowStream`,
   `DetectorCircuit::detector_layers`): sliding windows of rounds that
   commit the corrections of their first rounds and carry the rest of the

@@ -358,6 +358,51 @@ a perfect matching, the start reaches only the configurations on its own
 pairs, `num_orbits` counts those, and other configurations have
 probability zero (`state_of` refuses them).
 
+On any other graph, `GroupInteractingWalk` takes a group of the graph's
+automorphisms and finds the orbits from minimal images: the smallest
+configuration in each orbit, found along a chain of point stabilisers
+(Jefferson, Jonauskyte, Pfeiffer and Waldecker, J. Algebra 521, 481
+(2019)). The smallest node any symmetry can bring a particle to is the
+smallest orbit representative among the particles' nodes; every
+particle that reaches it is a branch, and the search goes on in the
+stabiliser of that node. Each stabiliser met is built once by a
+randomised Schreier–Sims algorithm, stopped when its order reaches the
+group's order divided by the orbit, which makes it exact. The surviving
+branches count the stabiliser of the configuration, and for fermions
+they must agree on the sign. With `whole_group=False` the group is the
+stabiliser of the start's nodes and the start is the initial state; with
+`whole_group=True` it is the whole automorphism group, and the states are
+orbit states:
+
+```python
+import metatron_qso as q
+
+g = q.Graph.paley(401)
+walk = q.GroupInteractingWalk(g, [0, 1, 3], whole_group=True,
+                              statistics="fermions", on_site=1.0)
+print(walk.num_orbits)   # 132 orbits of 1.1·10⁷ configurations
+x = walk.evolve(walk.state_of([0, 1, 3]), 1.0)
+print(round(walk.probability_of(x, [0, 1, 3]), 8))   # 7.52e-06
+```
+
+On four cores (release build, interaction `U = 1`, `t = 1`):
+
+| Graph | Particles from | Group | Configurations | Orbits | Group, search, evolution |
+|---|---|---|---|---|---|
+| Paley(401) | 3 bosons, node 0 | stabiliser of the node (200) | 1.1·10⁷ | 54 139 | 0.04 s, 52 s, 55 s |
+| Paley(401) | 3 fermions, nodes 0, 1, 3 | whole (8.0·10⁴) | 1.1·10⁷ | 132 | 0.04 s, 0.1 s, < 0.01 s |
+| Paley(1601) | 3 fermions, nodes 0, 1, 3 | whole (1.3·10⁶) | 6.8·10⁸ | 532 | 1.3 s, 2.0 s, 0.1 s |
+| Paley(3209) | 3 fermions, nodes 0, 1, 3 | whole (5.2·10⁶) | 5.5·10⁹ | 1068 | 4.9 s, 7.8 s, 1.1 s |
+| Paley(101) | 4 fermions, nodes 0, 1, 3, 7 | whole (5050) | 4.1·10⁶ | 833 | < 0.01 s, 0.2 s, 0.5 s |
+| circulant(2000; 1, 7, 40) | 3 bosons, node 0 | whole (4000) | 1.3·10⁹ | 334 334 | 0.07 s, 12 s, 1.5 s |
+
+A dense graph with a small group stays dense on its orbits (Paley(401)
+from one node: 600 hops per orbit, 3·10⁷ entries), and Paley(809) from
+one node exceeds the 2²⁶ entries. The group comes from the automorphism
+search of `Graph`, which takes seconds for these graphs; the limits are
+those of `CoordinateInteractingWalk`, with 2²⁸ node labels for the
+stabilisers met (three per node and stabiliser).
+
 Certificates need every configuration as a start, but the
 automorphisms of the graph map starts onto starts with the same
 transition probabilities. `certificate_by_orbits(times, generators)`
@@ -385,6 +430,20 @@ The checks:
   particles follow the permanents and determinants of the walker's
   closed-form amplitudes on `Q₂₀` (three bosons from node 0, the 156 240
   states of `HypercubeParticles`), `H(8, 4)`, `Q₁₀` and `H(6, 4)`.
+- `GroupInteractingWalk` equals the full walk configuration by
+  configuration (Petersen, Paley(13), a circulant, the 3 × 4 rook's
+  graph, Shrikhande, `Q₃`; three statistics, both generators, `U` and
+  `V`), the orbits of `SymmetricInteractingWalk` from one configuration
+  and under the whole group (orbit states), and the canonical forms of
+  `CoordinateInteractingWalk` on `H(3, 3)`, `J(7, 2)` and `K(7, 2)`. Its
+  orbit counts equal Burnside's lemma over every element of the group
+  (bosons and distinguishable particles; for fermions the signed count,
+  the trace of the group on the exterior power). Its minimal images are
+  the smallest element of the orbit, and the stabilisers those of the
+  group's elements (Paley(29)). Free bosons on Paley(101) follow the
+  permanents of the closed-form amplitudes of a strongly regular graph,
+  and free fermions on the orbit state of {0, 1, 3} under the whole group
+  of Paley(401) the sum of determinants over the orbit with its signs.
 - `HypercubeParticles` equals the reduction of the graph `Q₃` and `Q₄` by
   the stabiliser of node 0, for bosons and distinguishable particles (two
   and three) and fermions (two to four), and the full walk on `Q₈` for

@@ -3,8 +3,8 @@
 
 use metatron_qso::walks::driven::{DrivenEvolution, DrivenWalk, MagnusOptions, Term};
 use metatron_qso::walks::interacting::{
-    CoordinateGraph, CoordinateInteractingWalk, HypercubeParticles, InteractingWalk, Statistics,
-    SymmetricInteractingWalk, certificate_distance,
+    CoordinateGraph, CoordinateInteractingWalk, GroupInteractingWalk, HypercubeParticles,
+    InteractingWalk, Statistics, SymmetricInteractingWalk, certificate_distance,
 };
 use metatron_qso::walks::{
     ContinuousWalk, DephasingWalk, Generator, SpatialSearch, classical_hitting_times,
@@ -1041,6 +1041,181 @@ impl PySymmetricInteractingWalk {
     }
 }
 
+/// Interacting particles on any graph, reduced by a group of its
+/// automorphisms, on the orbits reachable from the start found from
+/// minimal images (no configuration is visited unless it is an orbit's
+/// representative). With `whole_group=False` the group is the stabiliser
+/// of the start's nodes and the start configuration is the initial state;
+/// with `whole_group=True` it is the whole automorphism group, and states
+/// are orbit states (`state_of(start)` is the start's).
+#[pyclass(name = "GroupInteractingWalk", module = "metatron_qso", frozen)]
+pub struct PyGroupInteractingWalk {
+    inner: GroupInteractingWalk,
+}
+
+#[pymethods]
+impl PyGroupInteractingWalk {
+    #[new]
+    #[pyo3(signature = (graph, start, whole_group = false, statistics = "bosons", generator = "adjacency", gamma = 1.0, on_site = 0.0, neighbour = 0.0))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        py: Python<'_>,
+        graph: &PyGraph,
+        start: Vec<usize>,
+        whole_group: bool,
+        statistics: &str,
+        generator: &str,
+        gamma: f64,
+        on_site: f64,
+        neighbour: f64,
+    ) -> PyResult<Self> {
+        let (s, gen_) = (self::statistics(statistics)?, self::generator(generator)?);
+        let g = &graph.inner;
+        let inner = py
+            .detach(|| {
+                let walk = if whole_group {
+                    let group = g.automorphism_group();
+                    GroupInteractingWalk::new(g, gen_, gamma, s, &start, &group)?
+                } else {
+                    GroupInteractingWalk::from_start(g, gen_, gamma, s, &start)?
+                };
+                walk.with_interaction(on_site, neighbour)
+            })
+            .raise()?;
+        Ok(Self { inner })
+    }
+
+    /// The orbit state of the configuration `sites`.
+    fn state_of<'py>(
+        &self,
+        py: Python<'py>,
+        sites: Vec<usize>,
+    ) -> PyResult<Bound<'py, PyArray1<metatron_qso::C64>>> {
+        Ok(complex_array(py, self.inner.state_of(&sites).raise()?))
+    }
+
+    /// `exp(−iHt)` applied to `x0`.
+    fn evolve<'py>(
+        &self,
+        py: Python<'py>,
+        x0: ComplexArg<'_>,
+        t: f64,
+    ) -> PyResult<Bound<'py, PyArray1<metatron_qso::C64>>> {
+        let x0 = complex_vec(&x0);
+        let w = &self.inner;
+        Ok(complex_array(py, py.detach(|| w.evolve(&x0, t)).raise()?))
+    }
+
+    fn orbit_probabilities<'py>(
+        &self,
+        py: Python<'py>,
+        x: ComplexArg<'_>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let x = complex_vec(&x);
+        Ok(real_array(py, self.inner.orbit_probabilities(&x).raise()?))
+    }
+
+    /// The probability of the configuration `sites`.
+    fn probability_of(&self, x: ComplexArg<'_>, sites: Vec<usize>) -> PyResult<f64> {
+        let x = complex_vec(&x);
+        self.inner.probability_of(&x, &sites).raise()
+    }
+
+    /// The density of particles on every node.
+    fn densities<'py>(
+        &self,
+        py: Python<'py>,
+        x: ComplexArg<'_>,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let x = complex_vec(&x);
+        Ok(real_array(py, self.inner.densities(&x).raise()?))
+    }
+
+    fn representative(&self, o: usize) -> PyResult<Vec<usize>> {
+        if o >= self.inner.num_orbits() {
+            return Err(invalid(format!("orbit {o} of {}", self.inner.num_orbits())));
+        }
+        Ok(self.inner.representative(o).to_vec())
+    }
+
+    fn orbit_size(&self, o: usize) -> PyResult<f64> {
+        if o >= self.inner.num_orbits() {
+            return Err(invalid(format!("orbit {o} of {}", self.inner.num_orbits())));
+        }
+        Ok(self.inner.orbit_size(o))
+    }
+
+    #[getter]
+    fn spectrum<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<f64>>> {
+        self.inner.spectrum().map(|s| real_array(py, s.to_vec()))
+    }
+
+    #[getter]
+    fn num_orbits(&self) -> usize {
+        self.inner.num_orbits()
+    }
+
+    #[getter]
+    fn num_nodes(&self) -> usize {
+        self.inner.num_nodes()
+    }
+
+    #[getter]
+    fn log_num_configurations(&self) -> f64 {
+        self.inner.log_num_configurations()
+    }
+
+    #[getter]
+    fn log_group_order(&self) -> f64 {
+        self.inner.log_group_order()
+    }
+
+    #[getter]
+    fn start(&self) -> Vec<usize> {
+        self.inner.start().to_vec()
+    }
+
+    #[getter]
+    fn particles(&self) -> usize {
+        self.inner.particles()
+    }
+
+    #[getter]
+    fn statistics(&self) -> &'static str {
+        self.inner.statistics().name()
+    }
+
+    #[getter]
+    fn generator(&self) -> &'static str {
+        generator_name(self.inner.generator())
+    }
+
+    #[getter]
+    fn gamma(&self) -> f64 {
+        self.inner.gamma()
+    }
+
+    #[getter]
+    fn on_site(&self) -> f64 {
+        self.inner.on_site()
+    }
+
+    #[getter]
+    fn neighbour(&self) -> f64 {
+        self.inner.neighbour()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "GroupInteractingWalk({} nodes, {} {}, {} orbits)",
+            self.inner.num_nodes(),
+            self.inner.particles(),
+            self.inner.statistics().name(),
+            self.inner.num_orbits()
+        )
+    }
+}
+
 /// Interacting particles on a Hamming, Johnson or Kneser graph, whose
 /// symmetries act on the places of its nodes' words, on the orbits of the
 /// start's pointwise stabiliser found from canonical forms (the graph is
@@ -1472,6 +1647,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySymmetricInteractingWalk>()?;
     m.add_class::<PyHypercubeParticles>()?;
     m.add_class::<PyCoordinateInteractingWalk>()?;
+    m.add_class::<PyGroupInteractingWalk>()?;
     m.add_function(wrap_pyfunction!(certificate_distance_py, m)?)?;
     m.add_class::<PySpatialSearch>()?;
     m.add_class::<PyDephasingWalk>()?;

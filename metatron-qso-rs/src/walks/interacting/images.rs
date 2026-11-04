@@ -1,0 +1,1205 @@
+//! Interacting walkers on any graph, reduced by a group of its
+//! automorphisms, on the orbits of configurations found from minimal
+//! images, without visiting every configuration.
+//!
+//! [`SymmetricInteractingWalk`](super::SymmetricInteractingWalk) (1.43)
+//! finds the orbits of a group on the configurations by a union–find over
+//! every configuration; [`CoordinateInteractingWalk`](super::CoordinateInteractingWalk)
+//! (1.53) generates them from the start with canonical forms that only
+//! Hamming, Johnson and Kneser graphs have. Here the canonical form of a
+//! configuration is its *minimal image* under the group (Jefferson,
+//! Jonauskyte, Pfeiffer and Waldecker, J. Algebra 521, 481 (2019)): the
+//! lexicographically smallest configuration in its orbit, found along a
+//! chain of point stabilisers.
+//!
+//! * **Groups.** A group is held by generators and its exact order (from
+//!   the base and strong generating set of
+//!   [`AutomorphismGroup`](crate::graph::automorphism::AutomorphismGroup)).
+//!   The stabiliser of a point `m` in a group `K` of known order has order
+//!   `|K|/|m^K|`, so a randomised Schreier–Sims algorithm with base `[m, …]`
+//!   is stopped exactly when its basic orbits multiply to the order (a
+//!   proper subgroup is at least twice smaller): the stabiliser's strong
+//!   generators are then complete, whatever the random elements.
+//! * **Orbit forests.** For every group met, the orbits on the nodes are
+//!   found by breadth-first search from the smallest node of each orbit
+//!   (its root) over the generators and a few random elements, which keeps
+//!   the trees shallow. Walking a node up its tree to the root with the
+//!   inverse generators maps the whole configuration by an element of the
+//!   group.
+//! * **Minimal images.** For bosons and fermions (multisets of nodes) the
+//!   smallest node any element can bring a particle to is the smallest
+//!   root among the particles' nodes (preferring nodes holding more
+//!   particles, whose image then repeats). Every node that reaches it is a
+//!   branch: the configuration is mapped so that node sits at the root,
+//!   and the search goes on in the stabiliser of the root. Branches that
+//!   fall behind are dropped; those that survive to the end reach the
+//!   minimal image, one per coset of the final stabiliser, so
+//!   `|Stab(c)| = (branches) · |stabiliser of the image's nodes|`. For
+//!   fermions every surviving branch must order the particles with the same
+//!   parity; otherwise a symmetry maps the configuration to minus itself
+//!   and the orbit carries no invariant state. For distinguishable
+//!   particles (sequences) each particle in turn goes to its root, without
+//!   branching.
+//! * **Stabilisers met** are cached by the sequence of roots that led to
+//!   them; a stabiliser of order one ends the search (the remaining
+//!   particles stay where they are).
+//!
+//! The orbits reachable from the start are then found by breadth-first
+//! search, as in 1.53: the Hamiltonian of
+//! [`InteractingWalk`](super::InteractingWalk) applied to each orbit's
+//! representative gives configurations whose minimal images name orbits,
+//! old or new. A graph whose stabiliser of the start leaves the walk on few
+//! orbits, such as Paley graphs, circulants and strongly regular graphs,
+//! is reduced as far as its symmetry allows, beyond the configurations a
+//! union–find could visit.
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
+
+use num_complex::Complex64 as C64;
+
+use super::symmetric::MAX_ORBIT_ENTRIES;
+use super::{Statistics, Terms, propagate};
+use crate::error::{QsoError, Result};
+use crate::graph::Graph;
+use crate::graph::automorphism::AutomorphismGroup;
+use crate::linalg::{CsrMatrix, RMatrix, eigh_real};
+use crate::rng::Rng;
+use crate::walks::{DENSE_LIMIT, Generator};
+
+/// Most orbits found (each keeps its representative and its key).
+pub const MAX_IMAGE_ORBITS: usize = 1 << 22;
+
+/// Most particles (`6! = 720` branches at most per level).
+pub const MAX_IMAGE_PARTICLES: usize = 6;
+
+/// Most node labels the stabilisers met may hold together (three per node
+/// and stabiliser): 2²⁸, 1 GiB.
+pub const MAX_STABILISER_LABELS: usize = 1 << 28;
+
+/// Random elements added to each orbit forest's generators.
+const FOREST_RANDOM: usize = 10;
+
+/// Random elements a Schreier–Sims run may draw without growing its chain
+/// before it gives up (the order it was told is then wrong).
+const MAX_IDLE_DRAWS: usize = 4096;
+
+const NONE: u32 = u32::MAX;
+
+type Perm = Vec<u32>;
+
+/// `a ∘ b`: `x ↦ a(b(x))`.
+fn compose(a: &[u32], b: &[u32]) -> Perm {
+    b.iter().map(|&x| a[x as usize]).collect()
+}
+
+fn invert(a: &[u32]) -> Perm {
+    let mut inv = vec![0u32; a.len()];
+    for (x, &y) in a.iter().enumerate() {
+        inv[y as usize] = x as u32;
+    }
+    inv
+}
+
+fn is_identity(a: &[u32]) -> bool {
+    a.iter().enumerate().all(|(x, &y)| x as u32 == y)
+}
+
+/// Random elements of the group generated by `gens` by product
+/// replacement (Celler et al., Comm. Algebra 23, 4931 (1995), with
+/// Leedham-Green's accumulator).
+struct Random {
+    slots: Vec<Perm>,
+    acc: Perm,
+    rng: Rng,
+}
+
+impl Random {
+    fn new(n: usize, gens: &[Perm], seed: u64) -> Self {
+        let identity: Perm = (0..n as u32).collect();
+        let mut slots: Vec<Perm> = gens.iter().filter(|g| !is_identity(g)).cloned().collect();
+        if slots.is_empty() {
+            slots.push(identity.clone());
+        }
+        let base = slots.len();
+        while slots.len() < 10 {
+            let k = slots.len();
+            slots.push(slots[k % base].clone());
+        }
+        let mut r = Random {
+            slots,
+            acc: identity,
+            rng: Rng::seed_from_u64(seed),
+        };
+        for _ in 0..64 {
+            r.next();
+        }
+        r
+    }
+
+    fn next(&mut self) -> Perm {
+        let m = self.slots.len();
+        let i = self.rng.below(m as u64) as usize;
+        let mut j = self.rng.below(m as u64 - 1) as usize;
+        if j >= i {
+            j += 1;
+        }
+        let other = if self.rng.below(2) == 0 {
+            self.slots[j].clone()
+        } else {
+            invert(&self.slots[j])
+        };
+        self.slots[i] = if self.rng.below(2) == 0 {
+            compose(&self.slots[i], &other)
+        } else {
+            compose(&other, &self.slots[i])
+        };
+        self.acc = compose(&self.acc, &self.slots[i]);
+        self.acc.clone()
+    }
+}
+
+/// A Schreier tree: the generator (index) that reaches each node of the
+/// orbit from its parent, `NONE` outside the orbit and at the root.
+#[derive(Clone)]
+struct Tree {
+    root: u32,
+    via: Vec<u32>,
+    parent: Vec<u32>,
+    len: usize,
+}
+
+impl Tree {
+    fn new(n: usize, root: u32, gens: &[usize], strong: &[(Perm, Perm)]) -> Self {
+        let mut via = vec![NONE; n];
+        let mut parent = vec![NONE; n];
+        let mut seen = vec![false; n];
+        seen[root as usize] = true;
+        let mut queue = vec![root];
+        let mut head = 0;
+        while head < queue.len() {
+            let x = queue[head];
+            head += 1;
+            for &g in gens {
+                let y = strong[g].0[x as usize];
+                if !seen[y as usize] {
+                    seen[y as usize] = true;
+                    via[y as usize] = g as u32;
+                    parent[y as usize] = x;
+                    queue.push(y);
+                }
+            }
+        }
+        Tree {
+            root,
+            via,
+            parent,
+            len: queue.len(),
+        }
+    }
+
+    fn contains(&self, x: u32) -> bool {
+        x == self.root || self.parent[x as usize] != NONE
+    }
+}
+
+/// The strong generators of the stabiliser of `point` in the group
+/// generated by `gens`, of order `e^{log_order}`, by the randomised
+/// Schreier–Sims algorithm with base `[point, …]`, stopped when the
+/// basic orbits reach the order.
+fn stabiliser(n: usize, gens: &[Perm], log_order: f64, point: u32, seed: u64) -> Result<Vec<Perm>> {
+    let mut strong: Vec<(Perm, Perm)> = Vec::new();
+    // Levels: base point, generators (indices into `strong`), tree.
+    let mut levels: Vec<(u32, Vec<usize>, Tree)> =
+        vec![(point, Vec::new(), Tree::new(n, point, &[], &strong))];
+    let mut random = Random::new(n, gens, seed);
+    let reached = |levels: &[(u32, Vec<usize>, Tree)]| -> f64 {
+        levels.iter().map(|l| (l.2.len as f64).ln()).sum()
+    };
+    let mut idle = 0;
+    while reached(&levels) < log_order - 0.3 {
+        let g = random.next();
+        // Sift.
+        let mut h = g;
+        let mut fail = levels.len();
+        for (j, (b, _, tree)) in levels.iter().enumerate() {
+            let mut beta = h[*b as usize];
+            if !tree.contains(beta) {
+                fail = j;
+                break;
+            }
+            while beta != *b {
+                let inv = &strong[tree.via[beta as usize] as usize].1;
+                h = compose(inv, &h);
+                beta = tree.parent[beta as usize];
+            }
+        }
+        if fail == levels.len() && is_identity(&h) {
+            idle += 1;
+            if idle > MAX_IDLE_DRAWS {
+                return Err(QsoError::invalid(
+                    "group",
+                    "the stabiliser chain does not reach the group's order (is the order right?)",
+                ));
+            }
+            continue;
+        }
+        idle = 0;
+        if fail == levels.len() {
+            let moved = h
+                .iter()
+                .enumerate()
+                .find(|&(x, &y)| x as u32 != y)
+                .map(|(x, _)| x as u32)
+                .expect("not the identity");
+            levels.push((moved, Vec::new(), Tree::new(n, moved, &[], &strong)));
+        }
+        let inv = invert(&h);
+        strong.push((h, inv));
+        let idx = strong.len() - 1;
+        for level in levels.iter_mut().take(fail + 1) {
+            level.1.push(idx);
+            level.2 = Tree::new(n, level.0, &level.1, &strong);
+        }
+    }
+    // The strong generators that fix the point: those of the levels below.
+    let mut out: Vec<usize> = levels[1..]
+        .iter()
+        .flat_map(|l| l.1.iter().copied())
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    Ok(out.into_iter().map(|i| strong[i].0.clone()).collect())
+}
+
+/// The orbits of a group on the nodes: per node the root of its orbit
+/// (its smallest node), the generator that reaches it from its parent and
+/// the parent; per root the orbit's size.
+struct Forest {
+    root: Vec<u32>,
+    via: Vec<u32>,
+    parent: Vec<u32>,
+    size: Vec<u32>,
+}
+
+/// A group met in the search: its generators with inverses (and random
+/// elements), its order and its orbit forest; `None` for the trivial
+/// group.
+struct Stage {
+    log_order: f64,
+    inner: Option<(Vec<(Perm, Perm)>, Forest)>,
+}
+
+impl Stage {
+    fn new(n: usize, gens: Vec<Perm>, log_order: f64, seed: u64) -> Self {
+        if log_order < 0.3 || gens.iter().all(|g| is_identity(g)) {
+            return Stage {
+                log_order: 0.0,
+                inner: None,
+            };
+        }
+        let mut all = gens.clone();
+        let mut random = Random::new(n, &gens, seed);
+        for _ in 0..FOREST_RANDOM {
+            all.push(random.next());
+        }
+        let ops: Vec<(Perm, Perm)> = all
+            .into_iter()
+            .map(|g| {
+                let inv = invert(&g);
+                (g, inv)
+            })
+            .collect();
+        let mut root = vec![NONE; n];
+        let mut via = vec![NONE; n];
+        let mut parent = vec![NONE; n];
+        let mut size = vec![0u32; n];
+        let mut queue = Vec::new();
+        for start in 0..n as u32 {
+            if root[start as usize] != NONE {
+                continue;
+            }
+            root[start as usize] = start;
+            queue.clear();
+            queue.push(start);
+            let mut head = 0;
+            while head < queue.len() {
+                let x = queue[head];
+                head += 1;
+                for (g, (p, _)) in ops.iter().enumerate() {
+                    let y = p[x as usize];
+                    if root[y as usize] == NONE {
+                        root[y as usize] = start;
+                        via[y as usize] = g as u32;
+                        parent[y as usize] = x;
+                        queue.push(y);
+                    }
+                }
+            }
+            size[start as usize] = queue.len() as u32;
+        }
+        Stage {
+            log_order,
+            inner: Some((
+                ops,
+                Forest {
+                    root,
+                    via,
+                    parent,
+                    size,
+                },
+            )),
+        }
+    }
+
+    /// Map `x` to its root, and every point of `pts` by the same element.
+    fn lift(&self, mut x: u32, pts: &mut [u32]) {
+        let Some((ops, forest)) = &self.inner else {
+            return;
+        };
+        while forest.parent[x as usize] != NONE {
+            let inv = &ops[forest.via[x as usize] as usize].1;
+            for p in pts.iter_mut() {
+                *p = inv[*p as usize];
+            }
+            x = forest.parent[x as usize];
+        }
+    }
+
+    fn root(&self, x: u32) -> u32 {
+        match &self.inner {
+            Some((_, f)) => f.root[x as usize],
+            None => x,
+        }
+    }
+
+    fn orbit_size(&self, root: u32) -> u32 {
+        match &self.inner {
+            Some((_, f)) => f.size[root as usize],
+            None => 1,
+        }
+    }
+
+    fn generators(&self) -> Vec<Perm> {
+        match &self.inner {
+            Some((ops, _)) => ops[..ops.len() - FOREST_RANDOM]
+                .iter()
+                .map(|(g, _)| g.clone())
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+}
+
+/// A configuration's minimal image.
+struct Form {
+    key: Vec<u32>,
+    /// Parity of the particles' order in the image (fermions).
+    odd: bool,
+    /// `ln |Stab(c)|`.
+    log_stabiliser: f64,
+}
+
+/// Minimal images under a group, with the stabilisers met cached.
+struct Images {
+    n: usize,
+    group: Arc<Stage>,
+    stages: Mutex<HashMap<Vec<u32>, Arc<Stage>>>,
+    labels: Mutex<usize>,
+}
+
+impl Images {
+    fn new(n: usize, generators: &[Vec<usize>], log_order: f64) -> Self {
+        let gens: Vec<Perm> = generators
+            .iter()
+            .map(|g| g.iter().map(|&x| x as u32).collect())
+            .collect();
+        Images {
+            n,
+            group: Arc::new(Stage::new(n, gens, log_order, 1)),
+            stages: Mutex::new(HashMap::new()),
+            labels: Mutex::new(0),
+        }
+    }
+
+    /// The stabiliser of the roots `prefix` (in the order they were met).
+    fn stage(&self, prefix: &[u32]) -> Result<Arc<Stage>> {
+        if prefix.is_empty() {
+            return Ok(self.group.clone());
+        }
+        if let Some(s) = self
+            .stages
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(prefix)
+        {
+            return Ok(s.clone());
+        }
+        let parent = self.stage(&prefix[..prefix.len() - 1])?;
+        let m = prefix[prefix.len() - 1];
+        let child = if parent.inner.is_none() {
+            Stage {
+                log_order: 0.0,
+                inner: None,
+            }
+        } else {
+            let log = parent.log_order - (parent.orbit_size(m) as f64).ln();
+            if log < 0.3 {
+                Stage {
+                    log_order: 0.0,
+                    inner: None,
+                }
+            } else {
+                {
+                    let mut labels = self.labels.lock().unwrap_or_else(|p| p.into_inner());
+                    *labels += 3 * self.n;
+                    if *labels > MAX_STABILISER_LABELS {
+                        return Err(QsoError::invalid(
+                            "group",
+                            format!(
+                                "the stabilisers met exceed {MAX_STABILISER_LABELS} node labels"
+                            ),
+                        ));
+                    }
+                }
+                let seed = prefix
+                    .iter()
+                    .fold(0x9e37_79b9u64, |h, &x| h.rotate_left(17) ^ u64::from(x));
+                let gens = stabiliser(self.n, &parent.generators(), parent.log_order, m, seed)?;
+                Stage::new(self.n, gens, log, seed ^ 1)
+            }
+        };
+        let child = Arc::new(child);
+        self.stages
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .entry(prefix.to_vec())
+            .or_insert(child.clone());
+        Ok(child)
+    }
+
+    /// The minimal image of `sites` (sorted for bosons and fermions);
+    /// `None` when a symmetry maps the fermionic configuration to minus
+    /// itself.
+    fn form(&self, sites: &[usize], statistics: Statistics) -> Result<Option<Form>> {
+        let k = sites.len();
+        let start: Vec<u32> = sites.iter().map(|&s| s as u32).collect();
+        if statistics == Statistics::Distinguishable {
+            let mut pts = start;
+            let mut prefix: Vec<u32> = Vec::new();
+            let mut log = self.group.log_order;
+            for i in 0..k {
+                let x = pts[i];
+                if prefix.contains(&x) {
+                    continue;
+                }
+                let stage = self.stage(&prefix)?;
+                if stage.inner.is_none() {
+                    break;
+                }
+                let root = stage.root(x);
+                stage.lift(x, &mut pts);
+                log = stage.log_order - (stage.orbit_size(root) as f64).ln();
+                prefix.push(root);
+            }
+            return Ok(Some(Form {
+                key: pts,
+                odd: false,
+                log_stabiliser: if log < 0.3 { 0.0 } else { log },
+            }));
+        }
+        // Multisets: branches of particle images, all sharing the roots met.
+        let mut branches: Vec<(Vec<u32>, Vec<bool>)> = vec![(start, vec![false; k])];
+        let mut prefix: Vec<u32> = Vec::new();
+        let mut log = self.group.log_order;
+        loop {
+            if branches[0].1.iter().all(|&d| d) {
+                break;
+            }
+            let stage = self.stage(&prefix)?;
+            if stage.inner.is_none() {
+                // Everything left stays: the smallest sorted image wins.
+                let sorted: Vec<Vec<u32>> = branches
+                    .iter()
+                    .map(|(p, _)| {
+                        let mut s = p.clone();
+                        s.sort_unstable();
+                        s
+                    })
+                    .collect();
+                let best = sorted.iter().min().expect("a branch").clone();
+                branches = branches
+                    .into_iter()
+                    .zip(&sorted)
+                    .filter(|(_, s)| **s == best)
+                    .map(|(b, _)| b)
+                    .collect();
+                log = 0.0;
+                break;
+            }
+            // The best (root, multiplicity) over the branches' open nodes.
+            let mut best: Option<(u32, usize)> = None;
+            let better = |a: (u32, usize), b: Option<(u32, usize)>| {
+                b.is_none_or(|b| a.0 < b.0 || (a.0 == b.0 && a.1 > b.1))
+            };
+            for (pts, done) in &branches {
+                for i in 0..k {
+                    if done[i] {
+                        continue;
+                    }
+                    let mult = (0..k).filter(|&j| !done[j] && pts[j] == pts[i]).count();
+                    let cand = (stage.root(pts[i]), mult);
+                    if better(cand, best) {
+                        best = Some(cand);
+                    }
+                }
+            }
+            let (root, mult) = best.expect("an open particle");
+            let mut next = Vec::new();
+            for (pts, done) in &branches {
+                let mut tried: Vec<u32> = Vec::new();
+                for i in 0..k {
+                    if done[i] || tried.contains(&pts[i]) {
+                        continue;
+                    }
+                    let x = pts[i];
+                    tried.push(x);
+                    let m = (0..k).filter(|&j| !done[j] && pts[j] == x).count();
+                    if m != mult || stage.root(x) != root {
+                        continue;
+                    }
+                    let mut p = pts.clone();
+                    stage.lift(x, &mut p);
+                    let mut d = done.clone();
+                    for j in 0..k {
+                        if !d[j] && pts[j] == x {
+                            d[j] = true;
+                        }
+                    }
+                    next.push((p, d));
+                }
+            }
+            log = stage.log_order - (stage.orbit_size(root) as f64).ln();
+            prefix.push(root);
+            branches = next;
+        }
+        let parity = |p: &[u32]| {
+            let mut odd = false;
+            for a in 0..p.len() {
+                for b in a + 1..p.len() {
+                    if p[a] > p[b] {
+                        odd = !odd;
+                    }
+                }
+            }
+            odd
+        };
+        let odd = parity(&branches[0].0);
+        if statistics == Statistics::Fermions && branches.iter().any(|(p, _)| parity(p) != odd) {
+            return Ok(None);
+        }
+        let mut key = branches[0].0.clone();
+        key.sort_unstable();
+        let log = if log < 0.3 { 0.0 } else { log };
+        Ok(Some(Form {
+            key,
+            odd,
+            log_stabiliser: (branches.len() as f64).ln() + log,
+        }))
+    }
+}
+
+/// An orbit: its representative (the first configuration met in it), the
+/// parity of the representative's form and `ln |Stab|`.
+#[derive(Clone, Debug)]
+struct Orbit {
+    sites: Vec<usize>,
+    odd: bool,
+    log_stabiliser: f64,
+}
+
+/// Interacting walkers on any graph, reduced by a group of its
+/// automorphisms, on the orbits reachable from the start found by minimal
+/// images (see the module documentation): the same Hamiltonian as
+/// [`InteractingWalk`](super::InteractingWalk), reduced exactly as
+/// [`SymmetricInteractingWalk`](super::SymmetricInteractingWalk) reduces
+/// it.
+#[derive(Debug)]
+pub struct GroupInteractingWalk {
+    terms: Terms,
+    statistics: Statistics,
+    generator: Generator,
+    gamma: f64,
+    start: Vec<usize>,
+    log_group: f64,
+    images: Arc<ImagesHandle>,
+    orbits: Vec<Orbit>,
+    index: HashMap<Vec<u32>, u32>,
+    hopping: Vec<(usize, usize, f64)>,
+    same: Vec<f64>,
+    adjacent: Vec<f64>,
+    potential: Vec<f64>,
+    hamiltonian: CsrMatrix,
+    spectral: OnceLock<Option<(Vec<f64>, RMatrix)>>,
+}
+
+/// The images, shared by clones (`Debug` without their tables).
+struct ImagesHandle(Images);
+
+impl std::fmt::Debug for ImagesHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Images {{ nodes: {} }}", self.0.n)
+    }
+}
+
+/// Where a configuration lies.
+enum Lookup {
+    Found(usize, f64),
+    NoInvariant,
+    Unreachable,
+}
+
+/// The hops from one orbit into another, merged.
+struct Hop {
+    key: Vec<u32>,
+    sites: Vec<usize>,
+    odd: bool,
+    log_stabiliser: f64,
+    amplitude: f64,
+}
+
+/// `ln C(n, k)` for real `n ≥ k`.
+fn log_binomial(n: f64, k: usize) -> f64 {
+    (0..k).map(|i| ((n - i as f64) / (i + 1) as f64).ln()).sum()
+}
+
+impl GroupInteractingWalk {
+    /// `start.len()` particles of the given statistics on `graph`, hopping
+    /// at rate `gamma` (`h = −γA` or `γL`), without interaction, reduced by
+    /// `group`, a group of automorphisms of the graph (weights included)
+    /// with its exact order, on the orbits reachable from the orbit of
+    /// `start`. The walk's states are invariant under the group: the start
+    /// is the normalised orbit state of the start configuration (the
+    /// configuration itself when the group fixes it).
+    pub fn new(
+        graph: &Graph,
+        generator: Generator,
+        gamma: f64,
+        statistics: Statistics,
+        start: &[usize],
+        group: &AutomorphismGroup,
+    ) -> Result<Self> {
+        if !(gamma.is_finite() && gamma > 0.0) {
+            return Err(QsoError::invalid(
+                "gamma",
+                "hopping rate must be positive and finite",
+            ));
+        }
+        let k = start.len();
+        if k == 0 || k > MAX_IMAGE_PARTICLES {
+            return Err(QsoError::invalid(
+                "start",
+                format!("need 1 to {MAX_IMAGE_PARTICLES} particles"),
+            ));
+        }
+        let n = graph.num_nodes();
+        if n >= NONE as usize {
+            return Err(QsoError::invalid("graph", "too many nodes"));
+        }
+        if let Some(&u) = start.iter().find(|&&u| u >= n) {
+            return Err(QsoError::invalid("start", format!("node {u} of {n} nodes")));
+        }
+        let mut sites = start.to_vec();
+        if statistics != Statistics::Distinguishable {
+            sites.sort_unstable();
+        }
+        if statistics == Statistics::Fermions && sites.windows(2).any(|w| w[0] == w[1]) {
+            return Err(QsoError::invalid("start", "fermions cannot share a site"));
+        }
+        let terms = Terms::new(graph, generator, gamma, statistics);
+        for (j, g) in group.generators().iter().enumerate() {
+            if g.len() != n || !terms.is_symmetry(g) {
+                return Err(QsoError::invalid(
+                    "group",
+                    format!("generator {j} is not an automorphism of the graph"),
+                ));
+            }
+        }
+        let log_group: f64 = group.orbit_sizes().iter().map(|&s| (s as f64).ln()).sum();
+        let nodes = n as f64;
+        let log_configurations = match statistics {
+            Statistics::Distinguishable => k as f64 * nodes.ln(),
+            Statistics::Bosons => log_binomial(nodes + k as f64 - 1.0, k),
+            Statistics::Fermions => log_binomial(nodes, k),
+        };
+        if log_configurations - log_group > (MAX_IMAGE_ORBITS as f64).ln() + 1.0 {
+            return Err(QsoError::invalid(
+                "start",
+                format!(
+                    "at least {:.1e} orbits (limit {MAX_IMAGE_ORBITS})",
+                    (log_configurations - log_group).exp()
+                ),
+            ));
+        }
+        let images = Arc::new(ImagesHandle(Images::new(n, group.generators(), log_group)));
+        let mut walk = GroupInteractingWalk {
+            terms,
+            statistics,
+            generator,
+            gamma,
+            start: sites,
+            log_group,
+            images,
+            orbits: Vec::new(),
+            index: HashMap::new(),
+            hopping: Vec::new(),
+            same: Vec::new(),
+            adjacent: Vec::new(),
+            potential: Vec::new(),
+            hamiltonian: CsrMatrix::from_triplets(0, &[])?,
+            spectral: OnceLock::new(),
+        };
+        walk.search(graph)?;
+        walk.assemble()?;
+        Ok(walk)
+    }
+
+    /// The walk started from the configuration `start`, reduced by the
+    /// automorphisms that fix each of its occupied nodes
+    /// ([`Graph::stabilizer`]); the start's orbit is the configuration
+    /// alone.
+    pub fn from_start(
+        graph: &Graph,
+        generator: Generator,
+        gamma: f64,
+        statistics: Statistics,
+        start: &[usize],
+    ) -> Result<Self> {
+        let n = graph.num_nodes();
+        if let Some(&u) = start.iter().find(|&&u| u >= n) {
+            return Err(QsoError::invalid("start", format!("node {u} of {n} nodes")));
+        }
+        let mut fixed = start.to_vec();
+        fixed.sort_unstable();
+        fixed.dedup();
+        let group = graph.stabilizer(&fixed)?;
+        Self::new(graph, generator, gamma, statistics, start, &group)
+    }
+
+    /// The breadth-first search for the orbits and the hopping between
+    /// them, a batch of orbits at a time in parallel.
+    fn search(&mut self, graph: &Graph) -> Result<()> {
+        let statistics = self.statistics;
+        let images = self.images.clone();
+        let Some(form) = images.0.form(&self.start, statistics)? else {
+            return Err(QsoError::invalid(
+                "start",
+                "no invariant state contains the start (a symmetry maps it to minus itself)",
+            ));
+        };
+        self.index.insert(form.key, 0);
+        self.orbits.push(Orbit {
+            sites: self.start.clone(),
+            odd: form.odd,
+            log_stabiliser: form.log_stabiliser,
+        });
+        let fermions = statistics == Statistics::Fermions;
+        let k = self.start.len();
+        let max_degree = (0..graph.num_nodes())
+            .map(|u| graph.neighbors(u).len())
+            .max()
+            .unwrap_or(0);
+        let per_orbit = (k as u64).saturating_mul(max_degree.max(1) as u64);
+        let batch = ((1u64 << 22) / per_orbit).clamp(1, 1 << 16) as usize;
+        let neighbours: Vec<Vec<usize>> = (0..graph.num_nodes())
+            .map(|u| {
+                let mut v: Vec<usize> = graph.neighbors(u).iter().map(|&(v, _)| v).collect();
+                v.sort_unstable();
+                v
+            })
+            .collect();
+        let mut lo = 0;
+        while lo < self.orbits.len() {
+            let hi = self.orbits.len().min(lo + batch);
+            let tasks = (crate::parallel::threads() * 8).max(1);
+            let per = (hi - lo).div_ceil(tasks).max(1);
+            let chunks = (hi - lo).div_ceil(per);
+            let orbits = &self.orbits;
+            let terms = &self.terms;
+            let neighbours = &neighbours;
+            let found = crate::parallel::map_tasks(chunks, |c| -> Result<Vec<_>> {
+                let mut out = Vec::new();
+                let mut scratch = terms.scratch(k);
+                for orbit in &orbits[lo + c * per..(lo + (c + 1) * per).min(hi)] {
+                    let sites = &orbit.sites;
+                    let mut distinct: Vec<(usize, usize)> = Vec::new();
+                    for &s in sites {
+                        match distinct.iter_mut().find(|e| e.0 == s) {
+                            Some(e) => e.1 += 1,
+                            None => distinct.push((s, 1)),
+                        }
+                    }
+                    let same: usize = distinct.iter().map(|&(_, m)| m * (m - 1) / 2).sum();
+                    let mut adjacent = 0usize;
+                    for (x, &(u, mu)) in distinct.iter().enumerate() {
+                        for &(v, mv) in &distinct[x + 1..] {
+                            if neighbours[u].binary_search(&v).is_ok() {
+                                adjacent += mu * mv;
+                            }
+                        }
+                    }
+                    let mut potential = 0.0;
+                    let mut seen: HashMap<Vec<u32>, usize> = HashMap::new();
+                    let mut hops: Vec<Hop> = Vec::new();
+                    let mut error = None;
+                    terms.apply(sites, &mut scratch, |target, amplitude| {
+                        if error.is_some() {
+                            return;
+                        }
+                        if target == sites.as_slice() {
+                            potential += amplitude;
+                            return;
+                        }
+                        match images.0.form(target, statistics) {
+                            Ok(Some(form)) => {
+                                let signed = if fermions && form.odd {
+                                    -amplitude
+                                } else {
+                                    amplitude
+                                };
+                                let h = *seen.entry(form.key).or_insert_with_key(|key| {
+                                    hops.push(Hop {
+                                        key: key.clone(),
+                                        sites: target.to_vec(),
+                                        odd: form.odd,
+                                        log_stabiliser: form.log_stabiliser,
+                                        amplitude: 0.0,
+                                    });
+                                    hops.len() - 1
+                                });
+                                hops[h].amplitude += signed;
+                            }
+                            Ok(None) => {}
+                            Err(e) => error = Some(e),
+                        }
+                    });
+                    if let Some(e) = error {
+                        return Err(e);
+                    }
+                    out.push((same, adjacent, potential, hops));
+                }
+                Ok(out)
+            });
+            let mut o = lo;
+            for chunk in found {
+                for (same, adjacent, potential, hops) in chunk? {
+                    self.same.push(same as f64);
+                    self.adjacent.push(adjacent as f64);
+                    self.potential.push(potential);
+                    let size_log = self.orbits[o].log_stabiliser;
+                    for Hop {
+                        key,
+                        sites: moved,
+                        odd,
+                        log_stabiliser,
+                        amplitude: signed,
+                    } in hops
+                    {
+                        let target = match self.index.get(&key) {
+                            Some(&t) => t,
+                            None => {
+                                if self.orbits.len() >= MAX_IMAGE_ORBITS {
+                                    return Err(QsoError::invalid(
+                                        "start",
+                                        format!("more than {MAX_IMAGE_ORBITS} orbits"),
+                                    ));
+                                }
+                                let t = self.orbits.len() as u32;
+                                self.orbits.push(Orbit {
+                                    sites: moved,
+                                    odd,
+                                    log_stabiliser,
+                                });
+                                self.index.insert(key, t);
+                                t
+                            }
+                        };
+                        let rep = &self.orbits[target as usize];
+                        // The amplitudes were signed by their forms'
+                        // parity: relative to the target's representative,
+                        // and the source's representative is the source.
+                        let sign = if fermions && rep.odd { -1.0 } else { 1.0 };
+                        let ratio = (0.5 * (rep.log_stabiliser - size_log)).exp();
+                        let v = sign * ratio * signed;
+                        if v != 0.0 {
+                            self.hopping.push((target as usize, o, v));
+                        }
+                    }
+                    if self.hopping.len() + self.orbits.len() > MAX_ORBIT_ENTRIES {
+                        return Err(QsoError::invalid(
+                            "start",
+                            format!("the reduced Hamiltonian exceeds {MAX_ORBIT_ENTRIES} entries"),
+                        ));
+                    }
+                    o += 1;
+                }
+            }
+            lo = hi;
+        }
+        Ok(())
+    }
+
+    /// The reduced Hamiltonian from the hopping and the interaction.
+    fn assemble(&mut self) -> Result<()> {
+        let d = self.orbits.len();
+        let mut triplets = self.hopping.clone();
+        let (on_site, neighbour) = (self.terms.on_site, self.terms.neighbour);
+        for o in 0..d {
+            let diag = self.potential[o] + on_site * self.same[o] + neighbour * self.adjacent[o];
+            if diag != 0.0 {
+                triplets.push((o, o, diag));
+            }
+        }
+        self.hamiltonian = CsrMatrix::from_triplets(d, &triplets)?;
+        self.spectral = OnceLock::new();
+        Ok(())
+    }
+
+    /// The same walk with on-site interaction `on_site` (U) and interaction
+    /// `neighbour` (V) between particles on adjacent nodes.
+    pub fn with_interaction(mut self, on_site: f64, neighbour: f64) -> Result<Self> {
+        if !(on_site.is_finite() && neighbour.is_finite()) {
+            return Err(QsoError::invalid(
+                "interaction",
+                "interaction strengths must be finite",
+            ));
+        }
+        self.terms.on_site = on_site;
+        self.terms.neighbour = neighbour;
+        self.assemble()?;
+        Ok(self)
+    }
+
+    pub fn generator(&self) -> Generator {
+        self.generator
+    }
+
+    pub fn gamma(&self) -> f64 {
+        self.gamma
+    }
+
+    /// The on-site interaction `U`.
+    pub fn on_site(&self) -> f64 {
+        self.terms.on_site
+    }
+
+    /// The interaction `V` between particles on adjacent nodes.
+    pub fn neighbour(&self) -> f64 {
+        self.terms.neighbour
+    }
+
+    pub fn statistics(&self) -> Statistics {
+        self.statistics
+    }
+
+    pub fn particles(&self) -> usize {
+        self.start.len()
+    }
+
+    pub fn num_nodes(&self) -> usize {
+        self.images.0.n
+    }
+
+    /// The start (sorted for bosons and fermions).
+    pub fn start(&self) -> &[usize] {
+        &self.start
+    }
+
+    /// Number of orbits reachable from the start that carry an invariant
+    /// state.
+    pub fn num_orbits(&self) -> usize {
+        self.orbits.len()
+    }
+
+    /// `ln` of the number of configurations of the particles.
+    pub fn log_num_configurations(&self) -> f64 {
+        let nodes = self.num_nodes() as f64;
+        let k = self.start.len();
+        match self.statistics {
+            Statistics::Distinguishable => k as f64 * nodes.ln(),
+            Statistics::Bosons => log_binomial(nodes + k as f64 - 1.0, k),
+            Statistics::Fermions => log_binomial(nodes, k),
+        }
+    }
+
+    /// `ln` of the group's order.
+    pub fn log_group_order(&self) -> f64 {
+        self.log_group
+    }
+
+    /// The representative of orbit `o`.
+    pub fn representative(&self, o: usize) -> &[usize] {
+        &self.orbits[o].sites
+    }
+
+    /// The configurations in orbit `o`.
+    pub fn orbit_size(&self, o: usize) -> f64 {
+        (self.log_group - self.orbits[o].log_stabiliser)
+            .exp()
+            .round()
+    }
+
+    pub fn hamiltonian(&self) -> &CsrMatrix {
+        &self.hamiltonian
+    }
+
+    fn spectral(&self) -> Option<&(Vec<f64>, RMatrix)> {
+        self.spectral
+            .get_or_init(|| {
+                let d = self.num_orbits();
+                (d <= DENSE_LIMIT).then(|| {
+                    let mut h = RMatrix::zeros(d, d);
+                    for o in 0..d {
+                        for (o2, v) in self.hamiltonian.row(o) {
+                            h[(o, o2)] = v;
+                        }
+                    }
+                    eigh_real(&h)
+                })
+            })
+            .as_ref()
+    }
+
+    /// Eigenvalues of the reduced Hamiltonian (up to [`DENSE_LIMIT`]
+    /// orbits).
+    pub fn spectrum(&self) -> Option<&[f64]> {
+        self.spectral().map(|(v, _)| v.as_slice())
+    }
+
+    fn lookup(&self, sites: &[usize]) -> Result<Lookup> {
+        if sites.len() != self.start.len() {
+            return Err(QsoError::DimensionMismatch {
+                expected: self.start.len(),
+                actual: sites.len(),
+            });
+        }
+        let n = self.num_nodes();
+        if let Some(&u) = sites.iter().find(|&&u| u >= n) {
+            return Err(QsoError::invalid("sites", format!("node {u} of {n} nodes")));
+        }
+        let mut sorted = sites.to_vec();
+        if self.statistics != Statistics::Distinguishable {
+            sorted.sort_unstable();
+        }
+        if self.statistics == Statistics::Fermions && sorted.windows(2).any(|w| w[0] == w[1]) {
+            return Err(QsoError::invalid(
+                "sites",
+                "two fermions cannot occupy the same site",
+            ));
+        }
+        let Some(form) = self.images.0.form(&sorted, self.statistics)? else {
+            return Ok(Lookup::NoInvariant);
+        };
+        let Some(&o) = self.index.get(&form.key) else {
+            return Ok(Lookup::Unreachable);
+        };
+        let sign =
+            if self.statistics == Statistics::Fermions && form.odd != self.orbits[o as usize].odd {
+                -1.0
+            } else {
+                1.0
+            };
+        Ok(Lookup::Found(o as usize, sign))
+    }
+
+    /// The orbit and the sign of the configuration `sites` relative to
+    /// its representative; `None` if no invariant state holds it, an error
+    /// if the start cannot reach it.
+    pub fn locate(&self, sites: &[usize]) -> Result<Option<(usize, f64)>> {
+        match self.lookup(sites)? {
+            Lookup::Found(o, sign) => Ok(Some((o, sign))),
+            Lookup::NoInvariant => Ok(None),
+            Lookup::Unreachable => Err(QsoError::invalid(
+                "sites",
+                "the configuration is not reachable from the start",
+            )),
+        }
+    }
+
+    /// The orbit state of the configuration `sites` (the start's is the
+    /// start).
+    pub fn state_of(&self, sites: &[usize]) -> Result<Vec<C64>> {
+        let (o, sign) = self.locate(sites)?.ok_or_else(|| {
+            QsoError::invalid(
+                "sites",
+                "no invariant state contains this configuration (a symmetry maps it to minus \
+                 itself)",
+            )
+        })?;
+        let mut x = vec![C64::new(0.0, 0.0); self.num_orbits()];
+        x[o] = C64::new(sign, 0.0);
+        Ok(x)
+    }
+
+    fn check_state(&self, x: &[C64]) -> Result<()> {
+        if x.len() != self.num_orbits() {
+            return Err(QsoError::DimensionMismatch {
+                expected: self.num_orbits(),
+                actual: x.len(),
+            });
+        }
+        Ok(())
+    }
+
+    /// `e^{−iHt} x` on the orbits.
+    pub fn evolve(&self, x0: &[C64], t: f64) -> Result<Vec<C64>> {
+        self.check_state(x0)?;
+        propagate(&self.hamiltonian, self.spectral(), x0, t)
+    }
+
+    /// The probability of each orbit.
+    pub fn orbit_probabilities(&self, x: &[C64]) -> Result<Vec<f64>> {
+        self.check_state(x)?;
+        Ok(x.iter().map(|a| a.norm_sqr()).collect())
+    }
+
+    /// The probability of the configuration `sites` (its orbit's over its
+    /// size; zero for a configuration no invariant state holds or the
+    /// start cannot reach).
+    pub fn probability_of(&self, x: &[C64], sites: &[usize]) -> Result<f64> {
+        self.check_state(x)?;
+        Ok(match self.lookup(sites)? {
+            Lookup::Found(o, _) => x[o].norm_sqr() / self.orbit_size(o),
+            Lookup::NoInvariant | Lookup::Unreachable => 0.0,
+        })
+    }
+
+    /// The density of particles on every node: each orbit's probability
+    /// spread evenly over the orbits of the nodes its representative
+    /// occupies.
+    pub fn densities(&self, x: &[C64]) -> Result<Vec<f64>> {
+        self.check_state(x)?;
+        let n = self.num_nodes();
+        let group = &self.images.0.group;
+        // Orbits of the group on the nodes.
+        let mut members: HashMap<u32, Vec<usize>> = HashMap::new();
+        for u in 0..n {
+            members.entry(group.root(u as u32)).or_default().push(u);
+        }
+        let mut density = vec![0.0; n];
+        for (o, orbit) in self.orbits.iter().enumerate() {
+            let p = x[o].norm_sqr();
+            for &u in &orbit.sites {
+                let class = &members[&group.root(u as u32)];
+                let share = p / class.len() as f64;
+                for &v in class {
+                    density[v] += share;
+                }
+            }
+        }
+        Ok(density)
+    }
+}
+
+#[cfg(test)]
+mod tests;

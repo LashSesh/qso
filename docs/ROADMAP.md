@@ -56,7 +56,7 @@ which withdraws the results of version 1.
 | Statevector speed | specialised kernels (1.1); gate fusion and cache blocking (1.3.0): 16-qubit layers 4.7× and 18–24-qubit layers 1.6–2.6× faster than in 1.2; batched evaluation; AVX and NEON kernels close to memory bandwidth and a blocked adjoint pass (1.11); single precision, one more qubit and about twice the speed on large registers (1.20); a worker pool that stays awake between short simulations (1.24) | spinning workers cost CPU time between simulations (`QSO_POOL_SPIN_US=0` turns it off) |
 | Boson sampling | exact probabilities and exact sampling (1.1); partial distinguishability, loss and Gaussian boson sampling with hafnians and torontonians (1.14) | mixed Gaussian states with many photons spread over many modes are impractical (10¹² operations at 20 photons in 10 modes) |
 | Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4); slow noise from Markov processes (telegraph, Ornstein–Uhlenbeck, quasi-static, 1/f) averaged exactly on density matrices (1.44) | noise learning for layers of two-qubit Clifford gates only, on density matrices up to 10 qubits and Pauli frames up to 64 (1.12, 1.31), with non-Pauli channels twirled one at a time; mitigation with the learned model above 24 qubits only on matrix-product states, for channels that are mixtures of unitaries (1.31); no leakage; channels on at most four qubits (1.30); slow noise averaged exactly up to 12 qubits and processes with finitely many states (1.44), sampled on trajectories beyond (1.30); virtual distillation (1.17) mitigates only its measured copies' preparation |
-| Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18); interacting bosons, fermions and distinguishable particles with certificates for graph isomorphism (1.29); symmetry for driven walks, open walks on orbitals, coined walks with dephasing, hypercubes with dephasing up to d = 230 (1.38); interacting walkers on the orbits of automorphisms (three bosons on Q₉: 2284 orbits of 22.5 million configurations) and up to four particles on hypercubes (1.43); open walks on large symmetric graphs from point stabilisers (Q₁₈, H(4, 10), J(24, 4); 1.48) | interacting walkers stop at 2²² configurations without symmetry and 2²⁷ with it, whose orbits come from a union–find over every configuration (1.43); open walks beyond 8192 nodes need a start whose stabiliser leaves few orbitals (dense graphs and circulants stay at 8192 nodes; 1.48); pretty good transfer on other graphs has no exact reference |
+| Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18); interacting bosons, fermions and distinguishable particles with certificates for graph isomorphism (1.29); symmetry for driven walks, open walks on orbitals, coined walks with dephasing, hypercubes with dephasing up to d = 230 (1.38); interacting walkers on the orbits of automorphisms (three bosons on Q₉: 2284 orbits of 22.5 million configurations) and up to four particles on hypercubes (1.43); open walks on large symmetric graphs from point stabilisers (Q₁₈, H(4, 10), J(24, 4); 1.48); interacting walkers on Hamming, Johnson and Kneser graphs from canonical forms (1.53) and on any graph from minimal images under a group (three fermions on Paley(3209): 1068 orbits of 5.5·10⁹ configurations; 1.58) | interacting walkers without symmetry stop at 2²² configurations, and dense graphs with small groups stay dense on their orbits (three bosons from one node of Paley(809) exceed 2²⁶ entries; 1.58); open walks beyond 8192 nodes need a start whose stabiliser leaves few orbitals (dense graphs and circulants stay at 8192 nodes; 1.48); pretty good transfer on other graphs has no exact reference |
 | Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37); the ¹³C bath of an NV centre by the cluster-correlation expansion (1.39); the optical cycle, ODMR, pulsed readout and magnetometer sensitivity in fields of any direction, and ensembles (1.40); sparse relaxation blocks propagated by Krylov steps, Redfield relaxation from sparse terms and equivalent spins: seven and eight relaxing protons for seconds (1.41); optimal control with relaxation on sparse blocks and on the orbits of equivalent spins, seven and eight spins (1.46); Redfield relaxation with anisotropic diffusion and model-free internal motion (1.49); reaction kinetics with spins: PASADENA, ALTADENA and SABRE as they run (1.50); field profiles with relaxation beyond six spins, the relaxation interpolated over the field (1.51); exchange and reactions on sparse blocks with iterative steady states and field profiles: SABRE with nine spins in the complex beside seven in the substrate (1.54); Redfield relaxation applied without storing it, with its analytic field derivative: nine and ten relaxing spins whose superoperator would need 6 to 74 GB (1.55); product-formula bounds whose remainder runs over the terms that do not commute, the error averaged over states, and step counts for a target error: half the steps of the bounds of Childs et al. for Heisenberg chains of 10 to 64 spins (1.56) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the commutator bound of product formulas (1.56) still sums its remainder by the triangle inequality, about 2.3 times the empirical step counts of Heisenberg chains and loose at few steps and order 6, where its budget stops the degree early; Redfield relaxation takes rigid-body diffusion and model-free internal motion, not correlated motions of groups (1.49), and propagations beyond 1.5·10¹² operations or 2 GiB are refused (eleven protons with dipolar relaxation, nine for 100 s; 1.41); chemical exchange and reaction kinetics take Krylov steps beyond 2048 elements per block (1.54), unaffordable in the laboratory frame at millitesla fields and more, and only one reactant of a reaction carries spins; field profiles with relaxation hold the relaxation at up to 33 fields (1.51), or apply Redfield relaxation without storing it where those would not fit (1.55), where work bounds them (eight spins with dipolar relaxation: two steps over 0.02 s per evaluation within the limit), and have many local optima; an evaluation of eight relaxing spins takes tens of seconds (1.46); the NV bath of 1.39 takes ideal pulses only (finite ones: the generalised expansion, 1.45), its expansion can diverge (results beyond `|L| = 1` are refused), and the nuclei next to the vacancy need given contact couplings (1.39); the optical model's rotating-wave approximation fails near the ground-state anticrossing (1.40) |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
 | Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22); exact circuit distances of any model by a parallel search or the Brouwer–Zimmermann enumeration, with the lightest logical error as circuit locations (1.42); the search on the orbits of an error model's symmetries: [[144, 12, 12]] over three rounds of the depth-8 cycle has circuit distance 10 (1.47); logical failure rates far below sampling by splitting, with their leading term (surface codes to 10⁻⁹, [[72, 12, 6]] to 10⁻¹³; 1.52); decoding in sliding windows of rounds by matching or BP+OSD, round by round, at constant time per round up to 4000 rounds (1.57) | exact circuit distances need time exponential in the distance (each weight about 17 times the last on bicycle circuits); symmetries divide it by a factor that grows with their number (41 to 43 for 72); splitting needs a burn-in long enough, which its error does not show (1.52); the error model of an experiment is built whole, in time quadratic in the rounds (about 5000 rounds of distance 5 at the limit), and windows are decoded one after another, not in parallel (1.57) |
@@ -6096,7 +6096,7 @@ Hartree–Fock and full CI. The rules stay: no new dependency of the
 crate, an independent reference for every deliverable, reference tools
 in the cross-validation only.
 
-### 1.58 — Interacting walkers on any symmetric graph (M)
+### 1.58 — Interacting walkers on any symmetric graph (M, delivered)
 
 Use case: several bosons, fermions or distinguishable particles on
 Paley graphs, circulants, strongly regular graphs and Cayley graphs
@@ -6114,6 +6114,85 @@ Validation: orbits equal to 1.43's union-find where those fit and to
 probability equal to the full walk where that fits; orbit counts equal
 to Burnside's lemma over the group's elements (small groups) and to the
 cycle index; free particles equal to permanents and determinants.
+
+Delivered in `walks/interacting/images.rs` (`GroupInteractingWalk`,
+Python `GroupInteractingWalk`):
+
+- **Minimal images.** A configuration's key is the smallest
+  configuration of its orbit. For bosons and fermions the smallest node a
+  symmetry can bring a particle to is the smallest orbit root among the
+  particles' nodes (a node holding more particles first, as its image
+  repeats); each particle that reaches it is a branch, the configuration
+  is mapped so that it sits at the root, and the search continues in the
+  stabiliser of the root. Branches that fall behind are dropped; the
+  survivors reach the minimal image, one per coset of the final
+  stabiliser, so they count `|Stab(c)|`, and for fermions they must agree
+  on the parity of the particles' order (otherwise no invariant state).
+  Distinguishable particles go to their roots one after another.
+- **Stabilisers.** A group is held by its generators and its exact order
+  (from the `AutomorphismGroup` of 1.3). The stabiliser of a root `m` has
+  order `|K|/|m^K|`; a randomised Schreier–Sims run with base `[m, …]`
+  stops exactly when its basic orbits reach it, and its strong
+  generators below `m` generate the stabiliser. Each stabiliser met is
+  cached with an orbit forest over the nodes; a stabiliser of order one
+  ends a search.
+- **Orbits from the start** by breadth-first search, as in 1.53, with the
+  hops and potential of `InteractingWalk`. `from_start` reduces by the
+  start's stabiliser; `new` takes any group of automorphisms (the whole
+  group: orbit states, where the start's orbit is the initial state).
+
+Changes to the plan:
+
+- **Minimal images by branching, not the paper's search.** Jefferson et
+  al. compute minimal images of sets under large groups with refined
+  partitions; for at most six particles the branches of the smallest root
+  are few (at most `k!` per level), and the stabilisers along them are
+  what the orbit sizes need anyway.
+- **Groups with known order.** Given generators alone are not accepted:
+  the order makes the randomised stabilisers exact, and the automorphism
+  search of 1.3 supplies it (one second for Paley(1601)).
+
+Not done, and why:
+
+- **Dense graphs with small groups** stay dense on the orbits: three
+  bosons from one node of Paley(401) under its stabiliser (order 200)
+  give 54 139 orbits with 600 hops each (52 s to find, 55 s to evolve to
+  t = 1), and Paley(809) exceeds the 2²⁶ entries.
+- **Groups beyond the automorphism search** (graphs of hundreds of
+  thousands of nodes, or groups given by generators without their order)
+  need a deterministic Schreier–Sims to fix their order first.
+
+Measured (four cores, release build, `U = 1`, `t = 1`):
+
+| Graph | Particles from | Group (order) | Configurations | Orbits | Group, search, evolution |
+|---|---|---|---|---|---|
+| Paley(401) | 3 bosons, node 0 | stabiliser (200) | 1.1·10⁷ | 54 139 | 0.04 s, 52 s, 55 s |
+| Paley(401) | 3 fermions, 0, 1, 3 | whole (8.0·10⁴) | 1.1·10⁷ | 132 | 0.04 s, 0.1 s, < 0.01 s |
+| Paley(809) | 3 bosons, node 0 | whole (3.3·10⁵) | 8.9·10⁷ | 273 | 0.24 s, 0.5 s, 0.01 s |
+| Paley(1601) | 3 fermions, 0, 1, 3 | whole (1.3·10⁶) | 6.8·10⁸ | 532 | 1.3 s, 2.0 s, 0.1 s |
+| Paley(3209) | 3 fermions, 0, 1, 3 | whole (5.2·10⁶) | 5.5·10⁹ | 1068 | 4.9 s, 7.8 s, 1.1 s |
+| Paley(101) | 4 fermions, 0, 1, 3, 7 | whole (5050) | 4.1·10⁶ | 833 | < 0.01 s, 0.2 s, 0.5 s |
+| circulant(2000; 1, 7, 40) | 3 bosons, node 0 | whole (4000) | 1.3·10⁹ | 334 334 | 0.07 s, 12 s, 1.5 s |
+
+1.43's union–find stops at 2²⁷ configurations; Paley(1601) has 6.8·10⁸.
+
+Validation: every configuration's probability equal to the full walk of
+1.29 to 10⁻¹² (Petersen, Paley(13), circulant(12; 1, 4), the 3 × 4
+rook's graph, Shrikhande, `Q₃`; bosons, fermions and distinguishable
+particles; both generators; `U` and `V`), the orbit counts and states of
+1.43 from one configuration and under the whole group (orbit states with
+the fermionic signs); orbit counts equal to Burnside's lemma over every
+element of the group (Petersen, Paley(17), circulant(15; 1, 3),
+Shrikhande; two and three particles; for fermions the trace on the
+exterior power); minimal images equal to the smallest element of the
+orbit and stabiliser orders to those counted over the group (Paley(29),
+200 random configurations); orbit counts equal to 1.53's on `H(3, 3)`,
+`J(7, 2)` and `K(7, 2)`; free bosons on Paley(101) equal to permanents of
+the strongly regular graph's closed-form amplitudes (relative 10⁻¹⁰), and
+free fermions on the orbit state of {0, 1, 3} on Paley(401) under its
+whole group to the sum of determinants over the orbit with its signs; a
+start that a symmetry maps to minus itself ({0, 1, 2} on Paley(401),
+by x ↦ 2 − x) is refused.
 
 ### 1.59 — Reactions of two spin-carrying reactants (M)
 

@@ -1169,6 +1169,25 @@ agree with brute force on random graphs.
   appearance (one configuration and a summed amplitude, signed by the
   form's parity for fermions), then new orbits numbered in order;
   neighbours are generated from the words, never from a graph.
+* On any graph (`walks/interacting/images.rs`, 1.58) a group is held by
+  generators and its exact order (the product of the basic orbits of an
+  `AutomorphismGroup`). For each group met, an orbit forest over the
+  nodes (breadth-first from the smallest node of each orbit, over the
+  generators and ten product-replacement elements, so the trees stay
+  shallow) gives each node's root and the path to it. The stabiliser of a
+  root `m` in a group `K` is built by randomised Schreier–Sims with base
+  `[m, …]`: random elements are sifted through Schreier trees (inverse
+  generators along the path), residues added to every level they fix,
+  until the basic orbits multiply to `|K|/|m^K|` (exact, since a proper
+  subgroup is at least twice smaller). Stabilisers are cached by the
+  sequence of roots in a mutex-guarded map; the trivial group is a
+  marker without tables. A minimal image for a multiset keeps branches
+  (the particles' images) that reach the smallest root, larger
+  multiplicity first, lifting the configuration with the tree's inverse
+  generators; the number of surviving branches times the last stabiliser
+  is `|Stab(c)|`, and the parity of each branch's sort order is the
+  fermionic sign. The search, batching and Hamiltonian entries are those
+  of 1.53, with `Terms::apply` of 1.29 for the hops and the potential.
 * Certificates by orbits (`InteractingWalk::certificate_by_orbits`): one
   row of transition probabilities per orbit of the automorphisms, by
   Krylov steps to 10⁻¹⁴ per unit time unless the walk was diagonalised
