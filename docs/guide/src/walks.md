@@ -389,19 +389,25 @@ On four cores (release build, interaction `U = 1`, `t = 1`):
 
 | Graph | Particles from | Group | Configurations | Orbits | Group, search, evolution |
 |---|---|---|---|---|---|
-| Paley(401) | 3 bosons, node 0 | stabiliser of the node (200) | 1.1·10⁷ | 54 139 | 0.04 s, 52 s, 55 s |
+| Paley(401) | 3 bosons, node 0 | stabiliser of the node (200) | 1.1·10⁷ | 54 139 | 0.04 s, 29 s, 54 s |
 | Paley(401) | 3 fermions, nodes 0, 1, 3 | whole (8.0·10⁴) | 1.1·10⁷ | 132 | 0.04 s, 0.1 s, < 0.01 s |
-| Paley(1601) | 3 fermions, nodes 0, 1, 3 | whole (1.3·10⁶) | 6.8·10⁸ | 532 | 1.3 s, 2.0 s, 0.1 s |
-| Paley(3209) | 3 fermions, nodes 0, 1, 3 | whole (5.2·10⁶) | 5.5·10⁹ | 1068 | 4.9 s, 7.8 s, 1.1 s |
-| Paley(101) | 4 fermions, nodes 0, 1, 3, 7 | whole (5050) | 4.1·10⁶ | 833 | < 0.01 s, 0.2 s, 0.5 s |
-| circulant(2000; 1, 7, 40) | 3 bosons, node 0 | whole (4000) | 1.3·10⁹ | 334 334 | 0.07 s, 12 s, 1.5 s |
+| Paley(1601) | 3 fermions, nodes 0, 1, 3 | whole (1.3·10⁶) | 6.8·10⁸ | 532 | 1.2 s, 1.1 s, 0.1 s |
+| Paley(3209) | 3 fermions, nodes 0, 1, 3 | whole (5.2·10⁶) | 5.5·10⁹ | 1068 | 5.1 s, 5.3 s, 1.2 s |
+| Paley(101) | 4 fermions, nodes 0, 1, 3, 7 | whole (5050) | 4.1·10⁶ | 833 | < 0.01 s, 0.1 s, 0.5 s |
+| circulant(2000; 1, 7, 40) | 3 bosons, node 0 | whole (4000) | 1.3·10⁹ | 334 334 | 0.08 s, 7.9 s, 1.5 s |
 
 A dense graph with a small group stays dense on its orbits (Paley(401)
 from one node: 600 hops per orbit, 3·10⁷ entries), and Paley(809) from
-one node exceeds the 2²⁶ entries. The group comes from the automorphism
-search of `Graph`, which takes seconds for these graphs; the limits are
-those of `CoordinateInteractingWalk`, with 2²⁸ node labels for the
-stabilisers met (three per node and stabiliser).
+one node exceeds the 2²⁶ entries. Where the configurations fit within
+the 2²⁷ of `SymmetricInteractingWalk`, its union–find is faster (9.3 s
+for Paley(401) from one node). A group with many small stabilisers, such
+as a large abelian group, keeps many tables: three bosons on a comb of 100
+spine nodes with two leaves each (group 2¹⁰⁰) take 1.5 GB and 32 s, and
+the stabilisers' tables are bounded by 2²⁸ node labels (four per node and
+group, and one per node for each generator). The group comes from the
+automorphism search of `Graph`, which takes seconds for these graphs, and
+its order is checked; the other limits are those of
+`CoordinateInteractingWalk`.
 
 Certificates need every configuration as a start, but the
 automorphisms of the graph map starts onto starts with the same

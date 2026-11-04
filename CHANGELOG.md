@@ -18,7 +18,7 @@ All notable changes to this project are documented here. The format follows
   each stabiliser built exactly by a randomised Schreier–Sims run that
   stops at the known order. Three fermions on Paley(3209): 5.5·10⁹
   configurations on 1068 orbits in 13 s; three bosons on a circulant of
-  2000 nodes: 334 334 orbits in 12 s. Equal to the full walk, to 1.43's
+  2000 nodes: 334 334 orbits in 8 s. Equal to the full walk, to 1.43's
   union–find orbits, to Burnside's lemma and to permanents and
   determinants of closed-form amplitudes.
 

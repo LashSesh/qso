@@ -1043,8 +1043,8 @@ impl PySymmetricInteractingWalk {
 
 /// Interacting particles on any graph, reduced by a group of its
 /// automorphisms, on the orbits reachable from the start found from
-/// minimal images (no configuration is visited unless it is an orbit's
-/// representative). With `whole_group=False` the group is the stabiliser
+/// minimal images (the configurations one hop from each orbit's
+/// representative are imaged; no other configuration is visited). With `whole_group=False` the group is the stabiliser
 /// of the start's nodes and the start configuration is the initial state;
 /// with `whole_group=True` it is the whole automorphism group, and states
 /// are orbit states (`state_of(start)` is the start's).
@@ -1207,11 +1207,13 @@ impl PyGroupInteractingWalk {
 
     fn __repr__(&self) -> String {
         format!(
-            "GroupInteractingWalk({} nodes, {} {}, {} orbits)",
+            "GroupInteractingWalk({} nodes, {} {}, {} orbits, U={}, V={})",
             self.inner.num_nodes(),
             self.inner.particles(),
             self.inner.statistics().name(),
-            self.inner.num_orbits()
+            self.inner.num_orbits(),
+            self.inner.on_site(),
+            self.inner.neighbour()
         )
     }
 }

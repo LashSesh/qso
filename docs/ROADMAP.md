@@ -6156,8 +6156,12 @@ Not done, and why:
 
 - **Dense graphs with small groups** stay dense on the orbits: three
   bosons from one node of Paley(401) under its stabiliser (order 200)
-  give 54 139 orbits with 600 hops each (52 s to find, 55 s to evolve to
+  give 54 139 orbits with 600 hops each (29 s to find, 54 s to evolve to
   t = 1), and Paley(809) exceeds the 2²⁶ entries.
+- **Groups with many small stabilisers** (large abelian groups) keep a
+  table per stabiliser met: three bosons on a comb with 100 spine nodes
+  and two leaves on each (group 2¹⁰⁰) take 1.5 GB and 32 s, where 1.43
+  takes 0.7 GB and 9 s; the tables stop at 2²⁸ node labels.
 - **Groups beyond the automorphism search** (graphs of hundreds of
   thousands of nodes, or groups given by generators without their order)
   need a deterministic Schreier–Sims to fix their order first.
@@ -6166,15 +6170,17 @@ Measured (four cores, release build, `U = 1`, `t = 1`):
 
 | Graph | Particles from | Group (order) | Configurations | Orbits | Group, search, evolution |
 |---|---|---|---|---|---|
-| Paley(401) | 3 bosons, node 0 | stabiliser (200) | 1.1·10⁷ | 54 139 | 0.04 s, 52 s, 55 s |
+| Paley(401) | 3 bosons, node 0 | stabiliser (200) | 1.1·10⁷ | 54 139 | 0.04 s, 29 s, 54 s |
 | Paley(401) | 3 fermions, 0, 1, 3 | whole (8.0·10⁴) | 1.1·10⁷ | 132 | 0.04 s, 0.1 s, < 0.01 s |
-| Paley(809) | 3 bosons, node 0 | whole (3.3·10⁵) | 8.9·10⁷ | 273 | 0.24 s, 0.5 s, 0.01 s |
-| Paley(1601) | 3 fermions, 0, 1, 3 | whole (1.3·10⁶) | 6.8·10⁸ | 532 | 1.3 s, 2.0 s, 0.1 s |
-| Paley(3209) | 3 fermions, 0, 1, 3 | whole (5.2·10⁶) | 5.5·10⁹ | 1068 | 4.9 s, 7.8 s, 1.1 s |
-| Paley(101) | 4 fermions, 0, 1, 3, 7 | whole (5050) | 4.1·10⁶ | 833 | < 0.01 s, 0.2 s, 0.5 s |
-| circulant(2000; 1, 7, 40) | 3 bosons, node 0 | whole (4000) | 1.3·10⁹ | 334 334 | 0.07 s, 12 s, 1.5 s |
+| Paley(809) | 3 bosons, node 0 | whole (3.3·10⁵) | 8.9·10⁷ | 273 | 0.27 s, 0.3 s, 0.02 s |
+| Paley(1601) | 3 fermions, 0, 1, 3 | whole (1.3·10⁶) | 6.8·10⁸ | 532 | 1.2 s, 1.1 s, 0.1 s |
+| Paley(3209) | 3 fermions, 0, 1, 3 | whole (5.2·10⁶) | 5.5·10⁹ | 1068 | 5.1 s, 5.3 s, 1.2 s |
+| Paley(101) | 4 fermions, 0, 1, 3, 7 | whole (5050) | 4.1·10⁶ | 833 | < 0.01 s, 0.1 s, 0.5 s |
+| circulant(2000; 1, 7, 40) | 3 bosons, node 0 | whole (4000) | 1.3·10⁹ | 334 334 | 0.08 s, 7.9 s, 1.5 s |
 
 1.43's union–find stops at 2²⁷ configurations; Paley(1601) has 6.8·10⁸.
+Where both fit, the union–find is faster (Paley(401) from one node:
+9.3 s).
 
 Validation: every configuration's probability equal to the full walk of
 1.29 to 10⁻¹² (Petersen, Paley(13), circulant(12; 1, 4), the 3 × 4
@@ -6193,6 +6199,48 @@ free fermions on the orbit state of {0, 1, 3} on Paley(401) under its
 whole group to the sum of determinants over the orbit with its signs; a
 start that a symmetry maps to minus itself ({0, 1, 2} on Paley(401),
 by x ↦ 2 − x) is refused.
+
+Review (independent, after delivery): the minimal images were found to
+be orbit invariants and the minimum of the orbit (larger multiplicity
+first is exactly lexicographic), the surviving branches disjoint cosets
+of the final stabiliser (so they count `|Stab(c)|`, also on the trivial
+shortcut and with repeated nodes), the fermionic parities consistent
+exactly when no symmetry maps a configuration to minus itself, the
+Hamiltonian entries and densities right, and the randomised
+Schreier–Sims run exact (a product of basic orbits above 0.74 of the
+order forces the whole stabiliser). 996 walks (stars, paths, products,
+weighted and disconnected graphs, 2 to 6 particles, all statistics, both
+generators, `U` and `V`) matched the full walk and 1.43 to 10⁻¹², and
+canonicity held for 8100 random pairs of configuration and group element.
+Findings, all fixed:
+
+- **The stabilisers' tables had no real bound.** The count missed the
+  generators and the whole group, a fixed node built a new copy of its
+  group, and distinguishable particles built one group per order of the
+  same nodes: a comb with a group 2¹⁰⁰ took 6.4 GB (1.43: 0.66 GB), and
+  five bosons on a smaller comb were killed by the kernel. Groups now keep
+  their stabilisers per root and are found again by their fixed nodes,
+  the stabiliser of a fixed node is the group itself, only inverse
+  permutations are kept, and the tables count what they hold: 1.5 GB for
+  the first comb, a clean error for the second.
+- **The search hardly used the threads**: a global lock per level and
+  hash maps of vectors with SipHash on the main thread. Stabilisers are
+  now reached through their parent (a read lock), keys are fixed arrays
+  with a fast hash, and hops into known orbits are resolved in the
+  workers (Paley(401) from one node: 29 s instead of 52 s, the circulant
+  8 s instead of 12 s).
+- **A wrong group was accepted**: a group claiming too small an order gave
+  orbit sizes summing to more than the configurations, and a generator
+  that is no permutation passed. Generators are checked as permutations,
+  the order is checked by sifting random elements after a Schreier–Sims
+  run of the whole group (too large an order cannot be reached), and
+  trivial generators with a non-trivial order are refused.
+- **Smaller ones**: densities per class of nodes instead of per node of
+  each class, the Hamiltonian assembled without a copy of the hops, an
+  orbit reached only through a cancelling amplitude no longer counted,
+  the docs of the limits, the Python docstring and `repr` corrected, and
+  tests of fermionic signs, distinguishable keys and deep chains (`Q₄`,
+  `J(7, 3)`, `K₆`, `H(3, 3)`), proper subgroups and wrong orders.
 
 ### 1.59 — Reactions of two spin-carrying reactants (M)
 

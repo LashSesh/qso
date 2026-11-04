@@ -276,7 +276,7 @@ fn minimal_images_are_invariants_of_the_orbits() {
     let g = generators::paley(29).unwrap();
     let group = g.automorphism_group();
     let all = elements(29, group.generators());
-    let images = Images::new(29, group.generators(), (all.len() as f64).ln());
+    let images = Images::new(29, group.generators(), (all.len() as f64).ln()).unwrap();
     let mut rng = Rng::seed_from_u64(158);
     for _ in 0..200 {
         let k = 2 + rng.below(3) as usize;
@@ -296,7 +296,7 @@ fn minimal_images_are_invariants_of_the_orbits() {
         let fixing = orbit.iter().filter(|c| **c == sites).count();
         orbit.sort();
         orbit.dedup();
-        let key: Vec<usize> = form.key.iter().map(|&x| x as usize).collect();
+        let key: Vec<usize> = form.key[..k].iter().map(|&x| x as usize).collect();
         assert_eq!(key, orbit[0], "{sites:?}");
         assert!(
             (form.log_stabiliser - (fixing as f64).ln()).abs() < 1e-9,
@@ -519,7 +519,136 @@ fn inputs_are_checked() {
     let walk =
         GroupInteractingWalk::from_start(&g, Generator::Adjacency, 1.0, stat, &[0, 0]).unwrap();
     assert!(walk.state_of(&[0]).is_err());
-    assert!(walk.evolve(&[C64::new(1.0, 0.0)], 1.0).is_err() || walk.num_orbits() == 1);
+    assert!(walk.num_orbits() > 1);
+    assert!(walk.evolve(&[C64::new(1.0, 0.0)], 1.0).is_err());
+}
+
+/// A group of `n` points from its generators and the order it claims.
+fn claimed(n: usize, generators: Vec<Vec<usize>>, orbit_sizes: Vec<usize>) -> AutomorphismGroup {
+    serde_json::from_value(serde_json::json!({
+        "n": n,
+        "base": (0..orbit_sizes.len()).collect::<Vec<_>>(),
+        "orbit_sizes": orbit_sizes,
+        "generators": generators,
+    }))
+    .unwrap()
+}
+
+#[test]
+fn wrong_orders_and_subgroups() {
+    // Paley(13) and its subgroup x ↦ 3x + b (order 39).
+    let g = generators::paley(13).unwrap();
+    let translate: Vec<usize> = (0..13).map(|x| (x + 1) % 13).collect();
+    let scale: Vec<usize> = (0..13).map(|x| 3 * x % 13).collect();
+    let gens = vec![translate.clone(), scale.clone()];
+    let run = |group: &AutomorphismGroup, statistics| {
+        GroupInteractingWalk::new(&g, Generator::Adjacency, 1.0, statistics, &[0, 1], group)
+    };
+    for (sizes, ok) in [(vec![13, 3], true), (vec![13, 6], false), (vec![13], false)] {
+        let group = claimed(13, gens.clone(), sizes.clone());
+        for statistics in STATISTICS {
+            let walk = run(&group, statistics);
+            assert_eq!(walk.is_ok(), ok, "{sizes:?} {statistics:?}");
+            if let Ok(w) = walk {
+                // The proper subgroup reduces as 1.43 does with it.
+                let theirs = SymmetricInteractingWalk::new(
+                    &g,
+                    Generator::Adjacency,
+                    1.0,
+                    statistics,
+                    2,
+                    &gens,
+                )
+                .unwrap();
+                assert_eq!(w.num_orbits(), theirs.num_orbits());
+                let total: f64 = (0..w.num_orbits()).map(|o| w.orbit_size(o)).sum();
+                assert!(total <= w.log_num_configurations().exp() + 0.5);
+            }
+        }
+    }
+    // Not a permutation, and trivial generators with a non-trivial order.
+    let edgeless = Graph::new(4);
+    assert!(
+        GroupInteractingWalk::new(
+            &edgeless,
+            Generator::Adjacency,
+            1.0,
+            Statistics::Bosons,
+            &[0],
+            &claimed(4, vec![vec![0, 0, 0, 0]], vec![2]),
+        )
+        .is_err()
+    );
+    assert!(
+        GroupInteractingWalk::new(
+            &edgeless,
+            Generator::Adjacency,
+            1.0,
+            Statistics::Bosons,
+            &[0],
+            &claimed(4, vec![vec![0, 1, 2, 3]], vec![2]),
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn forms_are_invariant_with_their_signs_on_deep_chains() {
+    // Random configurations c and group elements h: c and h·c have the same
+    // key, and for fermions their parities differ by the sign of sorting
+    // h·c; distinguishable keys too. Groups with long stabiliser chains.
+    let mut rng = Rng::seed_from_u64(1581);
+    for g in [
+        generators::hypercube(4),
+        generators::johnson(7, 3).unwrap(),
+        generators::complete(6),
+        generators::hamming(3, 3).unwrap(),
+        generators::paley(29).unwrap(),
+    ] {
+        let n = g.num_nodes();
+        let group = g.automorphism_group();
+        let all = elements(n, group.generators());
+        let images = Images::new(n, group.generators(), (all.len() as f64).ln()).unwrap();
+        for _ in 0..150 {
+            let k = 2 + rng.below(4) as usize;
+            let h = &all[rng.below(all.len() as u64) as usize];
+            for statistics in STATISTICS {
+                let mut sites: Vec<usize> = (0..k).map(|_| rng.below(n as u64) as usize).collect();
+                if statistics != Statistics::Distinguishable {
+                    sites.sort_unstable();
+                }
+                if statistics == Statistics::Fermions {
+                    sites.dedup();
+                }
+                let moved: Vec<usize> = sites.iter().map(|&s| h[s]).collect();
+                let mut sorted = moved.clone();
+                let mut odd = false;
+                if statistics != Statistics::Distinguishable {
+                    for a in 0..sorted.len() {
+                        for b in a + 1..sorted.len() {
+                            if sorted[a] > sorted[b] {
+                                odd = !odd;
+                            }
+                        }
+                    }
+                    sorted.sort_unstable();
+                }
+                let f = images.form(&sites, statistics).unwrap();
+                let fm = images.form(&sorted, statistics).unwrap();
+                match (f, fm) {
+                    (Some(a), Some(b)) => {
+                        assert_eq!(a.key, b.key, "{} {statistics:?} {sites:?}", g.name());
+                        assert!((a.log_stabiliser - b.log_stabiliser).abs() < 1e-9);
+                        if statistics == Statistics::Fermions {
+                            assert_eq!(a.odd, b.odd ^ odd, "{} {sites:?}", g.name());
+                        }
+                    }
+                    (None, None) => assert_eq!(statistics, Statistics::Fermions),
+                    _ => panic!("{} {statistics:?} {sites:?}: one form only", g.name()),
+                }
+            }
+        }
+    }
 }
 
 /// Orbits and times on large symmetric graphs (`cargo test --release --
