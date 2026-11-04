@@ -28,6 +28,9 @@
 //!   [`enumerated_failure_rate`]: logical failure rates far below the
 //!   reach of sampling (splitting), their leading term, and exact
 //!   references for small models;
+//! * [`WindowDecoder`] and [`WindowStream`]: decoding in sliding windows
+//!   of rounds, by matching or BP+OSD, for experiments of thousands of
+//!   rounds and for detection events given round by round;
 //! * [`DetectorCircuit::to_stim`]: export in Stim's text format.
 
 pub mod bposd;
@@ -44,6 +47,7 @@ pub mod matching;
 pub mod sparse;
 pub mod splitting;
 mod stim;
+pub mod window;
 
 pub use bposd::{
     BpMethod, BpOsdDecoder, BpOsdOptions, BpOsdOutcome, MAX_BPOSD_DETECTORS, OsdMethod,
@@ -75,6 +79,7 @@ pub use splitting::{
     SplittingEstimate, SplittingOptions, SplittingRate, enumerated_failure_rate, leading_failures,
     splitting_failure_rate,
 };
+pub use window::{StreamState, WindowDecoder, WindowMethod, WindowOptions, WindowStream};
 
 use crate::error::{QsoError, Result};
 use crate::rng::Rng;
@@ -160,6 +165,13 @@ pub enum DecoderChoice {
     /// BP+OSD ([`BpOsdDecoder`] with its default options); for a circuit
     /// ([`DecoderChoice::build_for`]) on the model without decomposition.
     BpOsd,
+    /// Matching in sliding windows of `window` rounds committing `commit`
+    /// ([`WindowDecoder`]); for circuits only, whose rounds are
+    /// [`DetectorCircuit::detector_layers`].
+    WindowMatching { window: usize, commit: usize },
+    /// BP+OSD (default options) in sliding windows ([`WindowDecoder`]) on
+    /// the model without decomposition; for circuits only.
+    WindowBpOsd { window: usize, commit: usize },
 }
 
 impl DecoderChoice {
@@ -180,12 +192,19 @@ impl DecoderChoice {
             DecoderChoice::BpOsd => {
                 Box::new(BpOsdDecoder::new(&graph.to_dem(), BpOsdOptions::default())?)
             }
+            DecoderChoice::WindowMatching { .. } | DecoderChoice::WindowBpOsd { .. } => {
+                return Err(QsoError::invalid(
+                    "decoder",
+                    "windows need the rounds of a circuit's detectors (build_for)",
+                ));
+            }
         })
     }
 
     /// The decoder of a circuit's detector error model: decomposed into a
-    /// matching graph for union-find and matching, with the parts of each
-    /// error for correlated matching, whole for BP+OSD.
+    /// matching graph for union-find and matching (also in windows), with
+    /// the parts of each error for correlated matching, whole for BP+OSD
+    /// (also in windows).
     pub fn build_for(self, circuit: &DetectorCircuit) -> Result<Box<dyn Decoder + Send>> {
         Ok(match self {
             DecoderChoice::BpOsd => Box::new(BpOsdDecoder::new(
@@ -194,6 +213,18 @@ impl DecoderChoice {
             )?),
             DecoderChoice::CorrelatedMatching => Box::new(CorrelatedMatchingDecoder::new(
                 &correlated_error_model(circuit)?,
+            )?),
+            DecoderChoice::WindowMatching { window, commit } => Box::new(WindowDecoder::new(
+                &detector_error_model(circuit, true)?,
+                &circuit.detector_layers(),
+                WindowOptions { window, commit },
+                WindowMethod::Matching,
+            )?),
+            DecoderChoice::WindowBpOsd { window, commit } => Box::new(WindowDecoder::new(
+                &detector_error_model(circuit, false)?,
+                &circuit.detector_layers(),
+                WindowOptions { window, commit },
+                WindowMethod::BpOsd(BpOsdOptions::default()),
             )?),
             _ => self.build(MatchingGraph::from_dem(&detector_error_model(
                 circuit, true,

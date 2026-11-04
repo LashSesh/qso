@@ -17,8 +17,8 @@ finished milestones are released together, not one by one. The third
 for medical research, section 4h) stages ship together as release
 1.8.0. The ninth (1.38 to 1.42, section 4i) and tenth (1.43 to 1.47,
 section 4j) stages ship together as release 1.9.0. The eleventh stage
-(1.48 to 1.52, section 4k) is delivered, and the twelfth (1.53 to 1.57,
-section 4l) is planned; the two ship together as release 1.10.0. Up to 1.3
+(1.48 to 1.52, section 4k) and the twelfth (1.53 to 1.57, section 4l)
+are delivered; the two ship together as release 1.10.0. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -58,7 +58,7 @@ which withdraws the results of version 1.
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18); interacting bosons, fermions and distinguishable particles with certificates for graph isomorphism (1.29); symmetry for driven walks, open walks on orbitals, coined walks with dephasing, hypercubes with dephasing up to d = 230 (1.38); interacting walkers on the orbits of automorphisms (three bosons on Q₉: 2284 orbits of 22.5 million configurations) and up to four particles on hypercubes (1.43); open walks on large symmetric graphs from point stabilisers (Q₁₈, H(4, 10), J(24, 4); 1.48) | interacting walkers stop at 2²² configurations without symmetry and 2²⁷ with it, whose orbits come from a union–find over every configuration (1.43); open walks beyond 8192 nodes need a start whose stabiliser leaves few orbitals (dense graphs and circulants stay at 8192 nodes; 1.48); pretty good transfer on other graphs has no exact reference |
 | Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37); the ¹³C bath of an NV centre by the cluster-correlation expansion (1.39); the optical cycle, ODMR, pulsed readout and magnetometer sensitivity in fields of any direction, and ensembles (1.40); sparse relaxation blocks propagated by Krylov steps, Redfield relaxation from sparse terms and equivalent spins: seven and eight relaxing protons for seconds (1.41); optimal control with relaxation on sparse blocks and on the orbits of equivalent spins, seven and eight spins (1.46); Redfield relaxation with anisotropic diffusion and model-free internal motion (1.49); reaction kinetics with spins: PASADENA, ALTADENA and SABRE as they run (1.50); field profiles with relaxation beyond six spins, the relaxation interpolated over the field (1.51); exchange and reactions on sparse blocks with iterative steady states and field profiles: SABRE with nine spins in the complex beside seven in the substrate (1.54); Redfield relaxation applied without storing it, with its analytic field derivative: nine and ten relaxing spins whose superoperator would need 6 to 74 GB (1.55); product-formula bounds whose remainder runs over the terms that do not commute, the error averaged over states, and step counts for a target error: half the steps of the bounds of Childs et al. for Heisenberg chains of 10 to 64 spins (1.56) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the commutator bound of product formulas (1.56) still sums its remainder by the triangle inequality, about 2.3 times the empirical step counts of Heisenberg chains and loose at few steps and order 6, where its budget stops the degree early; Redfield relaxation takes rigid-body diffusion and model-free internal motion, not correlated motions of groups (1.49), and propagations beyond 1.5·10¹² operations or 2 GiB are refused (eleven protons with dipolar relaxation, nine for 100 s; 1.41); chemical exchange and reaction kinetics take Krylov steps beyond 2048 elements per block (1.54), unaffordable in the laboratory frame at millitesla fields and more, and only one reactant of a reaction carries spins; field profiles with relaxation hold the relaxation at up to 33 fields (1.51), or apply Redfield relaxation without storing it where those would not fit (1.55), where work bounds them (eight spins with dipolar relaxation: two steps over 0.02 s per evaluation within the limit), and have many local optima; an evaluation of eight relaxing spins takes tens of seconds (1.46); the NV bath of 1.39 takes ideal pulses only (finite ones: the generalised expansion, 1.45), its expansion can diverge (results beyond `|L| = 1` are refused), and the nuclei next to the vacancy need given contact couplings (1.39); the optical model's rotating-wave approximation fails near the ground-state anticrossing (1.40) |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
-| Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22); exact circuit distances of any model by a parallel search or the Brouwer–Zimmermann enumeration, with the lightest logical error as circuit locations (1.42); the search on the orbits of an error model's symmetries: [[144, 12, 12]] over three rounds of the depth-8 cycle has circuit distance 10 (1.47); logical failure rates far below sampling by splitting, with their leading term (surface codes to 10⁻⁹, [[72, 12, 6]] to 10⁻¹³; 1.52) | exact circuit distances need time exponential in the distance (each weight about 17 times the last on bicycle circuits); symmetries divide it by a factor that grows with their number (41 to 43 for 72); splitting needs a burn-in long enough, which its error does not show (1.52); decoders take a whole experiment at once, so long memories and BP+OSD over many rounds grow beyond time and memory |
+| Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22); exact circuit distances of any model by a parallel search or the Brouwer–Zimmermann enumeration, with the lightest logical error as circuit locations (1.42); the search on the orbits of an error model's symmetries: [[144, 12, 12]] over three rounds of the depth-8 cycle has circuit distance 10 (1.47); logical failure rates far below sampling by splitting, with their leading term (surface codes to 10⁻⁹, [[72, 12, 6]] to 10⁻¹³; 1.52); decoding in sliding windows of rounds by matching or BP+OSD, round by round, at constant time per round up to 4000 rounds (1.57) | exact circuit distances need time exponential in the distance (each weight about 17 times the last on bicycle circuits); symmetries divide it by a factor that grows with their number (41 to 43 for 72); splitting needs a burn-in long enough, which its error does not show (1.52); the error model of an experiment is built whole, in time quadratic in the rounds (about 5000 rounds of distance 5 at the limit), and windows are decoded one after another, not in parallel (1.57) |
 | Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9), in the browser build too (1.25) | — |
 | Documentation | user guide, executed tutorials and Python reference on GitHub Pages (1.2); Rust tutorials from the examples and the documentation of every release since 1.2.0 (1.25) | — |
 | Engineering | CI on Linux (x86_64, arm64), macOS and Windows; Miri, fuzzing, API checks, weekly cross-validation and benchmark tracking; Trusted Publishing (1.2); line and branch coverage, and differential tests of all simulators on random circuits (1.21); coverage of the CLI and of the Python tests (1.25) | — |
@@ -5932,7 +5932,7 @@ in 108 cases. Findings, all fixed:
   `average` as 2, the trivial bound; targets are printed in scientific
   notation; the stage-by-stage sums are named `stage_sums`.
 
-### 1.57 — Decoding in windows (M)
+### 1.57 — Decoding in windows (M, delivered)
 
 Use case: memory experiments of thousands of rounds, and BP+OSD over
 many rounds of bicycle codes, which decoding a whole experiment at once
@@ -5948,6 +5948,92 @@ Validation: equal to decoding the whole experiment when the window
 covers it; logical error rates approach those of the whole decoding as
 the window grows; streaming equals the batch; time per round constant in
 the rounds.
+
+Delivered in `qec/window.rs` (`WindowDecoder`, `WindowStream`,
+`StreamState`, `DetectorCircuit::detector_layers`):
+
+- **Sliding windows.** Detectors fall into layers, by default the blocks
+  of detectors a circuit declares one after another (a round of the
+  memory experiments). A window of `window` layers is decoded on the
+  errors whose first detector lies in it, their detectors beyond the
+  window cut off (the window's future end is a boundary), without the
+  errors that reach back before it. The part of the correction that
+  touches the first `commit` layers is committed: its observables are
+  added, its detection events flipped in the buffer and beyond, so that
+  the next window, `commit` layers on, decodes what is left; the last
+  window commits everything. For matching the correction is the set of
+  matched pairs (`SparseMatchingDecoder` now reports them with the
+  observables of their paths and the boundary edge they end on): a pair
+  is committed when one of its events lies in the commit region, its
+  path flips only its two events, and a boundary edge cut off at the
+  window's end flips the detectors beyond. For BP+OSD the errors of the
+  correction with a detector in the commit region are committed with all
+  their detectors.
+- **Costs.** Windows of the same shape (the same errors relative to
+  their first detector) share one decoder: a memory experiment needs
+  three (the first window, the bulk, the last). Each window keeps the
+  indices of its errors into the model. Decoding costs one window's
+  decoding per `commit` rounds.
+- **Streaming.** `push_layer` takes the detection events of the next
+  layer and decodes each window as soon as its layers are in, returning
+  the observables committed so far; the batch is the same stream given
+  every layer at once. `DecoderChoice::WindowMatching` and `WindowBpOsd`
+  (for `logical_error_rate_using`), Python `WindowDecoder` with
+  `push_layer`/`finish` and `logical_error_rate(decoder="window_matching"
+  | "window_bposd", window, commit)`, `qso qec --window --commit`.
+
+Changes to the plan:
+
+- **Windows one after another, not in parallel.** Skoric et al. decode
+  non-overlapping windows in parallel and then the seams between them;
+  QSO decodes the windows in sequence, as a stream must, and gains its
+  parallelism from shots.
+- **Pairs, not paths, for matching.** The committed effect of a matched
+  pair is its two events (and, at the window's end, the cut-off part of
+  its last edge), so the paths need not be rebuilt.
+- **The error model's work estimate** counted every pass of the
+  propagation through the whole circuit; it now counts each pass from
+  its first component, as the propagation runs, which admits about
+  twice the rounds (4000 rounds of a distance-5 surface code, refused
+  before, take 40 s).
+
+Not done, and why:
+
+- **The model is built for the whole experiment.** Its propagation is
+  quadratic in the rounds (an X error on a data qubit is carried to the
+  final measurement): 2 s for 1000 rounds of distance 5, 40 s for 4000,
+  and about 5000 at the work limit. A model built window by window from
+  the circuit would remove this, but needs to know which errors can
+  first flip a detector of a later window.
+- **Union-find and correlated matching in windows.** Their corrections
+  are not reported as pairs or errors.
+- **Parallel windows** (above).
+
+Measured (four cores, release build):
+
+| Experiment | Windows (window, commit) | Failures | Whole decoding |
+|---|---|---|---|
+| surface d = 5, 40 rounds, p = 5·10⁻³, 20 000 shots | (1, 1) / (2, 1) / (3, 1) / (4, 2) / (6, 3) / (10, 5) / (20, 10) | 7829 / 4291 / 2879 / 2646 / 2279 / 2206 / 2197 | 2197 |
+| [[72, 12, 6]], BP+OSD, p = 2·10⁻³, 2000 shots, 6 / 12 / 24 / 48 rounds | (6, 3) | 25 / 44 / 96 / 165 in 4.9 / 13.5 / 28 / 59 s | 25 / 50 / 113 / 196 in 2.7 / 8.9 / 27 / 76 s |
+
+Matching in windows of ten rounds committing five on the distance-5
+surface code takes 1.1, 1.5 and 1.3 µs per round and shot at 100, 1000
+and 4000 rounds (20, 200 and 800 windows, three decoders; the whole
+decoding by sparse matching 0.7 to 1.3 µs, as it is nearly linear
+itself). BP+OSD in windows grows in proportion to the rounds and fails
+no more often than BP+OSD on the whole model, whose larger matrices it
+handles worse.
+
+Validation: a window over every layer predicts what the whole decoding
+does, shot for shot (sparse matching on the surface code, BP+OSD on the
+[[72, 12, 6]] code); streaming layer by layer equals the batch, and a
+layer given out of turn or a stream finished early is an error; the
+commit region of every window is resolved (checked in debug builds);
+logical error rates fall towards the whole decoding's as the window
+grows and equal it within the sampling error at a buffer of the
+distance; windows in the bulk share one decoder (at most four for a
+repetition code of 200 rounds); BP+OSD in windows of three rounds
+committing two matches the whole BP+OSD within the sampling error.
 
 ### Not in this stage
 

@@ -181,10 +181,9 @@ pub fn compare(circuit: &Circuit, theta: &[f64]) -> Result<DifferentialReport> {
         ..MpsOptions::exact()
     };
     let mps_state = Mps::from_circuit(circuit, theta, options)?;
-    // δ from the bound (1 − δ²/2)².
-    let mps_truncation = mps_state
-        .fidelity_lower_bound()
-        .map_or(f64::NAN, |f| (2.0 * (1.0 - f.sqrt())).max(0.0).sqrt());
+    // δ itself: the fidelity bound (1 − δ²/2)² rounds to 1 for δ below
+    // about 10⁻⁸, which would allow no rounding at all.
+    let mps_truncation = mps_state.truncation_distance().unwrap_or(f64::NAN);
     let mps = mps_state.to_statevector()?;
     let stabilizer_tolerance: f64 = circuit
         .instructions()

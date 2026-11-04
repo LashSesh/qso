@@ -7,7 +7,8 @@ use metatron_qso::qec::{
     CorrelatedError, CorrelatedErrorModel, CorrelatedMatchingDecoder, CssCode, CssSchedule,
     Decoder, DecoderChoice, DetectorCircuit, DetectorErrorModel, DistanceMethod, DistanceOptions,
     ErrorMechanism, ExactDistanceOptions, MatchingDecoder, MatchingGraph, MemoryBasis, Noise,
-    OsdMethod, SparseMatchingDecoder, UnionFindDecoder,
+    OsdMethod, SparseMatchingDecoder, StreamState, UnionFindDecoder, WindowDecoder, WindowMethod,
+    WindowOptions,
 };
 use numpy::ndarray::Array2;
 use numpy::{AllowTypeChange, IntoPyArray, PyArray1, PyArray2, PyArrayLike2};
@@ -97,6 +98,13 @@ impl PyDetectorCircuit {
     #[getter]
     fn n_observables(&self) -> usize {
         self.inner.n_observables()
+    }
+
+    /// The layer (round) of every detector: detectors declared one after
+    /// another form one layer, as each round of a memory experiment
+    /// declares its detectors after its measurements.
+    fn detector_layers(&self) -> Vec<usize> {
+        self.inner.detector_layers()
     }
 
     fn __len__(&self) -> usize {
@@ -1201,6 +1209,128 @@ impl PyBpOsdDecoder {
     }
 }
 
+/// Decoding in sliding windows of layers (rounds): a window of `window`
+/// layers commits the corrections of its first `commit` (default: half,
+/// rounded up) and carries the rest of the syndrome forward.
+/// `layers[d]` is the layer of detector d (`DetectorCircuit.detector_layers`),
+/// non-decreasing. `decoder` is `"matching"` (sparse minimum-weight
+/// matching, on a decomposed model) or `"bposd"` (default options).
+/// Windows of the same shape share one decoder. `push_layer` gives the
+/// detection events layer by layer and returns the observables committed
+/// so far; `finish` returns the prediction and starts a new stream.
+#[pyclass(name = "WindowDecoder", module = "metatron_qso")]
+pub struct PyWindowDecoder {
+    inner: WindowDecoder,
+    state: StreamState,
+}
+
+#[pymethods]
+impl PyWindowDecoder {
+    #[new]
+    #[pyo3(signature = (model, layers, window, commit = None, decoder = "matching"))]
+    fn new(
+        py: Python<'_>,
+        model: &PyDetectorErrorModel,
+        layers: Vec<usize>,
+        window: usize,
+        commit: Option<usize>,
+        decoder: &str,
+    ) -> PyResult<Self> {
+        let method = match decoder {
+            "matching" => WindowMethod::Matching,
+            "bposd" => WindowMethod::BpOsd(BpOsdOptions::default()),
+            other => {
+                return Err(invalid(format!(
+                    "unknown decoder {other:?}; use \"matching\" or \"bposd\""
+                )));
+            }
+        };
+        let options = WindowOptions {
+            window,
+            commit: commit.unwrap_or(WindowOptions::new(window).commit),
+        };
+        let dem = &model.inner;
+        let inner = py
+            .detach(|| WindowDecoder::new(dem, &layers, options, method))
+            .raise()?;
+        let state = inner.new_stream();
+        Ok(Self { inner, state })
+    }
+
+    #[getter]
+    fn n_detectors(&self) -> usize {
+        self.inner.n_detectors()
+    }
+
+    #[getter]
+    fn n_layers(&self) -> usize {
+        self.inner.n_layers()
+    }
+
+    #[getter]
+    fn n_windows(&self) -> usize {
+        self.inner.n_windows()
+    }
+
+    /// Distinct decoders the windows share.
+    #[getter]
+    fn n_decoders(&self) -> usize {
+        self.inner.n_decoders()
+    }
+
+    /// Predicted observable flips (a bit mask) for the detectors that
+    /// fired, window by window.
+    fn decode(&mut self, py: Python<'_>, fired: Vec<usize>) -> PyResult<u64> {
+        let d = &mut self.inner;
+        py.detach(|| d.decode(&fired)).raise()
+    }
+
+    /// Decode each row of a (shots, n_detectors) boolean array; returns
+    /// the predicted observable masks.
+    fn decode_batch<'py>(
+        &mut self,
+        py: Python<'py>,
+        detectors: PyArrayLike2<'py, bool, AllowTypeChange>,
+    ) -> PyResult<Bound<'py, PyArray1<u64>>> {
+        let n = self.inner.n_detectors();
+        decode_batch(py, &mut self.inner, n, detectors)
+    }
+
+    /// The detection events of the stream's next layer; returns the
+    /// observable flips committed so far.
+    fn push_layer(&mut self, py: Python<'_>, fired: Vec<usize>) -> PyResult<u64> {
+        let (d, s) = (&mut self.inner, &mut self.state);
+        py.detach(|| d.push_layer(s, &fired)).raise()
+    }
+
+    /// The observable flips the stream committed so far.
+    #[getter]
+    fn committed(&self) -> u64 {
+        self.state.committed()
+    }
+
+    /// The prediction of the stream once every layer was given; the next
+    /// `push_layer` starts a new stream.
+    fn finish(&mut self) -> PyResult<u64> {
+        let r = self.inner.finish(&self.state).raise()?;
+        self.state = self.inner.new_stream();
+        Ok(r)
+    }
+
+    fn __repr__(&self) -> String {
+        let o = self.inner.options();
+        format!(
+            "WindowDecoder(detectors={}, layers={}, window={}, commit={}, windows={}, decoders={})",
+            self.inner.n_detectors(),
+            self.inner.n_layers(),
+            o.window,
+            o.commit,
+            self.inner.n_windows(),
+            self.inner.n_decoders()
+        )
+    }
+}
+
 /// A CSS code: X-type and Z-type checks (lists of qubits) on `n` qubits,
 /// with a basis of logical operators paired so that X logical i and Z
 /// logical j overlap oddly exactly when i = j.
@@ -1423,17 +1553,21 @@ fn surface_code_memory(
 /// decomposed detector error model (`"union_find"`, `"matching"`, or
 /// `"correlated_matching"` with the parts of each error) or of its whole
 /// model (`"bposd"`, default options) and count the logical failures.
-/// Every decoder sees the same shots.
+/// `"window_matching"` and `"window_bposd"` decode in sliding windows of
+/// `window` rounds committing `commit` (default: half, rounded up). Every
+/// decoder sees the same shots.
 #[pyfunction]
-#[pyo3(signature = (circuit, shots, seed = 0, decoder = "union_find"))]
+#[pyo3(signature = (circuit, shots, seed = 0, decoder = "union_find", window = None, commit = None))]
 fn logical_error_rate(
     py: Python<'_>,
     circuit: &PyDetectorCircuit,
     shots: usize,
     seed: u64,
     decoder: &str,
+    window: Option<usize>,
+    commit: Option<usize>,
 ) -> PyResult<PyLogicalErrorRate> {
-    let kind = decoder_choice(decoder)?;
+    let kind = decoder_choice(decoder, window, commit)?;
     let c = &circuit.inner;
     let r = py
         .detach(|| qec::logical_error_rate_using(c, shots, seed, kind))
@@ -1447,15 +1581,37 @@ fn logical_error_rate(
 }
 
 /// A decoder by name.
-fn decoder_choice(decoder: &str) -> PyResult<DecoderChoice> {
+fn decoder_choice(
+    decoder: &str,
+    window: Option<usize>,
+    commit: Option<usize>,
+) -> PyResult<DecoderChoice> {
+    let windowed = decoder.starts_with("window_");
+    if !windowed && (window.is_some() || commit.is_some()) {
+        return Err(invalid(format!(
+            "window and commit apply to the window decoders, not {decoder:?}"
+        )));
+    }
+    let sizes = || -> PyResult<(usize, usize)> {
+        let w = window.ok_or_else(|| invalid(format!("{decoder:?} needs a window")))?;
+        Ok((w, commit.unwrap_or(WindowOptions::new(w).commit)))
+    };
     Ok(match decoder {
         "union_find" => DecoderChoice::UnionFind,
         "matching" => DecoderChoice::Matching,
         "correlated_matching" => DecoderChoice::CorrelatedMatching,
         "bposd" => DecoderChoice::BpOsd,
+        "window_matching" => {
+            let (window, commit) = sizes()?;
+            DecoderChoice::WindowMatching { window, commit }
+        }
+        "window_bposd" => {
+            let (window, commit) = sizes()?;
+            DecoderChoice::WindowBpOsd { window, commit }
+        }
         other => {
             return Err(invalid(format!(
-                "unknown decoder {other:?}; use \"union_find\", \"matching\", \"correlated_matching\" or \"bposd\""
+                "unknown decoder {other:?}; use \"union_find\", \"matching\", \"correlated_matching\", \"bposd\", \"window_matching\" or \"window_bposd\""
             )));
         }
     })
@@ -1489,7 +1645,7 @@ fn splitting_failure_rate<'py>(
     burn_in: usize,
     seed: u64,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let kind = decoder_choice(decoder)?;
+    let kind = decoder_choice(decoder, None, None)?;
     let options = qec::SplittingOptions {
         start_shots,
         chains,
@@ -1549,7 +1705,7 @@ fn enumerated_failure_rate<'py>(
     max_weight: usize,
     decoder: &str,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let kind = decoder_choice(decoder)?;
+    let kind = decoder_choice(decoder, None, None)?;
     let c = &circuit.inner;
     let r = py
         .detach(|| qec::enumerated_failure_rate(c, kind, max_weight))
@@ -1582,7 +1738,7 @@ fn leading_failures<'py>(
     max_work: u64,
     max_configurations: u64,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let kind = decoder_choice(decoder)?;
+    let kind = decoder_choice(decoder, None, None)?;
     let c = &circuit.inner;
     let r = py
         .detach(|| qec::leading_failures(c, kind, max_work, max_configurations))
@@ -1618,6 +1774,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(explain_errors, m)?)?;
     m.add_function(wrap_pyfunction!(graphlike_distance, m)?)?;
     m.add_class::<PyBpOsdDecoder>()?;
+    m.add_class::<PyWindowDecoder>()?;
     m.add_class::<PyBpOsdOutcome>()?;
     m.add_class::<PyCssCode>()?;
     m.add_class::<PyLogicalErrorRate>()?;

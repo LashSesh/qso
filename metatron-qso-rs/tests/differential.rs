@@ -190,6 +190,47 @@ proptest! {
 }
 
 #[test]
+fn rounding_level_truncations_widen_the_mps_tolerance() {
+    // Found by the random circuits of 1.57's test run: the MPS discarded
+    // weights of rounding size (distance 4·10⁻¹⁰), which the fidelity
+    // bound rounds to 1; the tolerance derived from it was 0.
+    let u = [
+        (0.05530992400208978, 0.13853797088379138),
+        (0.2865026582511861, 0.7772264135417407),
+        (-0.10255354347627613, -0.2922852433251139),
+        (-0.017747058031668178, -0.4419508129016087),
+        (-0.6549785678564867, -0.38081526834465296),
+        (-0.06492988775228031, 0.22860417240889974),
+        (-0.5544791520142129, 0.08233748656321968),
+        (-0.02484007319322032, 0.23380211318502028),
+        (-0.28237045232648483, 0.2421086409037981),
+        (-0.34736675259712246, -0.3131190133480033),
+        (-0.178751820606171, -0.05631690586457217),
+        (-0.4472118220606881, -0.6386085931740468),
+        (0.11033475560979156, 0.5031972032232701),
+        (-0.03953361179868489, -0.19258631091025014),
+        (-0.5282131626978324, -0.5250643418091385),
+        (0.2651274744425723, 0.266405962339305),
+    ]
+    .map(|(re, im)| C64::new(re, im));
+    let mut c = Circuit::new(6);
+    c.controlled(GateKind::RXX, &[2, 5], &[], &[(-6.282639534515751).into()])
+        .unwrap();
+    c.sx(3);
+    c.unitary(u.to_vec(), &[0, 4], &[]).unwrap();
+    c.z(0);
+    c.controlled(GateKind::X, &[1], &[4], &[]).unwrap();
+    c.controlled(GateKind::RX, &[5], &[3], &[(-FRAC_PI_2).into()])
+        .unwrap();
+    c.controlled(GateKind::X, &[0], &[1, 2], &[]).unwrap();
+    c.controlled(GateKind::Swap, &[1, 2], &[0], &[]).unwrap();
+    c.controlled(GateKind::Swap, &[0, 5], &[3], &[]).unwrap();
+    let r = compare(&c, &[]).unwrap();
+    assert!(r.mps <= 1e-10 + 2.0 * r.mps_truncation, "{r:?}");
+    assert!(r.failures().is_empty(), "{r:?}");
+}
+
+#[test]
 fn mps_without_cutoff_stays_finite() {
     // Found by the review of 1.21: with cutoff 0 the MPS kept singular
     // values of 10⁻⁴⁰, whose squares broke the next eigendecomposition

@@ -516,6 +516,62 @@ the ordering of the colour codes (d = 3, 5, 7 at p = 0.002) and that the
 [[72, 12, 6]] code fails in under 1% of shots at p = 0.001 with 6 rounds
 (about 1.5·10⁻³).
 
+## Decoding in windows
+
+An experiment of thousands of rounds, or one that runs while it is
+decoded, is decoded a window of rounds at a time. `WindowDecoder(model,
+layers, window, commit)` takes a model and the layer (round) of every
+detector, `DetectorCircuit.detector_layers()` for a circuit: detectors
+declared one after another form a layer, as every round of the memory
+experiments declares its detectors after its measurements.
+
+A window covers `window` layers. It is decoded on the errors whose first
+detector lies in it, with their detectors beyond the window dropped (the
+window's future end acts as a boundary), and without the errors that
+reach back before it. The part of the correction that touches its first
+`commit` layers is applied: its observables are added to the prediction
+and its detection events flipped, also those in the rest of the window
+(the buffer) and beyond, which the next window sees. The next window
+starts `commit` layers later; the last one commits everything. This is
+the sliding window of overlapping recovery (Dennis et al., J. Math. Phys.
+43, 4452 (2002)) in the commit-and-buffer form of Skoric et al. (Nat.
+Commun. 14, 7040 (2023)). `decoder="matching"` takes a decomposed model
+and commits matched pairs of events; `decoder="bposd"` commits errors of
+the BP+OSD correction. Windows of the same shape, as in the bulk of a
+memory experiment, share one decoder.
+
+```python
+import metatron_qso as q
+
+c = q.surface_code_memory(5, 200, 5e-3)
+model = c.detector_error_model(decompose=True)
+w = q.WindowDecoder(model, c.detector_layers(), window=10, commit=5)
+print(w.n_windows, w.n_decoders)          # 40 windows, 3 decoders
+detectors, observables = c.sample(1000, seed=1)
+wrong = (w.decode_batch(detectors) != observables[:, 0]).sum()
+
+# Round by round, as on hardware: push_layer returns what is committed.
+fired = [int(d) for d in detectors[0].nonzero()[0]]
+layers = c.detector_layers()
+for layer in range(w.n_layers):
+    w.push_layer([d for d in fired if layers[d] == layer])
+assert w.finish() == w.decode(fired)
+```
+
+`logical_error_rate(..., decoder="window_matching" | "window_bposd",
+window=w, commit=c)` and `qso qec --window W --commit C` decode the same
+shots in windows. On a distance-5 surface code over 40 rounds at
+p = 5·10⁻³, 20 000 shots fail 7829 times in windows of one round (no
+buffer), 2646 times in windows of four committing two, 2206 in windows
+of ten committing five and 2197 in windows of twenty, as decoding the
+whole experiment does. The time per round stays at 1.1 to 1.5 µs per
+shot from 100 to 4000 rounds. On the [[72, 12, 6]] bicycle code over 48
+rounds, BP+OSD in windows of six rounds committing three took 59 s for
+2000 shots (165 failures) against 76 s on the whole model (196); its
+time grows in proportion to the rounds. The error model itself is built
+for the whole experiment, in time quadratic in the rounds (2 s for 1000
+rounds of distance 5, 40 s for 4000).
+
 ## Circuit distance and CNOT schedules
 
 The circuit distance is the fewest faults that flip a logical observable
@@ -841,7 +897,8 @@ on the orbits of the circuit's symmetries.
 | Operations | 2²⁴ |
 | Observables | 64 |
 | Results of one `sample` call | shots × (detectors + 64) ≤ 2³³ bits (1 GiB); in Python, shots × (detectors + observables) ≤ 2³⁰ |
-| Error components of a model | 2²²; their detector lists before merging, 2²⁷ entries (1 GiB); propagation, 2³⁴ word operations |
+| Error components of a model | 2²²; their detector lists before merging, 2²⁷ entries (1 GiB); propagation, 2³⁴ word operations (each pass from its first component to the end of the circuit: about 5000 rounds of a distance-5 surface code) |
+| Window decoder | layers non-decreasing in the detector index; one decoder per distinct window shape, and the window's errors indexed for every window |
 | Code distance, rounds | 101, 10 000, and at most 2²⁴ operations (checked before building) |
 | Imported Stim circuits | 65 536 qubits; 2²⁴ operations and annotations after expanding REPEAT blocks (checked before expanding); blocks nested at most 64 deep |
 | Matching decoder (`MatchingDecoder`) | cached distances 2²¹ entries (32 MiB), bounded searches beyond; at most 2²² pairs of events per shot |

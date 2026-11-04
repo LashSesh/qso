@@ -303,6 +303,22 @@ frame update for each gate is derived once.
   every combination of a channel's Paulis it takes the XOR of their
   signatures and keeps those equal to the error's effect, as
   `CircuitFault`s with the operation index.
+- **Decoding in windows** (`qec/window.rs`, 1.57). The model's errors
+  of probability above zero are indexed by their first detector's layer;
+  a window's errors are those whose first layer lies in it, in the
+  model's order, with their detectors beyond the window cut off. The
+  window's model in its own detector indices is the key of its shape
+  (probability bits, local detectors, observables), and windows of equal
+  shape share one decoder; each window keeps the indices of its errors
+  into the model. A stream holds the syndrome as bits and decodes a
+  window once its last layer is in; the batch is a stream given every
+  layer at once. For matching, `SparseMatchingDecoder::decode_matches`
+  returns the matched pairs with the observables of their paths and, for
+  a match to the boundary, the graph edge it ends on (carried in the
+  compressed edges of the region growth): a path flips only its two
+  events, and a boundary edge that was cut off at the window's end
+  flips its detectors beyond the window. For BP+OSD the committed errors
+  flip all their detectors.
 - **Failure rates below sampling** (`qec/splitting.rs`, 1.52). The model
   without decomposition is the error distribution; the decoder is built
   for each rate's circuit as `DecoderChoice::build_for` builds it, and a

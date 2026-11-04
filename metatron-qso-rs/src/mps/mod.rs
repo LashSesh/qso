@@ -254,6 +254,15 @@ impl Mps {
         self.truncations
     }
 
+    /// The bound δ on the 2-norm distance `‖ψ − ψ_exact‖` from the state
+    /// the gates prepare exactly: the sum of the distances of the
+    /// truncations, those at the level of rounding included. `None` where
+    /// [`Mps::fidelity_lower_bound`] is. Below about 10⁻⁸ the fidelity
+    /// bound rounds to 1, while δ keeps its value.
+    pub fn truncation_distance(&self) -> Option<f64> {
+        (!self.bound_void).then_some(self.distance)
+    }
+
     /// A lower bound on the fidelity `|⟨ψ_exact|ψ⟩|²` with the state the
     /// gates prepare exactly: `(1 − δ²/2)²` with δ the sum of the distances
     /// of the truncations (0 if δ² ≥ 2). `None` after a measurement or

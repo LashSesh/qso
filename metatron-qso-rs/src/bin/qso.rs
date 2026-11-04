@@ -518,6 +518,14 @@ enum Command {
         /// 4096 detectors.
         #[arg(long, requires = "circuit_distance")]
         symmetry: bool,
+        /// Decode in sliding windows of this many rounds (matching or
+        /// bposd), committing --commit of them.
+        #[arg(long)]
+        window: Option<usize>,
+        /// Rounds each window commits (default: half the window, rounded
+        /// up).
+        #[arg(long, requires = "window")]
+        commit: Option<usize>,
     },
 }
 
@@ -1602,19 +1610,38 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             circuit_distance,
             max_seconds,
             symmetry,
+            window,
+            commit,
         } => {
-            let kind = match decoder {
-                DecoderArg::UnionFind => qec::DecoderChoice::UnionFind,
-                DecoderArg::Matching => qec::DecoderChoice::Matching,
-                DecoderArg::CorrelatedMatching => qec::DecoderChoice::CorrelatedMatching,
-                DecoderArg::Bposd => qec::DecoderChoice::BpOsd,
+            let sizes = window.map(|w| (w, commit.unwrap_or(qec::WindowOptions::new(w).commit)));
+            let kind = match (decoder, sizes) {
+                (DecoderArg::UnionFind, None) => qec::DecoderChoice::UnionFind,
+                (DecoderArg::Matching, None) => qec::DecoderChoice::Matching,
+                (DecoderArg::CorrelatedMatching, None) => qec::DecoderChoice::CorrelatedMatching,
+                (DecoderArg::Bposd, None) => qec::DecoderChoice::BpOsd,
+                (DecoderArg::Matching, Some((window, commit))) => {
+                    qec::DecoderChoice::WindowMatching { window, commit }
+                }
+                (DecoderArg::Bposd, Some((window, commit))) => {
+                    qec::DecoderChoice::WindowBpOsd { window, commit }
+                }
+                (_, Some(_)) => {
+                    return Err(QsoError::invalid(
+                        "window",
+                        "windows take the matching or bposd decoder",
+                    ));
+                }
             };
-            let decoder_name = match decoder {
+            let mut decoder_name = match decoder {
                 DecoderArg::UnionFind => "union-find",
                 DecoderArg::Matching => "matching",
                 DecoderArg::CorrelatedMatching => "correlated matching",
                 DecoderArg::Bposd => "BP+OSD",
-            };
+            }
+            .to_string();
+            if let Some((w, c)) = sizes {
+                decoder_name = format!("{decoder_name} in windows of {w} rounds committing {c}");
+            }
             let css_schedule = match schedule.as_str() {
                 "greedy" => qec::CssSchedule::Greedy,
                 "bicycle" => qec::CssSchedule::Bicycle,

@@ -8,6 +8,23 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Decoding in windows** (1.57, `qec::WindowDecoder`, `WindowStream`,
+  `DetectorCircuit::detector_layers`): sliding windows of rounds that
+  commit the corrections of their first rounds and carry the rest of the
+  syndrome forward (overlapping recovery in the commit-and-buffer form of
+  Skoric et al.), with sparse matching (matched pairs committed, the
+  window's future end as a boundary) or BP+OSD (errors committed);
+  windows of one shape share a decoder; detection events can be given
+  round by round. `DecoderChoice::WindowMatching` and `WindowBpOsd`,
+  Python `WindowDecoder` and `logical_error_rate(decoder="window_…")`,
+  `qso qec --window --commit`. Equal to the whole decoding when a window
+  covers it; on a distance-5 surface code over 40 rounds the failures
+  fall from 7829 (windows of one round) to 2197 of 20 000 (twenty rounds),
+  as for the whole decoding; 1.1 to 1.5 µs per round and shot from 100
+  to 4000 rounds; BP+OSD on the [[72, 12, 6]] code over 48 rounds in 59 s
+  instead of 76 s. The error model's work estimate now counts each pass
+  from its first component, which admits about twice the rounds.
+
 - **Product-formula bounds that know which terms commute** (1.56,
   `TrotterBounds::commutators`, `TrotterBounds::average`,
   `trotter_steps`): the error series of a Trotter–Suzuki step with exact

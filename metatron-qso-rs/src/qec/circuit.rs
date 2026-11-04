@@ -130,6 +130,32 @@ impl DetectorCircuit {
         self.observables
     }
 
+    /// The layer (round) of every detector: detectors declared one after
+    /// another, with no other operation between them (observables
+    /// aside), form one layer, as each round of a memory experiment
+    /// declares its detectors after its measurements. Layers are
+    /// numbered from 0 in the order of the circuit, so they never
+    /// decrease with the detector index.
+    pub fn detector_layers(&self) -> Vec<usize> {
+        let mut layers = Vec::with_capacity(self.detectors);
+        let mut layer = 0;
+        let mut previous_was_detector = false;
+        for op in &self.ops {
+            match op {
+                QecOp::Detector { .. } => {
+                    if !previous_was_detector && !layers.is_empty() {
+                        layer += 1;
+                    }
+                    layers.push(layer);
+                    previous_was_detector = true;
+                }
+                QecOp::Observable { .. } => {}
+                _ => previous_was_detector = false,
+            }
+        }
+        layers
+    }
+
     fn push(&mut self, op: QecOp) -> Result<()> {
         if self.ops.len() >= MAX_QEC_OPERATIONS {
             return Err(QsoError::invalid(

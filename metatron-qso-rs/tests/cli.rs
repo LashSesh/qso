@@ -474,6 +474,34 @@ fn error_correction() {
         "matching",
     ]);
     assert!(f(&m["logical_error_rate"]["rate"]) < 0.05);
+    // The same shots in windows of three rounds committing two.
+    let w = qso(&[
+        "qec",
+        "--circuit",
+        stim.path(),
+        "--shots",
+        "2000",
+        "--decoder",
+        "matching",
+        "--window",
+        "3",
+        "--commit",
+        "2",
+    ]);
+    assert!(f(&w["logical_error_rate"]["rate"]) < 0.05);
+    assert_eq!(w["decoder"]["window-matching"]["window"], 3);
+    assert!(
+        qso_fails(&[
+            "qec",
+            "--decoder",
+            "union-find",
+            "--window",
+            "3",
+            "--shots",
+            "10"
+        ])
+        .contains("window")
+    );
     let c = qso(&[
         "qec",
         "--circuit",

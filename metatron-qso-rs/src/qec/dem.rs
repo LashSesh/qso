@@ -18,7 +18,8 @@ use crate::stabilizer::apply_clifford;
 pub const MAX_COMPONENTS: usize = 1 << 22;
 /// Most detector entries over all propagated components (1 GiB).
 pub const MAX_SIGNATURE_ENTRIES: usize = 1 << 27;
-/// Most word operations of propagation, passes × operations × words
+/// Most word operations of propagation, the operations from each pass's
+/// first component to the end times its words, summed over the passes
 /// (about a minute and a half at the limit).
 pub const MAX_MODEL_WORK: u64 = 1 << 34;
 
@@ -582,10 +583,12 @@ fn propagate(circuit: &DetectorCircuit, components: &[Component]) -> Result<Vec<
     let (n_det, n_obs) = (circuit.n_detectors(), circuit.n_observables());
     let per_word = circuit.n_measurements() + 2 * n + n_det + n_obs;
     let max_words = (PASS_MEMORY_WORDS / per_word.max(1)).clamp(1, 64);
-    let passes = components.len().div_ceil(64 * max_words) as u64;
-    let work = passes
-        .saturating_mul(circuit.operations().len() as u64)
-        .saturating_mul(max_words.min(components.len().div_ceil(64)) as u64);
+    // Each pass runs from its first component to the end of the circuit.
+    let ops = circuit.operations().len() as u64;
+    let work = components
+        .chunks(64 * max_words)
+        .map(|chunk| (ops - chunk[0].op as u64).saturating_mul(chunk.len().div_ceil(64) as u64))
+        .fold(0u64, u64::saturating_add);
     if work > MAX_MODEL_WORK {
         return Err(QsoError::invalid(
             "circuit",

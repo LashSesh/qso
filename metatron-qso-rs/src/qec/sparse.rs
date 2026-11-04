@@ -50,6 +50,20 @@ struct Edge {
     v: u32,
     obs: u64,
     len: i64,
+    /// For a match to the boundary: the graph edge into the boundary
+    /// (`NONE` otherwise).
+    via: u32,
+}
+
+/// A matched pair of detection events of a minimum-weight correction
+/// (`v == u32::MAX` for the boundary), the observables its path flips, and
+/// for a boundary match the graph edge it reaches the boundary through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Matched {
+    pub u: u32,
+    pub v: u32,
+    pub obs: u64,
+    pub via: u32,
 }
 
 impl Edge {
@@ -222,12 +236,25 @@ impl SparseMatchingDecoder {
     /// The matched pairs of detection events (`u32::MAX` for the
     /// boundary) of a minimum-weight correction.
     pub(crate) fn decode_pairs(&mut self, fired: &[usize]) -> Result<Vec<(u32, u32)>> {
+        Ok(self
+            .decode_matches(fired)?
+            .into_iter()
+            .map(|m| (m.u, m.v))
+            .collect())
+    }
+
+    /// The matches of a minimum-weight correction, with the observables of
+    /// their paths (which add up to the prediction) and the boundary edges
+    /// they end on.
+    pub(crate) fn decode_matches(&mut self, fired: &[usize]) -> Result<Vec<Matched>> {
         let events = self.events(fired)?;
         self.reset();
-        let mut pairs = Vec::with_capacity(events.len());
-        let result = self.solve(&events).map(|()| self.extract(Some(&mut pairs)));
+        let mut matches = Vec::with_capacity(events.len());
+        let result = self
+            .solve(&events)
+            .map(|()| self.extract(Some(&mut matches)));
         self.reset();
-        result.map(|_| pairs)
+        result.map(|_| matches)
     }
 
     /// The fired detectors listed an odd number of times, ascending.
@@ -468,6 +495,7 @@ impl SparseMatchingDecoder {
                             v: NONE,
                             obs: node.obs ^ edge.observables,
                             len: node.dist + weight,
+                            via: e as u32,
                         },
                     ));
                     break;
@@ -506,6 +534,7 @@ impl SparseMatchingDecoder {
                         v: target.source,
                         obs: node.obs ^ edge.observables ^ target.obs,
                         len: node.dist + weight + target.dist,
+                        via: NONE,
                     },
                 ));
                 break;
@@ -562,6 +591,7 @@ impl SparseMatchingDecoder {
                 v: up.v,
                 obs: down.obs ^ up.obs,
                 len: down.len + up.len,
+                via: NONE,
             };
             self.form_blossom(
                 vec![parent, r, child],
@@ -930,10 +960,15 @@ impl SparseMatchingDecoder {
     /// The matched pairs below the top-level matching: total observables
     /// and weight (in `MatchingDecoder` units); the pairs of detection
     /// events go to `pairs`.
-    fn extract(&self, mut pairs: Option<&mut Vec<(u32, u32)>>) -> (u64, i64) {
+    fn extract(&self, mut pairs: Option<&mut Vec<Matched>>) -> (u64, i64) {
         let mut pair = |e: &Edge| {
             if let Some(p) = pairs.as_mut() {
-                p.push((e.u, e.v));
+                p.push(Matched {
+                    u: e.u,
+                    v: e.v,
+                    obs: e.obs,
+                    via: e.via,
+                });
             }
         };
         let mut obs = 0u64;
@@ -991,6 +1026,7 @@ const NO_EDGE: Edge = Edge {
     v: NONE,
     obs: 0,
     len: 0,
+    via: NONE,
 };
 
 #[cfg(test)]
