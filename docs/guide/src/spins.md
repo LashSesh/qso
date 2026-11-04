@@ -419,8 +419,10 @@ When the amounts change, `spin.Reactions` takes their place. It holds
 spin sites with initial amounts (zero for a product not yet formed),
 species without spins (substrate, parahydrogen, catalyst) and reactions
 of first and second order, `reactants → products` at `k Π c` (sites by
-index, species by name). At most one product is a site; it receives the
-carried spins of the first reactant site and fresh spins for the rest.
+index, species by name). The first product site receives the carried
+spins of the first reactant site and fresh spins for the rest (another
+product site receives thermal spins); `routes` carry spins from any
+reactant site into any product site (see below).
 PASADENA as it runs, parahydrogen in excess:
 
 ```python
@@ -487,9 +489,69 @@ events before the first step (limit 1.5·10¹² operations).
   step's midpoint, the inhomogeneous term in three augmented
   coordinates). PHIP at 5 µT with spectator protons: a product of seven
   spins over 1 s in 4.7 s, of nine spins over 0.2 s in 17 s.
-- **Not modelled.** Correlated states of two reactants that both carry
-  spins (only the first reactant site carries; a partner's spins are
-  traced), reactions of third order, and spin-dependent chemistry.
+- **Not modelled.** Correlations between molecules (two reactants are
+  uncorrelated when they meet, see below), reactions of third order, and
+  spin-dependent chemistry.
+
+### Two reactants with spins
+
+`routes=[(reactant position, product position, [(spin, spin)])]` carry
+spins from any reactant site into any product site. A product site that
+takes spins from both reactants of `A + B → C` forms in the product of
+their states, `k [A][B] ρ_A ⊗ ρ_B` placed into its spins (the reactants
+uncorrelated, as in a well-mixed solution); a product that takes spins
+from one reactant receives its partial trace, so `C → A + B` gives each
+product its part of `C`. Every site keeps its own relaxation. PHIP of a
+¹³C-labelled substrate from a hydrogen pool whose singlet is kept or
+decays:
+
+```python
+import numpy as np
+import metatron_qso as q
+from metatron_qso import spin
+
+def system(spins, couplings):                   # at 1 µT
+    sys = q.SpinSystem(1e-6).with_frame("laboratory")
+    for isotope, shift, relax in spins:
+        i = sys.add_spin(isotope, shift)
+        if relax:
+            sys.set_relaxation(i, relax, relax)
+    for i, j, hz in couplings:
+        sys.couple(i, j, hz)
+    return sys
+
+substrate = system([("13C", 30.0, 10.0)], [])
+product = system([("1H", 1.2, 3.0), ("1H", 1.6, 3.0), ("13C", 30.0, 10.0)],
+                 [(0, 1, 7.0), (0, 2, 5.0), (1, 2, 130.0)])
+for t_pool in (None, 2.0):                      # singlet kept, or decaying
+    pool = system([("1H", 4.5, t_pool), ("1H", 4.5, t_pool)], [])
+    r = spin.Reactions()
+    s = r.add_site(substrate, 1.0)
+    h = r.add_site(pool, 0.6)
+    p = r.add_site(product, 0.0)
+    r.add_reaction([s, h], [p], 2.0,
+                   routes=[(0, 0, [(0, 2)]),            # the substrate's 13C
+                           (1, 0, [(0, 0), (1, 1)])])   # the pool's protons
+    start = r.thermal_state()
+    start[h] = 0.6 * pool.parahydrogen_state(0, 1, 1.0)
+    end = r.evolve(start, [spin.delay(2.0)])
+    formed = np.trace(end[p]).real
+    print(round(formed, 3), round(product.polarization(end[p] / formed, 2), 3))
+# 0.545 -0.097   (equal to H2 as a species with fresh parahydrogen)
+# 0.545 -0.06
+```
+
+The product of two states is quadratic in them. It is written exactly as
+transfers from each reactant with the other's reference state in its
+spins (the order-zero part of its state at the step's predicted
+midpoint), a drift, and a remainder that is the product of the two
+reactants' deviations from their references. The transfers go into the
+exponentials as those of one reactant do, so a partner held in its state
+(parahydrogen in a pool that keeps it, a thermal spin) gives exactly the
+steps of a reaction with that partner as a species; the remainder enters the inhomogeneous term, each step is
+corrected until it settles, and steps whose remainder matters are checked
+against their halves (to 10⁻⁹ of the deviation). Each step costs three
+to five times the exponentials of a linear one.
 
 ## Long-lived states and transfer
 

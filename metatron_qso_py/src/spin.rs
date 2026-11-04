@@ -6,7 +6,7 @@ use metatron_qso::optimize::Options;
 use metatron_qso::spin::{
     Channel, Control, Drive, Event, Exchange, FIELD_TOLERANCE, Frame, Fresh, Interaction, Isotope,
     MAX_FIELD_ERROR, Member, ModelFree, Optimized, Participant, Profile, Reaction, Reactions,
-    Segment, Spectrum, SpinSystem, Target, axial_csa, axial_diffusion, inept, inept_cycle,
+    Route, Segment, Spectrum, SpinSystem, Target, axial_csa, axial_diffusion, inept, inept_cycle,
     inversion_recovery, m2s, s2m, spin_echo, spin_lock, unitary_bound,
 };
 use numpy::{IntoPyArray, PyArray1, PyArray2};
@@ -1242,8 +1242,10 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 /// Spin sites whose amounts change by reactions of first and second order
-/// with species without spins (parahydrogen, a catalyst). States are
-/// unnormalised: each site's trace is its amount.
+/// among themselves and species without spins (parahydrogen, a catalyst);
+/// both reactants of a reaction may carry spins into its products (see
+/// `add_reaction`'s `routes`). States are unnormalised: each site's trace
+/// is its amount.
 #[pyclass(name = "Reactions", module = "metatron_qso")]
 #[derive(Clone)]
 pub struct PyReactions {
@@ -1323,11 +1325,17 @@ impl PyReactions {
 
     /// Add `reactants → products` (sites by index, species by name) at rate
     /// `k Π c_reactants` (s⁻¹ for one reactant, per amount and second for
-    /// two). The product site, if any, takes the spin pairs `carried`
+    /// two). The first product site takes the spin pairs `carried`
     /// `[(spin of the first reactant site, spin of the product)]`; its other
     /// spins arrive thermal, or two of them (`parahydrogen=(i, j)`) in the
-    /// singlet with probability `fraction` (default 1).
-    #[pyo3(signature = (reactants, products, rate, carried = Vec::new(), parahydrogen = None, fraction = None))]
+    /// singlet with probability `fraction` (default 1). Instead of
+    /// `carried`, `routes=[(reactant position, product position, [(spin,
+    /// spin)])]` carry spins from any reactant site into any product site:
+    /// a product site that takes spins from both reactants forms in the
+    /// product of their reduced states (`A + B → C` in `ρ_A ⊗ ρ_B`), and a
+    /// product of `C → A + B` takes its partial trace of `C`.
+    #[pyo3(signature = (reactants, products, rate, carried = Vec::new(), parahydrogen = None, fraction = None, routes = None))]
+    #[allow(clippy::too_many_arguments)]
     fn add_reaction(
         &mut self,
         reactants: Vec<Bound<'_, PyAny>>,
@@ -1336,6 +1344,7 @@ impl PyReactions {
         carried: Vec<(usize, usize)>,
         parahydrogen: Option<(usize, usize)>,
         fraction: Option<f64>,
+        routes: Option<Vec<(usize, usize, Vec<(usize, usize)>)>>,
     ) -> PyResult<()> {
         let fresh = match (parahydrogen, fraction) {
             (None, None) => Fresh::Thermal,
@@ -1357,16 +1366,45 @@ impl PyReactions {
             .iter()
             .map(|x| self.participant(x))
             .collect::<PyResult<Vec<_>>>()?;
-        self.inner
-            .add_reaction(Reaction {
-                reactants,
-                products,
-                rate,
-                carried,
-                fresh,
-            })
-            .raise()?;
+        let reaction = Reaction {
+            reactants,
+            products,
+            rate,
+            carried,
+            fresh,
+        };
+        match routes {
+            None => self.inner.add_reaction(reaction).raise()?,
+            Some(routes) => {
+                let routes = routes
+                    .into_iter()
+                    .map(|(reactant, product, spins)| Route {
+                        reactant,
+                        product,
+                        spins,
+                    })
+                    .collect();
+                self.inner.add_routed_reaction(reaction, routes).raise()?
+            }
+        };
         Ok(())
+    }
+
+    /// The routes of reaction `reaction` (in the order added):
+    /// `[(reactant position, product position, [(spin, spin)])]`.
+    fn routes(&self, reaction: usize) -> PyResult<Vec<(usize, usize, Vec<(usize, usize)>)>> {
+        if reaction >= self.inner.reactions().len() {
+            return Err(invalid(format!(
+                "reaction {reaction} of {}",
+                self.inner.reactions().len()
+            )));
+        }
+        Ok(self
+            .inner
+            .routes(reaction)
+            .iter()
+            .map(|r| (r.reactant, r.product, r.spins.clone()))
+            .collect())
     }
 
     /// The amounts after `t` (s): the sites', then the species'.

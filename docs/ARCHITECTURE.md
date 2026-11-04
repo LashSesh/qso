@@ -669,6 +669,30 @@ midpoint; the step's block is then exponentiated densely, as before, or
 by `expv` on an `Augmented` operator with the three coordinates
 `[u₁, u₂, 1]`, scaled to the deviation.
 
+Reactions are reduced to feeds per product site (`Reactions::feeds`):
+fresh spins only (a drift times the rate), a transfer from one reactant
+(a member with its pseudo-rate, as above), or spins from both reactants
+(`Bilinear`). The last is quadratic in the states and is split exactly:
+transfers from each reactant with the other's reference `1/d + ŷ` in its
+spins (`ŷ` the order-zero part of the reduced, normalised deviation, so
+the blocks of coherence order stay apart; `Reduced` groups a reactant's
+basis states by its traced spins and places its carried ones in the
+product's basis), the drift `v(1/(d_A d_B) − ŷ_A ⊗ ŷ_B) ⊗ ρ_fresh`, and
+the remainder `k Emb((x_A' − c_A ŷ_A) ⊗ (x_B' − c_B ŷ_B) ⊗ ρ_fresh)` over
+the product's elements of every order. The transfers' entries are fixed
+(`skeleton`), held in the family by a `Pattern` member of weight zero,
+and set each step at their `places` in the combined block; the drift and
+the remainder join the quadratic inhomogeneous term (blocks the
+remainder reaches are augmented whatever their order). `midpoint`
+predicts the midpoint and end with the start's references and remainder,
+then repeats the step with the predicted midpoint's references and the
+remainder at the three nodes until the end settles (`Step::converged`);
+`delay` repeats a step at a quarter when it does not settle, and checks
+steps whose remainder matters against their halves. Every transfer takes
+its source's trace off the product's first population: the deviations'
+traces are zero, but `C → A + B` would feed them into two products and
+let rounding grow.
+
 Optimal control (`spin/control.rs`) evaluates the transfer `Re Tr(C†
 ρ(T))` of piecewise-constant controls and its gradient in one forward and
 one backward pass. Without relaxation each step's `H_k` is diagonalised:

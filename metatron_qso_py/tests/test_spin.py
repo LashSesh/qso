@@ -1236,3 +1236,76 @@ def test_reactions_bindings():
     half = r.evolve(start, [spin.delay(0.2)])
     rest = r.advanced(0.2).evolve(half, [spin.delay(0.3)])
     assert np.allclose(rest[0], out[0], atol=1e-11)
+
+
+def test_reactions_of_two_spin_carrying_reactants():
+    # A + H2 -> C with H2 a site held in parahydrogen (no relaxation, its
+    # protons equivalent) equals H2 as a species and fresh parahydrogen.
+    a_sys = q.SpinSystem(1.0)
+    a_sys.add_spin("1H", 0.5)
+    a_sys.set_relaxation(0, 3.0, 1.0)
+    h2 = q.SpinSystem(1.0)
+    h2.add_spin("1H", 0.2)
+    h2.add_spin("1H", 0.2)
+    h2.couple(0, 1, 5.0)
+    c_sys = q.SpinSystem(1.0)
+    for shift in (0.6, 0.1, 0.4):
+        i = c_sys.add_spin("1H", shift)
+        c_sys.set_relaxation(i, 2.0, 0.7)
+    c_sys.couple(0, 1, 7.0)
+    c_sys.couple(0, 2, 3.0)
+    rho_a = np.eye(2) / 2 + 0.3 * a_sys.spin_operator(0, "x")
+    para = h2.parahydrogen_state(0, 1, 0.9)
+
+    routed = spin.Reactions()
+    ia = routed.add_site(a_sys, 1.0)
+    ih = routed.add_site(h2, 0.8)
+    ic = routed.add_site(c_sys, 0.0)
+    routes = [(0, 0, [(0, 0)]), (1, 0, [(0, 1), (1, 2)])]
+    routed.add_reaction([ia, ih], [ic], 2.5, routes=routes)
+    assert routed.routes(0) == routes
+    with pytest.raises(ValueError):
+        routed.routes(1)
+    got = routed.evolve([rho_a, 0.8 * para, np.zeros((8, 8))], [spin.delay(0.4)])
+
+    fixed = spin.Reactions()
+    ja = fixed.add_site(a_sys, 1.0)
+    jc = fixed.add_site(c_sys, 0.0)
+    fixed.add_species("H2", 0.8)
+    fixed.add_reaction([ja, "H2"], [jc], 2.5, carried=[(0, 0)], parahydrogen=(1, 2), fraction=0.9)
+    want = fixed.evolve([rho_a, np.zeros((8, 8))], [spin.delay(0.4)])
+    assert np.allclose(got[0], want[0], atol=1e-11)
+    assert np.allclose(got[2], want[1], atol=1e-11)
+    left = routed.amounts(0.4)[1]
+    assert np.allclose(got[1], left * para, atol=1e-12)
+    back = spin.Reactions.from_json(routed.to_json())
+    assert back.routes(0) == routes
+    # Routes and carried spins together are refused, and so are routes
+    # from a species.
+    with pytest.raises(ValueError):
+        routed.add_reaction([ia, ih], [ic], 1.0, carried=[(0, 0)], routes=routes)
+    with pytest.raises(ValueError):
+        fixed.add_reaction([ja, "H2"], [jc], 1.0, routes=[(1, 0, [(0, 1)])])
+
+    # C -> A + B without evolution: each product takes its partial trace.
+    one = q.SpinSystem(1.0)
+    one.add_spin("1H", 0.0)
+    two = q.SpinSystem(1.0)
+    two.add_spin("1H", 0.0)
+    two.add_spin("1H", 0.0)
+    r = spin.Reactions()
+    x = r.add_site(one, 0.0)
+    y = r.add_site(one, 0.0)
+    z = r.add_site(two, 1.0)
+    r.add_reaction([z], [x, y], 2.0, routes=[(0, 0, [(0, 0)]), (0, 1, [(1, 0)])])
+    sx = two.spin_operator(0, "x")
+    sz = two.spin_operator(1, "z")
+    rho = np.eye(4) / 4 + 0.2 * sx + 0.3 * sz
+    out = r.evolve([np.zeros((2, 2)), np.zeros((2, 2)), rho], [spin.delay(0.5)])
+    formed = 1 - math.exp(-1.0)
+    ox = one.spin_operator(0, "x")
+    oz = one.spin_operator(0, "z")
+    # <I_x> of the first spin is 0.2 * Tr(sx sx) = 0.2 in C, and so in A.
+    assert np.trace(out[0] @ ox).real == pytest.approx(formed * 0.2, rel=1e-9)
+    assert np.trace(out[1] @ oz).real == pytest.approx(formed * 0.3, rel=1e-9)
+    assert abs(np.trace(out[0] @ oz)) < 1e-12 and abs(np.trace(out[1] @ ox)) < 1e-12

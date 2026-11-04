@@ -20,6 +20,22 @@
 //! the product's others arrive fresh (thermal, or two in the singlet of
 //! parahydrogen).
 //!
+//! With [`Reactions::add_routed_reaction`], [`Route`]s carry spins from
+//! any reactant site into any product site. A product site that takes
+//! spins from both reactants of `A + B → C` forms in the product of their
+//! reduced states (the reactants uncorrelated, as in a well-mixed
+//! solution): `dσ_C/dt ∋ k Emb(σ_A' ⊗ σ_B' ⊗ ρ_fresh)`, quadratic in the
+//! states. It is written exactly as transfers from each reactant with the
+//! other's reference state `ρ̂ = 1/d + ŷ` in its spins (order zero, so the
+//! blocks of coherence order stay apart), the drift `v(1/(d_A d_B) − ŷ_A ⊗
+//! ŷ_B) ⊗ ρ_fresh` and the remainder `k Emb((x_A' − c_A ŷ_A) ⊗ (x_B' − c_B
+//! ŷ_B) ⊗ ρ_fresh)`, which vanishes when either reactant is in its
+//! reference state: with a partner held in its state the step is that of
+//! a linear reaction. The references are each step's predicted midpoint,
+//! the remainder enters the inhomogeneous quadratic, and the step is
+//! corrected until it settles; steps whose remainder matters are checked
+//! against their halves to [`BILINEAR_TOLERANCE`].
+//!
 //! The spin equations are linear with coefficients that follow the
 //! amounts. They are propagated as the deviation `σ_s − c_s(t)/d_s` (its
 //! trace stays zero, so `Tr σ_s = c_s` exactly) by exponentials of the
@@ -34,13 +50,15 @@
 //! would miss the phase of the coherences it carries, so its steps also
 //! resolve the frequencies of the blocks it feeds (`‖h M‖ ≤ 1/4`).
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 use super::super::blocks::LiouvilleBlock;
 use super::super::krylov::{
     Augmented, KRYLOV_TOLERANCE, SparseBlock, SparseFamily, expv, krylov_bytes, krylov_work,
 };
-use super::super::{Event, SpinSystem, Target, ZERO, check_field, check_time};
+use super::super::{Event, Isotope, SpinSystem, Target, ZERO, check_field, check_time};
 use super::Propagation;
 use super::{Channel, Exchange, Fresh, Site};
 use crate::error::{QsoError, Result};
@@ -65,6 +83,17 @@ const COHERENT_PHASE: f64 = 0.25;
 /// Relative tolerance of the Dormand–Prince steps of the amounts.
 const KINETIC_TOLERANCE: f64 = 1e-12;
 
+/// The largest difference, relative to the deviation from `c_s/d_s` of all
+/// sites (plus 10⁻⁶ of their amounts, below which rounding of the terms of
+/// order `c/d` dominates), between a step of `h` and two of `h/2` (before
+/// their extrapolation) when a bilinear source's remainder matters in it;
+/// longer steps are repeated shorter.
+pub const BILINEAR_TOLERANCE: f64 = 1e-9;
+
+/// Most corrections of a step with bilinear sources; a step whose
+/// corrections have not settled by then is repeated shorter.
+const MAX_CORRECTIONS: usize = 8;
+
 /// A species without spins and its initial amount.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -83,9 +112,11 @@ pub enum Participant {
 }
 
 /// A reaction of first or second order: `reactants → products` at rate
-/// `k Π c_reactants` (a reactant may appear twice). At most one product is
-/// a spin site; it receives the carried spins of the first site among the
-/// reactants (its source) and fresh spins for the rest.
+/// `k Π c_reactants` (a reactant may appear twice). The first product that
+/// is a spin site receives the `carried` spins of the first site among the
+/// reactants (its source) and `fresh` spins for the rest; other product
+/// sites receive thermal spins. [`Reactions::add_routed_reaction`] carries
+/// spins from any reactant site into any product site instead.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Reaction {
@@ -101,6 +132,20 @@ pub struct Reaction {
     pub fresh: Fresh,
 }
 
+/// Spins a reaction carries from one of its reactant sites into one of its
+/// product sites, by their positions among the reaction's reactants and
+/// products (see [`Reactions::add_routed_reaction`]).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Route {
+    /// Position among the reactants (a spin site).
+    pub reactant: usize,
+    /// Position among the products (a spin site).
+    pub product: usize,
+    /// `(spin of the reactant, spin of the product)` pairs.
+    pub spins: Vec<(usize, usize)>,
+}
+
 impl Reaction {
     /// The first spin site among the reactants and its position there.
     fn source(&self) -> Option<(usize, usize)> {
@@ -111,14 +156,6 @@ impl Reaction {
                 Participant::Site(s) => Some((i, *s)),
                 Participant::Species(_) => None,
             })
-    }
-
-    /// The spin site among the products.
-    fn target(&self) -> Option<usize> {
-        self.products.iter().find_map(|p| match p {
-            Participant::Site(s) => Some(*s),
-            Participant::Species(_) => None,
-        })
     }
 }
 
@@ -132,7 +169,102 @@ pub struct Reactions {
     species: Vec<Species>,
     #[serde(default)]
     reactions: Vec<Reaction>,
+    /// The routes of every reaction (none: its `carried` spins), or empty
+    /// when no reaction has routes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    routes: Vec<Vec<Route>>,
 }
+
+/// What a reaction brings into one of its product sites.
+struct Feed {
+    site: usize,
+    /// `(position among the reactants, its site, spin pairs)`, by position:
+    /// none (fresh spins only), one (a transfer, linear in that reactant's
+    /// state) or two (the product of both reactants' states).
+    routes: Vec<(usize, usize, Vec<(usize, usize)>)>,
+    fresh: Fresh,
+}
+
+/// A reactant's state reduced to the spins it carries into a product.
+struct Reduced {
+    dim: usize,
+    /// The reactant's basis states grouped by the levels of its other
+    /// (traced) spins: `(state, index here)`.
+    groups: Vec<Vec<(u32, u32)>>,
+    /// Per index here, its part of the product's basis index.
+    place: Vec<usize>,
+    /// The elements `(u, u')` of coherence order zero, as `u·dim + u'`.
+    zero: Vec<u32>,
+}
+
+impl Reduced {
+    /// `Tr_traced(x)` of the reactant's matrix `x`.
+    fn of(&self, x: &CMatrix) -> CMatrix {
+        let mut out = CMatrix::zeros(self.dim, self.dim);
+        for group in &self.groups {
+            for &(a, u) in group {
+                for &(a2, u2) in group {
+                    out[(u as usize, u2 as usize)] += x[(a as usize, a2 as usize)];
+                }
+            }
+        }
+        out
+    }
+
+    /// The elements of order zero of `m`, the others zero.
+    fn zero_part(&self, m: &CMatrix) -> CMatrix {
+        let mut out = CMatrix::zeros(self.dim, self.dim);
+        for &e in &self.zero {
+            let (u, u2) = (e as usize / self.dim, e as usize % self.dim);
+            out[(u, u2)] = m[(u, u2)];
+        }
+        out
+    }
+}
+
+/// A product site that receives spins from both reactants: the bilinear
+/// source `k Emb(σ_0' ⊗ σ_1' ⊗ ρ_fresh)` (`σ_q'` reactant `q`'s state
+/// reduced to its carried spins), handled as transfers from each reactant
+/// with the other's reference state in place of its spins, a drift and a
+/// remainder (see [`Reactions::remainder`]).
+struct Bilinear {
+    r: usize,
+    /// The reactants' sites (positions 0 and 1 of the reaction).
+    sources: [usize; 2],
+    reduced: [Reduced; 2],
+    /// The fresh spins' state.
+    fresh: CMatrix,
+    /// Per element of the product: `(block, position, p, p')`.
+    elements: Vec<(u32, u32, u32, u32)>,
+    /// Per basis state of the product: its index in each reactant's reduced
+    /// space and among the fresh spins.
+    index: Vec<[u32; 3]>,
+    /// The transfers from reactant `q` with the other's reference in place
+    /// of its spins: `(block, row, column, partner element or [`TRACE`],
+    /// weight)`, and
+    /// once the family exists, the entries' places in its blocks
+    /// `(block, index among the values, partner element, weight)`.
+    skeleton: [Vec<(usize, usize, usize, u32, C64)>; 2],
+    places: [Vec<(usize, usize, u32, C64)>; 2],
+}
+
+/// The partner element of a bilinear source's transfer entry that takes
+/// the source's trace off the product (weight one, no partner).
+///
+/// Each transfer moves only the traceless part of its source's deviation
+/// `x` (its trace is zero but for rounding): the product loses `Tr x` at
+/// its first population. Without, the traces of the deviations would
+/// follow `C → A + B` into both products while `C` loses them once, and
+/// rounding errors would grow at the rates of the chemistry (as `e^{0.85
+/// t}` in a test, `e^{850}` over one step of 1000 s of steady chemistry).
+const TRACE: u32 = u32::MAX;
+
+/// The reference states of the bilinear sources: per [`Bilinear`], each
+/// reactant's normalised reduced state less `1/d`, order zero only.
+type References = Vec<[CMatrix; 2]>;
+
+/// Per joint block, the remainder of the bilinear sources (if any).
+type Remainder = Vec<Option<Vec<C64>>>;
 
 /// The base of the generator at one field: each site's evolution and
 /// relaxation, and the transfers of the reactions.
@@ -153,12 +285,24 @@ struct Base {
     drift: Vec<Vec<(usize, usize, C64)>>,
     /// Every element of each site: `(block, position, is a population)`.
     elements: Vec<Vec<(usize, usize, bool)>>,
-    /// Per reaction with a product site: the transfer entries from its
-    /// source `(block, row, column, w)` and the drift per unit pseudo rate
-    /// and unit amount of the source, or (no source) the fresh state's
-    /// entries per unit rate.
-    transfers: Vec<Vec<(usize, usize, usize, C64)>>,
-    drift_transfers: Vec<Vec<(usize, usize, C64)>>,
+    /// The transfers into product sites from one reactant each.
+    linear: Vec<Linear>,
+    /// Per reaction and product site without carried spins: the fresh
+    /// state's entries per unit rate `(reaction, [(block, row, w)])`.
+    fresh: Vec<(usize, Vec<(usize, usize, C64)>)>,
+    /// The product sites with spins from both reactants.
+    bilinear: Vec<Bilinear>,
+}
+
+/// A transfer of reaction `r` from its reactant at position `from` (site
+/// `source`) into a product site: the entries `(block, row, column, w)`
+/// and the drift per unit pseudo-rate and unit amount of the source.
+struct Linear {
+    r: usize,
+    from: usize,
+    source: usize,
+    entries: Vec<(usize, usize, usize, C64)>,
+    drifts: Vec<(usize, usize, C64)>,
 }
 
 /// A part of the generator that scales with the amounts.
@@ -167,9 +311,25 @@ enum Member {
     /// `−1` on the elements of the site reacting as reactant `pos` of
     /// reaction `r` (times its pseudo-rate).
     Loss { r: usize, pos: usize },
-    /// The transfer of reaction `r` from its source (times its
-    /// pseudo-rate).
-    Transfer { r: usize },
+    /// The transfer [`Base::linear`]`[k]` (times its pseudo-rate).
+    Transfer { k: usize },
+    /// The pattern of a bilinear source's transfers, whose values each
+    /// step sets (weight zero).
+    Pattern,
+}
+
+/// Per reaction, the largest frequency of the blocks its transfers feed
+/// and the positions of the reactants they come from.
+type Coherence = Vec<(f64, Vec<usize>)>;
+
+/// One step of [`Reactions::midpoint`]: the states, the size of the
+/// bilinear sources' remainder over the step (`h` times its largest norm at
+/// the nodes), the operations, and whether the corrections converged.
+struct Step {
+    states: Vec<CMatrix>,
+    remainder: f64,
+    work: f64,
+    converged: bool,
 }
 
 /// The columns of augmented coordinates and their own derivatives.
@@ -179,13 +339,30 @@ type Coordinates = (Vec<Vec<C64>>, Vec<Vec<C64>>);
 /// for zero-order blocks, the inhomogeneous term's quadratic.
 struct StepBlock {
     n: usize,
-    a: SparseBlock,
+    a: Arc<SparseBlock>,
     /// `(f₀, f_m, f₁)` at the step's start, midpoint and end.
     drift: Option<[Vec<C64>; 3]>,
     h: f64,
 }
 
 impl StepBlock {
+    /// The same block over the first half of the step: the generator and
+    /// the inhomogeneous term's quadratic restricted to `[0, h/2]` (its
+    /// values at `0`, `h/4` and `h/2`).
+    fn first_half(&self) -> StepBlock {
+        StepBlock {
+            n: self.n,
+            a: Arc::clone(&self.a),
+            drift: self.drift.as_ref().map(|[f0, fm, f1]| {
+                let quarter = (0..self.n)
+                    .map(|i| f0[i] * 0.375 + fm[i] * 0.75 - f1[i] * 0.125)
+                    .collect();
+                [f0.clone(), quarter, fm.clone()]
+            }),
+            h: self.h / 2.0,
+        }
+    }
+
     /// Mean precession of the diagonal (zero for populations).
     fn shift(&self) -> C64 {
         if self.drift.is_some() || self.n == 0 {
@@ -347,9 +524,40 @@ impl Reactions {
 
     /// Add a reaction (checked).
     pub fn add_reaction(&mut self, reaction: Reaction) -> Result<&mut Self> {
-        self.check_reaction(&reaction)?;
+        self.check_reaction(&reaction, &[])?;
+        self.reactions.push(reaction);
+        if !self.routes.is_empty() {
+            self.routes.push(Vec::new());
+        }
+        Ok(self)
+    }
+
+    /// Add a reaction whose `routes` carry spins from its reactant sites
+    /// into its product sites (checked; its `carried` must be empty). Each
+    /// product site receives the reduced states of the reactants whose
+    /// spins it takes, as a product when it takes spins from both (the
+    /// reactants uncorrelated, as in a well-mixed solution): `A + B → C`
+    /// forms `C` in `ρ_A ⊗ ρ_B` at the rate `k[A][B]`, and `C → A + B`
+    /// gives each product its partial trace of `C`. The spins of a product
+    /// site that no route reaches arrive fresh: `fresh` on the first
+    /// product site, thermal on another.
+    pub fn add_routed_reaction(
+        &mut self,
+        reaction: Reaction,
+        routes: Vec<Route>,
+    ) -> Result<&mut Self> {
+        self.check_reaction(&reaction, &routes)?;
+        if !routes.is_empty() || !self.routes.is_empty() {
+            self.routes.resize(self.reactions.len(), Vec::new());
+            self.routes.push(routes);
+        }
         self.reactions.push(reaction);
         Ok(self)
+    }
+
+    /// The routes of reaction `reaction` (empty for one added without).
+    pub fn routes(&self, reaction: usize) -> &[Route] {
+        self.routes.get(reaction).map_or(&[], Vec::as_slice)
     }
 
     pub fn sites(&self) -> &[Site] {
@@ -393,20 +601,51 @@ impl Reactions {
         }
     }
 
-    /// The channel through which a reaction carries spins into its product
-    /// site (from the product itself when no reactant has spins).
-    fn channel(r: &Reaction) -> Option<Channel> {
-        let to = r.target()?;
-        Some(Channel {
-            from: r.source().map_or(to, |(_, s)| s),
-            to,
-            rate: r.rate,
-            carried: r.carried.clone(),
-            fresh: r.fresh,
-        })
+    /// What reaction `r` brings into each of its product sites.
+    fn feeds(&self, r: usize) -> Vec<Feed> {
+        let reaction = &self.reactions[r];
+        let routes = self.routes(r);
+        let mut out: Vec<Feed> = Vec::new();
+        for (p, part) in reaction.products.iter().enumerate() {
+            let Participant::Site(site) = *part else {
+                continue;
+            };
+            let first = out.is_empty();
+            let mut into = Vec::new();
+            if routes.is_empty() {
+                if first
+                    && !reaction.carried.is_empty()
+                    && let Some((pos, s)) = reaction.source()
+                {
+                    into.push((pos, s, reaction.carried.clone()));
+                }
+            } else {
+                for route in routes.iter().filter(|x| x.product == p) {
+                    if let Participant::Site(s) = reaction.reactants[route.reactant] {
+                        into.push((route.reactant, s, route.spins.clone()));
+                    }
+                }
+                into.sort_by_key(|x| x.0);
+            }
+            out.push(Feed {
+                site,
+                routes: into,
+                fresh: if first {
+                    reaction.fresh
+                } else {
+                    Fresh::Thermal
+                },
+            });
+        }
+        out
     }
 
-    fn check_reaction(&self, r: &Reaction) -> Result<()> {
+    /// Whether a product site takes spins from both reactants.
+    fn has_bilinear(&self) -> bool {
+        (0..self.reactions.len()).any(|r| self.feeds(r).iter().any(|f| f.routes.len() == 2))
+    }
+
+    fn check_reaction(&self, r: &Reaction, routes: &[Route]) -> Result<()> {
         let bad = |why: &str| Err(QsoError::invalid("reaction", why.to_string()));
         let exists = |p: &Participant| match *p {
             Participant::Site(s) => s < self.sites.len(),
@@ -421,28 +660,104 @@ impl Reactions {
         if !r.reactants.iter().chain(&r.products).all(exists) {
             return bad("a participant is out of range");
         }
-        let product_sites = r
-            .products
-            .iter()
-            .filter(|p| matches!(p, Participant::Site(_)))
-            .count();
-        if product_sites > 1 {
-            return bad("at most one product is a spin site");
-        }
         if !(r.rate.is_finite() && r.rate >= 0.0) {
             return bad("the rate must be finite and non-negative");
         }
-        match Self::channel(r) {
-            Some(c) => {
-                if r.source().is_none() && !r.carried.is_empty() {
-                    return bad("carried spins need a reactant with spins");
-                }
-                self.shadow().check_channel(&c)?;
+        let site = |p: &Participant| match *p {
+            Participant::Site(s) => Some(s),
+            Participant::Species(_) => None,
+        };
+        let Some(first) = r.products.iter().position(|p| site(p).is_some()) else {
+            if !r.carried.is_empty() || r.fresh != Fresh::Thermal || !routes.is_empty() {
+                return bad("carried and fresh spins need a product with spins");
             }
-            None => {
-                if !r.carried.is_empty() || r.fresh != Fresh::Thermal {
-                    return bad("carried and fresh spins need a product with spins");
-                }
+            return Ok(());
+        };
+        if !routes.is_empty() && !r.carried.is_empty() {
+            return bad("a reaction carries spins by its routes or by `carried`, not both");
+        }
+        // Every carried pair as (reactant position, product position,
+        // spin of the reactant, spin of the product).
+        let mut pairs: Vec<(usize, usize, usize, usize)> = Vec::new();
+        if !r.carried.is_empty() {
+            let Some((pos, _)) = r.source() else {
+                return bad("carried spins need a reactant with spins");
+            };
+            pairs.extend(r.carried.iter().map(|&(i, j)| (pos, first, i, j)));
+        }
+        for (k, route) in routes.iter().enumerate() {
+            let from = r.reactants.get(route.reactant).and_then(site);
+            let to = r.products.get(route.product).and_then(site);
+            if from.is_none() || to.is_none() {
+                return bad("a route joins a reactant and a product that are spin sites");
+            }
+            if route.spins.is_empty() {
+                return bad("a route carries at least one spin");
+            }
+            if routes[..k]
+                .iter()
+                .any(|o| o.reactant == route.reactant && o.product == route.product)
+            {
+                return bad("two routes join the same reactant and product (merge their spins)");
+            }
+            pairs.extend(
+                route
+                    .spins
+                    .iter()
+                    .map(|&(i, j)| (route.reactant, route.product, i, j)),
+            );
+        }
+        let spins_of = |p: &Participant| site(p).map_or(0, |s| self.sites[s].system.spins().len());
+        let mut from_seen: Vec<Vec<bool>> = r
+            .reactants
+            .iter()
+            .map(|p| vec![false; spins_of(p)])
+            .collect();
+        let mut to_seen: Vec<Vec<bool>> = r
+            .products
+            .iter()
+            .map(|p| vec![false; spins_of(p)])
+            .collect();
+        for &(rp, pp, i, j) in &pairs {
+            let ok = i < from_seen[rp].len()
+                && j < to_seen[pp].len()
+                && !from_seen[rp][i]
+                && !to_seen[pp][j];
+            if !ok {
+                return bad(&format!(
+                    "the carried pair ({i}, {j}) is out of range or repeated"
+                ));
+            }
+            from_seen[rp][i] = true;
+            to_seen[pp][j] = true;
+            let (a, b) = (
+                &self.sites[site(&r.reactants[rp]).expect("a site")].system,
+                &self.sites[site(&r.products[pp]).expect("a site")].system,
+            );
+            if a.spins()[i].isotope != b.spins()[j].isotope {
+                return bad(&format!("carried spins {i} and {j} are different isotopes"));
+            }
+        }
+        if let Fresh::Parahydrogen {
+            spins: [i, j],
+            fraction,
+        } = r.fresh
+        {
+            let b = &self.sites[site(&r.products[first]).expect("a site")].system;
+            let free = &to_seen[first];
+            let ok = i != j
+                && i < free.len()
+                && j < free.len()
+                && !free[i]
+                && !free[j]
+                && b.spins()[i].isotope == b.spins()[j].isotope
+                && b.spins()[i].isotope.levels() == 2
+                && (0.0..=1.0).contains(&fraction);
+            if !ok {
+                return bad(
+                    "parahydrogen occupies two fresh spins ½ of one isotope of the first product \
+                     site, fraction in [0, 1]",
+                );
             }
         }
         Ok(())
@@ -467,8 +782,18 @@ impl Reactions {
                 ));
             }
         }
-        for r in &self.reactions {
-            self.check_reaction(r)?;
+        if !self.routes.is_empty() && self.routes.len() != self.reactions.len() {
+            return Err(QsoError::invalid(
+                "routes",
+                format!(
+                    "{} lists of routes for {} reactions",
+                    self.routes.len(),
+                    self.reactions.len()
+                ),
+            ));
+        }
+        for (k, r) in self.reactions.iter().enumerate() {
+            self.check_reaction(r, self.routes(k))?;
         }
         Ok(())
     }
@@ -680,11 +1005,23 @@ impl Reactions {
                 |_, _, _, _| entries += 1,
             );
         }
+        let feeds: Vec<Vec<Feed>> = (0..self.reactions.len()).map(|r| self.feeds(r)).collect();
         let member_count = self
             .reactions
             .iter()
-            .map(|r| r.reactants.len() + 1)
-            .sum::<usize>() as f64;
+            .map(|r| {
+                r.reactants
+                    .iter()
+                    .filter(|p| matches!(p, Participant::Site(_)))
+                    .count()
+            })
+            .sum::<usize>()
+            + feeds
+                .iter()
+                .flatten()
+                .map(|f| f.routes.len().min(2))
+                .sum::<usize>();
+        let member_count = member_count as f64;
         let elements_total: usize = joint.blocks.iter().map(|(_, _, n)| n + 3).sum();
         let bytes = entries as f64 * (12.0 + 20.0 + 16.0 * (1.0 + member_count))
             + krylov_bytes(elements_total)
@@ -737,59 +1074,96 @@ impl Reactions {
             drift.push(here);
             elements.push(all);
         }
-        let mut transfers = Vec::with_capacity(self.reactions.len());
-        let mut drift_transfers = Vec::with_capacity(self.reactions.len());
-        for r in &self.reactions {
-            let mut entries = Vec::new();
-            let mut drifts = Vec::new();
-            if let Some(c) = Self::channel(r) {
-                if r.source().is_some() {
-                    let da = self.sites[c.from].system.dimension() as f64;
-                    shadow.transfer(&c, b, |a, a2, t1, t2, w| {
-                        let (Some((j, col)), Some((j2, row))) =
-                            (at(c.from, a, a2), at(c.to, t1, t2))
-                        else {
-                            return;
+        let mut linear = Vec::new();
+        let mut fresh = Vec::new();
+        let mut bilinear = Vec::new();
+        for (r, list) in feeds.iter().enumerate() {
+            for feed in list {
+                match feed.routes.as_slice() {
+                    [] => {
+                        // The fresh state of every spin times the rate.
+                        let sys = &self.sites[feed.site].system;
+                        let channel = Channel {
+                            from: feed.site,
+                            to: feed.site,
+                            rate: 0.0,
+                            carried: Vec::new(),
+                            fresh: feed.fresh,
                         };
-                        debug_assert_eq!(j, j2, "reactions keep the coherence order");
-                        entries.push((j, row, col, w));
-                        if a == a2 {
-                            drifts.push((j, row, w / da));
-                        }
-                    });
-                } else {
-                    let sys = &self.sites[c.to].system;
-                    let (fresh, rho) = shadow.fresh_state(&c, b);
-                    let levels: Vec<usize> = fresh
-                        .iter()
-                        .map(|&j| sys.spins()[j].isotope.levels())
-                        .collect();
-                    let index = |f: usize| -> usize {
-                        let mut rest = f;
-                        let mut out = 0;
-                        for k in (0..fresh.len()).rev() {
-                            out += (rest % levels[k]) * sys.stride(fresh[k]);
-                            rest /= levels[k];
-                        }
-                        out
-                    };
-                    for f in 0..rho.nrows() {
-                        for f2 in 0..rho.ncols() {
-                            let v = rho[(f, f2)];
-                            if v != ZERO
-                                && let Some((j, row)) = at(c.to, index(f), index(f2))
-                            {
-                                drifts.push((j, row, v));
+                        let (spins, rho) = shadow.fresh_state(&channel, b);
+                        let levels: Vec<usize> = spins
+                            .iter()
+                            .map(|&j| sys.spins()[j].isotope.levels())
+                            .collect();
+                        let index = |f: usize| -> usize {
+                            let mut rest = f;
+                            let mut out = 0;
+                            for k in (0..spins.len()).rev() {
+                                out += (rest % levels[k]) * sys.stride(spins[k]);
+                                rest /= levels[k];
+                            }
+                            out
+                        };
+                        let mut drifts = Vec::new();
+                        for f in 0..rho.nrows() {
+                            for f2 in 0..rho.ncols() {
+                                let v = rho[(f, f2)];
+                                if v != ZERO
+                                    && let Some((j, row)) = at(feed.site, index(f), index(f2))
+                                {
+                                    drifts.push((j, row, v));
+                                }
                             }
                         }
+                        fresh.push((r, drifts));
                     }
+                    [(from, source, spins)] => {
+                        let channel = Channel {
+                            from: *source,
+                            to: feed.site,
+                            rate: 0.0,
+                            carried: spins.clone(),
+                            fresh: feed.fresh,
+                        };
+                        let da = self.sites[*source].system.dimension() as f64;
+                        let mut entries = Vec::new();
+                        let mut drifts = Vec::new();
+                        shadow.transfer(&channel, b, |a, a2, t1, t2, w| {
+                            let (Some((j, col)), Some((j2, row))) =
+                                (at(*source, a, a2), at(feed.site, t1, t2))
+                            else {
+                                return;
+                            };
+                            debug_assert_eq!(j, j2, "reactions keep the coherence order");
+                            entries.push((j, row, col, w));
+                            if a == a2 {
+                                drifts.push((j, row, w / da));
+                            }
+                        });
+                        // Only the traceless part of the source moves (see
+                        // `traceless`).
+                        let (j0, row0) = at(feed.site, 0, 0).expect("a population");
+                        for &(j, col, population) in &elements[*source] {
+                            if population {
+                                debug_assert_eq!(j, j0);
+                                entries.push((j, row0, col, C64::new(-1.0, 0.0)));
+                            }
+                        }
+                        linear.push(Linear {
+                            r,
+                            from: *from,
+                            source: *source,
+                            entries,
+                            drifts,
+                        });
+                    }
+                    _ => bilinear.push(self.bilinear(&shadow, &joint, r, feed, b)),
                 }
             }
-            transfers.push(entries);
-            drift_transfers.push(drifts);
         }
-        // The members: losses of every site reactant, transfers of every
-        // reaction with a source, each block on the union of the patterns.
+        // The members: losses of every site reactant, the transfers, and
+        // the patterns of the bilinear sources' transfers; each block on
+        // the union of the patterns.
         let mut members = Vec::new();
         let mut parts: Vec<Vec<Vec<(u32, u32, C64)>>> = Vec::new();
         for (r, reaction) in self.reactions.iter().enumerate() {
@@ -802,12 +1176,22 @@ impl Reactions {
                 members.push(Member::Loss { r, pos });
                 parts.push(per);
             }
-            if reaction.target().is_some() && reaction.source().is_some() {
+        }
+        for (k, l) in linear.iter().enumerate() {
+            let mut per = vec![Vec::new(); joint.blocks.len()];
+            for &(j, row, col, w) in &l.entries {
+                per[j].push((row as u32, col as u32, w));
+            }
+            members.push(Member::Transfer { k });
+            parts.push(per);
+        }
+        for feed in &bilinear {
+            for skeleton in &feed.skeleton {
                 let mut per = vec![Vec::new(); joint.blocks.len()];
-                for &(j, row, col, w) in &transfers[r] {
-                    per[j].push((row as u32, col as u32, w));
+                for &(j, row, col, _, _) in skeleton {
+                    per[j].push((row as u32, col as u32, C64::new(1.0, 0.0)));
                 }
-                members.push(Member::Transfer { r });
+                members.push(Member::Pattern);
                 parts.push(per);
             }
         }
@@ -832,7 +1216,7 @@ impl Reactions {
             ));
         }
         let mut norms = Vec::with_capacity(joint.blocks.len());
-        let family = triplets
+        let family: Vec<SparseFamily> = triplets
             .into_iter()
             .enumerate()
             .map(|(j, t)| {
@@ -846,6 +1230,22 @@ impl Reactions {
                 SparseFamily::new(&blocks)
             })
             .collect();
+        // Where the bilinear sources' transfers sit among the values of
+        // each combined block.
+        let mut probes: Vec<Option<SparseBlock>> = vec![None; family.len()];
+        let zeros = vec![0.0; members.len() + 1];
+        for feed in &mut bilinear {
+            for q in 0..2 {
+                feed.places[q] = feed.skeleton[q]
+                    .iter()
+                    .map(|&(j, row, col, e, w)| {
+                        let probe = probes[j].get_or_insert_with(|| family[j].combine(&zeros));
+                        let at = probe.position(row, col).expect("the pattern holds it");
+                        (j, at, e, w)
+                    })
+                    .collect();
+            }
+        }
         Ok(Base {
             joint,
             family,
@@ -854,26 +1254,250 @@ impl Reactions {
             augmented,
             drift,
             elements,
-            transfers,
-            drift_transfers,
+            linear,
+            fresh,
+            bilinear,
         })
     }
 
+    /// The bilinear source of reaction `r` into the product site of `feed`
+    /// (routes from both reactants) on `joint` at field `b`.
+    fn bilinear(
+        &self,
+        shadow: &Exchange,
+        joint: &super::Joint,
+        r: usize,
+        feed: &Feed,
+        b: f64,
+    ) -> Bilinear {
+        let at = |s: usize, a: usize, a2: usize| -> Option<(usize, usize)> {
+            let l = &joint.liouvilles[s];
+            let k = l.block_of(a, a2)?;
+            let (j, offset) = joint.place[s][k];
+            Some((j, offset + l.position_of(a, a2)))
+        };
+        let product = &self.sites[feed.site].system;
+        let dp = product.dimension();
+        let level = |sys: &SpinSystem, i: usize, state: usize| {
+            (state / sys.stride(i)) % sys.spins()[i].isotope.levels()
+        };
+        // The levels of `spins` in `state` as one index, the first spin
+        // most significant.
+        let digits = |sys: &SpinSystem, spins: &[usize], state: usize| -> usize {
+            spins.iter().fold(0, |acc, &i| {
+                acc * sys.spins()[i].isotope.levels() + level(sys, i, state)
+            })
+        };
+        let lab = product.frame() == super::super::Frame::Laboratory;
+        let targets: [Vec<usize>; 2] =
+            [0, 1].map(|q| feed.routes[q].2.iter().map(|&(_, j)| j).collect());
+        let reduced: [Reduced; 2] = [0, 1].map(|q| {
+            let (_, source, spins) = &feed.routes[q];
+            let src = &self.sites[*source].system;
+            let from: Vec<usize> = spins.iter().map(|&(i, _)| i).collect();
+            let traced: Vec<usize> = (0..src.spins().len())
+                .filter(|i| !from.contains(i))
+                .collect();
+            let levels: Vec<usize> = from
+                .iter()
+                .map(|&i| src.spins()[i].isotope.levels())
+                .collect();
+            let dim: usize = levels.iter().product();
+            let traced_dim: usize = traced
+                .iter()
+                .map(|&i| src.spins()[i].isotope.levels())
+                .product();
+            let mut groups = vec![Vec::new(); traced_dim];
+            for a in 0..src.dimension() {
+                groups[digits(src, &traced, a)].push((a as u32, digits(src, &from, a) as u32));
+            }
+            let split = |u: usize| -> Vec<usize> {
+                let mut out = vec![0; levels.len()];
+                let mut rest = u;
+                for k in (0..levels.len()).rev() {
+                    out[k] = rest % levels[k];
+                    rest /= levels[k];
+                }
+                out
+            };
+            let place = (0..dim)
+                .map(|u| {
+                    split(u)
+                        .iter()
+                        .zip(&targets[q])
+                        .map(|(&l, &j)| l * product.stride(j))
+                        .sum()
+                })
+                .collect();
+            // Order zero: the levels sum the same per isotope (rotating
+            // frame) or over all spins (laboratory frame).
+            let isotopes: Vec<_> = from.iter().map(|&i| src.spins()[i].isotope).collect();
+            let mut zero = Vec::new();
+            for u in 0..dim {
+                let du = split(u);
+                for u2 in 0..dim {
+                    let du2 = split(u2);
+                    let sum = |d: &[usize], x: Option<Isotope>| -> usize {
+                        d.iter()
+                            .zip(&isotopes)
+                            .filter(|&(_, y)| x.is_none_or(|x| x == *y))
+                            .map(|(l, _)| l)
+                            .sum()
+                    };
+                    let same = if lab {
+                        sum(&du, None) == sum(&du2, None)
+                    } else {
+                        isotopes
+                            .iter()
+                            .all(|&x| sum(&du, Some(x)) == sum(&du2, Some(x)))
+                    };
+                    if same {
+                        zero.push((u * dim + u2) as u32);
+                    }
+                }
+            }
+            Reduced {
+                dim,
+                groups,
+                place,
+                zero,
+            }
+        });
+        // The fresh spins: those no route reaches.
+        let channel = Channel {
+            from: feed.site,
+            to: feed.site,
+            rate: 0.0,
+            carried: targets.iter().flatten().map(|&j| (j, j)).collect(),
+            fresh: feed.fresh,
+        };
+        let (fresh_spins, fresh) = shadow.fresh_state(&channel, b);
+        let fresh_place: Vec<usize> = (0..fresh.nrows())
+            .map(|f| {
+                let mut rest = f;
+                let mut out = 0;
+                for k in (0..fresh_spins.len()).rev() {
+                    let levels = product.spins()[fresh_spins[k]].isotope.levels();
+                    out += (rest % levels) * product.stride(fresh_spins[k]);
+                    rest /= levels;
+                }
+                out
+            })
+            .collect();
+        let index: Vec<[u32; 3]> = (0..dp)
+            .map(|p| {
+                [
+                    digits(product, &targets[0], p) as u32,
+                    digits(product, &targets[1], p) as u32,
+                    digits(product, &fresh_spins, p) as u32,
+                ]
+            })
+            .collect();
+        let mut elements = Vec::new();
+        for p in 0..dp {
+            for p2 in 0..dp {
+                if let Some((j, i)) = at(feed.site, p, p2) {
+                    elements.push((j as u32, i as u32, p as u32, p2 as u32));
+                }
+            }
+        }
+        let skeleton = [0, 1].map(|q| {
+            let source = feed.routes[q].1;
+            let (own, other) = (&reduced[q], &reduced[1 - q]);
+            let mut out = Vec::new();
+            for group in &own.groups {
+                for &(a, u) in group {
+                    for &(a2, u2) in group {
+                        let Some((j, col)) = at(source, a as usize, a2 as usize) else {
+                            continue;
+                        };
+                        for &e in &other.zero {
+                            let (w, w2) = (e as usize / other.dim, e as usize % other.dim);
+                            for f in 0..fresh.nrows() {
+                                for f2 in 0..fresh.ncols() {
+                                    let v = fresh[(f, f2)];
+                                    if v == ZERO {
+                                        continue;
+                                    }
+                                    let p = own.place[u as usize] + other.place[w] + fresh_place[f];
+                                    let p2 =
+                                        own.place[u2 as usize] + other.place[w2] + fresh_place[f2];
+                                    if let Some((j2, row)) = at(feed.site, p, p2) {
+                                        debug_assert_eq!(j, j2, "reactions keep the order");
+                                        out.push((j, row, col, e, v));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Only the traceless part of the source moves.
+            let (j0, row0) = at(feed.site, 0, 0).expect("a population");
+            let src = &self.sites[source].system;
+            for a in 0..src.dimension() {
+                if let Some((j, col)) = at(source, a, a) {
+                    debug_assert_eq!(j, j0);
+                    out.push((j, row0, col, TRACE, C64::new(-1.0, 0.0)));
+                }
+            }
+            out
+        });
+        Bilinear {
+            r,
+            sources: [feed.routes[0].1, feed.routes[1].1],
+            reduced,
+            fresh,
+            elements,
+            index,
+            skeleton,
+            places: [Vec::new(), Vec::new()],
+        }
+    }
+
     /// The part of the generator that acts on the deviation, with the
-    /// amounts `c` (each block `n × n`).
-    fn matrix(&self, base: &Base, c: &[f64]) -> Vec<SparseBlock> {
+    /// amounts `c` and the bilinear sources' references `refs` (each block
+    /// `n × n`).
+    fn matrix(&self, base: &Base, c: &[f64], refs: &References) -> Vec<SparseBlock> {
         let mut w = vec![1.0];
         for m in &base.members {
             w.push(match *m {
                 Member::Loss { r, pos } => self.pseudo_rate(&self.reactions[r], pos, c),
-                Member::Transfer { r } => {
-                    let reaction = &self.reactions[r];
-                    let (pos, _) = reaction.source().expect("a source");
-                    self.pseudo_rate(reaction, pos, c)
+                Member::Transfer { k } => {
+                    let l = &base.linear[k];
+                    self.pseudo_rate(&self.reactions[l.r], l.from, c)
                 }
+                Member::Pattern => 0.0,
             });
         }
-        base.family.iter().map(|f| f.combine(&w)).collect()
+        let mut blocks: Vec<SparseBlock> = base.family.iter().map(|f| f.combine(&w)).collect();
+        // Each bilinear source's transfer from reactant q at the pseudo-rate
+        // k·c_other, with the other's reference `1/d + ŷ` in its spins.
+        for (feed, refs) in base.bilinear.iter().zip(refs) {
+            let reaction = &self.reactions[feed.r];
+            for q in 0..2 {
+                let kappa = self.pseudo_rate(reaction, q, c);
+                if kappa == 0.0 {
+                    continue;
+                }
+                let (other, y) = (&feed.reduced[1 - q], &refs[1 - q]);
+                let flat = 1.0 / other.dim as f64;
+                for &(j, at, e, weight) in &feed.places[q] {
+                    let rho = if e == TRACE {
+                        C64::new(1.0, 0.0)
+                    } else {
+                        let (u, u2) = (e as usize / other.dim, e as usize % other.dim);
+                        let mut rho = y[(u, u2)];
+                        if u == u2 {
+                            rho += flat;
+                        }
+                        rho
+                    };
+                    blocks[j].values_mut()[at] += rho * weight * kappa;
+                }
+            }
+        }
+        blocks
     }
 
     /// `k_r` times the amounts of the reactants other than the one at
@@ -890,8 +1514,9 @@ impl Reactions {
     /// The inhomogeneous term of the deviation's equation with the amounts
     /// `c`, per block (populations and zero-quantum coherences only):
     /// the relaxation's drift, the losses and gains of `c_s/d_s`, the fresh
-    /// states of reactions without a source, and `−ċ_s/d_s`.
-    fn drift(&self, base: &Base, c: &[f64]) -> Vec<Vec<C64>> {
+    /// states of reactions without carried spins, the bilinear sources'
+    /// `v(1/(d₀d₁) − ŷ₀ ⊗ ŷ₁) ⊗ ρ_fresh`, and `−ċ_s/d_s`.
+    fn drift(&self, base: &Base, c: &[f64], refs: &References) -> Vec<Vec<C64>> {
         let mut f: Vec<Vec<C64>> = base
             .joint
             .blocks
@@ -924,7 +1549,7 @@ impl Reactions {
             }
         }
         let velocities = self.velocities(c);
-        for (r, reaction) in self.reactions.iter().enumerate() {
+        for reaction in &self.reactions {
             for (pos, p) in reaction.reactants.iter().enumerate() {
                 let Participant::Site(s) = *p else { continue };
                 let kappa = self.pseudo_rate(reaction, pos, c);
@@ -937,70 +1562,195 @@ impl Reactions {
                     }
                 }
             }
-            if reaction.target().is_none() {
+        }
+        for l in &base.linear {
+            let g = self.pseudo_rate(&self.reactions[l.r], l.from, c);
+            for &(j, row, w) in &l.drifts {
+                push(j, row, w * g * c[l.source]);
+            }
+        }
+        for (r, drifts) in &base.fresh {
+            for &(j, row, w) in drifts {
+                push(j, row, w * velocities[*r]);
+            }
+        }
+        for (feed, refs) in base.bilinear.iter().zip(refs) {
+            let v = velocities[feed.r];
+            if v == 0.0 {
                 continue;
             }
-            match reaction.source() {
-                Some((pos, s)) => {
-                    let g = self.pseudo_rate(reaction, pos, c);
-                    for &(j, row, w) in &base.drift_transfers[r] {
-                        push(j, row, w * g * c[s]);
-                    }
+            let flat = 1.0 / (feed.reduced[0].dim * feed.reduced[1].dim) as f64;
+            for &(j, i, p, p2) in &feed.elements {
+                let j = j as usize;
+                if !base.augmented[j] {
+                    continue;
                 }
-                None => {
-                    for &(j, row, w) in &base.drift_transfers[r] {
-                        push(j, row, w * velocities[r]);
-                    }
+                let ([u0, u1, x], [w0, w1, x2]) = (feed.index[p as usize], feed.index[p2 as usize]);
+                let fv = feed.fresh[(x as usize, x2 as usize)];
+                if fv == ZERO {
+                    continue;
                 }
+                let mut val =
+                    -refs[0][(u0 as usize, w0 as usize)] * refs[1][(u1 as usize, w1 as usize)];
+                if u0 == w0 && u1 == w1 {
+                    val += flat;
+                }
+                push(j, i as usize, val * fv * v);
             }
         }
         f
     }
 
+    /// The bilinear sources' references at the deviations `x` with the
+    /// amounts `c`: each reactant's reduced state normalised, less `1/d`,
+    /// order zero only (zero for a reactant without amount).
+    fn references(&self, base: &Base, x: &[CMatrix], c: &[f64]) -> References {
+        let total: f64 = c[..self.sites.len()].iter().sum();
+        base.bilinear
+            .iter()
+            .map(|feed| {
+                [0, 1].map(|q| {
+                    let (s, red) = (feed.sources[q], &feed.reduced[q]);
+                    if c[s] <= 1e-12 * total {
+                        return CMatrix::zeros(red.dim, red.dim);
+                    }
+                    red.zero_part(&red.of(&x[s])) * C64::new(1.0 / c[s], 0.0)
+                })
+            })
+            .collect()
+    }
+
+    /// The remainder of the bilinear sources at the deviations `x` with the
+    /// amounts `c` and references `refs`: `k Emb((x₀' − c₀ŷ₀) ⊗ (x₁' −
+    /// c₁ŷ₁) ⊗ ρ_fresh)`, all orders; with the transfers and drift it gives
+    /// the source exactly, and it vanishes when either reactant is in its
+    /// reference state. Per block (blocks it misses `None`), and its 2-norm.
+    fn remainder(
+        &self,
+        base: &Base,
+        x: &[CMatrix],
+        c: &[f64],
+        refs: &References,
+    ) -> (Remainder, f64) {
+        let mut out: Remainder = vec![None; base.joint.blocks.len()];
+        for (feed, refs) in base.bilinear.iter().zip(refs) {
+            let k = self.reactions[feed.r].rate;
+            let z = [0, 1].map(|q| {
+                let s = feed.sources[q];
+                feed.reduced[q].of(&x[s]) - &refs[q] * C64::new(c[s], 0.0)
+            });
+            if k == 0.0 || z.iter().any(|m| m.iter().all(|v| *v == ZERO)) {
+                continue;
+            }
+            for &(j, i, p, p2) in &feed.elements {
+                let ([u0, u1, f], [w0, w1, f2]) = (feed.index[p as usize], feed.index[p2 as usize]);
+                let fv = feed.fresh[(f as usize, f2 as usize)];
+                if fv == ZERO {
+                    continue;
+                }
+                let v =
+                    z[0][(u0 as usize, w0 as usize)] * z[1][(u1 as usize, w1 as usize)] * fv * k;
+                if v != ZERO {
+                    let n = base.joint.blocks[j as usize].2;
+                    out[j as usize].get_or_insert_with(|| vec![ZERO; n])[i as usize] += v;
+                }
+            }
+        }
+        let norm = out
+            .iter()
+            .flatten()
+            .flatten()
+            .map(|v| v.norm_sqr())
+            .sum::<f64>()
+            .sqrt();
+        (out, norm)
+    }
+
     /// The blocks of one step of `h`: the generator with the amounts at the
-    /// midpoint `cm`, and the inhomogeneous term interpolated by the
-    /// quadratic through its values at the start, midpoint and end
-    /// (`c0`, `cm`, `c1`), integrated exactly through two more coordinates
-    /// `u₁ = s/h`, `u₂ = (s/h)²/2` (the φ-functions of the exponential).
+    /// midpoint `nodes[1]`, and the inhomogeneous term (with the bilinear
+    /// sources' remainders `rems` at the nodes) interpolated by the
+    /// quadratic through its values at the start, midpoint and end,
+    /// integrated exactly through two more coordinates `u₁ = s/h`,
+    /// `u₂ = (s/h)²/2` (the φ-functions of the exponential).
     fn step_blocks(
         &self,
         base: &Base,
-        c0: &[f64],
-        cm: &[f64],
-        c1: &[f64],
+        nodes: [&[f64]; 3],
         h: f64,
+        refs: &References,
+        rems: Option<&[Remainder; 3]>,
     ) -> Vec<StepBlock> {
-        let matrices = self.matrix(base, cm);
-        let (f0, fm, f1) = (
-            self.drift(base, c0),
-            self.drift(base, cm),
-            self.drift(base, c1),
-        );
-        let mut f0 = f0.into_iter();
-        let mut fm = fm.into_iter();
-        let mut f1 = f1.into_iter();
+        let matrices = self.matrix(base, nodes[1], refs);
+        let mut f = nodes.map(|c| self.drift(base, c, refs).into_iter());
         base.joint
             .blocks
             .iter()
             .zip(matrices)
             .enumerate()
             .map(|(j, ((_, _, n), a))| {
-                let (x0, xm, x1) = (
-                    f0.next().expect("a block"),
-                    fm.next().expect("a block"),
-                    f1.next().expect("a block"),
-                );
+                let mut values = [0, 1, 2].map(|k| f[k].next().expect("a block"));
+                let fed = rems.is_some_and(|r| r.iter().any(|x| x[j].is_some()));
+                if fed {
+                    for (k, v) in values.iter_mut().enumerate() {
+                        v.resize(*n, ZERO);
+                        if let Some(add) = rems.and_then(|r| r[k][j].as_ref()) {
+                            for (o, a) in v.iter_mut().zip(add) {
+                                *o += a;
+                            }
+                        }
+                    }
+                }
                 StepBlock {
                     n: *n,
-                    a,
-                    drift: base.augmented[j].then_some([x0, xm, x1]),
+                    a: Arc::new(a),
+                    drift: (base.augmented[j] || fed).then_some(values),
                     h,
                 }
             })
             .collect()
     }
 
-    /// One step of `h` from `t` (amounts `c` at `t`).
+    /// The states after propagating each block of `blocks` from `x`, and
+    /// the operations it took.
+    fn apply(
+        &self,
+        base: &Base,
+        blocks: &[StepBlock],
+        x: &[CMatrix],
+        method: Propagation,
+    ) -> Result<(Vec<CMatrix>, f64)> {
+        let mut out: Vec<CMatrix> = x
+            .iter()
+            .map(|m| CMatrix::zeros(m.nrows(), m.ncols()))
+            .collect();
+        let mut work = 0.0;
+        for ((_, parts, n), block) in base.joint.blocks.iter().zip(blocks) {
+            let mut elements: Vec<(usize, usize, usize)> = Vec::with_capacity(*n);
+            for &(s, k, _) in parts {
+                for &(a, b) in &base.joint.liouvilles[s].blocks[k].1 {
+                    elements.push((s, a, b));
+                }
+            }
+            let v: Vec<C64> = elements.iter().map(|&(s, a, b)| x[s][(a, b)]).collect();
+            let (dense, cost) = block.plan(method);
+            work += cost;
+            let moved = block.propagate(&v, dense)?;
+            for (&(s, a, b), v) in elements.iter().zip(moved) {
+                out[s][(a, b)] = v;
+            }
+        }
+        Ok((out, work))
+    }
+
+    /// One step of `h` from `t` (amounts `c` at `t`). With bilinear sources,
+    /// a predictor (the references of the step's start, the remainder held
+    /// at its start's value) gives the states at the midpoint and the end;
+    /// the step then takes the references of the predicted midpoint and the
+    /// remainder at the three nodes, and is repeated with the corrected
+    /// states until the end moves by less than a tenth of `tolerance`
+    /// (each pass squares the error of the last: the remainder is the
+    /// product of two deviations from the references), at most
+    /// [`MAX_CORRECTIONS`] times.
     #[allow(clippy::too_many_arguments)]
     fn midpoint(
         &self,
@@ -1010,46 +1760,93 @@ impl Reactions {
         t: f64,
         h: f64,
         method: Propagation,
-    ) -> Result<Vec<CMatrix>> {
+        tolerance: f64,
+    ) -> Result<Step> {
         let mut mid = c.to_vec();
         self.advance(&mut mid, t, t + h / 2.0)?;
         let mut end = mid.clone();
         self.advance(&mut end, t + h / 2.0, t + h)?;
-        let blocks = self.step_blocks(base, c, &mid, &end, h);
-        let mut out: Vec<CMatrix> = x
-            .iter()
-            .map(|m| CMatrix::zeros(m.nrows(), m.ncols()))
-            .collect();
-        for ((_, parts, n), block) in base.joint.blocks.iter().zip(&blocks) {
-            let mut elements: Vec<(usize, usize, usize)> = Vec::with_capacity(*n);
-            for &(s, k, _) in parts {
-                for &(a, b) in &base.joint.liouvilles[s].blocks[k].1 {
-                    elements.push((s, a, b));
-                }
-            }
-            let v: Vec<C64> = elements.iter().map(|&(s, a, b)| x[s][(a, b)]).collect();
-            let (dense, _) = block.plan(method);
-            let moved = block.propagate(&v, dense)?;
-            for (&(s, a, b), v) in elements.iter().zip(moved) {
-                out[s][(a, b)] = v;
-            }
+        let nodes = [c, mid.as_slice(), end.as_slice()];
+        if base.bilinear.is_empty() {
+            let blocks = self.step_blocks(base, nodes, h, &Vec::new(), None);
+            let (states, work) = self.apply(base, &blocks, x, method)?;
+            return Ok(Step {
+                states,
+                remainder: 0.0,
+                work,
+                converged: true,
+            });
         }
-        Ok(out)
+        let norm = |m: &[CMatrix]| m.iter().map(|x| x.norm_squared()).sum::<f64>().sqrt();
+        let start = self.references(base, x, c);
+        let (held, _) = self.remainder(base, x, c, &start);
+        let held = [held.clone(), held.clone(), held];
+        let blocks = self.step_blocks(base, nodes, h, &start, Some(&held));
+        let (mut end_guess, mut work) = self.apply(base, &blocks, x, method)?;
+        let halves: Vec<StepBlock> = blocks.iter().map(StepBlock::first_half).collect();
+        let (mut mid_guess, w) = self.apply(base, &halves, x, method)?;
+        work += w;
+        for pass in 1..=MAX_CORRECTIONS {
+            let refs = self.references(base, &mid_guess, &mid);
+            let (r0, n0) = self.remainder(base, x, c, &refs);
+            let (rm, nm) = self.remainder(base, &mid_guess, &mid, &refs);
+            let (r1, n1) = self.remainder(base, &end_guess, &end, &refs);
+            let blocks = self.step_blocks(base, nodes, h, &refs, Some(&[r0, rm, r1]));
+            let (states, w) = self.apply(base, &blocks, x, method)?;
+            work += w;
+            let moved: Vec<CMatrix> = states.iter().zip(&end_guess).map(|(a, b)| a - b).collect();
+            let converged = norm(&moved) <= 0.1 * tolerance;
+            if converged || pass == MAX_CORRECTIONS {
+                return Ok(Step {
+                    states,
+                    remainder: h * n0.max(nm).max(n1),
+                    work,
+                    converged,
+                });
+            }
+            let halves: Vec<StepBlock> = blocks.iter().map(StepBlock::first_half).collect();
+            let (m, w) = self.apply(base, &halves, x, method)?;
+            work += w;
+            mid_guess = m;
+            end_guess = states;
+        }
+        unreachable!("the last pass returns")
     }
 
-    /// Per reaction that carries spins from a source into a product site:
-    /// a bound on the frequencies of the blocks its transfers feed (the
-    /// one-norm of the block without its mean phase), zero otherwise.
-    fn coherence(&self, base: &Base) -> Vec<f64> {
-        base.transfers
-            .iter()
-            .map(|entries| {
-                entries
-                    .iter()
-                    .map(|&(j, _, _, _)| base.norms[j])
-                    .fold(0.0, f64::max)
-            })
-            .collect()
+    /// Per reaction: a bound on the frequencies of the blocks its
+    /// transfers feed (the one-norm of the block without its mean phase,
+    /// zero without transfers), and the positions of the reactants the
+    /// transfers come from.
+    fn coherence(&self, base: &Base) -> Coherence {
+        let mut out: Coherence = vec![(0.0, Vec::new()); self.reactions.len()];
+        let mut note = |r: usize, bound: f64, from: &[usize]| {
+            if bound > 0.0 {
+                out[r].0 = out[r].0.max(bound);
+                for &q in from {
+                    if !out[r].1.contains(&q) {
+                        out[r].1.push(q);
+                    }
+                }
+            }
+        };
+        for l in &base.linear {
+            let bound = l
+                .entries
+                .iter()
+                .map(|&(j, _, _, _)| base.norms[j])
+                .fold(0.0, f64::max);
+            note(l.r, bound, &[l.from]);
+        }
+        for feed in &base.bilinear {
+            let bound = feed
+                .skeleton
+                .iter()
+                .flatten()
+                .map(|&(j, _, _, _, _)| base.norms[j])
+                .fold(0.0, f64::max);
+            note(feed.r, bound, &[0, 1]);
+        }
+        out
     }
 
     /// The step from `t` with amounts `c`, at most `left`: for every
@@ -1059,7 +1856,7 @@ impl Reactions {
     /// fraction; a reaction that carries spins at a pseudo-rate that
     /// changes also keeps `h` within `COHERENT_PHASE / coherence` (see
     /// [`Self::coherence`]).
-    fn step_size(&self, c: &[f64], left: f64, coherence: &[f64]) -> f64 {
+    fn step_size(&self, c: &[f64], left: f64, coherence: &Coherence) -> f64 {
         let total: f64 = c.iter().map(|x| x.abs()).sum();
         let velocities = self.velocities(c);
         if total <= 0.0 {
@@ -1083,18 +1880,20 @@ impl Reactions {
             if change > 0.0 {
                 h = h.min(STEP_FRACTION / change);
             }
-            if let Some((pos, _)) = reaction.source()
-                && coherence[r] > 0.0
-            {
-                let partners: f64 = reaction
-                    .reactants
-                    .iter()
-                    .enumerate()
-                    .filter(|&(q, _)| q != pos)
-                    .map(|(_, p)| relative(p))
-                    .sum();
-                if partners * left > 1e-12 {
-                    h = h.min(COHERENT_PHASE / coherence[r]);
+            let (bound, sources) = &coherence[r];
+            if *bound > 0.0 {
+                let changes = sources.iter().any(|&pos| {
+                    let partners: f64 = reaction
+                        .reactants
+                        .iter()
+                        .enumerate()
+                        .filter(|&(q, _)| q != pos)
+                        .map(|(_, p)| relative(p))
+                        .sum();
+                    partners * left > 1e-12
+                });
+                if changes {
+                    h = h.min(COHERENT_PHASE / bound);
                 }
             }
         }
@@ -1112,42 +1911,49 @@ impl Reactions {
         let mut work = 0.0;
         // The steps of a delay of `t` from `now` (amounts advanced) and the
         // first.
-        let run = |c: &mut Vec<f64>, now: f64, t: f64, coherence: &[f64]| -> Result<(f64, f64)> {
-            let (mut s, end) = (now, now + t);
-            let mut steps = 0usize;
-            let mut first = None;
-            while s < end {
-                let h = self.step_size(c, end - s, coherence);
-                first.get_or_insert(h);
-                steps += 1;
-                if steps > MAX_KINETIC_STEPS {
-                    return Err(QsoError::invalid(
-                        "reactions",
-                        format!("more than {MAX_KINETIC_STEPS} steps in a delay of {t} s"),
-                    ));
+        let run =
+            |c: &mut Vec<f64>, now: f64, t: f64, coherence: &Coherence| -> Result<(f64, f64)> {
+                let (mut s, end) = (now, now + t);
+                let mut steps = 0usize;
+                let mut first = None;
+                while s < end {
+                    let h = self.step_size(c, end - s, coherence);
+                    first.get_or_insert(h);
+                    steps += 1;
+                    if steps > MAX_KINETIC_STEPS {
+                        return Err(QsoError::invalid(
+                            "reactions",
+                            format!("more than {MAX_KINETIC_STEPS} steps in a delay of {t} s"),
+                        ));
+                    }
+                    self.advance(c, s, s + h)?;
+                    s += h;
                 }
-                self.advance(c, s, s + h)?;
-                s += h;
-            }
-            Ok((steps as f64, first.unwrap_or(t)))
-        };
-        // Three exponentials per step, the most of the fields' blocks.
+                Ok((steps as f64, first.unwrap_or(t)))
+            };
+        // Three exponentials per step (nine with bilinear sources, whose
+        // steps predict), the most of the fields' blocks.
+        let exponentials = if self.has_bilinear() { 9.0 } else { 3.0 };
         let per_step = |bases: &[Base], c: &[f64], h: f64| {
             bases
                 .iter()
                 .map(|base| {
-                    let probe = self.step_blocks(base, c, c, c, h);
-                    3.0 * probe.iter().map(|b| b.plan(method).1).sum::<f64>()
+                    let refs = vec![[CMatrix::zeros(0, 0), CMatrix::zeros(0, 0)]; 0];
+                    let refs = if base.bilinear.is_empty() {
+                        refs
+                    } else {
+                        self.flat_references(base)
+                    };
+                    let probe = self.step_blocks(base, [c, c, c], h, &refs, None);
+                    exponentials * probe.iter().map(|b| b.plan(method).1).sum::<f64>()
                 })
                 .fold(0.0, f64::max)
         };
-        let coherence = |bases: &[Base]| -> Vec<f64> {
-            bases
-                .iter()
-                .map(|b| self.coherence(b))
-                .fold(vec![0.0; self.reactions.len()], |m, x| {
-                    m.iter().zip(x).map(|(a, b)| a.max(b)).collect()
-                })
+        let coherence = |bases: &[Base]| -> Coherence {
+            bases.iter().map(|b| self.coherence(b)).fold(
+                vec![(0.0, Vec::new()); self.reactions.len()],
+                merge_coherence,
+            )
         };
         for e in events {
             match e {
@@ -1178,15 +1984,8 @@ impl Reactions {
                     // Each sweep step holds a field; the work and the
                     // frequencies are taken as the most of the ends', one
                     // base held at a time.
-                    let bound = {
-                        let first = coherence(&[self.base(b)?]);
-                        let second = coherence(&[self.base(*to)?]);
-                        first
-                            .iter()
-                            .zip(second)
-                            .map(|(a, b)| a.max(b))
-                            .collect::<Vec<_>>()
-                    };
+                    let bound =
+                        merge_coherence(coherence(&[self.base(b)?]), coherence(&[self.base(*to)?]));
                     let dt = duration / *steps as f64;
                     let start = c.clone();
                     let (mut total, mut first) = (0.0, f64::INFINITY);
@@ -1233,7 +2032,10 @@ impl Reactions {
     }
 
     /// Reactions, evolution and relaxation for `t` at field `b` from time
-    /// `t0`, amounts `c` (advanced).
+    /// `t0`, amounts `c` (advanced); `work` counts the operations of the
+    /// exponentials. Steps with a bilinear source that matters are checked
+    /// against their halves (to [`BILINEAR_TOLERANCE`] of the deviation)
+    /// and repeated shorter when they miss.
     #[allow(clippy::too_many_arguments)]
     fn delay(
         &self,
@@ -1243,6 +2045,7 @@ impl Reactions {
         t: f64,
         b: f64,
         method: Propagation,
+        work: &mut f64,
     ) -> Result<Vec<CMatrix>> {
         if t == 0.0 {
             return Ok(x.to_vec());
@@ -1253,8 +2056,10 @@ impl Reactions {
         let end = t0 + t;
         let mut x = x.to_vec();
         let mut steps = 0usize;
+        let mut limit = f64::INFINITY;
+        let norm = |m: &[CMatrix]| m.iter().map(|x| x.norm_squared()).sum::<f64>().sqrt();
         while now < end {
-            let h = self.step_size(c, end - now, &coherence);
+            let h = self.step_size(c, end - now, &coherence).min(limit);
             steps += 1;
             if steps > MAX_KINETIC_STEPS {
                 return Err(QsoError::invalid(
@@ -1262,11 +2067,63 @@ impl Reactions {
                     format!("more than {MAX_KINETIC_STEPS} steps in a delay of {t} s"),
                 ));
             }
-            let full = self.midpoint(&base, &x, c, now, h, method)?;
-            let half = self.midpoint(&base, &x, c, now, h / 2.0, method)?;
+            let sites: f64 = c[..self.sites.len()].iter().sum();
+            // Relative to the deviation, but not below rounding of the
+            // terms of order c/d that cancel in the drift.
+            let tol = BILINEAR_TOLERANCE * (norm(&x) + 1e-6 * sites);
+            let full = self.midpoint(&base, &x, c, now, h, method, tol)?;
+            let first = self.midpoint(&base, &x, c, now, h / 2.0, method, tol)?;
             let mut c_half = c.clone();
             self.advance(&mut c_half, now, now + h / 2.0)?;
-            let half = self.midpoint(&base, &half, &c_half, now + h / 2.0, h / 2.0, method)?;
+            let second = self.midpoint(
+                &base,
+                &first.states,
+                &c_half,
+                now + h / 2.0,
+                h / 2.0,
+                method,
+                tol,
+            )?;
+            *work += full.work + first.work + second.work;
+            if *work > super::super::MAX_RELAXATION_WORK {
+                return Err(QsoError::invalid(
+                    "reactions",
+                    format!(
+                        "the steps took more than {:.1e} operations: products of two reactants \
+                         whose states change within a step (coherences in both) need short \
+                         steps; use fewer spins or shorter delays",
+                        super::super::MAX_RELAXATION_WORK
+                    ),
+                ));
+            }
+            let (half, remainder) = (
+                second.states,
+                full.remainder.max(first.remainder).max(second.remainder),
+            );
+            let settled = full.converged && first.converged && second.converged;
+            let full = full.states;
+            if !settled {
+                limit = h / 4.0;
+                continue;
+            }
+            if !base.bilinear.is_empty() {
+                if remainder > 1e-3 * tol {
+                    let diff: Vec<CMatrix> = half.iter().zip(&full).map(|(a, f)| a - f).collect();
+                    let err = norm(&diff);
+                    let factor = if err > 0.0 {
+                        0.9 * (tol / err).cbrt()
+                    } else {
+                        4.0
+                    };
+                    if err > tol {
+                        limit = h * factor.clamp(0.1, 0.5);
+                        continue;
+                    }
+                    limit = h * factor.clamp(1.0, 4.0);
+                } else {
+                    limit *= 4.0;
+                }
+            }
             x = half
                 .iter()
                 .zip(&full)
@@ -1277,6 +2134,14 @@ impl Reactions {
             now += h;
         }
         Ok(x)
+    }
+
+    /// References `1/d` (zero deviations) for every bilinear source.
+    fn flat_references(&self, base: &Base) -> References {
+        base.bilinear
+            .iter()
+            .map(|f| [0, 1].map(|q| CMatrix::zeros(f.reduced[q].dim, f.reduced[q].dim)))
+            .collect()
     }
 
     fn check_states(&self, states: &[CMatrix]) -> Result<()> {
@@ -1336,6 +2201,7 @@ impl Reactions {
         let mut c = self.initial();
         let mut now = 0.0;
         let mut x = deviations(states, &c[..self.sites.len()]);
+        let mut work = 0.0;
         for e in events {
             match e {
                 Event::Pulse { target, .. } => {
@@ -1384,7 +2250,7 @@ impl Reactions {
                 }
                 Event::Delay(t) => {
                     check_time("delay", *t)?;
-                    x = self.delay(&x, &mut c, now, *t, b, method)?;
+                    x = self.delay(&x, &mut c, now, *t, b, method, &mut work)?;
                     now += t;
                 }
                 Event::Field(to) => {
@@ -1408,7 +2274,7 @@ impl Reactions {
                     let dt = duration / *steps as f64;
                     for k in 0..*steps {
                         let field = from + (to - from) * (k as f64 + 0.5) / *steps as f64;
-                        x = self.delay(&x, &mut c, now, dt, field, method)?;
+                        x = self.delay(&x, &mut c, now, dt, field, method, &mut work)?;
                         now += dt;
                     }
                     b = *to;
@@ -1423,6 +2289,19 @@ impl Reactions {
         }
         Ok(sigmas(x, &c[..self.sites.len()]))
     }
+}
+
+/// The most of two bounds per reaction, and the union of their sources.
+fn merge_coherence(mut a: Coherence, b: Coherence) -> Coherence {
+    for ((bound, sources), (other, more)) in a.iter_mut().zip(b) {
+        *bound = bound.max(other);
+        for q in more {
+            if !sources.contains(&q) {
+                sources.push(q);
+            }
+        }
+    }
+    a
 }
 
 /// The one-norm of `a` less its mean precession `i·mean(Im a_ii)`.
@@ -1497,3 +2376,6 @@ mod tests;
 
 #[cfg(test)]
 mod sparse_tests;
+
+#[cfg(test)]
+mod bilinear_tests;

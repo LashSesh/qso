@@ -239,6 +239,20 @@ impl SparseBlock {
         (&self.cols[range.clone()], &self.vals[range])
     }
 
+    /// The index among the stored values of the entry at `(r, c)`, if it
+    /// is stored.
+    pub fn position(&self, r: usize, c: usize) -> Option<usize> {
+        let row = &self.cols[self.indptr[r]..self.indptr[r + 1]];
+        row.binary_search(&(c as u32))
+            .ok()
+            .map(|k| self.indptr[r] + k)
+    }
+
+    /// The stored values (by rows, as [`Self::position`] counts them).
+    pub fn values_mut(&mut self) -> &mut [C64] {
+        &mut self.vals
+    }
+
     /// The entry at `(r, c)`.
     pub fn get(&self, r: usize, c: usize) -> C64 {
         let row = &self.cols[self.indptr[r]..self.indptr[r + 1]];

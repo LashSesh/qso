@@ -334,7 +334,7 @@ fn reactions_input_is_checked_and_survives_json() {
     for bad in [
         reaction(&[], &[S(p)], 1.0),
         reaction(&[P(a), P(a), P(a)], &[S(p)], 1.0),
-        reaction(&[P(a)], &[S(p), S(p)], 1.0),
+        reaction(&[P(a)], &[S(p), S(p), S(p)], 1.0),
         reaction(&[P(5)], &[S(p)], 1.0),
         reaction(&[P(a)], &[S(p)], -1.0),
     ] {

@@ -197,6 +197,11 @@ All notable changes to this project are documented here. The format follows
   term (every symmetry maps each partition onto one of the same rate,
   terms with equal partitions merged), and `Orbitals::coefficients` and
   `Orbitals::operator`, which are dense, refuse such sizes.
+- `Reactions` accepts two product sites in one reaction (the first takes
+  `carried` and `fresh`, another thermal spins); transfers of reaction
+  kinetics move only the traceless part of their source's deviation from
+  `c/d` (zero but for rounding), which keeps rounding from growing when
+  one reaction feeds two products.
 
 ### Fixed
 
