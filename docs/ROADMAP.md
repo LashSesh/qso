@@ -18,8 +18,8 @@ for medical research, section 4h) stages ship together as release
 1.8.0. The ninth (1.38 to 1.42, section 4i) and tenth (1.43 to 1.47,
 section 4j) stages ship together as release 1.9.0. The eleventh stage
 (1.48 to 1.52, section 4k) and the twelfth (1.53 to 1.57, section 4l)
-are delivered; the two ship together as release 1.10.0. A thirteenth
-stage (1.58 to 1.62, section 4m) is proposed. Up to 1.3
+are delivered; the two ship together as release 1.10.0. The thirteenth
+stage (1.58 to 1.62, section 4m) is accepted and in progress. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -6082,7 +6082,7 @@ still parked (section 7).
 
 ## 4m. Thirteenth stage (1.58 to 1.62)
 
-Proposed November 2026, after the twelfth stage, from the gaps that
+Proposed and accepted November 2026, after the twelfth stage, from the gaps that
 remain in the table of section 1. As before, the stage starts with walks
 on graphs: the many-particle walks of 1.53 reach every symmetric graph,
 not only the coordinate families. Two milestones then close gaps of the
@@ -6305,7 +6305,7 @@ The GPU track, still parked (section 7).
     their relaxation affordable; both build on 1.41. The product-formula
     bounds (1.56) and decoding in windows (1.57) are independent of the
     rest.
-21. **Thirteenth stage (proposed): walks first again, then experiments
+21. **Thirteenth stage: walks first again, then experiments
     as they run.** Interacting walkers on any symmetric graph (1.58)
     replace the canonical forms of 1.53 by minimal images under a group.
     Reactions of two spin-carrying reactants (1.59) extend the kinetics
@@ -6412,7 +6412,7 @@ Taken (October 2026):
   product-formula bounds that know which terms commute (1.56), decoding
   in windows (1.57). The eleventh and twelfth stages ship together as
   one release (1.10.0), as the ninth and tenth did.
-* Thirteenth stage (November 2026, proposed): interacting walkers on any
+* Thirteenth stage (November 2026, accepted as proposed): interacting walkers on any
   symmetric graph (1.58), reactions of two spin-carrying reactants
   (1.59), NV centres at their level anticrossings (1.60), error models
   of long experiments and windows in parallel (1.61), coupled-cluster
