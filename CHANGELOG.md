@@ -22,8 +22,12 @@ All notable changes to this project are documented here. The format follows
   fall from 7829 (windows of one round) to 2197 of 20 000 (twenty rounds),
   as for the whole decoding; 1.1 to 1.5 µs per round and shot from 100
   to 4000 rounds; BP+OSD on the [[72, 12, 6]] code over 48 rounds in 59 s
-  instead of 76 s. The error model's work estimate now counts each pass
-  from its first component, which admits about twice the rounds.
+  instead of 76 s. Where a window's decoder finds no correction (a
+  boundary only in the past, as with reset errors), a fallback with the
+  errors that reach back decodes it. The error model's propagation now
+  starts each pass at its first component, and its work estimate counts
+  that, which admits about twice the rounds (4000 rounds of distance 5
+  in 30 s).
 
 - **Product-formula bounds that know which terms commute** (1.56,
   `TrotterBounds::commutators`, `TrotterBounds::average`,

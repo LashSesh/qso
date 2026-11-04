@@ -48,3 +48,18 @@ def test_logical_error_rate_in_windows() -> None:
         q.logical_error_rate(c, 10, decoder="matching", window=4)
     with pytest.raises(ValueError):
         q.WindowDecoder(c.detector_error_model(decompose=True), c.detector_layers(), 2, decoder="mwpm")  # type: ignore[arg-type]
+
+
+def test_a_failed_stream_is_void_until_reset() -> None:
+    # Detector 1 has no error, so no correction explains an event there.
+    model = q.DetectorErrorModel(2, [(0.1, [0], 0)])
+    w = q.WindowDecoder(model, [0, 1], window=1)
+    w.push_layer([])
+    with pytest.raises(ValueError):
+        w.push_layer([1])
+    with pytest.raises(ValueError):
+        w.finish()
+    w.reset()
+    w.push_layer([0])
+    w.push_layer([])
+    assert w.finish() == 0

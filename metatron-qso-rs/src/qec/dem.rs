@@ -597,6 +597,20 @@ fn propagate(circuit: &DetectorCircuit, components: &[Component]) -> Result<Vec<
             ),
         ));
     }
+    // Measurements and detectors before each operation: a pass starts at
+    // its first component, before which its frames, records and detectors
+    // are zero.
+    let mut before = Vec::with_capacity(circuit.operations().len() + 1);
+    let (mut m_count, mut d_count) = (0usize, 0usize);
+    for op in circuit.operations() {
+        before.push((m_count, d_count));
+        match op {
+            QecOp::Measure { .. } => m_count += 1,
+            QecOp::Detector { .. } => d_count += 1,
+            _ => {}
+        }
+    }
+    before.push((m_count, d_count));
     let mut entries = 0usize;
     let mut out: Vec<Signature> = Vec::with_capacity(components.len());
     for chunk in components.chunks(64 * max_words) {
@@ -604,10 +618,12 @@ fn propagate(circuit: &DetectorCircuit, components: &[Component]) -> Result<Vec<
         let first = chunk[0].op;
         let mut f = Frames::new(n, w);
         let mut records: Vec<u64> = Vec::with_capacity(circuit.n_measurements() * w);
+        records.resize(before[first].0 * w, 0);
         let mut det: Vec<u64> = Vec::with_capacity(n_det * w);
+        det.resize(before[first].1 * w, 0);
         let mut obs = vec![0u64; n_obs * w];
         let mut next = 0;
-        for (i, op) in circuit.operations().iter().enumerate() {
+        for (i, op) in circuit.operations().iter().enumerate().skip(first) {
             match op {
                 // Frames are zero before the first component.
                 QecOp::Gate(inst) if i > first => apply_clifford(&mut f, inst, &[])?,

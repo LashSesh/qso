@@ -1217,7 +1217,9 @@ impl PyBpOsdDecoder {
 /// matching, on a decomposed model) or `"bposd"` (default options).
 /// Windows of the same shape share one decoder. `push_layer` gives the
 /// detection events layer by layer and returns the observables committed
-/// so far; `finish` returns the prediction and starts a new stream.
+/// so far; `finish` returns the prediction and starts a new stream,
+/// `reset` starts one without it. A window that fails to decode voids the
+/// stream until `reset`.
 #[pyclass(name = "WindowDecoder", module = "metatron_qso")]
 pub struct PyWindowDecoder {
     inner: WindowDecoder,
@@ -1315,6 +1317,11 @@ impl PyWindowDecoder {
         let r = self.inner.finish(&self.state).raise()?;
         self.state = self.inner.new_stream();
         Ok(r)
+    }
+
+    /// Drop the stream (after an error, or to start again).
+    fn reset(&mut self) {
+        self.state = self.inner.new_stream();
     }
 
     fn __repr__(&self) -> String {

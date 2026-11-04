@@ -223,3 +223,41 @@ fn long_chains_nest_blossoms_deeply() {
         }
     }
 }
+
+#[test]
+fn matches_add_up_to_the_prediction_and_name_their_boundary_edges() {
+    // The matches of 1.57: their observables add up to the prediction,
+    // every event is matched once, and a boundary match names an edge into
+    // the boundary.
+    let mut rng = Rng::seed_from_u64(57);
+    for case in 0..200 {
+        let dem = random_dem(&mut rng, 3 + case % 9, 12 + case % 20, true);
+        let graph = MatchingGraph::from_dem(&dem).unwrap();
+        let n = graph.n_detectors();
+        let mut d = SparseMatchingDecoder::new(graph);
+        for _ in 0..5 {
+            let fired: Vec<usize> = (0..n).filter(|_| rng.below(3) == 0).collect();
+            let Ok(prediction) = d.decode(&fired) else {
+                continue;
+            };
+            let matches = d.decode_matches(&fired).unwrap();
+            assert_eq!(matches.iter().fold(0, |o, m| o ^ m.obs), prediction);
+            let mut seen: Vec<u32> = matches
+                .iter()
+                .flat_map(|m| [m.u, m.v])
+                .filter(|&x| x != u32::MAX)
+                .collect();
+            seen.sort_unstable();
+            let events: Vec<u32> = fired.iter().map(|&x| x as u32).collect();
+            assert_eq!(seen, events);
+            for m in &matches {
+                if m.v == u32::MAX {
+                    let e = &d.graph().edges()[m.via as usize];
+                    assert_eq!(e.b, n, "case {case}");
+                } else {
+                    assert_eq!(m.via, u32::MAX);
+                }
+            }
+        }
+    }
+}

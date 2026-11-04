@@ -518,8 +518,11 @@ enum Command {
         /// 4096 detectors.
         #[arg(long, requires = "circuit_distance")]
         symmetry: bool,
-        /// Decode in sliding windows of this many rounds (matching or
-        /// bposd), committing --commit of them.
+        /// Decode in sliding windows of this many layers (matching or
+        /// bposd), committing --commit of them. A layer is a block of
+        /// detectors declared one after another: a round of the generated
+        /// memory experiments, and of Stim circuits that declare a round's
+        /// detectors together.
         #[arg(long)]
         window: Option<usize>,
         /// Rounds each window commits (default: half the window, rounded

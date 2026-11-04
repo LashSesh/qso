@@ -11,7 +11,12 @@
 //! * errors whose first detector lies in the window, with the detectors
 //!   beyond the window dropped (the window's future end is a boundary);
 //! * errors that flip a detector before the window are left out: the
-//!   windows before resolved those detectors.
+//!   windows before resolved those detectors. Where the window's decoder
+//!   then finds no correction (a defect carried forward whose only way
+//!   out leads back, as when the only boundary of a detector is an error
+//!   at the start), a fallback decoder with those errors too, their
+//!   earlier detectors dropped, decodes the window; built when first
+//!   needed, it changes no prediction the window's own decoder makes.
 //!
 //! Of the correction, the part that touches the commit region is applied:
 //! its observables are added to the prediction and its detection events
@@ -84,6 +89,8 @@ impl WindowOptions {
 /// of the same shape) and its errors (into the model's).
 #[derive(Clone, Debug)]
 struct Window {
+    /// Its first layer.
+    start: usize,
     /// Detectors `first..end`; those below `commit` form the commit
     /// region (all of them in the last window).
     first: usize,
@@ -91,6 +98,17 @@ struct Window {
     commit: usize,
     decoder: usize,
     errors: Vec<u32>,
+    /// The decoder and errors with those that reach before the window
+    /// too (their earlier detectors dropped), built when the window's own
+    /// decoder fails.
+    fallback: Option<(usize, Vec<u32>)>,
+}
+
+/// A correction of a window: matched pairs or errors (into the window's
+/// errors).
+enum Correction {
+    Pairs(Vec<super::sparse::Matched>),
+    Errors(Vec<usize>),
 }
 
 #[derive(Clone, Debug)]
@@ -111,13 +129,19 @@ pub struct WindowDecoder {
     /// Errors of probability above zero that flip a detector, in the
     /// model's order.
     errors: Vec<ErrorMechanism>,
+    n_observables: usize,
+    /// Errors by the layer of their first detector, and the most layers
+    /// an error spans.
+    by_layer: Vec<Vec<u32>>,
+    span: usize,
     windows: Vec<Window>,
     decoders: Vec<Inner>,
+    shapes: HashMap<Shape, usize>,
 }
 
 /// The model of a window in its own detector indices, the key of its
 /// shape.
-#[derive(PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct Shape {
     n_detectors: usize,
     errors: Vec<(u64, Vec<usize>, u64)>,
@@ -185,6 +209,15 @@ impl WindowDecoder {
                     format!("an error flips detector {d} of {n}"),
                 ));
             }
+            if matches!(method, WindowMethod::Matching) && e.detectors.len() > 2 {
+                return Err(QsoError::invalid(
+                    "dem",
+                    format!(
+                        "an error flips {} detectors; matching needs at most two (a decomposed model)",
+                        e.detectors.len()
+                    ),
+                ));
+            }
             if e.probability > 0.0 && !e.detectors.is_empty() {
                 let mut sorted = e.clone();
                 sorted.detectors.sort_unstable();
@@ -193,12 +226,25 @@ impl WindowDecoder {
         }
         // Errors by their first layer.
         let mut by_layer: Vec<Vec<u32>> = vec![Vec::new(); n_layers];
+        let mut span = 0;
         for (k, e) in errors.iter().enumerate() {
-            by_layer[layers[e.detectors[0]]].push(k as u32);
+            let (lo, hi) = (layers[e.detectors[0]], layers[*e.detectors.last().unwrap()]);
+            by_layer[lo].push(k as u32);
+            span = span.max(hi - lo);
         }
-        let mut windows = Vec::new();
-        let mut decoders = Vec::new();
-        let mut shapes: HashMap<Shape, usize> = HashMap::new();
+        let mut decoder = WindowDecoder {
+            options,
+            method,
+            n_detectors: n,
+            layer_first,
+            errors,
+            n_observables: dem.n_observables,
+            by_layer,
+            span,
+            windows: Vec::new(),
+            decoders: Vec::new(),
+            shapes: HashMap::new(),
+        };
         let mut start = 0;
         loop {
             let last = start + options.window >= n_layers;
@@ -212,74 +258,100 @@ impl WindowDecoder {
             } else {
                 start + options.commit
             };
-            let (first, end) = (layer_first[start], layer_first[end_layer]);
-            let mut ids: Vec<u32> = by_layer[start..end_layer].concat();
+            let (first, end) = (decoder.layer_first[start], decoder.layer_first[end_layer]);
+            let mut ids: Vec<u32> = decoder.by_layer[start..end_layer].concat();
             ids.sort_unstable();
-            let shape = Shape {
-                n_detectors: end - first,
-                errors: ids
-                    .iter()
-                    .map(|&k| {
-                        let e = &errors[k as usize];
-                        let local = e
-                            .detectors
-                            .iter()
-                            .filter(|&&d| d < end)
-                            .map(|&d| d - first)
-                            .collect();
-                        (e.probability.to_bits(), local, e.observables)
-                    })
-                    .collect(),
-            };
-            let decoder = match shapes.get(&shape) {
-                Some(&i) => i,
-                None => {
-                    let local = DetectorErrorModel {
-                        n_detectors: shape.n_detectors,
-                        n_observables: dem.n_observables,
-                        errors: shape
-                            .errors
-                            .iter()
-                            .map(|(p, d, o)| ErrorMechanism {
-                                probability: f64::from_bits(*p),
-                                detectors: d.clone(),
-                                observables: *o,
-                            })
-                            .collect(),
-                    };
-                    decoders.push(match method {
-                        WindowMethod::Matching => Inner::Matching(Box::new(
-                            SparseMatchingDecoder::new(MatchingGraph::from_dem(&local)?),
-                        )),
-                        WindowMethod::BpOsd(o) => {
-                            Inner::BpOsd(Box::new(BpOsdDecoder::new(&local, o)?))
-                        }
-                    });
-                    shapes.insert(shape, decoders.len() - 1);
-                    decoders.len() - 1
-                }
-            };
-            windows.push(Window {
+            let index = decoder.decoder_for(first, end, &ids)?;
+            decoder.windows.push(Window {
+                start,
                 first,
                 end,
-                commit: layer_first[commit_layer],
-                decoder,
+                commit: decoder.layer_first[commit_layer],
+                decoder: index,
                 errors: ids,
+                fallback: None,
             });
             if last {
                 break;
             }
             start += options.commit;
         }
-        Ok(WindowDecoder {
-            options,
-            method,
-            n_detectors: n,
-            layer_first,
-            errors,
-            windows,
-            decoders,
-        })
+        Ok(decoder)
+    }
+
+    /// The decoder of the window of detectors `first..end` with these
+    /// errors (their detectors outside the window dropped), shared with
+    /// every window of the same shape.
+    fn decoder_for(&mut self, first: usize, end: usize, ids: &[u32]) -> Result<usize> {
+        let shape = Shape {
+            n_detectors: end - first,
+            errors: ids
+                .iter()
+                .map(|&k| {
+                    let e = &self.errors[k as usize];
+                    let local = e
+                        .detectors
+                        .iter()
+                        .filter(|&&d| d >= first && d < end)
+                        .map(|&d| d - first)
+                        .collect();
+                    (e.probability.to_bits(), local, e.observables)
+                })
+                .collect(),
+        };
+        if let Some(&i) = self.shapes.get(&shape) {
+            return Ok(i);
+        }
+        let local = DetectorErrorModel {
+            n_detectors: shape.n_detectors,
+            n_observables: self.n_observables,
+            errors: shape
+                .errors
+                .iter()
+                .map(|(p, d, o)| ErrorMechanism {
+                    probability: f64::from_bits(*p),
+                    detectors: d.clone(),
+                    observables: *o,
+                })
+                .collect(),
+        };
+        self.decoders.push(match self.method {
+            WindowMethod::Matching => {
+                let graph = MatchingGraph::from_dem(&local)?;
+                // One edge per error, in order: matches name errors by
+                // their edges.
+                debug_assert_eq!(graph.edges().len(), ids.len());
+                Inner::Matching(Box::new(SparseMatchingDecoder::new(graph)))
+            }
+            WindowMethod::BpOsd(o) => Inner::BpOsd(Box::new(BpOsdDecoder::new(&local, o)?)),
+        });
+        self.shapes.insert(shape, self.decoders.len() - 1);
+        Ok(self.decoders.len() - 1)
+    }
+
+    /// The fallback of window `w`: its errors and those that reach before
+    /// it with a detector in it, the window's past end a boundary too.
+    fn fallback(&mut self, w: usize) -> Result<()> {
+        if self.windows[w].fallback.is_some() {
+            return Ok(());
+        }
+        let (start, first, end) = {
+            let v = &self.windows[w];
+            (v.start, v.first, v.end)
+        };
+        let mut ids = self.windows[w].errors.clone();
+        for layer in start.saturating_sub(self.span)..start {
+            for &k in &self.by_layer[layer] {
+                let e = &self.errors[k as usize];
+                if e.detectors.iter().any(|&d| d >= first && d < end) {
+                    ids.push(k);
+                }
+            }
+        }
+        ids.sort_unstable();
+        let index = self.decoder_for(first, end, &ids)?;
+        self.windows[w].fallback = Some((index, ids));
+        Ok(())
     }
 
     pub fn options(&self) -> WindowOptions {
@@ -345,6 +417,7 @@ impl WindowDecoder {
             layers: 0,
             next: 0,
             observables: 0,
+            failed: false,
         }
     }
 
@@ -354,6 +427,12 @@ impl WindowDecoder {
     /// committed so far.
     pub fn push_layer(&mut self, state: &mut StreamState, fired: &[usize]) -> Result<u64> {
         let n_layers = self.n_layers();
+        if state.failed {
+            return Err(QsoError::invalid(
+                "stream",
+                "a window of this stream failed to decode; start a new stream",
+            ));
+        }
         if state.syndrome.len() != self.n_detectors || state.layers >= n_layers {
             return Err(QsoError::invalid(
                 "layer",
@@ -378,10 +457,17 @@ impl WindowDecoder {
         Ok(state.observables)
     }
 
-    /// The prediction of a stream that holds every layer.
+    /// The prediction of a stream that holds every layer and decoded every
+    /// window.
     pub fn finish(&self, state: &StreamState) -> Result<u64> {
         let n_layers = self.n_layers();
-        if state.layers < n_layers {
+        if state.failed {
+            return Err(QsoError::invalid(
+                "stream",
+                "a window of this stream failed to decode",
+            ));
+        }
+        if state.layers < n_layers || state.next < self.windows.len() {
             return Err(QsoError::invalid(
                 "layer",
                 format!("{} of {n_layers} layers were given", state.layers),
@@ -397,71 +483,108 @@ impl WindowDecoder {
             if self.windows[state.next].end > self.layer_first[state.layers] {
                 break;
             }
-            state.observables ^=
-                self.decode_window(state.next, &mut state.syndrome, &mut events)?;
+            match self.decode_window(state.next, &mut state.syndrome, &mut events) {
+                Ok(o) => state.observables ^= o,
+                Err(e) => {
+                    state.failed = true;
+                    return Err(e);
+                }
+            }
             state.next += 1;
         }
         Ok(())
     }
 
+    /// The correction of window `w` for its detection events, by its own
+    /// decoder or the fallback's.
+    fn correct(&mut self, w: usize, fallback: bool, events: &[usize]) -> Result<Correction> {
+        let window = &self.windows[w];
+        let index = if fallback {
+            window.fallback.as_ref().expect("built").0
+        } else {
+            window.decoder
+        };
+        Ok(match &mut self.decoders[index] {
+            Inner::Matching(m) => Correction::Pairs(m.decode_matches(events)?),
+            Inner::BpOsd(b) => Correction::Errors(b.decode_detailed(events)?.errors),
+        })
+    }
+
     /// Decode window `w` on `syndrome` and apply its commit: returns the
-    /// observables it commits.
+    /// observables it commits. When the window's decoder finds no
+    /// correction (the carried syndrome may need the window's past end as
+    /// a boundary, as when errors at the start are the only boundary), the
+    /// fallback with the errors that reach before the window decodes it.
     fn decode_window(
         &mut self,
         w: usize,
         syndrome: &mut [bool],
         events: &mut Vec<usize>,
     ) -> Result<u64> {
-        let window = &self.windows[w];
+        let (first, end) = (self.windows[w].first, self.windows[w].end);
         events.clear();
-        events.extend(
-            (window.first..window.end)
-                .filter(|&d| syndrome[d])
-                .map(|d| d - window.first),
-        );
+        events.extend((first..end).filter(|&d| syndrome[d]).map(|d| d - first));
         if events.is_empty() {
             return Ok(0);
         }
-        let commit = window.commit - window.first;
+        let (correction, fallback) = match self.correct(w, false, events) {
+            Ok(c) => (c, false),
+            Err(error) => {
+                self.fallback(w)?;
+                match self.correct(w, true, events) {
+                    Ok(c) => (c, true),
+                    Err(_) => return Err(error),
+                }
+            }
+        };
+        let window = &self.windows[w];
+        let ids = if fallback {
+            &window.fallback.as_ref().expect("built").1
+        } else {
+            &window.errors
+        };
+        let commit = window.commit - first;
         let mut observables = 0;
-        match &mut self.decoders[window.decoder] {
-            Inner::Matching(m) => {
-                for pair in m.decode_matches(events)? {
+        match correction {
+            Correction::Pairs(pairs) => {
+                for pair in pairs {
                     let (u, v) = (pair.u as usize, pair.v);
                     let boundary = v == u32::MAX;
                     if u >= commit && (boundary || v as usize >= commit) {
                         continue;
                     }
                     observables ^= pair.obs;
-                    syndrome[window.first + u] ^= true;
+                    syndrome[first + u] ^= true;
                     if !boundary {
-                        syndrome[window.first + v as usize] ^= true;
+                        syndrome[first + v as usize] ^= true;
                     } else {
                         // The error it reaches the boundary through: its
-                        // detectors beyond the window, if any.
-                        let e = &self.errors[window.errors[pair.via as usize] as usize];
-                        for &d in e.detectors.iter().filter(|&&d| d >= window.end) {
+                        // detectors beyond the window, if any (those
+                        // before it are resolved and left alone).
+                        let e = &self.errors[ids[pair.via as usize] as usize];
+                        for &d in e.detectors.iter().filter(|&&d| d >= end) {
                             syndrome[d] ^= true;
                         }
                     }
                 }
             }
-            Inner::BpOsd(b) => {
-                for k in b.decode_detailed(events)?.errors {
-                    let e = &self.errors[window.errors[k] as usize];
-                    // Detectors ascend and the first lies in the window.
-                    if e.detectors[0] >= window.commit {
+            Correction::Errors(errors) => {
+                for k in errors {
+                    let e = &self.errors[ids[k] as usize];
+                    // Its first detector in the window.
+                    let inside = e.detectors.iter().find(|&&d| d >= first);
+                    if inside.is_none_or(|&d| d >= window.commit) {
                         continue;
                     }
                     observables ^= e.observables;
-                    for &d in &e.detectors {
+                    for &d in e.detectors.iter().filter(|&&d| d >= first) {
                         syndrome[d] ^= true;
                     }
                 }
             }
         }
         debug_assert!(
-            (window.first..window.commit).all(|d| !syndrome[d]),
+            (first..window.commit).all(|d| !syndrome[d]),
             "the commit region of window {w} is resolved"
         );
         Ok(observables)
@@ -483,6 +606,8 @@ pub struct StreamState {
     layers: usize,
     next: usize,
     observables: u64,
+    /// A window failed to decode: the stream is void.
+    failed: bool,
 }
 
 impl StreamState {

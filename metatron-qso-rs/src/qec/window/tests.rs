@@ -1,6 +1,7 @@
 //! Validation of decoding in windows (1.57).
 
 use super::*;
+use crate::qec::dem::{DetectorErrorModel, ErrorMechanism};
 use crate::qec::{
     BpOsdDecoder, BpOsdOptions, CircuitNoise, CssCode, DecoderChoice, DetectorCircuit, MemoryBasis,
     css_code_memory, detector_error_model, logical_error_rate_using, repetition_code_memory,
@@ -101,7 +102,7 @@ fn windows_share_decoders_and_errors_are_checked() {
     let w = matching_windows(&c, 6, 3);
     // First window, the bulk, and the last ones.
     assert!(w.n_windows() > 60);
-    assert!(w.n_decoders() <= 4, "{}", w.n_decoders());
+    assert_eq!(w.n_decoders(), 3);
     let dem = detector_error_model(&c, true).unwrap();
     let layers = c.detector_layers();
     let bad = |window, commit| {
@@ -166,7 +167,7 @@ fn logical_error_rates_approach_the_whole_decoding_as_the_window_grows() {
         whole.errors
     );
     assert!(rates[0] > rates[2] && rates[1] > rates[3], "{rates:?}");
-    // A buffer of twice the distance: within the sampling error.
+    // A buffer of the distance: within the sampling error.
     let diff = (rates[3] as f64 - whole.errors as f64).abs();
     assert!(
         diff <= 3.0 * (whole.errors as f64).sqrt() + 3.0,
@@ -301,5 +302,156 @@ fn measure_rates() {
             "bicycle [[72,12,6]], {rounds} rounds, p=2e-3: windows (6, 3) {} of {n} in {tw:.1} s; whole {} in {t:.1} s",
             windowed.errors, whole.errors
         );
+    }
+}
+
+fn model(n: usize, errors: &[(f64, &[usize], u64)]) -> DetectorErrorModel {
+    DetectorErrorModel {
+        n_detectors: n,
+        n_observables: 1,
+        errors: errors
+            .iter()
+            .map(|&(p, d, o)| ErrorMechanism {
+                probability: p,
+                detectors: d.to_vec(),
+                observables: o,
+            })
+            .collect(),
+    }
+}
+
+#[test]
+fn a_boundary_only_in_the_past_falls_back() {
+    // Found by the review: detector 0 reaches the boundary, detector 1
+    // only through detector 0. The window of layer 1 alone cannot explain
+    // an event at 1; its fallback takes the error back to layer 0.
+    let dem = model(2, &[(0.1, &[0], 0), (0.05, &[0, 1], 1)]);
+    let mut w =
+        WindowDecoder::new(&dem, &[0, 1], WindowOptions::new(1), WindowMethod::Matching).unwrap();
+    assert_eq!(w.decode(&[1]).unwrap(), 1);
+    // Reset errors only: their boundary lies at the start.
+    let noise = CircuitNoise {
+        after_reset: 3e-2,
+        ..CircuitNoise::default()
+    };
+    for c in [
+        repetition_code_memory(5, 10, &noise).unwrap(),
+        surface_code_memory(3, 10, &noise).unwrap(),
+    ] {
+        // Every window decodes; with a buffer of four rounds as the whole
+        // decoding does (repetition 71, 9, 6, 0, 0 failures against 0;
+        // surface 138, 49, 40, 34, 35 against 34).
+        let whole = logical_error_rate_using(&c, 2000, 1, DecoderChoice::Matching).unwrap();
+        let mut errors = Vec::new();
+        for (window, commit) in [(1, 1), (2, 1), (3, 2), (4, 2), (6, 3)] {
+            let r = logical_error_rate_using(
+                &c,
+                2000,
+                1,
+                DecoderChoice::WindowMatching { window, commit },
+            )
+            .unwrap();
+            errors.push(r.errors);
+        }
+        assert!(
+            errors[0] > errors[1] && errors[1] >= errors[2],
+            "{errors:?}"
+        );
+        let tolerance = 3 * (whole.errors as f64).sqrt() as usize + 3;
+        assert!(
+            errors[3..].iter().all(|&e| e <= whole.errors + tolerance),
+            "{errors:?} vs {}",
+            whole.errors
+        );
+    }
+    let (code, _) = CssCode::bivariate_bicycle_code(72).unwrap();
+    let c = css_code_memory(&code, 4, &noise, MemoryBasis::Z).unwrap();
+    logical_error_rate_using(
+        &c,
+        200,
+        1,
+        DecoderChoice::WindowBpOsd {
+            window: 2,
+            commit: 1,
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_failed_window_voids_the_stream() {
+    // Detector 1 has no error: no correction explains an event there.
+    let dem = model(2, &[(0.1, &[0], 0)]);
+    let mut w =
+        WindowDecoder::new(&dem, &[0, 1], WindowOptions::new(1), WindowMethod::Matching).unwrap();
+    assert!(w.decode(&[1]).is_err());
+    let mut s = w.new_stream();
+    w.push_layer(&mut s, &[]).unwrap();
+    assert!(w.push_layer(&mut s, &[1]).is_err());
+    assert!(w.finish(&s).is_err());
+    assert!(w.push_layer(&mut s, &[]).is_err());
+}
+
+#[test]
+fn matching_windows_refuse_hyperedges() {
+    // An error of three detectors would hide its third beyond every
+    // window.
+    let dem = model(
+        3,
+        &[
+            (0.1, &[0, 1, 2], 1),
+            (0.1, &[0], 0),
+            (0.1, &[1], 0),
+            (0.1, &[2], 0),
+        ],
+    );
+    assert!(
+        WindowDecoder::new(
+            &dem,
+            &[0, 0, 1],
+            WindowOptions::new(1),
+            WindowMethod::Matching
+        )
+        .is_err()
+    );
+    assert!(
+        WindowDecoder::new(
+            &dem,
+            &[0, 0, 1],
+            WindowOptions::new(1),
+            WindowMethod::BpOsd(BpOsdOptions::default())
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn bposd_streams_equal_the_batch() {
+    let c = crate::qec::css_code_memory(
+        &CssCode::color_code(5).unwrap(),
+        6,
+        &CircuitNoise::uniform(3e-3),
+        MemoryBasis::X,
+    )
+    .unwrap();
+    let layers = c.detector_layers();
+    let mut w = WindowDecoder::new(
+        &detector_error_model(&c, false).unwrap(),
+        &layers,
+        WindowOptions {
+            window: 3,
+            commit: 2,
+        },
+        WindowMethod::BpOsd(BpOsdOptions::default()),
+    )
+    .unwrap();
+    for (fired, _) in shots(&c, 100, 2) {
+        let batch = w.decode(&fired).unwrap();
+        let mut s = w.new_stream();
+        for l in 0..w.n_layers() {
+            let in_layer: Vec<usize> = fired.iter().copied().filter(|&d| layers[d] == l).collect();
+            w.push_layer(&mut s, &in_layer).unwrap();
+        }
+        assert_eq!(w.finish(&s).unwrap(), batch);
     }
 }

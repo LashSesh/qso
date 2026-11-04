@@ -523,7 +523,9 @@ decoded, is decoded a window of rounds at a time. `WindowDecoder(model,
 layers, window, commit)` takes a model and the layer (round) of every
 detector, `DetectorCircuit.detector_layers()` for a circuit: detectors
 declared one after another form a layer, as every round of the memory
-experiments declares its detectors after its measurements.
+experiments declares its detectors after its measurements. A circuit that
+declares a round's detectors in several blocks (or one per operation)
+has several layers per round; windows count layers.
 
 A window covers `window` layers. It is decoded on the errors whose first
 detector lies in it, with their detectors beyond the window dropped (the
@@ -569,8 +571,11 @@ shot from 100 to 4000 rounds. On the [[72, 12, 6]] bicycle code over 48
 rounds, BP+OSD in windows of six rounds committing three took 59 s for
 2000 shots (165 failures) against 76 s on the whole model (196); its
 time grows in proportion to the rounds. The error model itself is built
-for the whole experiment, in time quadratic in the rounds (2 s for 1000
-rounds of distance 5, 40 s for 4000).
+for the whole experiment, in time quadratic in the rounds (1.3 s for
+1000 rounds of distance 5, 30 s for 4000). Where a window finds no
+correction, because the only way out of a carried defect leads back
+(as when the only boundary is an error at the start), a fallback with
+the errors that reach before the window decodes it.
 
 ## Circuit distance and CNOT schedules
 

@@ -5991,17 +5991,18 @@ Changes to the plan:
 - **Pairs, not paths, for matching.** The committed effect of a matched
   pair is its two events (and, at the window's end, the cut-off part of
   its last edge), so the paths need not be rebuilt.
-- **The error model's work estimate** counted every pass of the
-  propagation through the whole circuit; it now counts each pass from
-  its first component, as the propagation runs, which admits about
-  twice the rounds (4000 rounds of a distance-5 surface code, refused
-  before, take 40 s).
+- **The error model's propagation** ran every pass through the whole
+  circuit and its work estimate counted that; each pass now starts at
+  its first component (frames, records and detectors are zero before
+  it), and the estimate counts what it runs, which admits about twice
+  the rounds (4000 rounds of a distance-5 surface code, refused before,
+  take 30 s).
 
 Not done, and why:
 
 - **The model is built for the whole experiment.** Its propagation is
   quadratic in the rounds (an X error on a data qubit is carried to the
-  final measurement): 2 s for 1000 rounds of distance 5, 40 s for 4000,
+  final measurement): 1.3 s for 1000 rounds of distance 5, 30 s for 4000,
   and about 5000 at the work limit. A model built window by window from
   the circuit would remove this, but needs to know which errors can
   first flip a detector of a later window.
@@ -6017,10 +6018,9 @@ Measured (four cores, release build):
 | [[72, 12, 6]], BP+OSD, p = 2·10⁻³, 2000 shots, 6 / 12 / 24 / 48 rounds | (6, 3) | 25 / 44 / 96 / 165 in 4.9 / 13.5 / 28 / 59 s | 25 / 50 / 113 / 196 in 2.7 / 8.9 / 27 / 76 s |
 
 Matching in windows of ten rounds committing five on the distance-5
-surface code takes 1.1, 1.5 and 1.3 µs per round and shot at 100, 1000
-and 4000 rounds (20, 200 and 800 windows, three decoders; the whole
-decoding by sparse matching 0.7 to 1.3 µs, as it is nearly linear
-itself). BP+OSD in windows grows in proportion to the rounds and fails
+surface code takes 1.1 to 1.5 µs per round and shot at 100, 1000 and
+4000 rounds (20, 200 and 800 windows, three decoders; the whole decoding
+by sparse matching 0.6 to 1.3 µs, as it is nearly linear itself). BP+OSD in windows grows in proportion to the rounds and fails
 no more often than BP+OSD on the whole model, whose larger matrices it
 handles worse.
 
@@ -6031,9 +6031,44 @@ layer given out of turn or a stream finished early is an error; the
 commit region of every window is resolved (checked in debug builds);
 logical error rates fall towards the whole decoding's as the window
 grows and equal it within the sampling error at a buffer of the
-distance; windows in the bulk share one decoder (at most four for a
+distance; windows in the bulk share one decoder (three for a
 repetition code of 200 rounds); BP+OSD in windows of three rounds
 committing two matches the whole BP+OSD within the sampling error.
+
+Review (independent, after delivery): the boundary edge reported with
+each match was traced through every path of the region growth (only a
+boundary hit sets it, boundary edges are never reversed, blossoms expand
+along cycle edges), committed paths contain a cut-off edge only as their
+last, a single window predicts what the whole decoding does on
+repetition, surface Z and X, colour and bicycle codes and the Stim
+files, streaming equals the batch, and the measured rates reproduce.
+Findings, all fixed:
+
+- **A window could find no correction where the experiment has one.**
+  With reset errors only, the only boundary of a carried defect lies in
+  the past, which a window leaves out; the last window then failed and
+  aborted the whole run (a two-detector model reproduces it). A fallback
+  decoder with the errors that reach before the window, their earlier
+  detectors dropped, now decodes such windows; built when first needed,
+  it changes no other prediction. With reset errors at 3·10⁻², windows of
+  1, 2, 3, 4 and 6 rounds fail 138, 49, 40, 34 and 35 times against 34 for
+  the whole decoding (surface code d = 3).
+- **A stream that failed could still be finished**, with a partial
+  prediction; a failed window now voids the stream (Python `reset`
+  starts a new one), and `finish` needs every window decoded.
+- **Matching windows accepted errors of three detectors**, which a cut
+  can hide in every window; they are refused as for whole matching.
+- **The error model's work estimate was no bound**: each pass still
+  walked the operations before its first component. The passes now start
+  there (with zero records and detectors), so the estimate is the work,
+  and long experiments build faster (30 s instead of 40 s at 4000
+  rounds).
+- **Docs and tests.** Windows count blocks of detector declarations,
+  which are rounds for the generated experiments (said in the guide and
+  the CLI help); a test of the matches (their observables add up to the
+  prediction, every event is matched once, boundary matches name a
+  boundary edge), of BP+OSD streaming, of hyperedges and of failed
+  streams; a comment's buffer and the shared-decoder count corrected.
 
 ### Not in this stage
 
