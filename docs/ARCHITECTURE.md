@@ -220,7 +220,13 @@ frame update for each gate is derived once.
   propagated forwards (kept as the test's reference), in time linear in
   the circuit. Independent error terms (the exact decomposition of
   depolarizing channels into Paulis) take the XOR of their components'
-  signatures, and terms with equal signatures merge.
+  signatures, and terms with equal signatures merge as the pass goes, so
+  that a model holds only its distinct errors (`explain_errors` alone
+  keeps every component). The same pass checks that the detectors and
+  observables are deterministic: a fresh qubit (after a reset or a
+  measurement, or at the start) is a Z eigenstate of either sign, so the
+  Z effect there must be empty, which is what the frame sampler's random
+  Z frames test.
 - **Repeated blocks** (`qec/repeat.rs`, 1.61). A `RepeatedCircuit` is a
   tree of blocks: operations whose records count back from the operation
   (Stim's `rec[-k]`), and repeated blocks with their measurements,
@@ -236,9 +242,12 @@ frame update for each gate is derived once.
   iteration's, every earlier iteration's contributions are the last
   one's lowered again: the merged contributions of the last iteration
   (kept per open block) are added shifted, and the pass jumps to the
-  block's start with the state shifted. Merging is associative, so the
-  model equals the expanded one's up to the rounding of merged
-  probabilities.
+  block's start with the state shifted. A contribution whose key does not
+  shift (no detectors, or a block without detectors) is added once with
+  `1 − 2q = (1 − 2p)^j` for its j iterations. A block without operations
+  (TICK, or noise that cannot happen) is left out when it is built.
+  Merging is associative, so the model equals the expanded one's up to
+  the rounding of merged probabilities.
 - **Decoding.** The matching graph has a node per detector plus one
   boundary node. Union-find growth is event-driven: each round finds the
   frontier edges of the growing clusters, advances all of them by the

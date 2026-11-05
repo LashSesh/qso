@@ -1413,10 +1413,7 @@ impl PyWindowDecoder {
         decoder: &str,
     ) -> PyResult<Self> {
         let method = window_method(decoder)?;
-        let options = ParallelWindowOptions {
-            commit,
-            buffer: buffer.unwrap_or(commit),
-        };
+        let options = ParallelWindowOptions::new(commit, buffer.unwrap_or(commit));
         let dem = &model.inner;
         let inner = py
             .detach(|| WindowDecoder::parallel(dem, &layers, options, method))

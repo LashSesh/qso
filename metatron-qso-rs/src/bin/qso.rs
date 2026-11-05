@@ -1810,8 +1810,8 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 let circuit = match qec::DetectorCircuit::from_stim(&text) {
                     Ok(c) => Experiment::Flat(c),
                     Err(e) => match qec::RepeatedCircuit::from_stim(&text) {
-                        Ok(c) if c.flatten().is_err() => Experiment::Repeated(c),
-                        _ => return Err(e),
+                        Ok(c) => Experiment::Repeated(c),
+                        Err(_) => return Err(e),
                     },
                 };
                 let rate = circuit.rate(*shots, *seed, kind)?;

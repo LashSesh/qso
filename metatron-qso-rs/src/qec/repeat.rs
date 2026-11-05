@@ -178,6 +178,11 @@ impl Builder {
         }
         let (body, count, (m, d, o)) = self.stack.pop().expect("an open block");
         let (dm, dd, dops) = (self.measured - m, self.detectors - d, self.operations - o);
+        // A block without operations (TICK, coordinates, noise that cannot
+        // happen) does nothing, however often: it is left out.
+        if dops == 0 {
+            return Ok(());
+        }
         let total = |start: u64, per: u64| -> Option<u64> {
             per.checked_mul(count as u64)?.checked_add(start)
         };

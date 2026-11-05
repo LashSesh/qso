@@ -2,7 +2,7 @@
 //! rounds at a time, as hardware decodes while the experiment runs.
 //!
 //! The detectors fall into layers (rounds; see
-//! [`DetectorCircuit::detector_layers`]). A window covers `window`
+//! [`DetectorCircuit::detector_layers`](super::DetectorCircuit::detector_layers)). A window covers `window`
 //! consecutive layers; the first `commit` of them are its commit region,
 //! the rest its buffer. Windows start at layers `0, commit, 2·commit, …`
 //! until one reaches the last layer, which commits everything. Each window
@@ -88,11 +88,20 @@ impl WindowOptions {
 /// Sizes of the windows of parallel decoding ([`WindowDecoder::parallel`]),
 /// in layers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ParallelWindowOptions {
     /// Layers each window of the first pass commits (at least 1).
     pub commit: usize,
     /// Layers of buffer on each side of them.
     pub buffer: usize,
+}
+
+impl ParallelWindowOptions {
+    /// Windows of the first pass committing `commit` layers with `buffer`
+    /// layers on each side.
+    pub fn new(commit: usize, buffer: usize) -> Self {
+        ParallelWindowOptions { commit, buffer }
+    }
 }
 
 /// How a window takes its errors and applies its commit.
@@ -166,6 +175,9 @@ pub struct WindowDecoder {
     windows: Vec<Window>,
     decoders: Vec<Inner>,
     shapes: HashMap<Shape, usize>,
+    /// Each thread's copy of the decoders for the parallel passes, kept
+    /// from shot to shot.
+    copies: Vec<Vec<Inner>>,
 }
 
 /// The model of a window in its own detector indices, the key of its
@@ -373,6 +385,7 @@ impl WindowDecoder {
             windows: Vec::new(),
             decoders: Vec::new(),
             shapes: HashMap::new(),
+            copies: Vec::new(),
         })
     }
 
@@ -598,28 +611,44 @@ impl WindowDecoder {
                 .collect();
             let threads = crate::parallel::threads().max(1);
             let chunk = ws.len().div_ceil(threads).max(1);
+            let tasks = ws.len().div_ceil(chunk);
+            // Each task's copy of the decoders, kept from shot to shot and
+            // brought up to date with fallbacks built since.
+            let mut copies = std::mem::take(&mut self.copies);
+            if copies.len() < tasks {
+                copies.resize_with(tasks, Vec::new);
+            }
+            for copy in &mut copies {
+                let have = copy.len();
+                copy.extend(self.decoders[have..].iter().cloned());
+            }
+            let copies: Vec<std::sync::Mutex<Vec<Inner>>> =
+                copies.into_iter().map(std::sync::Mutex::new).collect();
             let this = &*self;
             let syndrome = &state.syndrome;
             let original = &state.original;
-            let done: Vec<Vec<(usize, Result<Commit>)>> =
-                crate::parallel::map_tasks(ws.len().div_ceil(chunk), |c| {
-                    let mut decoders = this.decoders.clone();
-                    let mut events = Vec::new();
-                    ws[c * chunk..((c + 1) * chunk).min(ws.len())]
-                        .iter()
-                        .map(|&w| {
-                            let source = if kind == Kind::First {
-                                original
-                            } else {
-                                syndrome
-                            };
-                            (
-                                w,
-                                this.commit_of(w, false, source, &mut decoders, &mut events),
-                            )
-                        })
-                        .collect()
-                });
+            let done: Vec<Vec<(usize, Result<Commit>)>> = crate::parallel::map_tasks(tasks, |c| {
+                let mut decoders = copies[c].lock().expect("one task per copy");
+                let mut events = Vec::new();
+                ws[c * chunk..((c + 1) * chunk).min(ws.len())]
+                    .iter()
+                    .map(|&w| {
+                        let source = if kind == Kind::First {
+                            original
+                        } else {
+                            syndrome
+                        };
+                        (
+                            w,
+                            this.commit_of(w, false, source, &mut decoders, &mut events),
+                        )
+                    })
+                    .collect()
+            });
+            self.copies = copies
+                .into_iter()
+                .map(|m| m.into_inner().expect("one task per copy"))
+                .collect();
             let mut failed = Vec::new();
             for (w, commit) in done.into_iter().flatten() {
                 match commit {
@@ -678,7 +707,15 @@ impl WindowDecoder {
                 "a window of this stream failed to decode; start a new stream",
             ));
         }
-        if state.syndrome.len() != self.n_detectors || state.layers >= n_layers {
+        let original = if self.parallel.is_some() {
+            self.n_detectors
+        } else {
+            0
+        };
+        if state.syndrome.len() != self.n_detectors
+            || state.original.len() != original
+            || state.layers >= n_layers
+        {
             return Err(QsoError::invalid(
                 "layer",
                 format!("the stream holds {} of {n_layers} layers", state.layers),

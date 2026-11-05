@@ -403,7 +403,8 @@ def repeated_vs_stim(quick: bool) -> dict:
         ours = {(tuple(dets), obs): p for p, dets, obs in model.errors}
         keys = set(theirs) | set(ours)
         diff = max(abs(theirs.get(k, 0.0) - ours.get(k, 0.0)) / max(theirs.get(k, 0.0), ours.get(k, 0.0)) for k in keys)
-        shots = 2000 if quick else 20_000
+        # Shots × detectors stay below the 2³⁰ entries of an array.
+        shots = 2000
         det, _ = c.sample(shots, seed=1)
         ref = sc.compile_detector_sampler(seed=2).sample(shots)
         a, b = det.mean(axis=0), ref.mean(axis=0)

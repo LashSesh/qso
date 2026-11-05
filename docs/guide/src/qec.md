@@ -571,16 +571,17 @@ shot from 100 to 4000 rounds. On the [[72, 12, 6]] bicycle code over 48
 rounds, BP+OSD in windows of six rounds committing three took 59 s for
 2000 shots (165 failures) against 76 s on the whole model (196); its
 time grows in proportion to the rounds. The error model is built for
-the whole experiment, in one pass backwards through the circuit (0.5 s
-for 1000 rounds of distance 5, 2.3 s for 4000). Where a window finds no
+the whole experiment, in one pass backwards through the circuit (0.26 s
+for 1000 rounds of distance 5, 1.05 s for 4000). Where a window finds no
 correction, because the only way out of a carried defect leads back
 (as when the only boundary is an error at the start), a fallback with
 the errors that reach before the window decodes it.
 
 ## Long experiments: repeated blocks and parallel windows
 
-A flat `DetectorCircuit` holds 2²⁴ operations, about 6000 rounds of a
-distance-5 surface code. A `RepeatedCircuit` keeps repeated blocks as
+A flat `DetectorCircuit` holds 2²⁴ operations (about 97 000 rounds of a
+distance-5 surface code), and the memory experiments build at most
+10 000 rounds flat. A `RepeatedCircuit` keeps repeated blocks as
 Stim's `REPEAT` does: `RepeatedCircuit.from_stim(text)` reads Stim's
 format without expanding its blocks, and `surface_code_memory_repeated`,
 `repetition_code_memory_repeated` and `css_code_memory_repeated` build
@@ -590,7 +591,9 @@ rounds; `flatten()` expands one into the flat circuit (where it fits),
 operation that reads them (`rec[-k]`), so every iteration reads the
 same relative records. `sample` runs the operations in order and keeps
 only the records a detector can still reach, with the same shots as
-the expanded circuit for the same seed.
+the expanded circuit for the same seed as long as both take the same
+batches of shots (1024, unless the records and detectors of a batch
+pass 128 MiB).
 
 The detector error model comes from one pass backwards through the
 circuit, which carries for every qubit the detectors and observables an
@@ -600,8 +603,10 @@ shifted by one iteration's, each earlier iteration repeats the last
 one's errors shifted, and the pass jumps to the start of the block (as
 Stim folds loops). A memory experiment repeats after two or three
 rounds. The model equals the expanded circuit's term by term, and
-Stim's for its generated circuits of 1000 and 2000 rounds (relative
-differences 3·10⁻¹⁶ in the cross-validation).
+Stim's for its generated circuits of 1000 to 20 000 rounds (relative
+differences 3·10⁻¹⁶). A block whose iterations have no detectors adds
+its errors' j iterations at once; a block without operations is left
+out.
 
 `WindowDecoder.parallel(model, layers, commit, buffer)` decodes in two
 passes, as Skoric et al. propose: windows of `buffer + commit + buffer`
@@ -646,14 +651,14 @@ print(rate.errors, f"{per_round:.1e}")           # 66 of 256: 3.6e-05 per round
 ```
 
 At distance 5 and p = 10⁻³ (four cores, release build) the model of
-10⁴ rounds takes 0.14 s and that of 10⁵ rounds 1.7 s (5.6 million
+10⁴ rounds takes 0.15 s and that of 10⁵ rounds 1.4 s (5.6 million
 errors, about 350 MB); sampling costs 9 µs per round for a batch of up
-to 64 shots.
-Sliding windows of ten rounds decode 0.17 to 0.19 µs per round and
-shot at 10⁴ and 10⁵ rounds; parallel windows committing five with
-buffers of five 0.18 µs on one thread, 0.14 on two and 0.09 on four,
-with the same failures. A shot's syndrome and the commits are applied
-on one thread, which caps the gain near two.
+to 64 shots. Sliding windows of ten rounds decode 0.18 to 0.20 µs per
+round and shot at 10⁴ and 10⁵ rounds. Parallel windows committing five
+with buffers of five take 0.19, 0.14 and 0.08 µs on one, two and four
+threads at 10⁴ rounds (2.4 times faster on four) and 0.18, 0.11 and
+0.09 µs at 10⁵ rounds (2.0 times), with the same failures; a shot's
+syndrome and the commits are applied on one thread.
 
 ## Circuit distance and CNOT schedules
 
@@ -987,7 +992,7 @@ with `--buffer` (default `--commit`) on each side.
 | Operations | 2²⁴ |
 | Observables | 64 |
 | Results of one `sample` call | shots × (detectors + 64) ≤ 2³³ bits (1 GiB); in Python, shots × (detectors + observables) ≤ 2³⁰ |
-| Error components of a model | 2²² (flat circuits); their detector lists before merging, 2²⁷ entries (1 GiB); the pass backwards, 2³⁴ entries of effects touched (about fifteen seconds) |
+| Error models | the distinct errors' detector lists 2²⁷ entries (1 GiB), merged as the pass goes; the pass backwards, 2³⁴ entries of effects touched (about fifteen seconds); `explain_errors` 2²² error components |
 | Window decoder | layers non-decreasing in the detector index; one decoder per distinct window shape, and the window's errors indexed for every window |
 | Code distance, rounds | 101, 10 000, and at most 2²⁴ operations (checked before building); repeated memory experiments 10⁷ rounds |
 | Repeated circuits | 2²⁴ operations stored, 2³¹ expanded; models 2²⁴ detectors; sampling keeps as many records as a detector reaches back |
@@ -1010,5 +1015,5 @@ with `--buffer` (default `--commit`) on each side.
 - **Example timing.** On one core, a distance-21 surface code with 21
   rounds (881 qubits, 4840 detectors) needs about 0.15 s for its error
   model and 15 s for 100 000 shots decoded by union-find at p = 0.001. The error model
-  of d = 41 with 41 rounds (35 280 detectors) takes 1.2 s (30 s before
+  of d = 41 with 41 rounds (35 280 detectors) takes 1.0 s (30 s before
   the pass backwards).

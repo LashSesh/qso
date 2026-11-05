@@ -19,7 +19,9 @@ use crate::error::{QsoError, Result};
 use crate::quantum::Instruction;
 use crate::stabilizer::{CliffordTarget, apply_clifford};
 
-/// Most elementary error components a model propagates.
+/// Most elementary error components [`explain_errors`] propagates (the
+/// models merge their errors as the pass goes and hold only the distinct
+/// ones).
 pub const MAX_COMPONENTS: usize = 1 << 22;
 /// Most detector entries over all propagated components (1 GiB).
 pub const MAX_SIGNATURE_ENTRIES: usize = 1 << 27;
@@ -120,24 +122,8 @@ pub fn detector_error_model(
     circuit: &DetectorCircuit,
     decompose: bool,
 ) -> Result<DetectorErrorModel> {
-    let mut merged: BTreeMap<Signature, f64> = BTreeMap::new();
-    each_channel(circuit, |_, basis, probabilities| {
-        if !decompose {
-            for (k, &p) in probabilities.iter().enumerate().skip(1) {
-                let total = combination(basis, k);
-                if p > 0.0 && !is_empty(&total) {
-                    merge(&mut merged, total, p);
-                }
-            }
-            return Ok(());
-        }
-        for (parts, p) in decomposed(basis, probabilities)? {
-            for part in parts {
-                merge(&mut merged, part, p);
-            }
-        }
-        Ok(())
-    })?;
+    let mut contribute = model_contributions(decompose);
+    let merged = fold_flat::<Signature>(circuit, contribute.as_mut())?;
     let errors = merged
         .into_iter()
         .map(|((detectors, observables), probability)| ErrorMechanism {
@@ -364,14 +350,8 @@ impl CorrelatedErrorModel {
 /// to it, is split into its single-qubit X and Z parts. Errors with the
 /// same parts are merged.
 pub fn correlated_error_model(circuit: &DetectorCircuit) -> Result<CorrelatedErrorModel> {
-    let mut merged: BTreeMap<Vec<Signature>, f64> = BTreeMap::new();
-    each_channel(circuit, |_, basis, probabilities| {
-        for (mut parts, p) in decomposed(basis, probabilities)? {
-            parts.sort();
-            merge(&mut merged, parts, p);
-        }
-        Ok(())
-    })?;
+    let mut contribute = correlated_contributions();
+    let merged = fold_flat::<Vec<Signature>>(circuit, contribute.as_mut())?;
     Ok(CorrelatedErrorModel {
         n_detectors: circuit.n_detectors(),
         n_observables: circuit.n_observables(),
@@ -472,7 +452,6 @@ fn each_channel(
     circuit: &DetectorCircuit,
     mut f: impl FnMut(&Channel, &[Signature], &[f64]) -> Result<()>,
 ) -> Result<()> {
-    super::frame::check_deterministic(circuit)?;
     // Elementary components.
     let mut components: Vec<Component> = Vec::new();
     for (i, op) in circuit.operations().iter().enumerate() {
@@ -502,7 +481,7 @@ fn each_channel(
     }
     components.sort();
     components.dedup();
-    let signatures = propagate(circuit, &components)?;
+    let signatures = propagate(circuit, &components, true)?;
     let sig = |c: Component| -> Signature {
         signatures[components
             .binary_search(&c)
@@ -684,6 +663,9 @@ pub(super) struct Tracker {
     pub(super) pending: HashMap<usize, Signature>,
     /// Entries touched so far.
     pub(super) work: u64,
+    /// Whether to require every detector and observable to be
+    /// deterministic without noise.
+    strict: bool,
 }
 
 impl Tracker {
@@ -693,7 +675,40 @@ impl Tracker {
             z: vec![(Vec::new(), 0); n],
             pending: HashMap::new(),
             work: 0,
+            strict: true,
         }
+    }
+
+    /// A fresh qubit (after a reset or a measurement, or at the start) is a
+    /// Z eigenstate of either sign: a detector or observable that a Z
+    /// there would flip is not deterministic without noise (the frame
+    /// sampler draws that Z at random).
+    fn check_fresh(&self, qubit: usize) -> Result<()> {
+        if !self.strict {
+            return Ok(());
+        }
+        let z = &self.z[qubit];
+        if let Some(&d) = z.0.first() {
+            return Err(QsoError::invalid(
+                "detector",
+                format!("detector {d} is not deterministic without noise"),
+            ));
+        }
+        if z.1 != 0 {
+            return Err(QsoError::invalid(
+                "observable",
+                format!(
+                    "observable {} is not deterministic without noise",
+                    z.1.trailing_zeros()
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// At the start of the circuit every qubit is fresh.
+    pub(super) fn check_start(&self) -> Result<()> {
+        (0..self.z.len()).try_for_each(|q| self.check_fresh(q))
     }
 
     pub(super) fn gate(&mut self, inst: &Instruction, steps: &mut Vec<Step>) -> Result<()> {
@@ -728,17 +743,20 @@ impl Tracker {
 
     /// Passes the measurement of `qubit` into `record`: returns the effect
     /// of flipping it.
-    pub(super) fn measure(&mut self, qubit: usize, record: usize) -> Signature {
+    pub(super) fn measure(&mut self, qubit: usize, record: usize) -> Result<Signature> {
+        self.check_fresh(qubit)?;
         let mut s = self.pending.remove(&record).unwrap_or_default();
         s.0.reverse();
         xor_into(&mut self.x[qubit], &s, &mut self.work);
         self.z[qubit] = (Vec::new(), 0);
-        s
+        Ok(s)
     }
 
-    pub(super) fn reset(&mut self, qubit: usize) {
+    pub(super) fn reset(&mut self, qubit: usize) -> Result<()> {
+        self.check_fresh(qubit)?;
         self.x[qubit] = (Vec::new(), 0);
         self.z[qubit] = (Vec::new(), 0);
+        Ok(())
     }
 
     /// Passes detector `id`, below every detector passed before.
@@ -765,6 +783,18 @@ impl Tracker {
 }
 
 impl Tracker {
+    /// Entries of the state (to count its copies and comparisons).
+    fn size(&self) -> u64 {
+        let effects = |v: &[Signature]| v.iter().map(|s| s.0.len() as u64 + 1).sum::<u64>();
+        effects(&self.x)
+            + effects(&self.z)
+            + self
+                .pending
+                .values()
+                .map(|s| s.0.len() as u64 + 1)
+                .sum::<u64>()
+    }
+
     /// Whether this state is `before` with every detector `dd` and every
     /// record `dm` lower (records whose effect is empty left aside).
     fn is_shift_of(&self, before: &Tracker, dd: usize, dm: usize) -> bool {
@@ -898,20 +928,22 @@ impl<K: Key> Folder<'_, K> {
         Ok(())
     }
 
-    fn op(&mut self, op: &QecOp) -> Result<()> {
+    /// Pass `op` backwards; its records count back from it, or with
+    /// `absolute` index the whole record (a flat circuit).
+    fn op(&mut self, op: &QecOp, absolute: bool) -> Result<()> {
         self.op -= 1;
         let i = self.op as usize;
         match op {
             QecOp::Gate(inst) => self.t.gate(inst, &mut self.steps)?,
             QecOp::Measure { qubit, flip } => {
                 self.m -= 1;
-                let s = self.t.measure(*qubit, self.m);
+                let s = self.t.measure(*qubit, self.m)?;
                 if *flip > 0.0 {
                     let mut add = |c: &Channel, b: &[Signature], p: &[f64]| self.channel(c, b, p);
                     flip_channel(i, *qubit, *flip, s, &mut add)?;
                 }
             }
-            QecOp::Reset { qubit } => self.t.reset(*qubit),
+            QecOp::Reset { qubit } => self.t.reset(*qubit)?,
             QecOp::Noise { noise, qubits } => {
                 // The effects are read while contributions are added.
                 let (x, z) = (std::mem::take(&mut self.t.x), std::mem::take(&mut self.t.z));
@@ -930,12 +962,20 @@ impl<K: Key> Folder<'_, K> {
             }
             QecOp::Detector { records } => {
                 self.d -= 1;
-                let r: Vec<usize> = records.iter().map(|&k| self.m - k).collect();
-                self.t.detector(self.d, &r);
+                if absolute {
+                    self.t.detector(self.d, records);
+                } else {
+                    let r: Vec<usize> = records.iter().map(|&k| self.m - k).collect();
+                    self.t.detector(self.d, &r);
+                }
             }
             QecOp::Observable { index, records } => {
-                let r: Vec<usize> = records.iter().map(|&k| self.m - k).collect();
-                self.t.observable(*index, &r);
+                if absolute {
+                    self.t.observable(*index, records);
+                } else {
+                    let r: Vec<usize> = records.iter().map(|&k| self.m - k).collect();
+                    self.t.observable(*index, &r);
+                }
             }
         }
         if self.t.work > MAX_MODEL_WORK {
@@ -952,7 +992,7 @@ impl<K: Key> Folder<'_, K> {
             match block {
                 Block::Ops(ops) => {
                     for op in ops.iter().rev() {
-                        self.op(op)?;
+                        self.op(op, false)?;
                     }
                 }
                 Block::Repeat(r) => self.repeat(r)?,
@@ -970,20 +1010,48 @@ impl<K: Key> Folder<'_, K> {
         while j > 0 {
             j -= 1;
             self.open.last_mut().expect("this block").clear();
-            let before = (j > 0).then(|| Tracker {
-                work: 0,
-                ..self.t.clone()
+            let before = (j > 0).then(|| {
+                // The copy and the comparison cost the state's size.
+                self.t.work += self.t.size();
+                Tracker {
+                    work: 0,
+                    ..self.t.clone()
+                }
             });
             self.blocks(&r.body)?;
             let Some(before) = before else { break };
+            self.t.work += self.t.size();
             if !self.t.is_shift_of(&before, r.detectors, r.measurements) {
                 continue;
             }
             let last = self.open.pop().expect("this block");
-            for i in 1..=j {
-                let by = i * r.detectors;
-                for (k, &p) in &last {
-                    self.add(k.lowered(by), p)?;
+            let mut shifting = Vec::with_capacity(last.len());
+            for (k, p) in last {
+                if r.detectors == 0 || k.entries() == 0 {
+                    // The same key in every iteration: j merges of p at
+                    // once, 1 − 2q = (1 − 2p)^j.
+                    let q = if p <= 0.5 {
+                        -0.5 * (j as f64 * (-2.0 * p).ln_1p()).exp_m1()
+                    } else {
+                        0.5 * (1.0 - (1.0 - 2.0 * p).powf(j as f64))
+                    };
+                    self.add(k, q)?;
+                } else {
+                    shifting.push((k, p));
+                }
+            }
+            // Iteration by iteration, each one's keys close together.
+            let per: u64 = shifting.iter().map(|(k, _)| 1 + k.entries() as u64).sum();
+            for i in (1..=j).take_while(|_| !shifting.is_empty()) {
+                self.t.work += per;
+                if self.t.work > MAX_MODEL_WORK {
+                    return Err(QsoError::invalid(
+                        "circuit",
+                        format!("the error model needs more than {MAX_MODEL_WORK} operations"),
+                    ));
+                }
+                for (k, p) in &shifting {
+                    self.add(k.lowered(i * r.detectors), *p)?;
                 }
             }
             self.t.shift_down(j * r.detectors, j * r.measurements)?;
@@ -1012,7 +1080,6 @@ pub(super) fn fold<'a, K: Key>(
             ),
         ));
     }
-    super::frame::check_deterministic(circuit)?;
     let mut f = Folder {
         t: Tracker::new(circuit.n_qubits()),
         steps: Vec::new(),
@@ -1026,8 +1093,47 @@ pub(super) fn fold<'a, K: Key>(
         contribute,
     };
     f.blocks(&circuit.blocks)?;
+    f.t.check_start()?;
     debug_assert_eq!((f.m, f.d, f.op), (0, 0, 0));
     Ok(f.merged)
+}
+
+/// The merged contributions of every channel of a flat circuit, by the
+/// same pass backwards (records indexing the whole record): the model is
+/// merged as it is built, so only its distinct errors are held.
+pub(super) fn fold_flat<'a, K: Key>(
+    circuit: &DetectorCircuit,
+    contribute: &'a mut Contribute<'a, K>,
+) -> Result<BTreeMap<K, f64>> {
+    let mut f = Folder {
+        t: Tracker::new(circuit.n_qubits()),
+        steps: Vec::new(),
+        m: circuit.n_measurements(),
+        d: circuit.n_detectors(),
+        op: circuit.operations().len() as u64,
+        merged: BTreeMap::new(),
+        open: Vec::new(),
+        scratch: Vec::new(),
+        entries: 0,
+        contribute,
+    };
+    for op in circuit.operations().iter().rev() {
+        f.op(op, true)?;
+    }
+    f.t.check_start()?;
+    debug_assert_eq!((f.m, f.d, f.op), (0, 0, 0));
+    Ok(f.merged)
+}
+
+/// The contributions of a channel to the correlated model.
+fn correlated_contributions() -> Box<Contribute<'static, Vec<Signature>>> {
+    Box::new(|_, basis, probabilities, out| {
+        for (mut parts, p) in decomposed(basis, probabilities)? {
+            parts.sort();
+            out.push((parts, p));
+        }
+        Ok(())
+    })
 }
 
 /// The contributions of a channel to the model of [`detector_error_model`].
@@ -1077,18 +1183,8 @@ pub(super) fn repeated_error_model(
 /// The correlated model of a repeated circuit, as
 /// [`correlated_error_model`] gives it for the expanded circuit.
 pub(super) fn repeated_correlated_model(circuit: &RepeatedCircuit) -> Result<CorrelatedErrorModel> {
-    let mut contribute = |_: &Channel,
-                          basis: &[Signature],
-                          probabilities: &[f64],
-                          out: &mut Vec<(Vec<Signature>, f64)>|
-     -> Result<()> {
-        for (mut parts, p) in decomposed(basis, probabilities)? {
-            parts.sort();
-            out.push((parts, p));
-        }
-        Ok(())
-    };
-    let merged = fold::<Vec<Signature>>(circuit, &mut contribute)?;
+    let mut contribute = correlated_contributions();
+    let merged = fold::<Vec<Signature>>(circuit, contribute.as_mut())?;
     Ok(CorrelatedErrorModel {
         n_detectors: circuit.n_detectors(),
         n_observables: circuit.n_observables(),
@@ -1101,8 +1197,13 @@ pub(super) fn repeated_correlated_model(circuit: &RepeatedCircuit) -> Result<Cor
 
 /// The effect of each component (sorted by operation), by one pass
 /// backwards through the circuit (see [`Tracker`]).
-fn propagate(circuit: &DetectorCircuit, components: &[Component]) -> Result<Vec<Signature>> {
+fn propagate(
+    circuit: &DetectorCircuit,
+    components: &[Component],
+    strict: bool,
+) -> Result<Vec<Signature>> {
     let mut t = Tracker::new(circuit.n_qubits());
+    t.strict = strict;
     let mut steps = Vec::new();
     let mut out: Vec<Signature> = vec![(Vec::new(), 0); components.len()];
     let (mut m, mut d) = (circuit.n_measurements(), circuit.n_detectors());
@@ -1113,14 +1214,14 @@ fn propagate(circuit: &DetectorCircuit, components: &[Component]) -> Result<Vec<
             QecOp::Gate(inst) => t.gate(inst, &mut steps)?,
             QecOp::Measure { qubit, .. } => {
                 m -= 1;
-                let s = t.measure(*qubit, m);
+                let s = t.measure(*qubit, m)?;
                 while next > 0 && components[next - 1].op == i {
                     next -= 1;
                     entries += s.0.len();
                     out[next] = s.clone();
                 }
             }
-            QecOp::Reset { qubit } => t.reset(*qubit),
+            QecOp::Reset { qubit } => t.reset(*qubit)?,
             QecOp::Noise { .. } => {
                 while next > 0 && components[next - 1].op == i {
                     next -= 1;
@@ -1154,6 +1255,7 @@ fn propagate(circuit: &DetectorCircuit, components: &[Component]) -> Result<Vec<
             ));
         }
     }
+    t.check_start()?;
     Ok(out)
 }
 
@@ -1331,7 +1433,7 @@ mod backward_tests {
 
     fn same(circuit: &DetectorCircuit) {
         let c = components(circuit);
-        let back = propagate(circuit, &c).unwrap();
+        let back = propagate(circuit, &c, false).unwrap();
         let forward = propagate_forward(circuit, &c).unwrap();
         assert_eq!(back, forward);
     }
@@ -1339,7 +1441,7 @@ mod backward_tests {
     /// A random noisy Clifford circuit on `n` qubits with detectors and
     /// observables on random records (deterministic or not: the effects
     /// of errors are linear either way).
-    fn random_circuit(n: usize, ops: usize, rng: &mut Rng) -> DetectorCircuit {
+    fn random_circuit(n: usize, ops: usize, rng: &mut Rng, deterministic: bool) -> DetectorCircuit {
         use crate::quantum::{GateKind, Param};
         let mut c = DetectorCircuit::new(n).unwrap();
         let q = |rng: &mut Rng| rng.below(n as u64) as usize;
@@ -1421,6 +1523,19 @@ mod backward_tests {
                 11 => {
                     c.noise(Noise::Depolarize2(0.01), &[a, b]).unwrap();
                 }
+                _ if deterministic => {
+                    // A detector on two measurements of a qubit in a row
+                    // (noise between them), always deterministic.
+                    let first = c.measure(a, 0.01).unwrap();
+                    c.noise(Noise::Depolarize1(0.01), &[a]).unwrap();
+                    let second = c.measure(a, 0.0).unwrap();
+                    if rng.below(4) == 0 {
+                        c.observable(rng.below(3) as usize, &[first, second])
+                            .unwrap();
+                    } else {
+                        c.detector(&[first, second]).unwrap();
+                    }
+                }
                 _ => {
                     let m = c.n_measurements();
                     if m > 0 {
@@ -1452,9 +1567,18 @@ mod backward_tests {
         let (bb, _) = CssCode::bivariate_bicycle_code(72).unwrap();
         same(&css_code_memory(&bb, 2, &noise, MemoryBasis::X).unwrap());
         let mut rng = Rng::seed_from_u64(61);
-        for trial in 0..200 {
+        let mut refused = 0;
+        for trial in 0..300 {
             let n = 2 + trial % 6;
-            same(&random_circuit(n, 20 + 3 * trial, &mut rng));
+            let c = random_circuit(n, 20 + 3 * (trial % 200), &mut rng, trial >= 200);
+            same(&c);
+            // The pass backwards refuses exactly the circuits whose
+            // detectors or observables the frame sampler finds random.
+            let strict = propagate(&c, &components(&c), true).is_ok();
+            assert_eq!(strict, crate::qec::frame::check_deterministic(&c).is_ok());
+            assert!(strict || trial < 200);
+            refused += !strict as usize;
         }
+        assert!(refused > 100, "{refused}");
     }
 }

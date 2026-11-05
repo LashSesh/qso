@@ -365,7 +365,10 @@ pub fn logical_error_rate_using(
 
 /// [`logical_error_rate_using`] for a circuit with repeated blocks: its
 /// shots sampled as they run, decoded by `decoder` built from its folded
-/// models ([`DecoderChoice::build_for_repeated`]).
+/// models ([`DecoderChoice::build_for_repeated`]). The shots are those of
+/// the expanded circuit while both take the same batches of shots (1024,
+/// unless a batch's records and detectors pass 128 MiB: the repeated
+/// circuit counts only the records a detector can reach).
 pub fn logical_error_rate_repeated(
     circuit: &RepeatedCircuit,
     shots: usize,

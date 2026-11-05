@@ -14,7 +14,7 @@
 //!
 //! * **Groups.** A group is held by generators and its exact order (from
 //!   the base and strong generating set of
-//!   [`AutomorphismGroup`](crate::graph::automorphism::AutomorphismGroup)).
+//!   [`AutomorphismGroup`]).
 //!   The stabiliser of a point `m` in a group `K` of known order has order
 //!   `|K|/|m^K|`, so a randomised Schreier–Sims algorithm with base `[m, …]`
 //!   is stopped exactly when its basic orbits multiply to the order (a

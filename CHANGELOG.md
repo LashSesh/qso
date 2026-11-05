@@ -22,11 +22,11 @@ All notable changes to this project are documented here. The format follows
   circuits that keep their repeated blocks (Stim's `REPEAT`, memory
   experiments of up to 10⁷ rounds), sampled as they run and expanded
   where they fit, whose detector error models fold once an iteration
-  repeats the next one shifted (10⁵ rounds of distance 5 in 1.7 s, equal
-  to Stim's term by term); parallel windows in the manner of Skoric et
-  al., independent windows and then the seams between them, each pass on
-  threads (twice as fast on four cores), streamed with the same
-  prediction.
+  repeats the next one shifted (10⁵ rounds of distance 5 in 1.4 s; equal
+  to Stim's term by term for its generated circuits of up to 2·10⁴
+  rounds); parallel windows in the manner of Skoric et al., independent
+  windows and then the seams between them, each pass on threads (2 to 2.4
+  times as fast on four cores), streamed with the same prediction.
 
 - **NV centres at their level anticrossings** (1.60,
   `spin::NuclearOpticalNv`, `NuclearSpin`, `AnticrossingState`,
@@ -253,14 +253,19 @@ All notable changes to this project are documented here. The format follows
 - **Error models in one pass backwards** (1.61): what each error flips
   comes from one pass backwards through the circuit, the transpose of
   propagating frames forwards, in time linear in the rounds (4000 rounds
-  of a distance-5 surface code: 2.3 s instead of 30 s); the models are
-  the same term by term, and a circuit that needed too much propagation
-  work before (two million noisy measurements) now builds its model.
-  `MAX_MODEL_WORK` counts the entries the pass touches. The frame
-  sampler keeps only the measurement records a detector can still reach.
-  `qso qec` builds memory experiments beyond 10 000 rounds as repeated
-  circuits and reads Stim files too long to expand with their blocks;
-  `--commit` without `--window` or `--parallel` is now an error.
+  of a distance-5 surface code: 1.05 s instead of 30 s); the models are
+  the same term by term (merged probabilities to rounding). The pass
+  merges errors as it goes, so models are no longer limited by their
+  error components (`MAX_COMPONENTS` now limits `explain_errors` only),
+  and a circuit that needed too much propagation work before (two
+  million noisy measurements) builds its model. It also checks that
+  detectors and observables are deterministic, exactly, where the frame
+  sampler drew random Z frames. `MAX_MODEL_WORK` counts the entries the
+  pass touches. The frame sampler keeps only the measurement records a
+  detector can still reach. `qso qec` builds memory experiments beyond
+  10 000 rounds as repeated circuits and reads Stim files too long to
+  expand with their blocks; `--commit` without `--window` or
+  `--parallel` is refused by the command, not by its argument parser.
 
 - Field profiles with relaxation no longer use the dense generator, so
   `MAX_CONTROL_LIOUVILLE` (six spins ½) no longer limits them; their cost

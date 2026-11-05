@@ -233,6 +233,44 @@ fn a_hundred_thousand_rounds_fold_after_a_few() {
 }
 
 #[test]
+fn blocks_that_do_nothing_or_repeat_one_error_cost_nothing() {
+    // Bodies without operations, nested, are left out.
+    let c = RepeatedCircuit::from_stim(
+        "R 0\nREPEAT 2147483648 {\nREPEAT 2147483648 {\nTICK\n}\n}\nX_ERROR(0.1) 0\nM 0\nDETECTOR rec[-1]\n",
+    )
+    .unwrap();
+    assert_eq!(c.n_operations(), 4);
+    assert_eq!(c.flatten().unwrap().operations().len(), 4);
+    assert_eq!(c.sample(10, 1).unwrap().shots(), 10);
+    // Two billion iterations whose errors all flip the detector after the
+    // block: merged at once.
+    let start = std::time::Instant::now();
+    let c = RepeatedCircuit::from_stim(
+        "R 0\nREPEAT 2000000000 {\nX_ERROR(0.001) 0\n}\nM 0\nDETECTOR rec[-1]\n",
+    )
+    .unwrap();
+    let m = c.detector_error_model(false).unwrap();
+    assert_eq!(m.errors.len(), 1);
+    assert!((m.errors[0].probability - 0.5).abs() < 1e-12);
+    assert!(start.elapsed().as_secs_f64() < crate::time_limit(2.0));
+    // As merging every iteration does: a block without detectors, and an
+    // error that flips only the observable in a block with detectors.
+    for text in [
+        "R 0\nREPEAT 300 {\nX_ERROR(0.003) 0\nDEPOLARIZE1(0.4) 0\n}\nM 0\nDETECTOR rec[-1]\n",
+        "R 0 1\nMR 1\nREPEAT 300 {\nX_ERROR(0.003) 0\nDEPOLARIZE1(0.002) 1\nMR(0.001) 1\nDETECTOR rec[-1] rec[-2]\n}\nM 0\nOBSERVABLE_INCLUDE(0) rec[-1]\n",
+    ] {
+        let c = RepeatedCircuit::from_stim(text).unwrap();
+        for decompose in [false, true] {
+            assert_same_model(
+                text,
+                &c.detector_error_model(decompose).unwrap(),
+                &detector_error_model(&c.flatten().unwrap(), decompose).unwrap(),
+            );
+        }
+    }
+}
+
+#[test]
 fn repeated_circuits_check_their_input() {
     assert!(RepeatedCircuit::from_stim("REPEAT 0 {\nM 0\n}\n").is_err());
     assert!(RepeatedCircuit::from_stim("M 0\nREPEAT 2 {\nDETECTOR rec[-2]\n}\n").is_err());
@@ -279,13 +317,13 @@ fn repeated_logical_error_rates_equal_the_expanded_ones() {
 /// measure_long_experiments -- --ignored --nocapture`.
 #[test]
 #[ignore]
+#[cfg(feature = "parallel")]
 fn measure_long_experiments() {
     use crate::qec::{ParallelWindowOptions, WindowDecoder, WindowMethod, WindowOptions};
     use std::time::Instant;
     let noise = CircuitNoise::uniform(1e-3);
     // The model: flat circuits by the pass backwards, repeated ones folded.
-    // (1.57: 1.3 s for 1000 rounds, 30 s for 4000; a flat circuit holds
-    // about 6000.)
+    // (1.57: 1.3 s for 1000 rounds, 30 s for 4000.)
     for rounds in [1000, 4000] {
         let flat = crate::qec::surface_code_memory(5, rounds, &noise).unwrap();
         let t = Instant::now();
@@ -351,10 +389,7 @@ fn measure_long_experiments() {
         let mut parallel = WindowDecoder::parallel(
             &m,
             &layers,
-            ParallelWindowOptions {
-                commit: 5,
-                buffer: 5,
-            },
+            ParallelWindowOptions::new(5, 5),
             WindowMethod::Matching,
         )
         .unwrap();

@@ -462,7 +462,7 @@ fn parallel_matching(circuit: &DetectorCircuit, commit: usize, buffer: usize) ->
     WindowDecoder::parallel(
         &detector_error_model(circuit, true).unwrap(),
         &circuit.detector_layers(),
-        ParallelWindowOptions { commit, buffer },
+        ParallelWindowOptions::new(commit, buffer),
         WindowMethod::Matching,
     )
     .unwrap()
@@ -518,21 +518,12 @@ fn the_parallel_layout_alternates_windows_and_seams() {
     // Windows of the bulk share decoders: the first, the bulk and the
     // last of the first pass, and the seams.
     assert!(w.n_decoders() <= 4, "{}", w.n_decoders());
-    assert_eq!(
-        w.parallel_options(),
-        Some(ParallelWindowOptions {
-            commit: 3,
-            buffer: 2
-        })
-    );
+    assert_eq!(w.parallel_options(), Some(ParallelWindowOptions::new(3, 2)));
     assert!(
         WindowDecoder::parallel(
             &detector_error_model(&c, true).unwrap(),
             &c.detector_layers(),
-            ParallelWindowOptions {
-                commit: 0,
-                buffer: 2
-            },
+            ParallelWindowOptions::new(0, 2),
             WindowMethod::Matching,
         )
         .is_err()
@@ -579,6 +570,17 @@ fn parallel_windows_fail_as_often_as_sliding_ones() {
 }
 
 #[test]
+fn a_stream_of_another_layout_is_refused() {
+    let c = surface_code_memory(3, 6, &CircuitNoise::uniform(1e-3)).unwrap();
+    let mut sliding = matching_windows(&c, 4, 2);
+    let mut parallel = parallel_matching(&c, 2, 1);
+    let state = sliding.new_stream();
+    assert!(parallel.push_layer(&mut state.clone(), &[]).is_err());
+    let state = parallel.new_stream();
+    assert!(sliding.push_layer(&mut state.clone(), &[]).is_err());
+}
+
+#[test]
 fn parallel_bp_osd_windows_decode_a_bicycle_code() {
     let (code, _) = CssCode::bivariate_bicycle_code(72).unwrap();
     let c = css_code_memory(&code, 12, &CircuitNoise::uniform(2e-3), MemoryBasis::Z).unwrap();
@@ -588,10 +590,7 @@ fn parallel_bp_osd_windows_decode_a_bicycle_code() {
     let mut parallel = WindowDecoder::parallel(
         &dem,
         &c.detector_layers(),
-        ParallelWindowOptions {
-            commit: 2,
-            buffer: 2,
-        },
+        ParallelWindowOptions::new(2, 2),
         WindowMethod::BpOsd(options),
     )
     .unwrap();

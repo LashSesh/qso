@@ -425,8 +425,8 @@ fn limits_fail_early_with_an_error() {
     let m = r.measure(0, 0.0).unwrap();
     r.detector(&[m]).unwrap();
     assert!(detector_error_model(&r, false).is_err());
-    // An error that flips every one of 100 000 detectors, 2000 times
-    // before merging: too many signature entries.
+    // An error that flips every one of 100 000 detectors, 2000 times:
+    // merged as the model is built, into one.
     let n = 2001;
     let mut c = DetectorCircuit::new(n).unwrap();
     c.noise(Noise::XError(0.01), &(1..n).collect::<Vec<_>>())
@@ -438,7 +438,37 @@ fn limits_fail_early_with_an_error() {
     for _ in 0..100_000 {
         c.detector(&[m]).unwrap();
     }
+    let merged = detector_error_model(&c, false).unwrap();
+    assert_eq!(merged.errors.len(), 1);
+    assert_eq!(merged.errors[0].detectors.len(), 100_000);
+    // Two thousand errors that each flip their own detector and the same
+    // 100 000: too many entries in the model.
+    let mut c = DetectorCircuit::new(n).unwrap();
+    c.noise(Noise::XError(0.01), &(1..n).collect::<Vec<_>>())
+        .unwrap();
+    for q in 1..n {
+        c.cx(q, 0).unwrap();
+    }
+    let records: Vec<usize> = (0..n).map(|q| c.measure(q, 0.0).unwrap()).collect();
+    for &r in &records[1..] {
+        c.detector(&[r]).unwrap();
+    }
+    for _ in 0..100_000 {
+        c.detector(&[records[0]]).unwrap();
+    }
     assert!(detector_error_model(&c, false).is_err());
+    // More error components than a model once held (2²²): the model holds
+    // its distinct errors only.
+    let mut many = DetectorCircuit::new(1).unwrap();
+    for _ in 0..2_200_000 {
+        many.noise(Noise::XError(1e-6), &[0]).unwrap();
+    }
+    let m = many.measure(0, 0.0).unwrap();
+    many.detector(&[m]).unwrap();
+    let model = detector_error_model(&many, false).unwrap();
+    assert_eq!(model.errors.len(), 1);
+    let want = 0.5 * (1.0 - (1.0 - 2e-6f64).powi(2_200_000));
+    assert!((model.errors[0].probability - want).abs() < 1e-9 * want);
     // Two million noisy measurements, too much work for frames propagated
     // forwards (1.57), take one pass backwards: only the first flips the
     // detector.
