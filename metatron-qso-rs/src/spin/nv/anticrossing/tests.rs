@@ -49,6 +49,23 @@ fn decoupled_nuclei_leave_the_optics_of_1_40() {
 }
 
 #[test]
+fn the_electron_with_its_nuclei_stays_near_1_40_away_from_the_anticrossings() {
+    // The hyperfine couplings mix the excited levels by about (A_e/Δ)²:
+    // 0.2 to 0.7 % of the fluorescence between 5 and 70 mT.
+    for b in [0.005, 0.02, 0.07] {
+        for nitrogen in [NuclearSpin::nitrogen_15(), NuclearSpin::nitrogen_14()] {
+            let mut nv = NuclearOpticalNv::new([0.0, 0.0, b], nitrogen);
+            nv.nuclear_relaxation = 10.0;
+            let got = nv.steady_state(0.1 * KR, None).unwrap().fluorescence;
+            let want = nv
+                .electron
+                .fluorescence(&nv.electron.steady_state(0.1 * KR, None).unwrap());
+            assert!((got - want).abs() < 1e-2 * want, "{b}: {got} vs {want}");
+        }
+    }
+}
+
+#[test]
 fn levels_follow_the_two_level_blocks_of_nitrogen_15() {
     // Along the axis S·A·I with A = diag(A⊥, A⊥, A∥) keeps m_s + m_I: the
     // singles |+1, +½⟩, |−1, −½⟩ and the pairs {|0, +½⟩, |+1, −½⟩},
