@@ -11,6 +11,7 @@ use numpy::{PyArray1, PyArray2};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+use metatron_qso::spin::anticrossing::{AnticrossingState, NuclearOpticalNv, NuclearSpin};
 use metatron_qso::spin::bath::{
     self, BathSpin, Cce, DIAMOND_LATTICE_CONSTANT, MAX_BATH_SPINS, MAX_CLUSTER_ORDER,
     MAX_EXACT_BATH, NATURAL_C13_ABUNDANCE, SpinBath,
@@ -1283,6 +1284,254 @@ fn optical_drive(frequency: Option<f64>, rabi: Option<f64>) -> PyResult<Option<(
     }
 }
 
+/// Rates by name (`"tetienne"`, `"gupta"`) or as `(k_r, k_47, k_57, k_71,
+/// k_72)` (1/s).
+fn named_rates(rates: Option<&Bound<'_, PyAny>>) -> PyResult<Photophysics> {
+    let Some(rates) = rates else {
+        return Ok(Photophysics::tetienne());
+    };
+    if let Ok(name) = rates.extract::<String>() {
+        return match name.to_ascii_lowercase().as_str() {
+            "tetienne" => Ok(Photophysics::tetienne()),
+            "gupta" => Ok(Photophysics::gupta()),
+            _ => Err(invalid(format!(
+                "rates: \"tetienne\", \"gupta\" or five rates, not {name:?}"
+            ))),
+        };
+    }
+    let [
+        radiative,
+        isc_zero,
+        isc_plus_minus,
+        singlet_zero,
+        singlet_plus_minus,
+    ]: [f64; 5] = rates
+        .extract()
+        .map_err(|_| invalid("rates: \"tetienne\", \"gupta\" or five rates"))?;
+    Ok(Photophysics {
+        radiative,
+        isc_zero,
+        isc_plus_minus,
+        singlet_zero,
+        singlet_plus_minus,
+    })
+}
+
+fn state_dict<'py>(py: Python<'py>, s: AnticrossingState) -> PyResult<Bound<'py, PyDict>> {
+    Ok(crate::pydict!(py, {
+        "rho" => cmatrix(py, &s.rho),
+        "fluorescence" => s.fluorescence,
+        "polarisation" => s.polarisation,
+        "polarisation_zero" => s.polarisation_zero,
+        "harmonics" => s.harmonics,
+    }))
+}
+
+/// The NV electron in its optical cycle (the seven levels of `OpticalNv`)
+/// with its nitrogen (`"15N"` or `"14N"`, literature couplings in both
+/// triplets) and optionally one ¹³C (`carbon = (ground tensor, excited
+/// tensor)`, Hz), full hyperfine tensors, near the level anticrossings.
+/// `nitrogen_ground` and `nitrogen_excited` replace the nitrogen's tensors
+/// (3 × 3, Hz); `rates` is `"tetienne"` (default), `"gupta"` or five rates;
+/// `nuclear_relaxation` is `Γ_n` (1/s). A microwave of `frequency` (Hz)
+/// and Rabi frequency `rabi` (Hz) stays in the laboratory frame: its
+/// periodic steady state is solved over its harmonics (Floquet).
+#[pyclass(name = "NuclearOpticalNv", module = "metatron_qso", frozen)]
+pub struct PyNuclearOpticalNv {
+    inner: NuclearOpticalNv,
+}
+
+#[pymethods]
+impl PyNuclearOpticalNv {
+    #[new]
+    #[pyo3(signature = (
+        field = [0.0, 0.0, 0.0], nitrogen = "15N", carbon = None, rates = None,
+        nuclear_relaxation = 0.0, dephasing = 2e5, spin_lattice = 1e3, collection = 0.01,
+        nitrogen_ground = None, nitrogen_excited = None,
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        field: [f64; 3],
+        nitrogen: &str,
+        carbon: Option<([[f64; 3]; 3], [[f64; 3]; 3])>,
+        rates: Option<Bound<'_, PyAny>>,
+        nuclear_relaxation: f64,
+        dephasing: f64,
+        spin_lattice: f64,
+        collection: f64,
+        nitrogen_ground: Option<[[f64; 3]; 3]>,
+        nitrogen_excited: Option<[[f64; 3]; 3]>,
+    ) -> PyResult<Self> {
+        let mut n = match nitrogen {
+            "15N" | "N15" => NuclearSpin::nitrogen_15(),
+            "14N" | "N14" => NuclearSpin::nitrogen_14(),
+            _ => {
+                return Err(invalid(format!(
+                    "nitrogen: \"15N\" or \"14N\", not {nitrogen:?}"
+                )));
+            }
+        };
+        if let Some(t) = nitrogen_ground {
+            n.ground = t;
+        }
+        if let Some(t) = nitrogen_excited {
+            n.excited = t;
+        }
+        let mut inner = NuclearOpticalNv::new(field, n);
+        if let Some((g, e)) = carbon {
+            inner.nuclei.push(NuclearSpin::carbon_13(g, e));
+        }
+        inner.electron.rates = named_rates(rates.as_ref())?;
+        inner.nuclear_relaxation = nuclear_relaxation;
+        inner.electron.dephasing = dephasing;
+        inner.electron.spin_lattice = spin_lattice;
+        inner.electron.collection = collection;
+        inner.validate().raise()?;
+        Ok(Self { inner })
+    }
+
+    #[getter]
+    fn field(&self) -> [f64; 3] {
+        self.inner.electron.field
+    }
+
+    /// The model's dimension: 7 electron levels times the nuclei.
+    #[getter]
+    fn dimension(&self) -> usize {
+        self.inner.dimension()
+    }
+
+    /// `H/h` of the ground triplet with the nuclei (Hz; electron `+1, 0,
+    /// −1` major, then the nuclei, `m` descending).
+    fn ground_hamiltonian<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<C64>> {
+        cmatrix(py, &self.inner.ground_hamiltonian())
+    }
+
+    /// `H/h` of the excited triplet with the nuclei (Hz).
+    fn excited_hamiltonian<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<C64>> {
+        cmatrix(py, &self.inner.excited_hamiltonian())
+    }
+
+    /// Energies (Hz, ascending) and eigenvectors of the ground triplet with
+    /// the nuclei.
+    fn ground_levels<'py>(&self, py: Python<'py>) -> PyResult<Levels<'py>> {
+        let (e, v) = self.inner.ground_levels().raise()?;
+        Ok((real_array(py, e), cmatrix(py, &v)))
+    }
+
+    /// Energies and eigenvectors of the excited triplet with the nuclei.
+    fn excited_levels<'py>(&self, py: Python<'py>) -> PyResult<Levels<'py>> {
+        let (e, v) = self.inner.excited_levels().raise()?;
+        Ok((real_array(py, e), cmatrix(py, &v)))
+    }
+
+    /// The steady state under `pump` (1/s) and an optional microwave in the
+    /// laboratory frame (its period average): a dict with `rho`,
+    /// `fluorescence` (photons/s), `polarisation` (`⟨I_z⟩/I` of each
+    /// nucleus over all levels), `polarisation_zero` (within the ground
+    /// `m_s = 0`) and `harmonics`.
+    #[pyo3(signature = (pump, frequency = None, rabi = None))]
+    fn steady_state<'py>(
+        &self,
+        py: Python<'py>,
+        pump: f64,
+        frequency: Option<f64>,
+        rabi: Option<f64>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let drive = optical_drive(frequency, rabi)?;
+        let nv = &self.inner;
+        let s = py.detach(|| nv.steady_state(pump, drive)).raise()?;
+        state_dict(py, s)
+    }
+
+    /// `⟨I_z⟩/I` of nucleus `nucleus` within electron level `level` (ground
+    /// `+1, 0, −1` = 0, 1, 2; excited 3, 4, 5; singlet 6) of `rho`.
+    fn nuclear_polarisation_in(
+        &self,
+        rho: ComplexMatrixArg<'_>,
+        nucleus: usize,
+        level: usize,
+    ) -> PyResult<f64> {
+        let (d, data) = square_complex("rho", &rho)?;
+        if d != self.inner.dimension() {
+            return Err(invalid(format!(
+                "rho is {d} × {d}, the model {0} × {0}",
+                self.inner.dimension()
+            )));
+        }
+        let m = CMatrix::from_row_slice(d, d, &data);
+        self.inner
+            .nuclear_polarisation_in(&m, nucleus, level)
+            .raise()
+    }
+
+    /// The fluorescence and nuclear polarisations without a microwave at
+    /// each field (rows of `fields`, T): `(rates, polarisations)`.
+    fn field_scan<'py>(
+        &self,
+        py: Python<'py>,
+        fields: Vec<[f64; 3]>,
+        pump: f64,
+    ) -> PyResult<(Bound<'py, PyArray1<f64>>, Vec<Vec<f64>>)> {
+        let nv = &self.inner;
+        let scan = py.detach(|| nv.field_scan(&fields, pump)).raise()?;
+        let (rates, pols): (Vec<f64>, Vec<Vec<f64>>) = scan.into_iter().unzip();
+        Ok((real_array(py, rates), pols))
+    }
+
+    /// The time-averaged photon rate at each microwave frequency (Hz), the
+    /// microwave in the laboratory frame.
+    fn cw_odmr<'py>(
+        &self,
+        py: Python<'py>,
+        frequencies: RealArg<'_>,
+        rabi: f64,
+        pump: f64,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let (f, nv) = (real_vec(&frequencies), &self.inner);
+        Ok(real_array(
+            py,
+            py.detach(|| nv.cw_odmr(&f, rabi, pump)).raise()?,
+        ))
+    }
+
+    /// `(√R/|∂R/∂B|, R, ∂R/∂B)`: the shot-noise-limited sensitivity
+    /// (T/√Hz) of the fluorescence `R` to a field along `direction`,
+    /// without a microwave, by central differences of `step` (T).
+    #[pyo3(signature = (pump, direction = [0.0, 0.0, 1.0], step = 1e-6))]
+    fn field_sensitivity(
+        &self,
+        py: Python<'_>,
+        pump: f64,
+        direction: [f64; 3],
+        step: f64,
+    ) -> PyResult<(f64, f64, f64)> {
+        let nv = &self.inner;
+        py.detach(|| nv.field_sensitivity(pump, direction, step))
+            .raise()
+    }
+
+    fn to_json(&self) -> String {
+        self.inner.to_json()
+    }
+
+    #[staticmethod]
+    fn from_json(text: &str) -> PyResult<Self> {
+        Ok(Self {
+            inner: NuclearOpticalNv::from_json(text).raise()?,
+        })
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "NuclearOpticalNv(field={:?}, nuclei={}, dimension={})",
+            self.inner.electron.field,
+            self.inner.nuclei.len(),
+            self.inner.dimension()
+        )
+    }
+}
+
 /// The electron spin of an NV centre in its optical cycle: the
 /// seven-level model of Tetienne et al. (ground and excited triplets, a
 /// metastable singlet) in a field `field` (T, frame of the centre: z
@@ -1655,6 +1904,7 @@ fn py_axial_and_transverse(
 
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyOpticalNv>()?;
+    m.add_class::<PyNuclearOpticalNv>()?;
     m.add_class::<PyTwoLevelOdmr>()?;
     m.add_function(wrap_pyfunction!(py_ramsey_sensitivity, m)?)?;
     m.add_function(wrap_pyfunction!(py_echo_sensitivity, m)?)?;

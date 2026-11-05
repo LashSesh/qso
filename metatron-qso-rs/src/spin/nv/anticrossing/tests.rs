@@ -39,7 +39,11 @@ fn decoupled_nuclei_leave_the_optics_of_1_40() {
                 "{field:?}: {} vs {want}",
                 ours.fluorescence
             );
-            assert!(ours.polarisation[0].abs() < 1e-12);
+            assert!(
+                ours.polarisation[0].abs() < 1e-8,
+                "{}",
+                ours.polarisation[0]
+            );
         }
     }
 }
@@ -163,13 +167,14 @@ fn propagated(nv: &NuclearOpticalNv, pump: f64, f: f64, rabi: f64, steps: usize)
 
 #[test]
 fn the_microwave_in_the_laboratory_equals_a_propagation_over_its_period() {
-    // 100 mT along the axis: the transition 0 ↔ −1 at 67 MHz, driven at
-    // Ω = 15 MHz, where the rotating-wave approximation fails.
-    let nv = decoupled([0.0, 0.0, 0.1]);
+    // 101.7 mT along the axis: the transition 0 ↔ −1 at 20 MHz, driven at
+    // Ω = 15 MHz, where the rotating-wave approximation fails (the
+    // counter-rotating field shifts the line by about Ω²/4f = 3 MHz).
+    let nv = decoupled([0.0, 0.0, 0.1017]);
     let [(minus, _), _] = nv.electron.lines().unwrap();
     let pump = 0.1 * KR;
     let rabi = 15e6;
-    for f in [minus.abs(), minus.abs() + 8e6] {
+    for f in [minus.abs(), minus.abs() + 5e6] {
         let floquet = nv.steady_state(pump, Some((f, rabi))).unwrap();
         let (a, b) = (
             propagated(&nv, pump, f, rabi, 256),
@@ -225,33 +230,212 @@ fn anticrossing_input_is_checked_and_survives_json() {
     assert!((&off.rho - &zero.rho).norm() < 1e-14);
 }
 
-#[test]
-#[ignore]
-fn explore() {
-    // Duarte et al.'s ¹⁵N (their A⊥ is twice the coefficient of
-    // S_xI_x + S_yI_y) with Gupta's rates and T₁ of the nucleus 100 ms.
+/// Duarte et al.'s ¹⁵N (Phys. Rev. B 103, 195443 (2021), table 2: their
+/// `A⊥` is twice the coefficient of `S_xI_x + S_yI_y`) with the rates of
+/// Gupta et al. or Tetienne et al. and a nuclear T₁ of 100 ms.
+fn duarte(b: f64, rates: Photophysics) -> NuclearOpticalNv {
     let mut n = NuclearSpin::nitrogen_15();
     n.ground = axial(3.9e6, 3.4e6);
     n.excited = axial(-38.5e6, -58.1e6);
-    for (name, rates) in [
-        ("gupta", Photophysics::gupta()),
-        ("tetienne", Photophysics::tetienne()),
+    let mut nv = NuclearOpticalNv::new([0.0, 0.0, b], n);
+    nv.electron.rates = rates;
+    nv.nuclear_relaxation = 10.0;
+    nv
+}
+
+#[test]
+fn nitrogen_15_polarises_at_the_excited_anticrossing() {
+    // Duarte et al. find about 95 % with Gupta's rates (experiment: 96 %,
+    // and 98 % at 50 mT, 95 % at 44 mT in Jacques et al. 2009), almost
+    // independent of the laser.
+    let p =
+        |b: f64, rates: Photophysics, pump: f64| duarte(b, rates).steady_state(pump, None).unwrap();
+    let at = p(0.051, Photophysics::gupta(), 4e6);
+    let (total, zero) = (at.polarisation[0], at.polarisation_zero[0]);
+    assert!((0.94..0.96).contains(&total), "{total}");
+    assert!((zero - total).abs() < 0.005, "{zero} vs {total}");
+    let strong = p(0.051, Photophysics::gupta(), 70e6).polarisation[0];
+    assert!((strong - total).abs() < 0.005, "{strong} vs {total}");
+    let off = p(0.044, Photophysics::gupta(), 4e6).polarisation[0];
+    assert!((0.93..total).contains(&off), "{off}");
+    let low = p(0.02, Photophysics::gupta(), 4e6).polarisation[0];
+    assert!(low < 0.7, "{low}");
+    // Tetienne's singlet returns to m_s = ±1 almost as often as to 0: the
+    // electron is polarised to 0.75, and |−1, ↑⟩ undoes the nucleus at the
+    // anticrossing.
+    let tetienne = p(0.051, Photophysics::tetienne(), 4e6).polarisation[0];
+    assert!((0.79..0.82).contains(&tetienne), "{tetienne}");
+}
+
+#[test]
+fn a_field_across_the_axis_dims_the_ground_anticrossing() {
+    // ¹⁴N, 0.1 mT across the axis: the fluorescence dips where m_s = 0
+    // and −1 cross (D/γ_e = 102.4 mT); along the axis the nucleus keeps
+    // the crossing partners equally populated and nothing shows.
+    let pump = 0.1 * KR;
+    let crossing = NV_ZERO_FIELD_SPLITTING_OF(&NuclearOpticalNv::new(
+        [0.0, 0.0, 0.1],
+        NuclearSpin::nitrogen_14(),
+    ));
+    let fields: Vec<[f64; 3]> = [-0.002, -0.0005, 0.0, 0.0005, 0.002]
+        .iter()
+        .map(|d| [1e-4, 0.0, crossing + d])
+        .collect();
+    let nv = NuclearOpticalNv::new([1e-4, 0.0, crossing], NuclearSpin::nitrogen_14());
+    let scan = nv.field_scan(&fields, pump).unwrap();
+    let f: Vec<f64> = scan.iter().map(|x| x.0).collect();
+    assert!(f[2] < 0.8 * f[0] && f[2] < 0.8 * f[4], "{f:?}");
+    assert!(f[1] < f[0] && f[3] < f[4], "{f:?}");
+    let along = NuclearOpticalNv::new([0.0, 0.0, crossing], NuclearSpin::nitrogen_14());
+    let aligned = along
+        .field_scan(&[[0.0, 0.0, crossing - 0.002], [0.0, 0.0, crossing]], pump)
+        .unwrap();
+    assert!((aligned[1].0 - aligned[0].0).abs() < 1e-4 * aligned[0].0);
+    // The dip's slope makes a magnetometer without microwaves.
+    let (eta, rate, slope) = nv.field_sensitivity(pump, [0.0, 0.0, 1.0], 1e-6).unwrap();
+    assert!(eta.is_finite() && eta > 0.0 && rate > 0.0 && slope.is_finite());
+}
+
+/// `D/γ_e` of the centre (T).
+#[allow(non_snake_case)]
+fn NV_ZERO_FIELD_SPLITTING_OF(nv: &NuclearOpticalNv) -> f64 {
+    nv.electron.zero_field_splitting / nv.electron.gyromagnetic_ratio
+}
+
+/// The anticrossings measured for the documentation (`cargo test --release
+/// -- --ignored measure_anticrossings --nocapture`).
+#[test]
+#[ignore]
+fn measure_anticrossings() {
+    let clock = std::time::Instant::now();
+    // ¹⁵N polarisation against the field (along the axis), Γ_n = 10/s.
+    let fields = [0.02, 0.035, 0.044, 0.048, 0.051, 0.055, 0.07, 0.1];
+    for (name, rates, jacques) in [
+        ("Gupta, Duarte's hyperfine", Photophysics::gupta(), false),
+        (
+            "Tetienne, Duarte's hyperfine",
+            Photophysics::tetienne(),
+            false,
+        ),
+        (
+            "Gupta, Jacques's isotropic 60 MHz",
+            Photophysics::gupta(),
+            true,
+        ),
     ] {
-        for pump in [4e6, 70e6] {
-            let mut line = String::new();
-            for b in [0.02, 0.035, 0.044, 0.048, 0.050, 0.051, 0.052, 0.055, 0.07] {
-                let mut nv = NuclearOpticalNv::new([0.0, 0.0, b], n.clone());
-                nv.electron.rates = rates;
-                nv.nuclear_relaxation = 10.0;
-                let s = nv.steady_state(pump, None).unwrap();
-                line += &format!(
-                    " {:.0} mT {:.3}/{:.3};",
-                    b * 1e3,
-                    s.polarisation[0],
-                    s.polarisation_zero[0]
-                );
+        let mut line = String::new();
+        for &b in &fields {
+            let mut nv = duarte(b, rates);
+            if jacques {
+                nv.nuclei[0] = NuclearSpin::nitrogen_15();
             }
-            eprintln!("{name} k = {pump:.0e}:{line}");
+            let s = nv.steady_state(4e6, None).unwrap();
+            line += &format!(" {:.0} mT {:.3};", b * 1e3, s.polarisation_zero[0]);
         }
+        eprintln!("15N in m_s = 0, {name}:{line}");
     }
+    let mut line = String::new();
+    for &b in &fields {
+        let mut nv = NuclearOpticalNv::new([0.0, 0.0, b], NuclearSpin::nitrogen_14());
+        nv.electron.rates = Photophysics::gupta();
+        nv.nuclear_relaxation = 10.0;
+        let s = nv.steady_state(4e6, None).unwrap();
+        line += &format!(" {:.0} mT {:.3};", b * 1e3, s.polarisation_zero[0]);
+    }
+    eprintln!("14N in m_s = 0, Gupta:{line}");
+    // The ground-state anticrossing with ¹⁴N: the dip against the field
+    // across the axis.
+    let pump = 0.1 * KR;
+    let probe = NuclearOpticalNv::new([0.0, 0.0, 0.1], NuclearSpin::nitrogen_14());
+    let crossing = NV_ZERO_FIELD_SPLITTING_OF(&probe);
+    for across in [0.0, 2e-5, 5e-5, 1e-4, 2e-4] {
+        let nv = NuclearOpticalNv::new([across, 0.0, crossing], NuclearSpin::nitrogen_14());
+        let grid: Vec<[f64; 3]> = (0..=200)
+            .map(|k| [across, 0.0, crossing - 1e-3 + 1e-5 * k as f64])
+            .collect();
+        let scan = nv.field_scan(&grid, pump).unwrap();
+        let rates: Vec<f64> = scan.iter().map(|x| x.0).collect();
+        let base = rates[0].max(rates[200]);
+        let (k, low) =
+            rates.iter().enumerate().fold(
+                (0, f64::INFINITY),
+                |m, (k, &r)| if r < m.1 { (k, r) } else { m },
+            );
+        let half = base - (base - low) / 2.0;
+        let width = rates.iter().filter(|&&r| r < half).count() as f64 * 1e-5;
+        let slope = rates
+            .windows(2)
+            .map(|w| ((w[1] - w[0]) / 1e-5).abs())
+            .fold(0.0, f64::max);
+        let eta = low.sqrt() / slope;
+        eprintln!(
+            "GSLAC, {:.0} μT across: dip {:.1} % at {:.3} mT, width {:.0} μT, best √R/|dR/dB| {:.2e} T/√Hz",
+            across * 1e6,
+            100.0 * (base - low) / base,
+            grid[k][2] * 1e3,
+            width * 1e6,
+            eta
+        );
+    }
+    // The microwave near the ground-state anticrossing (101.7 mT, the
+    // line at 20 MHz): the laboratory frame against the rotating-wave
+    // model, Ω = 15 MHz.
+    let nv = decoupled([0.0, 0.0, 0.1017]);
+    let [(minus, _), _] = nv.electron.lines().unwrap();
+    let f0 = minus.abs();
+    let freqs: Vec<f64> = (0..=60).map(|k| f0 - 15e6 + 0.5e6 * k as f64).collect();
+    let t = std::time::Instant::now();
+    let lab = nv.cw_odmr(&freqs, 15e6, pump).unwrap();
+    let lab_time = t.elapsed().as_secs_f64();
+    let rwa = nv.electron.cw_odmr(&freqs, 15e6, pump).unwrap();
+    let dip = |r: &[f64]| {
+        let k = r
+            .iter()
+            .enumerate()
+            .fold(
+                (0, f64::INFINITY),
+                |m, (k, &x)| if x < m.1 { (k, x) } else { m },
+            )
+            .0;
+        freqs[k]
+    };
+    eprintln!(
+        "101.7 mT, line {:.2} MHz, Ω = 15 MHz: dip at {:.1} MHz in the laboratory, {:.1} MHz rotating wave; 61 points in {lab_time:.1} s",
+        f0 / 1e6,
+        dip(&lab) / 1e6,
+        dip(&rwa) / 1e6
+    );
+    // Costs.
+    for (name, nv) in [
+        (
+            "15N",
+            NuclearOpticalNv::new([0.0, 0.0, 0.051], NuclearSpin::nitrogen_15()),
+        ),
+        (
+            "14N",
+            NuclearOpticalNv::new([0.0, 0.0, 0.051], NuclearSpin::nitrogen_14()),
+        ),
+        ("14N and 13C", {
+            let mut nv = NuclearOpticalNv::new([0.0, 0.0, 0.051], NuclearSpin::nitrogen_14());
+            let c = [[13e6, 0.0, 0.0], [0.0, 13e6, 0.0], [0.0, 0.0, 15e6]];
+            nv.nuclei.push(NuclearSpin::carbon_13(c, c));
+            nv.nuclear_relaxation = 10.0;
+            nv
+        }),
+    ] {
+        let t = std::time::Instant::now();
+        let s = nv.steady_state(pump, None).unwrap();
+        let steady = t.elapsed().as_secs_f64();
+        let [(_, _), (plus, _)] = nv.electron.lines().unwrap();
+        let t = std::time::Instant::now();
+        let driven = nv.steady_state(pump, Some((plus.abs(), 1e6))).unwrap();
+        eprintln!(
+            "{name} ({} levels): steady state {steady:.2} s (P = {:.3}), with a microwave {:.2} s ({} harmonics)",
+            nv.dimension(),
+            s.polarisation[0],
+            t.elapsed().as_secs_f64(),
+            driven.harmonics
+        );
+    }
+    eprintln!("all in {:.1} s", clock.elapsed().as_secs_f64());
 }

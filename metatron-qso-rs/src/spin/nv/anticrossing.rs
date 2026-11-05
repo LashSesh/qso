@@ -197,6 +197,19 @@ impl NuclearOpticalNv {
         Ok(())
     }
 
+    /// From JSON (the fields of this struct), checked.
+    pub fn from_json(text: &str) -> Result<Self> {
+        let nv: NuclearOpticalNv = serde_json::from_str(text)
+            .map_err(|e| QsoError::invalid("json", format!("not a centre with nuclei: {e}")))?;
+        nv.validate()?;
+        Ok(nv)
+    }
+
+    /// As JSON.
+    pub fn to_json(&self) -> String {
+        serde_json::to_string_pretty(self).expect("models serialise")
+    }
+
     /// The dimension of the nuclei.
     fn nuclear_dimension(&self) -> usize {
         self.nuclei.iter().map(|n| n.levels).product()
