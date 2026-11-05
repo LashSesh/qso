@@ -200,6 +200,112 @@ the same input in ångström gives geometries 3·10⁻¹¹ apart (relative) and
 energies about 10⁻¹⁰ Ha apart, so the comparisons give PySCF QSO's
 positions in bohr.
 
+## Correlation beyond Hartree–Fock
+
+Full CI stops at 32 active orbitals and 2¹⁸ determinants. For whole
+molecules a `HartreeFock` gives three references, each with the lowest
+`frozen` orbitals kept doubly occupied (a frozen core):
+
+- **`mp2(frozen)`**: second-order Møller–Plesset energies in the
+  canonical orbitals of RHF or UHF, with their same-spin and
+  opposite-spin parts. ROHF of an open shell has no canonical orbitals
+  and is refused.
+- **`ccsd(frozen)`**: coupled-cluster singles and doubles. A closed shell
+  in restricted orbitals is solved in spatial orbitals; UHF and ROHF of
+  open shells in spin orbitals, with the equations of Stanton, Gauss,
+  Watts and Bartlett, which take the whole Fock matrix and so hold for
+  ROHF's orbitals too. The amplitudes start from MP2's and are iterated
+  with DIIS (`diis_space` amplitude vectors) until the energy changes by
+  less than `energy_tolerance` (10⁻¹⁰ Ha) and the amplitudes by less than
+  `amplitude_tolerance` (10⁻⁸, the norm of the step). The T1 diagnostic
+  of Lee and Taylor, `√(Σ (t_i^a)² / N)` over `N` correlated electrons,
+  flags references that CCSD describes poorly (above about 0.02).
+- **`ccsd_t(frozen)`**: CCSD and the perturbative triples (T) of
+  Raghavachari et al., for canonical references: RHF of a closed shell or
+  UHF. ROHF of an open shell would need semicanonical orbitals and is
+  refused.
+
+```python
+import metatron_qso as q
+
+water = q.Molecule("O 0 0 0.1173; H 0 0.7572 -0.4692; H 0 -0.7572 -0.4692")
+hf = q.hartree_fock(water, "cc-pvdz")
+pt = hf.mp2(frozen=1)
+cc = hf.ccsd_t(frozen=1)
+print(pt["correlation"], pt["same_spin"])              # −0.20167, −0.05072
+print(cc["ccsd"]["correlation"], cc["triples"])        # −0.21123, −0.00304
+print(cc["energy"], cc["ccsd"]["t1_diagnostic"])       # −76.24104, 0.0059
+oh = q.Molecule("O 0 0 0; H 0 0 0.97", multiplicity=2)
+uhf = q.hartree_fock(oh, "6-31g", unrestricted=True)
+print(uhf.ccsd_t()["triples"])                         # −0.000557, in spin orbitals
+rohf = q.hartree_fock(oh, "6-31g", restricted_open=True)
+print(rohf.ccsd()["correlation"])                      # −0.10015
+```
+
+The integrals are transformed to the molecular orbitals in full by four
+quarter transformations, each a matrix product. A closed shell keeps
+`m⁴` of them for `m` correlated orbitals (64 functions: 134 MB). Spin
+orbitals keep their whole antisymmetrised tensor and at most 100 of them
+are correlated (`MAX_SPIN_ORBITALS`; 50 spatial orbitals). Everything runs
+on one thread.
+
+The tests and the cross-validation compare with PySCF 2.14 (`mp.MP2`,
+`cc.CCSD`, `ccsd_t` and `uccsd_t`):
+
+- MP2, CCSD and (T) of water, LiH and N₂ in STO-3G, 6-31G and cc-pVDZ,
+  with and without frozen cores, UHF MP2, CCSD and (T) and ROHF CCSD of
+  OH (6-31G, cc-pVDZ), NH₂ (6-31G*) and triplet O₂ (cc-pVDZ, two frozen
+  orbitals) agree to 2.3·10⁻¹⁰ Ha, the T1 diagnostics of the closed
+  shells to 3.4·10⁻⁹ (the tests hold them to 10⁻⁸).
+- The cross-validation adds water (6-31G*), NH₃ and CO (cc-pVDZ), HF
+  (6-31G*), HCl (6-31G, five frozen orbitals) and, in UHF and ROHF,
+  triplet CH₂ and NO (6-31G): the largest difference is 2.1·10⁻¹⁰ Ha.
+  MP2 depends on the orbitals at first order: PySCF's UHF of NO stops
+  unconverged after its default 50 cycles, and its MP2 is then 7·10⁻⁹ Ha
+  off, so the comparison lets it run to 10⁻¹⁰ in the gradient.
+- CCSD is full CI for two electrons (H₂ in 6-31G and cc-pVDZ, HeH⁺) to
+  10⁻⁹ Ha, from RHF and UHF, and (T) vanishes there.
+- Two N₂ molecules 100 Å apart (STO-3G) have twice the correlation
+  energy of one to 10⁻⁹ Ha in MP2 and CCSD and to 10⁻¹⁰ in (T) (size
+  consistency).
+- The spatial and spin-orbital equations give the same CCSD and (T) for
+  closed shells, and UHF of a closed shell gives RHF's.
+- The first CCSD energy, from the MP2 amplitudes, is the MP2 energy.
+
+`qso scf` takes `--mp2`, `--ccsd` and `--ccsd-t`, with `--frozen`:
+
+```text
+$ qso scf --atoms "O 0 0 0.1173; H 0 0.7572 -0.4692; H 0 -0.7572 -0.4692" --basis cc-pvdz --frozen 1 --mp2 --ccsd-t
+24 basis functions, 5 + 5 electrons
+RHF   -76.0267720534  (12 iterations, <S²> = 0.000000)
+MP2   -76.2284380332  (correlation -0.2016659798: same spin -0.0507168938, opposite spin -0.1509490859)
+CCSD  -76.2380047126  (correlation -0.2112326592, 13 iterations, T1 diagnostic 0.0059)
+CCSD(T)   -76.2410412034  (triples -0.0030364908)
+```
+
+In Rust the functions take the integrals beside the Hartree–Fock result:
+
+```rust
+use metatron_qso::chemistry::cc::{CcOptions, ccsd, ccsd_t, mp2};
+use metatron_qso::chemistry::integrals::{AoIntegrals, Basis, Molecule};
+use metatron_qso::chemistry::scf::{ScfOptions, rhf, rohf};
+
+fn main() -> metatron_qso::Result<()> {
+    let water = Molecule::from_atoms("O 0 0 0.1173; H 0 0.7572 -0.4692; H 0 -0.7572 -0.4692", 0, 1)?;
+    let ints = AoIntegrals::compute(&water, Basis::CcPvdz)?;
+    let hf = rhf(&water, &ints, &ScfOptions::default())?;
+    let pt = mp2(&hf, &ints, 1)?;
+    let cc = ccsd_t(&hf, &ints, 1, &CcOptions::default())?;
+    println!("{} {} {}", pt.correlation, cc.ccsd.correlation, cc.triples);
+    let oh = Molecule::from_atoms("O 0 0 0; H 0 0 0.97", 0, 2)?;
+    let ints = AoIntegrals::compute(&oh, Basis::SixThirtyOneG)?;
+    let ro = rohf(&oh, &ints, &ScfOptions::default())?;
+    let open = ccsd(&ro, &ints, 0, &CcOptions::default())?;
+    assert!(open.spin_orbitals);
+    Ok(())
+}
+```
+
 ## UCCSD, k-UpCCGSD and ADAPT-VQE
 
 An excitation `T` moves electrons between spin orbitals, and

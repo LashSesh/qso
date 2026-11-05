@@ -3,6 +3,7 @@
 
 use metatron_qso::C64;
 use metatron_qso::chemistry::adapt::{AdaptOptions, adapt_vqe_molecule};
+use metatron_qso::chemistry::cc::{self, CcOptions, Ccsd};
 use metatron_qso::chemistry::{
     AoIntegrals, Basis, FermionOperator, Guess, Harmonics, Mapping, MolecularIntegrals, Molecule,
     QubitEncoding, ScfOptions, ScfResult, k_upccgsd, rhf, rohf, uccsd, uhf,
@@ -720,6 +721,90 @@ impl PyHartreeFock {
             .map(|inner| PyMolecularIntegrals { inner })
     }
 
+    /// Second-order Møller–Plesset energies in the canonical orbitals of
+    /// RHF or UHF, the lowest `frozen` orbitals frozen: a dict with
+    /// `correlation`, `energy`, `same_spin` and `opposite_spin`.
+    #[pyo3(signature = (frozen = 0))]
+    fn mp2<'py>(&self, py: Python<'py>, frozen: usize) -> PyResult<Bound<'py, PyDict>> {
+        let ints = &self.integrals.get().inner;
+        let r = py.detach(|| cc::mp2(&self.inner, ints, frozen)).raise()?;
+        Ok(pydict!(py, {
+            "correlation" => r.correlation,
+            "energy" => r.energy,
+            "same_spin" => r.same_spin,
+            "opposite_spin" => r.opposite_spin,
+        }))
+    }
+
+    /// CCSD in these orbitals, the lowest `frozen` frozen: in spatial
+    /// orbitals for a closed shell, in spin orbitals for UHF and open-shell
+    /// ROHF. A dict with `correlation`, `energy`, `iterations`,
+    /// `t1_diagnostic` and `spin_orbitals`.
+    #[pyo3(signature = (
+        frozen = 0,
+        max_iterations = 200,
+        energy_tolerance = 1e-10,
+        amplitude_tolerance = 1e-8,
+        diis_space = 8,
+    ))]
+    fn ccsd<'py>(
+        &self,
+        py: Python<'py>,
+        frozen: usize,
+        max_iterations: usize,
+        energy_tolerance: f64,
+        amplitude_tolerance: f64,
+        diis_space: usize,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let options = cc_options(
+            max_iterations,
+            energy_tolerance,
+            amplitude_tolerance,
+            diis_space,
+        );
+        let ints = &self.integrals.get().inner;
+        let r = py
+            .detach(|| cc::ccsd(&self.inner, ints, frozen, &options))
+            .raise()?;
+        ccsd_dict(py, &r)
+    }
+
+    /// CCSD and its perturbative triples (T) for canonical references (RHF
+    /// of a closed shell, UHF): a dict with `ccsd` (as from `ccsd`),
+    /// `triples` and `energy`.
+    #[pyo3(signature = (
+        frozen = 0,
+        max_iterations = 200,
+        energy_tolerance = 1e-10,
+        amplitude_tolerance = 1e-8,
+        diis_space = 8,
+    ))]
+    fn ccsd_t<'py>(
+        &self,
+        py: Python<'py>,
+        frozen: usize,
+        max_iterations: usize,
+        energy_tolerance: f64,
+        amplitude_tolerance: f64,
+        diis_space: usize,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let options = cc_options(
+            max_iterations,
+            energy_tolerance,
+            amplitude_tolerance,
+            diis_space,
+        );
+        let ints = &self.integrals.get().inner;
+        let r = py
+            .detach(|| cc::ccsd_t(&self.inner, ints, frozen, &options))
+            .raise()?;
+        Ok(pydict!(py, {
+            "ccsd" => ccsd_dict(py, &r.ccsd)?,
+            "triples" => r.triples,
+            "energy" => r.energy,
+        }))
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "HartreeFock(energy={:.10}, restricted={}, iterations={})",
@@ -728,6 +813,30 @@ impl PyHartreeFock {
             self.inner.iterations
         )
     }
+}
+
+fn cc_options(
+    max_iterations: usize,
+    energy_tolerance: f64,
+    amplitude_tolerance: f64,
+    diis_space: usize,
+) -> CcOptions {
+    let mut options = CcOptions::default();
+    options.max_iterations = max_iterations;
+    options.energy_tolerance = energy_tolerance;
+    options.amplitude_tolerance = amplitude_tolerance;
+    options.diis_space = diis_space;
+    options
+}
+
+fn ccsd_dict<'py>(py: Python<'py>, r: &Ccsd) -> PyResult<Bound<'py, PyDict>> {
+    Ok(pydict!(py, {
+        "correlation" => r.correlation,
+        "energy" => r.energy,
+        "iterations" => r.iterations,
+        "t1_diagnostic" => r.t1_diagnostic,
+        "spin_orbitals" => r.spin_orbitals,
+    }))
 }
 
 fn parse_harmonics(name: &str) -> PyResult<Harmonics> {

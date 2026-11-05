@@ -341,6 +341,32 @@ fn chemistry_and_dynamics() {
         "--restricted-open",
     ]);
     assert_eq!(o2["method"], "ROHF");
+    // PySCF 2.14: water in STO-3G with a frozen core.
+    let water = qso(&[
+        "scf",
+        "--atoms",
+        "O 0 0 0.1173; H 0 0.7572 -0.4692; H 0 -0.7572 -0.4692",
+        "--frozen",
+        "1",
+        "--mp2",
+        "--ccsd-t",
+    ]);
+    close(f(&water["mp2"]["correlation"]), -0.03544594119987926, 1e-8);
+    close(f(&water["ccsd"]["correlation"]), -0.04936022397391921, 1e-8);
+    close(f(&water["ccsd_t"]["triples"]), -6.748571270771238e-05, 1e-8);
+    let oh = qso(&[
+        "scf",
+        "--atoms",
+        "O 0 0 0; H 0 0 0.97",
+        "--multiplicity",
+        "2",
+        "--basis",
+        "6-31g",
+        "--restricted-open",
+        "--ccsd",
+    ]);
+    close(f(&oh["ccsd"]["correlation"]), -0.10014818757154079, 1e-8);
+    assert_eq!(oh["ccsd"]["spin_orbitals"], true);
     let hcl = qso(&[
         "scf",
         "--atoms",

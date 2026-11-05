@@ -2018,6 +2018,27 @@ class AoIntegrals:
     @property
     def angular_momenta(self) -> list[int]: ...
 
+@type_check_only
+class Mp2Result(TypedDict):
+    correlation: float
+    energy: float
+    same_spin: float
+    opposite_spin: float
+
+@type_check_only
+class CcsdResult(TypedDict):
+    correlation: float
+    energy: float
+    iterations: int
+    t1_diagnostic: float
+    spin_orbitals: bool
+
+@type_check_only
+class CcsdTResult(TypedDict):
+    ccsd: CcsdResult
+    triples: float
+    energy: float
+
 @final
 class HartreeFock:
     @property
@@ -2042,6 +2063,23 @@ class HartreeFock:
     def molecular_integrals(
         self, frozen: int = 0, active: Optional[int] = None
     ) -> MolecularIntegrals: ...
+    def mp2(self, frozen: int = 0) -> Mp2Result: ...
+    def ccsd(
+        self,
+        frozen: int = 0,
+        max_iterations: int = 200,
+        energy_tolerance: float = 1e-10,
+        amplitude_tolerance: float = 1e-8,
+        diis_space: int = 8,
+    ) -> CcsdResult: ...
+    def ccsd_t(
+        self,
+        frozen: int = 0,
+        max_iterations: int = 200,
+        energy_tolerance: float = 1e-10,
+        amplitude_tolerance: float = 1e-8,
+        diis_space: int = 8,
+    ) -> CcsdTResult: ...
 
 def hartree_fock(
     molecule: Molecule,

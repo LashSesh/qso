@@ -21,7 +21,7 @@ matrices, and it mitigates their errors: readout mitigation, zero-noise
 extrapolation, probabilistic error cancellation and Pauli twirling, with a
 standard error on every estimate. For chemistry and physics it computes
 Hartree–Fock from a molecule's geometry (STO-3G, 6-31G, 6-31G* and
-cc-pVDZ, hydrogen to argon) or reads FCIDUMP files, maps the molecules to qubits, solves them with UCCSD and
+cc-pVDZ, hydrogen to argon), with MP2, CCSD and CCSD(T) on top, or reads FCIDUMP files, maps the molecules to qubits, solves them with UCCSD and
 ADAPT-VQE against full CI, finds excited states, builds Trotter–Suzuki
 circuits with rigorous error bounds, and estimates amplitudes with
 Heisenberg-limited scaling. It also simulates continuous- and discrete-time quantum walks on
@@ -80,7 +80,7 @@ or by the benchmark report you can run yourself.
 | **Algorithms** | VQE with seeded parallel restarts; QAOA for weighted MaxCut (fast diagonal simulation, exact optimum by enumeration, INTERP layer-wise initialisation); Grover search with any number of marked items; QFT; phase estimation; variational classifier with data re-uploading; graph classifier with trainable QAOA-type layers |
 | **Excited states and geometry** | VQD and SSVQE; exact state derivatives, quantum Fisher information, quantum natural gradient; variational imaginary-time evolution |
 | **Hamiltonian simulation** | Pauli rotations for any string; Trotter–Suzuki circuits of order 1, 2, 4, 6, … with rigorous error bounds (nested commutators of the step's error, computed in the Pauli algebra, for every order, with a remainder over the terms that do not commute; the commutator bounds of Childs et al. for orders 1 and 2), a bound on the error averaged over states, and the steps for a target error; qDRIFT with its error bound |
-| **Electronic structure** | Fermionic operators with normal ordering; Jordan–Wigner, parity (with two-qubit reduction) and Bravyi–Kitaev mappings; Gaussian integrals over shells up to g, spherical or Cartesian, with Schwarz screening (STO-3G, 6-31G, 6-31G*, cc-pVDZ; H to Ar), restricted, unrestricted and restricted open-shell Hartree–Fock with DIIS, frozen-core active spaces (also of open shells); molecular integrals from FCIDUMP files (H₂, LiH, BeH₂ bundled with PySCF reference energies); Hartree–Fock states; full CI; UCCSD, k-UpCCGSD and ADAPT-VQE |
+| **Electronic structure** | Fermionic operators with normal ordering; Jordan–Wigner, parity (with two-qubit reduction) and Bravyi–Kitaev mappings; Gaussian integrals over shells up to g, spherical or Cartesian, with Schwarz screening (STO-3G, 6-31G, 6-31G*, cc-pVDZ; H to Ar), restricted, unrestricted and restricted open-shell Hartree–Fock with DIIS, frozen-core active spaces (also of open shells); MP2, CCSD (spatial orbitals for closed shells, spin orbitals for UHF and ROHF) and CCSD(T) with frozen cores; molecular integrals from FCIDUMP files (H₂, LiH, BeH₂ bundled with PySCF reference energies); Hartree–Fock states; full CI; UCCSD, k-UpCCGSD and ADAPT-VQE |
 | **Optimisation and estimation** | QUBO and Ising problems with exact enumeration; QAOA for any diagonal cost with X, XY (Hamming-weight conserving) and warm-start mixers; canonical, iterative and maximum-likelihood amplitude estimation |
 | **Models** | Transverse-field Ising, XXZ Heisenberg, MaxCut cost operator, H₂ / STO-3G (2 qubits, with full-CI reference), any molecule given as an FCIDUMP file |
 | **Optimisers** | L-BFGS with strong-Wolfe line search, Adam, gradient descent with momentum, Nelder–Mead, SPSA |
@@ -147,6 +147,9 @@ or by the benchmark report you can run yourself.
 | Hartree–Fock of H₂O from its geometry (6-31G), and full CI with a frozen core in 8 orbitals | −75.98397447 / −76.02472563 Ha | PySCF RHF and CASCI, to 10⁻¹⁰ / 10⁻⁹ Ha |
 | Unrestricted Hartree–Fock of OH (6-31G) | −75.36316825 Ha, ⟨S²⟩ = 0.75377 | PySCF UHF, to 10⁻¹⁰ Ha |
 | Hartree–Fock with d functions: H₂O / HCl / H₂S (cc-pVDZ); ROHF of triplet O₂ (cc-pVDZ) and CASCI in its orbitals (12 electrons, 8 orbitals) | −76.02677205 / −460.08944519 / −398.69453740; −149.60808447, −149.68777966 Ha | PySCF RHF, ROHF and CASCI, to 10⁻⁹ Ha |
+| MP2, CCSD and (T) correlation of H₂O in cc-pVDZ with a frozen core | −0.20166598 / −0.21123266 / −0.00303649 Ha | PySCF `MP2`, `CCSD`, `ccsd_t`, to 10⁻⁸ Ha (measured 2.3·10⁻¹⁰ over 36 closed- and open-shell cases, 2.1·10⁻¹⁰ over 9 more in the cross-validation) |
+| UHF CCSD and (T), ROHF CCSD of OH (6-31G) | −0.09882769, −0.00055750; −0.10014819 Ha | PySCF `UCCSD`, `uccsd_t`, to 10⁻⁸ Ha |
+| CCSD of two electrons (H₂, HeH⁺) | equal to full CI | to 10⁻⁹ Ha, (T) vanishing |
 | Gaussian integrals with d shells (6-31G*, cc-pVDZ, spherical and Cartesian) of H₂O, NH₃, CO, F₂, HCl, H₂S, SiH₄ and NaF; f and g shells in a custom basis | every integral to 2.6·10⁻¹³; f and g: PySCF's fingerprints to 10⁻¹⁰ | PySCF 2.14 |
 | LiH on 10 qubits: UCCSD (92 parameters) / ADAPT-VQE (30 operators), error vs. full CI | 1.1·10⁻⁵ / 1.1·10⁻⁵ Ha | chemical accuracy 1.6·10⁻³ Ha |
 | VQD, all four levels of H₂ (Sz = 0) | equal to full CI to 10⁻⁶ Ha | PySCF full CI |
@@ -449,7 +452,7 @@ machine-readable output; `qso <command> --help` lists all options.
 | `qasm FILE` | Run an OpenQASM 2 or 3 program and sample its bits, or convert it; Clifford programs beyond 34 qubits on the stabilizer simulator | `--shots`, `--seed`, `--export qasm2\|qasm3`, `--stabilizer`, `--mps`, `--max-bond N`, `--single`, `--noise p1,p2`, `--device FILE`, `--trajectories N` |
 | `qec` | Repetition, surface, colour or bivariate bicycle code memory experiment, or a Stim circuit file: logical error rate with union-find, matching, correlated matching or BP+OSD decoding; optionally the circuit distance | `--code surface\|repetition\|color\|bb`, `--basis z\|x`, `--decoder union-find\|matching\|correlated-matching\|bposd`, `--window`, `--commit`, `--parallel`, `--buffer`, `--schedule greedy\|bicycle\|0,1,2,3,4,5`, `--circuit-distance`, `--max-seconds`, `--symmetry`, `--distance 3,5,7`, `--rounds`, `--p 0.001,0.01`, `--shots`, `--stim FILE`, `--circuit FILE` |
 | `estimate FILE` | ⟨H⟩ with standard error, optionally mitigated | `--observable`, `--shots`, `--device`, `--mitigate-readout`, `--zne 1,3,5`, `--pec N` |
-| `scf` | Hartree–Fock of a molecule from its geometry, full CI in an active space, FCIDUMP output | `--atoms`, `--basis`, `--charge`, `--multiplicity`, `--unrestricted`, `--frozen`, `--active`, `--fci`, `--fcidump` |
+| `scf` | Hartree–Fock of a molecule from its geometry, MP2, CCSD and CCSD(T), full CI in an active space, FCIDUMP output | `--atoms`, `--basis`, `--charge`, `--multiplicity`, `--unrestricted`, `--restricted-open`, `--frozen`, `--active`, `--fci`, `--mp2`, `--ccsd`, `--ccsd-t`, `--fcidump` |
 | `molecule FILE` | Qubit Hamiltonian, Hartree–Fock and full-CI energies of an FCIDUMP molecule, and a variational solution | `--mapping`, `--two-qubit-reduction`, `--method none\|uccsd\|upccgsd\|adapt`, `--roots` |
 | `trotter` | Trotter–Suzuki circuit for exp(−iHt) with its error bound | `--hamiltonian`, `--time`, `--steps`, `--order`, `--output FILE`, `--epsilon` |
 
@@ -569,7 +572,7 @@ metatron-qso-rs/            Rust library `metatron_qso` and the `qso` CLI
   src/algorithms/           gradients, ansätze, models, VQE, QAOA, Grover, QFT/QPE, classifiers,
                             excited states, state geometry, time evolution, QUBO/QAOA mixers,
                             amplitude estimation
-  src/chemistry/            fermionic operators, qubit mappings, Gaussian integrals, Hartree–Fock, FCIDUMP molecules, UCC ansätze, ADAPT-VQE
+  src/chemistry/            fermionic operators, qubit mappings, Gaussian integrals, Hartree–Fock, MP2 and coupled cluster, FCIDUMP molecules, UCC ansätze, ADAPT-VQE
   src/optimize/             L-BFGS, Adam, gradient descent, Nelder–Mead, SPSA
   src/graph/                graphs, generators, Metatron family, automorphisms, canonical forms, file I/O
   src/walks/                continuous- and discrete-time walks, quotients, state transfer, search, circuits

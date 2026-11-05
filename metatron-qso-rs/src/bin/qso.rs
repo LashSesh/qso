@@ -356,7 +356,8 @@ enum Command {
         seed: u64,
     },
     /// Hartree–Fock of a molecule from its geometry (STO-3G, 6-31G, 6-31G* or cc-pVDZ;
-    /// H to Ar), optionally full CI in an active space and an FCIDUMP file.
+    /// H to Ar), optionally MP2, CCSD or CCSD(T), full CI in an active space and an
+    /// FCIDUMP file.
     Scf {
         /// Atoms in ångström, e.g. "H 0 0 0; H 0 0 0.735".
         #[arg(long)]
@@ -380,7 +381,8 @@ enum Command {
         #[arg(long)]
         cartesian: bool,
         /// Doubly occupied orbitals folded into the core energy (with
-        /// --fci or --fcidump).
+        /// --fci or --fcidump) or left uncorrelated (with --mp2, --ccsd or
+        /// --ccsd-t).
         #[arg(long, default_value_t = 0)]
         frozen: usize,
         /// Orbitals kept after the frozen ones (default: all; with --fci or
@@ -393,6 +395,15 @@ enum Command {
         /// Full CI in the frozen-core active space.
         #[arg(long)]
         fci: bool,
+        /// Second-order Møller–Plesset energy (RHF or UHF).
+        #[arg(long)]
+        mp2: bool,
+        /// Coupled-cluster singles and doubles.
+        #[arg(long)]
+        ccsd: bool,
+        /// CCSD and its perturbative triples (RHF of a closed shell or UHF).
+        #[arg(long)]
+        ccsd_t: bool,
         /// Write the active-space Hamiltonian as an FCIDUMP file.
         #[arg(long)]
         fcidump: Option<std::path::PathBuf>,
@@ -1458,13 +1469,23 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             frozen,
             active,
             fci,
+            mp2,
+            ccsd,
+            ccsd_t,
             fcidump,
             max_iterations,
         } => {
-            if (*frozen > 0 || active.is_some()) && !*fci && fcidump.is_none() {
+            let correlated = *mp2 || *ccsd || *ccsd_t;
+            if active.is_some() && !*fci && fcidump.is_none() {
+                return Err(QsoError::invalid(
+                    "active",
+                    "--active chooses the space of --fci or --fcidump",
+                ));
+            }
+            if *frozen > 0 && !*fci && fcidump.is_none() && !correlated {
                 return Err(QsoError::invalid(
                     "frozen",
-                    "--frozen and --active choose the space of --fci or --fcidump",
+                    "--frozen applies to --fci, --fcidump, --mp2, --ccsd and --ccsd-t",
                 ));
             }
             let mol = Molecule::from_atoms(atoms, *charge, *multiplicity)?;
@@ -1514,6 +1535,49 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                     hf.s_squared()
                 ),
             ];
+            let mut mp2_json = Value::Null;
+            if *mp2 {
+                let r = metatron_qso::chemistry::mp2(&hf, &ints, *frozen)?;
+                lines.push(format!(
+                    "MP2   {:.10}  (correlation {:.10}: same spin {:.10}, opposite spin {:.10})",
+                    r.energy, r.correlation, r.same_spin, r.opposite_spin
+                ));
+                mp2_json = serde_json::to_value(&r)
+                    .map_err(|e| QsoError::invalid("mp2", e.to_string()))?;
+            }
+            let cc_options = metatron_qso::chemistry::CcOptions::default();
+            let ccsd_line = |r: &metatron_qso::chemistry::Ccsd| {
+                format!(
+                    "CCSD  {:.10}  (correlation {:.10}, {} iterations{}, T1 diagnostic {:.4})",
+                    r.energy,
+                    r.correlation,
+                    r.iterations,
+                    if r.spin_orbitals {
+                        " in spin orbitals"
+                    } else {
+                        ""
+                    },
+                    r.t1_diagnostic
+                )
+            };
+            let mut ccsd_json = Value::Null;
+            let mut ccsd_t_json = Value::Null;
+            if *ccsd_t {
+                let r = metatron_qso::chemistry::ccsd_t(&hf, &ints, *frozen, &cc_options)?;
+                lines.push(ccsd_line(&r.ccsd));
+                lines.push(format!(
+                    "CCSD(T)   {:.10}  (triples {:.10})",
+                    r.energy, r.triples
+                ));
+                ccsd_json = serde_json::to_value(&r.ccsd)
+                    .map_err(|e| QsoError::invalid("ccsd", e.to_string()))?;
+                ccsd_t_json = json!({"energy": r.energy, "triples": r.triples});
+            } else if *ccsd {
+                let r = metatron_qso::chemistry::ccsd(&hf, &ints, *frozen, &cc_options)?;
+                lines.push(ccsd_line(&r));
+                ccsd_json = serde_json::to_value(&r)
+                    .map_err(|e| QsoError::invalid("ccsd", e.to_string()))?;
+            }
             let mut fci_energy = Value::Null;
             if *fci || fcidump.is_some() {
                 let mo = hf.molecular_integrals(&ints, *frozen, *active)?;
@@ -1549,6 +1613,9 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                     "s_squared": hf.s_squared(),
                     "orbital_energies": hf.orbital_energies,
                     "fci": fci_energy,
+                    "mp2": mp2_json,
+                    "ccsd": ccsd_json,
+                    "ccsd_t": ccsd_t_json,
                 }),
                 lines.join("\n"),
             ))

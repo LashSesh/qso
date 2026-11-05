@@ -9,6 +9,7 @@ the rustdoc (`cargo doc -p metatron-qso-rs --open`).
             ┌─────── qso CLI ─── Python (PyO3) ─── WebAssembly ─┐
 chemistry   │ fermion operators · mappings · FCIDUMP · full CI · │
             │ UCCSD / k-UpCCGSD · ADAPT-VQE                      │
+            │ integrals · Hartree–Fock · MP2 · CCSD(T)           │
 algorithms  │ VQE · QAOA (+ mixers, QUBO) · Grover · QFT/QPE ·   │
             │ excited states · geometry · time evolution ·       │
             │ amplitude estimation · classifier · models         │
@@ -1026,6 +1027,31 @@ in the span of the encoded determinants by applying every Pauli term to
 each basis state and summing the images (single terms leave the sector,
 their sum does not). Up to 4096 determinants the matrix is diagonalised
 densely, beyond that the ground state comes from Lanczos.
+
+MP2 and coupled cluster (`chemistry/cc.rs`) work on the molecular-orbital
+integrals in full, from four quarter transformations: each reads the
+row-major tensor as a matrix, multiplies its last index by the orbital
+coefficients and moves it to the front, so the whole transformation is
+four matrix products. A closed shell in restricted orbitals is solved in
+spatial orbitals with the RCCSD equations in the intermediates of Koch et
+al. (PySCF's form), every other reference in spin orbitals with the
+equations of Stanton, Gauss, Watts and Bartlett, which carry the whole
+Fock matrix and so take ROHF's non-canonical orbitals. In spin orbitals
+the antisymmetrised integrals ⟨pq‖rs⟩ are kept once, with three blocks
+copied out as matrices (vvvv, oovv, vovv), and the costly terms are
+matrix products: the particle–particle ladder is `τ · ⟨ab‖ef⟩ᵀ` plus the
+hole–hole term `¼ (τ · ⟨mn‖ef⟩ᵀ)ᵀ τ` and the singles' corrections
+through `τ · ⟨am‖ef⟩`, so the four-virtual intermediate W_abef is never
+built; W_mbej is a product of reshaped amplitudes and integrals. Each
+Jacobi step divides the residual by the orbital-energy denominators
+(the diagonal of the Fock matrix for ROHF) and DIIS extrapolates from the
+last `diis_space` amplitude vectors with their changes as errors. The
+closed-shell (T) loops over every triple (i, j, k) of occupied orbitals
+and builds W from its six pair permutations, the particle term of each a
+matrix product over the virtual index d (the form of Rendell, Lee and
+Komornicki); the spin-orbital (T) loops over i < j < k, with the
+connected triples as matrix products and a < b < c summed with the
+disconnected part.
 
 ## State geometry (`algorithms/geometry.rs`)
 

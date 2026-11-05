@@ -143,21 +143,35 @@ pub struct CcsdT {
 // ---- orbitals, integrals and Fock matrices --------------------------------
 
 /// `(pq|rs)` over the columns of `c[0]` (p), `c[1]` (q), `c[2]` (r) and
-/// `c[3]` (s), row-major, by four quarter transformations, each a matrix
-/// product: the last index is transformed and moved to the front.
+/// `c[3]` (s), row-major, by four quarter transformations, each one or a
+/// few matrix products (nalgebra's blocked gemm) on contiguous blocks.
 fn transform(ints: &AoIntegrals, c: [&RMatrix; 4]) -> Vec<f64> {
     let n = ints.n_functions();
     let mut cur = ints.eri_tensor().to_vec();
     let mut dims = [n, n, n, n];
     for k in (0..4).rev() {
         let m = c[k].ncols();
-        let rest = dims[0] * dims[1] * dims[2];
-        let last = dims[3];
-        // The row-major (rest × last) tensor is the column-major (last ×
-        // rest) matrix W; Wᵀ C is column-major (rest × m): index p·rest + a.
-        let w = DMatrix::from_column_slice(last, rest, &cur);
-        cur = w.tr_mul(c[k]).as_slice().to_vec();
-        dims = [m, dims[0], dims[1], dims[2]];
+        let outer: usize = dims[..k].iter().product();
+        let inner: usize = dims[k + 1..].iter().product();
+        let len = dims[k];
+        let mut next = vec![0.0; outer * m * inner];
+        if inner == 1 {
+            // The row-major (outer × len) tensor is the column-major (len ×
+            // outer) matrix W; Cᵀ W is column-major (m × outer), the
+            // row-major (outer × m) tensor.
+            let w = nalgebra::DMatrixView::from_slice(&cur, len, outer);
+            next.copy_from_slice((c[k].transpose() * w).as_slice());
+        } else {
+            // Each row-major (len × inner) block is the column-major (inner
+            // × len) matrix B; B C is column-major (inner × m), the
+            // row-major (m × inner) block.
+            for (block, out) in cur.chunks(len * inner).zip(next.chunks_mut(m * inner)) {
+                let b = nalgebra::DMatrixView::from_slice(block, inner, len);
+                out.copy_from_slice((b * c[k]).as_slice());
+            }
+        }
+        dims[k] = m;
+        cur = next;
     }
     cur
 }
@@ -264,9 +278,11 @@ pub fn mp2(hf: &ScfResult, ints: &AoIntegrals, frozen: usize) -> Result<Mp2> {
     }
     let m = r.m;
     let e = |s: usize, p: usize| r.fock[s][(p, p)];
-    // Spin pairs: (α, α), (β, β), (α, β); a closed shell has α = β.
-    let pairs: &[(usize, usize)] = if r.closed_shell() {
-        &[(0, 0), (0, 1)]
+    // Spin pairs: (α, α), (β, β), (α, β). A closed shell has α = β, and
+    // its one set of (ia|jb) gives both parts.
+    let closed = r.closed_shell();
+    let pairs: &[(usize, usize)] = if closed {
+        &[(0, 1)]
     } else {
         &[(0, 0), (1, 1), (0, 1)]
     };
@@ -285,29 +301,27 @@ pub fn mp2(hf: &ScfResult, ints: &AoIntegrals, frozen: usize) -> Result<Mp2> {
         // (ia|jb), i a of spin s1 and j b of spin s2.
         let g = transform(ints, [&occ1, &vir1, &occ2, &vir2]);
         let at = |i: usize, a: usize, j: usize, b: usize| g[((i * v1 + a) * o2 + j) * v2 + b];
-        let mut sum = 0.0;
+        let (mut parallel, mut antiparallel) = (0.0, 0.0);
         for i in 0..o1 {
             for a in 0..v1 {
                 for j in 0..o2 {
                     for b in 0..v2 {
                         let d = e(s1, i) + e(s2, j) - e(s1, o1 + a) - e(s2, o2 + b);
                         let x = at(i, a, j, b);
-                        if s1 == s2 {
-                            // ½ Σ (ia|jb)[(ia|jb) − (ib|ja)] / D.
-                            sum += 0.5 * x * (x - at(i, b, j, a)) / d;
-                        } else {
-                            sum += x * x / d;
+                        if s1 == s2 || closed {
+                            // ½ Σ (ia|jb)[(ia|jb) − (ib|ja)] / D per spin.
+                            parallel += 0.5 * x * (x - at(i, b, j, a)) / d;
+                        }
+                        if s1 != s2 {
+                            antiparallel += x * x / d;
                         }
                     }
                 }
             }
         }
-        if s1 == s2 {
-            // A closed shell's β pairs equal its α pairs.
-            same += if r.closed_shell() { 2.0 * sum } else { sum };
-        } else {
-            opposite += sum;
-        }
+        // A closed shell's β pairs equal its α pairs.
+        same += if closed { 2.0 * parallel } else { parallel };
+        opposite += antiparallel;
     }
     Ok(Mp2 {
         correlation: same + opposite,
@@ -661,7 +675,7 @@ impl Closed {
                 }
             }
         }
-        // Wvvvv[a, b, c, d] as the (ab × cd) matrix.
+        // Wvvvv[a, b, c, d] as the (cd × ab) matrix.
         let mut wvvvv = DMatrix::<f64>::zeros(v * v, v * v);
         for a in 0..v {
             for b in 0..v {
@@ -671,17 +685,30 @@ impl Closed {
                         for k in 0..o {
                             x -= ovvv(k, d, a, c) * t1(k, b) + ovvv(k, c, b, d) * t1(k, a);
                         }
-                        wvvvv[(a * v + b, c * v + d)] = x;
+                        wvvvv[(c * v + d, a * v + b)] = x;
                     }
                 }
             }
         }
-        // Wvoov[a, k, i, c], Wvovo[a, k, c, i].
-        let mut wvoov = vec![0.0; v * o * o * v];
-        let mut wvovo = vec![0.0; v * o * v * o];
-        for a in 0..v {
-            for k in 0..o {
-                for i in 0..o {
+        // Wvoov[a, k, i, c] and Wvovo[a, k, c, i] as the (ia × kc) matrices
+        // A and B. Their parts over (l, d) are matrix products,
+        // A += Z₁ M₁ + Z₂ M₂ and B += Z₃ M₂, with M₁[ld, kc] = (ld|kc),
+        // M₂[ld, kc] = (lc|kd), Z₃[ia, ld] = −½ t_il^da − t_i^d t_l^a,
+        // Z₁ = Z₃ + t_il^ad and Z₂ = −½ t_il^ad.
+        let ov = o * v;
+        let m1 = DMatrix::from_fn(ov, ov, |ld, kc| ovov(ld / v, ld % v, kc / v, kc % v));
+        let m2 = DMatrix::from_fn(ov, ov, |ld, kc| ovov(ld / v, kc % v, kc / v, ld % v));
+        let z3 = DMatrix::from_fn(ov, ov, |ia, ld| {
+            let (i, a, l, d) = (ia / v, ia % v, ld / v, ld % v);
+            -0.5 * t2(i, l, d, a) - t1(i, d) * t1(l, a)
+        });
+        let z2 = DMatrix::from_fn(ov, ov, |ia, ld| -0.5 * t2(ia / v, ld / v, ia % v, ld % v));
+        let z1 = &z3 - 2.0 * &z2;
+        let mut wa = &z1 * &m1 + &z2 * &m2;
+        let mut wb = &z3 * &m2;
+        for i in 0..o {
+            for a in 0..v {
+                for k in 0..o {
                     for c in 0..v {
                         let mut x = ovvo(k, c, a, i);
                         let mut y = oovv(k, i, a, c);
@@ -692,53 +719,64 @@ impl Closed {
                         for l in 0..o {
                             x -= ovoo(k, c, l, i) * t1(l, a);
                             y -= ovoo(l, c, k, i) * t1(l, a);
-                            for d in 0..v {
-                                x -= 0.5 * ovov(l, d, k, c) * t2(i, l, d, a);
-                                x -= 0.5 * ovov(l, c, k, d) * t2(i, l, a, d);
-                                x -= ovov(l, d, k, c) * t1(i, d) * t1(l, a);
-                                x += ovov(l, d, k, c) * t2(i, l, a, d);
-                                y -= 0.5 * ovov(l, c, k, d) * t2(i, l, d, a);
-                                y -= ovov(l, c, k, d) * t1(i, d) * t1(l, a);
-                            }
                         }
-                        wvoov[((a * o + k) * o + i) * v + c] = x;
-                        wvovo[((a * o + k) * v + c) * o + i] = y;
+                        wa[(i * v + a, k * v + c)] += x;
+                        wb[(i * v + a, k * v + c)] += y;
                     }
                 }
             }
         }
-        let wvoov = |a: usize, k: usize, i: usize, c: usize| wvoov[((a * o + k) * o + i) * v + c];
-        let wvovo = |a: usize, k: usize, c: usize, i: usize| wvovo[((a * o + k) * v + c) * o + i];
+        // Σ_kc of 2 A t_kj^cb − B t_kj^cb − A t_kj^bc as the product
+        // P = (2A − B) T − A U, and Σ_kc B[ib, kc] t_kj^ac as Q = B U, with
+        // T[kc, jb] = t_kj^cb and U[kc, jb] = t_kj^bc.
+        let tm = DMatrix::from_fn(ov, ov, |kc, jb| t2(kc / v, jb / v, kc % v, jb % v));
+        let um = DMatrix::from_fn(ov, ov, |kc, jb| t2(kc / v, jb / v, jb % v, kc % v));
+        let pm = (2.0 * &wa - &wb) * &tm - &wa * &um;
+        let qm = &wb * &um;
+        // Y[i, a, b, c] = (ia|cb) − Σ_k (ki|bc) t_k^a and
+        // Z[i, a, j, k] = (ia|jk) + Σ_c (kc|ai) t_j^c.
+        let mut yv = vec![0.0; o * v * v * v];
+        for i in 0..o {
+            for a in 0..v {
+                for b in 0..v {
+                    for c in 0..v {
+                        let mut y = ovvv(i, a, c, b);
+                        for k in 0..o {
+                            y -= oovv(k, i, b, c) * t1(k, a);
+                        }
+                        yv[((i * v + a) * v + b) * v + c] = y;
+                    }
+                }
+            }
+        }
+        let mut zo = vec![0.0; o * v * o * o];
+        for i in 0..o {
+            for a in 0..v {
+                for j in 0..o {
+                    for k in 0..o {
+                        let mut y = ovoo(i, a, j, k);
+                        for c in 0..v {
+                            y += ovvo(k, c, a, i) * t1(j, c);
+                        }
+                        zo[((i * v + a) * o + j) * o + k] = y;
+                    }
+                }
+            }
+        }
         // T2: terms that are added with their (i ↔ j, a ↔ b) partner.
         let mut half = vec![0.0; o * o * v * v];
         for i in 0..o {
             for j in 0..o {
                 for a in 0..v {
                     for b in 0..v {
-                        let mut x = 0.0;
+                        let mut x = pm[(i * v + a, j * v + b)] - qm[(i * v + b, j * v + a)];
                         for c in 0..v {
-                            // (ia|cb) − Σ_k (ki|bc) t_k^a, times t_j^c.
-                            let mut y = ovvv(i, a, c, b);
-                            for k in 0..o {
-                                y -= oovv(k, i, b, c) * t1(k, a);
-                            }
-                            x += y * t1(j, c);
+                            x += yv[((i * v + a) * v + b) * v + c] * t1(j, c);
                             x += lvv[a * v + c] * t2(i, j, c, b);
                         }
                         for k in 0..o {
-                            // (ia|jk) + Σ_c (kc|ai) t_j^c, times t_k^b.
-                            let mut y = ovoo(i, a, j, k);
-                            for c in 0..v {
-                                y += ovvo(k, c, a, i) * t1(j, c);
-                            }
-                            x -= y * t1(k, b);
+                            x -= zo[((i * v + a) * o + j) * o + k] * t1(k, b);
                             x -= loo[k * o + i] * t2(k, j, a, b);
-                            for c in 0..v {
-                                x += 2.0 * wvoov(a, k, i, c) * t2(k, j, c, b);
-                                x -= wvovo(a, k, c, i) * t2(k, j, c, b);
-                                x -= wvoov(a, k, i, c) * t2(k, j, b, c);
-                                x -= wvovo(b, k, c, i) * t2(k, j, a, c);
-                            }
                         }
                         half[self.t2i(i, j, a, b)] = x;
                     }
@@ -756,7 +794,7 @@ impl Closed {
                 }
             }
         }
-        let ladder = &tau * wvvvv.transpose();
+        let ladder = &tau * &wvvvv;
         let mut r2 = vec![0.0; o * o * v * v];
         for i in 0..o {
             for j in 0..o {
@@ -1166,7 +1204,8 @@ impl Spin {
         // τ ⟨ab||ef⟩ᵀ − P(ab) Σ_m t_m^b Z[ij, am] + ¼ Xᵀ τ, with Z[ij, am] =
         // Σ_ef τ_ij^ef ⟨am||ef⟩; and Σ_mn τ_mn^ab W_mnij.
         let z = &tau_m * &self.vovv;
-        let mut ladder = &tau_m * self.vvvv.transpose() + 0.25 * xmn.transpose() * &tau_m;
+        // ⟨ab||ef⟩ = ⟨ef||ab⟩ (real orbitals): `vvvv` is its own transpose.
+        let mut ladder = &tau_m * &self.vvvv + 0.25 * xmn.transpose() * &tau_m;
         for ij in 0..o * o {
             for a in 0..v {
                 for b in 0..v {

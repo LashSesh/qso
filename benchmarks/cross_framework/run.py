@@ -979,9 +979,58 @@ def chemistry_vs_pyscf() -> dict:
         theirs_cas = cas.kernel()[0]
         ours_cas = ours.molecular_integrals(frozen=frozen, active=active).fci_energies()[0]
         energy_err = max(energy_err, abs(ours_cas - theirs_cas))
+    # MP2, CCSD and (T) on molecules the unit tests do not use (1.62):
+    # RHF closed shells, UHF and ROHF open shells, with frozen cores.
+    from pyscf import cc, mp
+    from pyscf.cc import ccsd_t, uccsd_t
+
+    correlation_err = 0.0
+    for atoms, mult, basis, kind, frozen in (
+        (water, 1, "6-31g*", "rhf", 1),
+        (ammonia, 1, "cc-pvdz", "rhf", 1),
+        ("C 0 0 0; O 0 0 1.128", 1, "cc-pvdz", "rhf", 2),
+        ("H 0 0 0; F 0 0 0.917", 1, "6-31g*", "rhf", 0),
+        ("H 0 0 0; Cl 0 0 1.2746", 1, "6-31g", "rhf", 5),
+        ("C 0 0 0.1; H 0 0.99 -0.5; H 0 -0.99 -0.5", 3, "6-31g", "uhf", 1),
+        ("N 0 0 0; O 0 0 1.151", 2, "6-31g", "uhf", 2),
+        ("C 0 0 0.1; H 0 0.99 -0.5; H 0 -0.99 -0.5", 3, "6-31g", "rohf", 1),
+        ("N 0 0 0; O 0 0 1.151", 2, "6-31g", "rohf", 2),
+    ):
+        m = q.Molecule(atoms, 0, mult)
+        mol = pyscf_molecule(m, basis)
+        mf = {"rhf": scf.RHF, "uhf": scf.UHF, "rohf": scf.ROHF}[kind](mol)
+        # PySCF's UHF of NO needs over a hundred cycles to reach the
+        # gradient; MP2 moves with the orbitals at first order (10⁻⁸ Ha at
+        # PySCF's default 50 cycles), the CC energies hardly.
+        mf.conv_tol = 1e-13
+        mf.conv_tol_grad = 1e-10
+        mf.max_cycle = 1000
+        mf.kernel()
+        assert mf.converged, (atoms, kind)
+        ours = q.hartree_fock(
+            m, basis, unrestricted=kind == "uhf", restricted_open=kind == "rohf",
+            energy_tolerance=1e-12, gradient_tolerance=1e-10,
+        )
+        energy_err = max(energy_err, abs(ours.energy - mf.e_tot))
+        pyscf_cc = cc.CCSD(mf).set(frozen=frozen or None, conv_tol=1e-12, conv_tol_normt=1e-10, max_cycle=200)
+        pyscf_cc.kernel()
+        if kind == "rohf":
+            mine = ours.ccsd(frozen)
+            correlation_err = max(correlation_err, abs(mine["correlation"] - pyscf_cc.e_corr))
+            continue
+        pt = mp.MP2(mf).set(frozen=frozen or None).kernel()[0]
+        triples = (ccsd_t if kind == "rhf" else uccsd_t).kernel(pyscf_cc, pyscf_cc.ao2mo(), verbose=0)
+        mine_t = ours.ccsd_t(frozen)
+        correlation_err = max(
+            correlation_err,
+            abs(ours.mp2(frozen)["correlation"] - pt),
+            abs(mine_t["ccsd"]["correlation"] - pyscf_cc.e_corr),
+            abs(mine_t["triples"] - triples),
+        )
     return {
         "integral_max_difference": integral_err,
         "energy_max_difference": energy_err,
+        "correlation_max_difference": correlation_err,
     }
 
 TOLERANCES = {
@@ -1019,6 +1068,9 @@ TOLERANCES = {
     # convergence of both SCF codes.
     "integral": 1e-12,
     "scf_energy": 1e-9,
+    # MP2, CCSD and (T) correlation energies: both CCSD codes converged to
+    # 10⁻¹⁰ in the energy (1.62's plan asks for 10⁻⁸ hartree).
+    "correlation_energy": 1e-8,
     # QAOA energy and gradient at 22–26 qubits, relative to |⟨C⟩|: double
     # precision against each other to rounding of 2^n-term sums; QSO's
     # single precision against double (measured up to 1.1·10⁻⁸ for the
@@ -1621,6 +1673,8 @@ def check(c: dict) -> list[str]:
         failures.append(f"integrals differ from PySCF by {chem['integral_max_difference']:.3g}")
     if not chem["energy_max_difference"] <= TOLERANCES["scf_energy"]:
         failures.append(f"Hartree–Fock or CASCI energies differ from PySCF by {chem['energy_max_difference']:.3g}")
+    if not chem["correlation_max_difference"] <= TOLERANCES["correlation_energy"]:
+        failures.append(f"MP2, CCSD or (T) energies differ from PySCF by {chem['correlation_max_difference']:.3g}")
     return failures
 
 
