@@ -687,8 +687,13 @@ remainder reaches are augmented whatever their order). `midpoint`
 predicts the midpoint and end with the start's references and remainder,
 then repeats the step with the predicted midpoint's references and the
 remainder at the three nodes until the end settles (`Step::converged`);
-`delay` repeats a step at a quarter when it does not settle, and checks
-steps whose remainder matters against their halves. Every transfer takes
+`delay` repeats a step at a quarter when it does not settle, checks
+steps whose remainder matters against their halves, and shortens them
+first where the remainder turns faster than they resolve
+(`resolved_step`: the reactants' coherences between eigenstates of their
+Hamiltonians above `1/(4h)`, which the quadratic and the halves alike
+would miss, bounded against the tolerance); the longest step and the
+work are kept over the delays of one evolution (`Pace`). Every transfer takes
 its source's trace off the product's first population: the deviations'
 traces are zero, but `C → A + B` would feed them into two products and
 let rounding grow.

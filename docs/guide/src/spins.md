@@ -560,7 +560,7 @@ cost follows: about four times the exponentials of a linear reaction with
 a partner held in its state (the example: 9 s against 2 s), more when the
 partner's amount changes, and steps that resolve the Larmor frequencies
 when both reactants carry transverse coherences in the laboratory frame
-(refused at millitesla fields by the limit on the work).
+(two spins ½ meeting at 10 mT: 20 ms in about 200 s).
 
 ## Long-lived states and transfer
 

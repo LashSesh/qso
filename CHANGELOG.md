@@ -19,14 +19,17 @@ All notable changes to this project are documented here. The format follows
   and every site keeps its relaxation. The quadratic source is written
   exactly as transfers with the partner's reference state inside the
   exponentials, a drift and a remainder; steps are predicted, corrected
-  until they settle and checked against their halves. SABRE whose complex
+  until they settle, checked against their halves and shortened where
+  the remainder turns faster than they resolve. SABRE whose complex
   keeps its hydrides through substrate exchange and swaps them with a
   hydrogen pool: the free ¹⁵N reaches 48.3 % after 60 s (1.50's fresh
   hydrides: 73.9 %), and 1.5 % when the pool is not renewed from the gas
-  (its singlet falls to 0.35). PHIP of a ¹³C substrate from a pool whose singlet decays at 2 s: −6.0 % on the product's ¹³C instead of −9.65 %. Equal to 1.50 with a partner
-  held in its state, to the equations written out, to molecules reacting
-  at random within their standard error, to the closed-form kinetics of
-  `A + B ⇌ C` and to a steady state found by Newton's method.
+  (its singlet falls to 0.35). PHIP of a ¹³C substrate from a pool whose
+  singlet decays at 2 s: −6.0 % on the product's ¹³C instead of −9.65 %.
+  Equal to 1.50 with a partner held in its state, to the equations
+  written out, to molecules reacting at random within their standard
+  error, to the closed-form kinetics of `A + B ⇌ C` and to a steady
+  state found by Newton's method.
 
 - **Interacting walkers on any symmetric graph** (1.58,
   `walks::GroupInteractingWalk`, Python `GroupInteractingWalk`): bosons,

@@ -6326,8 +6326,12 @@ Not done, and why:
   its reactants' states: molecules that met before and still carry
   correlations (geminate recombination, cage effects) are not modelled.
 - **Order zero only in the references.** Coherences of nonzero order in
-  both reactants (after a pulse during the reaction) stay in the
-  remainder; steps then resolve their frequencies.
+  both reactants (after a pulse during the reaction, or transverse
+  magnetisation in the laboratory frame) stay in the remainder, and steps
+  then resolve their frequencies: two spins ½ meeting at 10 mT take
+  about 200 s for 20 ms. Shifting the blocks' mean precession out of the
+  remainder's quadratic would spare the Larmor frequencies but not the
+  differences between isotopes.
 - **Third-order and spin-dependent chemistry**, as in 1.50.
 
 Measured (four cores, release build):
@@ -6380,6 +6384,49 @@ Jacobian has no eigenvalue with a positive real part) to 10⁻¹², and
 after 1000 s more still. Routes are checked (positions, species, spins
 used twice, isotopes, routes with `carried`, parahydrogen on a routed
 spin) and survive JSON.
+
+Review (independent, after delivery): the decomposition was found exact
+for any reference, the index arithmetic of the reduced states, the
+skeletons and the fresh spins right (spin 1, both frames, `2A → D` with
+one spin from both positions), the trace correction without effect on
+exact solutions, and the routes' checks, JSON and API compatible. An
+independent NumPy integration (RK4 at two steps) agreed with
+`Reactions.evolve` within its own error in seventeen cases: products
+with fresh thermal spins and routes out of order, pulses on both
+isotopes, `2A ⇌ D` with parahydrogen, spin 1 and heteronuclear spins at
+2 µT, `A + B → C + D` beside a reaction with two product sites,
+sweeps, relaxation, reactants absent or consumed, a rate of zero,
+maximally mixed starts. Findings, all fixed:
+
+- **A remainder that turns faster than the step was missed.** With
+  transverse coherences in both reactants in the laboratory frame from
+  about 2 mT, the remainder turns at the sum of their Larmor frequencies;
+  the quadratic through a step's three nodes and the comparison with two
+  half steps, which sample the same ends, agreed on a value without it:
+  the product's double quantum came out 3.4·10⁻⁸ instead of 1.35·10⁻³ at
+  10 mT, and heteronuclear zero and double quantum likewise. Steps whose
+  remainder matters are now shortened until the reactants' coherences
+  between eigenstates of their Hamiltonians that turn faster than the
+  step resolves (`h|E_a − E_b| > 1/4`) can no longer exceed the tolerance
+  in it, and refused at once when the steps that takes exceed the work
+  limit; the case above now agrees with the rotating frame to 2·10⁻⁸, the
+  heteronuclear one with the reference to 7·10⁻⁸, and a test compares
+  both frames at 3 mT. A first attempt that took the frequency from
+  `‖ż‖/‖z‖` mistook the slow change of `z` within a step for a frequency
+  of `2/h` and shortened steps without end.
+- **The work.** The estimate before the first step does not foresee the
+  shortened steps, so a run could be refused after its work; the
+  shortened steps are now projected and refused at once. The check while
+  running applied to reactions without bilinear sources too, with a
+  message about them; it applies to bilinear sources only. The longest
+  step started again at every delay (every step of a sweep); it is now
+  kept over the delays of one evolution.
+- **Smaller ones**: the corrections converge linearly, not by squaring
+  the error (doc), the accuracy over many steps (10⁻⁷ to 10⁻⁶ of the
+  deviation with coherences in both reactants, against 10⁻⁹ per step) and
+  the cost (about four times a linear reaction with a partner held in its
+  state, eight with one whose amount changes) stated, and two long lines
+  of the docs wrapped.
 
 ### 1.60 — NV centres at their level anticrossings (M)
 
