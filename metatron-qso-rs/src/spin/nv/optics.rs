@@ -123,15 +123,15 @@ impl Default for Photophysics {
 
 /// A Lindblad generator on `n` levels: a Hamiltonian (rad/s) and jump
 /// operators (with the square root of their rates).
-struct Lindblad {
-    n: usize,
-    h: CMatrix,
-    ops: Vec<CMatrix>,
+pub(super) struct Lindblad {
+    pub(super) n: usize,
+    pub(super) h: CMatrix,
+    pub(super) ops: Vec<CMatrix>,
 }
 
 impl Lindblad {
     /// The generator on `vec ρ` (column-major: `ρ_rc` at `r + n c`).
-    fn superoperator(&self) -> CMatrix {
+    pub(super) fn superoperator(&self) -> CMatrix {
         let n = self.n;
         let zero = C64::new(0.0, 0.0);
         let i = C64::new(0.0, 1.0);
@@ -173,7 +173,7 @@ impl Lindblad {
     }
 
     /// The state with `L ρ = 0` and unit trace.
-    fn steady_state(&self) -> Result<CMatrix> {
+    pub(super) fn steady_state(&self) -> Result<CMatrix> {
         let n = self.n;
         let mut m = self.superoperator();
         let mut rhs = nalgebra::DVector::from_element(n * n, C64::new(0.0, 0.0));
@@ -286,7 +286,7 @@ pub fn readout_contrast(a: f64, b: f64) -> Result<f64> {
 
 /// The eigenbases of both triplets and the ground levels closest to
 /// `m_s = 0`, `+1` and `−1`.
-struct Levels {
+pub(super) struct Levels {
     eg: Vec<f64>,
     vg: CMatrix,
     ee: Vec<f64>,
@@ -435,7 +435,7 @@ impl OpticalNv {
     /// microwave of frequency `drive.0` (Hz, signed as
     /// [`OpticalNv::lines`]) and Rabi frequency `drive.1` (Hz, as in
     /// [`super::NvCenter`]: `2π(Ω/2)` couples `0` and `±1` along the axis).
-    fn model(&self, pump: f64, drive: Option<(f64, f64)>) -> Result<(Lindblad, Levels)> {
+    pub(super) fn model(&self, pump: f64, drive: Option<(f64, f64)>) -> Result<(Lindblad, Levels)> {
         if !(pump.is_finite() && pump >= 0.0) {
             return Err(QsoError::invalid("pump", "a finite rate ≥ 0"));
         }

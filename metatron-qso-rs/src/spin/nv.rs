@@ -1471,6 +1471,7 @@ impl NvCenter {
     }
 }
 
+pub mod anticrossing;
 pub mod bath;
 pub mod generalised;
 pub mod optics;
