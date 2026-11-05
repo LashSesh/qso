@@ -455,3 +455,154 @@ fn bposd_streams_equal_the_batch() {
         assert_eq!(w.finish(&s).unwrap(), batch);
     }
 }
+
+// ---- parallel windows (1.61) ------------------------------------------------
+
+fn parallel_matching(circuit: &DetectorCircuit, commit: usize, buffer: usize) -> WindowDecoder {
+    WindowDecoder::parallel(
+        &detector_error_model(circuit, true).unwrap(),
+        &circuit.detector_layers(),
+        ParallelWindowOptions { commit, buffer },
+        WindowMethod::Matching,
+    )
+    .unwrap()
+}
+
+#[test]
+fn parallel_windows_over_everything_are_the_whole_decoding() {
+    let c = surface_code_memory(5, 6, &CircuitNoise::uniform(4e-3)).unwrap();
+    let mut whole = DecoderChoice::Matching.build_for(&c).unwrap();
+    let mut windows = parallel_matching(&c, 7, 2);
+    assert_eq!(windows.n_windows(), 1);
+    for (fired, _) in shots(&c, 400, 3) {
+        assert_eq!(
+            windows.decode(&fired).unwrap(),
+            whole.decode(&fired).unwrap()
+        );
+    }
+}
+
+#[test]
+fn the_parallel_layout_alternates_windows_and_seams() {
+    // 21 layers (20 rounds and the final one), commit 3, buffer 2, errors
+    // spanning one layer: first-pass windows commit 0..3, 6..9, 12..15,
+    // 18..21, the seams 3..6, 9..12 and 15..18 between them.
+    let c = surface_code_memory(3, 20, &CircuitNoise::uniform(1e-3)).unwrap();
+    let w = parallel_matching(&c, 3, 2);
+    assert_eq!(w.span, 1);
+    let layout: Vec<(Kind, usize, usize, usize)> = w
+        .windows
+        .iter()
+        .map(|v| {
+            (
+                v.kind,
+                v.start,
+                w.layer_of(v.commit_start),
+                w.layer_of(v.commit),
+            )
+        })
+        .collect();
+    use Kind::{First, Seam};
+    assert_eq!(
+        layout,
+        vec![
+            (First, 0, 0, 3),
+            (First, 4, 6, 9),
+            (Seam, 3, 3, 6),
+            (First, 10, 12, 15),
+            (Seam, 9, 9, 12),
+            (First, 16, 18, 21),
+            (Seam, 15, 15, 18),
+        ]
+    );
+    // Windows of the bulk share decoders: the first, the bulk and the
+    // last of the first pass, and the seams.
+    assert!(w.n_decoders() <= 4, "{}", w.n_decoders());
+    assert_eq!(
+        w.parallel_options(),
+        Some(ParallelWindowOptions {
+            commit: 3,
+            buffer: 2
+        })
+    );
+    assert!(
+        WindowDecoder::parallel(
+            &detector_error_model(&c, true).unwrap(),
+            &c.detector_layers(),
+            ParallelWindowOptions {
+                commit: 0,
+                buffer: 2
+            },
+            WindowMethod::Matching,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn parallel_windows_stream_as_they_decode_in_parallel() {
+    let c = surface_code_memory(3, 30, &CircuitNoise::uniform(6e-3)).unwrap();
+    let layers = c.detector_layers();
+    let mut windows = parallel_matching(&c, 3, 2);
+    for (fired, _) in shots(&c, 300, 11) {
+        let batch = windows.decode(&fired).unwrap();
+        let n_layers = windows.n_layers();
+        let mut stream = windows.stream();
+        for l in 0..n_layers {
+            let in_layer: Vec<usize> = fired.iter().copied().filter(|&d| layers[d] == l).collect();
+            stream.push_layer(&in_layer).unwrap();
+        }
+        assert_eq!(stream.finish().unwrap(), batch);
+    }
+}
+
+#[test]
+fn parallel_windows_fail_as_often_as_sliding_ones() {
+    // Distance 5, 40 rounds, as 1.57 measured sliding windows: with a
+    // buffer of the distance both approach the whole decoding.
+    let c = surface_code_memory(5, 40, &CircuitNoise::uniform(5e-3)).unwrap();
+    let mut whole = DecoderChoice::Matching.build_for(&c).unwrap();
+    let mut sliding = matching_windows(&c, 10, 5);
+    let mut parallel = parallel_matching(&c, 5, 5);
+    let (mut w, mut s, mut p) = (0, 0, 0);
+    let events = shots(&c, 4000, 21);
+    for (fired, actual) in &events {
+        w += (whole.decode(fired).unwrap() != *actual) as usize;
+        s += (sliding.decode(fired).unwrap() != *actual) as usize;
+        p += (parallel.decode(fired).unwrap() != *actual) as usize;
+    }
+    // About 440 failures each (2197 of 20 000 in 1.57); three standard
+    // errors of the difference.
+    let sigma = (2.0 * w as f64).sqrt();
+    assert!((p as f64 - w as f64).abs() < 3.0 * sigma, "{p} vs {w}");
+    assert!((p as f64 - s as f64).abs() < 3.0 * sigma, "{p} vs {s}");
+}
+
+#[test]
+fn parallel_bp_osd_windows_decode_a_bicycle_code() {
+    let (code, _) = CssCode::bivariate_bicycle_code(72).unwrap();
+    let c = css_code_memory(&code, 12, &CircuitNoise::uniform(2e-3), MemoryBasis::Z).unwrap();
+    let dem = detector_error_model(&c, false).unwrap();
+    let options = BpOsdOptions::default();
+    let mut whole = BpOsdDecoder::new(&dem, options).unwrap();
+    let mut parallel = WindowDecoder::parallel(
+        &dem,
+        &c.detector_layers(),
+        ParallelWindowOptions {
+            commit: 2,
+            buffer: 2,
+        },
+        WindowMethod::BpOsd(options),
+    )
+    .unwrap();
+    assert!(parallel.n_windows() > 2);
+    let (mut w, mut p) = (0, 0);
+    for (fired, actual) in shots(&c, 300, 4) {
+        w += (whole.decode(&fired).unwrap() != actual) as usize;
+        p += (parallel.decode(&fired).unwrap() != actual) as usize;
+    }
+    assert!(
+        p <= w + 3 * (w.max(1) as f64).sqrt() as usize + 3,
+        "{p} vs {w}"
+    );
+}

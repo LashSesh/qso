@@ -85,16 +85,44 @@ impl WindowOptions {
     }
 }
 
+/// Sizes of the windows of parallel decoding ([`WindowDecoder::parallel`]),
+/// in layers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ParallelWindowOptions {
+    /// Layers each window of the first pass commits (at least 1).
+    pub commit: usize,
+    /// Layers of buffer on each side of them.
+    pub buffer: usize,
+}
+
+/// How a window takes its errors and applies its commit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    /// One after another: errors whose first detector lies in it, the
+    /// future end a boundary.
+    Sliding,
+    /// The first pass of parallel decoding: every error with a detector in
+    /// it, both ends boundaries, decoded on the detection events as
+    /// sampled.
+    First,
+    /// The second pass: the seam between two committed regions, with the
+    /// errors inside it only.
+    Seam,
+}
+
 /// One window: its layers and detectors, its decoder (shared by windows
 /// of the same shape) and its errors (into the model's).
 #[derive(Clone, Debug)]
 struct Window {
+    kind: Kind,
     /// Its first layer.
     start: usize,
-    /// Detectors `first..end`; those below `commit` form the commit
-    /// region (all of them in the last window).
+    /// Detectors `first..end`; those in `commit_start..commit` form the
+    /// commit region (for sliding windows from `first`, all of them in the
+    /// last window).
     first: usize,
     end: usize,
+    commit_start: usize,
     commit: usize,
     decoder: usize,
     errors: Vec<u32>,
@@ -122,6 +150,7 @@ enum Inner {
 #[derive(Clone, Debug)]
 pub struct WindowDecoder {
     options: WindowOptions,
+    parallel: Option<ParallelWindowOptions>,
     method: WindowMethod,
     n_detectors: usize,
     /// First detector of every layer, and `n_detectors` at the end.
@@ -157,13 +186,6 @@ impl WindowDecoder {
         options: WindowOptions,
         method: WindowMethod,
     ) -> Result<Self> {
-        let n = dem.n_detectors;
-        if layers.len() != n {
-            return Err(QsoError::invalid(
-                "layers",
-                format!("{} layers for {n} detectors", layers.len()),
-            ));
-        }
         if options.window == 0 || options.commit == 0 || options.commit > options.window {
             return Err(QsoError::invalid(
                 "window",
@@ -171,6 +193,114 @@ impl WindowDecoder {
                     "a window of {} layers cannot commit {} (need 1 ≤ commit ≤ window)",
                     options.window, options.commit
                 ),
+            ));
+        }
+        let mut decoder = Self::empty(dem, layers, options, None, method)?;
+        let n_layers = decoder.n_layers();
+        let mut start = 0;
+        loop {
+            let last = start + options.window >= n_layers;
+            let end_layer = if last {
+                n_layers
+            } else {
+                start + options.window
+            };
+            let commit_layer = if last {
+                n_layers
+            } else {
+                start + options.commit
+            };
+            decoder.add_window(Kind::Sliding, start, start, commit_layer, end_layer)?;
+            if last {
+                break;
+            }
+            start += options.commit;
+        }
+        Ok(decoder)
+    }
+
+    /// The parallel window decoder of `dem` (layers as for
+    /// [`WindowDecoder::new`]), in two passes as Skoric et al. decode
+    /// (Nat. Commun. 14, 7040 (2023)). The first pass decodes windows of
+    /// `buffer + commit + buffer` layers, each on the detection events as
+    /// sampled with both its ends as boundaries, and commits their middle
+    /// `commit` layers; between two of these lie `buffer + span` layers,
+    /// `span` the most layers an error spans, so that no window of the pass
+    /// changes what another commits, and they run in parallel. The second
+    /// pass decodes the seams between the committed regions, with the
+    /// detection events the first left, on the errors within each seam,
+    /// and commits all of it; the seams too run in parallel. A stream
+    /// ([`WindowDecoder::push_layer`]) decodes the same windows in order
+    /// as their layers come in, with the same prediction.
+    pub fn parallel(
+        dem: &DetectorErrorModel,
+        layers: &[usize],
+        options: ParallelWindowOptions,
+        method: WindowMethod,
+    ) -> Result<Self> {
+        let (c, b) = (options.commit, options.buffer);
+        if c == 0 {
+            return Err(QsoError::invalid(
+                "commit",
+                "a window of the first pass commits at least one layer",
+            ));
+        }
+        let window = c
+            .checked_add(b.checked_mul(2).unwrap_or(usize::MAX))
+            .unwrap_or(usize::MAX);
+        let mut decoder = Self::empty(
+            dem,
+            layers,
+            WindowOptions { window, commit: c },
+            Some(options),
+            method,
+        )?;
+        let n_layers = decoder.n_layers();
+        let gap = b.saturating_add(decoder.span);
+        let period = c.saturating_add(gap);
+        // First-pass windows and the seams after them, in the order a
+        // stream decodes them: a seam once the window after it is done.
+        let mut first = Vec::new();
+        let mut at = 0usize;
+        while at < n_layers {
+            let commit_end = at.saturating_add(c).min(n_layers);
+            first.push((
+                at.saturating_sub(b),
+                at,
+                commit_end,
+                commit_end.saturating_add(b).min(n_layers),
+            ));
+            at = at.saturating_add(period);
+        }
+        for (i, &(lo, clo, chi, hi)) in first.iter().enumerate() {
+            decoder.add_window(Kind::First, lo, clo, chi, hi)?;
+            if i > 0 {
+                let seam = (first[i - 1].2, clo);
+                if seam.0 < seam.1 {
+                    decoder.add_window(Kind::Seam, seam.0, seam.0, seam.1, seam.1)?;
+                }
+            }
+        }
+        let tail = first.last().map_or(0, |w| w.2);
+        if tail < n_layers {
+            decoder.add_window(Kind::Seam, tail, tail, n_layers, n_layers)?;
+        }
+        Ok(decoder)
+    }
+
+    /// A decoder of `dem` without windows yet.
+    fn empty(
+        dem: &DetectorErrorModel,
+        layers: &[usize],
+        options: WindowOptions,
+        parallel: Option<ParallelWindowOptions>,
+        method: WindowMethod,
+    ) -> Result<Self> {
+        let n = dem.n_detectors;
+        if layers.len() != n {
+            return Err(QsoError::invalid(
+                "layers",
+                format!("{} layers for {n} detectors", layers.len()),
             ));
         }
         let mut layer_first = Vec::new();
@@ -232,8 +362,9 @@ impl WindowDecoder {
             by_layer[lo].push(k as u32);
             span = span.max(hi - lo);
         }
-        let mut decoder = WindowDecoder {
+        Ok(WindowDecoder {
             options,
+            parallel,
             method,
             n_detectors: n,
             layer_first,
@@ -244,39 +375,60 @@ impl WindowDecoder {
             windows: Vec::new(),
             decoders: Vec::new(),
             shapes: HashMap::new(),
+        })
+    }
+
+    /// The errors of a window of layers `start..end_layer` of this kind
+    /// (without its fallback's).
+    fn window_errors(&self, kind: Kind, start: usize, end_layer: usize) -> Vec<u32> {
+        let (first, end) = (self.layer_first[start], self.layer_first[end_layer]);
+        let mut ids: Vec<u32> = match kind {
+            Kind::Sliding => self.by_layer[start..end_layer].concat(),
+            Kind::First => self.by_layer[start.saturating_sub(self.span)..end_layer]
+                .iter()
+                .flatten()
+                .copied()
+                .filter(|&k| {
+                    let e = &self.errors[k as usize];
+                    e.detectors.iter().any(|&d| d >= first && d < end)
+                })
+                .collect(),
+            Kind::Seam => self.by_layer[start..end_layer]
+                .iter()
+                .flatten()
+                .copied()
+                .filter(|&k| *self.errors[k as usize].detectors.last().unwrap() < end)
+                .collect(),
         };
-        let mut start = 0;
-        loop {
-            let last = start + options.window >= n_layers;
-            let end_layer = if last {
-                n_layers
-            } else {
-                start + options.window
-            };
-            let commit_layer = if last {
-                n_layers
-            } else {
-                start + options.commit
-            };
-            let (first, end) = (decoder.layer_first[start], decoder.layer_first[end_layer]);
-            let mut ids: Vec<u32> = decoder.by_layer[start..end_layer].concat();
-            ids.sort_unstable();
-            let index = decoder.decoder_for(first, end, &ids)?;
-            decoder.windows.push(Window {
-                start,
-                first,
-                end,
-                commit: decoder.layer_first[commit_layer],
-                decoder: index,
-                errors: ids,
-                fallback: None,
-            });
-            if last {
-                break;
-            }
-            start += options.commit;
-        }
-        Ok(decoder)
+        ids.sort_unstable();
+        ids
+    }
+
+    /// Add the window of layers `start..end_layer` committing
+    /// `commit_start..commit_layer`.
+    fn add_window(
+        &mut self,
+        kind: Kind,
+        start: usize,
+        commit_start: usize,
+        commit_layer: usize,
+        end_layer: usize,
+    ) -> Result<()> {
+        let (first, end) = (self.layer_first[start], self.layer_first[end_layer]);
+        let ids = self.window_errors(kind, start, end_layer);
+        let index = self.decoder_for(first, end, &ids)?;
+        self.windows.push(Window {
+            kind,
+            start,
+            first,
+            end,
+            commit_start: self.layer_first[commit_start],
+            commit: self.layer_first[commit_layer],
+            decoder: index,
+            errors: ids,
+            fallback: None,
+        });
+        Ok(())
     }
 
     /// The decoder of the window of detectors `first..end` with these
@@ -335,18 +487,38 @@ impl WindowDecoder {
         if self.windows[w].fallback.is_some() {
             return Ok(());
         }
-        let (start, first, end) = {
+        let (kind, start, first, end) = {
             let v = &self.windows[w];
-            (v.start, v.first, v.end)
+            (v.kind, v.start, v.first, v.end)
         };
         let mut ids = self.windows[w].errors.clone();
-        for layer in start.saturating_sub(self.span)..start {
-            for &k in &self.by_layer[layer] {
-                let e = &self.errors[k as usize];
-                if e.detectors.iter().any(|&d| d >= first && d < end) {
-                    ids.push(k);
+        let touches = |e: &ErrorMechanism| e.detectors.iter().any(|&d| d >= first && d < end);
+        match kind {
+            Kind::Sliding => {
+                for layer in start.saturating_sub(self.span)..start {
+                    for &k in &self.by_layer[layer] {
+                        if touches(&self.errors[k as usize]) {
+                            ids.push(k);
+                        }
+                    }
                 }
             }
+            // The errors that reach into the committed regions too, those
+            // detectors dropped.
+            Kind::Seam => {
+                let end_layer = self.layer_of(end);
+                for layer in start.saturating_sub(self.span)..end_layer {
+                    for &k in &self.by_layer[layer] {
+                        let e = &self.errors[k as usize];
+                        let inside = e.detectors[0] >= first && *e.detectors.last().unwrap() < end;
+                        if touches(e) && !inside {
+                            ids.push(k);
+                        }
+                    }
+                }
+            }
+            // A window of the first pass has every error touching it.
+            Kind::First => {}
         }
         ids.sort_unstable();
         let index = self.decoder_for(first, end, &ids)?;
@@ -354,8 +526,21 @@ impl WindowDecoder {
         Ok(())
     }
 
+    /// The sizes of sliding windows; for a parallel decoder the windows of
+    /// its first pass (`buffer + commit + buffer` layers committing
+    /// `commit`).
     pub fn options(&self) -> WindowOptions {
         self.options
+    }
+
+    /// The sizes of a parallel decoder ([`WindowDecoder::parallel`]).
+    pub fn parallel_options(&self) -> Option<ParallelWindowOptions> {
+        self.parallel
+    }
+
+    /// The layer whose first detector is `d` (the layer count for the end).
+    fn layer_of(&self, d: usize) -> usize {
+        self.layer_first.partition_point(|&f| f < d)
     }
 
     pub fn method(&self) -> WindowMethod {
@@ -381,7 +566,8 @@ impl WindowDecoder {
     }
 
     /// Predicted observable flips for the fired detectors (a detector
-    /// listed twice cancels), window by window.
+    /// listed twice cancels), window by window; for a parallel decoder the
+    /// windows of each pass in parallel.
     pub fn decode(&mut self, fired: &[usize]) -> Result<u64> {
         let n = self.n_detectors;
         if let Some(&d) = fired.iter().find(|&&d| d >= n) {
@@ -395,8 +581,64 @@ impl WindowDecoder {
             state.syndrome[d] ^= true;
         }
         state.layers = self.n_layers();
-        self.decode_ready(&mut state)?;
+        if self.parallel.is_some() {
+            self.decode_passes(&mut state)?;
+        } else {
+            self.decode_ready(&mut state)?;
+        }
         Ok(state.observables)
+    }
+
+    /// Both passes of a parallel decoder, each window of a pass on its own
+    /// thread's copy of the decoders; windows whose decoder fails are
+    /// decoded again in order with their fallback.
+    fn decode_passes(&mut self, state: &mut StreamState) -> Result<()> {
+        state.original.clone_from(&state.syndrome);
+        for kind in [Kind::First, Kind::Seam] {
+            let ws: Vec<usize> = (0..self.windows.len())
+                .filter(|&w| self.windows[w].kind == kind)
+                .collect();
+            let threads = crate::parallel::threads().max(1);
+            let chunk = ws.len().div_ceil(threads).max(1);
+            let this = &*self;
+            let syndrome = &state.syndrome;
+            let original = &state.original;
+            let done: Vec<Vec<(usize, Result<Commit>)>> =
+                crate::parallel::map_tasks(ws.len().div_ceil(chunk), |c| {
+                    let mut decoders = this.decoders.clone();
+                    let mut events = Vec::new();
+                    ws[c * chunk..((c + 1) * chunk).min(ws.len())]
+                        .iter()
+                        .map(|&w| {
+                            let source = if kind == Kind::First {
+                                original
+                            } else {
+                                syndrome
+                            };
+                            (
+                                w,
+                                this.commit_of(w, false, source, &mut decoders, &mut events),
+                            )
+                        })
+                        .collect()
+                });
+            let mut failed = Vec::new();
+            for (w, commit) in done.into_iter().flatten() {
+                match commit {
+                    Ok(c) => state.apply(&c),
+                    Err(_) => failed.push(w),
+                }
+            }
+            for w in failed {
+                let c = self.commit_with_fallback(w, &state.syndrome, &state.original)?;
+                state.apply(&c);
+            }
+            for &w in &ws {
+                self.check_resolved(w, &state.syndrome);
+            }
+        }
+        state.next = self.windows.len();
+        Ok(())
     }
 
     /// A stream of detection events, layer by layer, borrowing the
@@ -414,6 +656,11 @@ impl WindowDecoder {
     pub fn new_stream(&self) -> StreamState {
         StreamState {
             syndrome: vec![false; self.n_detectors],
+            original: if self.parallel.is_some() {
+                vec![false; self.n_detectors]
+            } else {
+                Vec::new()
+            },
             layers: 0,
             next: 0,
             observables: 0,
@@ -451,6 +698,9 @@ impl WindowDecoder {
         }
         for &d in fired {
             state.syndrome[d] ^= true;
+            if let Some(o) = state.original.get_mut(d) {
+                *o ^= true;
+            }
         }
         state.layers += 1;
         self.decode_ready(state)?;
@@ -478,92 +728,127 @@ impl WindowDecoder {
 
     /// Decode the windows whose layers are all in.
     fn decode_ready(&mut self, state: &mut StreamState) -> Result<()> {
-        let mut events = Vec::new();
         while state.next < self.windows.len() {
             if self.windows[state.next].end > self.layer_first[state.layers] {
                 break;
             }
-            match self.decode_window(state.next, &mut state.syndrome, &mut events) {
-                Ok(o) => state.observables ^= o,
+            let w = state.next;
+            match self.commit_with_fallback(w, &state.syndrome, &state.original) {
+                Ok(c) => state.apply(&c),
                 Err(e) => {
                     state.failed = true;
                     return Err(e);
                 }
             }
+            self.check_resolved(w, &state.syndrome);
             state.next += 1;
         }
         Ok(())
     }
 
-    /// The correction of window `w` for its detection events, by its own
-    /// decoder or the fallback's.
-    fn correct(&mut self, w: usize, fallback: bool, events: &[usize]) -> Result<Correction> {
+    /// In debug builds: the commit region of window `w` is resolved.
+    fn check_resolved(&self, w: usize, syndrome: &[bool]) {
         let window = &self.windows[w];
-        let index = if fallback {
-            window.fallback.as_ref().expect("built").0
-        } else {
-            window.decoder
-        };
-        Ok(match &mut self.decoders[index] {
-            Inner::Matching(m) => Correction::Pairs(m.decode_matches(events)?),
-            Inner::BpOsd(b) => Correction::Errors(b.decode_detailed(events)?.errors),
-        })
+        debug_assert!(
+            (window.commit_start..window.commit).all(|d| !syndrome[d]),
+            "the commit region of window {w} is resolved"
+        );
     }
 
-    /// Decode window `w` on `syndrome` and apply its commit: returns the
-    /// observables it commits. When the window's decoder finds no
+    /// The commit of window `w` by its own decoder or, when that finds no
     /// correction (the carried syndrome may need the window's past end as
-    /// a boundary, as when errors at the start are the only boundary), the
-    /// fallback with the errors that reach before the window decodes it.
-    fn decode_window(
+    /// a boundary, as when errors at the start are the only boundary), by
+    /// its fallback, built when first needed.
+    fn commit_with_fallback(
         &mut self,
         w: usize,
-        syndrome: &mut [bool],
-        events: &mut Vec<usize>,
-    ) -> Result<u64> {
-        let (first, end) = (self.windows[w].first, self.windows[w].end);
-        events.clear();
-        events.extend((first..end).filter(|&d| syndrome[d]).map(|d| d - first));
-        if events.is_empty() {
-            return Ok(0);
-        }
-        let (correction, fallback) = match self.correct(w, false, events) {
-            Ok(c) => (c, false),
-            Err(error) => {
-                self.fallback(w)?;
-                match self.correct(w, true, events) {
-                    Ok(c) => (c, true),
-                    Err(_) => return Err(error),
-                }
-            }
-        };
-        let window = &self.windows[w];
-        let ids = if fallback {
-            &window.fallback.as_ref().expect("built").1
+        syndrome: &[bool],
+        original: &[bool],
+    ) -> Result<Commit> {
+        let source = if self.windows[w].kind == Kind::First {
+            original
         } else {
-            &window.errors
+            syndrome
         };
-        let commit = window.commit - first;
-        let mut observables = 0;
+        let mut events = Vec::new();
+        let mut decoders = std::mem::take(&mut self.decoders);
+        let own = self.commit_of(w, false, source, &mut decoders, &mut events);
+        self.decoders = decoders;
+        let Err(error) = own else { return own };
+        self.fallback(w)?;
+        let mut decoders = std::mem::take(&mut self.decoders);
+        let fallback = self.commit_of(w, true, source, &mut decoders, &mut events);
+        self.decoders = decoders;
+        fallback.map_err(|_| error)
+    }
+
+    /// The commit of window `w` on the detection events of `source`, by
+    /// its own decoder or (`fallback`, built) the fallback's, taken from
+    /// `decoders` (the decoder's own or a thread's copy). A matched pair is
+    /// committed when one of its events lies in the commit region and
+    /// flips its events, or for a match to the boundary its event and the
+    /// detectors outside the window of the error it ends on, where those
+    /// are not resolved (after a sliding window, both sides of a window of
+    /// the first pass, never for a seam); an error of BP+OSD is committed
+    /// when one of its detectors lies in the commit region, with the same
+    /// detectors.
+    fn commit_of(
+        &self,
+        w: usize,
+        fallback: bool,
+        source: &[bool],
+        decoders: &mut [Inner],
+        events: &mut Vec<usize>,
+    ) -> Result<Commit> {
+        let window = &self.windows[w];
+        let (first, end) = (window.first, window.end);
+        events.clear();
+        events.extend((first..end).filter(|&d| source[d]).map(|d| d - first));
+        let mut c = Commit::default();
+        if events.is_empty() {
+            return Ok(c);
+        }
+        let (index, ids) = if fallback {
+            let f = window.fallback.as_ref().expect("built");
+            (f.0, &f.1)
+        } else {
+            (window.decoder, &window.errors)
+        };
+        let correction = match &mut decoders[index] {
+            Inner::Matching(m) => Correction::Pairs(m.decode_matches(events)?),
+            Inner::BpOsd(b) => Correction::Errors(b.decode_detailed(events)?.errors),
+        };
+        let (lo, hi) = (window.commit_start, window.commit);
+        let in_commit = |d: usize| d >= lo && d < hi;
+        let flips = |d: usize| {
+            (d >= first && d < end)
+                || match window.kind {
+                    Kind::Sliding => d >= end,
+                    Kind::First => true,
+                    Kind::Seam => false,
+                }
+        };
         match correction {
             Correction::Pairs(pairs) => {
                 for pair in pairs {
-                    let (u, v) = (pair.u as usize, pair.v);
-                    let boundary = v == u32::MAX;
-                    if u >= commit && (boundary || v as usize >= commit) {
+                    let u = first + pair.u as usize;
+                    let v = (pair.v != u32::MAX).then(|| first + pair.v as usize);
+                    if !in_commit(u) && !v.is_some_and(in_commit) {
                         continue;
                     }
-                    observables ^= pair.obs;
-                    syndrome[first + u] ^= true;
-                    if !boundary {
-                        syndrome[first + v as usize] ^= true;
-                    } else {
-                        // The error it reaches the boundary through: its
-                        // detectors beyond the window, if any (those
-                        // before it are resolved and left alone).
-                        let e = &self.errors[ids[pair.via as usize] as usize];
-                        for &d in e.detectors.iter().filter(|&&d| d >= end) {
-                            syndrome[d] ^= true;
+                    c.observables ^= pair.obs;
+                    c.flips.push(u);
+                    match v {
+                        Some(v) => c.flips.push(v),
+                        None => {
+                            // The error it reaches the boundary through.
+                            let e = &self.errors[ids[pair.via as usize] as usize];
+                            c.flips.extend(
+                                e.detectors
+                                    .iter()
+                                    .copied()
+                                    .filter(|&d| (d < first || d >= end) && flips(d)),
+                            );
                         }
                     }
                 }
@@ -571,24 +856,24 @@ impl WindowDecoder {
             Correction::Errors(errors) => {
                 for k in errors {
                     let e = &self.errors[ids[k] as usize];
-                    // Its first detector in the window.
-                    let inside = e.detectors.iter().find(|&&d| d >= first);
-                    if inside.is_none_or(|&d| d >= window.commit) {
+                    if !e.detectors.iter().any(|&d| in_commit(d)) {
                         continue;
                     }
-                    observables ^= e.observables;
-                    for &d in e.detectors.iter().filter(|&&d| d >= first) {
-                        syndrome[d] ^= true;
-                    }
+                    c.observables ^= e.observables;
+                    c.flips
+                        .extend(e.detectors.iter().copied().filter(|&d| flips(d)));
                 }
             }
         }
-        debug_assert!(
-            (first..window.commit).all(|d| !syndrome[d]),
-            "the commit region of window {w} is resolved"
-        );
-        Ok(observables)
+        Ok(c)
     }
+}
+
+/// What a window commits: observables, and the detection events it flips.
+#[derive(Clone, Debug, Default)]
+struct Commit {
+    observables: u64,
+    flips: Vec<usize>,
 }
 
 impl super::Decoder for WindowDecoder {
@@ -603,6 +888,9 @@ impl super::Decoder for WindowDecoder {
 #[derive(Clone, Debug, PartialEq)]
 pub struct StreamState {
     syndrome: Vec<bool>,
+    /// The detection events as given (for the first pass of a parallel
+    /// decoder; empty otherwise).
+    original: Vec<bool>,
     layers: usize,
     next: usize,
     observables: u64,
@@ -611,6 +899,13 @@ pub struct StreamState {
 }
 
 impl StreamState {
+    fn apply(&mut self, c: &Commit) {
+        self.observables ^= c.observables;
+        for &d in &c.flips {
+            self.syndrome[d] ^= true;
+        }
+    }
+
     /// The observable flips committed so far.
     pub fn committed(&self) -> u64 {
         self.observables

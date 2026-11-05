@@ -250,3 +250,27 @@ fn repeated_circuits_check_their_input() {
     assert!(random.detector_error_model(false).is_err());
     assert!(random.sample(10, 1).is_err());
 }
+
+#[test]
+fn repeated_logical_error_rates_equal_the_expanded_ones() {
+    use crate::qec::{DecoderChoice, logical_error_rate_repeated, logical_error_rate_using};
+    let noise = CircuitNoise::uniform(4e-3);
+    let repeated = surface_code_memory_repeated(3, 20, &noise, MemoryBasis::Z).unwrap();
+    let flat = repeated.flatten().unwrap();
+    for decoder in [
+        DecoderChoice::Matching,
+        DecoderChoice::WindowMatching {
+            window: 4,
+            commit: 2,
+        },
+        DecoderChoice::ParallelWindowMatching {
+            commit: 3,
+            buffer: 2,
+        },
+    ] {
+        let ours = logical_error_rate_repeated(&repeated, 3000, 17, decoder).unwrap();
+        let theirs = logical_error_rate_using(&flat, 3000, 17, decoder).unwrap();
+        assert_eq!(ours, theirs, "{decoder:?}");
+        assert!(ours.errors > 10, "{decoder:?}: {}", ours.errors);
+    }
+}

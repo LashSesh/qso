@@ -30,7 +30,12 @@
 //!   references for small models;
 //! * [`WindowDecoder`] and [`WindowStream`]: decoding in sliding windows
 //!   of rounds, by matching or BP+OSD, for experiments of thousands of
-//!   rounds and for detection events given round by round;
+//!   rounds and for detection events given round by round, and in
+//!   parallel windows ([`WindowDecoder::parallel`]) on several cores;
+//! * [`RepeatedCircuit`]: circuits that keep their repeated blocks (from
+//!   Stim's `REPEAT` and [`surface_code_memory_repeated`] and its
+//!   siblings), sampled as they run, their error models folded
+//!   ([`logical_error_rate_repeated`]);
 //! * [`DetectorCircuit::to_stim`]: export in Stim's text format.
 
 pub mod bposd;
@@ -83,7 +88,9 @@ pub use splitting::{
     SplittingEstimate, SplittingOptions, SplittingRate, enumerated_failure_rate, leading_failures,
     splitting_failure_rate,
 };
-pub use window::{StreamState, WindowDecoder, WindowMethod, WindowOptions, WindowStream};
+pub use window::{
+    ParallelWindowOptions, StreamState, WindowDecoder, WindowMethod, WindowOptions, WindowStream,
+};
 
 use crate::error::{QsoError, Result};
 use crate::rng::Rng;
@@ -176,6 +183,48 @@ pub enum DecoderChoice {
     /// BP+OSD (default options) in sliding windows ([`WindowDecoder`]) on
     /// the model without decomposition; for circuits only.
     WindowBpOsd { window: usize, commit: usize },
+    /// Matching in parallel windows ([`WindowDecoder::parallel`]) that
+    /// commit `commit` rounds with `buffer` on each side; for circuits only.
+    ParallelWindowMatching { commit: usize, buffer: usize },
+    /// BP+OSD (default options) in parallel windows on the model without
+    /// decomposition; for circuits only.
+    ParallelWindowBpOsd { commit: usize, buffer: usize },
+}
+
+/// What a decoder of a circuit is built from: its models and the rounds
+/// of its detectors.
+trait Models {
+    fn model(&self, decompose: bool) -> Result<DetectorErrorModel>;
+    fn correlated(&self) -> Result<CorrelatedErrorModel>;
+    fn layers(&self) -> Vec<usize>;
+}
+
+impl Models for DetectorCircuit {
+    fn model(&self, decompose: bool) -> Result<DetectorErrorModel> {
+        detector_error_model(self, decompose)
+    }
+
+    fn correlated(&self) -> Result<CorrelatedErrorModel> {
+        correlated_error_model(self)
+    }
+
+    fn layers(&self) -> Vec<usize> {
+        self.detector_layers()
+    }
+}
+
+impl Models for RepeatedCircuit {
+    fn model(&self, decompose: bool) -> Result<DetectorErrorModel> {
+        self.detector_error_model(decompose)
+    }
+
+    fn correlated(&self) -> Result<CorrelatedErrorModel> {
+        self.correlated_error_model()
+    }
+
+    fn layers(&self) -> Vec<usize> {
+        self.detector_layers()
+    }
 }
 
 impl DecoderChoice {
@@ -196,7 +245,10 @@ impl DecoderChoice {
             DecoderChoice::BpOsd => {
                 Box::new(BpOsdDecoder::new(&graph.to_dem(), BpOsdOptions::default())?)
             }
-            DecoderChoice::WindowMatching { .. } | DecoderChoice::WindowBpOsd { .. } => {
+            DecoderChoice::WindowMatching { .. }
+            | DecoderChoice::WindowBpOsd { .. }
+            | DecoderChoice::ParallelWindowMatching { .. }
+            | DecoderChoice::ParallelWindowBpOsd { .. } => {
                 return Err(QsoError::invalid(
                     "decoder",
                     "windows need the rounds of a circuit's detectors (build_for)",
@@ -210,29 +262,54 @@ impl DecoderChoice {
     /// the parts of each error for correlated matching, whole for BP+OSD
     /// (also in windows).
     pub fn build_for(self, circuit: &DetectorCircuit) -> Result<Box<dyn Decoder + Send>> {
+        self.build_from(circuit)
+    }
+
+    /// [`DecoderChoice::build_for`] a circuit with repeated blocks, from
+    /// its folded models.
+    pub fn build_for_repeated(self, circuit: &RepeatedCircuit) -> Result<Box<dyn Decoder + Send>> {
+        self.build_from(circuit)
+    }
+
+    fn build_from(self, circuit: &dyn Models) -> Result<Box<dyn Decoder + Send>> {
+        let bposd = WindowMethod::BpOsd(BpOsdOptions::default());
         Ok(match self {
             DecoderChoice::BpOsd => Box::new(BpOsdDecoder::new(
-                &detector_error_model(circuit, false)?,
+                &circuit.model(false)?,
                 BpOsdOptions::default(),
             )?),
-            DecoderChoice::CorrelatedMatching => Box::new(CorrelatedMatchingDecoder::new(
-                &correlated_error_model(circuit)?,
-            )?),
+            DecoderChoice::CorrelatedMatching => {
+                Box::new(CorrelatedMatchingDecoder::new(&circuit.correlated()?)?)
+            }
             DecoderChoice::WindowMatching { window, commit } => Box::new(WindowDecoder::new(
-                &detector_error_model(circuit, true)?,
-                &circuit.detector_layers(),
+                &circuit.model(true)?,
+                &circuit.layers(),
                 WindowOptions { window, commit },
                 WindowMethod::Matching,
             )?),
             DecoderChoice::WindowBpOsd { window, commit } => Box::new(WindowDecoder::new(
-                &detector_error_model(circuit, false)?,
-                &circuit.detector_layers(),
+                &circuit.model(false)?,
+                &circuit.layers(),
                 WindowOptions { window, commit },
-                WindowMethod::BpOsd(BpOsdOptions::default()),
+                bposd,
             )?),
-            _ => self.build(MatchingGraph::from_dem(&detector_error_model(
-                circuit, true,
-            )?)?)?,
+            DecoderChoice::ParallelWindowMatching { commit, buffer } => {
+                Box::new(WindowDecoder::parallel(
+                    &circuit.model(true)?,
+                    &circuit.layers(),
+                    ParallelWindowOptions { commit, buffer },
+                    WindowMethod::Matching,
+                )?)
+            }
+            DecoderChoice::ParallelWindowBpOsd { commit, buffer } => {
+                Box::new(WindowDecoder::parallel(
+                    &circuit.model(false)?,
+                    &circuit.layers(),
+                    ParallelWindowOptions { commit, buffer },
+                    bposd,
+                )?)
+            }
+            _ => self.build(MatchingGraph::from_dem(&circuit.model(true)?)?)?,
         })
     }
 }
@@ -283,6 +360,29 @@ pub fn logical_error_rate_using(
     decoder: DecoderChoice,
 ) -> Result<LogicalErrorRate> {
     let mut decoder = decoder.build_for(circuit)?;
+    count_failures(circuit, decoder.as_mut(), shots, seed)
+}
+
+/// [`logical_error_rate_using`] for a circuit with repeated blocks: its
+/// shots sampled as they run, decoded by `decoder` built from its folded
+/// models ([`DecoderChoice::build_for_repeated`]).
+pub fn logical_error_rate_repeated(
+    circuit: &RepeatedCircuit,
+    shots: usize,
+    seed: u64,
+    decoder: DecoderChoice,
+) -> Result<LogicalErrorRate> {
+    let mut decoder = decoder.build_for_repeated(circuit)?;
+    count_failures(circuit, decoder.as_mut(), shots, seed)
+}
+
+/// Sample `shots` shots in blocks, decode each, and count the failures.
+fn count_failures(
+    circuit: &dyn frame::Walk,
+    decoder: &mut (dyn Decoder + Send),
+    shots: usize,
+    seed: u64,
+) -> Result<LogicalErrorRate> {
     let mut rng = Rng::seed_from_u64(seed);
     // Blocks of whole batches, with at most MAX_SAMPLED_EVENTS bits of
     // results, so the stream equals one call.
