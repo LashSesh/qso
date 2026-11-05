@@ -439,13 +439,17 @@ fn limits_fail_early_with_an_error() {
         c.detector(&[m]).unwrap();
     }
     assert!(detector_error_model(&c, false).is_err());
-    // Two million noisy measurements: too much propagation work.
+    // Two million noisy measurements, too much work for frames propagated
+    // forwards (1.57), take one pass backwards: only the first flips the
+    // detector.
     let mut w = DetectorCircuit::new(1).unwrap();
     for _ in 0..2_000_000 {
         w.measure(0, 0.01).unwrap();
     }
     w.detector(&[0]).unwrap();
-    assert!(detector_error_model(&w, false).is_err());
+    let start = std::time::Instant::now();
+    assert_eq!(detector_error_model(&w, false).unwrap().errors.len(), 1);
+    assert!(start.elapsed().as_secs_f64() < crate::time_limit(5.0));
     // Memory experiments beyond the operation limit fail before building.
     let start = std::time::Instant::now();
     assert!(surface_code_memory(101, 10_000, &CircuitNoise::uniform(0.001)).is_err());

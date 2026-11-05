@@ -3,24 +3,28 @@
 //!
 //! Every noise channel is written as independent Pauli errors (exactly:
 //! a depolarizing channel equals independent X, Y and Z errors, or the 15
-//! two-qubit Paulis, with adjusted probabilities). Each error is
-//! propagated through the noiseless circuit as a Pauli frame, 64 errors
-//! per machine word and up to 4096 per pass; errors with the same effect are merged.
+//! two-qubit Paulis, with adjusted probabilities). What each error flips
+//! comes from one pass backwards through the noiseless circuit, which
+//! carries for every qubit the detectors and observables an X or a Z there
+//! would flip (the transpose of propagating Pauli frames forwards), in
+//! time linear in the circuit; errors with the same effect are merged.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use super::circuit::{DetectorCircuit, Noise, QecOp};
+#[cfg(test)]
 use super::frame::Frames;
 use crate::error::{QsoError, Result};
-use crate::stabilizer::apply_clifford;
+use crate::quantum::Instruction;
+use crate::stabilizer::{CliffordTarget, apply_clifford};
 
 /// Most elementary error components a model propagates.
 pub const MAX_COMPONENTS: usize = 1 << 22;
 /// Most detector entries over all propagated components (1 GiB).
 pub const MAX_SIGNATURE_ENTRIES: usize = 1 << 27;
-/// Most word operations of propagation, the operations from each pass's
-/// first component to the end times its words, summed over the passes
-/// (about a minute and a half at the limit).
+/// Most entries of effects the pass backwards through a circuit touches
+/// (each XOR of two effects counts their lengths; about fifteen seconds at
+/// the limit).
 pub const MAX_MODEL_WORK: u64 = 1 << 34;
 
 /// One independent error mechanism of a detector error model.
@@ -54,14 +58,14 @@ struct Component {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum Kind {
+pub(super) enum Kind {
     X,
     Z,
     Flip,
 }
 
 /// Effect of an error: flipped detectors (sorted) and observables.
-type Signature = (Vec<usize>, u64);
+pub(super) type Signature = (Vec<usize>, u64);
 
 fn xor(a: &Signature, b: &Signature) -> Signature {
     let mut d = Vec::with_capacity(a.0.len() + b.0.len());
@@ -448,9 +452,9 @@ pub fn explain_errors(
 
 /// Where a noise channel acts: its operation and, for each basis error,
 /// the qubit and kind.
-struct Channel {
-    op: usize,
-    parts: Vec<(usize, Kind)>,
+pub(super) struct Channel {
+    pub(super) op: usize,
+    pub(super) parts: Vec<(usize, Kind)>,
 }
 
 /// Calls `f(channel, basis, probabilities)` for every noise channel of the
@@ -517,55 +521,15 @@ fn each_channel(
                         kind: Kind::Z,
                     })
                 };
-                let at = |parts: Vec<(usize, Kind)>| Channel { op: i, parts };
-                let zx = |q: usize| vec![(q, Kind::Z), (q, Kind::X)];
-                match *noise {
-                    Noise::XError(p) => qubits
-                        .iter()
-                        .try_for_each(|&q| f(&at(vec![(q, Kind::X)]), &[x(q)], &[0.0, p]))?,
-                    Noise::ZError(p) => qubits
-                        .iter()
-                        .try_for_each(|&q| f(&at(vec![(q, Kind::Z)]), &[z(q)], &[0.0, p]))?,
-                    // As one error over the basis Z, X (so that it splits
-                    // into its X and Z parts like a depolarizing channel's).
-                    Noise::YError(p) => qubits
-                        .iter()
-                        .try_for_each(|&q| f(&at(zx(q)), &[z(q), x(q)], &[0.0, 0.0, 0.0, p]))?,
-                    Noise::Depolarize1(p) => {
-                        let r = independent(p, 1);
-                        for &q in qubits {
-                            f(&at(zx(q)), &[z(q), x(q)], &[0.0, r, r, r])?;
-                        }
-                    }
-                    Noise::Depolarize2(p) => {
-                        let r = independent(p, 2);
-                        let mut probabilities = [r; 16];
-                        probabilities[0] = 0.0;
-                        for pair in qubits.chunks(2) {
-                            let mut parts = zx(pair[0]);
-                            parts.extend(zx(pair[1]));
-                            f(
-                                &at(parts),
-                                &[z(pair[0]), x(pair[0]), z(pair[1]), x(pair[1])],
-                                &probabilities,
-                            )?;
-                        }
-                    }
-                }
+                noise_channels(i, *noise, qubits, &x, &z, &mut f)?;
             }
             QecOp::Measure { flip, qubit } if *flip > 0.0 => {
-                f(
-                    &Channel {
-                        op: i,
-                        parts: vec![(*qubit, Kind::Flip)],
-                    },
-                    &[sig(Component {
-                        op: i,
-                        qubit: 0,
-                        kind: Kind::Flip,
-                    })],
-                    &[0.0, *flip],
-                )?;
+                let s = sig(Component {
+                    op: i,
+                    qubit: 0,
+                    kind: Kind::Flip,
+                });
+                flip_channel(i, *qubit, *flip, s, &mut f)?;
             }
             _ => {}
         }
@@ -573,12 +537,298 @@ fn each_channel(
     Ok(())
 }
 
+/// The channels of noise operation `i` on `qubits`, whose X and Z errors
+/// have the effects `x(q)` and `z(q)` (see [`each_channel`]).
+pub(super) fn noise_channels(
+    i: usize,
+    noise: Noise,
+    qubits: &[usize],
+    x: &dyn Fn(usize) -> Signature,
+    z: &dyn Fn(usize) -> Signature,
+    f: &mut dyn FnMut(&Channel, &[Signature], &[f64]) -> Result<()>,
+) -> Result<()> {
+    let at = |parts: Vec<(usize, Kind)>| Channel { op: i, parts };
+    let zx = |q: usize| vec![(q, Kind::Z), (q, Kind::X)];
+    match noise {
+        Noise::XError(p) => qubits
+            .iter()
+            .try_for_each(|&q| f(&at(vec![(q, Kind::X)]), &[x(q)], &[0.0, p])),
+        Noise::ZError(p) => qubits
+            .iter()
+            .try_for_each(|&q| f(&at(vec![(q, Kind::Z)]), &[z(q)], &[0.0, p])),
+        // As one error over the basis Z, X (so that it splits into its X
+        // and Z parts like a depolarizing channel's).
+        Noise::YError(p) => qubits
+            .iter()
+            .try_for_each(|&q| f(&at(zx(q)), &[z(q), x(q)], &[0.0, 0.0, 0.0, p])),
+        Noise::Depolarize1(p) => {
+            let r = independent(p, 1);
+            qubits
+                .iter()
+                .try_for_each(|&q| f(&at(zx(q)), &[z(q), x(q)], &[0.0, r, r, r]))
+        }
+        Noise::Depolarize2(p) => {
+            let r = independent(p, 2);
+            let mut probabilities = [r; 16];
+            probabilities[0] = 0.0;
+            for pair in qubits.chunks(2) {
+                let mut parts = zx(pair[0]);
+                parts.extend(zx(pair[1]));
+                f(
+                    &at(parts),
+                    &[z(pair[0]), x(pair[0]), z(pair[1]), x(pair[1])],
+                    &probabilities,
+                )?;
+            }
+            Ok(())
+        }
+    }
+}
+
+/// The channel of a measurement of `qubit` at operation `i` flipped with
+/// probability `flip`, whose flip has effect `s`.
+pub(super) fn flip_channel(
+    i: usize,
+    qubit: usize,
+    flip: f64,
+    s: Signature,
+    f: &mut dyn FnMut(&Channel, &[Signature], &[f64]) -> Result<()>,
+) -> Result<()> {
+    f(
+        &Channel {
+            op: i,
+            parts: vec![(qubit, Kind::Flip)],
+        },
+        &[s],
+        &[0.0, flip],
+    )
+}
+
+/// XOR `b` into `a`, counting the entries touched in `work`.
+pub(super) fn xor_into(a: &mut Signature, b: &Signature, work: &mut u64) {
+    if b.0.is_empty() {
+        *work += 1;
+        a.1 ^= b.1;
+    } else if a.0.is_empty() {
+        *work += b.0.len() as u64;
+        a.0.clone_from(&b.0);
+        a.1 ^= b.1;
+    } else {
+        *work += (a.0.len() + b.0.len()) as u64;
+        *a = xor(a, b);
+    }
+}
+
+/// One step of a Clifford gate's action on Pauli frames.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Step {
+    H(usize),
+    S(usize),
+    Cx(usize, usize),
+    Swap(usize, usize),
+}
+
+/// The steps a gate takes on a frame (signs aside), in order.
+#[derive(Default)]
+struct Steps(Vec<Step>);
+
+impl CliffordTarget for Steps {
+    fn h(&mut self, q: usize) {
+        self.0.push(Step::H(q));
+    }
+
+    fn s(&mut self, q: usize) {
+        self.0.push(Step::S(q));
+    }
+
+    // On frames S† acts as S, and Pauli gates only change signs.
+    fn sdg(&mut self, q: usize) {
+        self.0.push(Step::S(q));
+    }
+
+    fn x(&mut self, _: usize) {}
+
+    fn y(&mut self, _: usize) {}
+
+    fn z(&mut self, _: usize) {}
+
+    fn cx(&mut self, c: usize, t: usize) {
+        self.0.push(Step::Cx(c, t));
+    }
+
+    fn swap(&mut self, a: usize, b: usize) {
+        self.0.push(Step::Swap(a, b));
+    }
+}
+
+/// What an error at the current point of a pass backwards through a
+/// circuit flips: on each qubit the effect of an X and of a Z there, and
+/// the effect of flipping each measurement not yet passed whose detectors
+/// or observables were. Every operation acts as the transpose of its
+/// action on Pauli frames (a gate's steps in reverse; a measurement adds
+/// its record's effect to the X of its qubit and clears the Z, as frames
+/// drop the Z of a measured qubit; a reset clears both), so the effects are
+/// exactly those of propagating each error forwards, in one pass.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Tracker {
+    pub(super) x: Vec<Signature>,
+    pub(super) z: Vec<Signature>,
+    /// Effects of flipping measurement records not yet passed, their
+    /// detectors descending (detectors are passed in descending order, so
+    /// each is appended).
+    pub(super) pending: HashMap<usize, Signature>,
+    /// Entries touched so far.
+    pub(super) work: u64,
+}
+
+impl Tracker {
+    pub(super) fn new(n: usize) -> Self {
+        Tracker {
+            x: vec![(Vec::new(), 0); n],
+            z: vec![(Vec::new(), 0); n],
+            pending: HashMap::new(),
+            work: 0,
+        }
+    }
+
+    pub(super) fn gate(&mut self, inst: &Instruction, steps: &mut Vec<Step>) -> Result<()> {
+        let mut record = Steps(std::mem::take(steps));
+        record.0.clear();
+        apply_clifford(&mut record, inst, &[])?;
+        for step in record.0.iter().rev() {
+            match *step {
+                Step::H(q) => std::mem::swap(&mut self.x[q], &mut self.z[q]),
+                Step::S(q) => {
+                    let z = std::mem::take(&mut self.z[q]);
+                    xor_into(&mut self.x[q], &z, &mut self.work);
+                    self.z[q] = z;
+                }
+                Step::Cx(c, t) => {
+                    let xt = std::mem::take(&mut self.x[t]);
+                    xor_into(&mut self.x[c], &xt, &mut self.work);
+                    self.x[t] = xt;
+                    let zc = std::mem::take(&mut self.z[c]);
+                    xor_into(&mut self.z[t], &zc, &mut self.work);
+                    self.z[c] = zc;
+                }
+                Step::Swap(a, b) => {
+                    self.x.swap(a, b);
+                    self.z.swap(a, b);
+                }
+            }
+        }
+        *steps = record.0;
+        Ok(())
+    }
+
+    /// Passes the measurement of `qubit` into `record`: returns the effect
+    /// of flipping it.
+    pub(super) fn measure(&mut self, qubit: usize, record: usize) -> Signature {
+        let mut s = self.pending.remove(&record).unwrap_or_default();
+        s.0.reverse();
+        xor_into(&mut self.x[qubit], &s, &mut self.work);
+        self.z[qubit] = (Vec::new(), 0);
+        s
+    }
+
+    pub(super) fn reset(&mut self, qubit: usize) {
+        self.x[qubit] = (Vec::new(), 0);
+        self.z[qubit] = (Vec::new(), 0);
+    }
+
+    /// Passes detector `id`, below every detector passed before.
+    pub(super) fn detector(&mut self, id: usize, records: &[usize]) {
+        for &r in records {
+            let e = &mut self.pending.entry(r).or_default().0;
+            debug_assert!(e.last().is_none_or(|&d| d >= id));
+            // A record listed twice cancels.
+            if e.last() == Some(&id) {
+                e.pop();
+            } else {
+                e.push(id);
+            }
+            self.work += 1;
+        }
+    }
+
+    pub(super) fn observable(&mut self, index: usize, records: &[usize]) {
+        for &r in records {
+            self.pending.entry(r).or_default().1 ^= 1 << index;
+            self.work += 1;
+        }
+    }
+}
+
+/// The effect of each component (sorted by operation), by one pass
+/// backwards through the circuit (see [`Tracker`]).
+fn propagate(circuit: &DetectorCircuit, components: &[Component]) -> Result<Vec<Signature>> {
+    let mut t = Tracker::new(circuit.n_qubits());
+    let mut steps = Vec::new();
+    let mut out: Vec<Signature> = vec![(Vec::new(), 0); components.len()];
+    let (mut m, mut d) = (circuit.n_measurements(), circuit.n_detectors());
+    let mut next = components.len();
+    let mut entries = 0usize;
+    for (i, op) in circuit.operations().iter().enumerate().rev() {
+        match op {
+            QecOp::Gate(inst) => t.gate(inst, &mut steps)?,
+            QecOp::Measure { qubit, .. } => {
+                m -= 1;
+                let s = t.measure(*qubit, m);
+                while next > 0 && components[next - 1].op == i {
+                    next -= 1;
+                    entries += s.0.len();
+                    out[next] = s.clone();
+                }
+            }
+            QecOp::Reset { qubit } => t.reset(*qubit),
+            QecOp::Noise { .. } => {
+                while next > 0 && components[next - 1].op == i {
+                    next -= 1;
+                    let c = components[next];
+                    let s = match c.kind {
+                        Kind::X => &t.x[c.qubit],
+                        _ => &t.z[c.qubit],
+                    };
+                    entries += s.0.len();
+                    out[next] = s.clone();
+                }
+            }
+            QecOp::Detector { records } => {
+                d -= 1;
+                t.detector(d, records);
+            }
+            QecOp::Observable { index, records } => t.observable(*index, records),
+        }
+        if t.work > MAX_MODEL_WORK {
+            return Err(QsoError::invalid(
+                "circuit",
+                format!("the error model needs more than {MAX_MODEL_WORK} operations"),
+            ));
+        }
+        if entries > MAX_SIGNATURE_ENTRIES {
+            return Err(QsoError::invalid(
+                "circuit",
+                format!(
+                    "the errors flip more than {MAX_SIGNATURE_ENTRIES} detectors in all before merging"
+                ),
+            ));
+        }
+    }
+    Ok(out)
+}
+
 /// Words of frame and record memory one propagation pass may use.
+#[cfg(test)]
 const PASS_MEMORY_WORDS: usize = 1 << 24;
 
 /// The effect of each component (sorted by operation), up to 64 words of
-/// 64 components per pass through the circuit.
-fn propagate(circuit: &DetectorCircuit, components: &[Component]) -> Result<Vec<Signature>> {
+/// 64 components per pass forwards through the circuit: the reference of
+/// [`propagate`], quadratic in the rounds of an experiment.
+#[cfg(test)]
+fn propagate_forward(
+    circuit: &DetectorCircuit,
+    components: &[Component],
+) -> Result<Vec<Signature>> {
     let n = circuit.n_qubits();
     let (n_det, n_obs) = (circuit.n_detectors(), circuit.n_observables());
     let per_word = circuit.n_measurements() + 2 * n + n_det + n_obs;
@@ -704,4 +954,167 @@ fn propagate(circuit: &DetectorCircuit, components: &[Component]) -> Result<Vec<
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod backward_tests {
+    use super::*;
+    use crate::qec::codes::{
+        CircuitNoise, MemoryBasis, repetition_code_memory, surface_code_memory_with,
+    };
+    use crate::qec::css::{CssCode, css_code_memory};
+    use crate::rng::Rng;
+
+    fn components(circuit: &DetectorCircuit) -> Vec<Component> {
+        let mut out = Vec::new();
+        for (i, op) in circuit.operations().iter().enumerate() {
+            match op {
+                QecOp::Noise { qubits, .. } => {
+                    for &qubit in qubits {
+                        for kind in [Kind::X, Kind::Z] {
+                            out.push(Component { op: i, qubit, kind });
+                        }
+                    }
+                }
+                QecOp::Measure { flip, .. } if *flip > 0.0 => out.push(Component {
+                    op: i,
+                    qubit: 0,
+                    kind: Kind::Flip,
+                }),
+                _ => {}
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    fn same(circuit: &DetectorCircuit) {
+        let c = components(circuit);
+        let back = propagate(circuit, &c).unwrap();
+        let forward = propagate_forward(circuit, &c).unwrap();
+        assert_eq!(back, forward);
+    }
+
+    /// A random noisy Clifford circuit on `n` qubits with detectors and
+    /// observables on random records (deterministic or not: the effects
+    /// of errors are linear either way).
+    fn random_circuit(n: usize, ops: usize, rng: &mut Rng) -> DetectorCircuit {
+        use crate::quantum::{GateKind, Param};
+        let mut c = DetectorCircuit::new(n).unwrap();
+        let q = |rng: &mut Rng| rng.below(n as u64) as usize;
+        for _ in 0..ops {
+            let a = q(rng);
+            let b = (a + 1 + rng.below(n as u64 - 1) as usize) % n;
+            match rng.below(14) {
+                0 => {
+                    c.h(a).unwrap();
+                }
+                1 => {
+                    c.s(a).unwrap();
+                }
+                2 => {
+                    c.cx(a, b).unwrap();
+                }
+                3 => {
+                    c.cz(a, b).unwrap();
+                }
+                4 => {
+                    let kind = [GateKind::Sdg, GateKind::SX, GateKind::SXdg, GateKind::Y]
+                        [rng.below(4) as usize];
+                    c.gate(Instruction {
+                        kind,
+                        targets: vec![a],
+                        controls: vec![],
+                        params: vec![],
+                        matrix: None,
+                    })
+                    .unwrap();
+                }
+                5 => {
+                    c.gate(Instruction {
+                        kind: GateKind::RY,
+                        targets: vec![a],
+                        controls: vec![],
+                        params: vec![Param::Value(std::f64::consts::FRAC_PI_2)],
+                        matrix: None,
+                    })
+                    .unwrap();
+                }
+                6 => {
+                    let kind = [GateKind::Swap, GateKind::Y][rng.below(2) as usize];
+                    let inst = if kind == GateKind::Swap {
+                        Instruction {
+                            kind,
+                            targets: vec![a, b],
+                            controls: vec![],
+                            params: vec![],
+                            matrix: None,
+                        }
+                    } else {
+                        Instruction {
+                            kind,
+                            targets: vec![b],
+                            controls: vec![a],
+                            params: vec![],
+                            matrix: None,
+                        }
+                    };
+                    c.gate(inst).unwrap();
+                }
+                7 | 8 => {
+                    c.measure(a, if rng.below(2) == 0 { 0.0 } else { 0.01 })
+                        .unwrap();
+                }
+                9 => {
+                    c.reset(a).unwrap();
+                }
+                10 => {
+                    let noise = [
+                        Noise::XError(0.01),
+                        Noise::YError(0.02),
+                        Noise::ZError(0.03),
+                        Noise::Depolarize1(0.01),
+                    ][rng.below(4) as usize];
+                    c.noise(noise, &[a]).unwrap();
+                }
+                11 => {
+                    c.noise(Noise::Depolarize2(0.01), &[a, b]).unwrap();
+                }
+                _ => {
+                    let m = c.n_measurements();
+                    if m > 0 {
+                        let k = 1 + rng.below(3) as usize;
+                        let recs: Vec<usize> =
+                            (0..k).map(|_| rng.below(m as u64) as usize).collect();
+                        if rng.below(4) == 0 {
+                            c.observable(rng.below(3) as usize, &recs).unwrap();
+                        } else {
+                            c.detector(&recs).unwrap();
+                        }
+                    }
+                }
+            }
+        }
+        c
+    }
+
+    #[test]
+    fn the_pass_backwards_equals_frames_propagated_forwards() {
+        let noise = CircuitNoise::uniform(1e-3);
+        same(&repetition_code_memory(5, 7, &noise).unwrap());
+        for basis in [MemoryBasis::Z, MemoryBasis::X] {
+            same(&surface_code_memory_with(3, 4, &noise, basis).unwrap());
+            same(&surface_code_memory_with(5, 3, &noise, basis).unwrap());
+        }
+        let colour = CssCode::color_code(5).unwrap();
+        same(&css_code_memory(&colour, 3, &noise, MemoryBasis::Z).unwrap());
+        let (bb, _) = CssCode::bivariate_bicycle_code(72).unwrap();
+        same(&css_code_memory(&bb, 2, &noise, MemoryBasis::X).unwrap());
+        let mut rng = Rng::seed_from_u64(61);
+        for trial in 0..200 {
+            let n = 2 + trial % 6;
+            same(&random_circuit(n, 20 + 3 * trial, &mut rng));
+        }
+    }
 }
