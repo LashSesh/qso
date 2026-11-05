@@ -29,8 +29,8 @@ const BATCH_MEMORY_WORDS: usize = 1 << 24;
 
 /// Shots per batch of `circuit`: up to 1024, fewer when frames and
 /// measurement records would exceed [`BATCH_MEMORY_WORDS`].
-pub(crate) fn batch_shots(circuit: &DetectorCircuit) -> usize {
-    let per_word = circuit.n_measurements() + 2 * circuit.n_qubits() + circuit.n_detectors();
+pub(crate) fn batch_shots(circuit: &dyn Walk) -> usize {
+    let per_word = circuit.ring() + 2 * circuit.n_qubits() + circuit.n_detectors();
     64 * (BATCH_MEMORY_WORDS / per_word.max(1)).clamp(1, BATCH_WORDS)
 }
 
@@ -212,7 +212,7 @@ pub fn sample_detectors(
 /// of consecutive calls whose shots are multiples of [`batch_shots`]
 /// equal those of one call.
 pub(crate) fn sample_with(
-    circuit: &DetectorCircuit,
+    circuit: &dyn Walk,
     shots: usize,
     rng: &mut Rng,
 ) -> Result<DetectorSamples> {
@@ -230,7 +230,7 @@ pub(crate) fn sample_with(
     while done < shots {
         let batch = (shots - done).min(batch_size);
         let w = batch.div_ceil(64);
-        let (det, obs) = run_batch(circuit, batch, w, rng)?;
+        let (det, obs) = run_batch(circuit, batch, w, rng, false)?;
         let first_word = done / 64;
         for d in 0..n_det {
             out.detectors[d * words + first_word..d * words + first_word + w]
@@ -248,10 +248,9 @@ pub(crate) fn sample_with(
     Ok(out)
 }
 
-pub(crate) fn check_deterministic(circuit: &DetectorCircuit) -> Result<()> {
-    let quiet = circuit.without_noise();
+pub(crate) fn check_deterministic(circuit: &dyn Walk) -> Result<()> {
     let mut rng = Rng::seed_from_u64(0x5eed);
-    let (det, obs) = run_batch(&quiet, 64, 1, &mut rng)?;
+    let (det, obs) = run_batch(circuit, 64, 1, &mut rng, true)?;
     if let Some(d) = (0..circuit.n_detectors()).find(|&d| det[d] != 0) {
         return Err(QsoError::invalid(
             "detector",
@@ -267,14 +266,60 @@ pub(crate) fn check_deterministic(circuit: &DetectorCircuit) -> Result<()> {
     Ok(())
 }
 
+/// A circuit as the sampler sees it: its register, detectors, observables
+/// and how many measurement records it reaches back at most (the size of
+/// the ring of records), and its operations in order.
+pub(crate) trait Walk {
+    fn n_qubits(&self) -> usize;
+    fn n_detectors(&self) -> usize;
+    fn n_observables(&self) -> usize;
+    /// Records kept: no detector or observable reaches further back.
+    fn ring(&self) -> usize;
+    /// Calls `f(op, records)` for every operation in order, with the
+    /// records of a detector or observable as indices into the whole
+    /// measurement record.
+    fn walk(&self, f: &mut dyn FnMut(&QecOp, &[usize]) -> Result<()>) -> Result<()>;
+}
+
+impl Walk for DetectorCircuit {
+    fn n_qubits(&self) -> usize {
+        DetectorCircuit::n_qubits(self)
+    }
+
+    fn n_detectors(&self) -> usize {
+        DetectorCircuit::n_detectors(self)
+    }
+
+    fn n_observables(&self) -> usize {
+        DetectorCircuit::n_observables(self)
+    }
+
+    fn ring(&self) -> usize {
+        self.n_measurements().max(1)
+    }
+
+    fn walk(&self, f: &mut dyn FnMut(&QecOp, &[usize]) -> Result<()>) -> Result<()> {
+        for op in self.operations() {
+            let records: &[usize] = match op {
+                QecOp::Detector { records } | QecOp::Observable { records, .. } => records,
+                _ => &[],
+            };
+            f(op, records)?;
+        }
+        Ok(())
+    }
+}
+
 /// Run one batch of `shots ≤ 64 w` shots; returns detection events
 /// (`n_detectors × w` words) and observable flips (one row of `w` words per
-/// observable). The Z frames of fresh qubits are drawn at random.
-fn run_batch(
-    circuit: &DetectorCircuit,
+/// observable). The Z frames of fresh qubits are drawn at random. With
+/// `quiet`, noise and measurement flips are left out.
+pub(crate) fn run_batch(
+    circuit: &dyn Walk,
     shots: usize,
     w: usize,
     rng: &mut Rng,
+    quiet: bool,
 ) -> Result<(Vec<u64>, Vec<Vec<u64>>)> {
     let n = circuit.n_qubits();
     let mut f = Frames::new(n, w);
@@ -294,45 +339,56 @@ fn run_batch(
     for q in 0..n {
         random_words(rng, &mut f.z[q * w..(q + 1) * w]);
     }
-    let mut records: Vec<u64> = Vec::with_capacity(circuit.n_measurements() * w);
+    // The last `ring` measurement records, record r in slot r % ring.
+    let ring = circuit.ring().max(1);
+    let mut records: Vec<u64> = vec![0; ring * w];
+    let mut measured = 0usize;
     let mut det = Vec::with_capacity(circuit.n_detectors() * w);
     let mut obs = vec![vec![0u64; w]; circuit.n_observables()];
     let flip = |bits: &mut [u64], s: usize| bits[s / 64] ^= 1 << (s % 64);
-    for op in circuit.operations() {
+    circuit.walk(&mut |op, recs| {
         match op {
             QecOp::Gate(inst) => apply_clifford(&mut f, inst, &[])?,
             QecOp::Measure { qubit, flip: p } => {
-                let mut bits = f.x[qubit * w..(qubit + 1) * w].to_vec();
-                bernoulli_hits(shots, *p, rng, |s| flip(&mut bits, s));
-                records.extend_from_slice(&bits);
+                let slot = (measured % ring) * w;
+                let bits = &mut records[slot..slot + w];
+                bits.copy_from_slice(&f.x[qubit * w..(qubit + 1) * w]);
+                if !quiet {
+                    bernoulli_hits(shots, *p, rng, |s| flip(bits, s));
+                }
+                measured += 1;
                 random_words(rng, &mut f.z[qubit * w..(qubit + 1) * w]);
             }
             QecOp::Reset { qubit } => {
                 f.x[qubit * w..(qubit + 1) * w].fill(0);
                 random_words(rng, &mut f.z[qubit * w..(qubit + 1) * w]);
             }
-            QecOp::Noise { noise, qubits } => apply_noise(&mut f, *noise, qubits, shots, rng),
-            QecOp::Detector { records: recs } => {
+            QecOp::Noise { noise, qubits } => {
+                if !quiet {
+                    apply_noise(&mut f, *noise, qubits, shots, rng);
+                }
+            }
+            QecOp::Detector { .. } => {
                 let mut bits = vec![0u64; w];
                 for &r in recs {
+                    let slot = (r % ring) * w;
                     for k in 0..w {
-                        bits[k] ^= records[r * w + k];
+                        bits[k] ^= records[slot + k];
                     }
                 }
                 det.extend_from_slice(&bits);
             }
-            QecOp::Observable {
-                index,
-                records: recs,
-            } => {
+            QecOp::Observable { index, .. } => {
                 for &r in recs {
+                    let slot = (r % ring) * w;
                     for k in 0..w {
-                        obs[*index][k] ^= records[r * w + k];
+                        obs[*index][k] ^= records[slot + k];
                     }
                 }
             }
         }
-    }
+        Ok(())
+    })?;
     Ok((det, obs))
 }
 

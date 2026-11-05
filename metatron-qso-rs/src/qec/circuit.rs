@@ -84,11 +84,69 @@ pub struct DetectorCircuit {
     observables: usize,
 }
 
-fn check_probability(p: f64, max: f64) -> Result<()> {
+pub(super) fn check_probability(p: f64, max: f64) -> Result<()> {
     if !(0.0..=max).contains(&p) {
         return Err(QsoError::invalid(
             "probability",
             format!("{p} is not a probability in [0, {max}]"),
+        ));
+    }
+    Ok(())
+}
+
+/// `q` is a qubit of a register of `n`.
+pub(super) fn check_qubit(n: usize, q: usize) -> Result<()> {
+    if q >= n {
+        return Err(QsoError::QubitOutOfRange {
+            qubit: q,
+            n_qubits: n,
+        });
+    }
+    Ok(())
+}
+
+/// A Clifford gate on a register of `n` with numbers for parameters.
+pub(super) fn check_gate(n: usize, inst: &Instruction) -> Result<()> {
+    validate_instruction(inst, &[], n)?;
+    if !is_clifford_instruction(inst, &[]) {
+        return Err(QsoError::invalid(
+            "gate",
+            format!("{} is not a Clifford gate", inst.kind.name()),
+        ));
+    }
+    Ok(())
+}
+
+/// Noise of a valid probability on qubits of a register of `n` (pairs of
+/// different qubits for two-qubit noise).
+pub(super) fn check_noise(n: usize, noise: &Noise, qubits: &[usize]) -> Result<()> {
+    check_probability(noise.probability(), noise.max_probability())?;
+    for &q in qubits {
+        check_qubit(n, q)?;
+    }
+    if let Noise::Depolarize2(_) = noise {
+        if !qubits.len().is_multiple_of(2) {
+            return Err(QsoError::invalid(
+                "qubits",
+                "two-qubit noise needs an even number of qubits",
+            ));
+        }
+        if qubits.chunks(2).any(|p| p[0] == p[1]) {
+            return Err(QsoError::invalid(
+                "qubits",
+                "two-qubit noise acts on two different qubits",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// An observable index below [`MAX_OBSERVABLES`].
+pub(super) fn check_observable(index: usize) -> Result<()> {
+    if index >= MAX_OBSERVABLES {
+        return Err(QsoError::invalid(
+            "observable",
+            format!("observable indices are below {MAX_OBSERVABLES}"),
         ));
     }
     Ok(())
@@ -168,24 +226,12 @@ impl DetectorCircuit {
     }
 
     fn check(&self, q: usize) -> Result<()> {
-        if q >= self.n {
-            return Err(QsoError::QubitOutOfRange {
-                qubit: q,
-                n_qubits: self.n,
-            });
-        }
-        Ok(())
+        check_qubit(self.n, q)
     }
 
     /// Append a Clifford gate (parameters must be numbers).
     pub fn gate(&mut self, inst: Instruction) -> Result<&mut Self> {
-        validate_instruction(&inst, &[], self.n)?;
-        if !is_clifford_instruction(&inst, &[]) {
-            return Err(QsoError::invalid(
-                "gate",
-                format!("{} is not a Clifford gate", inst.kind.name()),
-            ));
-        }
+        check_gate(self.n, &inst)?;
         self.push(QecOp::Gate(inst))?;
         Ok(self)
     }
@@ -280,24 +326,7 @@ impl DetectorCircuit {
 
     /// Pauli noise on `qubits` (pairs of them for [`Noise::Depolarize2`]).
     pub fn noise(&mut self, noise: Noise, qubits: &[usize]) -> Result<&mut Self> {
-        check_probability(noise.probability(), noise.max_probability())?;
-        for &q in qubits {
-            self.check(q)?;
-        }
-        if let Noise::Depolarize2(_) = noise {
-            if !qubits.len().is_multiple_of(2) {
-                return Err(QsoError::invalid(
-                    "qubits",
-                    "two-qubit noise needs an even number of qubits",
-                ));
-            }
-            if qubits.chunks(2).any(|p| p[0] == p[1]) {
-                return Err(QsoError::invalid(
-                    "qubits",
-                    "two-qubit noise acts on two different qubits",
-                ));
-            }
-        }
+        check_noise(self.n, &noise, qubits)?;
         if noise.probability() > 0.0 && !qubits.is_empty() {
             self.push(QecOp::Noise {
                 noise,
@@ -332,12 +361,7 @@ impl DetectorCircuit {
 
     /// Add these measurement records to logical observable `index`.
     pub fn observable(&mut self, index: usize, records: &[usize]) -> Result<&mut Self> {
-        if index >= MAX_OBSERVABLES {
-            return Err(QsoError::invalid(
-                "observable",
-                format!("observable indices are below {MAX_OBSERVABLES}"),
-            ));
-        }
+        check_observable(index)?;
         self.check_records(records)?;
         self.push(QecOp::Observable {
             index,

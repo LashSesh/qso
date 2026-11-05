@@ -2,8 +2,11 @@
 //! bicycle codes, and memory experiments for any of them.
 
 use super::circuit::{DetectorCircuit, MAX_OBSERVABLES, Noise};
-use super::codes::{CircuitNoise, MAX_DISTANCE, MemoryBasis, Noisy, check_rounds, check_size};
+use super::codes::{
+    CircuitNoise, MAX_DISTANCE, MemoryBasis, Noisy, Rounds, check_rounds, check_size, repeated,
+};
 use super::gf2::{self, Basis};
+use super::repeat::RepeatedCircuit;
 use crate::error::{QsoError, Result};
 use serde::{Deserialize, Serialize};
 
@@ -401,10 +404,7 @@ pub fn css_code_memory(
     noise: &CircuitNoise,
     basis: MemoryBasis,
 ) -> Result<DetectorCircuit> {
-    check_rounds(rounds)?;
-    check_logicals(code)?;
-    check_size(rounds, |r| build_css(code, r, noise, basis))?;
-    build_css(code, rounds, noise, basis)
+    css_code_memory_with(code, rounds, noise, basis, CssSchedule::Greedy)
 }
 
 fn check_logicals(code: &CssCode) -> Result<()> {
@@ -438,11 +438,40 @@ pub fn css_code_memory_with(
     basis: MemoryBasis,
     schedule: CssSchedule,
 ) -> Result<DetectorCircuit> {
+    check_rounds(rounds)?;
+    let build = css_builder(code, noise, basis, schedule)?;
+    check_size(rounds, |r| Ok(build(r)?.0))?;
+    Ok(build(rounds)?.0)
+}
+
+/// [`css_code_memory_with`] with rounds 2 to `rounds` as one repeated
+/// block, for up to [`super::MAX_REPEATED_ROUNDS`] rounds; expanded it is
+/// the same circuit.
+pub fn css_code_memory_repeated(
+    code: &CssCode,
+    rounds: usize,
+    noise: &CircuitNoise,
+    basis: MemoryBasis,
+    schedule: CssSchedule,
+) -> Result<RepeatedCircuit> {
+    let build = css_builder(code, noise, basis, schedule)?;
+    repeated(rounds, build)
+}
+
+/// The rounds of a memory experiment of `code` with the CNOTs of
+/// `schedule`, once the code and schedule are checked.
+type CssBuilder<'a> = Box<dyn Fn(usize) -> Result<Rounds> + 'a>;
+
+fn css_builder<'a>(
+    code: &'a CssCode,
+    noise: &'a CircuitNoise,
+    basis: MemoryBasis,
+    schedule: CssSchedule,
+) -> Result<CssBuilder<'a>> {
+    check_logicals(code)?;
     match schedule {
-        CssSchedule::Greedy => css_code_memory(code, rounds, noise, basis),
+        CssSchedule::Greedy => Ok(Box::new(move |r| build_css(code, r, noise, basis))),
         CssSchedule::Directions(order) => {
-            check_rounds(rounds)?;
-            check_logicals(code)?;
             let Some(faces) = &code.faces else {
                 return Err(QsoError::invalid(
                     "schedule",
@@ -468,21 +497,20 @@ pub fn css_code_memory_with(
                         .collect()
                 })
                 .collect();
-            let build = |r: usize| build_layered(code, r, noise, basis, &layers, &layers);
-            check_size(rounds, build)?;
-            build(rounds)
+            Ok(Box::new(move |r| {
+                build_layered(code, r, noise, basis, &layers, &layers)
+            }))
         }
         CssSchedule::Bicycle => {
-            check_rounds(rounds)?;
-            check_logicals(code)?;
             let Some(bicycle) = &code.bicycle else {
                 return Err(QsoError::invalid(
                     "schedule",
                     "the bicycle schedule needs a bivariate bicycle code with three monomials in each polynomial",
                 ));
             };
-            check_size(rounds, |r| build_bicycle(code, bicycle, r, noise, basis))?;
-            build_bicycle(code, bicycle, rounds, noise, basis)
+            Ok(Box::new(move |r| {
+                build_bicycle(code, bicycle, r, noise, basis)
+            }))
         }
     }
 }
@@ -494,7 +522,7 @@ fn build_bicycle(
     rounds: usize,
     noise: &CircuitNoise,
     basis: MemoryBasis,
-) -> Result<DetectorCircuit> {
+) -> Result<Rounds> {
     let x_basis = basis == MemoryBasis::X;
     let Bicycle { l, m, a, b } = *bicycle;
     let lm = l * m;
@@ -521,10 +549,7 @@ fn build_bicycle(
     let xs: Vec<usize> = checks.iter().map(|&c| x_anc(c)).collect();
     let zs: Vec<usize> = checks.iter().map(|&c| z_anc(c)).collect();
     let data: Vec<usize> = (0..n).collect();
-    let mut q = Noisy {
-        c: DetectorCircuit::new(2 * n)?,
-        noise,
-    };
+    let mut q = Noisy::new(DetectorCircuit::new(2 * n)?, noise);
     q.reset(&(0..2 * n).collect::<Vec<_>>())?;
     if x_basis {
         q.h(&data)?;
@@ -569,6 +594,7 @@ fn build_bicycle(
     };
     let mut previous: Option<Vec<usize>> = None;
     for _ in 0..rounds {
+        q.mark();
         q.c.noise(Noise::Depolarize1(noise.before_round), &data)?;
         // Round 1: X ancillas to |+⟩.
         q.reset(&xs)?;
@@ -595,6 +621,7 @@ fn build_bicycle(
         }
         previous = Some(detected);
     }
+    q.mark();
     let last = previous.expect("at least one round");
     if x_basis {
         q.h(&data)?;
@@ -618,7 +645,7 @@ fn build_bicycle(
     for (i, lg) in logicals.iter().enumerate() {
         q.c.observable(i, &lg.iter().map(|&d| measured[d]).collect::<Vec<_>>())?;
     }
-    Ok(q.c)
+    Ok((q.c, q.marks))
 }
 
 fn build_css(
@@ -626,7 +653,7 @@ fn build_css(
     rounds: usize,
     noise: &CircuitNoise,
     basis: MemoryBasis,
-) -> Result<DetectorCircuit> {
+) -> Result<Rounds> {
     let x_layers = layers(&code.x_checks, code.n);
     let z_layers = layers(&code.z_checks, code.n);
     build_layered(code, rounds, noise, basis, &x_layers, &z_layers)
@@ -641,15 +668,12 @@ fn build_layered(
     basis: MemoryBasis,
     x_layers: &[Vec<(usize, usize)>],
     z_layers: &[Vec<(usize, usize)>],
-) -> Result<DetectorCircuit> {
+) -> Result<Rounds> {
     let x_basis = basis == MemoryBasis::X;
     let n = code.n;
     let (rx, rz) = (code.x_checks.len(), code.z_checks.len());
     let total = n + rx + rz;
-    let mut b = Noisy {
-        c: DetectorCircuit::new(total)?,
-        noise,
-    };
+    let mut b = Noisy::new(DetectorCircuit::new(total)?, noise);
     let data: Vec<usize> = (0..n).collect();
     let x_anc: Vec<usize> = (n..n + rx).collect();
     let all_anc: Vec<usize> = (n..total).collect();
@@ -666,6 +690,7 @@ fn build_layered(
     let detected_offset = if x_basis { 0 } else { rx };
     let mut previous: Option<Vec<usize>> = None;
     for _ in 0..rounds {
+        b.mark();
         b.c.noise(Noise::Depolarize1(noise.before_round), &data)?;
         if rx > 0 {
             b.h(&x_anc)?;
@@ -691,6 +716,7 @@ fn build_layered(
         b.reset(&all_anc)?;
         previous = Some(m);
     }
+    b.mark();
     let last = previous.expect("at least one round");
     if x_basis {
         b.h(&data)?;
@@ -709,7 +735,7 @@ fn build_layered(
     for (i, l) in logicals.iter().enumerate() {
         b.c.observable(i, &l.iter().map(|&q| m[q]).collect::<Vec<_>>())?;
     }
-    Ok(b.c)
+    Ok((b.c, b.marks))
 }
 
 #[cfg(test)]

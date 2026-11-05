@@ -7,11 +7,13 @@ use crate::error::{QsoError, Result};
 use crate::quantum::{GateKind, Instruction, Param};
 use crate::stabilizer::{CliffordTarget, apply_clifford};
 
-/// Writes each Clifford gate as Stim's H, S, S_DAG, X, Y, Z, CX and SWAP.
-struct Writer<'a>(&'a mut String);
+/// Writes each Clifford gate as Stim's H, S, S_DAG, X, Y, Z, CX and SWAP,
+/// each line after the indentation.
+struct Writer<'a>(&'a mut String, &'a str);
 
 impl Writer<'_> {
     fn line(&mut self, gate: &str, qubits: &[usize]) {
+        self.0.push_str(self.1);
         self.0.push_str(gate);
         for q in qubits {
             let _ = write!(self.0, " {q}");
@@ -54,11 +56,57 @@ impl CliffordTarget for Writer<'_> {
     }
 }
 
-fn records(out: &mut String, recs: &[usize], measured: usize) {
-    for &r in recs {
-        let _ = write!(out, " rec[-{}]", measured - r);
+fn records(out: &mut String, lookbacks: impl Iterator<Item = usize>) {
+    for k in lookbacks {
+        let _ = write!(out, " rec[-{k}]");
     }
     out.push('\n');
+}
+
+/// One operation in Stim's format after `indent`, its records given as
+/// lookbacks by `lookback`.
+pub(super) fn write_op(
+    out: &mut String,
+    op: &QecOp,
+    indent: &str,
+    lookback: &dyn Fn(usize) -> usize,
+) -> Result<()> {
+    match op {
+        QecOp::Gate(inst) => apply_clifford(&mut Writer(out, indent), inst, &[])?,
+        QecOp::Measure { qubit, flip } => {
+            if *flip > 0.0 {
+                let _ = writeln!(out, "{indent}M({flip:?}) {qubit}");
+            } else {
+                let _ = writeln!(out, "{indent}M {qubit}");
+            }
+        }
+        QecOp::Reset { qubit } => {
+            let _ = writeln!(out, "{indent}R {qubit}");
+        }
+        QecOp::Noise { noise, qubits } => {
+            let name = match noise {
+                Noise::XError(_) => "X_ERROR",
+                Noise::YError(_) => "Y_ERROR",
+                Noise::ZError(_) => "Z_ERROR",
+                Noise::Depolarize1(_) => "DEPOLARIZE1",
+                Noise::Depolarize2(_) => "DEPOLARIZE2",
+            };
+            Writer(out, indent).line(&format!("{name}({:?})", noise.probability()), qubits);
+        }
+        QecOp::Detector { records: recs } => {
+            out.push_str(indent);
+            out.push_str("DETECTOR");
+            records(out, recs.iter().map(|&r| lookback(r)));
+        }
+        QecOp::Observable {
+            index,
+            records: recs,
+        } => {
+            let _ = write!(out, "{indent}OBSERVABLE_INCLUDE({index})");
+            records(out, recs.iter().map(|&r| lookback(r)));
+        }
+    }
+    Ok(())
 }
 
 impl DetectorCircuit {
@@ -72,40 +120,9 @@ impl DetectorCircuit {
         let mut out = String::new();
         let mut measured = 0;
         for op in self.operations() {
-            match op {
-                QecOp::Gate(inst) => apply_clifford(&mut Writer(&mut out), inst, &[])?,
-                QecOp::Measure { qubit, flip } => {
-                    if *flip > 0.0 {
-                        let _ = writeln!(out, "M({flip:?}) {qubit}");
-                    } else {
-                        let _ = writeln!(out, "M {qubit}");
-                    }
-                    measured += 1;
-                }
-                QecOp::Reset { qubit } => {
-                    let _ = writeln!(out, "R {qubit}");
-                }
-                QecOp::Noise { noise, qubits } => {
-                    let name = match noise {
-                        Noise::XError(_) => "X_ERROR",
-                        Noise::YError(_) => "Y_ERROR",
-                        Noise::ZError(_) => "Z_ERROR",
-                        Noise::Depolarize1(_) => "DEPOLARIZE1",
-                        Noise::Depolarize2(_) => "DEPOLARIZE2",
-                    };
-                    Writer(&mut out).line(&format!("{name}({:?})", noise.probability()), qubits);
-                }
-                QecOp::Detector { records: recs } => {
-                    out.push_str("DETECTOR");
-                    records(&mut out, recs, measured);
-                }
-                QecOp::Observable {
-                    index,
-                    records: recs,
-                } => {
-                    let _ = write!(out, "OBSERVABLE_INCLUDE({index})");
-                    records(&mut out, recs, measured);
-                }
+            write_op(&mut out, op, "", &|r| measured - r)?;
+            if let QecOp::Measure { .. } = op {
+                measured += 1;
             }
         }
         Ok(out)
@@ -350,11 +367,100 @@ fn measure_items(items: &[Item]) -> (u64, Option<usize>) {
     (ops, max)
 }
 
-struct Builder {
-    c: DetectorCircuit,
+/// Where an imported circuit goes: a flat circuit (REPEAT blocks
+/// expanded) or one that keeps its blocks.
+pub(super) trait Sink {
+    fn gate(&mut self, inst: Instruction) -> Result<()>;
+    fn measure(&mut self, qubit: usize, flip: f64) -> Result<()>;
+    fn reset(&mut self, qubit: usize) -> Result<()>;
+    fn noise(&mut self, noise: Noise, qubits: &[usize]) -> Result<()>;
+    /// A detector on the measurements `lookbacks` back (1: the last).
+    fn detector(&mut self, lookbacks: &[usize]) -> Result<()>;
+    fn observable(&mut self, index: usize, lookbacks: &[usize]) -> Result<()>;
+    /// Measurements so far (in the first iteration of open blocks).
+    fn measured(&self) -> usize;
+    /// Opens a block of `count` iterations, if the sink keeps blocks.
+    fn begin_repeat(&mut self, count: u64) -> Result<bool>;
+    fn end_repeat(&mut self) -> Result<()>;
 }
 
-impl Builder {
+impl Sink for DetectorCircuit {
+    fn gate(&mut self, inst: Instruction) -> Result<()> {
+        DetectorCircuit::gate(self, inst).map(|_| ())
+    }
+
+    fn measure(&mut self, qubit: usize, flip: f64) -> Result<()> {
+        DetectorCircuit::measure(self, qubit, flip).map(|_| ())
+    }
+
+    fn reset(&mut self, qubit: usize) -> Result<()> {
+        DetectorCircuit::reset(self, qubit).map(|_| ())
+    }
+
+    fn noise(&mut self, noise: Noise, qubits: &[usize]) -> Result<()> {
+        DetectorCircuit::noise(self, noise, qubits).map(|_| ())
+    }
+
+    fn detector(&mut self, lookbacks: &[usize]) -> Result<()> {
+        let m = self.n_measurements();
+        let r: Vec<usize> = lookbacks.iter().map(|&k| m - k).collect();
+        DetectorCircuit::detector(self, &r).map(|_| ())
+    }
+
+    fn observable(&mut self, index: usize, lookbacks: &[usize]) -> Result<()> {
+        let m = self.n_measurements();
+        let r: Vec<usize> = lookbacks.iter().map(|&k| m - k).collect();
+        DetectorCircuit::observable(self, index, &r).map(|_| ())
+    }
+
+    fn measured(&self) -> usize {
+        self.n_measurements()
+    }
+
+    fn begin_repeat(&mut self, _: u64) -> Result<bool> {
+        Ok(false)
+    }
+
+    fn end_repeat(&mut self) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// A parsed Stim circuit: its items, the register it needs and the
+/// operations it expands to (saturating).
+pub(super) struct Parsed {
+    items: Vec<Item>,
+    pub(super) n: usize,
+    pub(super) expanded: u64,
+}
+
+pub(super) fn parse(text: &str) -> Result<Parsed> {
+    let mut lines = text
+        .lines()
+        .enumerate()
+        .map(|(i, l)| (i + 1, l.to_string()))
+        .peekable();
+    let items = parse_items(&mut lines, 0)?;
+    let (expanded, max) = measure_items(&items);
+    Ok(Parsed {
+        items,
+        n: max.map_or(1, |q| q + 1),
+        expanded,
+    })
+}
+
+/// Emit a parsed circuit into `sink`.
+pub(super) fn emit<S: Sink>(parsed: &Parsed, sink: S) -> Result<S> {
+    let mut b = Builder { c: sink };
+    b.emit(&parsed.items)?;
+    Ok(b.c)
+}
+
+struct Builder<S: Sink> {
+    c: S,
+}
+
+impl<S: Sink> Builder<S> {
     fn gate(
         &mut self,
         kind: GateKind,
@@ -368,16 +474,16 @@ impl Builder {
             controls: control.into_iter().collect(),
             params: angle.into_iter().map(Param::Value).collect(),
             matrix: None,
-        })?;
-        Ok(())
+        })
     }
 
+    /// The lookbacks of record targets (1: the last measurement).
     fn records(&self, targets: &[Target], line: usize) -> Result<Vec<usize>> {
-        let measured = self.c.n_measurements();
+        let measured = self.c.measured();
         targets
             .iter()
             .map(|t| match *t {
-                Target::Record(k) if k <= measured => Ok(measured - k),
+                Target::Record(k) if k <= measured => Ok(k),
                 Target::Record(k) => Err(parse_error(
                     line,
                     format!("rec[-{k}] before {measured} measurements"),
@@ -391,8 +497,13 @@ impl Builder {
         for item in items {
             match item {
                 Item::Repeat { count, body } => {
-                    for _ in 0..*count {
+                    if self.c.begin_repeat(*count)? {
                         self.emit(body)?;
+                        self.c.end_repeat()?;
+                    } else {
+                        for _ in 0..*count {
+                            self.emit(body)?;
+                        }
                     }
                 }
                 Item::Instruction {
@@ -508,8 +619,7 @@ impl Builder {
                     controls: vec![],
                     params: vec![],
                     matrix: None,
-                })?;
-                Ok(())
+                })
             })?,
             "X_ERROR" => noise(self, Noise::XError(p))?,
             "Y_ERROR" => noise(self, Noise::YError(p))?,
@@ -574,26 +684,16 @@ impl DetectorCircuit {
     /// needs. Other instructions (feedback, MPP, correlated or heralded
     /// errors, PAULI_CHANNEL) are an error that names them.
     pub fn from_stim(text: &str) -> Result<DetectorCircuit> {
-        let mut lines = text
-            .lines()
-            .enumerate()
-            .map(|(i, l)| (i + 1, l.to_string()))
-            .peekable();
-        let items = parse_items(&mut lines, 0)?;
-        let (ops, max) = measure_items(&items);
-        if ops > MAX_QEC_OPERATIONS as u64 {
+        let parsed = parse(text)?;
+        if parsed.expanded > MAX_QEC_OPERATIONS as u64 {
             return Err(QsoError::invalid(
                 "circuit",
                 format!(
-                    "the circuit expands to more than {MAX_QEC_OPERATIONS} operations and annotations"
+                    "the circuit expands to more than {MAX_QEC_OPERATIONS} operations and annotations; \
+                     RepeatedCircuit::from_stim keeps its REPEAT blocks"
                 ),
             ));
         }
-        let n = max.map_or(1, |q| q + 1);
-        let mut b = Builder {
-            c: DetectorCircuit::new(n)?,
-        };
-        b.emit(&items)?;
-        Ok(b.c)
+        emit(&parsed, DetectorCircuit::new(parsed.n)?)
     }
 }

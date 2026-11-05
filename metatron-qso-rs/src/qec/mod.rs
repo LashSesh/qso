@@ -44,6 +44,7 @@ pub mod distance;
 pub mod frame;
 mod gf2;
 pub mod matching;
+pub mod repeat;
 pub mod sparse;
 pub mod splitting;
 mod stim;
@@ -54,12 +55,14 @@ pub use bposd::{
 };
 pub use circuit::{DetectorCircuit, MAX_OBSERVABLES, Noise, QecOp};
 pub use codes::{
-    CircuitNoise, MemoryBasis, repetition_code_memory, surface_code_memory,
+    CircuitNoise, MAX_REPEATED_ROUNDS, MemoryBasis, repetition_code_memory,
+    repetition_code_memory_repeated, surface_code_memory, surface_code_memory_repeated,
     surface_code_memory_with,
 };
 pub use correlated::CorrelatedMatchingDecoder;
 pub use css::{
-    COLOR_DIRECTIONS, CssCode, CssSchedule, MAX_CSS_QUBITS, css_code_memory, css_code_memory_with,
+    COLOR_DIRECTIONS, CssCode, CssSchedule, MAX_CSS_QUBITS, css_code_memory,
+    css_code_memory_repeated, css_code_memory_with,
 };
 pub use decoder::{MatchingEdge, MatchingGraph, UnionFindDecoder};
 pub use dem::{
@@ -73,6 +76,7 @@ pub use distance::{
 };
 pub use frame::{DetectorSamples, sample_detectors};
 pub use matching::{MAX_MATCHING_PAIRS, MatchingDecoder};
+pub use repeat::{MAX_REPEATED_OPERATIONS, RepeatedCircuit};
 pub use sparse::SparseMatchingDecoder;
 pub use splitting::{
     EnumeratedFailureRate, LeadingFailures, MAX_SPLITTING_DECODES, MAX_SPLITTING_RATES,

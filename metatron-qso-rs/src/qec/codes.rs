@@ -2,12 +2,16 @@
 //! circuit-level noise.
 
 use super::circuit::{DetectorCircuit, MAX_QEC_OPERATIONS, Noise};
+use super::repeat::RepeatedCircuit;
 use crate::error::{QsoError, Result};
 
 /// Largest code distance the generators build.
 pub const MAX_DISTANCE: usize = 101;
 /// Most rounds of syndrome extraction.
 pub const MAX_ROUNDS: usize = 10_000;
+/// Most rounds of a memory experiment with its rounds as one repeated
+/// block ([`repetition_code_memory_repeated`] and its siblings).
+pub const MAX_REPEATED_ROUNDS: usize = 10_000_000;
 
 /// Circuit-level noise, as in the standard depolarizing model: each
 /// probability may be zero.
@@ -95,13 +99,53 @@ pub(super) fn check_size(
     Ok(())
 }
 
-/// A builder that adds the noise of [`CircuitNoise`] around operations.
+/// A builder that adds the noise of [`CircuitNoise`] around operations,
+/// and marks where each round starts and the last ends.
 pub(super) struct Noisy<'a> {
     pub(super) c: DetectorCircuit,
     pub(super) noise: &'a CircuitNoise,
+    pub(super) marks: Vec<usize>,
+}
+
+/// A memory experiment and the operation at which each round starts and
+/// the last ends.
+pub(super) type Rounds = (DetectorCircuit, Vec<usize>);
+
+/// A memory experiment of `rounds` rounds with rounds 2 to `rounds` as
+/// one repeated block: the experiment of two rounds from `build`, its
+/// second round repeated.
+pub(super) fn repeated(
+    rounds: usize,
+    build: impl Fn(usize) -> Result<Rounds>,
+) -> Result<RepeatedCircuit> {
+    if rounds == 0 || rounds > MAX_REPEATED_ROUNDS {
+        return Err(QsoError::invalid(
+            "rounds",
+            format!("between 1 and {MAX_REPEATED_ROUNDS} rounds of syndrome extraction"),
+        ));
+    }
+    if rounds == 1 {
+        return RepeatedCircuit::from_circuit(&build(1)?.0);
+    }
+    let (c, marks) = build(2)?;
+    debug_assert_eq!(marks.len(), 3);
+    RepeatedCircuit::from_parts(&c, marks[1]..marks[2], rounds - 1)
 }
 
 impl Noisy<'_> {
+    pub(super) fn new(c: DetectorCircuit, noise: &CircuitNoise) -> Noisy<'_> {
+        Noisy {
+            c,
+            noise,
+            marks: Vec::new(),
+        }
+    }
+
+    /// Mark the start of a round (or the end of the last).
+    pub(super) fn mark(&mut self) {
+        self.marks.push(self.c.operations().len());
+    }
+
     pub(super) fn reset(&mut self, qs: &[usize]) -> Result<()> {
         for &q in qs {
             self.c.reset(q)?;
@@ -151,25 +195,31 @@ pub fn repetition_code_memory(
     noise: &CircuitNoise,
 ) -> Result<DetectorCircuit> {
     check(distance, rounds, false)?;
-    check_size(rounds, |r| build_repetition(distance, r, noise))?;
-    build_repetition(distance, rounds, noise)
+    check_size(rounds, |r| Ok(build_repetition(distance, r, noise)?.0))?;
+    Ok(build_repetition(distance, rounds, noise)?.0)
 }
 
-fn build_repetition(
+/// [`repetition_code_memory`] with rounds 2 to `rounds` as one repeated
+/// block, for up to [`MAX_REPEATED_ROUNDS`] rounds; expanded it is the
+/// same circuit.
+pub fn repetition_code_memory_repeated(
     distance: usize,
     rounds: usize,
     noise: &CircuitNoise,
-) -> Result<DetectorCircuit> {
+) -> Result<RepeatedCircuit> {
+    check(distance, 1, false)?;
+    repeated(rounds, |r| build_repetition(distance, r, noise))
+}
+
+fn build_repetition(distance: usize, rounds: usize, noise: &CircuitNoise) -> Result<Rounds> {
     let d = distance;
     let data: Vec<usize> = (0..d).collect();
     let anc: Vec<usize> = (d..2 * d - 1).collect();
-    let mut b = Noisy {
-        c: DetectorCircuit::new(2 * d - 1)?,
-        noise,
-    };
+    let mut b = Noisy::new(DetectorCircuit::new(2 * d - 1)?, noise);
     b.reset(&(0..2 * d - 1).collect::<Vec<_>>())?;
     let mut previous: Option<Vec<usize>> = None;
     for _ in 0..rounds {
+        b.mark();
         b.c.noise(Noise::Depolarize1(noise.before_round), &data)?;
         b.cx(&(0..d - 1).map(|i| (data[i], anc[i])).collect::<Vec<_>>())?;
         b.cx(&(0..d - 1)
@@ -185,13 +235,14 @@ fn build_repetition(
         b.reset(&anc)?;
         previous = Some(m);
     }
+    b.mark();
     let last = previous.expect("at least one round");
     let m = b.measure(&data)?;
     for i in 0..d - 1 {
         b.c.detector(&[last[i], m[i], m[i + 1]])?;
     }
     b.c.observable(0, &[m[0]])?;
-    Ok(b.c)
+    Ok((b.c, b.marks))
 }
 
 /// The logical state a memory experiment protects.
@@ -234,8 +285,21 @@ pub fn surface_code_memory_with(
     basis: MemoryBasis,
 ) -> Result<DetectorCircuit> {
     check(distance, rounds, true)?;
-    check_size(rounds, |r| build_surface(distance, r, noise, basis))?;
-    build_surface(distance, rounds, noise, basis)
+    check_size(rounds, |r| Ok(build_surface(distance, r, noise, basis)?.0))?;
+    Ok(build_surface(distance, rounds, noise, basis)?.0)
+}
+
+/// [`surface_code_memory_with`] with rounds 2 to `rounds` as one repeated
+/// block, for up to [`MAX_REPEATED_ROUNDS`] rounds; expanded it is the
+/// same circuit.
+pub fn surface_code_memory_repeated(
+    distance: usize,
+    rounds: usize,
+    noise: &CircuitNoise,
+    basis: MemoryBasis,
+) -> Result<RepeatedCircuit> {
+    check(distance, 1, true)?;
+    repeated(rounds, |r| build_surface(distance, r, noise, basis))
 }
 
 fn build_surface(
@@ -243,7 +307,7 @@ fn build_surface(
     rounds: usize,
     noise: &CircuitNoise,
     basis: MemoryBasis,
-) -> Result<DetectorCircuit> {
+) -> Result<Rounds> {
     let x_basis = basis == MemoryBasis::X;
     let d = distance as i64;
     let data = |r: i64, c: i64| (r * d + c) as usize;
@@ -271,10 +335,7 @@ fn build_surface(
     // errors run perpendicular to the logical operators.
     let order_x = [(0, 0), (0, 1), (1, 0), (1, 1)];
     let order_z = [(0, 0), (1, 0), (0, 1), (1, 1)];
-    let mut b = Noisy {
-        c: DetectorCircuit::new(n)?,
-        noise,
-    };
+    let mut b = Noisy::new(DetectorCircuit::new(n)?, noise);
     let all: Vec<usize> = (0..n).collect();
     let data_qubits: Vec<usize> = (0..n_data).collect();
     let x_anc: Vec<usize> = (0..plaquettes.len())
@@ -288,6 +349,7 @@ fn build_surface(
     }
     let mut previous: Option<Vec<usize>> = None;
     for _ in 0..rounds {
+        b.mark();
         b.c.noise(Noise::Depolarize1(noise.before_round), &data_qubits)?;
         b.h(&x_anc)?;
         for layer in 0..4 {
@@ -322,6 +384,7 @@ fn build_surface(
         b.reset(&all_anc)?;
         previous = Some(m);
     }
+    b.mark();
     let last = previous.expect("at least one round");
     if x_basis {
         b.h(&data_qubits)?;
@@ -346,5 +409,5 @@ fn build_surface(
         (0..d).map(|c| m[data(0, c)]).collect()
     };
     b.c.observable(0, &logical)?;
-    Ok(b.c)
+    Ok((b.c, b.marks))
 }

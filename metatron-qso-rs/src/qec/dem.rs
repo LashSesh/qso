@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, HashMap};
 use super::circuit::{DetectorCircuit, Noise, QecOp};
 #[cfg(test)]
 use super::frame::Frames;
+use super::repeat::{Block, Repeat, RepeatedCircuit};
 use crate::error::{QsoError, Result};
 use crate::quantum::Instruction;
 use crate::stabilizer::{CliffordTarget, apply_clifford};
@@ -757,6 +758,343 @@ impl Tracker {
             self.work += 1;
         }
     }
+}
+
+impl Tracker {
+    /// Whether this state is `before` with every detector `dd` and every
+    /// record `dm` lower (records whose effect is empty left aside).
+    fn is_shift_of(&self, before: &Tracker, dd: usize, dm: usize) -> bool {
+        let same = |a: &Signature, b: &Signature| {
+            a.1 == b.1 && a.0.len() == b.0.len() && a.0.iter().zip(&b.0).all(|(x, y)| x + dd == *y)
+        };
+        let live = |p: &HashMap<usize, Signature>| p.values().filter(|s| !is_empty(s)).count();
+        self.x.iter().zip(&before.x).all(|(a, b)| same(a, b))
+            && self.z.iter().zip(&before.z).all(|(a, b)| same(a, b))
+            && live(&self.pending) == live(&before.pending)
+            && before
+                .pending
+                .iter()
+                .filter(|(_, s)| !is_empty(s))
+                .all(|(&r, s)| r >= dm && self.pending.get(&(r - dm)).is_some_and(|a| same(a, s)))
+    }
+
+    /// Every detector `dd` and every record `dm` lower.
+    fn shift_down(&mut self, dd: usize, dm: usize) -> Result<()> {
+        let lower = |s: &mut Signature| -> Result<()> {
+            for d in &mut s.0 {
+                *d = d.checked_sub(dd).ok_or_else(|| {
+                    QsoError::invalid("circuit", "a repeated block shifted below detector 0")
+                })?;
+            }
+            Ok(())
+        };
+        for s in self.x.iter_mut().chain(self.z.iter_mut()) {
+            lower(s)?;
+        }
+        let mut pending = HashMap::with_capacity(self.pending.len());
+        for (r, mut s) in std::mem::take(&mut self.pending) {
+            if is_empty(&s) {
+                continue;
+            }
+            lower(&mut s)?;
+            let r = r.checked_sub(dm).ok_or_else(|| {
+                QsoError::invalid("circuit", "a repeated block shifted below record 0")
+            })?;
+            pending.insert(r, s);
+        }
+        self.pending = pending;
+        Ok(())
+    }
+}
+
+/// A key of a merged model whose detectors can be shifted.
+pub(super) trait Key: Ord + Clone {
+    /// The key with every detector `by` lower.
+    fn lowered(&self, by: usize) -> Self;
+    /// Detector entries it holds.
+    fn entries(&self) -> usize;
+}
+
+impl Key for Signature {
+    fn lowered(&self, by: usize) -> Self {
+        (self.0.iter().map(|d| d - by).collect(), self.1)
+    }
+
+    fn entries(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl Key for Vec<Signature> {
+    fn lowered(&self, by: usize) -> Self {
+        self.iter().map(|s| s.lowered(by)).collect()
+    }
+
+    fn entries(&self) -> usize {
+        self.iter().map(|s| s.0.len()).sum()
+    }
+}
+
+/// What one channel adds to a merged model: keys and probabilities.
+pub(super) type Contribute<'a, K> =
+    dyn FnMut(&Channel, &[Signature], &[f64], &mut Vec<(K, f64)>) -> Result<()> + 'a;
+
+/// The pass backwards through a repeated circuit that folds its blocks.
+struct Folder<'a, K: Key> {
+    t: Tracker,
+    steps: Vec<Step>,
+    /// Measurements, detectors and operations before the current point.
+    m: usize,
+    d: usize,
+    op: u64,
+    merged: BTreeMap<K, f64>,
+    /// The contributions of the current iteration of every open block.
+    open: Vec<BTreeMap<K, f64>>,
+    scratch: Vec<(K, f64)>,
+    entries: usize,
+    contribute: &'a mut Contribute<'a, K>,
+}
+
+impl<K: Key> Folder<'_, K> {
+    fn add(&mut self, key: K, p: f64) -> Result<()> {
+        for o in &mut self.open {
+            merge(o, key.clone(), p);
+        }
+        let n = key.entries();
+        let e = self.merged.entry(key);
+        if let std::collections::btree_map::Entry::Vacant(_) = e {
+            self.entries += n;
+            if self.entries > MAX_SIGNATURE_ENTRIES {
+                return Err(QsoError::invalid(
+                    "circuit",
+                    format!(
+                        "the model's errors flip more than {MAX_SIGNATURE_ENTRIES} detectors in all"
+                    ),
+                ));
+            }
+        }
+        let v = e.or_insert(0.0);
+        *v = *v * (1.0 - p) + p * (1.0 - *v);
+        Ok(())
+    }
+
+    fn channel(
+        &mut self,
+        channel: &Channel,
+        basis: &[Signature],
+        probabilities: &[f64],
+    ) -> Result<()> {
+        let mut scratch = std::mem::take(&mut self.scratch);
+        scratch.clear();
+        (self.contribute)(channel, basis, probabilities, &mut scratch)?;
+        for (k, p) in scratch.drain(..) {
+            self.add(k, p)?;
+        }
+        self.scratch = scratch;
+        Ok(())
+    }
+
+    fn op(&mut self, op: &QecOp) -> Result<()> {
+        self.op -= 1;
+        let i = self.op as usize;
+        match op {
+            QecOp::Gate(inst) => self.t.gate(inst, &mut self.steps)?,
+            QecOp::Measure { qubit, flip } => {
+                self.m -= 1;
+                let s = self.t.measure(*qubit, self.m);
+                if *flip > 0.0 {
+                    let mut add = |c: &Channel, b: &[Signature], p: &[f64]| self.channel(c, b, p);
+                    flip_channel(i, *qubit, *flip, s, &mut add)?;
+                }
+            }
+            QecOp::Reset { qubit } => self.t.reset(*qubit),
+            QecOp::Noise { noise, qubits } => {
+                // The effects are read while contributions are added.
+                let (x, z) = (std::mem::take(&mut self.t.x), std::mem::take(&mut self.t.z));
+                let mut add = |c: &Channel, b: &[Signature], p: &[f64]| self.channel(c, b, p);
+                let done = noise_channels(
+                    i,
+                    *noise,
+                    qubits,
+                    &|q| x[q].clone(),
+                    &|q| z[q].clone(),
+                    &mut add,
+                );
+                self.t.x = x;
+                self.t.z = z;
+                done?;
+            }
+            QecOp::Detector { records } => {
+                self.d -= 1;
+                let r: Vec<usize> = records.iter().map(|&k| self.m - k).collect();
+                self.t.detector(self.d, &r);
+            }
+            QecOp::Observable { index, records } => {
+                let r: Vec<usize> = records.iter().map(|&k| self.m - k).collect();
+                self.t.observable(*index, &r);
+            }
+        }
+        if self.t.work > MAX_MODEL_WORK {
+            return Err(QsoError::invalid(
+                "circuit",
+                format!("the error model needs more than {MAX_MODEL_WORK} operations"),
+            ));
+        }
+        Ok(())
+    }
+
+    fn blocks(&mut self, blocks: &[Block]) -> Result<()> {
+        for block in blocks.iter().rev() {
+            match block {
+                Block::Ops(ops) => {
+                    for op in ops.iter().rev() {
+                        self.op(op)?;
+                    }
+                }
+                Block::Repeat(r) => self.repeat(r)?,
+            }
+        }
+        Ok(())
+    }
+
+    /// The iterations of `r` from the last; once an iteration's start is
+    /// its end shifted by one iteration, the earlier ones are its
+    /// contributions shifted.
+    fn repeat(&mut self, r: &Repeat) -> Result<()> {
+        self.open.push(BTreeMap::new());
+        let mut j = r.count;
+        while j > 0 {
+            j -= 1;
+            self.open.last_mut().expect("this block").clear();
+            let before = (j > 0).then(|| Tracker {
+                work: 0,
+                ..self.t.clone()
+            });
+            self.blocks(&r.body)?;
+            let Some(before) = before else { break };
+            if !self.t.is_shift_of(&before, r.detectors, r.measurements) {
+                continue;
+            }
+            let last = self.open.pop().expect("this block");
+            for i in 1..=j {
+                let by = i * r.detectors;
+                for (k, &p) in &last {
+                    self.add(k.lowered(by), p)?;
+                }
+            }
+            self.t.shift_down(j * r.detectors, j * r.measurements)?;
+            self.m -= j * r.measurements;
+            self.d -= j * r.detectors;
+            self.op -= j as u64 * r.operations;
+            return Ok(());
+        }
+        self.open.pop();
+        Ok(())
+    }
+}
+
+/// The merged contributions of every channel of a repeated circuit, by one
+/// pass backwards that folds its blocks (see [`super::repeat`]).
+pub(super) fn fold<'a, K: Key>(
+    circuit: &RepeatedCircuit,
+    contribute: &'a mut Contribute<'a, K>,
+) -> Result<BTreeMap<K, f64>> {
+    if circuit.n_detectors() > MAX_MODEL_DETECTORS {
+        return Err(QsoError::invalid(
+            "circuit",
+            format!(
+                "{} detectors; a model holds at most {MAX_MODEL_DETECTORS}",
+                circuit.n_detectors()
+            ),
+        ));
+    }
+    super::frame::check_deterministic(circuit)?;
+    let mut f = Folder {
+        t: Tracker::new(circuit.n_qubits()),
+        steps: Vec::new(),
+        m: circuit.n_measurements(),
+        d: circuit.n_detectors(),
+        op: circuit.n_operations(),
+        merged: BTreeMap::new(),
+        open: Vec::new(),
+        scratch: Vec::new(),
+        entries: 0,
+        contribute,
+    };
+    f.blocks(&circuit.blocks)?;
+    debug_assert_eq!((f.m, f.d, f.op), (0, 0, 0));
+    Ok(f.merged)
+}
+
+/// The contributions of a channel to the model of [`detector_error_model`].
+pub(super) fn model_contributions(
+    decompose: bool,
+) -> impl FnMut(&Channel, &[Signature], &[f64], &mut Vec<(Signature, f64)>) -> Result<()> {
+    move |_, basis, probabilities, out| {
+        if !decompose {
+            for (k, &p) in probabilities.iter().enumerate().skip(1) {
+                let total = combination(basis, k);
+                if p > 0.0 && !is_empty(&total) {
+                    out.push((total, p));
+                }
+            }
+            return Ok(());
+        }
+        for (parts, p) in decomposed(basis, probabilities)? {
+            for part in parts {
+                out.push((part, p));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The detector error model of a repeated circuit, as
+/// [`detector_error_model`] gives it for the expanded circuit (up to the
+/// rounding of the merged probabilities).
+pub(super) fn repeated_error_model(
+    circuit: &RepeatedCircuit,
+    decompose: bool,
+) -> Result<DetectorErrorModel> {
+    let mut contribute = model_contributions(decompose);
+    let merged = fold::<Signature>(circuit, &mut contribute)?;
+    Ok(DetectorErrorModel {
+        n_detectors: circuit.n_detectors(),
+        n_observables: circuit.n_observables(),
+        errors: merged
+            .into_iter()
+            .map(|((detectors, observables), probability)| ErrorMechanism {
+                probability,
+                detectors,
+                observables,
+            })
+            .collect(),
+    })
+}
+
+/// The correlated model of a repeated circuit, as
+/// [`correlated_error_model`] gives it for the expanded circuit.
+pub(super) fn repeated_correlated_model(circuit: &RepeatedCircuit) -> Result<CorrelatedErrorModel> {
+    let mut contribute = |_: &Channel,
+                          basis: &[Signature],
+                          probabilities: &[f64],
+                          out: &mut Vec<(Vec<Signature>, f64)>|
+     -> Result<()> {
+        for (mut parts, p) in decomposed(basis, probabilities)? {
+            parts.sort();
+            out.push((parts, p));
+        }
+        Ok(())
+    };
+    let merged = fold::<Vec<Signature>>(circuit, &mut contribute)?;
+    Ok(CorrelatedErrorModel {
+        n_detectors: circuit.n_detectors(),
+        n_observables: circuit.n_observables(),
+        errors: merged
+            .into_iter()
+            .map(|(parts, probability)| CorrelatedError { probability, parts })
+            .collect(),
+    })
 }
 
 /// The effect of each component (sorted by operation), by one pass
