@@ -146,6 +146,9 @@ pub struct AnticrossingState {
     pub fluorescence: f64,
     /// `⟨I_z⟩/I` of each nucleus, over all levels.
     pub polarisation: Vec<f64>,
+    /// `⟨I_z⟩/I` of each nucleus within the ground `m_s = 0` (what the
+    /// nuclear-spin-resolved ODMR lines show).
+    pub polarisation_zero: Vec<f64>,
     /// The harmonics a microwave needed (0 without).
     pub harmonics: usize,
 }
@@ -386,13 +389,39 @@ impl NuclearOpticalNv {
         Ok((rho * op).trace().re / spin)
     }
 
+    /// `⟨I_z⟩/I` of nucleus `k` within electron level `level` of the
+    /// zero-field basis (ground `+1, 0, −1` = 0, 1, 2; excited 3, 4, 5;
+    /// singlet 6), normalised by that level's population.
+    pub fn nuclear_polarisation_in(&self, rho: &CMatrix, k: usize, level: usize) -> Result<f64> {
+        let nucleus = self.nuclei.get(k).ok_or_else(|| {
+            QsoError::invalid("nucleus", format!("nucleus {k} of {}", self.nuclei.len()))
+        })?;
+        if level >= 7 {
+            return Err(QsoError::invalid("level", "an electron level 0 to 6"));
+        }
+        let nn = self.nuclear_dimension();
+        let [iz, ..] = spin_ops(nucleus.levels);
+        let op = self.on_nucleus(k, &iz);
+        let block = rho.view((level * nn, level * nn), (nn, nn)).clone_owned();
+        let population = block.trace().re;
+        if population <= 0.0 {
+            return Ok(0.0);
+        }
+        let spin = (nucleus.levels as f64 - 1.0) / 2.0;
+        Ok((block * op).trace().re / (population * spin))
+    }
+
     fn summary(&self, rho: CMatrix, harmonics: usize) -> Result<AnticrossingState> {
         let polarisation = (0..self.nuclei.len())
             .map(|k| self.nuclear_polarisation(&rho, k))
             .collect::<Result<Vec<_>>>()?;
+        let polarisation_zero = (0..self.nuclei.len())
+            .map(|k| self.nuclear_polarisation_in(&rho, k, 1))
+            .collect::<Result<Vec<_>>>()?;
         Ok(AnticrossingState {
             fluorescence: self.fluorescence(&rho),
             polarisation,
+            polarisation_zero,
             rho,
             harmonics,
         })

@@ -115,6 +115,25 @@ impl Photophysics {
     }
 }
 
+impl Photophysics {
+    /// The rates of Gupta et al. (J. Opt. Soc. Am. B 33, B28 (2016)) as
+    /// Duarte et al. tabulate them for a seven-level model (Phys. Rev. B
+    /// 103, 195443 (2021), model 4): `k_r` = 67.4, `k₄₇` = 9.9, `k₅₇` =
+    /// 91.6, `k₇₁` = 4.83, `k₇₂` = 1.06 μs⁻¹. The singlet returns to
+    /// `m_s = 0` far more often than in [`Photophysics::tetienne`], which
+    /// polarises the electron (0.95 for a weak laser against 0.75) and so
+    /// the nuclei at the excited-state anticrossing.
+    pub fn gupta() -> Self {
+        Photophysics {
+            radiative: 67.4e6,
+            isc_zero: 9.9e6,
+            isc_plus_minus: 91.6e6,
+            singlet_zero: 4.83e6,
+            singlet_plus_minus: 1.06e6,
+        }
+    }
+}
+
 impl Default for Photophysics {
     fn default() -> Self {
         Self::tetienne()
