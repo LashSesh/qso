@@ -243,11 +243,22 @@ print(rohf.ccsd()["correlation"])                      # −0.10015
 ```
 
 The integrals are transformed to the molecular orbitals in full by four
-quarter transformations, each a matrix product. A closed shell keeps
-`m⁴` of them for `m` correlated orbitals (64 functions: 134 MB). Spin
-orbitals keep their whole antisymmetrised tensor and at most 100 of them
-are correlated (`MAX_SPIN_ORBITALS`; 50 spatial orbitals). Everything runs
-on one thread.
+quarter transformations, each one or a few matrix products, and held in
+memory: a closed shell `m⁴` of them for `m` correlated orbitals, spin
+orbitals their whole antisymmetrised tensor, with at most 100 of them
+correlated (`MAX_SPIN_ORBITALS`; 50 spatial orbitals). Everything runs on
+one thread. Measured in cc-pVDZ (release build; CCSD to 10⁻¹⁰ Ha):
+
+| Molecule | Functions | Reference | CCSD (iterations) | (T) | Peak memory |
+|---|---|---|---|---|---|
+| H₂O, one frozen | 24 | RHF | 0.08 s (13) | 0.05 s | 0.11 GB |
+| propyne, three frozen | 62 | RHF | 6.6 s (15) | 8.9 s | 0.57 GB |
+| triplet O₂, two frozen | 28 | UHF | 3.4 s (15) | 0.33 s | 0.25 GB |
+| C₂H₄⁺, 96 spin orbitals | 48 | UHF | 66 s (15) | 10.8 s | 1.65 GB |
+
+PySCF is faster: 2.3 times per closed-shell iteration on one core, 11 to
+15 times per open-shell one, since its UCCSD works in spin blocks and
+packs antisymmetric pairs (ROADMAP, 1.62).
 
 The tests and the cross-validation compare with PySCF 2.14 (`mp.MP2`,
 `cc.CCSD`, `ccsd_t` and `uccsd_t`):

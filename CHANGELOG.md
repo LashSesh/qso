@@ -8,6 +8,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Coupled-cluster references** (1.62, `chemistry::cc`: `mp2`, `ccsd`,
+  `ccsd_t`, `CcOptions`, `Mp2`, `Ccsd`, `CcsdT`, `MAX_SPIN_ORBITALS`;
+  Python `HartreeFock.mp2`, `.ccsd`, `.ccsd_t`; `qso scf --mp2 --ccsd
+  --ccsd-t` with `--frozen`): MP2 in canonical RHF and UHF orbitals with
+  its same-spin and opposite-spin parts; CCSD in spatial orbitals for
+  closed shells and in spin orbitals for UHF and ROHF (Stanton–Gauss
+  equations with the whole Fock matrix), Jacobi steps with DIIS and the
+  T1 diagnostic; (T) for closed shells and UHF; frozen cores. Equal to
+  PySCF's MP2, CCSD, `ccsd_t` and `uccsd_t` to 2.3·10⁻¹⁰ Ha on 45
+  closed- and open-shell cases (water, LiH, N₂, OH, NH₂, O₂ in the tests;
+  HF, HCl, NH₃, CO, CH₂, NO in the cross-validation); CCSD equal to full
+  CI for two electrons; size-consistent to 10⁻⁹ Ha. Propyne in cc-pVDZ
+  (62 functions): CCSD(T) in 16 s on one core.
+
 - **Error models of long experiments, windows in parallel** (1.61,
   `qec::RepeatedCircuit`, `repetition_code_memory_repeated`,
   `surface_code_memory_repeated`, `css_code_memory_repeated`,
@@ -273,6 +287,9 @@ All notable changes to this project are documented here. The format follows
   `"sparse"` with `d² + 1` coefficients). Declared symmetries are not
   used for field profiles.
 - `coordinate_permutations` takes up to 20 coordinates (was 13).
+- `qso scf --frozen` also applies to `--mp2`, `--ccsd` and `--ccsd-t`;
+  `--active` without `--fci` or `--fcidump` is refused with its own
+  message.
 - Beyond 8192 nodes, `SymmetricOpenWalk` checks the dephasing term by
   term (every symmetry maps each partition onto one of the same rate,
   terms with equal partitions merged), and `Orbitals::coefficients` and

@@ -21,9 +21,9 @@
 //!   spin orbitals for UHF.
 //!
 //! The integrals are transformed to the molecular orbitals in full (four
-//! quarter transformations, each a matrix product), so a closed shell in
-//! 64 basis functions holds 64⁴ of them; spin orbitals hold their whole
-//! antisymmetrised tensor, up to [`MAX_SPIN_ORBITALS`].
+//! quarter transformations, each one or a few matrix products), so a
+//! closed shell in 64 basis functions holds 64⁴ of them; spin orbitals
+//! hold their whole antisymmetrised tensor, up to [`MAX_SPIN_ORBITALS`].
 //!
 //! ```
 //! use metatron_qso::chemistry::cc::{CcOptions, ccsd_t, mp2};
@@ -50,7 +50,7 @@ use crate::linalg::RMatrix;
 
 /// Most spin orbitals (correlated, both spins) of a spin-orbital
 /// calculation: their antisymmetrised integrals take `n⁴` doubles (800 MB
-/// at the limit).
+/// at the limit), and CCSD of 96 spin orbitals peaks at 1.65 GB.
 pub const MAX_SPIN_ORBITALS: usize = 100;
 
 /// Settings of [`ccsd`] and [`ccsd_t`].
