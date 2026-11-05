@@ -175,6 +175,21 @@ impl ScfResult {
         value
     }
 
+    /// The integrals must be those this calculation used.
+    pub(super) fn check_integrals(&self, ints: &AoIntegrals) -> Result<()> {
+        if !(ints.basis() == self.source.basis
+            && ints.harmonics() == self.source.harmonics
+            && ints.n_functions() == self.source.n_functions
+            && ints.belongs_to(&self.source.molecule))
+        {
+            return Err(QsoError::invalid(
+                "ints",
+                "the integrals are not those of this Hartree–Fock calculation",
+            ));
+        }
+        Ok(())
+    }
+
     /// The Hamiltonian in the restricted orbitals with the lowest `frozen`
     /// orbitals doubly occupied and folded into the core energy, keeping
     /// `active` orbitals (all others when `None`). The result's
@@ -191,16 +206,7 @@ impl ScfResult {
                 "molecular integrals need one set of orbitals (RHF or ROHF), not UHF",
             ));
         }
-        if !(ints.basis() == self.source.basis
-            && ints.harmonics() == self.source.harmonics
-            && ints.n_functions() == self.source.n_functions
-            && ints.belongs_to(&self.source.molecule))
-        {
-            return Err(QsoError::invalid(
-                "ints",
-                "the integrals are not those of this Hartree–Fock calculation",
-            ));
-        }
+        self.check_integrals(ints)?;
         let c = &self.coefficients[0];
         let n = ints.n_functions();
         let m_all = c.ncols();
