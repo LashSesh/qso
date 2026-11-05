@@ -68,6 +68,10 @@ pub(super) enum Kind {
 /// Effect of an error: flipped detectors (sorted) and observables.
 pub(super) type Signature = (Vec<usize>, u64);
 
+/// What receives each channel: its place, its basis errors' effects and
+/// the probabilities of their combinations.
+pub(super) type ChannelSink<'a> = dyn FnMut(&Channel, &[Signature], &[f64]) -> Result<()> + 'a;
+
 fn xor(a: &Signature, b: &Signature) -> Signature {
     let mut d = Vec::with_capacity(a.0.len() + b.0.len());
     let (mut i, mut j) = (0, 0);
@@ -546,7 +550,7 @@ pub(super) fn noise_channels(
     qubits: &[usize],
     x: &dyn Fn(usize) -> Signature,
     z: &dyn Fn(usize) -> Signature,
-    f: &mut dyn FnMut(&Channel, &[Signature], &[f64]) -> Result<()>,
+    f: &mut ChannelSink<'_>,
 ) -> Result<()> {
     let at = |parts: Vec<(usize, Kind)>| Channel { op: i, parts };
     let zx = |q: usize| vec![(q, Kind::Z), (q, Kind::X)];
@@ -593,7 +597,7 @@ pub(super) fn flip_channel(
     qubit: usize,
     flip: f64,
     s: Signature,
-    f: &mut dyn FnMut(&Channel, &[Signature], &[f64]) -> Result<()>,
+    f: &mut ChannelSink<'_>,
 ) -> Result<()> {
     f(
         &Channel {
@@ -1027,10 +1031,8 @@ pub(super) fn fold<'a, K: Key>(
 }
 
 /// The contributions of a channel to the model of [`detector_error_model`].
-pub(super) fn model_contributions(
-    decompose: bool,
-) -> impl FnMut(&Channel, &[Signature], &[f64], &mut Vec<(Signature, f64)>) -> Result<()> {
-    move |_, basis, probabilities, out| {
+pub(super) fn model_contributions(decompose: bool) -> Box<Contribute<'static, Signature>> {
+    Box::new(move |_, basis, probabilities, out| {
         if !decompose {
             for (k, &p) in probabilities.iter().enumerate().skip(1) {
                 let total = combination(basis, k);
@@ -1046,7 +1048,7 @@ pub(super) fn model_contributions(
             }
         }
         Ok(())
-    }
+    })
 }
 
 /// The detector error model of a repeated circuit, as
@@ -1057,7 +1059,7 @@ pub(super) fn repeated_error_model(
     decompose: bool,
 ) -> Result<DetectorErrorModel> {
     let mut contribute = model_contributions(decompose);
-    let merged = fold::<Signature>(circuit, &mut contribute)?;
+    let merged = fold::<Signature>(circuit, contribute.as_mut())?;
     Ok(DetectorErrorModel {
         n_detectors: circuit.n_detectors(),
         n_observables: circuit.n_observables(),

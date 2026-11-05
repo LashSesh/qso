@@ -274,3 +274,107 @@ fn repeated_logical_error_rates_equal_the_expanded_ones() {
         assert!(ours.errors > 10, "{decoder:?}: {}", ours.errors);
     }
 }
+
+/// Costs of long experiments (1.61): `cargo test --release --lib
+/// measure_long_experiments -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn measure_long_experiments() {
+    use crate::qec::{ParallelWindowOptions, WindowDecoder, WindowMethod, WindowOptions};
+    use std::time::Instant;
+    let noise = CircuitNoise::uniform(1e-3);
+    // The model: flat circuits by the pass backwards, repeated ones folded.
+    // (1.57: 1.3 s for 1000 rounds, 30 s for 4000; a flat circuit holds
+    // about 6000.)
+    for rounds in [1000, 4000] {
+        let flat = crate::qec::surface_code_memory(5, rounds, &noise).unwrap();
+        let t = Instant::now();
+        let m = detector_error_model(&flat, true).unwrap();
+        eprintln!(
+            "flat d = 5, {rounds} rounds: model {:.2} s, {} errors",
+            t.elapsed().as_secs_f64(),
+            m.errors.len()
+        );
+    }
+    for rounds in [10_000, 100_000] {
+        let t = Instant::now();
+        let c = surface_code_memory_repeated(5, rounds, &noise, MemoryBasis::Z).unwrap();
+        let m = c.detector_error_model(true).unwrap();
+        let bytes: usize = m.errors.iter().map(|e| 48 + 8 * e.detectors.len()).sum();
+        eprintln!(
+            "repeated d = 5, {rounds} rounds: {} operations stored of {}, model {:.2} s, {} errors ({:.0} per round, about {:.0} MB)",
+            c.n_stored_operations(),
+            c.n_operations(),
+            t.elapsed().as_secs_f64(),
+            m.errors.len(),
+            m.errors.len() as f64 / rounds as f64,
+            bytes as f64 / 1e6
+        );
+    }
+    // Decoding per round and core: sliding windows of ten rounds against
+    // parallel windows committing five with buffers of five.
+    for rounds in [10_000, 100_000] {
+        let c = surface_code_memory_repeated(5, rounds, &noise, MemoryBasis::Z).unwrap();
+        let m = c.detector_error_model(true).unwrap();
+        let layers = c.detector_layers();
+        let shots = if rounds == 10_000 { 64 } else { 8 };
+        let t = Instant::now();
+        let samples = c.sample(shots, 5).unwrap();
+        let sampled = t.elapsed().as_secs_f64();
+        let fired = samples.fired_by_shot();
+        let t = Instant::now();
+        let mut sliding = WindowDecoder::new(
+            &m,
+            &layers,
+            WindowOptions {
+                window: 10,
+                commit: 5,
+            },
+            WindowMethod::Matching,
+        )
+        .unwrap();
+        let built = t.elapsed().as_secs_f64();
+        let t = Instant::now();
+        let mut fails = 0;
+        let mut predictions = Vec::new();
+        for (s, f) in fired.iter().enumerate() {
+            let p = sliding.decode(f).unwrap();
+            predictions.push(p);
+            fails += (p != samples.observable_flips(s)) as usize;
+        }
+        let per = t.elapsed().as_secs_f64() / (shots * rounds) as f64;
+        eprintln!(
+            "d = 5, {rounds} rounds, {shots} shots: sampled {:.2} µs per round and shot, sliding windows built {built:.2} s, decoded {:.2} µs per round and shot, {fails} failures",
+            sampled / (shots * rounds) as f64 * 1e6,
+            per * 1e6
+        );
+        let mut parallel = WindowDecoder::parallel(
+            &m,
+            &layers,
+            ParallelWindowOptions {
+                commit: 5,
+                buffer: 5,
+            },
+            WindowMethod::Matching,
+        )
+        .unwrap();
+        for threads in [1, 2, 4] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap();
+            let t = Instant::now();
+            let mut fails = 0;
+            pool.install(|| {
+                for (s, f) in fired.iter().enumerate() {
+                    fails += (parallel.decode(f).unwrap() != samples.observable_flips(s)) as usize;
+                }
+            });
+            let per = t.elapsed().as_secs_f64() / (shots * rounds) as f64;
+            eprintln!(
+                "  parallel windows on {threads} threads: {:.2} µs per round and shot, {fails} failures",
+                per * 1e6
+            );
+        }
+    }
+}

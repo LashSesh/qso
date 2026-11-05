@@ -8,6 +8,26 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Error models of long experiments, windows in parallel** (1.61,
+  `qec::RepeatedCircuit`, `repetition_code_memory_repeated`,
+  `surface_code_memory_repeated`, `css_code_memory_repeated`,
+  `WindowDecoder::parallel`, `ParallelWindowOptions`,
+  `DecoderChoice::ParallelWindowMatching`/`ParallelWindowBpOsd`,
+  `DecoderChoice::build_for_repeated`, `logical_error_rate_repeated`,
+  `MAX_REPEATED_OPERATIONS`, `MAX_REPEATED_ROUNDS`; Python
+  `RepeatedCircuit`, the `*_memory_repeated` functions,
+  `WindowDecoder.parallel`, `logical_error_rate(decoder=
+  "parallel_window_matching" | "parallel_window_bposd", commit, buffer)`
+  on either kind of circuit; `qso qec --parallel --commit --buffer`):
+  circuits that keep their repeated blocks (Stim's `REPEAT`, memory
+  experiments of up to 10⁷ rounds), sampled as they run and expanded
+  where they fit, whose detector error models fold once an iteration
+  repeats the next one shifted (10⁵ rounds of distance 5 in 1.7 s, equal
+  to Stim's term by term); parallel windows in the manner of Skoric et
+  al., independent windows and then the seams between them, each pass on
+  threads (twice as fast on four cores), streamed with the same
+  prediction.
+
 - **NV centres at their level anticrossings** (1.60,
   `spin::NuclearOpticalNv`, `NuclearSpin`, `AnticrossingState`,
   `Photophysics::gupta`, Python `spin.NuclearOpticalNv`): the seven-level
@@ -229,6 +249,18 @@ All notable changes to this project are documented here. The format follows
   images, checked once the Schreier trees are built).
 
 ### Changed
+
+- **Error models in one pass backwards** (1.61): what each error flips
+  comes from one pass backwards through the circuit, the transpose of
+  propagating frames forwards, in time linear in the rounds (4000 rounds
+  of a distance-5 surface code: 2.3 s instead of 30 s); the models are
+  the same term by term, and a circuit that needed too much propagation
+  work before (two million noisy measurements) now builds its model.
+  `MAX_MODEL_WORK` counts the entries the pass touches. The frame
+  sampler keeps only the measurement records a detector can still reach.
+  `qso qec` builds memory experiments beyond 10 000 rounds as repeated
+  circuits and reads Stim files too long to expand with their blocks;
+  `--commit` without `--window` or `--parallel` is now an error.
 
 - Field profiles with relaxation no longer use the dense generator, so
   `MAX_CONTROL_LIOUVILLE` (six spins ½) no longer limits them; their cost

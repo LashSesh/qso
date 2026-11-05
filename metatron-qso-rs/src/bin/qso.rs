@@ -525,11 +525,77 @@ enum Command {
         /// detectors together.
         #[arg(long)]
         window: Option<usize>,
-        /// Rounds each window commits (default: half the window, rounded
-        /// up).
-        #[arg(long, requires = "window")]
+        /// Rounds each window commits (sliding windows: default half the
+        /// window, rounded up; parallel windows: required).
+        #[arg(long)]
         commit: Option<usize>,
+        /// Decode in parallel windows (Skoric et al.): windows committing
+        /// --commit rounds with --buffer on each side decoded on threads,
+        /// then the seams between them (matching or bposd).
+        #[arg(long, requires = "commit", conflicts_with = "window")]
+        parallel: bool,
+        /// Rounds of buffer on each side of a parallel window (default:
+        /// --commit).
+        #[arg(long, requires = "parallel")]
+        buffer: Option<usize>,
     },
+}
+
+/// A circuit of the qec command: flat, or with its rounds (or a Stim
+/// file's REPEAT blocks) kept as repeated blocks when it is too long to
+/// expand.
+enum Experiment {
+    Flat(qec::DetectorCircuit),
+    Repeated(qec::RepeatedCircuit),
+}
+
+impl Experiment {
+    fn n_qubits(&self) -> usize {
+        match self {
+            Experiment::Flat(c) => c.n_qubits(),
+            Experiment::Repeated(c) => c.n_qubits(),
+        }
+    }
+
+    fn n_detectors(&self) -> usize {
+        match self {
+            Experiment::Flat(c) => c.n_detectors(),
+            Experiment::Repeated(c) => c.n_detectors(),
+        }
+    }
+
+    fn n_observables(&self) -> usize {
+        match self {
+            Experiment::Flat(c) => c.n_observables(),
+            Experiment::Repeated(c) => c.n_observables(),
+        }
+    }
+
+    fn to_stim(&self) -> Result<String> {
+        match self {
+            Experiment::Flat(c) => c.to_stim(),
+            Experiment::Repeated(c) => c.to_stim(),
+        }
+    }
+
+    fn model(&self) -> Result<qec::DetectorErrorModel> {
+        match self {
+            Experiment::Flat(c) => qec::detector_error_model(c, false),
+            Experiment::Repeated(c) => c.detector_error_model(false),
+        }
+    }
+
+    fn rate(
+        &self,
+        shots: usize,
+        seed: u64,
+        kind: qec::DecoderChoice,
+    ) -> Result<qec::LogicalErrorRate> {
+        match self {
+            Experiment::Flat(c) => qec::logical_error_rate_using(c, shots, seed, kind),
+            Experiment::Repeated(c) => qec::logical_error_rate_repeated(c, shots, seed, kind),
+        }
+    }
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -1615,20 +1681,46 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             symmetry,
             window,
             commit,
+            parallel,
+            buffer,
         } => {
+            if commit.is_some() && window.is_none() && !*parallel {
+                return Err(QsoError::invalid(
+                    "commit",
+                    "--commit applies to --window or --parallel",
+                ));
+            }
             let sizes = window.map(|w| (w, commit.unwrap_or(qec::WindowOptions::new(w).commit)));
-            let kind = match (decoder, sizes) {
-                (DecoderArg::UnionFind, None) => qec::DecoderChoice::UnionFind,
-                (DecoderArg::Matching, None) => qec::DecoderChoice::Matching,
-                (DecoderArg::CorrelatedMatching, None) => qec::DecoderChoice::CorrelatedMatching,
-                (DecoderArg::Bposd, None) => qec::DecoderChoice::BpOsd,
-                (DecoderArg::Matching, Some((window, commit))) => {
+            let halves = parallel.then(|| {
+                let c = commit.expect("clap requires --commit with --parallel");
+                (c, buffer.unwrap_or(c))
+            });
+            let kind = match (decoder, sizes, halves) {
+                (DecoderArg::Matching, None, Some((commit, buffer))) => {
+                    qec::DecoderChoice::ParallelWindowMatching { commit, buffer }
+                }
+                (DecoderArg::Bposd, None, Some((commit, buffer))) => {
+                    qec::DecoderChoice::ParallelWindowBpOsd { commit, buffer }
+                }
+                (_, None, Some(_)) => {
+                    return Err(QsoError::invalid(
+                        "parallel",
+                        "parallel windows take the matching or bposd decoder",
+                    ));
+                }
+                (DecoderArg::UnionFind, None, None) => qec::DecoderChoice::UnionFind,
+                (DecoderArg::Matching, None, None) => qec::DecoderChoice::Matching,
+                (DecoderArg::CorrelatedMatching, None, None) => {
+                    qec::DecoderChoice::CorrelatedMatching
+                }
+                (DecoderArg::Bposd, None, None) => qec::DecoderChoice::BpOsd,
+                (DecoderArg::Matching, Some((window, commit)), _) => {
                     qec::DecoderChoice::WindowMatching { window, commit }
                 }
-                (DecoderArg::Bposd, Some((window, commit))) => {
+                (DecoderArg::Bposd, Some((window, commit)), _) => {
                     qec::DecoderChoice::WindowBpOsd { window, commit }
                 }
-                (_, Some(_)) => {
+                (_, Some(_), _) => {
                     return Err(QsoError::invalid(
                         "window",
                         "windows take the matching or bposd decoder",
@@ -1644,6 +1736,11 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             .to_string();
             if let Some((w, c)) = sizes {
                 decoder_name = format!("{decoder_name} in windows of {w} rounds committing {c}");
+            }
+            if let Some((c, b)) = halves {
+                decoder_name = format!(
+                    "{decoder_name} in parallel windows committing {c} rounds with buffers of {b}"
+                );
             }
             let css_schedule = match schedule.as_str() {
                 "greedy" => qec::CssSchedule::Greedy,
@@ -1677,12 +1774,12 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 ));
             }
             // The circuit distance (or bounds on it), as JSON and text.
-            let bound = |c: &qec::DetectorCircuit| -> Result<(serde_json::Value, String)> {
+            let bound = |c: &Experiment| -> Result<(serde_json::Value, String)> {
                 if !*circuit_distance {
                     return Ok((serde_json::Value::Null, String::new()));
                 }
                 let r = qec::exact_circuit_distance(
-                    &qec::detector_error_model(c, false)?,
+                    &c.model()?,
                     &qec::ExactDistanceOptions::default()
                         .with_max_seconds(*max_seconds)
                         .with_symmetry(*symmetry),
@@ -1709,8 +1806,15 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 let text = std::fs::read_to_string(path).map_err(|e| {
                     QsoError::invalid("circuit", format!("{}: {e}", path.display()))
                 })?;
-                let circuit = qec::DetectorCircuit::from_stim(&text)?;
-                let rate = qec::logical_error_rate_using(&circuit, *shots, *seed, kind)?;
+                // A file too long to expand keeps its REPEAT blocks.
+                let circuit = match qec::DetectorCircuit::from_stim(&text) {
+                    Ok(c) => Experiment::Flat(c),
+                    Err(e) => match qec::RepeatedCircuit::from_stim(&text) {
+                        Ok(c) if c.flatten().is_err() => Experiment::Repeated(c),
+                        _ => return Err(e),
+                    },
+                };
+                let rate = circuit.rate(*shots, *seed, kind)?;
                 let (distance_json, distance_text) = bound(&circuit)?;
                 let line = format!(
                     "{}: {} qubits, {} detectors, {} observables; logical error rate {:.3e} ± {:.1e} ({} of {} shots, {decoder_name}){distance_text}",
@@ -1754,25 +1858,52 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                         _ => (None, d),
                     };
                     let r = rounds.unwrap_or(code_distance);
-                    let circuit = match code {
-                        CodeArg::Surface => {
-                            qec::surface_code_memory_with(d, r, &noise, memory_basis)?
-                        }
-                        CodeArg::Repetition => qec::repetition_code_memory(d, r, &noise)?,
-                        CodeArg::Color => qec::css_code_memory_with(
-                            &qec::CssCode::color_code(d)?,
-                            r,
-                            &noise,
-                            memory_basis,
-                            css_schedule,
-                        )?,
-                        CodeArg::Bb => qec::css_code_memory_with(
-                            bicycle.as_ref().expect("built above"),
-                            r,
-                            &noise,
-                            memory_basis,
-                            css_schedule,
-                        )?,
+                    // Beyond the rounds a flat circuit holds, the rounds
+                    // are one repeated block.
+                    let circuit = if r <= qec::codes::MAX_ROUNDS {
+                        Experiment::Flat(match code {
+                            CodeArg::Surface => {
+                                qec::surface_code_memory_with(d, r, &noise, memory_basis)?
+                            }
+                            CodeArg::Repetition => qec::repetition_code_memory(d, r, &noise)?,
+                            CodeArg::Color => qec::css_code_memory_with(
+                                &qec::CssCode::color_code(d)?,
+                                r,
+                                &noise,
+                                memory_basis,
+                                css_schedule,
+                            )?,
+                            CodeArg::Bb => qec::css_code_memory_with(
+                                bicycle.as_ref().expect("built above"),
+                                r,
+                                &noise,
+                                memory_basis,
+                                css_schedule,
+                            )?,
+                        })
+                    } else {
+                        Experiment::Repeated(match code {
+                            CodeArg::Surface => {
+                                qec::surface_code_memory_repeated(d, r, &noise, memory_basis)?
+                            }
+                            CodeArg::Repetition => {
+                                qec::repetition_code_memory_repeated(d, r, &noise)?
+                            }
+                            CodeArg::Color => qec::css_code_memory_repeated(
+                                &qec::CssCode::color_code(d)?,
+                                r,
+                                &noise,
+                                memory_basis,
+                                css_schedule,
+                            )?,
+                            CodeArg::Bb => qec::css_code_memory_repeated(
+                                bicycle.as_ref().expect("built above"),
+                                r,
+                                &noise,
+                                memory_basis,
+                                css_schedule,
+                            )?,
+                        })
                     };
                     let label = match &bicycle {
                         Some(c) => format!("[[{}, {}, {code_distance}]]", c.n(), c.k()),
@@ -1783,7 +1914,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                             QsoError::invalid("stim", format!("{}: {e}", path.display()))
                         })?;
                     }
-                    let rate = qec::logical_error_rate_using(&circuit, *shots, *seed, kind)?;
+                    let rate = circuit.rate(*shots, *seed, kind)?;
                     let (distance_json, distance_text) = match distances.get(&d) {
                         Some(known) if prob > 0.0 => known.clone(),
                         _ => {

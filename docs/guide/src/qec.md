@@ -570,12 +570,90 @@ whole experiment does. The time per round stays at 1.1 to 1.5 µs per
 shot from 100 to 4000 rounds. On the [[72, 12, 6]] bicycle code over 48
 rounds, BP+OSD in windows of six rounds committing three took 59 s for
 2000 shots (165 failures) against 76 s on the whole model (196); its
-time grows in proportion to the rounds. The error model itself is built
-for the whole experiment, in time quadratic in the rounds (1.3 s for
-1000 rounds of distance 5, 30 s for 4000). Where a window finds no
+time grows in proportion to the rounds. The error model is built for
+the whole experiment, in one pass backwards through the circuit (0.5 s
+for 1000 rounds of distance 5, 2.3 s for 4000). Where a window finds no
 correction, because the only way out of a carried defect leads back
 (as when the only boundary is an error at the start), a fallback with
 the errors that reach before the window decodes it.
+
+## Long experiments: repeated blocks and parallel windows
+
+A flat `DetectorCircuit` holds 2²⁴ operations, about 6000 rounds of a
+distance-5 surface code. A `RepeatedCircuit` keeps repeated blocks as
+Stim's `REPEAT` does: `RepeatedCircuit.from_stim(text)` reads Stim's
+format without expanding its blocks, and `surface_code_memory_repeated`,
+`repetition_code_memory_repeated` and `css_code_memory_repeated` build
+the memory experiments with rounds 2 to n as one block, for up to 10⁷
+rounds; `flatten()` expands one into the flat circuit (where it fits),
+`to_stim()` writes it with its blocks. Its records count back from the
+operation that reads them (`rec[-k]`), so every iteration reads the
+same relative records. `sample` runs the operations in order and keeps
+only the records a detector can still reach, with the same shots as
+the expanded circuit for the same seed.
+
+The detector error model comes from one pass backwards through the
+circuit, which carries for every qubit the detectors and observables an
+X or a Z there would flip. Through a block, once the state at the start
+of an iteration is its state at the end with every detector and record
+shifted by one iteration's, each earlier iteration repeats the last
+one's errors shifted, and the pass jumps to the start of the block (as
+Stim folds loops). A memory experiment repeats after two or three
+rounds. The model equals the expanded circuit's term by term, and
+Stim's for its generated circuits of 1000 and 2000 rounds (relative
+differences 3·10⁻¹⁶ in the cross-validation).
+
+`WindowDecoder.parallel(model, layers, commit, buffer)` decodes in two
+passes, as Skoric et al. propose: windows of `buffer + commit + buffer`
+layers, each decoded on the detection events as sampled with both ends
+as boundaries and committing its middle `commit` layers, run in
+parallel; then the seams between their commit regions, which take the
+detection events the first pass left and commit everything, also in
+parallel. Between two commit regions lie `buffer + span` layers (`span`
+the most layers one error spans), so that no window of the first pass
+changes what another commits. A stream (`push_layer`) decodes the same
+windows in order with the same prediction. `logical_error_rate(...,
+decoder="parallel_window_matching" | "parallel_window_bposd",
+commit=c, buffer=b)` and `qso qec --parallel --commit C --buffer B`
+decode in parallel windows; `logical_error_rate` takes a
+`RepeatedCircuit` as well.
+
+```python
+import metatron_qso as q
+
+# Ten thousand rounds of a distance-5 surface code: the round is stored
+# once, and the model folds once the rounds repeat.
+c = q.surface_code_memory_repeated(5, 10_000, 1e-3)
+print(c.n_stored_operations, c.n_operations)   # 432 of 1 720 088
+model = c.detector_error_model(decompose=True)
+print(len(model.errors))                        # 560 021, in under a second
+
+# Where the expanded circuit fits, the models agree term by term.
+short = q.surface_code_memory_repeated(3, 200, 1e-3)
+flat = q.surface_code_memory(3, 200, 1e-3)
+pairs = zip(short.detector_error_model().errors, flat.detector_error_model().errors)
+assert all(a[1:] == b[1:] and abs(a[0] - b[0]) <= 1e-13 * b[0] for a, b in pairs)
+
+# Stim's REPEAT blocks are kept, and written back.
+text = "R 0 1 2\nREPEAT 1000 {\n    X_ERROR(0.01) 0 1\n    CX 0 2 1 2\n    MR 2\n    DETECTOR rec[-1]\n}\n"
+r = q.RepeatedCircuit.from_stim(text)
+assert r.n_detectors == 1000 and "REPEAT 1000 {" in r.to_stim()
+
+# Parallel windows: commit five rounds, five of buffer on each side.
+rate = q.logical_error_rate(c, 256, seed=1, decoder="parallel_window_matching", commit=5)
+per_round = (1 - (1 - 2 * rate.rate) ** (1 / 10_000)) / 2
+print(rate.errors, f"{per_round:.1e}")           # 66 of 256: 3.6e-05 per round
+```
+
+At distance 5 and p = 10⁻³ (four cores, release build) the model of
+10⁴ rounds takes 0.14 s and that of 10⁵ rounds 1.7 s (5.6 million
+errors, about 350 MB); sampling costs 9 µs per round for a batch of up
+to 64 shots.
+Sliding windows of ten rounds decode 0.17 to 0.19 µs per round and
+shot at 10⁴ and 10⁵ rounds; parallel windows committing five with
+buffers of five 0.18 µs on one thread, 0.14 on two and 0.09 on four,
+with the same failures. A shot's syndrome and the commits are applied
+on one thread, which caps the gain near two.
 
 ## Circuit distance and CNOT schedules
 
@@ -842,8 +920,9 @@ each).
 
 `to_stim()` writes a circuit in Stim's text format, with relative
 measurement records (`rec[-k]`) and exact probabilities.
-`DetectorCircuit.from_stim(text)` reads one. It understands the
-following instructions:
+`DetectorCircuit.from_stim(text)` reads one, expanding its REPEAT
+blocks; `RepeatedCircuit.from_stim(text)` keeps them (see above). Both
+understand the following instructions:
 
 - the Clifford gates H, S, S_DAG, X, Y, Z, SQRT_X(_DAG), SQRT_Y(_DAG), CX,
   CY, CZ, XCZ, YCZ and SWAP;
@@ -886,13 +965,19 @@ qso qec --code bb --distance 72 --rounds 3 --decoder bposd --schedule bicycle --
 qso qec --code bb --distance 144 --rounds 3 --decoder bposd --schedule bicycle --shots 1000 \
     --circuit-distance --symmetry --max-seconds 3600
 qso qec --circuit surface.stim --decoder correlated-matching
+qso qec --distance 5 --rounds 100000 --p 0.001 --shots 100 --decoder matching \
+    --parallel --commit 5 --buffer 5
 ```
 
 For `--code bb`, `--distance` names the code by its qubits.
 `--schedule` takes `greedy`, `bicycle` or six directions (`0,1,2,3,4,5`,
 colour codes only); it is refused with `--circuit`. `--circuit-distance` adds the bounds on the circuit
 distance to each line and to the JSON output; `--symmetry` searches it
-on the orbits of the circuit's symmetries.
+on the orbits of the circuit's symmetries. Beyond 10 000 rounds a
+memory experiment is built with its rounds as one repeated block, and a
+Stim file too long to expand is read with its REPEAT blocks kept.
+`--parallel` decodes in parallel windows committing `--commit` rounds
+with `--buffer` (default `--commit`) on each side.
 
 ## Limits and costs
 
@@ -902,9 +987,10 @@ on the orbits of the circuit's symmetries.
 | Operations | 2²⁴ |
 | Observables | 64 |
 | Results of one `sample` call | shots × (detectors + 64) ≤ 2³³ bits (1 GiB); in Python, shots × (detectors + observables) ≤ 2³⁰ |
-| Error components of a model | 2²²; their detector lists before merging, 2²⁷ entries (1 GiB); propagation, 2³⁴ word operations (each pass from its first component to the end of the circuit: about 5000 rounds of a distance-5 surface code) |
+| Error components of a model | 2²² (flat circuits); their detector lists before merging, 2²⁷ entries (1 GiB); the pass backwards, 2³⁴ entries of effects touched (about fifteen seconds) |
 | Window decoder | layers non-decreasing in the detector index; one decoder per distinct window shape, and the window's errors indexed for every window |
-| Code distance, rounds | 101, 10 000, and at most 2²⁴ operations (checked before building) |
+| Code distance, rounds | 101, 10 000, and at most 2²⁴ operations (checked before building); repeated memory experiments 10⁷ rounds |
+| Repeated circuits | 2²⁴ operations stored, 2³¹ expanded; models 2²⁴ detectors; sampling keeps as many records as a detector reaches back |
 | Imported Stim circuits | 65 536 qubits; 2²⁴ operations and annotations after expanding REPEAT blocks (checked before expanding); blocks nested at most 64 deep |
 | Matching decoder (`MatchingDecoder`) | cached distances 2²¹ entries (32 MiB), bounded searches beyond; at most 2²² pairs of events per shot |
 | Sparse matching decoder | no limit on detection events; time grows faster than linearly where blossoms nest deeply (51 ms for 2001 events in one chain) |
@@ -914,14 +1000,15 @@ on the orbits of the circuit's symmetries.
 | Circuit distance | exact and polynomial for graph-like models (a breadth-first search per start node, bounded by the best cycle found); otherwise BP+OSD searches (each like one decoding) and an exhaustive search of at most `max_work` sets (2²⁴ by default; some 10⁷ a second per thread). `exact_circuit_distance` runs until `max_seconds` (its polynomial preliminaries aside, the check of symmetries included); symmetries are checked for up to 4096 detectors, by an elimination of about n² · m / 64 word operations for n detectors and m errors, and the automorphism search behind `symmetry` stops at `max_seconds`; the generator matrices of the Brouwer–Zimmermann enumeration take at most 2³¹ bits (256 MiB) together, on information sets whose rank falls at most 64 short of the dimension, and while the first is built the detectors' matrix takes up to as much again |
 
 - **Sampling.** Each operation costs one word operation per 64 shots.
-- **Error model.** The model takes one pass through the circuit per 4096
-  error components, or more when the circuit has more than 4096
-  measurements (each pass holds its records).
+- **Error model.** The model takes one pass backwards through the
+  circuit, in time linear in it; a repeated block costs a few
+  iterations, and the rest its errors' count.
 - **Matching.** With `MatchingDecoder`, a shot with k detection events
   costs k distance lookups (or bounded searches) and O(k³) for the
   blossom algorithm. `SparseMatchingDecoder` costs time in proportion to
   the events and the area their regions cover (see the table above).
 - **Example timing.** On one core, a distance-21 surface code with 21
-  rounds (881 qubits, 4840 detectors) needs about 0.5 s for its error
+  rounds (881 qubits, 4840 detectors) needs about 0.15 s for its error
   model and 15 s for 100 000 shots decoded by union-find at p = 0.001. The error model
-  of d = 41 with 41 rounds (35 280 detectors) takes 30 s.
+  of d = 41 with 41 rounds (35 280 detectors) takes 1.2 s (30 s before
+  the pass backwards).

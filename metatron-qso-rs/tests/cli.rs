@@ -490,6 +490,45 @@ fn error_correction() {
     ]);
     assert!(f(&w["logical_error_rate"]["rate"]) < 0.05);
     assert_eq!(w["decoder"]["window-matching"]["window"], 3);
+    // In parallel windows committing two rounds with a buffer of one.
+    let p = qso(&[
+        "qec",
+        "--circuit",
+        stim.path(),
+        "--shots",
+        "2000",
+        "--decoder",
+        "matching",
+        "--parallel",
+        "--commit",
+        "2",
+        "--buffer",
+        "1",
+    ]);
+    assert!(f(&p["logical_error_rate"]["rate"]) < 0.05);
+    assert_eq!(p["decoder"]["parallel-window-matching"]["buffer"], 1);
+    // Beyond 10 000 rounds the rounds are one repeated block.
+    let long = qso(&[
+        "qec",
+        "--code",
+        "repetition",
+        "--distance",
+        "3",
+        "--rounds",
+        "20000",
+        "--p",
+        "0.001",
+        "--shots",
+        "64",
+        "--decoder",
+        "matching",
+        "--parallel",
+        "--commit",
+        "3",
+    ]);
+    assert_eq!(long[0]["rounds"], 20000);
+    assert_eq!(long[0]["detectors"], 2 * 20001);
+    assert!(qso_fails(&["qec", "--commit", "2", "--shots", "10"]).contains("commit"));
     assert!(
         qso_fails(&[
             "qec",

@@ -206,12 +206,39 @@ frame update for each gate is derived once.
   outcomes of the reference into random flips. Noise is applied by
   geometric skipping, at a cost proportional to the number of errors.
 - **Error models.** Every noise operation contributes an X and a Z
-  component per qubit, and every noisy measurement a flip. The components
-  are propagated, without randomization, as up to 4096 frames per pass;
-  the detector and observable rows of the pass are read back as each
-  component's signature. Independent error terms (the exact decomposition
-  of depolarizing channels into Paulis) take the XOR of their components'
+  component per qubit, and every noisy measurement a flip. Their
+  signatures come from one pass backwards through the circuit (1.61),
+  which holds for every qubit the detectors and observables an X and a Z
+  there would flip, and for every measurement record not yet passed the
+  effect of its flip: each operation acts as the transpose of its action
+  on frames (a gate's steps from `apply_clifford` recorded and undone in
+  reverse, S as `x ^= z`, CX as `x_c ^= x_t, z_t ^= z_c`; a measurement
+  adds its record's effect to its qubit's X and clears its Z, as frames
+  drop the Z of a measured qubit; a reset clears both; a detector appends
+  its index to its records' effects, in descending order so that each
+  append is constant time). The signatures equal those of frames
+  propagated forwards (kept as the test's reference), in time linear in
+  the circuit. Independent error terms (the exact decomposition of
+  depolarizing channels into Paulis) take the XOR of their components'
   signatures, and terms with equal signatures merge.
+- **Repeated blocks** (`qec/repeat.rs`, 1.61). A `RepeatedCircuit` is a
+  tree of blocks: operations whose records count back from the operation
+  (Stim's `rec[-k]`), and repeated blocks with their measurements,
+  detectors and operations per iteration. Stim's importer emits into a
+  `Sink`: a flat circuit expands every block, the repeated builder keeps
+  it; the memory experiments mark where each round starts, and rounds 2
+  to n become the block of their second round. Sampling walks the
+  expansion and keeps the last `lookback` records in a ring (record r in
+  slot r mod lookback), so the shots equal those of the expanded circuit.
+  The model's pass backwards runs a block's iterations from the last;
+  before each it keeps a copy of the state, and when the state after it
+  equals that copy with every detector and record lowered by one
+  iteration's, every earlier iteration's contributions are the last
+  one's lowered again: the merged contributions of the last iteration
+  (kept per open block) are added shifted, and the pass jumps to the
+  block's start with the state shifted. Merging is associative, so the
+  model equals the expanded one's up to the rounding of merged
+  probabilities.
 - **Decoding.** The matching graph has a node per detector plus one
   boundary node. Union-find growth is event-driven: each round finds the
   frontier edges of the growing clusters, advances all of them by the
@@ -319,6 +346,20 @@ frame update for each gate is derived once.
   events, and a boundary edge that was cut off at the window's end
   flips its detectors beyond the window. For BP+OSD the committed errors
   flip all their detectors.
+- **Parallel windows** (`qec/window.rs`, 1.61). The layout alternates
+  windows of the first pass (`buffer + commit + buffer` layers, with
+  every error that touches them and their outside detectors dropped) and
+  seams (the `buffer + span` layers between two commit regions, with the
+  errors inside them only, and a fallback with those that reach out).
+  With the gap at `buffer + span`, what a first-pass window commits
+  (pairs in it, and the cut-off detectors of a boundary edge, at most
+  `span` layers out) never reaches another's commit region, so the pass
+  decodes on the detection events as given, each thread on its own copy
+  of the decoders, and the commits are applied afterwards; the seams
+  touch only themselves. A stream decodes the windows in the order
+  first₀, first₁, seam₀, first₂, seam₁, … with first-pass windows
+  reading the events as given (kept apart from the syndrome), which
+  gives the batch's prediction.
 - **Failure rates below sampling** (`qec/splitting.rs`, 1.52). The model
   without decomposition is the error distribution; the decoder is built
   for each rate's circuit as `DecoderChoice::build_for` builds it, and a

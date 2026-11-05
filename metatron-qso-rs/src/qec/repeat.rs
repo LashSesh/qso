@@ -75,11 +75,14 @@ pub struct RepeatedCircuit {
 
 /// Builds a repeated circuit operation by operation, blocks opened and
 /// closed around them.
+/// An open block: its blocks so far, its count, and the measurements,
+/// detectors and operations when it opened.
+type Open = (Vec<Block>, usize, (usize, usize, u64));
+
 pub(super) struct Builder {
     n: usize,
-    /// Open blocks, the whole circuit first: their blocks so far, count,
-    /// and the measurements, detectors and operations when they opened.
-    stack: Vec<(Vec<Block>, usize, (usize, usize, u64))>,
+    /// Open blocks, the whole circuit first.
+    stack: Vec<Open>,
     measured: usize,
     detectors: usize,
     observables: usize,

@@ -245,9 +245,7 @@ impl WindowDecoder {
                 "a window of the first pass commits at least one layer",
             ));
         }
-        let window = c
-            .checked_add(b.checked_mul(2).unwrap_or(usize::MAX))
-            .unwrap_or(usize::MAX);
+        let window = c.saturating_add(b.saturating_mul(2));
         let mut decoder = Self::empty(
             dem,
             layers,

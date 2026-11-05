@@ -7,8 +7,8 @@ use metatron_qso::qec::{
     CorrelatedError, CorrelatedErrorModel, CorrelatedMatchingDecoder, CssCode, CssSchedule,
     Decoder, DecoderChoice, DetectorCircuit, DetectorErrorModel, DistanceMethod, DistanceOptions,
     ErrorMechanism, ExactDistanceOptions, MatchingDecoder, MatchingGraph, MemoryBasis, Noise,
-    OsdMethod, SparseMatchingDecoder, StreamState, UnionFindDecoder, WindowDecoder, WindowMethod,
-    WindowOptions,
+    OsdMethod, ParallelWindowOptions, RepeatedCircuit, SparseMatchingDecoder, StreamState,
+    UnionFindDecoder, WindowDecoder, WindowMethod, WindowOptions,
 };
 use numpy::ndarray::Array2;
 use numpy::{AllowTypeChange, IntoPyArray, PyArray1, PyArray2, PyArrayLike2};
@@ -245,17 +245,7 @@ impl PyDetectorCircuit {
             ));
         }
         let c = &self.inner;
-        let (det, obs) = py
-            .detach(|| {
-                let s = qec::sample_detectors(c, shots, seed)?;
-                let det = Array2::from_shape_fn((shots, nd), |(k, d)| s.fired(d, k));
-                let obs = Array2::from_shape_fn((shots, no), |(k, i)| {
-                    (s.observable_flips(k) >> i) & 1 == 1
-                });
-                Ok::<_, metatron_qso::QsoError>((det, obs))
-            })
-            .raise()?;
-        Ok((det.into_pyarray(py), obs.into_pyarray(py)))
+        sample_arrays(py, shots, nd, no, || qec::sample_detectors(c, shots, seed))
     }
 
     /// The independent error mechanisms of the circuit. With `decompose`,
@@ -293,6 +283,161 @@ impl PyDetectorCircuit {
             "DetectorCircuit(n_qubits={}, operations={}, detectors={}, observables={})",
             self.inner.n_qubits(),
             self.inner.operations().len(),
+            self.inner.n_detectors(),
+            self.inner.n_observables()
+        )
+    }
+}
+
+/// Detection events and observable flips as boolean arrays of shape
+/// (shots, nd) and (shots, no).
+type SampleArrays<'py> = (Bound<'py, PyArray2<bool>>, Bound<'py, PyArray2<bool>>);
+
+fn sample_arrays<'py>(
+    py: Python<'py>,
+    shots: usize,
+    nd: usize,
+    no: usize,
+    sample: impl FnOnce() -> metatron_qso::Result<qec::DetectorSamples> + Send,
+) -> PyResult<SampleArrays<'py>> {
+    let (det, obs) = py
+        .detach(|| {
+            let s = sample()?;
+            let det = Array2::from_shape_fn((shots, nd), |(k, d)| s.fired(d, k));
+            let obs =
+                Array2::from_shape_fn((shots, no), |(k, i)| (s.observable_flips(k) >> i) & 1 == 1);
+            Ok::<_, metatron_qso::QsoError>((det, obs))
+        })
+        .raise()?;
+    Ok((det.into_pyarray(py), obs.into_pyarray(py)))
+}
+
+/// A detector circuit that keeps its repeated blocks (Stim's `REPEAT`),
+/// from `from_stim`, `from_circuit` or the `*_memory_repeated`
+/// experiments: each block is stored once, with its measurement records
+/// counted back. It samples as it runs, keeping only the records a
+/// detector can still reach, and its detector error model is folded: one
+/// pass backwards that, once an iteration's start is its end shifted by
+/// one iteration, adds the earlier iterations' errors shifted.
+#[pyclass(name = "RepeatedCircuit", module = "metatron_qso", frozen)]
+#[derive(Clone)]
+pub struct PyRepeatedCircuit {
+    pub inner: RepeatedCircuit,
+}
+
+#[pymethods]
+impl PyRepeatedCircuit {
+    /// A circuit in Stim's text format with its REPEAT blocks kept (the
+    /// instructions `DetectorCircuit.from_stim` reads).
+    #[staticmethod]
+    fn from_stim(text: &str) -> PyResult<Self> {
+        Ok(Self {
+            inner: RepeatedCircuit::from_stim(text).raise()?,
+        })
+    }
+
+    /// A flat circuit as a repeated one without blocks.
+    #[staticmethod]
+    fn from_circuit(circuit: &PyDetectorCircuit) -> PyResult<Self> {
+        Ok(Self {
+            inner: RepeatedCircuit::from_circuit(&circuit.inner).raise()?,
+        })
+    }
+
+    /// The circuit in Stim's text format, its blocks as REPEAT.
+    fn to_stim(&self) -> PyResult<String> {
+        self.inner.to_stim().raise()
+    }
+
+    /// Every block expanded, if it fits a `DetectorCircuit`.
+    fn flatten(&self) -> PyResult<PyDetectorCircuit> {
+        Ok(PyDetectorCircuit {
+            inner: self.inner.flatten().raise()?,
+        })
+    }
+
+    #[getter]
+    fn n_qubits(&self) -> usize {
+        self.inner.n_qubits()
+    }
+
+    /// Measurements, expanded.
+    #[getter]
+    fn n_measurements(&self) -> usize {
+        self.inner.n_measurements()
+    }
+
+    /// Detectors, expanded.
+    #[getter]
+    fn n_detectors(&self) -> usize {
+        self.inner.n_detectors()
+    }
+
+    #[getter]
+    fn n_observables(&self) -> usize {
+        self.inner.n_observables()
+    }
+
+    /// Operations, expanded.
+    #[getter]
+    fn n_operations(&self) -> u64 {
+        self.inner.n_operations()
+    }
+
+    /// Operations stored (each block once).
+    #[getter]
+    fn n_stored_operations(&self) -> usize {
+        self.inner.n_stored_operations()
+    }
+
+    /// The layer (round) of every detector, as for the expanded circuit.
+    fn detector_layers(&self) -> Vec<usize> {
+        self.inner.detector_layers()
+    }
+
+    /// Sample `shots` shots as `DetectorCircuit.sample` samples the
+    /// expanded circuit (the same shots for the same seed).
+    #[pyo3(signature = (shots, seed = 0))]
+    fn sample<'py>(&self, py: Python<'py>, shots: usize, seed: u64) -> PyResult<SampleArrays<'py>> {
+        let (nd, no) = (self.inner.n_detectors(), self.inner.n_observables());
+        if shots.saturating_mul(nd + no) > MAX_ARRAY_ENTRIES {
+            return Err(invalid(
+                "shots × (detectors + observables) must be at most 2³⁰",
+            ));
+        }
+        let c = &self.inner;
+        sample_arrays(py, shots, nd, no, || c.sample(shots, seed))
+    }
+
+    /// The detector error model of the expanded circuit (as
+    /// `DetectorCircuit.detector_error_model` gives it, up to the rounding
+    /// of merged probabilities), folded.
+    #[pyo3(signature = (decompose = false))]
+    fn detector_error_model(
+        &self,
+        py: Python<'_>,
+        decompose: bool,
+    ) -> PyResult<PyDetectorErrorModel> {
+        let c = &self.inner;
+        Ok(PyDetectorErrorModel {
+            inner: py.detach(|| c.detector_error_model(decompose)).raise()?,
+        })
+    }
+
+    /// The correlated model of the expanded circuit, folded.
+    fn correlated_error_model(&self, py: Python<'_>) -> PyResult<PyCorrelatedErrorModel> {
+        let c = &self.inner;
+        Ok(PyCorrelatedErrorModel {
+            inner: py.detach(|| c.correlated_error_model()).raise()?,
+        })
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "RepeatedCircuit(n_qubits={}, operations={}, stored={}, detectors={}, observables={})",
+            self.inner.n_qubits(),
+            self.inner.n_operations(),
+            self.inner.n_stored_operations(),
             self.inner.n_detectors(),
             self.inner.n_observables()
         )
@@ -1238,15 +1383,7 @@ impl PyWindowDecoder {
         commit: Option<usize>,
         decoder: &str,
     ) -> PyResult<Self> {
-        let method = match decoder {
-            "matching" => WindowMethod::Matching,
-            "bposd" => WindowMethod::BpOsd(BpOsdOptions::default()),
-            other => {
-                return Err(invalid(format!(
-                    "unknown decoder {other:?}; use \"matching\" or \"bposd\""
-                )));
-            }
-        };
+        let method = window_method(decoder)?;
         let options = WindowOptions {
             window,
             commit: commit.unwrap_or(WindowOptions::new(window).commit),
@@ -1254,6 +1391,35 @@ impl PyWindowDecoder {
         let dem = &model.inner;
         let inner = py
             .detach(|| WindowDecoder::new(dem, &layers, options, method))
+            .raise()?;
+        let state = inner.new_stream();
+        Ok(Self { inner, state })
+    }
+
+    /// Parallel windows (Skoric et al.): a first pass of windows of
+    /// `buffer + commit + buffer` layers (`buffer` defaults to `commit`),
+    /// each decoded on the detection events as given with both ends as
+    /// boundaries and committing its middle `commit` layers, then the seams
+    /// between them; each pass runs on threads. A stream (`push_layer`)
+    /// decodes the same windows in order with the same prediction.
+    #[staticmethod]
+    #[pyo3(signature = (model, layers, commit, buffer = None, decoder = "matching"))]
+    fn parallel(
+        py: Python<'_>,
+        model: &PyDetectorErrorModel,
+        layers: Vec<usize>,
+        commit: usize,
+        buffer: Option<usize>,
+        decoder: &str,
+    ) -> PyResult<Self> {
+        let method = window_method(decoder)?;
+        let options = ParallelWindowOptions {
+            commit,
+            buffer: buffer.unwrap_or(commit),
+        };
+        let dem = &model.inner;
+        let inner = py
+            .detach(|| WindowDecoder::parallel(dem, &layers, options, method))
             .raise()?;
         let state = inner.new_stream();
         Ok(Self { inner, state })
@@ -1325,6 +1491,17 @@ impl PyWindowDecoder {
     }
 
     fn __repr__(&self) -> String {
+        if let Some(p) = self.inner.parallel_options() {
+            return format!(
+                "WindowDecoder.parallel(detectors={}, layers={}, commit={}, buffer={}, windows={}, decoders={})",
+                self.inner.n_detectors(),
+                self.inner.n_layers(),
+                p.commit,
+                p.buffer,
+                self.inner.n_windows(),
+                self.inner.n_decoders()
+            );
+        }
         let o = self.inner.options();
         format!(
             "WindowDecoder(detectors={}, layers={}, window={}, commit={}, windows={}, decoders={})",
@@ -1335,6 +1512,16 @@ impl PyWindowDecoder {
             self.inner.n_windows(),
             self.inner.n_decoders()
         )
+    }
+}
+
+fn window_method(decoder: &str) -> PyResult<WindowMethod> {
+    match decoder {
+        "matching" => Ok(WindowMethod::Matching),
+        "bposd" => Ok(WindowMethod::BpOsd(BpOsdOptions::default())),
+        other => Err(invalid(format!(
+            "unknown decoder {other:?}; use \"matching\" or \"bposd\""
+        ))),
     }
 }
 
@@ -1464,7 +1651,34 @@ fn css_code_memory(
 ) -> PyResult<PyDetectorCircuit> {
     let basis = parse_basis(basis)?;
     let noise = noise.map(NoiseArg::model).unwrap_or_default();
-    let schedule = match schedule {
+    let schedule = parse_schedule(schedule)?;
+    Ok(PyDetectorCircuit {
+        inner: qec::css_code_memory_with(&code.inner, rounds, &noise, basis, schedule).raise()?,
+    })
+}
+
+/// `css_code_memory` with rounds 2 to `rounds` as one repeated block, for
+/// up to 10⁷ rounds; expanded it is the same circuit.
+#[pyfunction]
+#[pyo3(signature = (code, rounds, noise = None, basis = "z", schedule = None))]
+fn css_code_memory_repeated(
+    code: &PyCssCode,
+    rounds: usize,
+    noise: Option<NoiseArg>,
+    basis: &str,
+    schedule: Option<ScheduleArg>,
+) -> PyResult<PyRepeatedCircuit> {
+    let basis = parse_basis(basis)?;
+    let noise = noise.map(NoiseArg::model).unwrap_or_default();
+    let schedule = parse_schedule(schedule)?;
+    Ok(PyRepeatedCircuit {
+        inner: qec::css_code_memory_repeated(&code.inner, rounds, &noise, basis, schedule)
+            .raise()?,
+    })
+}
+
+fn parse_schedule(schedule: Option<ScheduleArg>) -> PyResult<CssSchedule> {
+    Ok(match schedule {
         None => CssSchedule::Greedy,
         Some(ScheduleArg::Name(name)) => match name.as_str() {
             "greedy" => CssSchedule::Greedy,
@@ -1489,9 +1703,6 @@ fn css_code_memory(
                 .map_err(|_| invalid("a schedule by directions lists six directions"))?;
             CssSchedule::Directions(order)
         }
-    };
-    Ok(PyDetectorCircuit {
-        inner: qec::css_code_memory_with(&code.inner, rounds, &noise, basis, schedule).raise()?,
     })
 }
 
@@ -1538,6 +1749,38 @@ fn repetition_code_memory(
     })
 }
 
+/// `repetition_code_memory` with rounds 2 to `rounds` as one repeated
+/// block, for up to 10⁷ rounds; expanded it is the same circuit.
+#[pyfunction]
+#[pyo3(signature = (distance, rounds, noise = None))]
+fn repetition_code_memory_repeated(
+    distance: usize,
+    rounds: usize,
+    noise: Option<NoiseArg>,
+) -> PyResult<PyRepeatedCircuit> {
+    let noise = noise.map(NoiseArg::model).unwrap_or_default();
+    Ok(PyRepeatedCircuit {
+        inner: qec::repetition_code_memory_repeated(distance, rounds, &noise).raise()?,
+    })
+}
+
+/// `surface_code_memory` with rounds 2 to `rounds` as one repeated block,
+/// for up to 10⁷ rounds; expanded it is the same circuit.
+#[pyfunction]
+#[pyo3(signature = (distance, rounds, noise = None, basis = "z"))]
+fn surface_code_memory_repeated(
+    distance: usize,
+    rounds: usize,
+    noise: Option<NoiseArg>,
+    basis: &str,
+) -> PyResult<PyRepeatedCircuit> {
+    let basis = parse_basis(basis)?;
+    let noise = noise.map(NoiseArg::model).unwrap_or_default();
+    Ok(PyRepeatedCircuit {
+        inner: qec::surface_code_memory_repeated(distance, rounds, &noise, basis).raise()?,
+    })
+}
+
 /// A rotated surface-code memory experiment of odd `distance` protecting
 /// `|0⟩_L` (`basis="z"`: Z-type detectors, the logical Z as observable 0)
 /// or `|+⟩_L` (`basis="x"`: X-type detectors, the logical X).
@@ -1561,24 +1804,38 @@ fn surface_code_memory(
 /// `"correlated_matching"` with the parts of each error) or of its whole
 /// model (`"bposd"`, default options) and count the logical failures.
 /// `"window_matching"` and `"window_bposd"` decode in sliding windows of
-/// `window` rounds committing `commit` (default: half, rounded up). Every
-/// decoder sees the same shots.
+/// `window` rounds committing `commit` (default: half, rounded up);
+/// `"parallel_window_matching"` and `"parallel_window_bposd"` in parallel
+/// windows committing `commit` rounds with `buffer` (default: `commit`)
+/// on each side. Every decoder sees the same shots. A `RepeatedCircuit`
+/// is sampled as it runs and decoded on its folded model.
 #[pyfunction]
-#[pyo3(signature = (circuit, shots, seed = 0, decoder = "union_find", window = None, commit = None))]
+#[pyo3(signature = (
+    circuit, shots, seed = 0, decoder = "union_find", window = None, commit = None, buffer = None
+))]
+#[allow(clippy::too_many_arguments)]
 fn logical_error_rate(
     py: Python<'_>,
-    circuit: &PyDetectorCircuit,
+    circuit: AnyCircuit<'_>,
     shots: usize,
     seed: u64,
     decoder: &str,
     window: Option<usize>,
     commit: Option<usize>,
+    buffer: Option<usize>,
 ) -> PyResult<PyLogicalErrorRate> {
-    let kind = decoder_choice(decoder, window, commit)?;
-    let c = &circuit.inner;
-    let r = py
-        .detach(|| qec::logical_error_rate_using(c, shots, seed, kind))
-        .raise()?;
+    let kind = decoder_choice(decoder, window, commit, buffer)?;
+    let r = match &circuit {
+        AnyCircuit::Flat(c) => {
+            let c = &c.inner;
+            py.detach(|| qec::logical_error_rate_using(c, shots, seed, kind))
+        }
+        AnyCircuit::Repeated(c) => {
+            let c = &c.get().inner;
+            py.detach(|| qec::logical_error_rate_repeated(c, shots, seed, kind))
+        }
+    }
+    .raise()?;
     Ok(PyLogicalErrorRate {
         shots: r.shots,
         errors: r.errors,
@@ -1587,18 +1844,41 @@ fn logical_error_rate(
     })
 }
 
+/// A flat or a repeated circuit.
+#[derive(FromPyObject)]
+enum AnyCircuit<'py> {
+    Flat(PyRef<'py, PyDetectorCircuit>),
+    Repeated(Bound<'py, PyRepeatedCircuit>),
+}
+
 /// A decoder by name.
 fn decoder_choice(
     decoder: &str,
     window: Option<usize>,
     commit: Option<usize>,
+    buffer: Option<usize>,
 ) -> PyResult<DecoderChoice> {
     let windowed = decoder.starts_with("window_");
-    if !windowed && (window.is_some() || commit.is_some()) {
+    let parallel = decoder.starts_with("parallel_window_");
+    if !windowed && !parallel && (window.is_some() || commit.is_some() || buffer.is_some()) {
         return Err(invalid(format!(
-            "window and commit apply to the window decoders, not {decoder:?}"
+            "window, commit and buffer apply to the window decoders, not {decoder:?}"
         )));
     }
+    if windowed && buffer.is_some() {
+        return Err(invalid(format!(
+            "{decoder:?} slides windows of `window` rounds; buffer applies to parallel windows"
+        )));
+    }
+    if parallel && window.is_some() {
+        return Err(invalid(format!(
+            "{decoder:?} takes commit and buffer, not a window"
+        )));
+    }
+    let halves = || -> PyResult<(usize, usize)> {
+        let c = commit.ok_or_else(|| invalid(format!("{decoder:?} needs commit")))?;
+        Ok((c, buffer.unwrap_or(c)))
+    };
     let sizes = || -> PyResult<(usize, usize)> {
         let w = window.ok_or_else(|| invalid(format!("{decoder:?} needs a window")))?;
         Ok((w, commit.unwrap_or(WindowOptions::new(w).commit)))
@@ -1616,9 +1896,17 @@ fn decoder_choice(
             let (window, commit) = sizes()?;
             DecoderChoice::WindowBpOsd { window, commit }
         }
+        "parallel_window_matching" => {
+            let (commit, buffer) = halves()?;
+            DecoderChoice::ParallelWindowMatching { commit, buffer }
+        }
+        "parallel_window_bposd" => {
+            let (commit, buffer) = halves()?;
+            DecoderChoice::ParallelWindowBpOsd { commit, buffer }
+        }
         other => {
             return Err(invalid(format!(
-                "unknown decoder {other:?}; use \"union_find\", \"matching\", \"correlated_matching\", \"bposd\", \"window_matching\" or \"window_bposd\""
+                "unknown decoder {other:?}; use \"union_find\", \"matching\", \"correlated_matching\", \"bposd\", \"window_matching\", \"window_bposd\", \"parallel_window_matching\" or \"parallel_window_bposd\""
             )));
         }
     })
@@ -1652,7 +1940,7 @@ fn splitting_failure_rate<'py>(
     burn_in: usize,
     seed: u64,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let kind = decoder_choice(decoder, None, None)?;
+    let kind = decoder_choice(decoder, None, None, None)?;
     let options = qec::SplittingOptions {
         start_shots,
         chains,
@@ -1712,7 +2000,7 @@ fn enumerated_failure_rate<'py>(
     max_weight: usize,
     decoder: &str,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let kind = decoder_choice(decoder, None, None)?;
+    let kind = decoder_choice(decoder, None, None, None)?;
     let c = &circuit.inner;
     let r = py
         .detach(|| qec::enumerated_failure_rate(c, kind, max_weight))
@@ -1745,7 +2033,7 @@ fn leading_failures<'py>(
     max_work: u64,
     max_configurations: u64,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let kind = decoder_choice(decoder, None, None)?;
+    let kind = decoder_choice(decoder, None, None, None)?;
     let c = &circuit.inner;
     let r = py
         .detach(|| qec::leading_failures(c, kind, max_work, max_configurations))
@@ -1785,9 +2073,13 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBpOsdOutcome>()?;
     m.add_class::<PyCssCode>()?;
     m.add_class::<PyLogicalErrorRate>()?;
+    m.add_class::<PyRepeatedCircuit>()?;
     m.add_function(wrap_pyfunction!(repetition_code_memory, m)?)?;
     m.add_function(wrap_pyfunction!(surface_code_memory, m)?)?;
     m.add_function(wrap_pyfunction!(css_code_memory, m)?)?;
+    m.add_function(wrap_pyfunction!(repetition_code_memory_repeated, m)?)?;
+    m.add_function(wrap_pyfunction!(surface_code_memory_repeated, m)?)?;
+    m.add_function(wrap_pyfunction!(css_code_memory_repeated, m)?)?;
     m.add_function(wrap_pyfunction!(logical_error_rate, m)?)?;
     Ok(())
 }

@@ -57,9 +57,9 @@ which withdraws the results of version 1.
 | Boson sampling | exact probabilities and exact sampling (1.1); partial distinguishability, loss and Gaussian boson sampling with hafnians and torontonians (1.14) | mixed Gaussian states with many photons spread over many modes are impractical (10¹² operations at 20 photons in 10 modes) |
 | Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4); slow noise from Markov processes (telegraph, Ornstein–Uhlenbeck, quasi-static, 1/f) averaged exactly on density matrices (1.44) | noise learning for layers of two-qubit Clifford gates only, on density matrices up to 10 qubits and Pauli frames up to 64 (1.12, 1.31), with non-Pauli channels twirled one at a time; mitigation with the learned model above 24 qubits only on matrix-product states, for channels that are mixtures of unitaries (1.31); no leakage; channels on at most four qubits (1.30); slow noise averaged exactly up to 12 qubits and processes with finitely many states (1.44), sampled on trajectories beyond (1.30); virtual distillation (1.17) mitigates only its measured copies' preparation |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18); interacting bosons, fermions and distinguishable particles with certificates for graph isomorphism (1.29); symmetry for driven walks, open walks on orbitals, coined walks with dephasing, hypercubes with dephasing up to d = 230 (1.38); interacting walkers on the orbits of automorphisms (three bosons on Q₉: 2284 orbits of 22.5 million configurations) and up to four particles on hypercubes (1.43); open walks on large symmetric graphs from point stabilisers (Q₁₈, H(4, 10), J(24, 4); 1.48); interacting walkers on Hamming, Johnson and Kneser graphs from canonical forms (1.53) and on any graph from minimal images under a group (three fermions on Paley(3209): 1068 orbits of 5.5·10⁹ configurations; 1.58) | interacting walkers without symmetry stop at 2²² configurations, and dense graphs with small groups stay dense on their orbits (three bosons from one node of Paley(809) exceed 2²⁶ entries; 1.58); open walks beyond 8192 nodes need a start whose stabiliser leaves few orbitals (dense graphs and circulants stay at 8192 nodes; 1.48); pretty good transfer on other graphs has no exact reference |
-| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37); the ¹³C bath of an NV centre by the cluster-correlation expansion (1.39); the optical cycle, ODMR, pulsed readout and magnetometer sensitivity in fields of any direction, and ensembles (1.40); sparse relaxation blocks propagated by Krylov steps, Redfield relaxation from sparse terms and equivalent spins: seven and eight relaxing protons for seconds (1.41); optimal control with relaxation on sparse blocks and on the orbits of equivalent spins, seven and eight spins (1.46); Redfield relaxation with anisotropic diffusion and model-free internal motion (1.49); reaction kinetics with spins: PASADENA, ALTADENA and SABRE as they run (1.50); field profiles with relaxation beyond six spins, the relaxation interpolated over the field (1.51); exchange and reactions on sparse blocks with iterative steady states and field profiles: SABRE with nine spins in the complex beside seven in the substrate (1.54); reactions of two spin-carrying reactants, the product formed in the product of their states: SABRE whose complex keeps its hydrides and swaps them with a hydrogen pool, PHIP from a pool whose singlet decays (1.59); the optical cycle with the nitrogen and one ¹³C at the level anticrossings, ¹⁵N polarised to 0.95 at 51 mT, the fluorescence dip at 102.4 mT, a microwave in the laboratory frame by Floquet harmonics (1.60); Redfield relaxation applied without storing it, with its analytic field derivative: nine and ten relaxing spins whose superoperator would need 6 to 74 GB (1.55); product-formula bounds whose remainder runs over the terms that do not commute, the error averaged over states, and step counts for a target error: half the steps of the bounds of Childs et al. for Heisenberg chains of 10 to 64 spins (1.56) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the commutator bound of product formulas (1.56) still sums its remainder by the triangle inequality, about 2.3 times the empirical step counts of Heisenberg chains and loose at few steps and order 6, where its budget stops the degree early; Redfield relaxation takes rigid-body diffusion and model-free internal motion, not correlated motions of groups (1.49), and propagations beyond 1.5·10¹² operations or 2 GiB are refused (eleven protons with dipolar relaxation, nine for 100 s; 1.41); chemical exchange and reaction kinetics take Krylov steps beyond 2048 elements per block (1.54), unaffordable in the laboratory frame at millitesla fields and more; reactants meet uncorrelated (no cage effects), and a reaction whose partner's amount changes takes steps that resolve the frequencies of the blocks it feeds (PHIP at 1 µT with a three-spin product: 2 s of reaction in 2 s, 9 s with the hydrogen a pool with spins; a four-spin product at 5 µT over 3 s exceeds the work limit; 1.50, 1.59); field profiles with relaxation hold the relaxation at up to 33 fields (1.51), or apply Redfield relaxation without storing it where those would not fit (1.55), where work bounds them (eight spins with dipolar relaxation: two steps over 0.02 s per evaluation within the limit), and have many local optima; an evaluation of eight relaxing spins takes tens of seconds (1.46); the NV bath of 1.39 takes ideal pulses only (finite ones: the generalised expansion, 1.45), its expansion can diverge (results beyond `|L| = 1` are refused), and the nuclei next to the vacancy need given contact couplings (1.39); the optical cycle with nuclei is dense in Liouville space: 42 levels (¹⁴N and ¹³C) take 10 s for a steady state and 210 s with a microwave, and more nuclei do not fit (1.60) |
+| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37); the ¹³C bath of an NV centre by the cluster-correlation expansion (1.39); the optical cycle, ODMR, pulsed readout and magnetometer sensitivity in fields of any direction, and ensembles (1.40); sparse relaxation blocks propagated by Krylov steps, Redfield relaxation from sparse terms and equivalent spins: seven and eight relaxing protons for seconds (1.41); optimal control with relaxation on sparse blocks and on the orbits of equivalent spins, seven and eight spins (1.46); Redfield relaxation with anisotropic diffusion and model-free internal motion (1.49); reaction kinetics with spins: PASADENA, ALTADENA and SABRE as they run (1.50); field profiles with relaxation beyond six spins, the relaxation interpolated over the field (1.51); exchange and reactions on sparse blocks with iterative steady states and field profiles: SABRE with nine spins in the complex beside seven in the substrate (1.54); reactions of two spin-carrying reactants, the product formed in the product of their states: SABRE whose complex keeps its hydrides and swaps them with a hydrogen pool, PHIP from a pool whose singlet decays (1.59); the optical cycle with the nitrogen and one ¹³C at the level anticrossings, ¹⁵N polarised to 0.95 at 51 mT, the fluorescence dip at 102.4 mT, a microwave in the laboratory frame by Floquet harmonics (1.60); Redfield relaxation applied without storing it, with its analytic field derivative: nine and ten relaxing spins whose superoperator would need 6 to 74 GB (1.55); product-formula bounds whose remainder runs over the terms that do not commute, the error averaged over states, and step counts for a target error: half the steps of the bounds of Childs et al. for Heisenberg chains of 10 to 64 spins (1.56) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the commutator bound of product formulas (1.56) still sums its remainder by the triangle inequality, about 2.3 times the empirical step counts of Heisenberg chains and loose at few steps and order 6, where its budget stops the degree early; Redfield relaxation takes rigid-body diffusion and model-free internal motion, not correlated motions of groups (1.49), and propagations beyond 1.5·10¹² operations or 2 GiB are refused (eleven protons with dipolar relaxation, nine for 100 s; 1.41); chemical exchange and reaction kinetics take Krylov steps beyond 2048 elements per block (1.54), unaffordable in the laboratory frame at millitesla fields and more; reactants meet uncorrelated (no cage effects), and a reaction whose partner's amount changes takes steps that resolve the frequencies of the blocks it feeds (PHIP at 1 µT with a three-spin product: 2 s of reaction in 2 s, 9 s with the hydrogen a pool with spins; a four-spin product at 5 µT over 3 s exceeds the work limit; 1.50, 1.59); field profiles with relaxation hold the relaxation at up to 33 fields (1.51), or apply Redfield relaxation without storing it where those would not fit (1.55), where work bounds them (eight spins with dipolar relaxation: two steps over 0.02 s per evaluation within the limit), and have many local optima; an evaluation of eight relaxing spins takes tens of seconds (1.46); the NV bath of 1.39 takes ideal pulses only (finite ones: the generalised expansion, 1.45), its expansion can diverge (results beyond `|L| = 1` are refused), and the nuclei next to the vacancy need given contact couplings (1.39); the optical cycle with nuclei is dense in Liouville space: 42 levels (¹⁴N and ¹³C) take 9 s for a steady state and 230 s with a microwave, and more nuclei do not fit (1.60) |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
-| Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22); exact circuit distances of any model by a parallel search or the Brouwer–Zimmermann enumeration, with the lightest logical error as circuit locations (1.42); the search on the orbits of an error model's symmetries: [[144, 12, 12]] over three rounds of the depth-8 cycle has circuit distance 10 (1.47); logical failure rates far below sampling by splitting, with their leading term (surface codes to 10⁻⁹, [[72, 12, 6]] to 10⁻¹³; 1.52); decoding in sliding windows of rounds by matching or BP+OSD, round by round, at constant time per round up to 4000 rounds (1.57) | exact circuit distances need time exponential in the distance (each weight about 17 times the last on bicycle circuits); symmetries divide it by a factor that grows with their number (41 to 43 for 72); splitting needs a burn-in long enough, which its error does not show (1.52); the error model of an experiment is built whole, in time quadratic in the rounds (about 5000 rounds of distance 5 at the limit), and windows are decoded one after another, not in parallel (1.57) |
+| Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22); exact circuit distances of any model by a parallel search or the Brouwer–Zimmermann enumeration, with the lightest logical error as circuit locations (1.42); the search on the orbits of an error model's symmetries: [[144, 12, 12]] over three rounds of the depth-8 cycle has circuit distance 10 (1.47); logical failure rates far below sampling by splitting, with their leading term (surface codes to 10⁻⁹, [[72, 12, 6]] to 10⁻¹³; 1.52); decoding in sliding windows of rounds by matching or BP+OSD, round by round, at constant time per round up to 4000 rounds (1.57); error models in one pass backwards, linear in the rounds; circuits that keep their repeated blocks, sampled as they run, their models folded: 10⁵ rounds of distance 5 in 1.7 s, equal to Stim's; windows decoded in parallel, twice as fast on four cores (1.61) | exact circuit distances need time exponential in the distance (each weight about 17 times the last on bicycle circuits); symmetries divide it by a factor that grows with their number (41 to 43 for 72); splitting needs a burn-in long enough, which its error does not show (1.52); the folded model is still expanded into all its errors (5.6 million, about 350 MB, for 10⁵ rounds of distance 5), and parallel windows gain about two on four cores, as a shot's syndrome and commits stay on one thread (1.61) |
 | Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9), in the browser build too (1.25) | — |
 | Documentation | user guide, executed tutorials and Python reference on GitHub Pages (1.2); Rust tutorials from the examples and the documentation of every release since 1.2.0 (1.25) | — |
 | Engineering | CI on Linux (x86_64, arm64), macOS and Windows; Miri, fuzzing, API checks, weekly cross-validation and benchmark tracking; Trusted Publishing (1.2); line and branch coverage, and differential tests of all simulators on random circuits (1.21); coverage of the CLI and of the Python tests (1.25) | — |
@@ -6611,7 +6611,7 @@ three-photon resonance. Findings, all fixed:
   and the docs state that the excited triplet has no dephasing of its
   own and that the microwave acts on the ground triplet only.
 
-### 1.61 — Error models of long experiments, windows in parallel (M)
+### 1.61 — Error models of long experiments, windows in parallel (M, delivered)
 
 Use case: memory experiments of 10⁴ to 10⁵ rounds, whose error model 1.57
 builds in time quadratic in the rounds (about 5000 rounds of distance 5
@@ -6628,6 +6628,116 @@ to the rounds that fit, and to Stim's for long `REPEAT` circuits in the
 cross-validation; parallel windows equal to the sequential ones of 1.57
 within the sampling error and to the whole decoding as the windows grow;
 time per round constant, and the speed-up with the cores measured.
+
+Delivered in `qec/dem.rs`, `qec/repeat.rs` and `qec/window.rs`
+(`RepeatedCircuit`, `repetition_code_memory_repeated`,
+`surface_code_memory_repeated`, `css_code_memory_repeated`,
+`WindowDecoder::parallel`, `ParallelWindowOptions`,
+`DecoderChoice::ParallelWindowMatching` and `ParallelWindowBpOsd`,
+`DecoderChoice::build_for_repeated`, `logical_error_rate_repeated`):
+
+- **One pass backwards.** Every error model now comes from one pass
+  backwards through the circuit, which carries for every qubit the
+  detectors and observables an X and a Z there would flip, and for every
+  measurement record not yet passed the effect of its flip: each
+  operation acts as the transpose of its action on Pauli frames. The
+  effects are those of propagating each error forwards, term by term,
+  in time linear in the circuit: the model of 4000 rounds of a distance-5
+  surface code takes 2.3 s instead of 30 s, and the forwards propagation
+  stays as the test's reference.
+- **Repeated blocks.** `RepeatedCircuit` keeps Stim's `REPEAT` blocks
+  (records counted back from the operation that reads them), from
+  `RepeatedCircuit::from_stim` and from the memory experiments, whose
+  rounds 2 to n become one block (up to 10⁷ rounds). It expands to the
+  flat circuit where that fits, writes its blocks back as `REPEAT`,
+  samples as it runs with a ring of the records a detector can still
+  reach (the same shots as the expanded circuit), and decodes through
+  `logical_error_rate_repeated`.
+- **The folded model.** The pass backwards runs a block's iterations
+  from the last; once the state at the start of an iteration is that at
+  its end with every detector and record lowered by one iteration's,
+  every earlier iteration repeats the last one's merged contributions
+  lowered, which are added without propagating, and the pass jumps to
+  the start of the block (as Stim folds loops). A block whose state never
+  repeats is passed iteration by iteration, still in linear time.
+- **Parallel windows.** `WindowDecoder::parallel` decodes in two passes,
+  as Skoric et al. propose: windows of `buffer + commit + buffer` layers,
+  each on the detection events as sampled with both ends as boundaries,
+  committing their middle `commit` layers; then the seams between the
+  commit regions, on the events the first pass left, committing all.
+  Each pass runs on threads, each with its own copy of the decoders. A
+  stream decodes the same windows in order (first₀, first₁, seam₀,
+  first₂, …) with the same prediction.
+
+Changes to the plan:
+
+- **A model linear in the rounds before any folding.** The plan folded
+  the model "once the propagation's state repeats"; the forwards
+  propagation of 1.57 had no state that could repeat (each error ran to
+  the end). Propagating backwards gives one state for all errors, linear
+  in the rounds, and the folding then needs only to compare it with its
+  shift.
+- **The seams' size.** Skoric et al. leave a buffer between the windows
+  of the first pass; here the gap between two commit regions is the
+  buffer plus the most layers one error spans, so that a window's
+  committed boundary edges, which reach that far beyond it, never touch
+  another's commit region and the first pass needs no synchronisation.
+- **The model expanded, not kept folded.** The folded pass yields every
+  error of the expanded circuit (merged as the flat model merges them),
+  so that every decoder and window takes it unchanged; a model kept in
+  blocks would need decoders that read it in blocks.
+
+Not done, and why:
+
+- **A folded model.** 10⁵ rounds of distance 5 have 5.6 million errors
+  (about 350 MB); the windows of the bulk share their decoders, so a
+  model kept as blocks would bound the memory too, but needs the
+  windows' indices built from the blocks.
+- **More than twice the speed on four cores.** A shot's syndrome, the
+  commits of each pass and the windows' events are handled on one
+  thread, which bounds the gain. Decoding many shots is parallel over
+  shots as before.
+- **Union-find and correlated matching in parallel windows**, as in
+  1.57: their corrections are not reported as pairs or errors.
+
+Measured (four cores, release build; distance-5 surface code, Z basis,
+p = 10⁻³):
+
+| Quantity | 1000 rounds | 4000 rounds | 10⁴ rounds | 10⁵ rounds |
+|---|---|---|---|---|
+| Model of the flat circuit (1.57) | 0.53 s (1.3 s) | 2.3 s (30 s) | — | — |
+| Model of the repeated circuit (432 operations stored) | | | 0.14 s, 560 021 errors | 1.7 s, 5.6 million (about 350 MB) |
+| Sampling, per round and batch (up to 64 shots) | | | 9 µs (64 shots) | 11 µs (8 shots) |
+| Sliding windows (10, 5), per round and shot | | | 0.17 µs | 0.19 µs |
+| Parallel windows (commit 5, buffer 5) on 1 / 2 / 4 threads | | | 0.18 / 0.15 / 0.12 µs | 0.18 / 0.14 / 0.09 µs |
+
+Sliding and parallel windows failed equally often on the same shots (15
+of 64 at 10⁴ rounds, 5 of 8 at 10⁵). The models of distance-21 and
+distance-41 surface codes over as many rounds take 0.15 and 1.2 s on one
+core (0.5 and 30 s before).
+
+Validation: the pass backwards equals frames propagated forwards term by
+term on repetition, surface (both bases), colour and [[72, 12, 6]]
+memory experiments and on 200 random noisy Clifford circuits with
+detectors on random records. The repeated memory experiments expand to
+the flat ones operation for operation (1, 2, 3 and 7 rounds, every code
+and schedule); their folded models (whole, decomposed and correlated)
+equal the expanded ones' term by term to 10⁻¹³ at 2 to 25 rounds and 300
+rounds, with nested blocks from Stim and with a block whose state never
+repeats; 10⁵ rounds fold, their bulk rounds equal bit for bit. Repeated
+circuits sample the expanded ones shot for shot, and their logical error
+rates equal the expanded ones' for matching and sliding and parallel
+windows. Against Stim (cross-validation): Stim's generated surface code
+of 1000 rounds and repetition code of 2000 rounds, read with their
+blocks, give Stim's models to 3·10⁻¹⁶, with no error on one side only,
+and detection-event rates within 4.3 standard errors over 24 000
+detectors; parallel windows fail as often as PyMatching on the whole
+experiment (0.358 against 0.361 of 2000 shots over 1000 rounds). Parallel
+windows over everything equal the whole decoding shot for shot, stream
+as they decode in parallel, fail as often as sliding windows and the
+whole decoding within the sampling error (distance 5, 40 rounds, 4000
+shots), and BP+OSD in parallel windows decodes the [[72, 12, 6]] code
+over 12 rounds no worse than BP+OSD on the whole model.
 
 ### 1.62 — Coupled-cluster references (M)
 

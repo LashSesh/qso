@@ -224,6 +224,7 @@ def correctness(quick: bool) -> dict:
             "max_density_matrix_difference_vs_qiskit_aer": density_diff,
         },
         "qec_vs_stim": qec_vs_stim(quick),
+        "repeated_vs_stim": repeated_vs_stim(quick),
         "bposd_vs_ldpc": bposd_vs_ldpc(quick),
         "correlated_and_distance_vs_stim": correlated_and_distance_vs_stim(quick),
         "chemistry_vs_pyscf": chemistry_vs_pyscf(),
@@ -354,6 +355,77 @@ def qec_vs_stim(quick: bool) -> dict:
             "sparse_matching_max_relative_weight_difference": weight_diff,
         }
     out["decoding_speed"] = decoding_speed(quick)
+    return out
+
+
+def repeated_vs_stim(quick: bool) -> dict:
+    """Long experiments with REPEAT blocks (1.61): Stim's generated memory
+    experiments of thousands of rounds, read by QSO with their blocks kept;
+    the folded detector error models against Stim's term by term, the
+    detection-event rates, and the logical error rate of QSO's parallel
+    windows next to PyMatching on the whole experiment."""
+    import pymatching
+    import stim
+
+    import metatron_qso as q
+
+    out = {}
+    for task, d, rounds in [
+        ("surface_code:rotated_memory_z", 5, 1000 if quick else 10_000),
+        ("repetition_code:memory", 7, 2000 if quick else 20_000),
+    ]:
+        sc = stim.Circuit.generated(
+            task,
+            distance=d,
+            rounds=rounds,
+            after_clifford_depolarization=0.003,
+            before_round_data_depolarization=0.002,
+            before_measure_flip_probability=0.004,
+            after_reset_flip_probability=0.003,
+        )
+        c = q.RepeatedCircuit.from_stim(str(sc))
+        t = time.perf_counter()
+        model = c.detector_error_model()
+        ours_time = time.perf_counter() - t
+        t = time.perf_counter()
+        stim_dem = sc.detector_error_model(decompose_errors=False)
+        stim_time = time.perf_counter() - t
+        theirs: dict = {}
+        for inst in stim_dem.flattened():
+            if inst.type != "error":
+                continue
+            targets = inst.targets_copy()
+            dets = tuple(sorted(t.val for t in targets if t.is_relative_detector_id()))
+            obs = sum(1 << t.val for t in targets if t.is_logical_observable_id())
+            e = theirs.get((dets, obs), 0.0)
+            p = inst.args_copy()[0]
+            theirs[(dets, obs)] = e * (1 - p) + p * (1 - e)
+        ours = {(tuple(dets), obs): p for p, dets, obs in model.errors}
+        keys = set(theirs) | set(ours)
+        diff = max(abs(theirs.get(k, 0.0) - ours.get(k, 0.0)) / max(theirs.get(k, 0.0), ours.get(k, 0.0)) for k in keys)
+        shots = 2000 if quick else 20_000
+        det, _ = c.sample(shots, seed=1)
+        ref = sc.compile_detector_sampler(seed=2).sample(shots)
+        a, b = det.mean(axis=0), ref.mean(axis=0)
+        sigma = np.sqrt(np.maximum(a * (1 - a) + b * (1 - b), 1e-300) / shots)
+        matching = pymatching.Matching.from_detector_error_model(sc.detector_error_model(decompose_errors=True))
+        d2, o2 = sc.compile_detector_sampler(seed=3).sample(shots, separate_observables=True)
+        mwpm = float(np.mean(np.any(matching.decode_batch(d2) != o2, axis=1)))
+        parallel = q.logical_error_rate(c, shots, seed=4, decoder="parallel_window_matching", commit=d, buffer=d)
+        out[f"{task} d={d}, {rounds} rounds"] = {
+            "stored_operations": c.n_stored_operations,
+            "expanded_operations": c.n_operations,
+            "detectors": c.n_detectors,
+            "error_mechanisms": len(ours),
+            "error_mechanisms_only_one_side": sum(1 for k in keys if k not in theirs or k not in ours),
+            "max_relative_probability_difference": diff,
+            "model_seconds_qso": ours_time,
+            "model_seconds_stim": stim_time,
+            "max_detector_rate_z_score": float(np.max(np.abs(a - b) / sigma)),
+            "shots": shots,
+            "logical_error_rate_parallel_windows": parallel.rate,
+            "logical_error_rate_pymatching": mwpm,
+        }
     return out
 
 

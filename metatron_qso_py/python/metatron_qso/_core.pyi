@@ -2362,6 +2362,31 @@ class DetectorCircuit:
     def copy(self) -> DetectorCircuit: ...
 
 @final
+class RepeatedCircuit:
+    @staticmethod
+    def from_stim(text: str) -> RepeatedCircuit: ...
+    @staticmethod
+    def from_circuit(circuit: DetectorCircuit) -> RepeatedCircuit: ...
+    def to_stim(self) -> str: ...
+    def flatten(self) -> DetectorCircuit: ...
+    @property
+    def n_qubits(self) -> int: ...
+    @property
+    def n_measurements(self) -> int: ...
+    @property
+    def n_detectors(self) -> int: ...
+    @property
+    def n_observables(self) -> int: ...
+    @property
+    def n_operations(self) -> int: ...
+    @property
+    def n_stored_operations(self) -> int: ...
+    def detector_layers(self) -> list[int]: ...
+    def sample(self, shots: int, seed: int = 0) -> tuple[BoolArray, BoolArray]: ...
+    def detector_error_model(self, decompose: bool = False) -> DetectorErrorModel: ...
+    def correlated_error_model(self) -> CorrelatedErrorModel: ...
+
+@final
 class CircuitNoise:
     def __new__(
         cls,
@@ -2531,6 +2556,14 @@ class WindowDecoder:
         commit: Optional[int] = None,
         decoder: Literal["matching", "bposd"] = "matching",
     ) -> WindowDecoder: ...
+    @staticmethod
+    def parallel(
+        model: DetectorErrorModel,
+        layers: Sequence[int],
+        commit: int,
+        buffer: Optional[int] = None,
+        decoder: Literal["matching", "bposd"] = "matching",
+    ) -> WindowDecoder: ...
     @property
     def n_detectors(self) -> int: ...
     @property
@@ -2603,8 +2636,24 @@ def css_code_memory(
     basis: Literal["z", "x", "Z", "X"] = "z",
     schedule: Union[str, Sequence[int], None] = None,
 ) -> DetectorCircuit: ...
+def repetition_code_memory_repeated(
+    distance: int, rounds: int, noise: Union[CircuitNoise, float, None] = None
+) -> RepeatedCircuit: ...
+def surface_code_memory_repeated(
+    distance: int,
+    rounds: int,
+    noise: Union[CircuitNoise, float, None] = None,
+    basis: Literal["z", "x", "Z", "X"] = "z",
+) -> RepeatedCircuit: ...
+def css_code_memory_repeated(
+    code: CssCode,
+    rounds: int,
+    noise: Union[CircuitNoise, float, None] = None,
+    basis: Literal["z", "x", "Z", "X"] = "z",
+    schedule: Union[str, Sequence[int], None] = None,
+) -> RepeatedCircuit: ...
 def logical_error_rate(
-    circuit: DetectorCircuit,
+    circuit: Union[DetectorCircuit, RepeatedCircuit],
     shots: int,
     seed: int = 0,
     decoder: Literal[
@@ -2614,9 +2663,12 @@ def logical_error_rate(
         "bposd",
         "window_matching",
         "window_bposd",
+        "parallel_window_matching",
+        "parallel_window_bposd",
     ] = "union_find",
     window: Optional[int] = None,
     commit: Optional[int] = None,
+    buffer: Optional[int] = None,
 ) -> LogicalErrorRate: ...
 
 
