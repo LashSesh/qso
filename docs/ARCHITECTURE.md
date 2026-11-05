@@ -842,6 +842,24 @@ symmetric functions of the three levels of each orientation, which give
 come from `Σ_k B·n_k = 0`, and Gauss–Newton on the eight lines refines
 the field.
 
+The optical cycle with its nuclei (`spin/nv/anticrossing.rs`) works in
+the product basis of the seven electron levels (zero-field states, not
+eigenstates) and the nuclei: both triplets' Hamiltonians with the full
+hyperfine tensors are built by Kronecker products, the singlet carries
+the nuclear terms alone, and every jump is the electron's tensored with
+the identity on the nuclei, so no eigenbasis is needed. The Lindblad
+generator is assembled by `optics::Lindblad` as before and solved for
+its steady state. A microwave is kept in the laboratory frame: with `L₀`
+the undriven generator and `V` half the drive's commutator, the periodic
+steady state's harmonics satisfy `(L₀ − ikω) ρ_k + V(ρ_{k−1} + ρ_{k+1}) =
+0`. A matrix continued fraction from `R_{K+1} = 0` gives `ρ_k = R_k
+ρ_{k−1}` with `R_k = −(L₀ − ikω + V R_{k+1})⁻¹ V` (one LU per harmonic);
+the negative side follows from `ρ_{−k} = ρ_k†`, which on vectors `r + n c`
+reads `R_{−1} = P conj(R₁) P` with `P` the transposition; `ρ₀` solves
+`(L₀ + V(R₁ + R₋₁)) ρ₀ = 0` with the trace. `K` starts at 2 and doubles
+until `ρ₀` moves by less than 10⁻¹⁰ of itself, up to 64; the work of
+`K` LUs is checked before each round.
+
 The ¹³C bath (`spin/nv/bath.rs`) works with ideal pulses only, so the
 electron is in one of two levels at any moment. A sequence is parsed into
 two branches with their levels per free period and two weights from the

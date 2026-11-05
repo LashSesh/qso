@@ -57,7 +57,7 @@ which withdraws the results of version 1.
 | Boson sampling | exact probabilities and exact sampling (1.1); partial distinguishability, loss and Gaussian boson sampling with hafnians and torontonians (1.14) | mixed Gaussian states with many photons spread over many modes are impractical (10¹² operations at 20 photons in 10 modes) |
 | Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4); slow noise from Markov processes (telegraph, Ornstein–Uhlenbeck, quasi-static, 1/f) averaged exactly on density matrices (1.44) | noise learning for layers of two-qubit Clifford gates only, on density matrices up to 10 qubits and Pauli frames up to 64 (1.12, 1.31), with non-Pauli channels twirled one at a time; mitigation with the learned model above 24 qubits only on matrix-product states, for channels that are mixtures of unitaries (1.31); no leakage; channels on at most four qubits (1.30); slow noise averaged exactly up to 12 qubits and processes with finitely many states (1.44), sampled on trajectories beyond (1.30); virtual distillation (1.17) mitigates only its measured copies' preparation |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18); interacting bosons, fermions and distinguishable particles with certificates for graph isomorphism (1.29); symmetry for driven walks, open walks on orbitals, coined walks with dephasing, hypercubes with dephasing up to d = 230 (1.38); interacting walkers on the orbits of automorphisms (three bosons on Q₉: 2284 orbits of 22.5 million configurations) and up to four particles on hypercubes (1.43); open walks on large symmetric graphs from point stabilisers (Q₁₈, H(4, 10), J(24, 4); 1.48); interacting walkers on Hamming, Johnson and Kneser graphs from canonical forms (1.53) and on any graph from minimal images under a group (three fermions on Paley(3209): 1068 orbits of 5.5·10⁹ configurations; 1.58) | interacting walkers without symmetry stop at 2²² configurations, and dense graphs with small groups stay dense on their orbits (three bosons from one node of Paley(809) exceed 2²⁶ entries; 1.58); open walks beyond 8192 nodes need a start whose stabiliser leaves few orbitals (dense graphs and circulants stay at 8192 nodes; 1.48); pretty good transfer on other graphs has no exact reference |
-| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37); the ¹³C bath of an NV centre by the cluster-correlation expansion (1.39); the optical cycle, ODMR, pulsed readout and magnetometer sensitivity in fields of any direction, and ensembles (1.40); sparse relaxation blocks propagated by Krylov steps, Redfield relaxation from sparse terms and equivalent spins: seven and eight relaxing protons for seconds (1.41); optimal control with relaxation on sparse blocks and on the orbits of equivalent spins, seven and eight spins (1.46); Redfield relaxation with anisotropic diffusion and model-free internal motion (1.49); reaction kinetics with spins: PASADENA, ALTADENA and SABRE as they run (1.50); field profiles with relaxation beyond six spins, the relaxation interpolated over the field (1.51); exchange and reactions on sparse blocks with iterative steady states and field profiles: SABRE with nine spins in the complex beside seven in the substrate (1.54); reactions of two spin-carrying reactants, the product formed in the product of their states: SABRE whose complex keeps its hydrides and swaps them with a hydrogen pool, PHIP from a pool whose singlet decays (1.59); Redfield relaxation applied without storing it, with its analytic field derivative: nine and ten relaxing spins whose superoperator would need 6 to 74 GB (1.55); product-formula bounds whose remainder runs over the terms that do not commute, the error averaged over states, and step counts for a target error: half the steps of the bounds of Childs et al. for Heisenberg chains of 10 to 64 spins (1.56) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the commutator bound of product formulas (1.56) still sums its remainder by the triangle inequality, about 2.3 times the empirical step counts of Heisenberg chains and loose at few steps and order 6, where its budget stops the degree early; Redfield relaxation takes rigid-body diffusion and model-free internal motion, not correlated motions of groups (1.49), and propagations beyond 1.5·10¹² operations or 2 GiB are refused (eleven protons with dipolar relaxation, nine for 100 s; 1.41); chemical exchange and reaction kinetics take Krylov steps beyond 2048 elements per block (1.54), unaffordable in the laboratory frame at millitesla fields and more; reactants meet uncorrelated (no cage effects), and a reaction whose partner's amount changes takes steps that resolve the frequencies of the blocks it feeds (PHIP at 1 µT with a three-spin product: 2 s of reaction in 2 s, 9 s with the hydrogen a pool with spins; a four-spin product at 5 µT over 3 s exceeds the work limit; 1.50, 1.59); field profiles with relaxation hold the relaxation at up to 33 fields (1.51), or apply Redfield relaxation without storing it where those would not fit (1.55), where work bounds them (eight spins with dipolar relaxation: two steps over 0.02 s per evaluation within the limit), and have many local optima; an evaluation of eight relaxing spins takes tens of seconds (1.46); the NV bath of 1.39 takes ideal pulses only (finite ones: the generalised expansion, 1.45), its expansion can diverge (results beyond `|L| = 1` are refused), and the nuclei next to the vacancy need given contact couplings (1.39); the optical model's rotating-wave approximation fails near the ground-state anticrossing (1.40) |
+| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37); the ¹³C bath of an NV centre by the cluster-correlation expansion (1.39); the optical cycle, ODMR, pulsed readout and magnetometer sensitivity in fields of any direction, and ensembles (1.40); sparse relaxation blocks propagated by Krylov steps, Redfield relaxation from sparse terms and equivalent spins: seven and eight relaxing protons for seconds (1.41); optimal control with relaxation on sparse blocks and on the orbits of equivalent spins, seven and eight spins (1.46); Redfield relaxation with anisotropic diffusion and model-free internal motion (1.49); reaction kinetics with spins: PASADENA, ALTADENA and SABRE as they run (1.50); field profiles with relaxation beyond six spins, the relaxation interpolated over the field (1.51); exchange and reactions on sparse blocks with iterative steady states and field profiles: SABRE with nine spins in the complex beside seven in the substrate (1.54); reactions of two spin-carrying reactants, the product formed in the product of their states: SABRE whose complex keeps its hydrides and swaps them with a hydrogen pool, PHIP from a pool whose singlet decays (1.59); the optical cycle with the nitrogen and one ¹³C at the level anticrossings, ¹⁵N polarised to 0.95 at 51 mT, the fluorescence dip at 102.4 mT, a microwave in the laboratory frame by Floquet harmonics (1.60); Redfield relaxation applied without storing it, with its analytic field derivative: nine and ten relaxing spins whose superoperator would need 6 to 74 GB (1.55); product-formula bounds whose remainder runs over the terms that do not commute, the error averaged over states, and step counts for a target error: half the steps of the bounds of Childs et al. for Heisenberg chains of 10 to 64 spins (1.56) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the commutator bound of product formulas (1.56) still sums its remainder by the triangle inequality, about 2.3 times the empirical step counts of Heisenberg chains and loose at few steps and order 6, where its budget stops the degree early; Redfield relaxation takes rigid-body diffusion and model-free internal motion, not correlated motions of groups (1.49), and propagations beyond 1.5·10¹² operations or 2 GiB are refused (eleven protons with dipolar relaxation, nine for 100 s; 1.41); chemical exchange and reaction kinetics take Krylov steps beyond 2048 elements per block (1.54), unaffordable in the laboratory frame at millitesla fields and more; reactants meet uncorrelated (no cage effects), and a reaction whose partner's amount changes takes steps that resolve the frequencies of the blocks it feeds (PHIP at 1 µT with a three-spin product: 2 s of reaction in 2 s, 9 s with the hydrogen a pool with spins; a four-spin product at 5 µT over 3 s exceeds the work limit; 1.50, 1.59); field profiles with relaxation hold the relaxation at up to 33 fields (1.51), or apply Redfield relaxation without storing it where those would not fit (1.55), where work bounds them (eight spins with dipolar relaxation: two steps over 0.02 s per evaluation within the limit), and have many local optima; an evaluation of eight relaxing spins takes tens of seconds (1.46); the NV bath of 1.39 takes ideal pulses only (finite ones: the generalised expansion, 1.45), its expansion can diverge (results beyond `|L| = 1` are refused), and the nuclei next to the vacancy need given contact couplings (1.39); the optical cycle with nuclei is dense in Liouville space: 42 levels (¹⁴N and ¹³C) take 10 s for a steady state and 210 s with a microwave, and more nuclei do not fit (1.60) |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
 | Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22); exact circuit distances of any model by a parallel search or the Brouwer–Zimmermann enumeration, with the lightest logical error as circuit locations (1.42); the search on the orbits of an error model's symmetries: [[144, 12, 12]] over three rounds of the depth-8 cycle has circuit distance 10 (1.47); logical failure rates far below sampling by splitting, with their leading term (surface codes to 10⁻⁹, [[72, 12, 6]] to 10⁻¹³; 1.52); decoding in sliding windows of rounds by matching or BP+OSD, round by round, at constant time per round up to 4000 rounds (1.57) | exact circuit distances need time exponential in the distance (each weight about 17 times the last on bicycle circuits); symmetries divide it by a factor that grows with their number (41 to 43 for 72); splitting needs a burn-in long enough, which its error does not show (1.52); the error model of an experiment is built whole, in time quadratic in the rounds (about 5000 rounds of distance 5 at the limit), and windows are decoded one after another, not in parallel (1.57) |
 | Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9), in the browser build too (1.25) | — |
@@ -6428,7 +6428,7 @@ maximally mixed starts. Findings, all fixed:
   state, eight with one whose amount changes) stated, and two long lines
   of the docs wrapped.
 
-### 1.60 — NV centres at their level anticrossings (M)
+### 1.60 — NV centres at their level anticrossings (M, delivered)
 
 Use case: optical polarisation of the nitrogen nucleus at the
 excited-state anticrossing (51 mT), and microwave-free magnetometry at
@@ -6447,6 +6447,113 @@ equal to 1.40 away from the anticrossings; with the microwave, equal to
 1.40's rotating-wave model where that holds and to a direct propagation
 in the laboratory frame near 102.4 mT; the level structure against the
 exact Hamiltonian's eigenvalues.
+
+Delivered in `spin/nv/anticrossing.rs` (with `Photophysics::gupta` in
+`spin/nv/optics.rs`):
+
+- **Nuclei in the optical cycle.** `NuclearOpticalNv` is the seven-level
+  model of 1.40 with the nitrogen (¹⁵N, or ¹⁴N with its quadrupole) and
+  optionally one ¹³C, in the product basis of the zero-field electron
+  levels and the nuclei: full hyperfine tensors in both triplets, the
+  nuclear Zeeman terms and the quadrupole in every level (the singlet
+  carries those alone), the jumps of Tetienne et al. acting on the
+  electron, and a nuclear relaxation `Γ_n` in every level. Its defaults
+  are the literature's (¹⁵N: 3.03 and 3.65 MHz in the ground state, an
+  isotropic 60 MHz excited; ¹⁴N: −2.14, −2.70 and −4.945 MHz, an
+  isotropic −40 MHz excited), the tensors replaceable;
+  `Photophysics::gupta` adds the rates of Gupta et al. as Duarte et al.
+  tabulate them.
+- **Without the rotating-wave approximation.** A microwave
+  `√2·2πΩ cos(2πft) S_x` stays in the laboratory frame: the periodic
+  steady state's harmonics are solved by a matrix continued fraction
+  (one LU per harmonic, the negative side by `ρ_{−k} = ρ_k†`), their
+  number doubled from 2 until the period average settles to 10⁻¹⁰. The
+  anticrossings' own fluorescence needs no microwave at all.
+- **Observables.** Steady states with the fluorescence and each
+  nucleus's polarisation over all levels and within the ground
+  `m_s = 0` (what nuclear-resolved ODMR shows), field scans in parallel,
+  the shot-noise sensitivity `√R/|∂R/∂B|` of the fluorescence, CW-ODMR in
+  the laboratory frame. In Python: `spin.NuclearOpticalNv`.
+
+Changes to the plan:
+
+- **Gupta's rates beside Tetienne's.** With Tetienne's rates the singlet
+  returns to `m_s = ±1` almost as often as to 0 (0.7 against 1.0 μs⁻¹);
+  the electron is polarised to 0.75, and `|−1, ↑⟩` undoes the nucleus at
+  the anticrossing: ¹⁵N reaches 0.81 at most, against 0.96 to 0.98
+  measured. Duarte et al. (Phys. Rev. B 103, 195443 (2021)) compared four
+  sets of rates and found about 0.95 with Gupta's; those are available by
+  name, and the validation uses them.
+- **The product basis instead of eigenbases.** Without a rotating-wave
+  approximation there are no blocks to keep apart, so the Hamiltonians
+  stay in the zero-field product basis, where the jumps are tensor
+  products.
+- **A continued fraction instead of Floquet propagation.** The harmonics
+  converge in four to eight terms for a drive weaker than its frequency,
+  and the period average comes out directly; propagating the period map
+  (the plan's Floquet or Krylov propagation) is the test's reference.
+
+Not done, and why:
+
+- **Larger nuclear systems.** The generator is dense in Liouville space:
+  42 levels (¹⁴N and ¹³C) take 10 s for a steady state and 210 s with a
+  microwave; a second ¹³C (84 levels, 7056 elements) does not fit.
+- **Ensembles and misalignment averages** are left to the caller
+  (`field_scan` over fields).
+- **The anticrossings' coherent dynamics** (pulsed experiments at the
+  anticrossings) are not provided: steady states only, as the use case
+  needs.
+
+Measured (four cores, release build; 1 % collection):
+
+- **¹⁵N polarisation within the ground `m_s = 0`** against the field
+  along the axis, `Γ_n` = 10 s⁻¹ (a nuclear T₁ of 100 ms, as Duarte et
+  al.), pump 4 μs⁻¹:
+
+  | Rates, couplings | 20 mT | 35 mT | 44 mT | 51 mT | 70 mT | 100 mT |
+  |---|---|---|---|---|---|---|
+  | Gupta, Duarte's | 0.639 | 0.883 | 0.939 | 0.952 | 0.910 | 0.871 |
+  | Gupta, Jacques's isotropic 60 MHz | 0.657 | 0.894 | 0.943 | 0.950 | 0.897 | 0.833 |
+  | Tetienne, Duarte's | 0.543 | 0.751 | 0.799 | 0.809 | 0.773 | 0.699 |
+
+  Jacques et al. measured 0.98 at 50 mT and 0.95 at 44 mT; ¹⁴N with
+  Gupta's rates reaches 0.974 at 51 mT. At 70 μs⁻¹ the polarisation
+  moves by less than 0.003.
+- **The ground-state anticrossing** with ¹⁴N (pump 0.1 `k_r`): exactly
+  along the axis no dip, since the nucleus keeps the crossing partners
+  `|0, m⟩` and `|−1, m + 1⟩` equally populated over a millitesla around
+  it. Across the axis:
+
+  | Across | Dip | Width | Best `√R/|∂R/∂B|` |
+  |---|---|---|---|
+  | 20 μT | 17.0 % | 180 μT | 3.8 μT/√Hz |
+  | 50 μT | 24.5 % | 360 μT | 5.1 μT/√Hz |
+  | 100 μT | 25.2 % | 630 μT | 8.3 μT/√Hz |
+  | 200 μT | 21.9 % | 970 μT | 16 μT/√Hz |
+
+- **The microwave near the ground-state anticrossing** (101.7 mT, the
+  line at 19.86 MHz, Ω = 15 MHz): the dip lies at 22.9 MHz in the
+  laboratory frame and at 19.9 MHz in the rotating-wave model, the
+  Bloch–Siegert shift `Ω²/4f` ≈ 2.8 MHz; 61 points take 32 s.
+- **Cost:** steady states of 14, 21 and 42 levels take 0.01, 0.1 and
+  9.6 s, with a microwave (four harmonics) 0.3, 2.7 and 208 s.
+
+Validation: decoupled nuclei (no hyperfine coupling) leave the
+fluorescence of 1.40 to 10⁻¹⁰ at 5 mT, 20 mT tilted, 51 and 102.4 mT
+and two lasers; with their couplings it stays
+within 1 % of 1.40 at 5, 20 and 70 mT ((A_e/Δ)²: 0.2 to 0.7 %). The ¹⁵N
+levels along the axis equal the closed-form 2 × 2 blocks of `m_s + m_I`
+to 10⁻⁶ Hz in both triplets at 30, 51 and 102.4 mT. The microwave in the
+laboratory frame equals 1.40's rotating-wave model at 5 mT to 10⁻⁵ of the
+fluorescence across the line, and at 101.7 mT, where the rotating-wave
+model is off by more than 10⁻³, a direct propagation of the seven levels
+over the period (the fixed point of the period's map, exponential
+midpoint steps at 256 and 512 per period, extrapolated) to 10⁻⁷. ¹⁵N
+with Gupta's rates and Duarte et al.'s couplings is polarised to 0.951
+at 51 mT, independent of the laser to 0.005 (Duarte et al.: about 0.95),
+and 0.81 with Tetienne's; 0.1 mT across the axis dims the ground-state
+anticrossing by more than 20 %, and nothing changes along it. Inputs are
+checked and survive JSON.
 
 ### 1.61 — Error models of long experiments, windows in parallel (M)
 

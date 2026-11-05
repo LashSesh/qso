@@ -8,6 +8,23 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **NV centres at their level anticrossings** (1.60,
+  `spin::NuclearOpticalNv`, `NuclearSpin`, `AnticrossingState`,
+  `Photophysics::gupta`, Python `spin.NuclearOpticalNv`): the seven-level
+  optical cycle of 1.40 with the nitrogen nucleus (¹⁵N, or ¹⁴N with its
+  quadrupole) and optionally one ¹³C in the product basis, full hyperfine
+  tensors in both triplets, the jumps acting on the electron; steady
+  states, nuclear polarisation over all levels and within the ground
+  `m_s = 0`, field scans and the field sensitivity of the fluorescence;
+  a microwave in the laboratory frame whose periodic steady state is
+  solved over its harmonics by a matrix continued fraction. ¹⁵N is
+  polarised to 0.95 at the excited-state anticrossing with Gupta's rates
+  (0.81 with Tetienne's, whose singlet returns to `m_s = ±1` almost as
+  often as to 0); 20 μT across the axis dim the ground-state
+  anticrossing by 17 %, 3.8 μT/√Hz at 1 % collection; near it a 15 MHz
+  microwave shifts its 20 MHz line by 3 MHz (Bloch–Siegert), which the
+  rotating-wave model misses.
+
 - **Reactions of two spin-carrying reactants** (1.59, `spin::Route`,
   `Reactions::add_routed_reaction`, `Reactions::routes`, Python
   `Reactions.add_reaction(routes=…)` and `Reactions.routes`): routes

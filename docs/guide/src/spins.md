@@ -1018,6 +1018,82 @@ A single centre in natural diamond at 50 mT combines the Hahn echo of its
 ¹³C bath with this readout, 1 μs of initialisation and the 446 ns window.
 Its best AC sensitivity is 17 nT/√Hz, at a total echo time of 0.49 ms.
 
+### Nuclei at the level anticrossings
+
+`spin.NuclearOpticalNv(field, nitrogen="15N")` is the same optical cycle
+with the nitrogen nucleus (`"15N"` or `"14N"` with its quadrupole) and
+optionally one ¹³C (`carbon = (ground tensor, excited tensor)`, Hz), in
+the product basis of the seven electron levels and the nuclei: full
+hyperfine tensors in both triplets, the nuclear Zeeman terms and the
+quadrupole in every level, the jumps acting on the electron alone. Near
+the excited-state anticrossing (`γ_e B ≈ D_e`, 51 mT) the hyperfine
+coupling mixes `|0, m⟩` with `|−1, m + 1⟩` in the excited state, and the
+optical cycle moves the nucleus into the state that `m_s = 0` keeps
+(Jacques et al., Phys. Rev. Lett. 102, 057403 (2009)). Near the
+ground-state anticrossing (102.4 mT) a field across the axis mixes `0`
+and `−1` and dims the fluorescence without any microwave.
+
+- **Defaults.** ¹⁵N: `A_∥` = 3.03, `A_⊥` = 3.65 MHz in the ground state,
+  an isotropic 60 MHz in the excited state; ¹⁴N: −2.14, −2.70 and
+  `P` = −4.945 MHz, an isotropic −40 MHz excited. `nitrogen_ground` and
+  `nitrogen_excited` replace the tensors; `rates` takes `"tetienne"`
+  (default), `"gupta"` (Gupta et al., J. Opt. Soc. Am. B 33, B28 (2016)) or
+  five rates; `nuclear_relaxation` is `Γ_n`, at which each nucleus's
+  `⟨I_z⟩` relaxes in every level.
+- **Results.** `steady_state(pump)` returns the state, the fluorescence,
+  the nuclear polarisation over all levels and within the ground
+  `m_s = 0` (`polarisation_zero`, what nuclear-resolved ODMR lines show).
+  `field_scan` runs fields in parallel; `field_sensitivity` gives
+  `√R/|∂R/∂B|` (T/√Hz) of the fluorescence without a microwave.
+- **A microwave without the rotating-wave approximation.** With
+  `frequency` and `rabi`, `√2·2πΩ cos(2πft) S_x` stays in the laboratory
+  frame and the periodic steady state is solved over its harmonics
+  (`harmonics` tells how many it took); its period average gives the
+  fluorescence. Near the ground-state anticrossing, where the line lies
+  at a few tens of megahertz, the counter-rotating field shifts it:
+  with Ω = 15 MHz the dip of a 19.9 MHz line moves to 22.9 MHz
+  (Bloch–Siegert, `Ω²/4f` ≈ 2.8 MHz), which the rotating-wave model of
+  `OpticalNv` misses.
+
+```python
+from metatron_qso import spin
+
+# 15N at the excited-state anticrossing, with the rates of Gupta et al.
+# and the couplings Duarte et al. use, the nucleus relaxing at 10/s.
+duarte = dict(
+    nitrogen="15N", rates="gupta", nuclear_relaxation=10.0,
+    nitrogen_ground=[[3.9e6, 0, 0], [0, 3.9e6, 0], [0, 0, 3.4e6]],
+    nitrogen_excited=[[-38.5e6, 0, 0], [0, -38.5e6, 0], [0, 0, -58.1e6]],
+)
+for b in (0.02, 0.044, 0.051):
+    s = spin.NuclearOpticalNv((0, 0, b), **duarte).steady_state(4e6)
+    print(b, round(s["polarisation_zero"][0], 3))
+# 0.02 0.639 / 0.044 0.939 / 0.051 0.952: Duarte et al. find about 0.95
+
+# The ground-state anticrossing with 14N: 20 μT across the axis dim it.
+crossing = 2.87e9 / 28.025e9
+for across in (0.0, 2e-5):
+    near = spin.NuclearOpticalNv((across, 0, crossing + 2e-5), nitrogen="14N")
+    far = spin.NuclearOpticalNv((across, 0, crossing - 1e-3), nitrogen="14N")
+    dip = 1 - near.steady_state(6.59e6)["fluorescence"] / far.steady_state(6.59e6)["fluorescence"]
+    print(across, round(dip, 2) + 0.0)
+# 0.0 0.0 / 2e-05 0.17
+```
+
+With Tetienne's rates the singlet returns to `m_s = ±1` almost as often
+as to `0`: the electron is polarised to 0.75, and `|−1, ↑⟩` undoes the
+nucleus at the anticrossing, so ¹⁵N reaches 0.81 there; with Gupta's
+rates, where the singlet returns mostly to `0`, 0.95, as Duarte et al.
+(Phys. Rev. B 103, 195443 (2021)) compute and experiments (96 to 98 %)
+find. Exactly along the axis the ground-state anticrossing shows no dip:
+the nucleus keeps the crossing partners `|0, m⟩` and `|−1, m + 1⟩`
+equally populated over a millitesla around it, so that mixing them
+changes nothing. A transverse field of 20 μT dims it by 17 % over
+180 μT, and its slope gives 3.8 μT/√Hz at 1 % collection; 100 μT dims
+it by 25 % over 630 μT. The model has 14 (¹⁵N), 21 (¹⁴N) or 42 levels
+(¹⁴N and ¹³C): a steady state takes 0.01, 0.1 and 10 s, one with a
+microwave 0.3, 2.7 and 210 s.
+
 ### The nuclear-spin bath
 
 In natural diamond an NV centre loses its coherence to the ¹³C around it
