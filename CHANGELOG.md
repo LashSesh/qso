@@ -8,6 +8,26 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Reactions of two spin-carrying reactants** (1.59, `spin::Route`,
+  `Reactions::add_routed_reaction`, `Reactions::routes`, Python
+  `Reactions.add_reaction(routes=…)` and `Reactions.routes`): routes
+  carry spins from any reactant site into any product site. A product
+  site that takes spins from both reactants of `A + B → C` forms in the
+  product of their reduced states at `k[A][B]` (the reactants
+  uncorrelated, as in a well-mixed solution), a product of `C → A + B`
+  takes its partial trace, two products of a reaction may both be sites,
+  and every site keeps its relaxation. The quadratic source is written
+  exactly as transfers with the partner's reference state inside the
+  exponentials, a drift and a remainder; steps are predicted, corrected
+  until they settle and checked against their halves. SABRE whose complex
+  keeps its hydrides through substrate exchange and swaps them with a
+  hydrogen pool: the free ¹⁵N reaches 48.3 % after 60 s (1.50's fresh
+  hydrides: 73.9 %), and 1.5 % when the pool is not renewed from the gas
+  (its singlet falls to 0.35). PHIP of a ¹³C substrate from a pool whose singlet decays at 2 s: −6.0 % on the product's ¹³C instead of −9.65 %. Equal to 1.50 with a partner
+  held in its state, to the equations written out, to molecules reacting
+  at random within their standard error, to the closed-form kinetics of
+  `A + B ⇌ C` and to a steady state found by Newton's method.
+
 - **Interacting walkers on any symmetric graph** (1.58,
   `walks::GroupInteractingWalk`, Python `GroupInteractingWalk`): bosons,
   fermions or distinguishable particles with on-site and neighbour

@@ -57,7 +57,7 @@ which withdraws the results of version 1.
 | Boson sampling | exact probabilities and exact sampling (1.1); partial distinguishability, loss and Gaussian boson sampling with hafnians and torontonians (1.14) | mixed Gaussian states with many photons spread over many modes are impractical (10¹² operations at 20 photons in 10 modes) |
 | Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4); slow noise from Markov processes (telegraph, Ornstein–Uhlenbeck, quasi-static, 1/f) averaged exactly on density matrices (1.44) | noise learning for layers of two-qubit Clifford gates only, on density matrices up to 10 qubits and Pauli frames up to 64 (1.12, 1.31), with non-Pauli channels twirled one at a time; mitigation with the learned model above 24 qubits only on matrix-product states, for channels that are mixtures of unitaries (1.31); no leakage; channels on at most four qubits (1.30); slow noise averaged exactly up to 12 qubits and processes with finitely many states (1.44), sampled on trajectories beyond (1.30); virtual distillation (1.17) mitigates only its measured copies' preparation |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18); interacting bosons, fermions and distinguishable particles with certificates for graph isomorphism (1.29); symmetry for driven walks, open walks on orbitals, coined walks with dephasing, hypercubes with dephasing up to d = 230 (1.38); interacting walkers on the orbits of automorphisms (three bosons on Q₉: 2284 orbits of 22.5 million configurations) and up to four particles on hypercubes (1.43); open walks on large symmetric graphs from point stabilisers (Q₁₈, H(4, 10), J(24, 4); 1.48); interacting walkers on Hamming, Johnson and Kneser graphs from canonical forms (1.53) and on any graph from minimal images under a group (three fermions on Paley(3209): 1068 orbits of 5.5·10⁹ configurations; 1.58) | interacting walkers without symmetry stop at 2²² configurations, and dense graphs with small groups stay dense on their orbits (three bosons from one node of Paley(809) exceed 2²⁶ entries; 1.58); open walks beyond 8192 nodes need a start whose stabiliser leaves few orbitals (dense graphs and circulants stay at 8192 nodes; 1.48); pretty good transfer on other graphs has no exact reference |
-| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37); the ¹³C bath of an NV centre by the cluster-correlation expansion (1.39); the optical cycle, ODMR, pulsed readout and magnetometer sensitivity in fields of any direction, and ensembles (1.40); sparse relaxation blocks propagated by Krylov steps, Redfield relaxation from sparse terms and equivalent spins: seven and eight relaxing protons for seconds (1.41); optimal control with relaxation on sparse blocks and on the orbits of equivalent spins, seven and eight spins (1.46); Redfield relaxation with anisotropic diffusion and model-free internal motion (1.49); reaction kinetics with spins: PASADENA, ALTADENA and SABRE as they run (1.50); field profiles with relaxation beyond six spins, the relaxation interpolated over the field (1.51); exchange and reactions on sparse blocks with iterative steady states and field profiles: SABRE with nine spins in the complex beside seven in the substrate (1.54); reactions of two spin-carrying reactants, the product formed in the product of their states: SABRE whose complex keeps its hydrides and swaps them with a hydrogen pool, PHIP from a pool whose singlet decays (1.59); Redfield relaxation applied without storing it, with its analytic field derivative: nine and ten relaxing spins whose superoperator would need 6 to 74 GB (1.55); product-formula bounds whose remainder runs over the terms that do not commute, the error averaged over states, and step counts for a target error: half the steps of the bounds of Childs et al. for Heisenberg chains of 10 to 64 spins (1.56) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the commutator bound of product formulas (1.56) still sums its remainder by the triangle inequality, about 2.3 times the empirical step counts of Heisenberg chains and loose at few steps and order 6, where its budget stops the degree early; Redfield relaxation takes rigid-body diffusion and model-free internal motion, not correlated motions of groups (1.49), and propagations beyond 1.5·10¹² operations or 2 GiB are refused (eleven protons with dipolar relaxation, nine for 100 s; 1.41); chemical exchange and reaction kinetics take Krylov steps beyond 2048 elements per block (1.54), unaffordable in the laboratory frame at millitesla fields and more; reactants meet uncorrelated (no cage effects), and a reaction whose partner's amount changes takes steps that resolve the frequencies of the blocks it feeds (PHIP at microtesla fields: seconds of reaction per minute; 1.50, 1.59); field profiles with relaxation hold the relaxation at up to 33 fields (1.51), or apply Redfield relaxation without storing it where those would not fit (1.55), where work bounds them (eight spins with dipolar relaxation: two steps over 0.02 s per evaluation within the limit), and have many local optima; an evaluation of eight relaxing spins takes tens of seconds (1.46); the NV bath of 1.39 takes ideal pulses only (finite ones: the generalised expansion, 1.45), its expansion can diverge (results beyond `|L| = 1` are refused), and the nuclei next to the vacancy need given contact couplings (1.39); the optical model's rotating-wave approximation fails near the ground-state anticrossing (1.40) |
+| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37); the ¹³C bath of an NV centre by the cluster-correlation expansion (1.39); the optical cycle, ODMR, pulsed readout and magnetometer sensitivity in fields of any direction, and ensembles (1.40); sparse relaxation blocks propagated by Krylov steps, Redfield relaxation from sparse terms and equivalent spins: seven and eight relaxing protons for seconds (1.41); optimal control with relaxation on sparse blocks and on the orbits of equivalent spins, seven and eight spins (1.46); Redfield relaxation with anisotropic diffusion and model-free internal motion (1.49); reaction kinetics with spins: PASADENA, ALTADENA and SABRE as they run (1.50); field profiles with relaxation beyond six spins, the relaxation interpolated over the field (1.51); exchange and reactions on sparse blocks with iterative steady states and field profiles: SABRE with nine spins in the complex beside seven in the substrate (1.54); reactions of two spin-carrying reactants, the product formed in the product of their states: SABRE whose complex keeps its hydrides and swaps them with a hydrogen pool, PHIP from a pool whose singlet decays (1.59); Redfield relaxation applied without storing it, with its analytic field derivative: nine and ten relaxing spins whose superoperator would need 6 to 74 GB (1.55); product-formula bounds whose remainder runs over the terms that do not commute, the error averaged over states, and step counts for a target error: half the steps of the bounds of Childs et al. for Heisenberg chains of 10 to 64 spins (1.56) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); the commutator bound of product formulas (1.56) still sums its remainder by the triangle inequality, about 2.3 times the empirical step counts of Heisenberg chains and loose at few steps and order 6, where its budget stops the degree early; Redfield relaxation takes rigid-body diffusion and model-free internal motion, not correlated motions of groups (1.49), and propagations beyond 1.5·10¹² operations or 2 GiB are refused (eleven protons with dipolar relaxation, nine for 100 s; 1.41); chemical exchange and reaction kinetics take Krylov steps beyond 2048 elements per block (1.54), unaffordable in the laboratory frame at millitesla fields and more; reactants meet uncorrelated (no cage effects), and a reaction whose partner's amount changes takes steps that resolve the frequencies of the blocks it feeds (PHIP at 1 µT with a three-spin product: 2 s of reaction in 2 s, 9 s with the hydrogen a pool with spins; a four-spin product at 5 µT over 3 s exceeds the work limit; 1.50, 1.59); field profiles with relaxation hold the relaxation at up to 33 fields (1.51), or apply Redfield relaxation without storing it where those would not fit (1.55), where work bounds them (eight spins with dipolar relaxation: two steps over 0.02 s per evaluation within the limit), and have many local optima; an evaluation of eight relaxing spins takes tens of seconds (1.46); the NV bath of 1.39 takes ideal pulses only (finite ones: the generalised expansion, 1.45), its expansion can diverge (results beyond `|L| = 1` are refused), and the nuclei next to the vacancy need given contact couplings (1.39); the optical model's rotating-wave approximation fails near the ground-state anticrossing (1.40) |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
 | Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22); exact circuit distances of any model by a parallel search or the Brouwer–Zimmermann enumeration, with the lightest logical error as circuit locations (1.42); the search on the orbits of an error model's symmetries: [[144, 12, 12]] over three rounds of the depth-8 cycle has circuit distance 10 (1.47); logical failure rates far below sampling by splitting, with their leading term (surface codes to 10⁻⁹, [[72, 12, 6]] to 10⁻¹³; 1.52); decoding in sliding windows of rounds by matching or BP+OSD, round by round, at constant time per round up to 4000 rounds (1.57) | exact circuit distances need time exponential in the distance (each weight about 17 times the last on bicycle circuits); symmetries divide it by a factor that grows with their number (41 to 43 for 72); splitting needs a burn-in long enough, which its error does not show (1.52); the error model of an experiment is built whole, in time quadratic in the rounds (about 5000 rounds of distance 5 at the limit), and windows are decoded one after another, not in parallel (1.57) |
 | Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9), in the browser build too (1.25) | — |
@@ -6242,7 +6242,7 @@ Findings, all fixed:
   tests of fermionic signs, distinguishable keys and deep chains (`Q₄`,
   `J(7, 3)`, `K₆`, `H(3, 3)`), proper subgroups and wrong orders.
 
-### 1.59 — Reactions of two spin-carrying reactants (M)
+### 1.59 — Reactions of two spin-carrying reactants (M, delivered)
 
 Use case: SABRE, where the substrate and the hydrogen bind to the
 catalyst from separate pools that both carry nuclear spins, and PHIP of
@@ -6261,6 +6261,125 @@ explicit molecules within its standard error; the concentrations equal
 the closed-form kinetics of `A + B ⇌ C`; total magnetisation and
 populations conserved where the reaction conserves them; the steady
 state against an independent solve.
+
+Delivered in `spin/exchange/kinetics.rs`:
+
+- **Bimolecular steps with two spin-carrying reactants.**
+  `Reactions::add_routed_reaction` takes `Route`s that carry spins from
+  any reactant site into any product site (positions in the reaction's
+  lists, so `2A → D` carries each molecule's spins). A product site that
+  takes spins from both reactants of `A + B → C` forms in
+  `k Emb(σ_A' ⊗ σ_B' ⊗ ρ_fresh)` (`σ'` the reactant reduced to its
+  carried spins, the reactants uncorrelated as in a well-mixed solution);
+  a product that takes spins from one reactant receives its partial trace
+  at the pseudo-rate of the others, so `C → A + B` gives each product its
+  partial trace of `C`, and two products of one reaction may now both be
+  sites. Every site keeps its own relaxation. Python:
+  `Reactions.add_reaction(..., routes=[(reactant, product, [(spin,
+  spin)])])` and `Reactions.routes(k)`.
+- **Kinetics, nonlinear in the states.** The product of two states is
+  written exactly as three parts: transfers from each reactant with the
+  other's reference state `ρ̂ = 1/d + ŷ` in its spins (`ŷ` the order-zero
+  part of its normalised reduced deviation, so the joint blocks of
+  coherence order stay apart), the drift `v(1/(d_A d_B) − ŷ_A ⊗ ŷ_B) ⊗
+  ρ_fresh`, and the remainder `k Emb((x_A' − c_A ŷ_A) ⊗ (x_B' − c_B ŷ_B)
+  ⊗ ρ_fresh)`, which vanishes when either reactant is in its reference
+  state. The transfers enter the exponentials of 1.50 as members whose
+  values each step sets on a fixed pattern (dense or Krylov blocks
+  alike); the drift and the remainder enter the inhomogeneous quadratic.
+  The references are each step's predicted midpoint, and the step is
+  corrected with the corrected midpoint and end until it settles (each
+  pass squares the last pass's error, the remainder being a product of
+  two deviations). Steps whose remainder matters are checked against two
+  half steps to 10⁻⁹ of the deviation and repeated shorter when they miss.
+- **Experiments.** SABRE in which the complex swaps its substrate with a
+  free one and its hydrides with a free H₂ (`C + S → C + S`,
+  `C + H₂ → C + H₂`), the released hydrides going into a hydrogen pool
+  renewed from the gas; PHIP of a ¹³C-labelled substrate from a hydrogen
+  pool whose singlet decays.
+
+Changes to the plan:
+
+- **Only the traceless part of a source moves.** With two product sites
+  (`C → A + B`) the traces of the deviations `σ − c/d`, zero but for
+  rounding, followed one dissociation into both products while `C` lost
+  them once: rounding errors grew as `e^{0.85 t}` near a steady state
+  (10⁻³ after 40 s), and one step of steady chemistry over 1000 s would
+  have overflowed. Every transfer now takes its source's trace off the
+  product's first population, which changes nothing exact and lets
+  trace errors only decay; the steady state then stays to 10⁻¹² over
+  1000 s (test).
+- **Corrections until the step settles.** The plan had one predictor
+  and one corrector. A corrected pass errs by the product of the
+  predicted reference's error and the predicted end's, which is small for
+  short steps but not for a step of the whole delay, which steady
+  chemistry allows; the step is now corrected until the end moves by
+  less than a tenth of the tolerance, at most eight times, else repeated
+  at a quarter of its length.
+- **Reaction and Route stay apart.** `Reaction` is a struct with public
+  fields; a new field would break code that builds it (1.x releases add,
+  never break), so routes are added beside it.
+
+Not done, and why:
+
+- **Correlations between molecules.** A product forms in the product of
+  its reactants' states: molecules that met before and still carry
+  correlations (geminate recombination, cage effects) are not modelled.
+- **Order zero only in the references.** Coherences of nonzero order in
+  both reactants (after a pulse during the reaction) stay in the
+  remainder; steps then resolve their frequencies.
+- **Third-order and spin-dependent chemistry**, as in 1.50.
+
+Measured (four cores, release build):
+
+- **SABRE with both pools carrying spins**, at the anti-crossing of
+  1.50's complex (two hydrides and the bound ¹⁵N; the free ¹⁵N with
+  `T₁` = 30 s; 10 substrates and 3 H₂ per complex): the complex swaps its
+  substrate with a free one at 2 s⁻¹ and its hydrides with the pool at
+  0.5 s⁻¹, keeping its hydrides through substrate exchange.
+
+  | Model | Free ¹⁵N after 10, 30, 60 s | Pool singlet at 60 s | Time |
+  |---|---|---|---|
+  | 1.50: hydrides fresh on every binding | 53.0, 72.4, 73.9 % | — | 2.7 s |
+  | hydrides kept, pool held in parahydrogen | 22.3, 41.9, 48.3 % | 1.000 | 0.6 s |
+  | pool renewed from the gas at 1 s⁻¹ | 20.0, 38.1, 44.7 % | 0.961 | 0.6 s |
+  | at 0.1 s⁻¹ | 14.5, 22.1, 25.8 % | 0.737 | 0.4 s |
+  | not renewed | 12.3, 8.1, 1.5 % | 0.348 | 0.6 s |
+
+  Hydrides that stay through several substrate exchanges lose singlet
+  order before they are renewed, and a pool fed with the released
+  hydrides runs down: the free ¹⁵N then peaks and falls.
+- **PHIP from a hydrogen pool** at 1 µT: a ¹³C substrate takes up both
+  protons of the pool (0.6 per substrate, `k` = 2), the product's ¹³C
+  coupled to the hydrides (130 and 5 Hz); after 2 s, 0.545 formed. With
+  the pool held in parahydrogen the product's ¹³C has −9.65 %, as with
+  H₂ a species (1.50, 2.1 s; the routed model takes 9.2 s); with the
+  pool's protons relaxing at 10, 2 and 0.5 s (its singlet at 0.75, 0.35
+  and 0.25 after 2 s) −8.63, −6.01 and −2.84 %.
+
+Validation: a partner held in its state equals 1.50: A + H₂ with H₂ a
+site in parahydrogen (90 %, equivalent protons, through a pulse) against
+H₂ a species with fresh parahydrogen, and A + B with B a thermal ¹³C
+with T₁ in the laboratory frame at 50 µT against B a species with fresh
+thermal spins, both to 10⁻⁹ of the deviation, H₂ staying parahydrogen
+to 10⁻¹⁰. `A + B ⇌ C` with coherences of every order in both reactants
+and relaxation everywhere, and `2A ⇌ D`, equal the equations written
+out (partial traces and products by index, the site generators, RK4 in
+2000 steps) to 10⁻⁷ over 0.5 s, Krylov blocks the dense ones to 10⁻⁸,
+traces the amounts to 10⁻¹². Molecules reacting at random (Gillespie,
+200 per unit amount, each evolved alone between its reactions, a
+product formed in `ρ_A ⊗ ρ_B` of a random pair and split by partial
+traces; 16 runs) agree with seven observables within four standard
+errors. The amounts of `A + B ⇌ C` follow the closed form
+`x₋x₊(1 − e^{−λt})/(x₊ − x₋e^{−λt})` to 10⁻¹¹. Without relaxation
+each isotope's `F_z` summed over the sites stays to 10⁻⁹ and the atoms
+of A + C and B + C to 10⁻¹². `H₂ + S ⇌ C` with the hydrogen renewed
+from parahydrogen at chemical equilibrium, relaxation everywhere, after
+40 s equals Newton's solution of the equations written out (its
+Jacobian has no eigenvalue with a positive real part) to 10⁻¹², and
+after 1000 s more still. Routes are checked (positions, species, spins
+used twice, isotopes, routes with `carried`, parahydrogen on a routed
+spin) and survive JSON.
 
 ### 1.60 — NV centres at their level anticrossings (M)
 
