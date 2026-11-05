@@ -175,13 +175,25 @@ pub struct Reactions {
     routes: Vec<Vec<Route>>,
 }
 
+/// Spins carried into a product site from one reactant: `(position among
+/// the reactants, its site, (spin of the reactant, spin of the product)
+/// pairs)`.
+type Carried = (usize, usize, Vec<(usize, usize)>);
+
+/// Entries per unit rate `(block, row, value)`.
+type DriftEntries = Vec<(usize, usize, C64)>;
+
+/// A transfer entry of a bilinear source: `(block, row, column, partner
+/// element or [`TRACE`], weight)`.
+type SkeletonEntry = (usize, usize, usize, u32, C64);
+
 /// What a reaction brings into one of its product sites.
 struct Feed {
     site: usize,
-    /// `(position among the reactants, its site, spin pairs)`, by position:
-    /// none (fresh spins only), one (a transfer, linear in that reactant's
-    /// state) or two (the product of both reactants' states).
-    routes: Vec<(usize, usize, Vec<(usize, usize)>)>,
+    /// Its routes, by position: none (fresh spins only), one (a transfer,
+    /// linear in that reactant's state) or two (the product of both
+    /// reactants' states).
+    routes: Vec<Carried>,
     fresh: Fresh,
 }
 
@@ -244,7 +256,7 @@ struct Bilinear {
     /// weight)`, and
     /// once the family exists, the entries' places in its blocks
     /// `(block, index among the values, partner element, weight)`.
-    skeleton: [Vec<(usize, usize, usize, u32, C64)>; 2],
+    skeleton: [Vec<SkeletonEntry>; 2],
     places: [Vec<(usize, usize, u32, C64)>; 2],
 }
 
@@ -289,7 +301,7 @@ struct Base {
     linear: Vec<Linear>,
     /// Per reaction and product site without carried spins: the fresh
     /// state's entries per unit rate `(reaction, [(block, row, w)])`.
-    fresh: Vec<(usize, Vec<(usize, usize, C64)>)>,
+    fresh: Vec<(usize, DriftEntries)>,
     /// The product sites with spins from both reactants.
     bilinear: Vec<Bilinear>,
 }
@@ -1938,12 +1950,7 @@ impl Reactions {
             bases
                 .iter()
                 .map(|base| {
-                    let refs = vec![[CMatrix::zeros(0, 0), CMatrix::zeros(0, 0)]; 0];
-                    let refs = if base.bilinear.is_empty() {
-                        refs
-                    } else {
-                        self.flat_references(base)
-                    };
+                    let refs = self.flat_references(base);
                     let probe = self.step_blocks(base, [c, c, c], h, &refs, None);
                     exponentials * probe.iter().map(|b| b.plan(method).1).sum::<f64>()
                 })

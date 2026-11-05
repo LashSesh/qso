@@ -1241,6 +1241,10 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
+/// A route from Python: `(reactant position, product position, [(spin of
+/// the reactant, spin of the product)])`.
+type PyRoute = (usize, usize, Vec<(usize, usize)>);
+
 /// Spin sites whose amounts change by reactions of first and second order
 /// among themselves and species without spins (parahydrogen, a catalyst);
 /// both reactants of a reaction may carry spins into its products (see
@@ -1344,7 +1348,7 @@ impl PyReactions {
         carried: Vec<(usize, usize)>,
         parahydrogen: Option<(usize, usize)>,
         fraction: Option<f64>,
-        routes: Option<Vec<(usize, usize, Vec<(usize, usize)>)>>,
+        routes: Option<Vec<PyRoute>>,
     ) -> PyResult<()> {
         let fresh = match (parahydrogen, fraction) {
             (None, None) => Fresh::Thermal,
@@ -1392,7 +1396,7 @@ impl PyReactions {
 
     /// The routes of reaction `reaction` (in the order added):
     /// `[(reactant position, product position, [(spin, spin)])]`.
-    fn routes(&self, reaction: usize) -> PyResult<Vec<(usize, usize, Vec<(usize, usize)>)>> {
+    fn routes(&self, reaction: usize) -> PyResult<Vec<PyRoute>> {
         if reaction >= self.inner.reactions().len() {
             return Err(invalid(format!(
                 "reaction {reaction} of {}",
