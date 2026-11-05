@@ -474,6 +474,96 @@ fn products_of_two_changing_states_follow_the_equations_written_out() {
 }
 
 #[test]
+fn coherences_in_both_reactants_turn_with_the_laboratory_frame() {
+    // A + B ⇌ C at 3 mT with transverse magnetisation in both reactants:
+    // the remainder turns at the sum of their Larmor frequencies, far
+    // faster than the chemistry. The laboratory frame must equal the
+    // rotating frame turned by the Zeeman evolution (homonuclear: double
+    // quantum; heteronuclear: zero and double quantum of ¹H and ¹³C).
+    let field = 3e-3;
+    for (x, y) in [(Isotope::H1, Isotope::H1), (Isotope::C13, Isotope::H1)] {
+        let make = |frame: Frame| {
+            let one = |iso: Isotope, shift: f64| {
+                let mut sys = SpinSystem::new(field).with_frame(frame);
+                sys.add_spin(iso, shift).unwrap();
+                sys
+            };
+            let (a, b) = (one(x, 1.0), one(y, 3.0));
+            let mut c = SpinSystem::new(field).with_frame(frame);
+            c.add_spin(x, 1.0).unwrap();
+            c.add_spin(y, 3.0).unwrap();
+            // A heteronuclear coupling is secular in the rotating frame
+            // only: the frames differ by J/Δω there.
+            if x == y {
+                c.couple(0, 1, 7.0).unwrap();
+            }
+            let mut r = Reactions::new();
+            let ia = r.add_site(a.clone(), 1.0).unwrap();
+            let ib = r.add_site(b.clone(), 0.8).unwrap();
+            let ic = r.add_site(c.clone(), 0.1).unwrap();
+            r.add_routed_reaction(
+                reaction(&[S(ia), S(ib)], &[S(ic)], 3.0),
+                vec![route(0, 0, &[(0, 0)]), route(1, 0, &[(0, 1)])],
+            )
+            .unwrap();
+            r.add_routed_reaction(
+                reaction(&[S(ic)], &[S(ia), S(ib)], 1.5),
+                vec![route(0, 0, &[(0, 0)]), route(0, 1, &[(1, 0)])],
+            )
+            .unwrap();
+            let start = vec![
+                state(&a, &[(a.ix(0).unwrap(), 0.4)]),
+                state(&b, &[(b.ix(0).unwrap(), 0.3)]) * C64::new(0.8, 0.0),
+                state(&c, &[(c.iz(0).unwrap(), 0.1)]) * C64::new(0.1, 0.0),
+            ];
+            (r, start, [a, b, c])
+        };
+        let t = 5e-4;
+        let (lab, start, systems) = make(Frame::Laboratory);
+        let got = lab.evolve(&start, &[Event::Delay(t)]).unwrap();
+        let (rot, start, _) = make(Frame::Rotating);
+        let turning = rot.evolve(&start, &[Event::Delay(t)]).unwrap();
+        // The Zeeman evolution exp(−i H_Z t) of each site in its basis.
+        let larmor = |iso: Isotope| {
+            let mut one = SpinSystem::new(field).with_frame(Frame::Laboratory);
+            one.add_spin(iso, 0.0).unwrap();
+            let h = one.hamiltonian().unwrap();
+            h[(1, 1)].re - h[(0, 0)].re
+        };
+        let want: Vec<CMatrix> = turning
+            .iter()
+            .zip(&systems)
+            .map(|(m, sys)| {
+                let d = sys.dimension();
+                let mut phase = vec![0.0; d];
+                for (i, spin) in sys.spins().iter().enumerate() {
+                    let iz = sys.iz(i).unwrap();
+                    for (k, p) in phase.iter_mut().enumerate() {
+                        *p += larmor(spin.isotope) * iz[(k, k)].re * t;
+                    }
+                }
+                CMatrix::from_fn(d, d, |r, c| {
+                    m[(r, c)] * C64::from_polar(1.0, phase[r] - phase[c])
+                })
+            })
+            .collect();
+        let err = relative(&got, &want);
+        // The product's double-quantum coherence, formed from the two
+        // reactants' coherences alone (missed entirely when the remainder's
+        // quadratic does not resolve its turning; the tolerance holds the
+        // whole deviation, of which it is a small part).
+        let dq = (got[2][(0, 3)] - want[2][(0, 3)]).norm() / want[2][(0, 3)].norm();
+        assert!(
+            err < 1e-8 && dq < 1e-4,
+            "{} and {}: {err:.2e}, {dq:.2e}",
+            x.name(),
+            y.name()
+        );
+        assert!(want[2][(0, 3)].norm() > 1e-5, "{}", want[2][(0, 3)]);
+    }
+}
+
+#[test]
 fn amounts_of_a_plus_b_equilibrium_follow_the_closed_form() {
     let (a0, b0, kf, kr, t) = (1.2, 0.7, 1.7, 0.6, 0.9);
     let one = || system(&[(Isotope::H1, 0.0, 0.0, 0.0)], &[]);

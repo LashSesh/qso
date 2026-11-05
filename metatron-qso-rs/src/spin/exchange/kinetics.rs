@@ -63,7 +63,7 @@ use super::Propagation;
 use super::{Channel, Exchange, Fresh, Site};
 use crate::error::{QsoError, Result};
 use crate::linalg::CMatrix;
-use crate::linalg::dense::{expm, expm_squarings};
+use crate::linalg::dense::{eigh, expm, expm_squarings};
 use num_complex::Complex64 as C64;
 
 /// The largest relative change of a reactant's amount in one step:
@@ -304,6 +304,9 @@ struct Base {
     fresh: Vec<(usize, DriftEntries)>,
     /// The product sites with spins from both reactants.
     bilinear: Vec<Bilinear>,
+    /// Per site that is a reactant of a bilinear source: its Hamiltonian's
+    /// eigenvalues (rad/s) and eigenvectors.
+    eigen: Vec<Option<(Vec<f64>, CMatrix)>>,
 }
 
 /// A transfer of reaction `r` from its reactant at position `from` (site
@@ -342,6 +345,13 @@ struct Step {
     remainder: f64,
     work: f64,
     converged: bool,
+}
+
+/// What the steps of one evolution share: the operations done so far and
+/// the longest step the bilinear sources allow.
+struct Pace {
+    work: f64,
+    limit: f64,
 }
 
 /// The columns of augmented coordinates and their own derivatives.
@@ -1228,6 +1238,14 @@ impl Reactions {
             ));
         }
         let mut norms = Vec::with_capacity(joint.blocks.len());
+        let mut eigen: Vec<Option<(Vec<f64>, CMatrix)>> = vec![None; self.sites.len()];
+        for feed in &bilinear {
+            for &site in &feed.sources {
+                if eigen[site].is_none() {
+                    eigen[site] = Some(eigh(&self.sites[site].system.hamiltonian_at(b)));
+                }
+            }
+        }
         let family: Vec<SparseFamily> = triplets
             .into_iter()
             .enumerate()
@@ -1269,6 +1287,7 @@ impl Reactions {
             linear,
             fresh,
             bilinear,
+            eigen,
         })
     }
 
@@ -1759,10 +1778,10 @@ impl Reactions {
     /// at its start's value) gives the states at the midpoint and the end;
     /// the step then takes the references of the predicted midpoint and the
     /// remainder at the three nodes, and is repeated with the corrected
-    /// states until the end moves by less than a tenth of `tolerance`
-    /// (each pass squares the error of the last: the remainder is the
-    /// product of two deviations from the references), at most
-    /// [`MAX_CORRECTIONS`] times.
+    /// states until the end moves by less than a tenth of `tolerance` (each
+    /// pass reduces the error of the last by a factor of the order of
+    /// `h k |z|`, `z` the reactants' deviations from their references), at
+    /// most [`MAX_CORRECTIONS`] times.
     #[allow(clippy::too_many_arguments)]
     fn midpoint(
         &self,
@@ -1823,6 +1842,80 @@ impl Reactions {
             end_guess = states;
         }
         unreachable!("the last pass returns")
+    }
+
+    /// The longest step whose remainder the quadratic through its three
+    /// nodes follows, at the deviations `x` with the amounts `c`: none if a
+    /// step of `h` already does. The remainder `k (x_A' − c_A ŷ_A) ⊗ (x_B' −
+    /// c_B ŷ_B)` turns with the reactants' coherences between eigenstates
+    /// of their Hamiltonians, at `|E_a − E_b|`; what turns faster than
+    /// `ω_c = COHERENT_PHASE/h` is missed by the quadratic, and by the
+    /// comparison with two half steps, which sample the same ends. Its
+    /// part over a step is at most `h k (‖F_A‖ ‖z_B‖ + ‖z_A‖ ‖F_B‖)`, `F`
+    /// the coherences above `ω_c` (times `√(d/d')` for the partial trace)
+    /// and `z` the reduced deviation from the reference; the step is
+    /// shortened to the longest whose bound stays within `tolerance`.
+    fn resolved_step(
+        &self,
+        base: &Base,
+        x: &[CMatrix],
+        c: &[f64],
+        h: f64,
+        tolerance: f64,
+    ) -> Option<f64> {
+        let norm = |m: &CMatrix| m.iter().map(|v| v.norm_sqr()).sum::<f64>().sqrt();
+        let refs = self.references(base, x, c);
+        let mut shortest: Option<f64> = None;
+        for (feed, refs) in base.bilinear.iter().zip(&refs) {
+            let k = self.reactions[feed.r].rate;
+            // Per reactant: ‖z‖, and its coherences' frequencies with the
+            // squared sizes, the fastest first.
+            let parts = [0, 1].map(|q| {
+                let (s, red) = (feed.sources[q], &feed.reduced[q]);
+                let z = norm(&(red.of(&x[s]) - &refs[q] * C64::new(c[s], 0.0)));
+                let (energies, v) = base.eigen[s].as_ref().expect("an eigenbasis");
+                let t = v.adjoint() * &x[s] * v;
+                let d = energies.len();
+                let mut lines: Vec<(f64, f64)> = Vec::new();
+                for a in 0..d {
+                    for b in 0..d {
+                        let w = (energies[a] - energies[b]).abs();
+                        let size = t[(a, b)].norm_sqr();
+                        if a != b && size > 0.0 && w > 0.0 {
+                            lines.push((w, size));
+                        }
+                    }
+                }
+                lines.sort_by(|p, q| q.0.total_cmp(&p.0));
+                let widen = (x[s].nrows() as f64 / red.dim as f64).sqrt();
+                (z, lines, widen)
+            });
+            // The bound with the cutoff at `w`: what turns faster than `w`.
+            let bound = |w: f64| {
+                let fast = |q: usize| {
+                    let (_, lines, widen) = &parts[q];
+                    let sum: f64 = lines.iter().take_while(|l| l.0 > w).map(|l| l.1).sum();
+                    widen * sum.sqrt()
+                };
+                (COHERENT_PHASE / w) * k * (fast(0) * parts[1].0 + parts[0].0 * fast(1))
+            };
+            if bound(COHERENT_PHASE / h) <= tolerance {
+                continue;
+            }
+            // The largest step (smallest cutoff among the coherences'
+            // frequencies) whose bound is within the tolerance; content
+            // above the fastest frequency is nil.
+            let mut cutoffs: Vec<f64> =
+                parts.iter().flat_map(|p| p.1.iter().map(|l| l.0)).collect();
+            cutoffs.sort_by(f64::total_cmp);
+            let w = cutoffs
+                .into_iter()
+                .find(|&w| bound(w) <= tolerance)
+                .unwrap_or(COHERENT_PHASE / h);
+            let step = COHERENT_PHASE / w;
+            shortest = Some(shortest.map_or(step, |s: f64| s.min(step)));
+        }
+        shortest.filter(|&s| s < h)
     }
 
     /// Per reaction: a bound on the frequencies of the blocks its
@@ -2039,10 +2132,15 @@ impl Reactions {
     }
 
     /// Reactions, evolution and relaxation for `t` at field `b` from time
-    /// `t0`, amounts `c` (advanced); `work` counts the operations of the
-    /// exponentials. Steps with a bilinear source that matters are checked
-    /// against their halves (to [`BILINEAR_TOLERANCE`] of the deviation)
-    /// and repeated shorter when they miss.
+    /// `t0`, amounts `c` (advanced). With bilinear sources, `pace` counts
+    /// the operations of the exponentials (refused beyond
+    /// [`super::super::MAX_RELAXATION_WORK`]) and keeps the longest step
+    /// from one delay to the next. A step whose remainder matters (more
+    /// than [`BILINEAR_TOLERANCE`] of the deviation over the step) is
+    /// repeated shorter when it turns faster than the step resolves
+    /// (`h · frequency ≤ 1/4`, see [`Self::frequency`]), when its
+    /// corrections do not settle, or when it differs from its two halves
+    /// by more than the tolerance.
     #[allow(clippy::too_many_arguments)]
     fn delay(
         &self,
@@ -2052,21 +2150,36 @@ impl Reactions {
         t: f64,
         b: f64,
         method: Propagation,
-        work: &mut f64,
+        pace: &mut Pace,
     ) -> Result<Vec<CMatrix>> {
         if t == 0.0 {
             return Ok(x.to_vec());
         }
         let base = self.base(b)?;
         let coherence = self.coherence(&base);
+        let bilinear = !base.bilinear.is_empty();
         let mut now = t0;
         let end = t0 + t;
         let mut x = x.to_vec();
         let mut steps = 0usize;
-        let mut limit = f64::INFINITY;
         let norm = |m: &[CMatrix]| m.iter().map(|x| x.norm_squared()).sum::<f64>().sqrt();
+        let too_much = |work: f64| {
+            QsoError::invalid(
+                "reactions",
+                format!(
+                    "these steps need about {work:.1e} operations (limit {:.1e}): the product \
+                     of two reactants whose states turn within a step (coherences in both) \
+                     takes steps that resolve their frequencies; use fewer spins, shorter \
+                     delays or the rotating frame",
+                    super::super::MAX_RELAXATION_WORK
+                ),
+            )
+        };
         while now < end {
-            let h = self.step_size(c, end - now, &coherence).min(limit);
+            let mut h = self.step_size(c, end - now, &coherence);
+            if bilinear {
+                h = h.min(pace.limit);
+            }
             steps += 1;
             if steps > MAX_KINETIC_STEPS {
                 return Err(QsoError::invalid(
@@ -2091,29 +2204,34 @@ impl Reactions {
                 method,
                 tol,
             )?;
-            *work += full.work + first.work + second.work;
-            if *work > super::super::MAX_RELAXATION_WORK {
-                return Err(QsoError::invalid(
-                    "reactions",
-                    format!(
-                        "the steps took more than {:.1e} operations: products of two reactants \
-                         whose states change within a step (coherences in both) need short \
-                         steps; use fewer spins or shorter delays",
-                        super::super::MAX_RELAXATION_WORK
-                    ),
-                ));
+            let work = full.work + first.work + second.work;
+            if bilinear {
+                pace.work += work;
+                if pace.work > super::super::MAX_RELAXATION_WORK {
+                    return Err(too_much(pace.work));
+                }
             }
-            let (half, remainder) = (
-                second.states,
-                full.remainder.max(first.remainder).max(second.remainder),
-            );
+            let remainder = full.remainder.max(first.remainder).max(second.remainder);
             let settled = full.converged && first.converged && second.converged;
-            let full = full.states;
-            if !settled {
-                limit = h / 4.0;
+            let (full, half) = (full.states, second.states);
+            if bilinear
+                && remainder > tol
+                && let Some(resolved) = self.resolved_step(&base, &x, c, h, tol)
+            {
+                // The remainder turns faster than the step resolves: its
+                // quadratic and the halves' agree on the wrong value.
+                let projected = pace.work + (end - now) / resolved * work;
+                if projected > super::super::MAX_RELAXATION_WORK {
+                    return Err(too_much(projected));
+                }
+                pace.limit = resolved;
                 continue;
             }
-            if !base.bilinear.is_empty() {
+            if !settled {
+                pace.limit = h / 4.0;
+                continue;
+            }
+            if bilinear {
                 if remainder > 1e-3 * tol {
                     let diff: Vec<CMatrix> = half.iter().zip(&full).map(|(a, f)| a - f).collect();
                     let err = norm(&diff);
@@ -2123,12 +2241,12 @@ impl Reactions {
                         4.0
                     };
                     if err > tol {
-                        limit = h * factor.clamp(0.1, 0.5);
+                        pace.limit = h * factor.clamp(0.1, 0.5);
                         continue;
                     }
-                    limit = h * factor.clamp(1.0, 4.0);
+                    pace.limit = h * factor.clamp(1.0, 4.0);
                 } else {
-                    limit *= 4.0;
+                    pace.limit = h * 4.0;
                 }
             }
             x = half
@@ -2139,6 +2257,14 @@ impl Reactions {
             *c = c_half;
             self.advance(c, now + h / 2.0, now + h)?;
             now += h;
+            if bilinear && now < end {
+                // The next step no longer than the remainder's frequencies
+                // allow, rather than tried and repeated.
+                let next = pace.limit.min(end - now);
+                if let Some(resolved) = self.resolved_step(&base, &x, c, next, tol) {
+                    pace.limit = resolved;
+                }
+            }
         }
         Ok(x)
     }
@@ -2208,7 +2334,10 @@ impl Reactions {
         let mut c = self.initial();
         let mut now = 0.0;
         let mut x = deviations(states, &c[..self.sites.len()]);
-        let mut work = 0.0;
+        let mut pace = Pace {
+            work: 0.0,
+            limit: f64::INFINITY,
+        };
         for e in events {
             match e {
                 Event::Pulse { target, .. } => {
@@ -2257,7 +2386,7 @@ impl Reactions {
                 }
                 Event::Delay(t) => {
                     check_time("delay", *t)?;
-                    x = self.delay(&x, &mut c, now, *t, b, method, &mut work)?;
+                    x = self.delay(&x, &mut c, now, *t, b, method, &mut pace)?;
                     now += t;
                 }
                 Event::Field(to) => {
@@ -2281,7 +2410,7 @@ impl Reactions {
                     let dt = duration / *steps as f64;
                     for k in 0..*steps {
                         let field = from + (to - from) * (k as f64 + 0.5) / *steps as f64;
-                        x = self.delay(&x, &mut c, now, dt, field, method, &mut work)?;
+                        x = self.delay(&x, &mut c, now, dt, field, method, &mut pace)?;
                         now += dt;
                     }
                     b = *to;

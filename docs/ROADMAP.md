@@ -6310,12 +6310,12 @@ Changes to the plan:
   trace errors only decay; the steady state then stays to 10⁻¹² over
   1000 s (test).
 - **Corrections until the step settles.** The plan had one predictor
-  and one corrector. A corrected pass errs by the product of the
-  predicted reference's error and the predicted end's, which is small for
-  short steps but not for a step of the whole delay, which steady
-  chemistry allows; the step is now corrected until the end moves by
-  less than a tenth of the tolerance, at most eight times, else repeated
-  at a quarter of its length.
+  and one corrector. Each pass reduces the error of the last by a factor
+  of the order of `h k |z|` (`z` the reactants' deviations from their
+  references), small for short steps but not for a step of the whole
+  delay, which steady chemistry allows; the step is now corrected until
+  the end moves by less than a tenth of the tolerance, at most eight
+  times, else repeated at a quarter of its length.
 - **Reaction and Route stay apart.** `Reaction` is a struct with public
   fields; a new field would break code that builds it (1.x releases add,
   never break), so routes are added beside it.

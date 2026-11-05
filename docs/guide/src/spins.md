@@ -548,10 +548,19 @@ midpoint), a drift, and a remainder that is the product of the two
 reactants' deviations from their references. The transfers go into the
 exponentials as those of one reactant do, so a partner held in its state
 (parahydrogen in a pool that keeps it, a thermal spin) gives exactly the
-steps of a reaction with that partner as a species; the remainder enters the inhomogeneous term, each step is
-corrected until it settles, and steps whose remainder matters are checked
-against their halves (to 10⁻⁹ of the deviation). Each step costs three
-to five times the exponentials of a linear one.
+steps of a reaction with that partner as a species. The remainder enters
+the inhomogeneous term as a quadratic over each step; each step is
+corrected until it settles and, where the remainder matters, checked
+against its two halves to 10⁻⁹ of the deviation (over many steps the
+errors add: 10⁻⁷ to 10⁻⁶ of it in tests with coherences in both
+reactants). A remainder that turns faster than the step, with the
+coherences of both reactants, would be missed by the quadratic and by the
+halves alike, so such steps are shortened until they resolve it. The
+cost follows: about four times the exponentials of a linear reaction with
+a partner held in its state (the example: 9 s against 2 s), more when the
+partner's amount changes, and steps that resolve the Larmor frequencies
+when both reactants carry transverse coherences in the laboratory frame
+(refused at millitesla fields by the limit on the work).
 
 ## Long-lived states and transfer
 
