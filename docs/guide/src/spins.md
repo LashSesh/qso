@@ -1034,12 +1034,19 @@ ground-state anticrossing (102.4 mT) a field across the axis mixes `0`
 and `−1` and dims the fluorescence without any microwave.
 
 - **Defaults.** ¹⁵N: `A_∥` = 3.03, `A_⊥` = 3.65 MHz in the ground state,
-  an isotropic 60 MHz in the excited state; ¹⁴N: −2.14, −2.70 and
-  `P` = −4.945 MHz, an isotropic −40 MHz excited. `nitrogen_ground` and
+  an isotropic 60 MHz in the excited state (only its size is measured;
+  the sign is the ground state's); ¹⁴N: −2.14, −2.70 and
+  `P` = −4.945 MHz, and `A_∥` = −40, `A_⊥` = −23 MHz excited (Poggiali
+  et al., Phys. Rev. B 95, 195308 (2017)). `nitrogen_ground` and
   `nitrogen_excited` replace the tensors; `rates` takes `"tetienne"`
   (default), `"gupta"` (Gupta et al., J. Opt. Soc. Am. B 33, B28 (2016)) or
   five rates; `nuclear_relaxation` is `Γ_n`, at which each nucleus's
-  `⟨I_z⟩` relaxes in every level.
+  `⟨I_z⟩` relaxes in every level. The electron dephases in the ground
+  triplet only, and the microwave acts on the ground triplet only.
+- **A unique steady state.** A nucleus that neither relaxes nor is
+  flipped by its couplings to the electron (none at all, or `A_∥` alone
+  in a field along the axis) keeps any population it had; such a steady
+  state is refused rather than returned with an arbitrary polarisation.
 - **Results.** `steady_state(pump)` returns the state, the fluorescence,
   the nuclear polarisation over all levels and within the ground
   `m_s = 0` (`polarisation_zero`, what nuclear-resolved ODMR lines show).
@@ -1068,7 +1075,7 @@ duarte = dict(
 for b in (0.02, 0.044, 0.051):
     s = spin.NuclearOpticalNv((0, 0, b), **duarte).steady_state(4e6)
     print(b, round(s["polarisation_zero"][0], 3))
-# 0.02 0.639 / 0.044 0.939 / 0.051 0.952: Duarte et al. find about 0.95
+# 0.02 0.639 / 0.044 0.94 / 0.051 0.952: Duarte et al. find about 0.95
 
 # The ground-state anticrossing with 14N: 20 μT across the axis dim it.
 crossing = 2.87e9 / 28.025e9
@@ -1089,10 +1096,13 @@ find. Exactly along the axis the ground-state anticrossing shows no dip:
 the nucleus keeps the crossing partners `|0, m⟩` and `|−1, m + 1⟩`
 equally populated over a millitesla around it, so that mixing them
 changes nothing. A transverse field of 20 μT dims it by 17 % over
-180 μT, and its slope gives 3.8 μT/√Hz at 1 % collection; 100 μT dims
-it by 25 % over 630 μT. The model has 14 (¹⁵N), 21 (¹⁴N) or 42 levels
-(¹⁴N and ¹³C): a steady state takes 0.01, 0.1 and 10 s, one with a
-microwave 0.3, 2.7 and 210 s.
+180 μT, and where its slope is steepest it gives 3.9 μT/√Hz at 1 %
+collection; 100 μT dims it by 25 % over 630 μT. The model has 14
+(¹⁵N), 21 (¹⁴N) or 42 levels (¹⁴N and ¹³C): a steady state takes 0.01,
+0.1 and 9 s, one with a microwave 0.25, 2.8 and 230 s. A field scan or
+CW-ODMR spectrum may take at most eight times the work limit of one
+steady state: about 550 fields or 14 microwave frequencies of 42
+levels.
 
 ### The nuclear-spin bath
 

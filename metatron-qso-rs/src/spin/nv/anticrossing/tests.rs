@@ -49,6 +49,36 @@ fn decoupled_nuclei_leave_the_optics_of_1_40() {
 }
 
 #[test]
+fn a_steady_state_that_is_not_unique_is_refused() {
+    // Without hyperfine couplings and nuclear relaxation the nucleus keeps
+    // whatever population it had: every mixture is stationary.
+    for field in [[0.0, 0.0, 0.03], [0.002, 0.0, 0.03]] {
+        let mut nv = decoupled(field);
+        nv.nuclear_relaxation = 0.0;
+        assert!(nv.steady_state(0.1 * KR, None).is_err(), "{field:?}");
+        let line = nv.electron.lines().unwrap()[0].0;
+        assert!(
+            nv.steady_state(0.1 * KR, Some((line.abs(), 1e6))).is_err(),
+            "{field:?}"
+        );
+        // Couplings along the axis only conserve I_z in a field along it;
+        // across it the nucleus is quantised differently in each level.
+        let mut axial = nv.clone();
+        axial.nuclei[0].ground = [[0.0; 3], [0.0; 3], [0.0, 0.0, 3e6]];
+        axial.nuclei[0].excited = [[0.0; 3], [0.0; 3], [0.0, 0.0, 60e6]];
+        assert_eq!(
+            axial.steady_state(0.1 * KR, None).is_err(),
+            field[0] == 0.0,
+            "{field:?}"
+        );
+        // The slowest legitimate rate: 1 per second against gigahertz.
+        nv.nuclear_relaxation = 1.0;
+        let p = nv.steady_state(0.1 * KR, None).unwrap().polarisation[0];
+        assert!(p.abs() < 1e-6, "{field:?}: {p}");
+    }
+}
+
+#[test]
 fn the_electron_with_its_nuclei_stays_near_1_40_away_from_the_anticrossings() {
     // The hyperfine couplings mix the excited levels by about (A_e/Δ)²:
     // 0.2 to 0.7 % of the fluorescence between 5 and 70 mT.
@@ -241,6 +271,18 @@ fn anticrossing_input_is_checked_and_survives_json() {
         .push(NuclearSpin::carbon_13([[0.0; 3]; 3], [[0.0; 3]; 3]));
     assert!(three.validate().is_err());
     assert!(nv.nuclear_polarisation(&CMatrix::zeros(21, 21), 1).is_err());
+    for wrong in [CMatrix::zeros(14, 14), CMatrix::zeros(21, 14)] {
+        assert!(nv.fluorescence(&wrong).is_err());
+        assert!(nv.nuclear_polarisation(&wrong, 0).is_err());
+        assert!(nv.nuclear_polarisation_in(&wrong, 0, 1).is_err());
+    }
+    assert!(nv.field_sensitivity(KR, [0.0, 0.0, 1.0], 0.0).is_err());
+    assert!(nv.field_sensitivity(KR, [0.0; 3], 1e-6).is_err());
+    // Scans of 42 levels beyond the budget are refused before any work.
+    let big = three.nuclei.pop().map(|_| three).unwrap();
+    assert_eq!(big.dimension(), 42);
+    assert!(big.cw_odmr(&[2.8e9; 20], 1e6, KR).is_err());
+    assert!(big.field_scan(&[[0.0, 0.0, 0.05]; 1000], KR).is_err());
     // A zero Rabi frequency is no microwave.
     let off = nv.steady_state(0.1 * KR, None).unwrap();
     let zero = nv.steady_state(0.1 * KR, Some((2.8e9, 0.0))).unwrap();
@@ -249,7 +291,9 @@ fn anticrossing_input_is_checked_and_survives_json() {
 
 /// Duarte et al.'s ¹⁵N (Phys. Rev. B 103, 195443 (2021), table 2: their
 /// `A⊥` is twice the coefficient of `S_xI_x + S_yI_y`) with the rates of
-/// Gupta et al. or Tetienne et al. and a nuclear T₁ of 100 ms.
+/// Gupta et al. or Tetienne et al. and a nuclear T₁ of 100 ms. Their
+/// excited coupling has the sign opposite to the default (only its size is
+/// measured); the nuclear Zeeman term stays the physical `−γ B·I`.
 fn duarte(b: f64, rates: Photophysics) -> NuclearOpticalNv {
     let mut n = NuclearSpin::nitrogen_15();
     n.ground = axial(3.9e6, 3.4e6);
@@ -380,13 +424,20 @@ fn measure_anticrossings() {
             );
         let half = base - (base - low) / 2.0;
         let width = rates.iter().filter(|&&r| r < half).count() as f64 * 1e-5;
-        let slope = rates
-            .windows(2)
-            .map(|w| ((w[1] - w[0]) / 1e-5).abs())
-            .fold(0.0, f64::max);
-        let eta = low.sqrt() / slope;
+        // The sensitivity where the slope of the scan is steepest, with
+        // the rate there (not at the bottom of the dip).
+        let steep = (0..200)
+            .max_by(|&a, &b| {
+                let s = |j: usize| (rates[j + 1] - rates[j]).abs();
+                s(a).total_cmp(&s(b))
+            })
+            .unwrap();
+        let mut at = nv.clone();
+        at.electron.field[2] = crossing - 1e-3 + 1e-5 * (steep as f64 + 0.5);
+        let (eta, _, _) = at.field_sensitivity(pump, [0.0, 0.0, 1.0], 1e-6).unwrap();
         eprintln!(
-            "GSLAC, {:.0} μT across: dip {:.1} % at {:.3} mT, width {:.0} μT, best √R/|dR/dB| {:.2e} T/√Hz",
+            "GSLAC, {:.0} μT across: dip {:.1} % at {:.3} mT, width {:.0} μT, \
+             √R/|dR/dB| at the steepest point {:.2e} T/√Hz",
             across * 1e6,
             100.0 * (base - low) / base,
             grid[k][2] * 1e3,

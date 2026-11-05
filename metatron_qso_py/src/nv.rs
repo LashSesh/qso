@@ -766,6 +766,10 @@ impl PySpinBath {
 /// A nucleus with its position (m) and full hyperfine tensor (Hz, row: the
 /// electron's component).
 type TensorSpin = ([f64; 3], [[f64; 3]; 3]);
+/// The hyperfine tensors of a nucleus in the ground and excited triplet.
+type TensorPair = ([[f64; 3]; 3], [[f64; 3]; 3]);
+/// The fluorescence at each field and the nuclear polarisations there.
+type FieldScan<'py> = (Bound<'py, PyArray1<f64>>, Vec<Vec<f64>>);
 
 /// Coherences and signals.
 type CoherenceAndSignal<'py> = (Bound<'py, PyArray1<C64>>, Bound<'py, PyArray1<f64>>);
@@ -1353,7 +1357,7 @@ impl PyNuclearOpticalNv {
     fn new(
         field: [f64; 3],
         nitrogen: &str,
-        carbon: Option<([[f64; 3]; 3], [[f64; 3]; 3])>,
+        carbon: Option<TensorPair>,
         rates: Option<Bound<'_, PyAny>>,
         nuclear_relaxation: f64,
         dephasing: f64,
@@ -1472,7 +1476,7 @@ impl PyNuclearOpticalNv {
         py: Python<'py>,
         fields: Vec<[f64; 3]>,
         pump: f64,
-    ) -> PyResult<(Bound<'py, PyArray1<f64>>, Vec<Vec<f64>>)> {
+    ) -> PyResult<FieldScan<'py>> {
         let nv = &self.inner;
         let scan = py.detach(|| nv.field_scan(&fields, pump)).raise()?;
         let (rates, pols): (Vec<f64>, Vec<Vec<f64>>) = scan.into_iter().unzip();

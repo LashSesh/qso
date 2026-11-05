@@ -19,10 +19,13 @@
 //! Phys. Rev. Lett. 102, 057403 (2009)), and near the ground-state
 //! anticrossing (102.4 mT) the mixing of `|0⟩` and `|−1⟩` dims the
 //! fluorescence without any microwave. The nuclei may relax towards the
-//! unpolarised state at `Γ_n` in every electronic level.
+//! unpolarised state at `Γ_n` in every electronic level. The electron
+//! dephases (`√(2Γ₂*) S_z`) in the ground triplet only, as in
+//! [`super::optics`]: the excited triplet has no dephasing of its own
+//! beyond its 12 ns lifetime.
 //!
-//! A microwave `√2·2πΩ cos(2πft) S_x` on the ground triplet is kept in the
-//! laboratory frame. The periodic steady state `ρ(t) = Σ_n ρ_n e^{i n ω t}`
+//! A microwave `√2·2πΩ cos(2πft) S_x`, acting on the ground triplet only
+//! (not on the excited one), is kept in the laboratory frame. The periodic steady state `ρ(t) = Σ_n ρ_n e^{i n ω t}`
 //! solves `(L₀ − inω) ρ_n + V (ρ_{n−1} + ρ_{n+1}) = 0` (`V` half the
 //! drive's superoperator), truncated at `|n| ≤ K` and solved by a matrix
 //! continued fraction, `K` doubled until the period average `ρ₀` settles
@@ -48,6 +51,31 @@ pub const MAX_FLOQUET_HARMONICS: usize = 64;
 /// The change of the period average, relative to itself, below which the
 /// harmonics are taken as enough.
 const FLOQUET_TOLERANCE: f64 = 1e-10;
+
+/// Most work (operations, estimated) of a [`NuclearOpticalNv::field_scan`]
+/// or [`NuclearOpticalNv::cw_odmr`] over all its points: eight times the
+/// limit of one steady state.
+pub const MAX_ANTICROSSING_SCAN_WORK: f64 = 8.0 * MAX_RELAXATION_WORK;
+
+/// Work (real operations, estimated) of the steady state without microwave
+/// on a superoperator of size `m`: its full-pivot LU in complex arithmetic.
+fn still_work(m: usize) -> f64 {
+    4.0 * (m as f64).powi(3)
+}
+
+/// Work of one round of [`floquet`] with `harmonics` harmonics: per
+/// harmonic an LU, an `m`-column solve and the product `V R` in complex
+/// arithmetic (about `24 m³`), and the central full-pivot LU. About 30 s
+/// per harmonic for 42 levels (`m` = 1764) on the test machine.
+fn floquet_work(m: usize, harmonics: usize) -> f64 {
+    24.0 * harmonics as f64 * (m as f64).powi(3) + still_work(m)
+}
+
+/// The least work of a steady state with microwave: the rounds of 2 and 4
+/// harmonics that the first comparison needs.
+fn least_floquet_work(m: usize) -> f64 {
+    floquet_work(m, 2) + floquet_work(m, 4)
+}
 
 /// A nucleus coupled to the electron in both triplets.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -75,8 +103,14 @@ fn axial(perpendicular: f64, parallel: f64) -> [[f64; 3]; 3] {
 
 impl NuclearSpin {
     /// ¹⁵N: in the ground state `A_∥ = 3.03` and `A_⊥ = 3.65 MHz` (Felton
-    /// et al., Phys. Rev. B 79, 075203 (2009)), in the excited state an
-    /// isotropic 60 MHz (Jacques et al. 2009).
+    /// et al., Phys. Rev. B 79, 075203 (2009), the sign taken from ¹⁴N),
+    /// in the excited state an isotropic 60 MHz (Jacques et al. 2009). Only
+    /// the size of the excited coupling is measured (61 ± 6 MHz, Fuchs et
+    /// al., Phys. Rev. Lett. 101, 117601 (2008)); its sign here is the
+    /// ground state's, as ¹⁴N's −40 MHz scaled by the gyromagnetic ratios
+    /// (+56 MHz) also gives. Duarte et al.'s ab initio −58.1 and −38.5 MHz
+    /// (Phys. Rev. B 103, 195443 (2021)) polarise ¹⁵N at 51 mT to 0.951
+    /// instead of 0.948, at 100 mT to 0.871 instead of 0.833.
     pub fn nitrogen_15() -> Self {
         NuclearSpin {
             levels: 2,
@@ -87,17 +121,18 @@ impl NuclearSpin {
         }
     }
 
-    /// ¹⁴N: in the ground state `A_∥ = −2.14`, `A_⊥ = −2.70 MHz` and `P =
-    /// −4.945 MHz` (Felton et al. 2009), in the excited state an isotropic
-    /// −40 MHz (the measured `A_∥`, Poggiali et al., Phys. Rev. B 95,
-    /// 195308 (2017); ¹⁵N's 60 MHz scaled by the ratio of the
-    /// gyromagnetic ratios gives −43).
+    /// ¹⁴N: in the ground state `A_∥ = −2.14` and `A_⊥ = −2.70 MHz`
+    /// (Felton et al. 2009) and `P = −4.945 MHz` (Doherty et al. 2013, as
+    /// [`super::Nitrogen::n14`]; Felton et al. give −5.01), in the excited
+    /// state `A_∥ = −40` and `A_⊥ = −23 MHz` (Poggiali et al., Phys. Rev.
+    /// B 95, 195308 (2017), who measure `A_⊥ = −23 ± 3 MHz` and find that
+    /// an isotropic −40 MHz does not fit).
     pub fn nitrogen_14() -> Self {
         NuclearSpin {
             levels: 3,
             gyromagnetic_ratio: N14_GAMMA,
             ground: axial(-2.70e6, -2.14e6),
-            excited: axial(-40e6, -40e6),
+            excited: axial(-23e6, -40e6),
             quadrupole: -4.945e6,
         }
     }
@@ -384,15 +419,33 @@ impl NuclearOpticalNv {
         .superoperator()
     }
 
+    /// A state of the model must be `dimension × dimension`.
+    fn check_state(&self, rho: &CMatrix) -> Result<()> {
+        let n = self.dimension();
+        if rho.nrows() != n || rho.ncols() != n {
+            return Err(QsoError::DimensionMismatch {
+                expected: n,
+                actual: if rho.nrows() != n {
+                    rho.nrows()
+                } else {
+                    rho.ncols()
+                },
+            });
+        }
+        Ok(())
+    }
+
     /// Detected photons per second in a state of the model.
-    pub fn fluorescence(&self, rho: &CMatrix) -> f64 {
+    pub fn fluorescence(&self, rho: &CMatrix) -> Result<f64> {
+        self.check_state(rho)?;
         let nn = self.nuclear_dimension();
         let excited: f64 = (3 * nn..6 * nn).map(|j| rho[(j, j)].re).sum();
-        self.electron.collection * self.electron.rates.radiative * excited
+        Ok(self.electron.collection * self.electron.rates.radiative * excited)
     }
 
     /// `⟨I_z⟩/I` of nucleus `k` in a state of the model, over all levels.
     pub fn nuclear_polarisation(&self, rho: &CMatrix, k: usize) -> Result<f64> {
+        self.check_state(rho)?;
         let nucleus = self.nuclei.get(k).ok_or_else(|| {
             QsoError::invalid("nucleus", format!("nucleus {k} of {}", self.nuclei.len()))
         })?;
@@ -406,6 +459,7 @@ impl NuclearOpticalNv {
     /// zero-field basis (ground `+1, 0, −1` = 0, 1, 2; excited 3, 4, 5;
     /// singlet 6), normalised by that level's population.
     pub fn nuclear_polarisation_in(&self, rho: &CMatrix, k: usize, level: usize) -> Result<f64> {
+        self.check_state(rho)?;
         let nucleus = self.nuclei.get(k).ok_or_else(|| {
             QsoError::invalid("nucleus", format!("nucleus {k} of {}", self.nuclei.len()))
         })?;
@@ -432,7 +486,7 @@ impl NuclearOpticalNv {
             .map(|k| self.nuclear_polarisation_in(&rho, k, 1))
             .collect::<Result<Vec<_>>>()?;
         Ok(AnticrossingState {
-            fluorescence: self.fluorescence(&rho),
+            fluorescence: self.fluorescence(&rho)?,
             polarisation,
             polarisation_zero,
             rho,
@@ -444,8 +498,11 @@ impl NuclearOpticalNv {
     /// and, if given, a microwave of frequency `drive.0` (Hz, positive) and
     /// Rabi frequency `drive.1` (Hz, as in [`OpticalNv`]) in the laboratory
     /// frame (its period average). It needs the laser or spin-lattice
-    /// relaxation to be unique, and the nuclei need their hyperfine
-    /// couplings, a transverse field or `Γ_n`.
+    /// relaxation to be unique, and the nuclei need `Γ_n` or hyperfine
+    /// couplings that flip them (`A_⊥`, or `A_∥` with a field across the
+    /// axis: not none at all, nor `A_∥` alone along the axis); a steady
+    /// state that is not unique (a pivot of its system below `1e-14` of
+    /// the largest) is refused.
     pub fn steady_state(&self, pump: f64, drive: Option<(f64, f64)>) -> Result<AnticrossingState> {
         if pump == 0.0 && self.electron.spin_lattice == 0.0 {
             return Err(QsoError::invalid(
@@ -470,24 +527,31 @@ impl NuclearOpticalNv {
         let v = self.drive(rabi) * C64::new(0.5, 0.0);
         let omega = TWO_PI * frequency;
         let m = l0.nrows();
-        // Each harmonic factorises an m × m matrix and solves m columns.
-        let per = 12.0 * (m as f64).powi(3);
         let mut harmonics = 2;
         let mut last: Option<CMatrix> = None;
+        let mut spent = 0.0;
         loop {
-            if 2.0 * per * harmonics as f64 > MAX_RELAXATION_WORK {
+            // The rounds so far and the next, at the start with the one
+            // after it: one round alone shows no convergence.
+            let mut work = spent + floquet_work(m, harmonics);
+            let mut upto = harmonics;
+            if last.is_none() {
+                upto *= 2;
+                work += floquet_work(m, upto);
+            }
+            if work > MAX_RELAXATION_WORK {
                 return Err(QsoError::invalid(
                     "drive",
                     format!(
-                        "{harmonics} harmonics of a model of {} levels need about {:.1e} \
-                         operations (limit {:.1e}); use fewer nuclei or a stronger field \
-                         splitting relative to the Rabi frequency",
+                        "{upto} harmonics of a model of {} levels need about {work:.1e} \
+                         operations with the rounds before (limit {:.1e}); use fewer nuclei, a \
+                         weaker drive or a higher frequency",
                         self.dimension(),
-                        2.0 * per * harmonics as f64,
                         MAX_RELAXATION_WORK
                     ),
                 ));
             }
+            spent += floquet_work(m, harmonics);
             let rho = floquet(&l0, &v, omega, harmonics, self.dimension())?;
             if let Some(prev) = &last {
                 let change = (&rho - prev).norm() / rho.norm();
@@ -509,8 +573,27 @@ impl NuclearOpticalNv {
         }
     }
 
+    /// A scan estimated above [`MAX_ANTICROSSING_SCAN_WORK`] is refused.
+    fn check_scan(&self, work: f64) -> Result<()> {
+        if work > MAX_ANTICROSSING_SCAN_WORK {
+            return Err(QsoError::invalid(
+                "scan",
+                format!(
+                    "the points of a model of {} levels need at least about {work:.1e} \
+                     operations (limit {MAX_ANTICROSSING_SCAN_WORK:.1e}); use fewer points or \
+                     fewer nuclei",
+                    self.dimension()
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     /// The fluorescence and nuclear polarisations without a microwave at
-    /// each field (T, frame of the centre), in parallel.
+    /// each field (T, frame of the centre), in parallel. At most
+    /// [`MAX_ANTICROSSING_SCAN_WORK`] in total (`4 m³` per point, `m` the
+    /// square of [`NuclearOpticalNv::dimension`]: about 550 points of 42
+    /// levels).
     pub fn field_scan(&self, fields: &[[f64; 3]], pump: f64) -> Result<Vec<(f64, Vec<f64>)>> {
         if fields.len() > super::optics::MAX_ODMR_POINTS {
             return Err(QsoError::invalid(
@@ -518,6 +601,8 @@ impl NuclearOpticalNv {
                 format!("at most {}", super::optics::MAX_ODMR_POINTS),
             ));
         }
+        let m = self.dimension().pow(2);
+        self.check_scan(fields.len() as f64 * still_work(m))?;
         crate::parallel::map_tasks(fields.len(), |k| {
             let mut nv = self.clone();
             nv.electron.field = fields[k];
@@ -529,13 +614,20 @@ impl NuclearOpticalNv {
     }
 
     /// The time-averaged photon rate under `pump` at each microwave
-    /// frequency (Hz), the microwave in the laboratory frame.
+    /// frequency (Hz), the microwave in the laboratory frame. At most
+    /// [`MAX_ANTICROSSING_SCAN_WORK`] in total, each point counted with the
+    /// 2 and 4 harmonics it needs at least (about 14 points of 42 levels,
+    /// 900 of 21, 10⁴ of 14).
     pub fn cw_odmr(&self, frequencies: &[f64], rabi: f64, pump: f64) -> Result<Vec<f64>> {
         if frequencies.len() > super::optics::MAX_ODMR_POINTS {
             return Err(QsoError::invalid(
                 "frequencies",
                 format!("at most {}", super::optics::MAX_ODMR_POINTS),
             ));
+        }
+        if rabi > 0.0 {
+            let m = self.dimension().pow(2);
+            self.check_scan(frequencies.len() as f64 * least_floquet_work(m))?;
         }
         crate::parallel::map_tasks(frequencies.len(), |k| {
             Ok(self
@@ -557,11 +649,11 @@ impl NuclearOpticalNv {
         step: f64,
     ) -> Result<(f64, f64, f64)> {
         let size = direction.iter().map(|x| x * x).sum::<f64>().sqrt();
-        if !(size.is_finite() && size > 0.0 && step.is_finite() && step > 0.0) {
-            return Err(QsoError::invalid(
-                "direction",
-                "a finite nonzero direction and a positive step",
-            ));
+        if !(size.is_finite() && size > 0.0) {
+            return Err(QsoError::invalid("direction", "a finite nonzero direction"));
+        }
+        if !(step.is_finite() && step > 0.0) {
+            return Err(QsoError::invalid("step", "a positive finite step (T)"));
         }
         let at = |sign: f64| -> Result<f64> {
             let mut nv = self.clone();
@@ -606,7 +698,7 @@ fn floquet(l0: &CMatrix, v: &CMatrix, omega: f64, harmonics: usize, n: usize) ->
         a[(0, k + n * k)] = C64::new(1.0, 0.0);
     }
     rhs[0] = C64::new(1.0, 0.0);
-    let x = a.full_piv_lu().solve(&rhs).ok_or_else(refuse)?;
+    let x = super::optics::solve_unique(a, &rhs).ok_or_else(refuse)?;
     let rho = CMatrix::from_fn(n, n, |r, c| x[r + n * c]);
     if rho.iter().any(|z| !z.is_finite()) {
         return Err(refuse());

@@ -849,7 +849,11 @@ hyperfine tensors are built by Kronecker products, the singlet carries
 the nuclear terms alone, and every jump is the electron's tensored with
 the identity on the nuclei, so no eigenbasis is needed. The Lindblad
 generator is assembled by `optics::Lindblad` as before and solved for
-its steady state. A microwave is kept in the laboratory frame: with `L₀`
+its steady state by a full-pivot LU with the trace in place of one
+equation; its smallest pivot against the largest tells a unique steady
+state (no less than about the slowest rate over the fastest frequency,
+3·10⁻¹¹ in the tests) from a kernel of several states (10⁻²⁰), and below
+10⁻¹⁴ the state is refused. A microwave is kept in the laboratory frame: with `L₀`
 the undriven generator and `V` half the drive's commutator, the periodic
 steady state's harmonics satisfy `(L₀ − ikω) ρ_k + V(ρ_{k−1} + ρ_{k+1}) =
 0`. A matrix continued fraction from `R_{K+1} = 0` gives `ρ_k = R_k
@@ -858,7 +862,10 @@ the negative side follows from `ρ_{−k} = ρ_k†`, which on vectors `r + n c`
 reads `R_{−1} = P conj(R₁) P` with `P` the transposition; `ρ₀` solves
 `(L₀ + V(R₁ + R₋₁)) ρ₀ = 0` with the trace. `K` starts at 2 and doubles
 until `ρ₀` moves by less than 10⁻¹⁰ of itself, up to 64; the work of
-`K` LUs is checked before each round.
+the rounds so far and the next (about `24 K m³` and a full-pivot LU per
+round, the first check counting the second round too) is checked before
+each round, and scans count their points against eight times that
+limit.
 
 The ¹³C bath (`spin/nv/bath.rs`) works with ideal pulses only, so the
 electron is in one of two levels at any moment. A sequence is parsed into

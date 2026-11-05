@@ -136,7 +136,7 @@ pub use nv::{
 };
 pub use redfield::{Interaction, MU0_OVER_4PI, ModelFree, axial_csa, axial_diffusion};
 
-/// The optical cycle of an NV centre and magnetometer sensitivity.
+/// An NV centre with its nuclei at the level anticrossings.
 pub use nv::anticrossing;
 pub use nv::anticrossing::{AnticrossingState, NuclearOpticalNv, NuclearSpin};
 /// The nuclear-spin bath of an NV centre (cluster-correlation expansion).
@@ -148,6 +148,7 @@ pub use nv::generalised;
 pub use nv::generalised::{
     FullSpin, GeneralisedBath, GeneralisedCce, Pulses, generalised_ensemble_signal,
 };
+/// The optical cycle of an NV centre and magnetometer sensitivity.
 pub use nv::optics;
 pub use nv::optics::{OpticalNv, Photophysics, TwoLevelOdmr};
 

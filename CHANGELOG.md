@@ -21,9 +21,12 @@ All notable changes to this project are documented here. The format follows
   polarised to 0.95 at the excited-state anticrossing with Gupta's rates
   (0.81 with Tetienne's, whose singlet returns to `m_s = ±1` almost as
   often as to 0); 20 μT across the axis dim the ground-state
-  anticrossing by 17 %, 3.8 μT/√Hz at 1 % collection; near it a 15 MHz
+  anticrossing by 17 %, 3.9 μT/√Hz at 1 % collection; near it a 15 MHz
   microwave shifts its 20 MHz line by 3 MHz (Bloch–Siegert), which the
-  rotating-wave model misses.
+  rotating-wave model misses. A steady state that is not unique (a
+  nucleus that neither relaxes nor is flipped by its couplings) is
+  refused, and scans are bounded in their total work
+  (`anticrossing::MAX_ANTICROSSING_SCAN_WORK`).
 
 - **Reactions of two spin-carrying reactants** (1.59, `spin::Route`,
   `Reactions::add_routed_reaction`, `Reactions::routes`, Python

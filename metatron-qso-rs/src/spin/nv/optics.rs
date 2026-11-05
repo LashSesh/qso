@@ -119,17 +119,18 @@ impl Photophysics {
     /// The rates of Gupta et al. (J. Opt. Soc. Am. B 33, B28 (2016)) as
     /// Duarte et al. tabulate them for a seven-level model (Phys. Rev. B
     /// 103, 195443 (2021), model 4): `k_r` = 67.4, `k₄₇` = 9.9, `k₅₇` =
-    /// 91.6, `k₇₁` = 4.83, `k₇₂` = 1.06 μs⁻¹. The singlet returns to
-    /// `m_s = 0` far more often than in [`Photophysics::tetienne`], which
-    /// polarises the electron (0.95 for a weak laser against 0.75) and so
-    /// the nuclei at the excited-state anticrossing.
+    /// 91.6, `k₇₁` = 4.83, `k₇₂` = 1.055 μs⁻¹ (their 2.11 for both
+    /// `m_s = ±1`). The singlet returns to `m_s = 0` far more often than in
+    /// [`Photophysics::tetienne`], which polarises the electron (0.91 for a
+    /// weak laser without spin-lattice relaxation, against 0.75) and so the
+    /// nuclei at the excited-state anticrossing.
     pub fn gupta() -> Self {
         Photophysics {
             radiative: 67.4e6,
             isc_zero: 9.9e6,
             isc_plus_minus: 91.6e6,
             singlet_zero: 4.83e6,
-            singlet_plus_minus: 1.06e6,
+            singlet_plus_minus: 1.055e6,
         }
     }
 }
@@ -204,7 +205,7 @@ impl Lindblad {
         }
         rhs[0] = C64::new(1.0, 0.0);
         let refuse = || QsoError::invalid("model", "the optical cycle has no unique steady state");
-        let x = m.full_piv_lu().solve(&rhs).ok_or_else(refuse)?;
+        let x = solve_unique(m, &rhs).ok_or_else(refuse)?;
         let rho = CMatrix::from_fn(n, n, |r, c| x[r + n * c]);
         // A singular system can slip through the pivoting: the result must
         // be a state.
@@ -213,6 +214,39 @@ impl Lindblad {
         }
         Ok(rho)
     }
+}
+
+/// The smallest pivot of the full-pivot LU of a steady-state system,
+/// relative to the largest, below which the steady state counts as not
+/// unique. A kernel of `L` with more than one state leaves, after the trace
+/// row replaces one equation, a pivot at rounding level (`1e-20` of the
+/// largest for a nucleus without couplings or relaxation); a unique one
+/// keeps about its slowest rate over the fastest frequency (`1e-10` for a
+/// nuclear relaxation of 1/s against the gigahertz of the electron, `3e-11`
+/// the smallest among the tests).
+pub(super) const UNIQUE_PIVOT: f64 = 1e-14;
+
+/// `a x = rhs` by a full-pivot LU, or `None` if a pivot falls below
+/// [`UNIQUE_PIVOT`] of the largest.
+pub(super) fn solve_unique(
+    a: CMatrix,
+    rhs: &nalgebra::DVector<C64>,
+) -> Option<nalgebra::DVector<C64>> {
+    let lu = a.full_piv_lu();
+    let u = lu.u();
+    let (mut low, mut high) = (f64::INFINITY, 0.0_f64);
+    for i in 0..u.nrows().min(u.ncols()) {
+        let p = u[(i, i)].norm();
+        if !p.is_finite() {
+            return None;
+        }
+        low = low.min(p);
+        high = high.max(p);
+    }
+    if low <= UNIQUE_PIVOT * high {
+        return None;
+    }
+    lu.solve(rhs)
 }
 
 /// `|vector component|²` of each eigenvector (column) of `v` on each basis

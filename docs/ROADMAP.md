@@ -6459,10 +6459,12 @@ Delivered in `spin/nv/anticrossing.rs` (with `Photophysics::gupta` in
   carries those alone), the jumps of Tetienne et al. acting on the
   electron, and a nuclear relaxation `Γ_n` in every level. Its defaults
   are the literature's (¹⁵N: 3.03 and 3.65 MHz in the ground state, an
-  isotropic 60 MHz excited; ¹⁴N: −2.14, −2.70 and −4.945 MHz, an
-  isotropic −40 MHz excited), the tensors replaceable;
+  isotropic 60 MHz excited, whose sign is not measured; ¹⁴N: −2.14,
+  −2.70 and −4.945 MHz, and `A_∥` = −40, `A_⊥` = −23 MHz excited as
+  Poggiali et al. measure), the tensors replaceable;
   `Photophysics::gupta` adds the rates of Gupta et al. as Duarte et al.
-  tabulate them.
+  tabulate them. A steady state that is not unique (a nucleus that
+  neither relaxes nor flips) is refused by the pivots of its system.
 - **Without the rotating-wave approximation.** A microwave
   `√2·2πΩ cos(2πft) S_x` stays in the laboratory frame: the periodic
   steady state's harmonics are solved by a matrix continued fraction
@@ -6496,7 +6498,7 @@ Changes to the plan:
 Not done, and why:
 
 - **Larger nuclear systems.** The generator is dense in Liouville space:
-  42 levels (¹⁴N and ¹³C) take 10 s for a steady state and 210 s with a
+  42 levels (¹⁴N and ¹³C) take 9 s for a steady state and 230 s with a
   microwave; a second ¹³C (84 levels, 7056 elements) does not fit.
 - **Ensembles and misalignment averages** are left to the caller
   (`field_scan` over fields).
@@ -6512,31 +6514,31 @@ Measured (four cores, release build; 1 % collection):
 
   | Rates, couplings | 20 mT | 35 mT | 44 mT | 51 mT | 70 mT | 100 mT |
   |---|---|---|---|---|---|---|
-  | Gupta, Duarte's | 0.639 | 0.883 | 0.939 | 0.952 | 0.910 | 0.871 |
-  | Gupta, Jacques's isotropic 60 MHz | 0.657 | 0.894 | 0.943 | 0.950 | 0.897 | 0.833 |
+  | Gupta, Duarte's | 0.639 | 0.883 | 0.940 | 0.952 | 0.910 | 0.871 |
+  | Gupta, Jacques's isotropic 60 MHz | 0.658 | 0.894 | 0.943 | 0.950 | 0.897 | 0.833 |
   | Tetienne, Duarte's | 0.543 | 0.751 | 0.799 | 0.809 | 0.773 | 0.699 |
 
   Jacques et al. measured 0.98 at 50 mT and 0.95 at 44 mT; ¹⁴N with
-  Gupta's rates reaches 0.974 at 51 mT. At 70 μs⁻¹ the polarisation
+  Gupta's rates reaches 0.975 at 51 mT. At 70 μs⁻¹ the polarisation
   moves by less than 0.003.
 - **The ground-state anticrossing** with ¹⁴N (pump 0.1 `k_r`): exactly
   along the axis no dip, since the nucleus keeps the crossing partners
   `|0, m⟩` and `|−1, m + 1⟩` equally populated over a millitesla around
   it. Across the axis:
 
-  | Across | Dip | Width | Best `√R/|∂R/∂B|` |
+  | Across | Dip | Width | `√R/|∂R/∂B|` where steepest |
   |---|---|---|---|
-  | 20 μT | 17.0 % | 180 μT | 3.8 μT/√Hz |
-  | 50 μT | 24.5 % | 360 μT | 5.1 μT/√Hz |
-  | 100 μT | 25.2 % | 630 μT | 8.3 μT/√Hz |
-  | 200 μT | 21.9 % | 970 μT | 16 μT/√Hz |
+  | 20 μT | 17.1 % | 180 μT | 3.9 μT/√Hz |
+  | 50 μT | 24.6 % | 360 μT | 5.2 μT/√Hz |
+  | 100 μT | 25.3 % | 630 μT | 8.5 μT/√Hz |
+  | 200 μT | 21.9 % | 970 μT | 17 μT/√Hz |
 
 - **The microwave near the ground-state anticrossing** (101.7 mT, the
   line at 19.86 MHz, Ω = 15 MHz): the dip lies at 22.9 MHz in the
   laboratory frame and at 19.9 MHz in the rotating-wave model, the
-  Bloch–Siegert shift `Ω²/4f` ≈ 2.8 MHz; 61 points take 32 s.
-- **Cost:** steady states of 14, 21 and 42 levels take 0.01, 0.1 and
-  9.6 s, with a microwave (four harmonics) 0.3, 2.7 and 208 s.
+  Bloch–Siegert shift `Ω²/4f` ≈ 2.8 MHz; 61 points take 21 s.
+- **Cost:** steady states of 14, 21 and 42 levels take 0.01, 0.11 and
+  8.6 s, with a microwave (four harmonics) 0.25, 2.8 and 228 s.
 
 Validation: decoupled nuclei (no hyperfine coupling) leave the
 fluorescence of 1.40 to 10⁻¹⁰ at 5 mT, 20 mT tilted, 51 and 102.4 mT
@@ -6554,6 +6556,60 @@ at 51 mT, independent of the laser to 0.005 (Duarte et al.: about 0.95),
 and 0.81 with Tetienne's; 0.1 mT across the axis dims the ground-state
 anticrossing by more than 20 %, and nothing changes along it. Inputs are
 checked and survive JSON.
+
+Review (independent, after delivery): the operators and their order,
+the signs of the Zeeman and hyperfine terms, the anticrossing fields
+(102.41 and 50.67 mT), the nuclear relaxation, the continued fraction
+(its recursion, `R₋₁` by conjugation, the trace row) and Gupta's rates
+were found right. An independent NumPy model agreed with the steady
+states to 10⁻¹² of the fluorescence and 3·10⁻¹¹ of the state in 22
+cases (¹⁵N from 5 to 102.4 mT, tilted, three sets of couplings and
+rates, ¹⁴N, ¹⁴N and ¹³C with random tensors), and the Floquet solution
+with the whole truncated system solved at once and with the period's
+map to 10⁻¹³ to 10⁻¹⁶, from 1 Hz to the line at 20 MHz and at a
+three-photon resonance. Findings, all fixed:
+
+- **A steady state that is not unique came back silently.** Without
+  couplings that flip the nucleus and without `Γ_n` (zero tensors, or
+  `A_∥` alone along the axis, as for a ¹³C left at zero) every
+  population of the nucleus is stationary, and the solve returned one of
+  them, polarisation 1. The smallest pivot of the full-pivot LU, against
+  the largest, now decides: such cases give 10⁻²⁰, unique ones no less
+  than 3·10⁻¹¹ (a nuclear relaxation of 1/s against gigahertz:
+  10⁻¹⁰), and below 10⁻¹⁴ the steady state (also 1.40's and the
+  periodic one) is refused; a test covers both kinds.
+- **The ¹⁴N excited coupling contradicted its source.** Poggiali et al.
+  measure `A_⊥` = −23 ± 3 MHz and find an isotropic −40 MHz does not
+  fit; the default is now `A_∥` = −40, `A_⊥` = −23 MHz. With it (and
+  `k₇₂` below) ¹⁴N's polarisation moves from 0.974 to 0.975 at 51 mT
+  and from 0.911 to 0.931 at 100 mT, the flip-flop rate with `A_⊥²`;
+  the numbers above are measured again.
+- **Citations and constants.** `P` = −4.945 MHz is Doherty et al.'s
+  (Felton et al. give −5.01); the sign of ¹⁵N's excited coupling is not
+  measured (Fuchs et al.: 61 ± 6 MHz), now stated with the difference
+  Duarte et al.'s opposite sign makes (0.951 against 0.948 at 51 mT,
+  0.871 against 0.833 at 100 mT); Gupta's rates polarise the electron
+  to 0.91 for a weak laser, not 0.95; `k₇₂` is Duarte et al.'s 2.11/2 =
+  1.055 μs⁻¹.
+- **The field sensitivity at the ground-state anticrossing** combined
+  the rate at the bottom of the dip with the slope at the steepest
+  point, 2 to 4 % optimistic; it is now `field_sensitivity` at the
+  steepest point (3.9 instead of 3.8 μT/√Hz at 20 μT across the axis,
+  8.5 instead of 8.3 at 100 μT).
+- **The work of the microwave** was estimated at 12 m³ per harmonic;
+  each harmonic costs about 24 m³ (an LU, an m-column solve and `V R` in
+  complex arithmetic) and every round a full-pivot LU, and 42 levels at
+  20 MHz ran 447 s before a refusal. The estimate now counts these and
+  all rounds so far, with the next round at the start; `cw_odmr` and
+  `field_scan` have a total of eight single limits
+  (`MAX_ANTICROSSING_SCAN_WORK`: about 14 microwave points of 42
+  levels, 550 steady states without one), and the refusal advises a
+  weaker drive or a higher frequency.
+- **Smaller ones**: `fluorescence` returns a result and it and the
+  nuclear polarisations refuse a state of the wrong size, an invalid
+  `step` is reported as such, a doc line in `spin` was back in its place,
+  and the docs state that the excited triplet has no dephasing of its
+  own and that the microwave acts on the ground triplet only.
 
 ### 1.61 — Error models of long experiments, windows in parallel (M)
 
