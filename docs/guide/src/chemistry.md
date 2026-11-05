@@ -209,17 +209,30 @@ molecules a `HartreeFock` gives three references, each with the lowest
 - **`mp2(frozen)`**: second-order Møller–Plesset energies in the
   canonical orbitals of RHF or UHF, with their same-spin and
   opposite-spin parts. ROHF of an open shell has no canonical orbitals
-  and is refused.
+  and is refused, as is a Hartree–Fock calculation whose Fock matrix
+  keeps off-diagonal elements above 10⁻⁶ Ha (`CANONICAL_TOLERANCE`; the
+  default convergence leaves about 10⁻⁸): MP2 moves with the orbitals at
+  first order.
 - **`ccsd(frozen)`**: coupled-cluster singles and doubles. A closed shell
   in restricted orbitals is solved in spatial orbitals; UHF and ROHF of
   open shells in spin orbitals, with the equations of Stanton, Gauss,
   Watts and Bartlett, which take the whole Fock matrix and so hold for
   ROHF's orbitals too. The amplitudes start from MP2's and are iterated
-  with DIIS (`diis_space` amplitude vectors) until the energy changes by
-  less than `energy_tolerance` (10⁻¹⁰ Ha) and the amplitudes by less than
-  `amplitude_tolerance` (10⁻⁸, the norm of the step). The T1 diagnostic
-  of Lee and Taylor, `√(Σ (t_i^a)² / N)` over `N` correlated electrons,
-  flags references that CCSD describes poorly (above about 0.02).
+  with DIIS over the last `diis_space` steps (8; fewer than two switch it
+  off; the first step is left out, as PySCF does) until the energy
+  changes by less than `energy_tolerance` (10⁻¹⁰ Ha) and the amplitudes
+  by less than `amplitude_tolerance` (10⁻⁸, the norm of the step), within
+  `max_iterations` (200, at least 2). Stretched bonds converge (N₂ at
+  2.2 Å in 6-31G: 35 iterations, PySCF 46); where CCSD itself breaks down
+  the result may not be the physical solution (N₂ at 2.4 Å in cc-pVDZ:
+  PySCF does not converge in 200 iterations, QSO ends 0.29 Ha below
+  PySCF's last iterate). The T1 diagnostic of Lee and Taylor,
+  `√(Σ (t_i^a)² / N)` over `N` correlated electrons, flags closed shells
+  that CCSD describes poorly (above about 0.02). Open shells use the same
+  formula over the spin-orbital amplitudes, not the open-shell
+  diagnostic of Jayatilaka and Lee; ROHF's singles carry the relaxation
+  of its restricted orbitals, so its value is about twice UHF's (the B
+  atom in cc-pVDZ: 0.021 against 0.011) and the 0.02 rule does not apply.
 - **`ccsd_t(frozen)`**: CCSD and the perturbative triples (T) of
   Raghavachari et al., for canonical references: RHF of a closed shell or
   UHF. ROHF of an open shell would need semicanonical orbitals and is
@@ -251,14 +264,14 @@ one thread. Measured in cc-pVDZ (release build; CCSD to 10⁻¹⁰ Ha):
 
 | Molecule | Functions | Reference | CCSD (iterations) | (T) | Peak memory |
 |---|---|---|---|---|---|
-| H₂O, one frozen | 24 | RHF | 0.08 s (13) | 0.05 s | 0.11 GB |
-| propyne, three frozen | 62 | RHF | 6.6 s (15) | 8.9 s | 0.57 GB |
-| triplet O₂, two frozen | 28 | UHF | 3.4 s (15) | 0.33 s | 0.25 GB |
-| C₂H₄⁺, 96 spin orbitals | 48 | UHF | 66 s (15) | 10.8 s | 1.65 GB |
+| H₂O, one frozen | 24 | RHF | 0.06 s (13) | 0.02 s | 0.03 GB |
+| propyne, three frozen | 62 | RHF | 6.3 s (16) | 5.1 s | 0.48 GB |
+| triplet O₂, two frozen | 28 | UHF | 3.2 s (15) | 0.4 s | 0.18 GB |
+| C₂H₄⁺, 96 spin orbitals | 48 | UHF | 52 s (14) | 7.9 s | 1.55 GB |
 
-PySCF is faster: 2.3 times per closed-shell iteration on one core, 11 to
-15 times per open-shell one, since its UCCSD works in spin blocks and
-packs antisymmetric pairs (ROADMAP, 1.62).
+PySCF is faster: 1.6 to 2 times per closed-shell iteration on one core,
+6 to 12 times per open-shell one, since its UCCSD works in spin blocks
+and packs antisymmetric pairs (ROADMAP, 1.62).
 
 The tests and the cross-validation compare with PySCF 2.14 (`mp.MP2`,
 `cc.CCSD`, `ccsd_t` and `uccsd_t`):
@@ -266,14 +279,18 @@ The tests and the cross-validation compare with PySCF 2.14 (`mp.MP2`,
 - MP2, CCSD and (T) of water, LiH and N₂ in STO-3G, 6-31G and cc-pVDZ,
   with and without frozen cores, UHF MP2, CCSD and (T) and ROHF CCSD of
   OH (6-31G, cc-pVDZ), NH₂ (6-31G*) and triplet O₂ (cc-pVDZ, two frozen
-  orbitals) agree to 2.3·10⁻¹⁰ Ha, the T1 diagnostics of the closed
-  shells to 3.4·10⁻⁹ (the tests hold them to 10⁻⁸).
-- The cross-validation adds water (6-31G*), NH₃ and CO (cc-pVDZ), HF
-  (6-31G*), HCl (6-31G, five frozen orbitals) and, in UHF and ROHF,
-  triplet CH₂ and NO (6-31G): the largest difference is 2.1·10⁻¹⁰ Ha.
+  orbitals), 34 cases, agree to 1.7·10⁻¹⁰ Ha, the T1 diagnostics of the
+  closed shells to 1.2·10⁻⁹ (the tests hold them to 10⁻⁸). The MP2
+  same-spin and opposite-spin parts agree with PySCF's `e_corr_ss` and
+  `e_corr_os` to 10⁻⁹ Ha, and stretched N₂ (2.2 Å) to 10⁻⁸.
+- The cross-validation adds nine cases: water (6-31G*), NH₃ and CO
+  (cc-pVDZ), HF (6-31G*), HCl (6-31G, five frozen orbitals) and, in UHF
+  and ROHF, triplet CH₂ and NO (6-31G). The largest difference is
+  2.1·10⁻¹⁰ Ha.
   MP2 depends on the orbitals at first order: PySCF's UHF of NO stops
   unconverged after its default 50 cycles, and its MP2 is then 7·10⁻⁹ Ha
-  off, so the comparison lets it run to 10⁻¹⁰ in the gradient.
+  off, so the comparison lets it run to 10⁻¹⁰ in the gradient and checks
+  that its SCF and CCSD converged.
 - CCSD is full CI for two electrons (H₂ in 6-31G and cc-pVDZ, HeH⁺) to
   10⁻⁹ Ha, from RHF and UHF, and (T) vanishes there.
 - Two N₂ molecules 100 Å apart (STO-3G) have twice the correlation

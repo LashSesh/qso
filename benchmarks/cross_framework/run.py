@@ -1014,6 +1014,7 @@ def chemistry_vs_pyscf() -> dict:
         energy_err = max(energy_err, abs(ours.energy - mf.e_tot))
         pyscf_cc = cc.CCSD(mf).set(frozen=frozen or None, conv_tol=1e-12, conv_tol_normt=1e-10, max_cycle=200)
         pyscf_cc.kernel()
+        assert pyscf_cc.converged, (atoms, kind)
         if kind == "rohf":
             mine = ours.ccsd(frozen)
             correlation_err = max(correlation_err, abs(mine["correlation"] - pyscf_cc.e_corr))

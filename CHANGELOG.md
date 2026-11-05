@@ -15,12 +15,13 @@ All notable changes to this project are documented here. The format follows
   its same-spin and opposite-spin parts; CCSD in spatial orbitals for
   closed shells and in spin orbitals for UHF and ROHF (Stanton–Gauss
   equations with the whole Fock matrix), Jacobi steps with DIIS and the
-  T1 diagnostic; (T) for closed shells and UHF; frozen cores. Equal to
-  PySCF's MP2, CCSD, `ccsd_t` and `uccsd_t` to 2.3·10⁻¹⁰ Ha on 45
-  closed- and open-shell cases (water, LiH, N₂, OH, NH₂, O₂ in the tests;
-  HF, HCl, NH₃, CO, CH₂, NO in the cross-validation); CCSD equal to full
-  CI for two electrons; size-consistent to 10⁻⁹ Ha. Propyne in cc-pVDZ
-  (62 functions): CCSD(T) in 16 s on one core.
+  T1 diagnostic; (T) for closed shells and UHF; frozen cores; MP2 and
+  (T) refuse orbitals that are not canonical (`CANONICAL_TOLERANCE`).
+  Equal to PySCF's MP2, CCSD, `ccsd_t` and `uccsd_t` to 2.1·10⁻¹⁰ Ha on
+  43 closed- and open-shell cases (water, LiH, N₂, OH, NH₂, O₂ in the
+  tests; water, HF, HCl, NH₃, CO, CH₂, NO in the cross-validation); CCSD
+  equal to full CI for two electrons; size-consistent to 10⁻⁹ Ha. Propyne in cc-pVDZ
+  (62 functions): CCSD(T) in 12 s on one core.
 
 - **Error models of long experiments, windows in parallel** (1.61,
   `qec::RepeatedCircuit`, `repetition_code_memory_repeated`,

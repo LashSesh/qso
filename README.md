@@ -147,7 +147,7 @@ or by the benchmark report you can run yourself.
 | Hartree–Fock of H₂O from its geometry (6-31G), and full CI with a frozen core in 8 orbitals | −75.98397447 / −76.02472563 Ha | PySCF RHF and CASCI, to 10⁻¹⁰ / 10⁻⁹ Ha |
 | Unrestricted Hartree–Fock of OH (6-31G) | −75.36316825 Ha, ⟨S²⟩ = 0.75377 | PySCF UHF, to 10⁻¹⁰ Ha |
 | Hartree–Fock with d functions: H₂O / HCl / H₂S (cc-pVDZ); ROHF of triplet O₂ (cc-pVDZ) and CASCI in its orbitals (12 electrons, 8 orbitals) | −76.02677205 / −460.08944519 / −398.69453740; −149.60808447, −149.68777966 Ha | PySCF RHF, ROHF and CASCI, to 10⁻⁹ Ha |
-| MP2, CCSD and (T) correlation of H₂O in cc-pVDZ with a frozen core | −0.20166598 / −0.21123266 / −0.00303649 Ha | PySCF `MP2`, `CCSD`, `ccsd_t`, to 10⁻⁸ Ha (measured 2.3·10⁻¹⁰ over 36 closed- and open-shell cases, 2.1·10⁻¹⁰ over 9 more in the cross-validation) |
+| MP2, CCSD and (T) correlation of H₂O in cc-pVDZ with a frozen core | −0.20166598 / −0.21123266 / −0.00303649 Ha | PySCF `MP2`, `CCSD`, `ccsd_t`, to 10⁻⁸ Ha (measured 1.7·10⁻¹⁰ over 34 closed- and open-shell cases, 2.1·10⁻¹⁰ over 9 more in the cross-validation) |
 | UHF CCSD and (T), ROHF CCSD of OH (6-31G) | −0.09882769, −0.00055750; −0.10014819 Ha | PySCF `UCCSD`, `uccsd_t`, to 10⁻⁸ Ha |
 | CCSD of two electrons (H₂, HeH⁺) | equal to full CI | to 10⁻⁹ Ha, (T) vanishing |
 | Gaussian integrals with d shells (6-31G*, cc-pVDZ, spherical and Cartesian) of H₂O, NH₃, CO, F₂, HCl, H₂S, SiH₄ and NaF; f and g shells in a custom basis | every integral to 2.6·10⁻¹³; f and g: PySCF's fingerprints to 10⁻¹⁰ | PySCF 2.14 |

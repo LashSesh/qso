@@ -1040,16 +1040,22 @@ Fock matrix and so take ROHF's non-canonical orbitals. In spin orbitals
 the antisymmetrised integrals ⟨pq‖rs⟩ are kept once, with three blocks
 copied out as matrices (vvvv, oovv, vovv), and the costly terms are
 matrix products: the particle–particle ladder is `τ · ⟨ab‖ef⟩ᵀ` plus the
-hole–hole term `¼ (τ · ⟨mn‖ef⟩ᵀ)ᵀ τ` and the singles' corrections
+hole–hole term `¼ (τ · ⟨mn‖ef⟩ᵀ) τ` and the singles' corrections
 through `τ · ⟨am‖ef⟩`, so the four-virtual intermediate W_abef is never
-built; W_mbej is a product of reshaped amplitudes and integrals. Each
+built; W_mbej is a product of reshaped amplitudes and integrals. In
+spatial orbitals W_voov and W_vovo get their parts over (l, d) from
+products of reshaped amplitudes with (ld|kc) and (lc|kd), their
+contractions with t₂ are two more products, and the singles terms of
+W_vvvv come from t₁ᵀ times the (k × dac) block of (ov|vv). Each
 Jacobi step divides the residual by the orbital-energy denominators
 (the diagonal of the Fock matrix for ROHF) and DIIS extrapolates from the
-last `diis_space` amplitude vectors with their changes as errors. The
+last `diis_space` amplitude vectors with their changes as errors,
+leaving out the first step from the MP2 amplitudes as PySCF does (with
+it, N₂ at 2.2 Å stalled). The
 closed-shell (T) loops over every triple (i, j, k) of occupied orbitals
-and builds W from its six pair permutations, the particle term of each a
-matrix product over the virtual index d (the form of Rendell, Lee and
-Komornicki); the spin-orbital (T) loops over i < j < k, with the
+and builds W from its six pair permutations, the particle and hole terms
+of each a matrix product (over the virtual index d and the occupied index
+l; the form of Rendell, Lee and Komornicki); the spin-orbital (T) loops over i < j < k, with the
 connected triples as matrix products and a < b < c summed with the
 disconnected part.
 

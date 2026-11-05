@@ -57,7 +57,7 @@ which withdraws the results of version 1.
 | Boson sampling | exact probabilities and exact sampling (1.1); partial distinguishability, loss and Gaussian boson sampling with hafnians and torontonians (1.14) | mixed Gaussian states with many photons spread over many modes are impractical (10¹² operations at 20 photons in 10 modes) |
 | Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4); slow noise from Markov processes (telegraph, Ornstein–Uhlenbeck, quasi-static, 1/f) averaged exactly on density matrices (1.44) | noise learning for layers of two-qubit Clifford gates only, on density matrices up to 10 qubits and Pauli frames up to 64 (1.12, 1.31), with non-Pauli channels twirled one at a time; mitigation with the learned model above 24 qubits only on matrix-product states, for channels that are mixtures of unitaries (1.31); no leakage; channels on at most four qubits (1.30); slow noise averaged exactly up to 12 qubits and processes with finitely many states (1.44), sampled on trajectories beyond (1.30); virtual distillation (1.17) mitigates only its measured copies' preparation |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18); interacting bosons, fermions and distinguishable particles with certificates for graph isomorphism (1.29); symmetry for driven walks, open walks on orbitals, coined walks with dephasing, hypercubes with dephasing up to d = 230 (1.38); interacting walkers on the orbits of automorphisms (three bosons on Q₉: 2284 orbits of 22.5 million configurations) and up to four particles on hypercubes (1.43); open walks on large symmetric graphs from point stabilisers (Q₁₈, H(4, 10), J(24, 4); 1.48); interacting walkers on Hamming, Johnson and Kneser graphs from canonical forms (1.53) and on any graph from minimal images under a group (three fermions on Paley(3209): 1068 orbits of 5.5·10⁹ configurations; 1.58) | interacting walkers without symmetry stop at 2²² configurations, and dense graphs with small groups stay dense on their orbits (three bosons from one node of Paley(809) exceed 2²⁶ entries; 1.58); open walks beyond 8192 nodes need a start whose stabiliser leaves few orbitals (dense graphs and circulants stay at 8192 nodes; 1.48); pretty good transfer on other graphs has no exact reference |
-| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); MP2, CCSD and CCSD(T) with frozen cores, closed shells in spatial orbitals and UHF and ROHF in spin orbitals, equal to PySCF's to 2.3·10⁻¹⁰ Ha (1.62); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37); the ¹³C bath of an NV centre by the cluster-correlation expansion (1.39); the optical cycle, ODMR, pulsed readout and magnetometer sensitivity in fields of any direction, and ensembles (1.40); sparse relaxation blocks propagated by Krylov steps, Redfield relaxation from sparse terms and equivalent spins: seven and eight relaxing protons for seconds (1.41); optimal control with relaxation on sparse blocks and on the orbits of equivalent spins, seven and eight spins (1.46); Redfield relaxation with anisotropic diffusion and model-free internal motion (1.49); reaction kinetics with spins: PASADENA, ALTADENA and SABRE as they run (1.50); field profiles with relaxation beyond six spins, the relaxation interpolated over the field (1.51); exchange and reactions on sparse blocks with iterative steady states and field profiles: SABRE with nine spins in the complex beside seven in the substrate (1.54); reactions of two spin-carrying reactants, the product formed in the product of their states: SABRE whose complex keeps its hydrides and swaps them with a hydrogen pool, PHIP from a pool whose singlet decays (1.59); the optical cycle with the nitrogen and one ¹³C at the level anticrossings, ¹⁵N polarised to 0.95 at 51 mT, the fluorescence dip at 102.4 mT, a microwave in the laboratory frame by Floquet harmonics (1.60); Redfield relaxation applied without storing it, with its analytic field derivative: nine and ten relaxing spins whose superoperator would need 6 to 74 GB (1.55); product-formula bounds whose remainder runs over the terms that do not commute, the error averaged over states, and step counts for a target error: half the steps of the bounds of Childs et al. for Heisenberg chains of 10 to 64 spins (1.56) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); coupled cluster holds every integral (64 basis functions, 100 correlated spin orbitals: 1.65 GB at 96) and runs on one thread, 2.3 times PySCF's time per closed-shell iteration and 11 to 15 times per open-shell one; no (T) for ROHF (1.62); the commutator bound of product formulas (1.56) still sums its remainder by the triangle inequality, about 2.3 times the empirical step counts of Heisenberg chains and loose at few steps and order 6, where its budget stops the degree early; Redfield relaxation takes rigid-body diffusion and model-free internal motion, not correlated motions of groups (1.49), and propagations beyond 1.5·10¹² operations or 2 GiB are refused (eleven protons with dipolar relaxation, nine for 100 s; 1.41); chemical exchange and reaction kinetics take Krylov steps beyond 2048 elements per block (1.54), unaffordable in the laboratory frame at millitesla fields and more; reactants meet uncorrelated (no cage effects), and a reaction whose partner's amount changes takes steps that resolve the frequencies of the blocks it feeds (PHIP at 1 µT with a three-spin product: 2 s of reaction in 2 s, 9 s with the hydrogen a pool with spins; a four-spin product at 5 µT over 3 s exceeds the work limit; 1.50, 1.59); field profiles with relaxation hold the relaxation at up to 33 fields (1.51), or apply Redfield relaxation without storing it where those would not fit (1.55), where work bounds them (eight spins with dipolar relaxation: two steps over 0.02 s per evaluation within the limit), and have many local optima; an evaluation of eight relaxing spins takes tens of seconds (1.46); the NV bath of 1.39 takes ideal pulses only (finite ones: the generalised expansion, 1.45), its expansion can diverge (results beyond `|L| = 1` are refused), and the nuclei next to the vacancy need given contact couplings (1.39); the optical cycle with nuclei is dense in Liouville space: 42 levels (¹⁴N and ¹³C) take 9 s for a steady state and 230 s with a microwave, and more nuclei do not fit (1.60) |
+| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); MP2, CCSD and CCSD(T) with frozen cores, closed shells in spatial orbitals and UHF and ROHF in spin orbitals, equal to PySCF's to 2.1·10⁻¹⁰ Ha (1.62); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37); the ¹³C bath of an NV centre by the cluster-correlation expansion (1.39); the optical cycle, ODMR, pulsed readout and magnetometer sensitivity in fields of any direction, and ensembles (1.40); sparse relaxation blocks propagated by Krylov steps, Redfield relaxation from sparse terms and equivalent spins: seven and eight relaxing protons for seconds (1.41); optimal control with relaxation on sparse blocks and on the orbits of equivalent spins, seven and eight spins (1.46); Redfield relaxation with anisotropic diffusion and model-free internal motion (1.49); reaction kinetics with spins: PASADENA, ALTADENA and SABRE as they run (1.50); field profiles with relaxation beyond six spins, the relaxation interpolated over the field (1.51); exchange and reactions on sparse blocks with iterative steady states and field profiles: SABRE with nine spins in the complex beside seven in the substrate (1.54); reactions of two spin-carrying reactants, the product formed in the product of their states: SABRE whose complex keeps its hydrides and swaps them with a hydrogen pool, PHIP from a pool whose singlet decays (1.59); the optical cycle with the nitrogen and one ¹³C at the level anticrossings, ¹⁵N polarised to 0.95 at 51 mT, the fluorescence dip at 102.4 mT, a microwave in the laboratory frame by Floquet harmonics (1.60); Redfield relaxation applied without storing it, with its analytic field derivative: nine and ten relaxing spins whose superoperator would need 6 to 74 GB (1.55); product-formula bounds whose remainder runs over the terms that do not commute, the error averaged over states, and step counts for a target error: half the steps of the bounds of Childs et al. for Heisenberg chains of 10 to 64 spins (1.56) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); coupled cluster holds every integral (64 basis functions, 100 correlated spin orbitals: 1.55 GB at 96) and runs on one thread, 1.6 to 2 times PySCF's time per closed-shell iteration and 6 to 12 times per open-shell one; no (T) for ROHF (1.62); the commutator bound of product formulas (1.56) still sums its remainder by the triangle inequality, about 2.3 times the empirical step counts of Heisenberg chains and loose at few steps and order 6, where its budget stops the degree early; Redfield relaxation takes rigid-body diffusion and model-free internal motion, not correlated motions of groups (1.49), and propagations beyond 1.5·10¹² operations or 2 GiB are refused (eleven protons with dipolar relaxation, nine for 100 s; 1.41); chemical exchange and reaction kinetics take Krylov steps beyond 2048 elements per block (1.54), unaffordable in the laboratory frame at millitesla fields and more; reactants meet uncorrelated (no cage effects), and a reaction whose partner's amount changes takes steps that resolve the frequencies of the blocks it feeds (PHIP at 1 µT with a three-spin product: 2 s of reaction in 2 s, 9 s with the hydrogen a pool with spins; a four-spin product at 5 µT over 3 s exceeds the work limit; 1.50, 1.59); field profiles with relaxation hold the relaxation at up to 33 fields (1.51), or apply Redfield relaxation without storing it where those would not fit (1.55), where work bounds them (eight spins with dipolar relaxation: two steps over 0.02 s per evaluation within the limit), and have many local optima; an evaluation of eight relaxing spins takes tens of seconds (1.46); the NV bath of 1.39 takes ideal pulses only (finite ones: the generalised expansion, 1.45), its expansion can diverge (results beyond `|L| = 1` are refused), and the nuclei next to the vacancy need given contact couplings (1.39); the optical cycle with nuclei is dense in Liouville space: 42 levels (¹⁴N and ¹³C) take 9 s for a steady state and 230 s with a microwave, and more nuclei do not fit (1.60) |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
 | Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22); exact circuit distances of any model by a parallel search or the Brouwer–Zimmermann enumeration, with the lightest logical error as circuit locations (1.42); the search on the orbits of an error model's symmetries: [[144, 12, 12]] over three rounds of the depth-8 cycle has circuit distance 10 (1.47); logical failure rates far below sampling by splitting, with their leading term (surface codes to 10⁻⁹, [[72, 12, 6]] to 10⁻¹³; 1.52); decoding in sliding windows of rounds by matching or BP+OSD, round by round, at constant time per round up to 4000 rounds (1.57); error models in one pass backwards, linear in the rounds; circuits that keep their repeated blocks, sampled as they run, their models folded: 10⁵ rounds of distance 5 in 1.4 s, equal to Stim's at 10⁴; windows decoded in parallel, 2 to 2.4 times as fast on four cores (1.61) | exact circuit distances need time exponential in the distance (each weight about 17 times the last on bicycle circuits); symmetries divide it by a factor that grows with their number (41 to 43 for 72); splitting needs a burn-in long enough, which its error does not show (1.52); the folded model is still expanded into all its errors (5.6 million, about 350 MB, for 10⁵ rounds of distance 5), and parallel windows gain 2 to 2.4 on four cores, as a shot's syndrome and commits stay on one thread (1.61) |
 | Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9), in the browser build too (1.25) | — |
@@ -6824,14 +6824,18 @@ Delivered in `chemistry/cc.rs` (`mp2`, `ccsd`, `ccsd_t`, `CcOptions`,
   whole Fock matrix and so hold for ROHF's non-canonical orbitals. The
   amplitudes start from MP2's, take Jacobi steps (the denominators from
   the diagonal of the Fock matrix) and are extrapolated by DIIS over the
-  last eight amplitude vectors, until the energy changes by less than
-  10⁻¹⁰ Ha and the amplitudes by less than 10⁻⁸; divergence and
-  non-convergence are errors. The result carries the T1 diagnostic of
-  Lee and Taylor.
+  last eight amplitude vectors (the first step left out, as in PySCF),
+  until the energy changes by less than 10⁻¹⁰ Ha and the amplitudes by
+  less than 10⁻⁸; divergence and non-convergence are errors. The result
+  carries the T1 diagnostic of Lee and Taylor.
 - **(T)** for canonical references: closed shells in spatial orbitals
   (the form of Rendell, Lee and Komornicki), UHF in spin orbitals.
 - **Frozen cores** for all three: the lowest `frozen` orbitals of each
   spin stay doubly occupied, as PySCF's `frozen=k` does.
+- **Canonical orbitals** for MP2 and (T): a Fock matrix with
+  off-diagonal elements above `CANONICAL_TOLERANCE` (10⁻⁶ Ha; Hartree–Fock
+  converged by default leaves about 10⁻⁸) is refused, ROHF of an open
+  shell too. CCSD takes any orbitals.
 - **Costs.** The integrals are transformed to the molecular orbitals in
   full, by four quarter transformations, each one or a few blocked
   matrix products. The costly terms of both CCSD forms (the particle and
@@ -6846,16 +6850,16 @@ Changes to the plan:
   the spin-orbital equations give UHF's (T) for the cost of one more
   function, and it agrees with PySCF's `uccsd_t` to 2·10⁻¹¹ Ha.
 - **More molecules.** The comparison with PySCF covers the plan's water,
-  LiH and N₂ in three bases in the tests, OH, NH₂ and O₂ in UHF and ROHF,
-  and nine more molecules (HF, HCl, NH₃, CO, triplet CH₂, NO) in the
-  cross-validation.
+  LiH and N₂ in three bases in the tests, OH, NH₂ and O₂ in UHF and ROHF
+  (34 cases), and nine more cases in the cross-validation (water in
+  6-31G*, HF, HCl, NH₃, CO, and triplet CH₂ and NO in UHF and ROHF).
 
 Not done, and why:
 
 - **(T) for ROHF.** It needs semicanonical orbitals and a choice among
   several open-shell (T) definitions; ROHF is refused there and for MP2.
-- **PySCF's speed.** On one core QSO takes 2.3 times PySCF's time per
-  closed-shell iteration at 62 functions and 11 to 15 times per
+- **PySCF's speed.** On one core QSO takes 1.6 to 2 times PySCF's time
+  per closed-shell iteration at 48 to 62 functions and 6 to 12 times per
   open-shell iteration: PySCF's UCCSD works in three spin blocks and packs the
   antisymmetric pairs, QSO's spin orbitals hold everything (a factor of
   about 4 to 8 in the ladder alone); its closed-shell (T) uses the
@@ -6871,31 +6875,34 @@ PySCF 2.14 on one thread at its default tolerances, 9 to 15 iterations):
 
 | Molecule | Functions | Reference | MP2 | CCSD (iterations) | (T) | Peak memory | PySCF CCSD / (T) |
 |---|---|---|---|---|---|---|---|
-| H₂O, one frozen | 24 | RHF | 0.01 s | 0.08 s (13) | 0.05 s | 0.11 GB | 0.10 / 0.03 s |
-| N₂, two frozen | 28 | RHF | 0.01 s | 0.11 s (13) | 0.12 s | 0.12 GB | 0.13 / 0.04 s |
-| C₂H₄, two frozen | 48 | RHF | 0.16 s | 1.5 s (15) | 1.5 s | 0.27 GB | 0.62 / 0.34 s |
-| propyne, three frozen | 62 | RHF | 0.40 s | 6.6 s (15) | 8.9 s | 0.57 GB | 1.9 / 1.3 s |
-| triplet O₂, two frozen | 28 | UHF | 0.01 s | 3.4 s (15) | 0.33 s | 0.25 GB | 0.35 / 0.18 s |
-| C₂H₃ (vinyl), two frozen | 43 | UHF | 0.18 s | 26.5 s (22) | 1.4 s | 0.90 GB | 1.6 / 1.0 s |
-| C₂H₄⁺, all electrons (96 spin orbitals) | 48 | UHF | 0.33 s | 66 s (15) | 10.8 s | 1.65 GB | 3.0 / 3.1 s |
+| H₂O, one frozen | 24 | RHF | 0.01 s | 0.06 s (13) | 0.02 s | 0.03 GB | 0.10 / 0.03 s |
+| N₂, two frozen | 28 | RHF | 0.01 s | 0.12 s (15) | 0.06 s | 0.04 GB | 0.13 / 0.04 s |
+| C₂H₄, two frozen | 48 | RHF | 0.11 s | 1.6 s (16) | 0.8 s | 0.18 GB | 0.62 / 0.34 s |
+| propyne, three frozen | 62 | RHF | 0.34 s | 6.3 s (16) | 5.1 s | 0.48 GB | 1.9 / 1.3 s |
+| triplet O₂, two frozen | 28 | UHF | 0.01 s | 3.2 s (15) | 0.4 s | 0.18 GB | 0.35 / 0.18 s |
+| C₂H₃ (vinyl), two frozen | 43 | UHF | 0.18 s | 24 s (22) | 0.4 s | 0.81 GB | 1.6 / 1.0 s |
+| C₂H₄⁺, all electrons (96 spin orbitals) | 48 | UHF | 0.33 s | 52 s (14) | 7.9 s | 1.55 GB | 3.0 / 3.1 s |
 
-The closed-shell terms as matrix products made propyne's CCSD 3.5 times
-faster (23 s before) and MP2 three times (1.24 s: nalgebra's `tr_mul`
-reads the whole tensor once per column instead of running a blocked
-product).
+Peak memory is that of the whole Python process (about 0.02 GB without
+a calculation). The closed-shell terms as matrix products made propyne's
+CCSD 3.6 times faster (23 s before), MP2 3.6 times (1.24 s: nalgebra's
+`tr_mul` reads the whole tensor once per column instead of running a
+blocked product) and (T) 1.7 times (8.9 s).
 
 Validation: MP2, CCSD and (T) of water, LiH and N₂ in STO-3G, 6-31G and
 cc-pVDZ, with and without frozen cores, the T1 diagnostics of these
 closed shells, UHF MP2, CCSD and (T) and ROHF CCSD of OH (6-31G,
 cc-pVDZ), NH₂ (6-31G*) and triplet O₂ (cc-pVDZ) equal PySCF's (`MP2`,
-`CCSD`, `ccsd_t`, `uccsd_t`; 36 cases) to 2.3·10⁻¹⁰ Ha (T1 to
-3.4·10⁻⁹); the tests hold them to 10⁻⁸. The cross-validation adds water
+`CCSD`, `ccsd_t`, `uccsd_t`; 34 cases) to 1.7·10⁻¹⁰ Ha (T1 to
+1.2·10⁻⁹); the tests hold them to 10⁻⁸, the MP2 same-spin and
+opposite-spin parts (against `e_corr_ss` and `e_corr_os`) to 10⁻⁹, and
+stretched N₂ (2.2 Å, 6-31G) to 10⁻⁸. The cross-validation adds water
 (6-31G*), NH₃ and CO (cc-pVDZ), HF (6-31G*), HCl (6-31G, five frozen)
 and, in UHF and ROHF, triplet CH₂ and NO: 2.1·10⁻¹⁰ Ha. There, PySCF's
 UHF of NO stops unconverged after its default 50 cycles and its MP2 is
 then 7·10⁻⁹ Ha off (MP2 depends on the orbitals at first order, CCSD
 hardly), so the comparison runs PySCF to 10⁻¹⁰ in the gradient and
-checks that it converged; the 36 references of the tests were
+checks that its SCF and CCSD converged; the references of the tests were
 recomputed that way and moved by at most 1.4·10⁻¹¹ Ha. CCSD is full CI
 for two electrons (H₂ in 6-31G and cc-pVDZ, HeH⁺; from RHF and UHF) to
 10⁻⁹ Ha and (T) vanishes there. Two N₂ 100 Å apart have twice the
@@ -6906,6 +6913,44 @@ consistency. MP2's closed form equals the CCSD energy functional at the
 MP2 amplitudes (t₁ = 0) in spatial and spin orbitals; the spatial and
 spin-orbital CCSD and (T) agree on closed shells, and UHF of a closed
 shell gives RHF's.
+
+Review (independent, after delivery): the spin-orbital equations
+(against Stanton et al., with the non-canonical Fock terms), the
+spin-orbital (T) (against Crawford's form) and the closed-shell singles
+(against PySCF's `rccsd`) were found right; 24 more comparisons with
+PySCF (quartet N, triplet CH₂ and NH, H₂O⁺, OH⁻, B, Li, O₂, CO, NaF with
+six frozen orbitals, all-electron HCl; RHF, UHF and ROHF) agreed to
+1.1·10⁻¹⁰ Ha in CCSD, 6·10⁻¹² in MP2 and 2.6·10⁻¹¹ in (T); a reference
+without virtual orbitals of one spin (HeH), where PySCF's `uccsd_t`
+fails, gives zero. Findings, all fixed:
+
+- **DIIS stalled on stretched bonds.** N₂ at 2.2 Å in 6-31G did not
+  converge in 200 iterations at any DIIS space from 5 to 30, while
+  PySCF converged in 46 to 66. QSO kept the first step, from the MP2
+  amplitudes, in the subspace; PySCF leaves it out. Without it N₂
+  converges in 35 iterations (now a test), and stretched water, C₂, O₃,
+  F₂ and BeO in 18 to 25, as fast as PySCF or faster. N₂ at 2.4 Å in
+  cc-pVDZ, where PySCF does not converge, ends 0.29 Ha below PySCF's
+  last iterate, a solution neither code can check.
+- **The canonical check scaled with the largest Fock element**, so it
+  allowed off-diagonal elements of 10⁻⁴ Ha in all-electron HCl, and MP2,
+  the more sensitive of the two, had no check. Both now refuse
+  off-diagonal elements above an absolute `CANONICAL_TOLERANCE` of
+  10⁻⁶ Ha, with a message that names the largest one, and `ccsd_t`
+  builds its reference once.
+- **Doc claims**: the tests have 34 PySCF cases (not 36; 43 with the
+  cross-validation, not 45), nine more cases on seven molecules, the T1
+  test tolerance was 10⁻⁶ (now 10⁻⁸, as the docs said), PySCF's lead per
+  open-shell iteration is 6 to 12 times (not 11 to 15, a range that left
+  out O₂), a formula in ARCHITECTURE had a stray transpose, and the
+  T1 diagnostic of ROHF (about twice UHF's) is documented.
+- **Smaller ones**: `max_iterations` below 2 (which can never converge)
+  and the DIIS space 1 (off, like 0) are documented and the first
+  refused, a T1 diagnostic without correlated electrons is +0 (not
+  −0), the singles terms of W_vvvv and the hole term of (T) are matrix
+  products (propyne's (T): 8.9 s to 5.1 s), restricted references no
+  longer copy their integrals for each spin block, and tests compare the
+  MP2 parts with PySCF.
 
 ### Not in this stage
 

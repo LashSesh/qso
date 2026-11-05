@@ -48,22 +48,28 @@ use super::scf::ScfResult;
 use crate::error::{QsoError, Result};
 use crate::linalg::RMatrix;
 
+/// Largest off-diagonal element of the Fock matrix (hartree) that MP2 and
+/// (T) accept as canonical orbitals: Hartree–Fock converged to an orbital
+/// gradient of about this size (its default is 10⁻⁸).
+pub const CANONICAL_TOLERANCE: f64 = 1e-6;
+
 /// Most spin orbitals (correlated, both spins) of a spin-orbital
 /// calculation: their antisymmetrised integrals take `n⁴` doubles (800 MB
-/// at the limit), and CCSD of 96 spin orbitals peaks at 1.65 GB.
+/// at the limit), and CCSD of 96 spin orbitals peaks at 1.55 GB.
 pub const MAX_SPIN_ORBITALS: usize = 100;
 
 /// Settings of [`ccsd`] and [`ccsd_t`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct CcOptions {
-    /// Largest number of iterations.
+    /// Largest number of iterations (at least 2: convergence compares the
+    /// energies of two iterations).
     pub max_iterations: usize,
     /// Largest change of the correlation energy (hartree) at convergence.
     pub energy_tolerance: f64,
     /// Largest norm of the change of the amplitudes at convergence.
     pub amplitude_tolerance: f64,
-    /// Amplitude vectors DIIS extrapolates over (0 switches it off).
+    /// Amplitude vectors DIIS extrapolates over (0 or 1 switch it off).
     pub diis_space: usize,
 }
 
@@ -80,8 +86,11 @@ impl Default for CcOptions {
 
 impl CcOptions {
     fn validate(&self) -> Result<()> {
-        if self.max_iterations == 0 {
-            return Err(QsoError::invalid("max_iterations", "must be positive"));
+        if self.max_iterations < 2 {
+            return Err(QsoError::invalid(
+                "max_iterations",
+                "must be at least 2 (convergence compares two iterations)",
+            ));
         }
         for (name, v) in [
             ("energy_tolerance", self.energy_tolerance),
@@ -254,13 +263,45 @@ impl Reference {
         self.restricted && self.occ[0] == self.occ[1]
     }
 
-    /// Whether the occupied–virtual and off-diagonal blocks of the Fock
-    /// matrices vanish (canonical Hartree–Fock orbitals).
-    fn canonical(&self) -> bool {
-        self.fock.iter().all(|f| {
-            let scale = f.iter().fold(1.0f64, |a, &x| a.max(x.abs()));
-            (0..self.m).all(|p| (0..self.m).all(|q| p == q || f[(p, q)].abs() < 1e-6 * scale))
-        })
+    /// The largest off-diagonal element of the Fock matrices over the
+    /// active orbitals: zero (to the convergence of Hartree–Fock) in
+    /// canonical orbitals, whose occupied–virtual block is the orbital
+    /// gradient.
+    fn off_diagonal(&self) -> f64 {
+        let m = self.m;
+        self.fock
+            .iter()
+            .flat_map(|f| {
+                (0..m).flat_map(move |p| {
+                    (0..m)
+                        .filter(move |&q| q != p)
+                        .map(move |q| f[(p, q)].abs())
+                })
+            })
+            .fold(0.0, f64::max)
+    }
+
+    /// Refuses orbitals that are not canonical: ROHF of an open shell, or
+    /// a Hartree–Fock calculation converged less than [`CANONICAL_TOLERANCE`].
+    fn require_canonical(&self, method: &str) -> Result<()> {
+        if self.restricted && !self.closed_shell() {
+            return Err(QsoError::invalid(
+                "scf",
+                format!(
+                    "{method} takes canonical RHF or UHF orbitals; ROHF of an open shell is not canonical"
+                ),
+            ));
+        }
+        let off = self.off_diagonal();
+        if off.is_nan() || off > CANONICAL_TOLERANCE {
+            return Err(QsoError::invalid(
+                "scf",
+                format!(
+                    "{method} takes canonical orbitals, but the Fock matrix has off-diagonal elements up to {off:.1e} Ha (above {CANONICAL_TOLERANCE:e}): converge the Hartree–Fock calculation further"
+                ),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -270,12 +311,7 @@ impl Reference {
 /// closed shell are the same), with the lowest `frozen` orbitals frozen.
 pub fn mp2(hf: &ScfResult, ints: &AoIntegrals, frozen: usize) -> Result<Mp2> {
     let r = Reference::new(hf, ints, frozen)?;
-    if r.restricted && !r.closed_shell() {
-        return Err(QsoError::invalid(
-            "scf",
-            "MP2 takes canonical RHF or UHF orbitals; ROHF of an open shell is not canonical",
-        ));
-    }
+    r.require_canonical("MP2")?;
     let m = r.m;
     let e = |s: usize, p: usize| r.fock[s][(p, p)];
     // Spin pairs: (α, α), (β, β), (α, β). A closed shell has α = β, and
@@ -333,11 +369,15 @@ pub fn mp2(hf: &ScfResult, ints: &AoIntegrals, frozen: usize) -> Result<Mp2> {
 
 // ---- DIIS ------------------------------------------------------------------
 
-/// Pulay's DIIS on amplitude vectors, the change of each step as its error.
+/// Pulay's DIIS on amplitude vectors, the change of each Jacobi step as
+/// its error. As in PySCF's `lib.diis`, the first step (from the MP2
+/// amplitudes, often far off) is left out of the subspace: with it,
+/// stretched bonds such as N₂ at 2.2 Å stalled.
 struct Diis {
     space: usize,
     vectors: Vec<Vec<f64>>,
     errors: Vec<Vec<f64>>,
+    started: bool,
 }
 
 impl Diis {
@@ -346,13 +386,14 @@ impl Diis {
             space,
             vectors: Vec::new(),
             errors: Vec::new(),
+            started: false,
         }
     }
 
-    /// The extrapolated amplitudes after the step to `t` with change
+    /// The extrapolated amplitudes after a Jacobi step to `t` with change
     /// `error`.
     fn extrapolate(&mut self, t: Vec<f64>, error: Vec<f64>) -> Vec<f64> {
-        if self.space < 2 {
+        if self.space < 2 || !std::mem::replace(&mut self.started, true) {
             return t;
         }
         if self.vectors.len() == self.space {
@@ -675,21 +716,21 @@ impl Closed {
                 }
             }
         }
-        // Wvvvv[a, b, c, d] as the (cd × ab) matrix.
-        let mut wvvvv = DMatrix::<f64>::zeros(v * v, v * v);
-        for a in 0..v {
-            for b in 0..v {
-                for c in 0..v {
-                    for d in 0..v {
-                        let mut x = vvvv(a, c, b, d);
-                        for k in 0..o {
-                            x -= ovvv(k, d, a, c) * t1(k, b) + ovvv(k, c, b, d) * t1(k, a);
-                        }
-                        wvvvv[(c * v + d, a * v + b)] = x;
-                    }
-                }
-            }
-        }
+        // Wvvvv[a, b, c, d] as the (cd × ab) matrix. Its singles terms are
+        // products of t₁ with (ov|vv) reshaped so that d runs fastest:
+        // S₁[acd, b] = Σ_k (kd|ac) t_k^b and S₂[cbd, a] = Σ_k (kc|bd) t_k^a.
+        let t1m = DMatrix::from_fn(o, v, &t1);
+        let vv = v * v;
+        let s1 = DMatrix::from_fn(vv * v, o, |acd, k| {
+            ovvv(k, acd % v, acd / vv, (acd / v) % v)
+        }) * &t1m;
+        let s2 = DMatrix::from_fn(vv * v, o, |cbd, k| {
+            ovvv(k, cbd / vv, (cbd / v) % v, cbd % v)
+        }) * &t1m;
+        let wvvvv = DMatrix::from_fn(vv, vv, |cd, ab| {
+            let (a, b, c, d) = (ab / v, ab % v, cd / v, cd % v);
+            vvvv(a, c, b, d) - s1[((a * v + c) * v + d, b)] - s2[((c * v + b) * v + d, a)]
+        });
         // Wvoov[a, k, i, c] and Wvovo[a, k, c, i] as the (ia × kc) matrices
         // A and B. Their parts over (l, d) are matrix products,
         // A += Z₁ M₁ + Z₂ M₂ and B += Z₃ M₂, with M₁[ld, kc] = (ld|kc),
@@ -851,6 +892,14 @@ impl Closed {
         let tij: Vec<DMatrix<f64>> = (0..o * o)
             .map(|ij| DMatrix::from_fn(v, v, |a, d| t2(ij / o, ij % o, a, d)))
             .collect();
+        // For the hole term: t_i as (ab × l) matrices, t_il^ab, and
+        // G_kj[l, c] = (ck|jl).
+        let til: Vec<DMatrix<f64>> = (0..o)
+            .map(|i| DMatrix::from_fn(v * v, o, |ab, l| t2(i, l, ab / v, ab % v)))
+            .collect();
+        let gkj: Vec<DMatrix<f64>> = (0..o * o)
+            .map(|kj| DMatrix::from_fn(o, v, |l, c| self.g(o + c, kj / o, kj % o, l)))
+            .collect();
         let mut energy = 0.0;
         let idx = |a: usize, b: usize, c: usize| (a * v + b) * v + c;
         for i in 0..o {
@@ -872,16 +921,15 @@ impl Closed {
                         let [pi, pj, pk] = occ;
                         // Σ_d t_pipj[a', d] (b'd|c'pk) for all a', b', c'.
                         let prod = &tij[pi * o + pj] * &x[pk];
+                        // Σ_l t_pil^a'b' (c'pk|pjl) for all a', b', c'.
+                        let hole = &til[pi] * &gkj[pk * o + pj];
                         for a in 0..v {
                             for b in 0..v {
                                 for c in 0..v {
                                     let abc = [a, b, c];
                                     let (a1, b1, c1) = (abc[pos[0]], abc[pos[1]], abc[pos[2]]);
-                                    let mut val = prod[(a1, b1 * v + c1)];
-                                    for l in 0..o {
-                                        val -= self.g(o + c1, pk, pj, l) * t2(pi, l, a1, b1);
-                                    }
-                                    w[idx(a, b, c)] += val;
+                                    w[idx(a, b, c)] +=
+                                        prod[(a1, b1 * v + c1)] - hole[(a1 * v + b1, c1)];
                                 }
                             }
                         }
@@ -949,14 +997,16 @@ impl Spin {
         map.extend((ob..m).map(|p| (1usize, p)));
         let (ca, cb) = (&r.coeff[0], &r.coeff[1]);
         let aa = transform(ints, [ca, ca, ca, ca]);
+        // Restricted orbitals: one tensor for all three spin blocks.
         let (ab, bb) = if r.restricted {
-            (aa.clone(), aa.clone())
+            (None, None)
         } else {
             (
-                transform(ints, [ca, ca, cb, cb]),
-                transform(ints, [cb, cb, cb, cb]),
+                Some(transform(ints, [ca, ca, cb, cb])),
+                Some(transform(ints, [cb, cb, cb, cb])),
             )
         };
+        let (ab, bb) = (ab.as_deref().unwrap_or(&aa), bb.as_deref().unwrap_or(&aa));
         // (pq|rs) of spin orbitals.
         let chem = |p: usize, q: usize, r: usize, s: usize| -> f64 {
             let ((sp, p), (sq, q), (sr, r), (ss, s)) = (map[p], map[q], map[r], map[s]);
@@ -966,9 +1016,9 @@ impl Spin {
             let at = |t: &[f64], p, q, r, s| t[((p * m + q) * m + r) * m + s];
             match (sp, sr) {
                 (0, 0) => at(&aa, p, q, r, s),
-                (1, 1) => at(&bb, p, q, r, s),
-                (0, 1) => at(&ab, p, q, r, s),
-                _ => at(&ab, r, s, p, q),
+                (1, 1) => at(bb, p, q, r, s),
+                (0, 1) => at(ab, p, q, r, s),
+                _ => at(ab, r, s, p, q),
             }
         };
         let mut w = vec![0.0; n * n * n * n];
@@ -1352,11 +1402,17 @@ impl Spin {
         }
         energy
     }
+}
 
-    fn t1_diagnostic(&self, t: &[f64]) -> f64 {
-        let norm: f64 = t[..self.o * self.v].iter().map(|x| x * x).sum();
-        (norm / (2 * self.o).max(1) as f64).sqrt()
+/// `√(Σ t² / count)` over the single amplitudes `t1`: `count` is `2o`
+/// for the spatial amplitudes of `o` doubly occupied orbitals and for the
+/// spin-orbital amplitudes of `o` occupied spin orbitals (which square to
+/// twice the spatial ones for a closed shell); 0 without amplitudes.
+fn t1_diagnostic(t1: &[f64], count: usize) -> f64 {
+    if count == 0 || t1.is_empty() {
+        return 0.0;
     }
+    (t1.iter().map(|x| x * x).sum::<f64>() / count as f64).sqrt()
 }
 
 /// How a CCSD calculation is solved.
@@ -1366,33 +1422,30 @@ enum Solved {
 }
 
 fn run_ccsd(
-    hf: &ScfResult,
+    r: &Reference,
     ints: &AoIntegrals,
-    frozen: usize,
     options: &CcOptions,
     spin_orbitals: bool,
 ) -> Result<(Ccsd, Solved)> {
     options.validate()?;
-    let r = Reference::new(hf, ints, frozen)?;
     if r.closed_shell() && !spin_orbitals {
-        let c = Closed::new(&r, ints);
+        let c = Closed::new(r, ints);
         let (o, v) = (c.o, c.v);
         let (t, e, iterations) = if o == 0 || v == 0 {
             (vec![0.0; o * v + o * o * v * v], 0.0, 0)
         } else {
             solve(c.start(), options, |t| c.step(t))?
         };
-        let norm: f64 = t[..o * v].iter().map(|x| x * x).sum();
         let result = Ccsd {
             correlation: e,
             energy: r.energy + e,
             iterations,
-            t1_diagnostic: (norm / (2 * o).max(1) as f64).sqrt(),
+            t1_diagnostic: t1_diagnostic(&t[..o * v], 2 * o),
             spin_orbitals: false,
         };
         return Ok((result, Solved::Closed(c, t)));
     }
-    let s = Spin::new(&r, ints)?;
+    let s = Spin::new(r, ints)?;
     let (o, v) = (s.o, s.v);
     let (t, e, iterations) = if o == 0 || v == 0 {
         (vec![0.0; o * v + o * o * v * v], 0.0, 0)
@@ -1403,7 +1456,7 @@ fn run_ccsd(
         correlation: e,
         energy: r.energy + e,
         iterations,
-        t1_diagnostic: s.t1_diagnostic(&t),
+        t1_diagnostic: t1_diagnostic(&t[..o * v], 2 * o),
         spin_orbitals: true,
     };
     Ok((result, Solved::Spin(s, t)))
@@ -1418,7 +1471,8 @@ pub fn ccsd(
     frozen: usize,
     options: &CcOptions,
 ) -> Result<Ccsd> {
-    Ok(run_ccsd(hf, ints, frozen, options, false)?.0)
+    let r = Reference::new(hf, ints, frozen)?;
+    Ok(run_ccsd(&r, ints, options, false)?.0)
 }
 
 /// CCSD and its perturbative triples, for canonical references: a closed
@@ -1431,13 +1485,8 @@ pub fn ccsd_t(
     options: &CcOptions,
 ) -> Result<CcsdT> {
     let r = Reference::new(hf, ints, frozen)?;
-    if (r.restricted && !r.closed_shell()) || !r.canonical() {
-        return Err(QsoError::invalid(
-            "scf",
-            "(T) takes canonical orbitals: RHF of a closed shell or UHF",
-        ));
-    }
-    let (ccsd, solved) = run_ccsd(hf, ints, frozen, options, false)?;
+    r.require_canonical("(T)")?;
+    let (ccsd, solved) = run_ccsd(&r, ints, options, false)?;
     let triples = match &solved {
         Solved::Closed(c, t) => c.triples(t),
         Solved::Spin(s, t) => s.triples(t),

@@ -90,7 +90,7 @@ fn closed_shells_match(which: impl Fn(Basis) -> bool) {
             cc.triples
         );
         assert!(
-            (cc.ccsd.t1_diagnostic - t1d).abs() < 1e-6,
+            (cc.ccsd.t1_diagnostic - t1d).abs() < 1e-8,
             "{name}: T1 {} vs {t1d}",
             cc.ccsd.t1_diagnostic
         );
@@ -170,8 +170,9 @@ fn spin_orbitals_and_spatial_orbitals_agree_on_closed_shells() {
     ] {
         let (hf, ints) = setup(atoms, basis, 1, rhf);
         let options = CcOptions::default();
-        let (closed, a) = run_ccsd(&hf, &ints, frozen, &options, false).unwrap();
-        let (spin, b) = run_ccsd(&hf, &ints, frozen, &options, true).unwrap();
+        let r = Reference::new(&hf, &ints, frozen).unwrap();
+        let (closed, a) = run_ccsd(&r, &ints, &options, false).unwrap();
+        let (spin, b) = run_ccsd(&r, &ints, &options, true).unwrap();
         assert!(spin.spin_orbitals && !closed.spin_orbitals);
         assert!(
             (closed.correlation - spin.correlation).abs() < 1e-9,
@@ -288,16 +289,39 @@ fn correlated_methods_check_their_input() {
     )
     .unwrap();
     assert!(mp2(&hf, &other, 0).is_err());
-    let bad = CcOptions {
-        max_iterations: 0,
-        ..CcOptions::default()
-    };
-    assert!(ccsd(&hf, &ints, 0, &bad).is_err());
+    for max_iterations in [0, 1] {
+        let bad = CcOptions {
+            max_iterations,
+            ..CcOptions::default()
+        };
+        assert!(ccsd(&hf, &ints, 0, &bad).is_err());
+    }
     let short = CcOptions {
         max_iterations: 2,
         ..CcOptions::default()
     };
     assert!(ccsd(&hf, &ints, 0, &short).is_err());
+    // MP2 and (T) need canonical orbitals: a loosely converged
+    // Hartree–Fock calculation is refused, CCSD takes it.
+    let mol = Molecule::from_atoms(H2O, 0, 1).unwrap();
+    let loose = ScfOptions {
+        energy_tolerance: 1e-3,
+        gradient_tolerance: 1e-2,
+        ..ScfOptions::default()
+    };
+    let rough = rhf(&mol, &ints, &loose).unwrap();
+    assert!(Reference::new(&rough, &ints, 0).unwrap().off_diagonal() > CANONICAL_TOLERANCE);
+    assert!(mp2(&rough, &ints, 0).is_err());
+    assert!(ccsd_t(&rough, &ints, 0, &CcOptions::default()).is_err());
+    assert!(ccsd(&rough, &ints, 0, &CcOptions::default()).is_ok());
+    // No correlated occupied orbitals: a T1 diagnostic of +0.
+    let (h2, ints_h2) = setup(H2, Basis::SixThirtyOneG, 1, rhf);
+    for spin in [false, true] {
+        let r = Reference::new(&h2, &ints_h2, 1).unwrap();
+        let (cc, _) = run_ccsd(&r, &ints_h2, &CcOptions::default(), spin).unwrap();
+        assert!(cc.correlation == 0.0 && cc.t1_diagnostic == 0.0);
+        assert!(cc.t1_diagnostic.is_sign_positive());
+    }
     // Without virtual orbitals nothing correlates.
     let he = Molecule::from_atoms("He 0 0 0", 0, 1).unwrap();
     let ints_he = AoIntegrals::compute(&he, Basis::Sto3g).unwrap();
@@ -309,4 +333,57 @@ fn correlated_methods_check_their_input() {
         hf_he.energy
     );
     assert_eq!(mp2(&hf_he, &ints_he, 0).unwrap().correlation, 0.0);
+}
+
+#[test]
+fn mp2_parts_match_pyscf() {
+    // PySCF 2.14 `e_corr_ss` and `e_corr_os`.
+    for (atoms, basis, mult, method, frozen, same, opposite) in [
+        (
+            H2O,
+            Basis::CcPvdz,
+            1,
+            rhf as Method,
+            1,
+            -0.05071689385987746,
+            -0.1509490859486789,
+        ),
+        (
+            OH,
+            Basis::SixThirtyOneG,
+            2,
+            uhf as Method,
+            0,
+            -0.020820011569448908,
+            -0.06836053289884131,
+        ),
+    ] {
+        let (hf, ints) = setup(atoms, basis, mult, method);
+        let pt = mp2(&hf, &ints, frozen).unwrap();
+        assert!(
+            (pt.same_spin - same).abs() < 1e-9,
+            "{atoms}: {} vs {same}",
+            pt.same_spin
+        );
+        assert!(
+            (pt.opposite_spin - opposite).abs() < 1e-9,
+            "{atoms}: {} vs {opposite}",
+            pt.opposite_spin
+        );
+    }
+}
+
+#[test]
+fn stretched_bonds_converge() {
+    // N₂ at 2.2 Å in 6-31G with two frozen orbitals, where DIIS on the
+    // change of each step instead of between successive steps stalled;
+    // PySCF 2.14 (CCSD to 10⁻¹²) needs 110 iterations.
+    let (hf, ints) = setup("N 0 0 0; N 0 0 2.2", Basis::SixThirtyOneG, 1, rhf);
+    assert!((hf.energy - -108.21646279056053).abs() < 1e-9);
+    let cc = ccsd(&hf, &ints, 2, &CcOptions::default()).unwrap();
+    assert!(
+        (cc.correlation - -0.7040644455958951).abs() < 1e-8,
+        "{}",
+        cc.correlation
+    );
 }
