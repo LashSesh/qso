@@ -19,7 +19,8 @@ for medical research, section 4h) stages ship together as release
 section 4j) stages ship together as release 1.9.0. The eleventh stage
 (1.48 to 1.52, section 4k) and the twelfth (1.53 to 1.57, section 4l)
 are delivered; the two ship together as release 1.10.0. The thirteenth
-stage (1.58 to 1.62, section 4m) is delivered. Up to 1.3
+stage (1.58 to 1.62, section 4m) is delivered, and a fourteenth (1.63 to
+1.67, section 4n) is proposed. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -6961,6 +6962,263 @@ Noise learning for layers of non-Clifford gates. Correlated motions of
 groups (1.49). Product-formula bounds over grouped exponentials (1.56).
 The GPU track, still parked (section 7).
 
+## 4n. Fourteenth stage (1.63 to 1.67)
+
+Proposed November 2026, after the thirteenth stage, from the gaps that
+remain in the table of section 1 and from items that earlier milestones
+left for later. As before, the stage starts with walks on graphs: open
+walks gain traps, losses and site energies, and the efficiency and
+arrival time of transport, the use case of 1.18, come from linear solves
+rather than from propagation to a guessed time. The noise row, untouched
+since 1.44, gets noisy and noise-scaled expectation values of circuits
+on hundreds of qubits by Pauli propagation, where the learned models of
+1.31 reach only matrix-product states with unitary noise. Radical pairs,
+born correlated in their cage, bring the cage effects that 1.59 left
+out; their yields solve the same equations as the efficiency of
+transport, with the solvers of 1.63. Error correction gets erasures
+whose place is heralded, and decoders that use the heralds, which 1.8
+and 1.10 left for later. Chemistry ends the stage with density fitting,
+which lifts the limit of 64 basis functions for Hartree–Fock, MP2 and
+closed-shell CCSD(T). The rules stay: no new dependency of the crate, an
+independent reference for every deliverable, reference tools in the
+cross-validation only.
+
+### 1.63 — Transport to a trap: efficiency and arrival times under dephasing (M)
+
+Use case: excitation transport through networks that end in a trap, such
+as the seven chromophores of the FMO complex and the photonic
+waveguides, trapped ions and superconducting circuits in which dephasing
+is added on purpose (Biggerstaff et al., Nat. Commun. 7, 11282 (2016);
+Maier et al., Phys. Rev. Lett. 122, 050501 (2019); Potočnik et al., Nat.
+Commun. 9, 904 (2018)): on which graph, from which start and at which
+dephasing rate an excitation reaches the trap before it is lost, and how
+fast (Plenio and Huelga, New J. Phys. 10, 113019 (2008)). This is the
+transport reading of walks that 1.18 named as its use case, and no QSO
+walk can pose it: the open walks of 1.38 and 1.48 take dephasing only,
+so there is no trap or loss; graphs refuse self-loops, so no static or
+open walk has site energies; results are states at chosen times, not
+integrals to infinite time; and the `DephasingWalk` of 1.13 takes one
+rate and stops at 512 nodes.
+
+| Deliverable | Detail |
+|---|---|
+| Traps, losses and site energies | open walks with `H_eff = H − iΣ_t κ_t P_t − (i/2)Σ_j Γ_j P_j` and dephasing per node: a trap feeds its sink at `2κ_t ρ_tt`, as in Rebentrost, Mohseni, Kassal, Lloyd and Aspuru-Guzik (New J. Phys. 11, 033003 (2009)) and Caruso, Chin, Datta, Huelga and Plenio (J. Chem. Phys. 131, 105106 (2009)), and a node loses population at `Γ_j ρ_jj`; site energies in the open walks and in the static `ContinuousWalk`; dense, on the orbitals of 1.38 and 1.48 where every symmetry fixes the start and the traps and preserves every rate and site energy, and on hypercubes with a trap at the antipode |
+| Efficiency and arrival time | `η = 2Σ_t κ_t X_tt` and the mean arrival time `τ = 2Σ_t κ_t Y_tt/η` from `X = ∫ρ dt` and `Y = ∫tρ dt` (Rebentrost et al.), by two linear solves: Bartels–Stewart solves (Commun. ACM 15, 820 (1972)) on nalgebra's complex Schur form of `H_eff` for the coherent and decaying part, the restarted GMRES of 1.54 over the populations that dephasing feeds, and GMRES on the orbital generator; both solvers go into `linalg` as crate-internal tools, and every solve reports its condition |
+| Dark states and scans | the states that never reach a trap and the start's weight in them (Caruso et al.), by a closure with a stated tolerance, the solves running on the remaining states, where they are regular; efficiency and arrival time against a uniform dephasing rate, which shifts `H_eff` by a constant so that one Schur form serves the scan, and the rate of highest efficiency |
+
+Validation: on complete graphs with start and trap on different nodes
+and no loss, `η = 1/(N − 1)` without dephasing (Caruso et al., Eq. 5),
+dense and on the ten orbitals of the start's and trap's stabiliser up to
+8192 nodes, and `1/(N − 2)` with dephasing at one other node; `η = 1`
+with dephasing at every node of a connected graph and no loss; the
+detuned dimer with trap, losses and dephasing in closed form at every
+rate (in units of the hopping: start on one site, the trap on the other,
+detuned by 3, `κ = 1`, loss 0.05 and dephasing on both sites; `η` =
+0.771278, 0.823024, 0.825951, 0.738538 and 0.274598 at dephasing rates
+0, 1, 3, 10 and 100, reproduced for this proposal by a solve in
+Liouville space and by QuTiP's `mesolve`, and mean arrival times 4.5256,
+3.5817, 3.5553, 5.3563 and 14.8622 by a solve in Liouville space and by
+integrating the flux into the sink); exact rational solves by SymPy,
+which joins the cross-validation, of the ten-orbital complete-graph
+system with dephasing and loss that its symmetry preserves, and of the
+dimer (at dephasing rate 1, `η = 32000/38881` and `τ = 139260/38881`);
+QuTiP's `mesolve` on the seven-site FMO Hamiltonian of Adolphs and
+Renger (Biophys. J. 91, 2778 (2006); a tutorial input, with no claim
+about the complex) and on random weighted graphs with site energies,
+integrated until less than 10⁻¹² of the population remains; solves in
+Liouville space and the time integral of the propagated sink population
+on small graphs; without dephasing, the hypercube with a trap at the
+antipode equal to the column chain of 1.3; site energies in
+`ContinuousWalk` equal to `DrivenWalk` with constant coefficients
+(1.13).
+
+### 1.64 — Expectation values of large noisy circuits by Pauli propagation (M)
+
+Use case: noisy and noise-scaled expectation values of circuits on 100
+to 1000 qubits, such as the 127-qubit kicked-Ising experiment of Kim et
+al. (Nature 618, 500 (2023)), Trotterised dynamics on heavy-hex and
+square lattices and Clifford circuits with a few rotations: exact where
+the observable stays sparse in the Heisenberg picture and with a stated
+error where it does not, for groups that check such experiments and the
+mitigation run on them (ZNE, PEA). Above 24 qubits the learned models of
+1.31 mitigate only on matrix-product states, which need swaps for
+two-dimensional couplings, and only noise that is a mixture of
+unitaries; state vectors stop at 34 qubits, the tableau of 1.7 takes
+Clifford gates only, and QSO's Pauli strings stop at 64 qubits.
+
+| Deliverable | Detail |
+|---|---|
+| Heisenberg propagation | an observable carried backwards through a circuit as Pauli strings on any number of qubits (two bit masks of ⌈n/64⌉ words) with real coefficients, as in sparse Pauli dynamics (Begušić, Gray and Chan, Sci. Adv. 10, eadk4321 (2024)): Clifford gates map a string to one string with the tableau's phase rules (1.7), a rotation `exp(−iθP/2)` splits each string that anticommutes with `P` into two, other gates on one to four qubits act by their Pauli transfer matrices, equal strings are merged, and the expectation value is read in the all-zero state or a product state |
+| Noise | Pauli and depolarising channels as factors per string; amplitude damping, thermal relaxation and Kraus channels on one to four qubits by the transfer matrices of their adjoints (damping maps `Z` to `(1 − γ)Z + γI`); the sparse Pauli–Lindblad models of 1.12 and 1.31 (van den Berg, Minev, Kandala and Temme, Nat. Phys. 19, 1116 (2023)) as `exp(−2Σλ_k)` over the generators that anticommute with a string, their rates scaled by any non-negative factor, as probabilistic error amplification needs, or by −1 after a device's own noise, for the value PEC converges to with that model; device models of 1.4 compiled beyond their 34 qubits for this path only; noise on non-Clifford layers given, not learned; slow noise (1.30) refused, as its average over a circuit is no product of channels |
+| Truncation with a bound | strings dropped by coefficient and by Pauli weight; the adjoint of every channel is unital and contracts the operator norm, so a dropped term changes the expectation value by at most its coefficient's magnitude in every state, times PEC's overhead `e^{2Σλ_k}` for every layer scaled by −1 (no channel) left between it and the start of the circuit; the sum of these is reported with the value |
+
+Validation: without truncation, equal to the state vector to 10⁻¹² on
+random circuits of the whole gate set (up to 12 qubits, and up to 20 for
+shallow circuits or circuits with few rotations, as an observable can
+spread over 4ⁿ strings) and to density matrices with every channel kind
+(up to 12 qubits); Clifford circuits of 10³ to 10⁴ qubits string for
+string and sign for sign against Stim's `PauliString.before` (which
+gives `C†PC`) and QSO's tableau; the kicked-Ising circuits of Kim et al.
+on the 115-qubit heavy-hex lattice of Qiskit's
+`CouplingMap.from_heavy_hex(7)`, for `⟨Z⟩` of its central qubit: exact
+at `θ_h` = 0 and π/2, where they are Clifford, and at other angles equal
+through five steps to Qiskit Aer's state vector of the light cone to
+10⁻¹⁰ (qiskit-addon-obp, run for this proposal, needs 70, 1620 and about
+10⁵ strings after three, four and five steps, on light cones of 5, 9 and
+13 qubits); at six and seven steps (light cones of 20 and 26 qubits),
+with truncation, the actual error against the light cone's state vector
+never above the reported bound; qiskit-addon-obp 0.3's `backpropagate`
+without budgets and with its trimming tolerance set to 10⁻¹⁴ (by default
+it drops coefficients below 10⁻⁸), string for string, as it joins the
+cross-validation; noise-scaled values equal to density matrices with the
+scaled model up to 12 qubits, and beyond to qiskit-addon-obp's
+propagation through Pauli–Lindblad layers
+(`PauliLindbladErrorInstruction`, equal to density matrices to 10⁻¹⁶ on
+four qubits, checked for this proposal).
+
+### 1.65 — Radical pairs: spin-selective recombination, field effects and CIDNP (M)
+
+Use case: photo-CIDNP of tryptophan, tyrosine and flavins,
+magnetic-field effects on reaction yields (MARY curves, the low-field
+effect; Timmel, Till, Brocklehurst, McLauchlan and Hore, Mol. Phys. 95,
+71 (1998)) and spin chemistry generally (Steiner and Ulrich, Chem. Rev.
+89, 51 (1989)). A radical pair is born correlated in its cage, as a
+singlet or a triplet, and recombines spin-selectively or escapes, so
+that its products carry opposite nuclear polarisation; spin chemists and
+CIDNP spectroscopists need the yields and polarisations from hyperfine
+couplings, g-values and rates, and then the NMR of the products. QSO's
+spin systems have no electron (1.33), its reaction rates depend on the
+amounts only (1.50), and its reactants meet uncorrelated (1.59).
+
+| Deliverable | Detail |
+|---|---|
+| Electron spins | electrons as a new kind of spin beside the nuclei of a `SpinSystem`, designed so that paramagnetic relaxation can use them later: g-values entered as shifts from the free electron's, isotropic hyperfine couplings and exchange as couplings, T₁ and T₂, in the frames of 1.33 (the rotating frame keeps the secular hyperfine terms at high field, the laboratory frame serves low fields); ¹⁴N as a spin-1 nucleus with given T₁ and T₂, as ²H has, for the nitrogen couplings of flavin and tryptophan radicals; `Isotope::ALL` keeps its six nuclei |
+| Spin-selective recombination | a linear model of the pair within the 2048 dimensions of 1.33 (two electrons, one ¹⁴N and seven protons take 1536): recombination from the singlet and the triplet by Haberkorn's term (Mol. Phys. 32, 1491 (1976)) or that of Jones, Maeda and Hore (Chem. Phys. Lett. 507, 269 (2011)), escape at a spin-independent rate, and birth in S, T₀, T± or the triplet mixture through a new initial-state type; with Haberkorn's term and without electron relaxation the yields come from one Sylvester equation `H_eff X − X H_eff† = −iρ(0)` with the solver of 1.63; with the term of Jones, Maeda and Hore, whose extra decay of singlet–triplet coherences (`P_S ρ P_T + P_T ρ P_S`) is not of that form, or with electron relaxation, from GMRES over the same operator |
+| Products and observables | the recombination and escape products' nuclear states, handed by the routes of 1.59 to `SpinSystem` evolutions or to `Reactions` as a formation source at a constant rate; singlet, triplet and escape yields against the field, and the polarisation of every nucleus in each product (CIDNP; Kaptein, J. Chem. Soc. D, 732 (1971)) |
+
+Validation: closed forms of the exponential model: with Δg alone at high
+field `Φ_S = ½ + ½k²/(k² + Δω²)`; with one proton at zero field
+`5/8 + (3/8)k²/(k² + a²)`; with one ¹⁴N at zero field
+`5/9 + (4/9)k²/(k² + 9a²/4)` (derived for this proposal and equal to
+independent NumPy builds to 10⁻¹⁵); for each nuclear state at high
+field; yields that sum to one; recombination and escape CIDNP that
+cancel nucleus by nucleus, with Kaptein's signs; products formed at a
+constant rate equal to the closed-form kinetics of formation, decay and
+T₁. RadicalPy 1.0.9, which joins the cross-validation:
+`HilbertSimulation` with the exponential model and `experiments.mary` up
+to six nuclei (for this proposal its yields were 0.7000000008 for the
+proton's 0.7 and 0.6000000008 for the ¹⁴N's 0.6 at `k = a/2`),
+`LiouvilleSimulation` with Haberkorn's and Jones–Hore's terms up to
+three, and `experiments.cidnp`, whose S–T₀ polarisation at its rate
+`k_s` equals the exponential model's at `k_s/2`, with the triplet
+product's sign (checked for this proposal). QuTiP's `mesolve` on an
+independently built Haberkorn Liouvillian with electron T₁ and T₂; the
+Sylvester solves equal to solves in Liouville space (3·10⁻¹⁶ for two
+protons in a field with unequal singlet and triplet rates); with all
+rates zero, the pair evolves as `SpinSystem.evolve`.
+
+### 1.66 — Erasures with heralds, and decoders that use them (M)
+
+Use case: neutral-atom qubits with erasure conversion (Wu, Kolkowitz,
+Puri and Thompson, Nat. Commun. 13, 4657 (2022); Ma et al., Nature 622,
+279 (2023); Scholl et al., Nature 622, 273 (2023)) and dual-rail
+superconducting qubits (Kubica et al., Phys. Rev. X 13, 041022 (2023);
+Levine et al., Phys. Rev. X 14, 011051 (2024)) turn most of their errors
+into erasures whose place is heralded, and a decoder told where they
+struck tolerates several times more error: in Wu et al.'s model the
+threshold rises from 0.937 % to 4.15 %. Their designers want the logical
+error rate against the heralded share at circuit level, but the Stim
+importer of 1.10 refuses heralded errors and QSO's decoders see
+detection events only (1.8); 1.8 left erasure for later, 1.10 heralded
+errors. In Stim's model an erased qubit is replaced by a maximally mixed
+qubit and its herald is a bit of the measurement record, so nothing
+leaves the qubit space and leakage stays out.
+
+| Deliverable | Detail |
+|---|---|
+| Heralded noise | Stim's `HERALDED_ERASE` and `HERALDED_PAULI_CHANNEL_1` in detector and repeated circuits, as operations of a new non-exhaustive type beside the exhaustive `QecOp` and `Noise`, designed so that Pauli channels, correlated errors, MPP and feedback can join it later; frames draw the herald and the Pauli together; the pass backwards of 1.61 converts them by Stim's approximate rule, outcomes of equal effect summed (`HERALDED_ERASE(0.1)` before a measurement gives two errors of probability 0.05, one on the herald alone and one on herald and measurement); read and written in Stim's format |
+| Decoding with heralds | a decoder interface beside `Decoder` that conditions the model on the fired heralds shot by shot (an erased qubit's X and Z parts at ½, the effects of silent heralds dropped): union-find joins the erased edges before it grows (Delfosse and Nickerson, Quantum 5, 595 (2021)), sparse matching sets the weights of the shot's edges and restores them after, and BP+OSD sets its priors; windows, correlated matching and the exact matching decoder are left for later |
+| Erasure-biased circuit noise | repetition, rotated surface and CSS memory experiments in which a stated share of every operation's error is a heralded erasure of each of its qubits and the rest is depolarising, in a new non-exhaustive noise type beside `CircuitNoise` |
+
+Validation: error models equal to Stim 1.16's
+`detector_error_model(approximate_disjoint_errors=True)` term by term on
+the erasure memory experiments and on random circuits with both
+channels, also in `REPEAT` blocks, and detection and herald rates within
+standard errors of Stim's sampler. Exact closed forms: a repetition code
+whose `d` data qubits are each erased with probability `p`, with perfect
+measurements and decoded with its heralds, fails with probability
+`p^d/2`; at code capacity, the rotated surface code whose data qubits
+are erased with probability ½ and decoded with its heralds fails with
+probability exactly ¼ at every odd distance, because a quarter turn maps
+it onto itself with X and Z exchanged and, by the cleaning lemma, an
+erased set supports the X logical exactly when its complement does not
+support the Z logical (256 of the 512 erased sets at `d = 3`,
+enumerated, and `d` = 5, 7 and 9 sampled by GF(2) rank for this
+proposal). Under pure erasure the decoders fail only on shots whose
+erased set supports a logical operator that flips the observable, and on
+half of those within the standard error (Delfosse and Zémor, Phys. Rev.
+Research 2, 033042 (2020)). With erasures and Pauli noise, correction
+weights equal to PyMatching 2.4 conditioned shot by shot (`add_edge`,
+`add_boundary_edge`), and BP+OSD equal to ldpc 2.4.1's `BpOsdDecoder`
+with `update_channel_probs`. Wu et al.'s gain is compared only
+qualitatively, since their pair erasure has no Stim instruction.
+
+### 1.67 — Molecules beyond 64 basis functions by density fitting (M–L)
+
+Use case: Hartree–Fock, MP2 and closed-shell CCSD(T) references, and
+active-space Hamiltonians for VQE and phase estimation, of molecules
+with 100 to 300 basis functions (benzene has 114 in cc-pVDZ, naphthalene
+180), from the geometry and without an external code. The integrals of
+1.15 hold every repulsion integral and stop at 64 basis functions, about
+three heavy atoms with their hydrogens in 6-31G* or cc-pVDZ (propyne has
+62 in cc-pVDZ); the coupled cluster of 1.62 inherits that limit, and its
+Not done names density fitting as a remedy.
+
+| Deliverable | Detail |
+|---|---|
+| Auxiliary basis sets | def2-universal-JKFIT for Hartree–Fock (Weigend, J. Comput. Chem. 29, 167 (2008)) and cc-pVDZ-RI for correlation (Weigend, Köhn and Hättig, J. Chem. Phys. 116, 3175 (2002); Hättig, Phys. Chem. Chem. Phys. 7, 59 (2005), for Li, Be, Na and Mg), generated from PySCF's copy as the basis data of 1.23 are |
+| Fitted integrals | two- and three-centre integrals from the McMurchie–Davidson code of 1.23 with the Schwarz screening of 1.32, and the fitted tensor in the Coulomb metric (Whitten, J. Chem. Phys. 58, 4496 (1973); Vahtras, Almlöf and Feyereisen, Chem. Phys. Lett. 213, 514 (1993)), with memory and work estimated before anything is built (300 functions with about 1500 auxiliary functions: 0.54 GB) |
+| SCF and correlation | density-fitted RHF, UHF and ROHF, the SCF generic over its integral source and the exact path unchanged; MP2 from RHF and UHF (Feyereisen, Fitzgerald and Komornicki, Chem. Phys. Lett. 208, 359 (1993)); the closed-shell CCSD and (T) of 1.62, unchanged, on molecular-orbital integrals assembled from the fitted tensor (that tensor takes 1.2 GB at about 110 correlated orbitals, and the peak, with the four-virtual intermediate of 1.62, is estimated before anything is built) |
+| Active spaces | `MolecularIntegrals` and FCIDUMP files from the fitted tensor for any molecule the SCF reaches, labelled as fitted |
+
+Validation: the integrals equal PySCF's `int2c2e` and `int3c2e`
+(`df.incore.aux_e2`) to 10⁻¹² in its normalisation of auxiliary
+functions (HCl, H₂S and SiH₄ in cc-pVDZ with def2-universal-JKFIT, g
+shells included); density-fitted RHF, UHF and ROHF equal PySCF's
+`density_fit` to 10⁻⁹ Ha (water, NH₃, OH, triplet O₂ and benzene in
+6-31G* and cc-pVDZ); MP2 equal to `DFRMP2` and `DFUMP2` to 10⁻⁹ Ha; CCSD
+and (T) equal to `dfccsd.RCCSD` and its `ccsd_t` to 10⁻⁸ Ha (PySCF's
+density-fitted CCSD is CCSD on the fitted tensor to 2.4·10⁻¹⁴ Ha,
+checked for this proposal); CASCI in active spaces from the fitted
+tensor equal to PySCF's CASCI on the density-fitted SCF to 10⁻⁹ Ha;
+every comparison names its auxiliary basis, since PySCF's correlation
+methods otherwise take the JK-fit basis. Exact cases: one s Gaussian per
+centre with the orbital products as auxiliary functions reproduces the
+integrals and SCF energies of 1.15 to 10⁻¹⁰ Ha, on geometries whose pair
+midpoints do not coincide; the fitted Coulomb energy of a fixed density
+never exceeds the exact one (Dunlap, Connolly and Sabin, J. Chem. Phys.
+71, 3396 (1979)), checked against the exact integrals below 64
+functions. The fitting error against 1.15 to 1.62 is reported as
+measured, not counted as agreement (water in cc-pVDZ: 3.25·10⁻⁵ Ha in
+RHF, 1.52·10⁻⁵ Ha in the MP2 correlation).
+
+### Not in this stage
+
+Leakage out of the qubit space, which needs qudits in every simulator;
+the heralded erasures of 1.66 stay in the qubit space, as Stim models
+them. Pretty good state transfer outside the cyclotomic families, which
+has no exact reference. Mixed Gaussian states with many photons in many
+modes, whose probabilities stay exponential; their exact sampling by
+pure-state decomposition (Quesada et al., PRX Quantum 3, 010306 (2022)),
+which The Walrus implements, is no longer held back by that and is left
+to a later stage. Noise learning for layers of non-Clifford gates.
+Correlated motions of groups (1.49). Product-formula bounds over grouped
+exponentials (1.56). Structured environments of transport (Redfield,
+hierarchical equations) and averages over static disorder, which a
+disorder milestone can build on the site energies of 1.63; F-pairs,
+diffusive re-encounters and anisotropic hyperfine tensors of radical
+pairs. The GPU track, still parked (section 7).
+
 ## 5. Order and reasoning
 
 1. **1.2 first:** small, made every later release safer, and documentation
@@ -7076,6 +7334,20 @@ The GPU track, still parked (section 7).
     on the windows of 1.57, coupled-cluster references (1.62) on the
     integrals and orbitals of 1.15 and 1.23. None of the five depends on
     another, so the order is that of the table of gaps.
+22. **Fourteenth stage (proposed): walks first again, then limits the
+    plan itself recorded.** Transport to a trap (1.63) gives the open
+    walks of 1.13, 1.38 and 1.48 traps, losses and site energies, and
+    puts a new Bartels–Stewart solver and the GMRES of 1.54 into
+    `linalg`; radical pairs (1.65) take their yields from the same
+    equations, so 1.63 comes first. Pauli propagation (1.64) carries
+    the noise models of 1.4, 1.12 and 1.31 to hundreds of qubits on the
+    Pauli algebra and the tableau of 1.7; radical pairs extend the spin
+    systems of 1.33 and the routes of 1.59, and erasures with heralds
+    (1.66) the pass backwards of 1.61 and the decoders of 1.8 to 1.19.
+    Density fitting (1.67) builds on the integrals of 1.15, 1.23 and
+    1.32 and the coupled cluster of 1.62; as the one M–L milestone it
+    comes last, so that its size holds up none of the others. Apart from
+    1.65's use of 1.63, none depends on another.
 
 ## 6. Measures of success
 
@@ -7179,6 +7451,16 @@ Taken (October 2026):
   (1.59), NV centres at their level anticrossings (1.60), error models
   of long experiments and windows in parallel (1.61), coupled-cluster
   references (1.62). Release 1.10.0 (1.48 to 1.57) is not tied to it.
+* Fourteenth stage (November 2026, proposed): transport to a trap
+  (1.63), expectation values of large noisy circuits by Pauli
+  propagation (1.64), radical pairs (1.65), erasures with heralds and
+  decoders that use them (1.66), molecules beyond 64 basis functions by
+  density fitting (1.67). SymPy, qiskit-addon-obp and RadicalPy join the
+  cross-validation as references only (qiskit-addon-obp installs IBM's
+  qiskit-ibm-runtime, used there only for a noise-model class); heralded
+  erasure stays in the qubit space, and leakage stays out. Release
+  1.10.0 (1.48 to 1.57), which still waits, and the thirteenth stage,
+  not yet in a release, are not tied to it.
 * The browser playground stays, because it costs little to maintain: it
   is plain HTML and JavaScript without dependencies or a build step, it
   uses only the npm package's JSON interface, which the package's tests
