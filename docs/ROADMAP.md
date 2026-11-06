@@ -19,8 +19,9 @@ for medical research, section 4h) stages ship together as release
 section 4j) stages ship together as release 1.9.0. The eleventh stage
 (1.48 to 1.52, section 4k) and the twelfth (1.53 to 1.57, section 4l)
 are delivered; the two ship together as release 1.10.0. The thirteenth
-stage (1.58 to 1.62, section 4m) is delivered, and a fourteenth (1.63 to
-1.67, section 4n) is proposed. Up to 1.3
+stage (1.58 to 1.62, section 4m) is delivered; the fourteenth (1.63 to
+1.67, section 4n) is accepted and in progress, and no release comes
+before it is delivered. Up to 1.3
 milestone and release numbers coincided; from 1.4 on the milestone
 numbers name units of work and releases follow Semantic Versioning on
 their own (the next release after 1.3.0 is 1.4.0, whatever
@@ -6964,24 +6965,24 @@ The GPU track, still parked (section 7).
 
 ## 4n. Fourteenth stage (1.63 to 1.67)
 
-Proposed November 2026, after the thirteenth stage, from the gaps that
-remain in the table of section 1 and from items that earlier milestones
-left for later. As before, the stage starts with walks on graphs: open
-walks gain traps, losses and site energies, and the efficiency and
-arrival time of transport, the use case of 1.18, come from linear solves
-rather than from propagation to a guessed time. The noise row, untouched
-since 1.44, gets noisy and noise-scaled expectation values of circuits
-on hundreds of qubits by Pauli propagation, where the learned models of
-1.31 reach only matrix-product states with unitary noise. Radical pairs,
-born correlated in their cage, bring the cage effects that 1.59 left
-out; their yields solve the same equations as the efficiency of
-transport, with the solvers of 1.63. Error correction gets erasures
-whose place is heralded, and decoders that use the heralds, which 1.8
-and 1.10 left for later. Chemistry ends the stage with density fitting,
-which lifts the limit of 64 basis functions for Hartree–Fock, MP2 and
-closed-shell CCSD(T). The rules stay: no new dependency of the crate, an
-independent reference for every deliverable, reference tools in the
-cross-validation only.
+Proposed and accepted November 2026, after the thirteenth stage, from
+the gaps that remain in the table of section 1 and from items that
+earlier milestones left for later. As before, the stage starts with
+walks on graphs: open walks gain traps, losses and site energies, and
+the efficiency and arrival time of transport, the use case of 1.18, come
+from linear solves rather than from propagation to a guessed time. The
+noise row, untouched since 1.44, gets noisy and noise-scaled expectation
+values of circuits on hundreds of qubits by Pauli propagation, where the
+learned models of 1.31 reach only matrix-product states with unitary
+noise. Radical pairs, born correlated in their cage, bring the cage
+effects that 1.59 left out; their yields solve the same equations as the
+efficiency of transport, with the solvers of 1.63. Error correction gets
+erasures whose place is heralded, and decoders that use the heralds,
+which 1.8 and 1.10 left for later. Chemistry ends the stage with density
+fitting, which lifts the limit of 64 basis functions for Hartree–Fock,
+MP2 and closed-shell CCSD(T). The rules stay: no new dependency of the
+crate, an independent reference for every deliverable, reference tools
+in the cross-validation only.
 
 ### 1.63 — Transport to a trap: efficiency and arrival times under dephasing (M)
 
@@ -7334,8 +7335,8 @@ pairs. The GPU track, still parked (section 7).
     on the windows of 1.57, coupled-cluster references (1.62) on the
     integrals and orbitals of 1.15 and 1.23. None of the five depends on
     another, so the order is that of the table of gaps.
-22. **Fourteenth stage (proposed): walks first again, then limits the
-    plan itself recorded.** Transport to a trap (1.63) gives the open
+22. **Fourteenth stage: walks first again, then limits the plan itself
+    recorded.** Transport to a trap (1.63) gives the open
     walks of 1.13, 1.38 and 1.48 traps, losses and site energies, and
     puts a new Bartels–Stewart solver and the GMRES of 1.54 into
     `linalg`; radical pairs (1.65) take their yields from the same
@@ -7451,16 +7452,16 @@ Taken (October 2026):
   (1.59), NV centres at their level anticrossings (1.60), error models
   of long experiments and windows in parallel (1.61), coupled-cluster
   references (1.62). Release 1.10.0 (1.48 to 1.57) is not tied to it.
-* Fourteenth stage (November 2026, proposed): transport to a trap
+* Fourteenth stage (November 2026, accepted as proposed): transport to a trap
   (1.63), expectation values of large noisy circuits by Pauli
   propagation (1.64), radical pairs (1.65), erasures with heralds and
   decoders that use them (1.66), molecules beyond 64 basis functions by
   density fitting (1.67). SymPy, qiskit-addon-obp and RadicalPy join the
   cross-validation as references only (qiskit-addon-obp installs IBM's
   qiskit-ibm-runtime, used there only for a noise-model class); heralded
-  erasure stays in the qubit space, and leakage stays out. Release
-  1.10.0 (1.48 to 1.57), which still waits, and the thirteenth stage,
-  not yet in a release, are not tied to it.
+  erasure stays in the qubit space, and leakage stays out. No release
+  comes before this stage is delivered: release 1.10.0 (1.48 to 1.57)
+  and the thirteenth stage, not yet in a release, wait for it.
 * The browser playground stays, because it costs little to maintain: it
   is plain HTML and JavaScript without dependencies or a build step, it
   uses only the npm package's JSON interface, which the package's tests
