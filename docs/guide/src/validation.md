@@ -9,7 +9,7 @@ Every algorithm is checked against an independent reference:
 
 | Kind of reference | Examples |
 |---|---|
-| Closed forms | Grover's sin²((2k+1)θ); QAOA on rings, (2p+1)/(2p+2); the one-layer QAOA formula of Wang et al.; walk limits such as 145/169; T₁/T₂ decay; n! bunching; the running time of local adiabatic search; the classical random walk as the limit of fully dephased coined walks |
+| Closed forms | Grover's sin²((2k+1)θ); QAOA on rings, (2p+1)/(2p+2); the one-layer QAOA formula of Wang et al.; walk limits such as 145/169; T₁/T₂ decay; n! bunching; the running time of local adiabatic search; the classical random walk as the limit of fully dephased coined walks; the efficiency of transport to a trap on complete graphs, 1/(N − 1), 1/(N − 2) and 1 (Caruso et al.), and its mean arrival times; the detuned dimer with trap, losses and dephasing in exact rationals (SymPy) |
 | Published values | 0.6925 and 0.7559 for QAOA on large-girth cubic graphs; the full-CI energy of H₂/STO-3G; automorphism group orders |
 | Dense matrices | every gate, the QFT against the DFT matrix, Lanczos and Krylov against full diagonalisation |
 | A second method | adjoint, parameter-shift and finite-difference gradients; statevector against density matrix; quantum trajectories against density matrices (χ² tests); the quantum Fisher information against finite differences of the fidelity; four fermion encodings against each other |
@@ -57,6 +57,8 @@ deviation above rounding level fails the run.
 | Permanents (The Walrus) | 2.8·10⁻¹⁴ relative |
 | Detector error models of repetition and surface-code memory experiments (Stim), and of Stim's generated circuits imported | 1.0·10⁻¹⁵ relative; detection-event rates agree to sampling precision |
 | Matching decoder against PyMatching, same error model and syndromes | 1 differing prediction in 800 000 (8 circuits × 10⁵ shots) |
+| Transport to a trap, efficiency and mean arrival time (SymPy 1.14 exact rationals: the detuned dimer, K_N for N = 4–9 and 64 dense, and on ten orbitals at N = 64 and 1024) | 2.0·10⁻¹⁴ in the efficiency, 4.3·10⁻¹⁴ relative in the arrival time |
+| Transport to a trap against QuTiP 5.3's `liouvillian` solved directly (the dimer, K₅, random weighted graphs of 5–8 nodes, FMO, hypercubes Q₃–Q₅ on the full cube) and `mesolve` integrated until less than 10⁻¹² is left | `liouvillian`: 1.7·10⁻¹³ (FMO without dephasing, condition 9·10⁴), 3.5·10⁻¹⁴ relative; `mesolve`: 6.7·10⁻¹³, 6.8·10⁻¹¹ relative; the dimer's best dephasing rate, 39/20, to 1.3·10⁻⁷ |
 
 ## Robustness
 

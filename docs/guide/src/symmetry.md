@@ -182,7 +182,102 @@ assert abs(abs(coherent.entry(x, 0, 0, 7)) - 2.0**-d) < 1e-20   # every node 2^-
 Cartesian product whose factors dephase independently stays a product
 state, so each factor evolves on its own: `[(DephasingWalk(edge, …), 1000)]`
 is Q₁₀₀₀ with coordinate dephasing, and `count_distribution` gives the
-distribution of the distance travelled.
+distribution of the distance travelled. Its factors may carry site
+energies and dephasing per node, but not traps or losses: a factor that
+loses population has marginals that are not distributions, so such
+factors are refused (use the walk on the product graph).
+
+**Traps on orbitals and hypercubes.** The [transport to a
+trap](walks.md#transport-to-a-trap) reduces in the same way.
+`SymmetricOpenWalk` takes `site_energies`, `node_dephasing` (added to
+its `dephasing` terms), `traps` and `losses`, each constant on every
+orbit of the symmetries on nodes; anything else is refused, naming two
+nodes of one orbit with different values. A whole orbit of traps with
+equal rates is allowed, and the start must be fixed by every symmetry.
+`transport`, `dephasing_scan`, `optimal_dephasing` and `transport_trace`
+then work on the orbitals. On the complete graph K_N, the symmetries
+that fix the start and the trap leave ten orbitals at any N, and
+seventeen when they also fix a dephased node:
+
+```python
+import metatron_qso as q
+
+n = 1024
+fix_01 = [[0, 1, 3, 2] + list(range(4, n)), [0, 1] + list(range(3, n)) + [2]]
+walk = q.SymmetricOpenWalk(q.Graph.complete(n), "adjacency", symmetries=fix_01, traps={1: 1.0})
+r = walk.transport(0)
+print(walk.num_orbitals, round(r["efficiency"] * (n - 1), 9), round(r["arrival_time"], 4))  # 10 1.0 511.501
+assert abs(r["arrival_time"] - (n * n - 2 * n + 3) / (2 * (n - 1))) < 1e-9
+
+fix_012 = [[0, 1, 2, 4, 3] + list(range(5, n)), [0, 1, 2] + list(range(4, n)) + [3]]
+one = q.SymmetricOpenWalk(q.Graph.complete(n), "adjacency", symmetries=fix_012,
+                          traps={1: 1.0}, node_dephasing=[0, 0, 0.8] + [0] * (n - 3))
+r = one.transport(0)
+print(one.num_orbitals, round(r["efficiency"] * (n - 2), 9))            # 17 1.0
+```
+
+The solves are GMRES on the orbital generator in the orthonormal basis
+of the orbitals, preconditioned by a banded LU of the generator shifted
+by `max(10⁻²·hopping, 10⁻⁶·‖M‖∞)`, its orbitals ordered by reverse
+Cuthill–McKee to keep the band narrow. Orbitals cannot be split by a
+closure into bright and dark states as the dense path does, so the
+first solve is the adjoint one: it gives, for every orbital, the
+probability of being trapped or lost from there, which projects the
+start onto the bright states. The forward solve starts from that
+projection, so it stays consistent where the generator is singular, also
+on graphs with signed couplings, and the efficiency is read from both
+solves; their difference enters `error`.
+
+`HypercubeOpenWalk` takes the same terms by Hamming weight (arrays of
+`d + 1` values) and traps as `(weight, κ)`: every node of that weight is
+a trap, and `(d, κ)` is the antipode of the start. Transport runs up to
+d = 61, where the banded LU reaches its limit of 2²⁷ entries (2 GiB).
+Without dephasing at the interior weights, the walk from the start
+stays on the distance partition (one cell per weight, the column chain of
+`Quotient.hypercube`) at any d, so a `DephasingWalk` on the weighted path
+with couplings `√((k + 1)(d − k))` gives the same results beyond that:
+
+```python
+import math
+import numpy as np
+import metatron_qso as q
+
+cube = q.HypercubeOpenWalk(10, losses=0.05, traps=[(10, 1.0)])
+scan = cube.dephasing_scan([0, 0.1, 1, 10])          # dephasing on every node
+print(np.round(scan["efficiency"], 6))               # [0.831038 0.690879 0.234277 0.011426]
+print(np.round(scan["arrival_time"], 4))             # [ 3.1184  2.6003  2.9052 25.5786]
+
+def chain(d: int) -> q.DephasingWalk:
+    edges = [(k, k + 1) for k in range(d)]
+    weights = [math.sqrt((k + 1) * (d - k)) for k in range(d)]
+    return q.DephasingWalk(q.Graph.from_edges(d + 1, edges, weights=weights), "adjacency",
+                           traps={d: 1.0}, losses=0.05)
+
+q20 = q.HypercubeOpenWalk(20, losses=0.05, traps=[(20, 1.0)]).transport()
+assert abs(q20["efficiency"] - chain(20).transport(0)["efficiency"]) < 1e-12
+far = chain(200).transport(0)                        # Q₂₀₀
+print(f"{far['efficiency']:.6f} {far['arrival_time']:.4f}")
+```
+
+The chain's own Laplacian is not the hypercube's, so the chain takes the
+adjacency generator (a constant diagonal changes nothing). With
+dephasing inside, the populations of one weight no longer move together
+and the chain is not exact (Q₄ with dephasing 0.5 and loss 0.05: 0.7104
+on the cube, 0.8497 on the chain).
+
+**Accuracy on large hypercubes.** Two kinds of hypercube transport are
+ill-conditioned, and only one shows it. Without dephasing and loss, some
+states of the chain reach the trap extremely slowly; η = 1 stays exact,
+but the arrival time from the orbitals is off by 2.3·10⁻¹⁰ (relative) at
+Q₃₀ and 1.2·10⁻⁴ at Q₄₀ against an 80-digit solution of the chain, while
+`error` (10⁻¹⁵) and `condition` (2.7·10²) look harmless. The dense solve of
+the chain is off by 3.8·10⁻⁷ at Q₄₀ and does report the conditioning
+(4.4·10¹³). With dephasing on every node and no loss the walk is nearly
+classical and the arrival time grows to 6.6·10¹¹ at Q₄₀; there η is off
+by 1.0·10⁻⁹ at Q₃₀, 7.1·10⁻⁷ at Q₄₀ and 4.1·10⁻³ at Q₅₀, which `error`
+does show (3.1·10⁻⁹, 2.1·10⁻⁶, 1.2·10⁻²), and τ is not resolved at Q₅₀.
+With a loss of 0.05 on every node, as in the examples above, the error
+estimates stay below 3·10⁻¹⁵ up to Q₄₀ (condition below 2·10³).
 
 **Coined walks.** `SymmetricCoinedWalk` reduces a `DecoherentCoinedWalk` to
 the orbitals of pairs of arcs. The coin must be invariant under the

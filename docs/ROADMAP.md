@@ -58,7 +58,7 @@ which withdraws the results of version 1.
 | Statevector speed | specialised kernels (1.1); gate fusion and cache blocking (1.3.0): 16-qubit layers 4.7× and 18–24-qubit layers 1.6–2.6× faster than in 1.2; batched evaluation; AVX and NEON kernels close to memory bandwidth and a blocked adjoint pass (1.11); single precision, one more qubit and about twice the speed on large registers (1.20); a worker pool that stays awake between short simulations (1.24) | spinning workers cost CPU time between simulations (`QSO_POOL_SPIN_US=0` turns it off) |
 | Boson sampling | exact probabilities and exact sampling (1.1); partial distinguishability, loss and Gaussian boson sampling with hafnians and torontonians (1.14) | mixed Gaussian states with many photons spread over many modes are impractical (10¹² operations at 20 photons in 10 modes) |
 | Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4); slow noise from Markov processes (telegraph, Ornstein–Uhlenbeck, quasi-static, 1/f) averaged exactly on density matrices (1.44) | noise learning for layers of two-qubit Clifford gates only, on density matrices up to 10 qubits and Pauli frames up to 64 (1.12, 1.31), with non-Pauli channels twirled one at a time; mitigation with the learned model above 24 qubits only on matrix-product states, for channels that are mixtures of unitaries (1.31); no leakage; channels on at most four qubits (1.30); slow noise averaged exactly up to 12 qubits and processes with finitely many states (1.44), sampled on trajectories beyond (1.30); virtual distillation (1.17) mitigates only its measured copies' preparation |
-| Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18); interacting bosons, fermions and distinguishable particles with certificates for graph isomorphism (1.29); symmetry for driven walks, open walks on orbitals, coined walks with dephasing, hypercubes with dephasing up to d = 230 (1.38); interacting walkers on the orbits of automorphisms (three bosons on Q₉: 2284 orbits of 22.5 million configurations) and up to four particles on hypercubes (1.43); open walks on large symmetric graphs from point stabilisers (Q₁₈, H(4, 10), J(24, 4); 1.48); interacting walkers on Hamming, Johnson and Kneser graphs from canonical forms (1.53) and on any graph from minimal images under a group (three fermions on Paley(3209): 1068 orbits of 5.5·10⁹ configurations; 1.58) | interacting walkers without symmetry stop at 2²² configurations, and dense graphs with small groups stay dense on their orbits (three bosons from one node of Paley(809) exceed 2²⁶ entries; 1.58); open walks beyond 8192 nodes need a start whose stabiliser leaves few orbitals (dense graphs and circulants stay at 8192 nodes; 1.48); pretty good transfer on other graphs has no exact reference |
+| Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18); interacting bosons, fermions and distinguishable particles with certificates for graph isomorphism (1.29); symmetry for driven walks, open walks on orbitals, coined walks with dephasing, hypercubes with dephasing up to d = 230 (1.38); interacting walkers on the orbits of automorphisms (three bosons on Q₉: 2284 orbits of 22.5 million configurations) and up to four particles on hypercubes (1.43); open walks on large symmetric graphs from point stabilisers (Q₁₈, H(4, 10), J(24, 4); 1.48); interacting walkers on Hamming, Johnson and Kneser graphs from canonical forms (1.53) and on any graph from minimal images under a group (three fermions on Paley(3209): 1068 orbits of 5.5·10⁹ configurations; 1.58); transport to a trap with traps, losses, site energies and dephasing per node, its efficiency and mean arrival time by linear solves, dark states and the best dephasing rate, dense to 2048 nodes, on orbitals (K₈₁₉₂ on ten orbitals) and on hypercubes to d = 61 (1.63) | interacting walkers without symmetry stop at 2²² configurations, and dense graphs with small groups stay dense on their orbits (three bosons from one node of Paley(809) exceed 2²⁶ entries; 1.58); open walks beyond 8192 nodes need a start whose stabiliser leaves few orbitals (dense graphs and circulants stay at 8192 nodes; 1.48); pretty good transfer on other graphs has no exact reference; the arrival time of transport has no error estimate and on large coherent hypercubes is limited by the conditioning (Q₄₀: 1.2·10⁻⁴ relative), and the orbital solves refactorise a banded LU at every dephasing rate (1.63) |
 | Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); MP2, CCSD and CCSD(T) with frozen cores, closed shells in spatial orbitals and UHF and ROHF in spin orbitals, equal to PySCF's to 2.1·10⁻¹⁰ Ha (1.62); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37); the ¹³C bath of an NV centre by the cluster-correlation expansion (1.39); the optical cycle, ODMR, pulsed readout and magnetometer sensitivity in fields of any direction, and ensembles (1.40); sparse relaxation blocks propagated by Krylov steps, Redfield relaxation from sparse terms and equivalent spins: seven and eight relaxing protons for seconds (1.41); optimal control with relaxation on sparse blocks and on the orbits of equivalent spins, seven and eight spins (1.46); Redfield relaxation with anisotropic diffusion and model-free internal motion (1.49); reaction kinetics with spins: PASADENA, ALTADENA and SABRE as they run (1.50); field profiles with relaxation beyond six spins, the relaxation interpolated over the field (1.51); exchange and reactions on sparse blocks with iterative steady states and field profiles: SABRE with nine spins in the complex beside seven in the substrate (1.54); reactions of two spin-carrying reactants, the product formed in the product of their states: SABRE whose complex keeps its hydrides and swaps them with a hydrogen pool, PHIP from a pool whose singlet decays (1.59); the optical cycle with the nitrogen and one ¹³C at the level anticrossings, ¹⁵N polarised to 0.95 at 51 mT, the fluorescence dip at 102.4 mT, a microwave in the laboratory frame by Floquet harmonics (1.60); Redfield relaxation applied without storing it, with its analytic field derivative: nine and ten relaxing spins whose superoperator would need 6 to 74 GB (1.55); product-formula bounds whose remainder runs over the terms that do not commute, the error averaged over states, and step counts for a target error: half the steps of the bounds of Childs et al. for Heisenberg chains of 10 to 64 spins (1.56) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); coupled cluster holds every integral (64 basis functions, 100 correlated spin orbitals: 1.55 GB at 96) and runs on one thread, 1.6 to 2 times PySCF's time per closed-shell iteration and 6 to 12 times per open-shell one; no (T) for ROHF (1.62); the commutator bound of product formulas (1.56) still sums its remainder by the triangle inequality, about 2.3 times the empirical step counts of Heisenberg chains and loose at few steps and order 6, where its budget stops the degree early; Redfield relaxation takes rigid-body diffusion and model-free internal motion, not correlated motions of groups (1.49), and propagations beyond 1.5·10¹² operations or 2 GiB are refused (eleven protons with dipolar relaxation, nine for 100 s; 1.41); chemical exchange and reaction kinetics take Krylov steps beyond 2048 elements per block (1.54), unaffordable in the laboratory frame at millitesla fields and more; reactants meet uncorrelated (no cage effects), and a reaction whose partner's amount changes takes steps that resolve the frequencies of the blocks it feeds (PHIP at 1 µT with a three-spin product: 2 s of reaction in 2 s, 9 s with the hydrogen a pool with spins; a four-spin product at 5 µT over 3 s exceeds the work limit; 1.50, 1.59); field profiles with relaxation hold the relaxation at up to 33 fields (1.51), or apply Redfield relaxation without storing it where those would not fit (1.55), where work bounds them (eight spins with dipolar relaxation: two steps over 0.02 s per evaluation within the limit), and have many local optima; an evaluation of eight relaxing spins takes tens of seconds (1.46); the NV bath of 1.39 takes ideal pulses only (finite ones: the generalised expansion, 1.45), its expansion can diverge (results beyond `|L| = 1` are refused), and the nuclei next to the vacancy need given contact couplings (1.39); the optical cycle with nuclei is dense in Liouville space: 42 levels (¹⁴N and ¹³C) take 9 s for a steady state and 230 s with a microwave, and more nuclei do not fit (1.60) |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
 | Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22); exact circuit distances of any model by a parallel search or the Brouwer–Zimmermann enumeration, with the lightest logical error as circuit locations (1.42); the search on the orbits of an error model's symmetries: [[144, 12, 12]] over three rounds of the depth-8 cycle has circuit distance 10 (1.47); logical failure rates far below sampling by splitting, with their leading term (surface codes to 10⁻⁹, [[72, 12, 6]] to 10⁻¹³; 1.52); decoding in sliding windows of rounds by matching or BP+OSD, round by round, at constant time per round up to 4000 rounds (1.57); error models in one pass backwards, linear in the rounds; circuits that keep their repeated blocks, sampled as they run, their models folded: 10⁵ rounds of distance 5 in 1.4 s, equal to Stim's at 10⁴; windows decoded in parallel, 2 to 2.4 times as fast on four cores (1.61) | exact circuit distances need time exponential in the distance (each weight about 17 times the last on bicycle circuits); symmetries divide it by a factor that grows with their number (41 to 43 for 72); splitting needs a burn-in long enough, which its error does not show (1.52); the folded model is still expanded into all its errors (5.6 million, about 350 MB, for 10⁵ rounds of distance 5), and parallel windows gain 2 to 2.4 on four cores, as a shot's syndrome and commits stay on one thread (1.61) |
@@ -6984,7 +6984,7 @@ MP2 and closed-shell CCSD(T). The rules stay: no new dependency of the
 crate, an independent reference for every deliverable, reference tools
 in the cross-validation only.
 
-### 1.63 — Transport to a trap: efficiency and arrival times under dephasing (M)
+### 1.63 — Transport to a trap: efficiency and arrival times under dephasing (M, delivered)
 
 Use case: excitation transport through networks that end in a trap, such
 as the seven chromophores of the FMO complex and the photonic
@@ -7032,6 +7032,239 @@ on small graphs; without dephasing, the hypercube with a trap at the
 antipode equal to the column chain of 1.3; site energies in
 `ContinuousWalk` equal to `DrivenWalk` with constant coefficients
 (1.13).
+
+Delivered in `walks/transport.rs` (`TransportOptions`, `TransportResult`,
+`SolveReport`, `DephasingOptimum`, `TransportState`,
+`MAX_TRANSPORT_WORK`, `MAX_TRANSPORT_FACTOR_ENTRIES`),
+`walks/transport/dense.rs`, `walks/symmetric/transport.rs` and
+`linalg/{gmres, sylvester, banded}.rs`; the builders `with_site_energies`,
+`with_traps`, `with_losses`, `with_node_dephasing` and the methods
+`transport`, `dephasing_scan`, `optimal_dephasing`, `transport_trace`
+on `DephasingWalk`, `SymmetricOpenWalk` and `HypercubeOpenWalk`, with
+`transport_from` and `dark_states` on `DephasingWalk`;
+`ContinuousWalk::with_site_energies`; Python keyword arguments
+`site_energies`, `node_dephasing`, `traps`, `losses` and the same methods;
+`qso transport`, `qso walk --energies`:
+
+- **The model.** `H_eff = H − iΣ_t κ_t P_t − (i/2)Σ_j Γ_j P_j` with `H`
+  the graph's Laplacian or adjacency plus `diag(ε)`, and dephasing
+  `γ_j` per node; a uniform `γ_j` is the `rate` of 1.13 bit for bit. The
+  conventions of Caruso et al. (`γ = 2γ_C`) and Rebentrost et al.
+  (`Γ = 2Γ_R`) are converted in the module docs and the guide. Site
+  energies also enter the static `ContinuousWalk`, whose
+  eigendecomposition is now computed on first use and whose quotient
+  path beyond 2048 nodes colours the nodes by their energies.
+- **The dense path** (up to 2048 nodes): a closure finds the bright
+  states (the smallest space that holds the traps and the nodes with more
+  than the smallest loss and is closed under `H` and the projectors of
+  the dephased nodes it meets; a uniform loss is a shift, not a seed);
+  on them one complex Schur form of `H′_B`, centred so that a common
+  energy offset costs no digits, turns the coherent and decaying part
+  into triangular Sylvester equations (recursive blocked Bartels–Stewart)
+  and GMRES runs over the populations that dephasing feeds back,
+  preconditioned by the classical rate matrix when every node is
+  dephased; at most two refinements follow. `X` then gives `η`, the loss
+  and per-trap shares, `Y = ∫tρ dt` the arrival time.
+- **On orbitals**: site terms must be constant on every orbit of the
+  symmetries on points (checked by `O(n)` orbital look-ups; a whole orbit
+  of traps with equal rates is allowed, the start must be fixed);
+  `HypercubeOpenWalk` takes them by Hamming weight and traps by weight.
+  An adjoint solve gives the efficiency of every start and, with the
+  loss solve, the projector onto the bright states, from which the
+  forward solve starts; `ητ = ⟨A, X⟩`. GMRES is right-preconditioned by
+  one banded LU of `M̂ − σI` after reverse Cuthill–McKee.
+- **Reports and limits.** Every solve reports its GMRES iterations,
+  backward error and a condition estimate; every result an estimate
+  `error` of the absolute error of `η`, the weight never absorbed
+  (`η + lost + dark = 1`), the bright dimension or number of orbitals and,
+  on the dense path, the slowest decay of the bright states. `τ` is
+  `None` when `η < max(10⁻¹², 10³·error)`. A call stops beyond
+  2·10¹³ estimated operations; the band of the orbital preconditioner is
+  limited to 2²⁷ entries (2 GiB), which is d = 61 for hypercubes.
+- **Dark states, scans, the best rate and traces.** `dark_states` gives
+  an orthonormal basis of the states that never reach a trap;
+  `dephasing_scan` adds a uniform rate to every node, with at most two
+  closures and Schur forms for the whole scan on the dense path (the
+  orbitals refactorise per rate); `optimal_dephasing` evaluates a
+  logarithmic grid of at least 13 rates and refines the best by golden
+  section in the logarithm of the rate, with `interior` false at an end
+  of the range or a flat `η`; `transport_trace` propagates the sinks and
+  the loss with the density matrix (RK4 up to 512 nodes, the orbital
+  exponential on `[x; y]` with `y′ = x`).
+- **Linear algebra.** `linalg::gmres` (1.54's iteration moved step for
+  step, bit-identical for the exchange steady states, with a
+  backward-error stop and a relative breakdown test), `linalg::sylvester`
+  (the Schur form with a bounded iteration and one Householder retry,
+  products in fixed panels so bit-identical on any number of threads)
+  and `linalg::banded` (reverse Cuthill–McKee and `zgbtf2` with solves
+  for `A` and `A†`), all crate-internal.
+- **Python, command line and cross-validation.** Keyword arguments on
+  the existing classes (traps as a dict or pairs, losses as one number
+  or an array) and dict results (scans and traces as arrays); `qso
+  transport` with `--scan` and `--best-rate`. SymPy 1.14 joins the
+  cross-validation for the exact rationals, and QuTiP's `liouvillian` and
+  `mesolve` check dense, orbital and hypercube results, in a child
+  process pinned to one thread.
+
+Changes to the plan:
+
+- **The existing open walks gained the terms**, rather than a new
+  problem type: one result type for all three walks, mirroring their
+  `evolve`.
+- **The bright start on orbitals comes from the adjoint solve.** A
+  closure over orbits of points, as on the dense path, fails on signed
+  graphs; the adjoint column is the projector onto the bright states and
+  keeps the forward solve consistent where dark states make the
+  generator singular.
+- **A third solver, the banded LU.** The plan named GMRES on the orbital
+  generator; it needs a preconditioner, and a dense LU holds the square
+  of the number of orbitals. The banded LU after reverse Cuthill–McKee
+  holds a band of about twice the bandwidth per orbital and reaches
+  d = 61 within 2 GiB. Its shift is `σ = max(10⁻²·hopping,
+  10⁻⁶‖M̂‖∞)`: tied to the hopping, so strong dephasing or strong traps
+  do not slow GMRES down (the iterations fall as the dephasing grows,
+  below).
+- **`DephasingWalk` builds up to 2048 nodes** for transport; its
+  density-matrix evolution and traces stay at 512 (RK4 costs about
+  `n⁴t` on dense graphs).
+- **Refinement.** On the dense path the residual is computed in the
+  bright basis and refined while it exceeds `tolerance·‖ρ₀‖`: the
+  design's backward-error rule missed its own tolerances under strong
+  dephasing, through cancellation between the decay in the Schur form
+  and its refeeding.
+  On orbitals the forward solve is always refined once, the adjoint
+  solves only when every node loses population (with dark states a
+  refinement adds kernel components); without it small read-outs on
+  small orbitals lost relative accuracy on the largest weekly cases.
+- **The Schur form is centred**, `H − cI` with `c` the centre of the
+  diagonal: raw FMO energies (around 12 400 cm⁻¹) cost digits before
+  (now a test: raw and centred energies agree).
+- **K₈₁₉₂ in Rust only**, in a weekly test (peak 6.0 GiB): the edge
+  limit of the graph generators stops at K₂₈₉₆, so the cross-validation
+  stops at K₁₀₂₄.
+- **The best-rate arrival time** is checked against a fresh solve at the
+  rate found, since `η` is flat at its maximum and the rate is known only
+  to about 10⁻⁷.
+
+Not done, and why:
+
+- **An error estimate for τ.** `error` estimates the error of `η` only, and τ's accuracy
+  follows the conditioning (open issues below); a bound would need the
+  forward error of `Y`, not its backward error.
+- **The efficiency of every start from one dense adjoint solve**, Newton
+  steps on `dη/dγ` and the variance of the arrival time (a third
+  solve): not in the plan, and none was needed for its use cases.
+- **A preconditioner in a general bright basis**: there the population
+  GMRES runs unpreconditioned; only node-aligned bright spaces (every
+  node dephased) get the classical one.
+- **The quotient path for transport and a symmetry search**: the column
+  chain is the documented route beyond d = 61 without interior
+  dephasing, and a quotient solver would make the hypercube-equals-chain
+  check circular.
+- **WebAssembly bindings** for transport.
+
+Measured (release build, this four-core machine; `measure_transport`
+and `measure_orbital_transport`, run at four threads and at one; the
+one-thread runs shared the machine with a one-job build, so their times
+are upper bounds). Dense path: a random weighted graph with site
+energies, loss 0.01 on every node and a trap at the last node, dephasing
+on every node or on every other node (r = n in every case):
+
+| n | Dephasing | Closure and Schur form, 4 / 1 threads | Solves, 4 / 1 threads | GMRES X / Y | Without the classical preconditioner (4 threads) | error |
+|---|---|---|---|---|---|---|
+| 256 | every node | 0.32 / 0.40 s | 1.5 / 2.1 s | 31 / 46 | 44 / 64, 1.9 s | 9.9·10⁻¹⁴ |
+| 256 | every other | 0.35 / 0.45 s | 1.5 / 2.1 s | 36 / 55 | — | 8.5·10⁻¹⁴ |
+| 512 | every node | 2.8 / 3.7 s | 7.9 / 14.8 s | 29 / 45 | 44 / 67, 10.1 s | 1.5·10⁻¹³ |
+| 512 | every other | 3.2 / 3.1 s | 8.5 / 13.3 s | 40 / 61 | — | 1.4·10⁻¹³ |
+| 1024 | every node | 26.4 / 28.2 s | 46.8 / 126 s | 31 / 47 | 46 / 71, 64.6 s | 2.7·10⁻¹³ |
+| 1024 | every other | 28.4 / 31.5 s | 47.5 / 119 s | 44 / 67 | — | 2.7·10⁻¹³ |
+| 2048 | every node | 329 s (4 threads only) | 363 s | 35 / 53 | refused by `MAX_TRANSPORT_WORK` after 98 iterations | 5.3·10⁻¹³ |
+| 2048 | every other | 669 s in all (4 threads; through Python, on a graph of the same kind) | (in the 669 s) | 45 / 68 | — | 5.5·10⁻¹³ |
+
+At 2048 nodes the work limit of 2·10¹³ operations binds: with dephasing
+on every node it allows about a hundred population iterations, so the
+run without the classical preconditioner was refused after 98, and the
+preconditioned one needed 88. The Schur form is nalgebra's and
+sequential, so it gains nothing from threads; its backward error grows
+from 2.0·10⁻¹³ at 256 nodes to 7.9·10⁻¹³ at 1024 and 1.5·10⁻¹² at 2048.
+The classical preconditioner saves a third of the iterations. Results at
+one and four threads agree in every printed digit (the tests check
+bit-identity). Peak memory: 355 MiB up to 1024 nodes, 1.25 GiB at 2048.
+Both 2048-node runs overlapped for a minute or two with a build or with
+tests. On orbitals, hypercubes with loss 0.05 and a trap at the antipode
+take about the same time at one and four threads (Q₄₀: 5.1 and 5.2 s at
+γ = 0; the banded LU is sequential):
+
+| Cube | Orbitals | Time per solve, γ = 0 … 10 | GMRES adjoint / loss / forward | condition | error |
+|---|---|---|---|---|---|
+| Q₁₀ | 286 | < 0.01 s | 17 / 18 / 17 … 14 / 12 / 14 | 4.7·10² … 6.6·10² | ≤ 1.4·10⁻¹⁵ |
+| Q₂₀ | 1771 | 0.07–0.11 s | 19 / 18 / 19 … 13 / 12 / 14 | 8.8·10² … 1.1·10³ | ≤ 2.0·10⁻¹⁵ |
+| Q₃₀ | 5456 | 1.0–1.2 s | 20 / 17 / 20 … 13 / 10 / 13 | 1.3·10³ … 1.5·10³ | ≤ 3.0·10⁻¹⁵ |
+| Q₄₀ | 12 341 | 4.5–5.2 s | 20 / 16 / 20 … 12 / 9 / 12 | 1.7·10³ … 1.9·10³ | ≤ 2.3·10⁻¹⁵ |
+| Q₅₀ | 23 426 | 16.0 s (γ = 1 only) | 14 / 10 / 14 | — | 2.8·10⁻¹⁵ |
+| Q₆₁ | 41 664 | 47.9 s (γ = 1 only) | 12 / 9 / 13 | — | 1.1·10⁻¹⁴ |
+
+Q₆₂ is refused before the band is allocated (138 290 880 entries against
+2²⁷). Q₅₀ and Q₆₁ together peak at 2.0 GiB. The weekly tests take 121 s
+for K₈₁₉₂ on ten and seventeen orbitals (four cases, peak 6.0 GiB) and
+53 s for Q₄₀ and Q₆₁ (peak 1.95 GiB).
+
+Without loss, coherent Q₄₀ takes 15.2 s (69 adjoint and 166 forward
+iterations). K₂₀₄₈ on ten orbitals takes 1.2 s to build and under a
+millisecond to solve. In Python the dimer's `transport` takes 27 µs and
+its `optimal_dephasing` (59 solves) 0.48 ms; the transport
+cross-validation takes 29 s on one thread.
+
+Validation: the detuned dimer equals SymPy's exact rationals at
+dephasing 0, 1, 3, 10 and 100 for both generators (η and the loss to
+10⁻¹³, τ to 10⁻¹¹ relative, as tested; through Python and `qso
+transport` too), and its best rate is 39/20 (found to 1.3·10⁻⁷, η* =
+800/963 to 10⁻¹³). K_N without loss gives `1/(N − 1)`, `1/(N − 2)` with
+dephasing at one more node and 1 with dephasing everywhere, with the
+closed-form arrival times, dense (N = 5, 16, 64) and on ten and
+seventeen orbitals (N = 5, 64, 1024, 2048 and, weekly, 8192) to 10⁻¹²
+and 10⁻¹⁰; SymPy's closed forms with loss and dephasing on the classes
+of K_N to 10⁻¹⁴ and 10⁻¹¹. Dark states on cycles, cubes, stars and
+signed graphs, random graphs against a test-side Liouville solve, the
+time integral of the propagated sink population, and `evolve` with
+every term against the Liouville exponential hold in the unit tests;
+orbitals equal the dense path on the star, Petersen, C₈ and Q₁₀ (1024
+nodes, to 10⁻¹¹), and hypercubes Q₃–Q₅ with energies and losses equal
+the full cube, the orbitals of `coordinate_permutations` and the column
+chain to 10⁻¹². Q₂₀ without dephasing equals the chain. Site energies in
+`ContinuousWalk` equal `DrivenWalk` with constant coefficients. In the
+cross-validation (one thread, 29 s): SymPy's rationals (dimer, K₄–K₉ and
+K₆₄ dense, K₆₄ and K₁₀₂₄ on orbitals) to 2.0·10⁻¹⁴ in η and 4.3·10⁻¹⁴ in
+τ (relative); QuTiP's `liouvillian` solved directly (dimer, K₅, eight
+random graphs of 5 to 8 nodes, FMO at five rates, Q₃–Q₅ on the full
+cube) to 1.7·10⁻¹³ (FMO without dephasing, condition 9·10⁴) and
+3.5·10⁻¹⁴; `mesolve` integrated until less than 10⁻¹² is left to
+6.7·10⁻¹³ and 6.8·10⁻¹¹.
+
+Open issues, recorded for the review:
+
+- **τ on large coherent hypercubes.** Without dephasing and loss, the
+  orbital solves give τ of Q₃₀ off by 2.3·10⁻¹⁰ and of Q₄₀ by 1.2·10⁻⁴
+  (relative, against an 80-digit solution of the chain), while `error`
+  (1.2·10⁻¹⁵) and `condition` (2.7·10²) look harmless; the dense chain
+  is off by 3.8·10⁻⁷ at Q₄₀ and reports condition 4.4·10¹³. With
+  dephasing on every node and no loss, η of Q₃₀, Q₄₀ and Q₅₀ is off by
+  1.0·10⁻⁹, 7.1·10⁻⁷ and 4.1·10⁻³, which `error` does show (3.1·10⁻⁹,
+  2.1·10⁻⁶, 1.2·10⁻²; τ is not resolved at Q₅₀). The guide states both;
+  `condition` on orbitals measures the solve, not the read-out.
+- **The work limit at 2048 nodes.** A dense call with dephasing on every
+  node of a 2048-node graph has room for about a hundred population
+  iterations within `MAX_TRANSPORT_WORK`; the measured random graph
+  needed 88 with the classical preconditioner and was refused after 98
+  without it, so "dense up to 2048 nodes" holds for well-conditioned
+  dephasing only.
+- **The band limit's message.** Q₆₂ is refused through `TooManyQubits`
+  ("transport preconditioner (band entries) supports at most 134217728
+  qubits, requested 138290880"): the existing error variant names qubits
+  where it means band entries.
+- **A slow validation test.** `hypercube_q10_on_orbitals_equals_the_dense_path`
+  (dense Q₁₀, 1024 nodes) takes 63 s on one thread in release; the
+  WebAssembly test run, single-threaded and slower, was not timed.
 
 ### 1.64 — Expectation values of large noisy circuits by Pauli propagation (M)
 

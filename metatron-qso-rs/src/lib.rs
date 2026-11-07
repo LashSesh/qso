@@ -12,7 +12,7 @@
 //! | [`algorithms`] | adjoint gradients, VQE, QAOA-MaxCut, Grover, QFT/phase estimation, variational classifier, model Hamiltonians |
 //! | [`optimize`] | L-BFGS, Adam, Nelder–Mead, SPSA, gradient descent |
 //! | [`graph`] | graphs, Platonic solids, Metatron's Cube / Fruit of Life, exact automorphism groups |
-//! | [`walks`] | continuous-time quantum walks, spatial search, dephasing, classical baselines |
+//! | [`walks`] | continuous-time quantum walks, spatial search, dephasing, transport to a trap, classical baselines |
 //! | [`photonics`] | linear interferometers, permanents, exact boson sampling |
 //! | [`backend`] | execution backends and shot-based expectation values |
 //! | [`linalg`] | Hermitian eigensolvers, Lanczos, Krylov propagation, sparse matrices |

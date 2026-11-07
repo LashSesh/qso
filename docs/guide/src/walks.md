@@ -41,6 +41,29 @@ assert big.spectrum is None and big.cyclic_dimension(0) == 13
 print(big.limiting_distribution(0)[:3])
 ```
 
+**Site energies** `ε_j` add `Σ_j ε_j|j⟩⟨j|` to `H`; they are not scaled
+by γ. A detuning holds the walker back: on a dimer with energies 3 and 0
+at most 4/13 of it crosses over, and 2/13 on average. Beyond 2048 nodes,
+energies that take one value on each cell of the start's equitable
+partition (colour refinement now also separates the energies) keep the
+walk on the cells, so the hypercube Q₁₂ with energies by distance from
+the start still has 13 dimensions; otherwise the cyclic subspace or Krylov
+propagation takes over, as without energies.
+
+```python
+import math
+import metatron_qso as q
+
+dimer = q.ContinuousWalk(q.Graph.path(2), "adjacency", site_energies=[3.0, 0.0])
+print(dimer.probabilities(0, math.pi / math.sqrt(13)))       # 9/13 and 4/13
+assert abs(dimer.limiting_distribution(0)[1] - 2 / 13) < 1e-12
+
+d = 12
+weights = [bin(u).count("1") for u in range(1 << d)]
+cube = q.ContinuousWalk(q.Graph.hypercube(d), site_energies=[0.1 * w for w in weights])
+assert cube.spectrum is None and cube.cyclic_dimension(0) == 13
+```
+
 ## Spatial search
 
 Childs–Goldstone search adds an oracle term −|w⟩⟨w| for the marked nodes w.
@@ -65,13 +88,14 @@ classical search. The technical note checks this for N up to 1024.
 
 ## Decoherence
 
-`DephasingWalk` adds Lindblad dephasing at a given rate κ. With κ = 0 it
+`DephasingWalk` adds Lindblad dephasing at a given `rate`. With rate 0 it
 reproduces the coherent walk. For strong dephasing the populations follow
-the classical master equation dp/dt = −(2γ²/κ)·L·p. This is the quantum
-Zeno regime: the walk becomes classical and slows down as κ grows.
+the classical master equation dp/dt = −(2γ²/rate)·L·p. This is the quantum
+Zeno regime: the walk becomes classical and slows down as the rate grows.
 On symmetric graphs the density matrix reduces to the orbitals of the
 symmetry group, which reaches hypercubes of any dimension up to 230 (see
-[Symmetry and state transfer](symmetry.md)).
+[Symmetry and state transfer](symmetry.md)). The density matrix is
+evolved for up to 512 nodes.
 
 ```python
 import numpy as np
@@ -83,6 +107,268 @@ for rate in [0.0, 1.0, 10.0]:
     print(rate, np.round(p[:3], 4))
 print(np.round(q.classical_walk_probabilities(g, 0, 3.0)[:3], 4))
 ```
+
+**Dephasing per node.** `node_dephasing` gives every node its own rate
+`γ_j` instead of one `rate` (give one or the other), and `site_energies`
+adds energies as in `ContinuousWalk`. The master equation is
+`dρ/dt = −i[H, ρ] + Σ_j γ_j (P_j ρ P_j − ½{P_j, ρ})` with `P_j = |j⟩⟨j|`,
+so the entries of ρ change as follows:
+
+| Entry | Decays at | Rotates at |
+|---|---|---|
+| `ρ_jj` | — (with traps and losses: `2κ_j + Γ_j`) | — |
+| `ρ_ab`, `a ≠ b` | `(γ_a + γ_b)/2` (with traps and losses: `+ k_a + k_b`, `k = κ + Γ/2`) | `−i(ε_a − ε_b)` |
+
+Equal rates on every node are the uniform `rate`, bit for bit:
+
+```python
+import numpy as np
+import metatron_qso as q
+
+g = q.Graph.fruit_of_life()
+uniform = q.DephasingWalk(g, rate=0.5).populations(0, 1.7)
+per_node = q.DephasingWalk(g, node_dephasing=[0.5] * 13).populations(0, 1.7)
+assert np.array_equal(uniform, per_node)
+one_node = q.DephasingWalk(g, node_dephasing=[2.0] + [0.0] * 12, site_energies=[0.3] * 13)
+print(np.round(one_node.populations(0, 1.7)[:3], 4))
+```
+
+## Transport to a trap
+
+An excitation hops over a network until a trap absorbs it or it is lost
+on the way: the chromophores of a light-harvesting complex such as FMO,
+photonic waveguides, trapped ions and superconducting circuits in which
+dephasing is added on purpose. The questions are how much of it reaches
+the trap (the *efficiency*), how fast (the *mean arrival time*) and at
+which dephasing rate transport works best. `DephasingWalk` answers them
+with linear solves, not by propagating to a guessed time.
+
+### The model
+
+```text
+dρ/dt = −i(H_eff ρ − ρ H_eff†) + Σ_j γ_j (P_j ρ P_j − ½{P_j, ρ})
+H_eff = H − i Σ_t κ_t P_t − (i/2) Σ_j Γ_j P_j,     P_j = |j⟩⟨j|
+```
+
+| Symbol | Meaning | Argument |
+|---|---|---|
+| `H` | `γL` or `−γA` plus `diag(ε)` | `generator`, `gamma`, `site_energies` |
+| `γ_j` | dephasing rate of node `j` | `rate` (every node) or `node_dephasing` |
+| `κ_t` | trap rate: the trap's sink fills at `2κ_t ρ_tt` | `traps`, a dict `{node: κ}` or pairs |
+| `Γ_j` | loss rate: node `j` loses population at `Γ_j ρ_jj` | `losses`, one number for every node or one per node |
+
+The literature writes these rates in more than one way. Converted to QSO:
+
+| Written as | In QSO |
+|---|---|
+| dephasing `2γ_C(PρP − ½{P, ρ})` (Caruso, Chin, Datta, Huelga and Plenio, J. Chem. Phys. 131, 105106 (2009); Plenio and Huelga 2008) | `γ = 2γ_C` |
+| loss `−iΓ_R P` in the effective Hamiltonian (Rebentrost, Mohseni, Kassal, Lloyd and Aspuru-Guzik, New J. Phys. 11, 033003 (2009)) | `Γ = 2Γ_R` |
+| a sink fed at `κ′ρ_tt` | `κ = κ′/2` |
+
+The factor matters: with the dephasing written the other way, the dimer
+below has the efficiency 0.830723 at rate 1, not 0.823024.
+
+### Efficiency and arrival time
+
+The time integrals `X = ∫₀^∞ ρ dt` and `Y = ∫₀^∞ tρ dt` solve the linear
+equations `𝓛(X) = −ρ₀` and `𝓛(Y) = −X`. From them come
+
+- the efficiency `η = 2Σ_t κ_t X_tt`, and per trap in `trapped`;
+- the population `lost` on the way, `Σ_j Γ_j X_jj`;
+- the mean arrival time of the trapped walker, `τ = 2Σ_t κ_t Y_tt/η`;
+- the weight `dark` that is never absorbed, so that
+  `η + lost + dark = 1`. When every node loses population nothing stays
+  dark, and that weight counts as lost.
+
+The detuned dimer is the textbook case: the start at energy 3, the trap
+at energy 0 with κ = 1, loss 0.05 and dephasing 1 on both sites, all in
+units of the hopping. Its efficiency is 32000/38881 and its arrival time
+139260/38881 exactly:
+
+```python
+import metatron_qso as q
+
+dimer = q.DephasingWalk(q.Graph.path(2), "adjacency", rate=1.0,
+                        site_energies=[3.0, 0.0], traps={1: 1.0}, losses=0.05)
+r = dimer.transport(0)
+print(f"{r['efficiency']:.6f} {r['arrival_time']:.4f}")       # 0.823024 3.5817
+assert abs(r["efficiency"] - 32000 / 38881) < 1e-12
+assert abs(r["arrival_time"] / (139260 / 38881) - 1) < 1e-10
+assert abs(r["efficiency"] + r["lost"] + r["dark"] - 1) < 1e-13
+print([(s["name"], s["iterations"], f"{s['condition']:.0f}") for s in r["solves"]])
+```
+
+The result also reports how the solves went. `dimension` is the number
+of bright states the solves ran on, `solves` lists every solve with its
+GMRES iterations, backward error and a lower estimate of its condition
+number (the largest is `condition`), and `error` estimates the absolute
+error of η: how far `η + lost + dark` is from 1, plus the last
+correction of the iterative refinement. `transport_from(rho0)` starts
+from a density matrix instead of a node.
+
+### Dark states
+
+A walker can be trapped only from states that reach a trap. On the
+complete graph K_N without dephasing, the start and the trap span a
+two-dimensional bright space; the start's weight outside it,
+`(N − 2)/(N − 1)`, never arrives, so `η = 1/(N − 1)` (Caruso et al.,
+Eq. 5). Dephasing at one more node gives `1/(N − 2)`, and dephasing at
+every node of a connected graph without loss gives `η = 1`.
+`dark_states()` returns an orthonormal basis of the states that never
+reach a trap or a node with more than the smallest loss. Interference can
+also hide a start completely: on a cycle of four nodes with one negative
+coupling, the paths from the far node to the trap cancel.
+
+```python
+import numpy as np
+import metatron_qso as q
+
+k5 = q.Graph.complete(5)
+r = q.DephasingWalk(k5, "adjacency", traps={1: 1.0}).transport(0)
+print(r["efficiency"], r["dark"], r["dimension"])               # 1/4, 3/4, 2
+dark = q.DephasingWalk(k5, "adjacency", traps={1: 1.0}).dark_states()
+assert dark.shape == (5, 3) and abs(dark[0] @ dark[0] - 0.75) < 1e-12
+one = q.DephasingWalk(k5, "adjacency", traps={1: 1.0}, node_dephasing=[0, 0, 0.8, 0, 0])
+assert abs(one.transport(0)["efficiency"] - 1 / 3) < 1e-12
+every = q.DephasingWalk(k5, "adjacency", rate=1.0, traps={1: 1.0}).transport(0)
+assert abs(every["efficiency"] - 1) < 1e-12 and abs(every["arrival_time"] - 35 / 4) < 1e-9
+
+c4 = q.Graph.from_edges(4, [(0, 1), (1, 2), (2, 3), (3, 0)], weights=[1, 1, 1, -1])
+hidden = q.DephasingWalk(c4, "adjacency", traps={0: 1.0}).transport(2)
+print(hidden["efficiency"], hidden["dark"], hidden["arrival_time"])   # 0.0 1.0 None
+opened = q.DephasingWalk(c4, "adjacency", traps={0: 1.0}, node_dephasing=[0, 0.5, 0, 0])
+assert abs(opened.transport(2)["arrival_time"] - 377 / 20) < 1e-9
+```
+
+The bright states are found by a closure: start from the traps and the
+nodes with more than the smallest loss, apply `H` and, at dephased nodes,
+the node projectors, and keep every new direction longer than
+`dark_tolerance` (default 10⁻¹⁰, relative to the largest entry of the
+centred `H`). A state coupled more weakly than that counts as dark. An
+almost dark state shows as a small `slowest_decay`, the slowest decay
+rate of the bright states without the refeeding by dephasing; a bright
+state that decays below rounding is refused with the advice to raise
+`dark_tolerance`.
+
+### Scans and the best dephasing rate
+
+Moderate dephasing helps transport: it moves the walker out of the
+superpositions that interfere destructively at the trap or that sit off
+resonance, until the quantum Zeno effect freezes it (Plenio and Huelga,
+New J. Phys. 10, 113019 (2008); Rebentrost et al.). `dephasing_scan` adds
+a uniform rate to every node and returns arrays of the results (an
+arrival time that is not resolved is NaN). A uniform rate shifts `H_eff`
+by a constant on the bright states, so at most two Schur forms serve the
+whole scan: one for the positive rates and, when the scan includes rate 0
+and the walk does not dephase every node already, one for rate 0.
+`optimal_dephasing(start, low, high)` evaluates a logarithmic grid of at
+least 13 rates over `[low, high]` and refines the best one by golden
+section in the logarithm of the rate; `interior` is false if the best
+rate is an end of the range or η is flat. Only positive rates are
+searched, because η can jump at rate 0 when dephasing opens dark states
+(K₅ above: ¼ at rate 0, 1 at any positive rate).
+
+```python
+import numpy as np
+import metatron_qso as q
+
+dimer = q.DephasingWalk(q.Graph.path(2), "adjacency",
+                        site_energies=[3.0, 0.0], traps={1: 1.0}, losses=0.05)
+scan = dimer.dephasing_scan(0, [0, 1, 3, 10, 100])
+print(np.round(scan["efficiency"], 6))     # [0.771278 0.823024 0.825951 0.738538 0.274598]
+print(np.round(scan["arrival_time"], 4))   # [ 4.5256  3.5817  3.5553  5.3563 14.8622]
+best = dimer.optimal_dephasing(0, 0.01, 100)
+print(f"{best['rate']:.2f} {best['efficiency']:.6f}")    # 1.95 0.830737
+assert abs(best["rate"] - 39 / 20) < 1e-6 and abs(best["efficiency"] - 800 / 963) < 1e-12
+```
+
+The dimer's best rate is 39/20 with η = 800/963 exactly; the search finds
+it to about 10⁻⁷, since η is flat at its maximum.
+
+### Traces
+
+`transport_trace(start, times)` propagates the density matrix (up to 512
+nodes, by the Runge–Kutta integrator of `evolve`) together with the sink
+of every trap and the population lost, and returns them at the given
+times. Their sum with the populations left is 1, and the flux into the
+sink gives the arrival time again:
+
+```python
+import numpy as np
+import metatron_qso as q
+
+dimer = q.DephasingWalk(q.Graph.path(2), "adjacency", rate=1.0,
+                        site_energies=[3.0, 0.0], traps={1: 1.0}, losses=0.05)
+times = np.linspace(0.0, 60.0, 601)
+trace = dimer.transport_trace(0, times)
+sink = trace["trapped"][:, 0]                       # one column per trap
+assert np.abs(sink + trace["lost"] + trace["populations"].sum(axis=1) - 1).max() < 1e-9
+mid = (times[1:] + times[:-1]) / 2
+print(f"{sink[-1]:.6f} {np.sum(mid * np.diff(sink)) / sink[-1]:.3f}")   # 0.823024 3.582
+```
+
+### FMO, a tutorial input
+
+The seven-site Hamiltonian of the Fenna–Matthews–Olson complex of
+*C. tepidum* by Adolphs and Renger (Biophys. J. 91, 2778 (2006)), as
+tabulated by Sarovar et al. (Nat. Phys. 6, 462 (2010), supplementary
+information), is the usual test input; this is no claim about the
+complex. In picoseconds, with the trap at BChl 3 (κ = 1/ps) and a loss
+of 1/ns: a common energy offset changes nothing, so the energies are
+taken relative to their mean.
+
+```python
+import math
+import numpy as np
+import metatron_qso as q
+
+fmo = np.array([   # cm⁻¹
+    [12410, -87.7, 5.5, -5.9, 6.7, -13.7, -9.9],
+    [-87.7, 12530, 30.8, 8.2, 0.7, 11.8, 4.3],
+    [5.5, 30.8, 12210, -53.5, -2.2, -9.6, 6.0],
+    [-5.9, 8.2, -53.5, 12320, -70.7, -17.0, -63.3],
+    [6.7, 0.7, -2.2, -70.7, 12480, 81.1, -1.3],
+    [-13.7, 11.8, -9.6, -17.0, 81.1, 12630, 39.7],
+    [-9.9, 4.3, 6.0, -63.3, -1.3, 39.7, 12440]])
+cm = 2 * math.pi * 2.99792458e-2                    # 1 cm⁻¹ in rad/ps
+edges = [(i, j) for i in range(7) for j in range(i + 1, 7)]
+g = q.Graph.from_edges(7, edges, weights=[-fmo[i, j] * cm for i, j in edges])   # −A carries V_ij
+walk = q.DephasingWalk(g, "adjacency", site_energies=(np.diag(fmo) - np.diag(fmo).mean()) * cm,
+                       traps={2: 1.0}, losses=1e-3)
+scan = walk.dephasing_scan(0, [0, 1, 10, 100])
+print(np.round(scan["efficiency"], 4), np.round(scan["arrival_time"], 2))
+# [0.9468 0.9819 0.9937 0.9931] [47.09 18.15  6.29  6.91]
+best = walk.optimal_dephasing(0, 1, 1000)
+print(f"{best['rate']:.1f} /ps ({best['rate'] / cm:.0f} cm⁻¹): {best['efficiency']:.5f}")
+# 26.0 /ps (138 cm⁻¹): 0.99439
+```
+
+Without dephasing 5.3 % of the excitation is lost; at the best rate,
+0.56 %, and it arrives eight times sooner (5.6 ps instead of 47 ps). These values agree with
+QuTiP's `mesolve` integrated until less than 10⁻¹² of the population is
+left (see [validation](validation.md)).
+
+### Accuracy and limits
+
+- **Sizes.** The dense solves take up to 2048 nodes; evolution and
+  traces up to 512. A transport call estimates its work and stops beyond
+  2·10¹³ operations (`MAX_TRANSPORT_WORK`). On four cores a random graph
+  of 1024 nodes with dephasing everywhere takes 26 s for the Schur form
+  and 47 s for the solves; at 2048 nodes 5.5 and 6 minutes, and there
+  the limit leaves room for only about a hundred iterations over the
+  dephased populations. On symmetric graphs the
+  solves run on orbitals, for graphs far larger (see
+  [Symmetry and state transfer](symmetry.md)).
+- **η** comes with `error`, an estimate of its absolute error.
+- **τ** has no error estimate of its own. It is reported only when
+  `η ≥ max(10⁻¹², 10³·error)` and is `None` otherwise: for a walker that
+  hardly arrives, τ is not resolved. Its accuracy follows the
+  conditioning of the problem, which `condition` estimates for each
+  solve; on large coherent hypercubes the orbital solves lose digits
+  that their `condition` does not show (see [accuracy on large
+  hypercubes](symmetry.md#driven-and-decoherent-walks-reduced-by-symmetry)).
+- **Optimum.** The best rate is found to about 10⁻⁷ relative where η is
+  flat at its maximum (η itself to rounding).
 
 ## Time-dependent Hamiltonians
 
@@ -481,6 +767,30 @@ fn main() -> Result<()> {
     let search = SpatialSearch::new(&cube, &[3], Generator::Laplacian, 1.0 / 13.0)?;
     let t = std::f64::consts::PI * 13f64.sqrt() / 2.0;
     assert!((search.success_probability(t) - 1.0).abs() < 1e-9);
+    Ok(())
+}
+```
+
+Transport to a trap, with the builders of `DephasingWalk`:
+
+```rust
+use metatron_qso::graph::generators;
+use metatron_qso::prelude::*;
+use metatron_qso::walks::TransportOptions;
+
+fn main() -> Result<()> {
+    let options = TransportOptions::default();
+    let dimer = DephasingWalk::new(&generators::path(2), Generator::Adjacency, 1.0, 0.0)?
+        .with_site_energies(&[3.0, 0.0])?
+        .with_traps(&[(1, 1.0)])?
+        .with_losses(&[0.05; 2])?;
+    let scan = dimer.dephasing_scan(0, &[0.0, 1.0, 3.0, 10.0, 100.0], &options)?;
+    assert!((scan[1].efficiency - 32000.0 / 38881.0).abs() < 1e-12);
+    let tau = scan[1].arrival_time.expect("resolved");
+    assert!((tau / (139260.0 / 38881.0) - 1.0).abs() < 1e-10);
+    let best = dimer.optimal_dephasing(0, 0.01, 100.0, &options)?;
+    assert!(best.interior && (best.rate / 1.95 - 1.0).abs() < 1e-6);
+    assert!((best.result.efficiency - 800.0 / 963.0).abs() < 1e-12);
     Ok(())
 }
 ```

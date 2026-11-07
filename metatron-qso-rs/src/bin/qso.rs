@@ -35,9 +35,9 @@ use metatron_qso::spin::{Event as SpinEvent, Isotope, SpinSystem, Target as Spin
 use metatron_qso::stabilizer::StabilizerState;
 use metatron_qso::stabilizer::program::{is_clifford_program, sample_program};
 use metatron_qso::walks::{
-    Coin, CoinedWalk, ContinuousWalk, Generator, InteractingWalk, PrettyGoodTransfer, Quotient,
-    QuotientWalk, SpatialSearch, StateTransfer, Statistics, SzegedyWalk, circuits,
-    classical_hitting_times, interacting,
+    Coin, CoinedWalk, ContinuousWalk, DephasingWalk, Generator, InteractingWalk,
+    PrettyGoodTransfer, Quotient, QuotientWalk, SpatialSearch, StateTransfer, Statistics,
+    SzegedyWalk, TransportOptions, circuits, classical_hitting_times, interacting,
 };
 use metatron_qso::{QsoError, Result};
 
@@ -181,6 +181,55 @@ enum Command {
         gamma: f64,
         #[arg(long, value_enum, default_value_t = GeneratorArg::Laplacian)]
         generator: GeneratorArg,
+        /// Site energies added to the diagonal of H, one per node
+        /// (not scaled by --gamma), e.g. 0.5,0,0.
+        #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
+        energies: Option<Vec<f64>>,
+    },
+    /// Transport to a trap: efficiency (the population that reaches the
+    /// traps), mean arrival time, loss and the weight never absorbed, of
+    /// an open walk with traps, losses, site energies and dephasing per
+    /// node (dense, up to 2048 nodes; hopping by the adjacency matrix
+    /// unless --generator laplacian). Optionally a scan over a uniform
+    /// dephasing rate added to every node, and the best such rate.
+    Transport {
+        #[arg(long, default_value = "path:2")]
+        graph: String,
+        #[arg(long, default_value_t = 0)]
+        start: usize,
+        /// Trap nodes, e.g. 1 or 3,7.
+        #[arg(long, value_delimiter = ',', required = true)]
+        trap: Vec<usize>,
+        /// Trapping rates κ (the sink fills at 2κρ_tt): one for every
+        /// trap, or one per trap.
+        #[arg(long, value_delimiter = ',', default_value = "1")]
+        kappa: Vec<f64>,
+        /// Loss rates Γ (population leaves node j at Γ_j ρ_jj): one for
+        /// every node, or one per node.
+        #[arg(long, value_delimiter = ',')]
+        loss: Option<Vec<f64>>,
+        /// Dephasing rates: one for every node, or one per node.
+        #[arg(long, value_delimiter = ',')]
+        dephasing: Option<Vec<f64>>,
+        /// Site energies, one per node (not scaled by --gamma).
+        #[arg(long, value_delimiter = ',', allow_hyphen_values = true)]
+        energies: Option<Vec<f64>>,
+        #[arg(long, default_value_t = 1.0)]
+        gamma: f64,
+        #[arg(long, value_enum, default_value_t = GeneratorArg::Adjacency)]
+        generator: GeneratorArg,
+        /// Also report these uniform dephasing rates added to every node,
+        /// e.g. 0,1,3,10,100.
+        #[arg(long, value_delimiter = ',')]
+        scan: Option<Vec<f64>>,
+        /// Also find the uniform added dephasing rate of highest
+        /// efficiency in LOW,HIGH (0 < LOW < HIGH).
+        #[arg(long, value_delimiter = ',', value_name = "LOW,HIGH")]
+        best_rate: Option<Vec<f64>>,
+        /// States coupled to the traps (and lossier nodes) more weakly than
+        /// this, relative to the hopping, count as dark; in (0, 1e-2].
+        #[arg(long, default_value_t = 1e-10)]
+        dark_tolerance: f64,
     },
     /// Walk of several bosons, fermions or distinguishable particles with
     /// on-site (U) and neighbour (V) interaction (hopping by the adjacency
@@ -789,6 +838,184 @@ fn model_hamiltonian(model: &str) -> Result<(PauliSum, usize, f64)> {
     }
 }
 
+/// Arguments of the transport command.
+struct TransportArgs<'a> {
+    start: usize,
+    trap: &'a [usize],
+    kappa: &'a [f64],
+    loss: Option<&'a [f64]>,
+    dephasing: Option<&'a [f64]>,
+    energies: Option<&'a [f64]>,
+    gamma: f64,
+    generator: GeneratorArg,
+    scan: Option<&'a [f64]>,
+    best_rate: Option<&'a [f64]>,
+    dark_tolerance: f64,
+}
+
+/// One value for every entry (`what`), or one per entry.
+fn per_entry(name: &'static str, values: &[f64], n: usize, what: &str) -> Result<Vec<f64>> {
+    match values.len() {
+        1 => Ok(vec![values[0]; n]),
+        k if k == n => Ok(values.to_vec()),
+        k => Err(QsoError::invalid(
+            name,
+            format!("give one value for every {what} or one per {what} ({n}), not {k}"),
+        )),
+    }
+}
+
+/// A probability for the text output: exact zeros as `0`.
+fn weight(x: f64) -> String {
+    if x == 0.0 {
+        "0".to_string()
+    } else {
+        format!("{x:.6}")
+    }
+}
+
+fn arrival_text(arrival: Option<f64>) -> String {
+    arrival.map_or("not resolved".to_string(), |t| format!("{t:.6}"))
+}
+
+/// The transport command: one dense transport calculation, and optionally
+/// a scan over and the best of a uniform dephasing rate added to every
+/// node.
+fn transport(g: &Graph, a: &TransportArgs) -> Result<(Value, String)> {
+    let n = g.num_nodes();
+    let kappa = per_entry("kappa", a.kappa, a.trap.len(), "trap")?;
+    let traps: Vec<(usize, f64)> = a.trap.iter().copied().zip(kappa).collect();
+    let mut walk = DephasingWalk::new(g, a.generator.into(), a.gamma, 0.0)?.with_traps(&traps)?;
+    if let Some(e) = a.energies {
+        walk = walk.with_site_energies(e)?;
+    }
+    if let Some(l) = a.loss {
+        walk = walk.with_losses(&per_entry("loss", l, n, "node")?)?;
+    }
+    if let Some(d) = a.dephasing {
+        walk = walk.with_node_dephasing(&per_entry("dephasing", d, n, "node")?)?;
+    }
+    let mut options = TransportOptions::default();
+    options.dark_tolerance = a.dark_tolerance;
+    let range = match a.best_rate {
+        None => None,
+        Some(&[low, high]) => Some((low, high)),
+        Some(other) => {
+            return Err(QsoError::invalid(
+                "best-rate",
+                format!("give LOW,HIGH, not {} values", other.len()),
+            ));
+        }
+    };
+    let r = walk.transport(a.start, &options)?;
+    let scan = match a.scan {
+        Some(rates) => Some(walk.dephasing_scan(a.start, rates, &options)?),
+        None => None,
+    };
+    let best = match range {
+        Some((low, high)) => Some(walk.optimal_dephasing(a.start, low, high, &options)?),
+        None => None,
+    };
+
+    let nodes = a
+        .trap
+        .iter()
+        .map(|t| t.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let plural = if a.trap.len() == 1 { "" } else { "s" };
+    let mut text = format!(
+        "transport from node {} to trap{plural} {nodes} on {}:\n  efficiency {:.6} (lost {}, never absorbed {})",
+        a.start,
+        g.name(),
+        r.efficiency,
+        weight(r.lost),
+        weight(r.dark)
+    );
+    if a.trap.len() > 1 {
+        let each = traps
+            .iter()
+            .zip(&r.trapped)
+            .map(|(&(t, _), p)| format!("{} at node {t}", weight(*p)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        text.push_str(&format!("\n  trapped {each}"));
+    }
+    text.push_str(&format!(
+        "\n  mean arrival time {}",
+        arrival_text(r.arrival_time)
+    ));
+    let slowest = r
+        .slowest_decay
+        .map_or(String::new(), |s| format!(", slowest decay {s:.6}"));
+    text.push_str(&format!(
+        "\n  [bright dimension {}{slowest}, condition {:.2e}, error {:.1e}]",
+        r.dimension, r.condition, r.error
+    ));
+    if let Some(results) = &scan {
+        text.push_str("\ndephasing rate added to every node:");
+        for s in results {
+            text.push_str(&format!(
+                "\n  rate {}: efficiency {:.6}, arrival {}, lost {}, never absorbed {}",
+                s.added_dephasing,
+                s.efficiency,
+                arrival_text(s.arrival_time),
+                weight(s.lost),
+                weight(s.dark)
+            ));
+        }
+    }
+    if let Some(b) = &best {
+        let edge = if b.interior {
+            ""
+        } else {
+            " (at an end of the range, or the efficiency is flat)"
+        };
+        // With dephasing of its own the rate found is on top of it.
+        let label = if walk.node_dephasing().iter().any(|&g| g > 0.0) {
+            "best added rate"
+        } else {
+            "best rate"
+        };
+        text.push_str(&format!(
+            "\n{label} {:.6}{edge}: efficiency {:.6}, arrival {}",
+            b.rate,
+            b.result.efficiency,
+            arrival_text(b.result.arrival_time)
+        ));
+    }
+
+    let generator = match a.generator {
+        GeneratorArg::Adjacency => "adjacency",
+        GeneratorArg::Laplacian => "laplacian",
+    };
+    let scan = scan.map(|results| {
+        results
+            .iter()
+            .map(|s| {
+                json!({"rate": s.added_dephasing, "efficiency": s.efficiency,
+                       "arrival_time": s.arrival_time, "lost": s.lost, "dark": s.dark,
+                       "error": s.error})
+            })
+            .collect::<Vec<_>>()
+    });
+    let best = best.map(|b| {
+        json!({"rate": b.rate, "interior": b.interior, "evaluations": b.evaluations,
+               "efficiency": b.result.efficiency, "arrival_time": b.result.arrival_time,
+               "lost": b.result.lost, "dark": b.result.dark, "error": b.result.error})
+    });
+    Ok((
+        json!({"graph": g.name(), "nodes": n, "generator": generator, "gamma": a.gamma,
+               "start": a.start, "traps": traps, "site_energies": walk.site_energies(),
+               "losses": walk.losses(), "dephasing": walk.node_dephasing(),
+               "efficiency": r.efficiency, "arrival_time": r.arrival_time,
+               "trapped": r.trapped, "lost": r.lost, "dark": r.dark, "dimension": r.dimension,
+               "slowest_decay": r.slowest_decay, "condition": r.condition, "error": r.error,
+               "solves": r.solves, "scan": scan, "best": best}),
+        text,
+    ))
+}
+
 fn run(cli: &Cli) -> Result<(Value, String)> {
     match &cli.command {
         Command::Graph { spec, save } => {
@@ -1039,13 +1266,22 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             time,
             gamma,
             generator,
+            energies,
         } => {
             let g = graph(spec)?;
-            let walk = ContinuousWalk::new(&g, (*generator).into(), *gamma)?;
+            let mut walk = ContinuousWalk::new(&g, (*generator).into(), *gamma)?;
+            if let Some(e) = energies {
+                walk = walk.with_site_energies(e)?;
+            }
             let p = walk.probabilities(*start, *time)?;
             let limit = walk.limiting_distribution(*start).ok();
+            let with = if energies.is_some() {
+                " with site energies"
+            } else {
+                ""
+            };
             let mut text = format!(
-                "P(node, t={time}) from node {start} on {}:\n  {}",
+                "P(node, t={time}) from node {start} on {}{with}:\n  {}",
                 g.name(),
                 vector(&p)
             );
@@ -1053,10 +1289,40 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 text.push_str(&format!("\nlimiting distribution:\n  {}", vector(l)));
             }
             Ok((
-                json!({"graph": g.name(), "time": time, "probabilities": p, "limiting_distribution": limit}),
+                json!({"graph": g.name(), "time": time, "site_energies": walk.site_energies(),
+                       "probabilities": p, "limiting_distribution": limit}),
                 text,
             ))
         }
+        Command::Transport {
+            graph: spec,
+            start,
+            trap,
+            kappa,
+            loss,
+            dephasing,
+            energies,
+            gamma,
+            generator,
+            scan,
+            best_rate,
+            dark_tolerance,
+        } => transport(
+            &graph(spec)?,
+            &TransportArgs {
+                start: *start,
+                trap,
+                kappa,
+                loss: loss.as_deref(),
+                dephasing: dephasing.as_deref(),
+                energies: energies.as_deref(),
+                gamma: *gamma,
+                generator: *generator,
+                scan: scan.as_deref(),
+                best_rate: best_rate.as_deref(),
+                dark_tolerance: *dark_tolerance,
+            },
+        ),
         Command::Particles {
             graph: spec,
             particles,

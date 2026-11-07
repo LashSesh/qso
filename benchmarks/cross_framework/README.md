@@ -14,7 +14,8 @@ same workloads. The results enter the technical note
 | Stim 1.16 | detector error models, detection-event rates |
 | PyMatching 2.4 | logical error rates (minimum-weight matching, for reference) |
 | PySCF 2.14 | Gaussian integrals, Hartree–Fock and CASCI energies |
-| QuTiP 5.3 | nuclear spin dynamics with relaxation (`liouvillian`, `mesolve`, `bloch_redfield_tensor`) |
+| QuTiP 5.3 | nuclear spin dynamics with relaxation (`liouvillian`, `mesolve`, `bloch_redfield_tensor`); transport to a trap (`liouvillian`, `mesolve`) |
+| SymPy 1.14 | transport to a trap in exact rationals (the detuned dimer, K_N on ten orbitals) |
 | PyCCE 1.1 | the ¹³C bath of an NV centre by the cluster-correlation expansion (reference only; its last release, imported with aliases for names NumPy, SciPy and pandas removed) |
 
 ProjectQ, which the 2025 note listed, is not included: its last release
@@ -54,7 +55,22 @@ ProjectQ, which the 2025 note listed, is not included: its last release
   (exported with `DetectorCircuit.to_stim()`), term by term against Stim's,
   and their detection-event rates against Stim's sampler; QSO's union-find
   logical error rate is reported next to PyMatching's (minimum-weight
-  matching).
+  matching);
+- transport to a trap (efficiency η and mean arrival time τ with traps,
+  losses, site energies and dephasing per node) of QSO's dense,
+  orbital and hypercube solves: against SymPy's exact rationals (the
+  detuned dimer at dephasing 0–100, K_N to N = 9 dense and on the ten
+  orbitals at N = 64 and 1024, the reduction checked against SymPy's full
+  Liouvillian at N = 4–6) and the closed forms on K_N without loss
+  (Caruso et al.), to 2·10⁻¹⁴ in η and 4·10⁻¹⁴ in τ (relative); against
+  QuTiP's `liouvillian` solved by sparse LU (also random weighted graphs,
+  the FMO complex and hypercubes Q₃–Q₅ on the full cube), to 1.7·10⁻¹³
+  in η (FMO without dephasing, condition 9·10⁴) and 3·10⁻¹⁴ in τ; and
+  against `mesolve` with an accumulator for τ, to 6.7·10⁻¹³ and
+  6.8·10⁻¹¹. The dimer's best dephasing rate, 39/20 exactly, is found to
+  1.3·10⁻⁷. This check runs in a child process pinned to one thread
+  (QuTiP's OpenMP threads on tiny matrices) and takes 6 s (`--quick`)
+  or 28 s.
 
 **Speed** (interleaved rounds, fresh process per measurement)
 - one layer (H and RZ on every qubit, CX chain) at 16–24 qubits;

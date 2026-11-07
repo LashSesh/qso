@@ -5,6 +5,7 @@ from typing import (
     Any,
     Callable,
     Literal,
+    Mapping,
     Optional,
     Sequence,
     Tuple,
@@ -547,7 +548,11 @@ def estimate_phase(
 @final
 class ContinuousWalk:
     def __new__(
-        cls, graph: Graph, generator: str = "laplacian", gamma: float = 1.0
+        cls,
+        graph: Graph,
+        generator: str = "laplacian",
+        gamma: float = 1.0,
+        site_energies: Optional[ArrayLike] = None,
     ) -> ContinuousWalk: ...
     def probabilities(self, start: int, t: float) -> RealArray: ...
     def evolve(self, psi0: ArrayLike, t: float) -> ComplexArray: ...
@@ -560,6 +565,8 @@ class ContinuousWalk:
     def propagator(self, t: float) -> ComplexArray: ...
     @property
     def spectrum(self) -> Optional[RealArray]: ...
+    @property
+    def site_energies(self) -> Optional[RealArray]: ...
     @property
     def num_nodes(self) -> int: ...
     @property
@@ -600,6 +607,51 @@ class SpatialSearch:
     @property
     def marked(self) -> list[int]: ...
 
+@type_check_only
+class SolveReport(TypedDict):
+    name: str
+    iterations: int
+    backward_error: float
+    condition: float
+
+@type_check_only
+class TransportResult(TypedDict):
+    efficiency: float
+    arrival_time: Optional[float]
+    trapped: RealArray
+    lost: float
+    dark: float
+    added_dephasing: float
+    dimension: int
+    slowest_decay: Optional[float]
+    condition: float
+    error: float
+    solves: list[SolveReport]
+
+@type_check_only
+class DephasingOptimum(TransportResult):
+    rate: float
+    interior: bool
+    evaluations: int
+
+@type_check_only
+class TransportScan(TypedDict):
+    rates: RealArray
+    efficiency: RealArray
+    arrival_time: RealArray
+    trapped: RealArray
+    lost: RealArray
+    dark: RealArray
+    condition: RealArray
+    error: RealArray
+
+@type_check_only
+class TransportTrace(TypedDict):
+    times: RealArray
+    populations: RealArray
+    trapped: RealArray
+    lost: RealArray
+
 @final
 class DephasingWalk:
     def __new__(
@@ -608,11 +660,66 @@ class DephasingWalk:
         generator: str = "laplacian",
         gamma: float = 1.0,
         rate: float = 0.0,
+        site_energies: Optional[ArrayLike] = None,
+        node_dephasing: Optional[ArrayLike] = None,
+        traps: Union[Mapping[int, float], Sequence[Tuple[int, float]], None] = None,
+        losses: Union[float, ArrayLike, None] = None,
     ) -> DephasingWalk: ...
     def populations(self, start: int, t: float) -> RealArray: ...
     def evolve(self, rho0: ArrayLike, t: float) -> ComplexArray: ...
+    def transport(
+        self,
+        start: int,
+        *,
+        dark_tolerance: float = 1e-10,
+        tolerance: float = 1e-13,
+        max_iterations: int = 1000,
+    ) -> TransportResult: ...
+    def transport_from(
+        self,
+        rho0: ArrayLike,
+        *,
+        dark_tolerance: float = 1e-10,
+        tolerance: float = 1e-13,
+        max_iterations: int = 1000,
+    ) -> TransportResult: ...
+    def dephasing_scan(
+        self,
+        start: int,
+        rates: ArrayLike,
+        *,
+        dark_tolerance: float = 1e-10,
+        tolerance: float = 1e-13,
+        max_iterations: int = 1000,
+    ) -> TransportScan: ...
+    def optimal_dephasing(
+        self,
+        start: int,
+        low: float = 1e-3,
+        high: float = 1e3,
+        *,
+        dark_tolerance: float = 1e-10,
+        tolerance: float = 1e-13,
+        max_iterations: int = 1000,
+    ) -> DephasingOptimum: ...
+    def dark_states(
+        self,
+        *,
+        dark_tolerance: float = 1e-10,
+        tolerance: float = 1e-13,
+        max_iterations: int = 1000,
+    ) -> RealArray: ...
+    def transport_trace(self, start: int, times: ArrayLike) -> TransportTrace: ...
     @property
     def num_nodes(self) -> int: ...
+    @property
+    def site_energies(self) -> RealArray: ...
+    @property
+    def node_dephasing(self) -> RealArray: ...
+    @property
+    def losses(self) -> RealArray: ...
+    @property
+    def traps(self) -> list[Tuple[int, float]]: ...
 
 @type_check_only
 class DrivenEvolution(TypedDict):
@@ -668,7 +775,41 @@ class SymmetricOpenWalk:
         gamma: float = 1.0,
         dephasing: Sequence[Tuple[float, Sequence[int]]] = ...,
         symmetries: Sequence[Sequence[int]] = ...,
+        site_energies: Optional[ArrayLike] = None,
+        node_dephasing: Optional[ArrayLike] = None,
+        traps: Union[Mapping[int, float], Sequence[Tuple[int, float]], None] = None,
+        losses: Union[float, ArrayLike, None] = None,
     ) -> SymmetricOpenWalk: ...
+    def transport(
+        self,
+        start: int,
+        *,
+        dark_tolerance: float = 1e-10,
+        tolerance: float = 1e-13,
+        max_iterations: int = 1000,
+    ) -> TransportResult: ...
+    def dephasing_scan(
+        self,
+        start: int,
+        rates: ArrayLike,
+        *,
+        dark_tolerance: float = 1e-10,
+        tolerance: float = 1e-13,
+        max_iterations: int = 1000,
+    ) -> TransportScan: ...
+    def optimal_dephasing(
+        self,
+        start: int,
+        low: float = 1e-3,
+        high: float = 1e3,
+        *,
+        dark_tolerance: float = 1e-10,
+        tolerance: float = 1e-13,
+        max_iterations: int = 1000,
+    ) -> DephasingOptimum: ...
+    def transport_trace(self, start: int, times: ArrayLike) -> TransportTrace: ...
+    @property
+    def traps(self) -> list[Tuple[int, float]]: ...
     @property
     def num_orbitals(self) -> int: ...
     @property
@@ -729,7 +870,38 @@ class HypercubeOpenWalk:
         gamma: float = 1.0,
         site_rate: float = 0.0,
         coordinate_rate: float = 0.0,
+        site_energies: Optional[ArrayLike] = None,
+        node_dephasing: Optional[ArrayLike] = None,
+        traps: Union[Mapping[int, float], Sequence[Tuple[int, float]], None] = None,
+        losses: Union[float, ArrayLike, None] = None,
     ) -> HypercubeOpenWalk: ...
+    def transport(
+        self,
+        *,
+        dark_tolerance: float = 1e-10,
+        tolerance: float = 1e-13,
+        max_iterations: int = 1000,
+    ) -> TransportResult: ...
+    def dephasing_scan(
+        self,
+        rates: ArrayLike,
+        *,
+        dark_tolerance: float = 1e-10,
+        tolerance: float = 1e-13,
+        max_iterations: int = 1000,
+    ) -> TransportScan: ...
+    def optimal_dephasing(
+        self,
+        low: float = 1e-3,
+        high: float = 1e3,
+        *,
+        dark_tolerance: float = 1e-10,
+        tolerance: float = 1e-13,
+        max_iterations: int = 1000,
+    ) -> DephasingOptimum: ...
+    def transport_trace(self, times: ArrayLike) -> TransportTrace: ...
+    @property
+    def traps(self) -> list[Tuple[int, float]]: ...
     @property
     def dimension(self) -> int: ...
     @property

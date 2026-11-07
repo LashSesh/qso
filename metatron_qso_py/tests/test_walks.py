@@ -132,6 +132,44 @@ def test_large_graph_uses_krylov_propagation():
         lambda: q.ContinuousWalk(q.Graph.cycle(4)).mixing_time(0, -0.1, 1.0),
         lambda: q.ContinuousWalk(q.Graph.cycle(4)).mixing_time(0, 0.1, math.inf),
         lambda: q.ContinuousWalk(q.Graph.cycle(4)).mixing_time(0, 0.1, 0.0),
+        # Site energies, traps, losses and per-node dephasing.
+        lambda: q.ContinuousWalk(q.Graph.cycle(4), site_energies=[0.0] * 3),
+        lambda: q.ContinuousWalk(q.Graph.cycle(4), site_energies=[0.0, math.nan, 0.0, 0.0]),
+        lambda: q.DephasingWalk(q.Graph.cycle(4), rate=0.5, node_dephasing=[0.1] * 4),
+        lambda: q.DephasingWalk(q.Graph.cycle(4), node_dephasing=[0.1] * 5),
+        lambda: q.DephasingWalk(q.Graph.cycle(4), node_dephasing=[0.1, -0.1, 0.1, 0.1]),
+        lambda: q.DephasingWalk(q.Graph.cycle(4), site_energies=[math.inf, 0, 0, 0]),
+        lambda: q.DephasingWalk(q.Graph.cycle(4), traps=[(0,)]),  # type: ignore[list-item]
+        lambda: q.DephasingWalk(q.Graph.cycle(4), traps=[(4, 1.0)]),
+        lambda: q.DephasingWalk(q.Graph.cycle(4), traps=[(0, 0.0)]),
+        lambda: q.DephasingWalk(q.Graph.cycle(4), traps=[(0, 1.0), (0, 2.0)]),
+        lambda: q.DephasingWalk(q.Graph.cycle(4), losses=-0.1),
+        lambda: q.DephasingWalk(q.Graph.cycle(4), losses=[0.1] * 3),
+        lambda: q.DephasingWalk(q.Graph.cycle(4)).transport(0),
+        lambda: q.DephasingWalk(q.Graph.cycle(4), traps={0: 1.0}).transport(4),
+        lambda: q.DephasingWalk(q.Graph.cycle(4), traps={0: 1.0}).transport(1, dark_tolerance=0.0),
+        lambda: q.DephasingWalk(q.Graph.cycle(4), traps={0: 1.0}).transport(1, tolerance=1e-3),
+        lambda: q.DephasingWalk(q.Graph.cycle(4), traps={0: 1.0}).transport(1, max_iterations=0),
+        lambda: q.DephasingWalk(q.Graph.cycle(4), traps={0: 1.0}).transport_from(np.eye(4)),
+        lambda: q.DephasingWalk(q.Graph.cycle(4), traps={0: 1.0}).transport_from(np.eye(3) / 3),
+        lambda: q.DephasingWalk(q.Graph.cycle(4), traps={0: 1.0}).dephasing_scan(1, [0.1, -0.1]),
+        lambda: q.DephasingWalk(q.Graph.cycle(4), traps={0: 1.0}).optimal_dephasing(1, 1.0, 1.0),
+        lambda: q.DephasingWalk(q.Graph.cycle(4), traps={0: 1.0}).optimal_dephasing(1, 0.0, 1.0),
+        lambda: q.DephasingWalk(q.Graph.cycle(4), traps={0: 1.0}).transport_trace(1, [1.0, 0.5]),
+        lambda: q.DephasingWalk(q.Graph.cycle(4)).dark_states(),
+        lambda: q.DephasingWalk(q.Graph.cycle(600), traps={0: 1.0}).transport_trace(1, [1.0]),
+        lambda: q.SymmetricOpenWalk(
+            q.Graph.cycle(4), symmetries=[[0, 3, 2, 1]], site_energies=[0.0, 1.0, 0.0, 0.0]
+        ),
+        lambda: q.SymmetricOpenWalk(
+            q.Graph.cycle(4), symmetries=[[0, 3, 2, 1]], traps={0: 1.0}
+        ).transport(1),
+        lambda: q.HypercubeOpenWalk(3, traps={4: 1.0}),
+        lambda: q.HypercubeOpenWalk(3, site_energies=[0.0] * 3),
+        lambda: q.HypercubeOpenWalk(3).transport(),
+        lambda: q.ProductOpenWalk(
+            [(q.DephasingWalk(q.Graph.complete(2), traps={1: 1.0}), 2)]
+        ),
     ],
 )
 def test_invalid_walk_inputs_raise_value_error(call):

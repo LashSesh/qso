@@ -1149,6 +1149,62 @@ Hamiltonians and Pauli sums on 2ⁿ amplitudes.
   vector sees (21 for a node of the 2²⁰-node hypercube), and its spectral
   decomposition gives limiting and time-averaged distributions exactly.
 
+## Sylvester, GMRES and banded solvers (`linalg/sylvester.rs`, `gmres.rs`, `banded.rs`)
+
+Three crate-internal tools, added for the transport to a trap (1.63);
+the GMRES also serves the exchange steady states (1.54), and the radical
+pairs of 1.65 are to use the Sylvester solver.
+
+* **Schur form and Sylvester equations.** `SchurForm` holds nalgebra's
+  complex Schur form `A = QTQ†` (from `unpack()`; nalgebra's documentation
+  writes `QTQᵀ`, which is wrong for complex matrices). It is computed by
+  `Schur::try_new` with the deflation tolerance 10⁻¹⁴ and LAPACK's budget
+  of `30·max(10, n)` sweeps, never by `Schur::new`: with
+  `f64::EPSILON` the subdiagonal of `K_n` stalls at rounding level from
+  n = 16 on, and `Schur::new` has no budget, so it never returns. A
+  cyclic shift stalls at any tolerance; one retry on `UAU` with the
+  Householder reflection `U = I − 2vv†`, `v_k ∝ 1/√(k + 1)`, rescues it.
+  The vector of ones would not: it is an eigenvector of `K_n` and of every
+  cyclic shift, so the reflection would leave them unchanged. A second
+  failure is `NoConvergence`. The backward error `‖A − QTQ†‖_F/‖A‖_F` is
+  computed once, on matrices scaled by their largest entry (unscaled, it
+  underflowed to 0 for entries of 10⁻¹⁶⁰, a test).
+  `AX − XA† − σX = C` becomes `TY − YT† − σY = Q†CQ` in the same basis
+  (`A† = QT†Q†`) and is solved by the recursive blocked algorithm of
+  Jonsson and Kågström: split the larger side, solve the independent
+  half, update the other by a product and recurse, down to blocks of at
+  most 48, solved column by column from the last (Bartels and Stewart).
+  Matrices are planar (real and imaginary parts apart); a complex product
+  is four real `gemm` calls, in fixed panels of 64 columns run in
+  parallel from 2²¹ multiply-adds, so every entry is computed by the same
+  calls on any number of threads and the results are bit-identical. A
+  transposed left operand is copied to column-major storage first, since
+  nalgebra 0.35's small-matrix `gemm` (any dimension ≤ 5) reads past the
+  columns of a strided view.
+* **GMRES.** 1.54's restarted GMRES with right preconditioning, moved
+  step for step (one pass of modified Gram–Schmidt, complex Givens
+  rotations, sequential sums so the thread count changes no bit) with
+  its constants made parameters. Two rules are new and off by default, so
+  the exchange steady states keep their results bit for bit (a test
+  compares them with a copy of the 1.54 code): the backward-error stop
+  `‖b − Ax‖ ≤ tol·(‖b‖ + scale·‖x‖)`, renewed at every restart, which
+  ends iterations on operators applied with rounding far above `tol·‖b‖`;
+  and a relative breakdown test that ends a cycle once the new Arnoldi
+  vector is rounding noise, after which the true residual decides
+  between convergence (a singular but consistent system) and breakdown.
+  Each solve reports its iterations, backward error, a condition estimate
+  of the last cycle's triangle and the work spent against a budget.
+* **Banded LU.** `reverse_cuthill_mckee` orders a pattern so that
+  neighbours get nearby positions: per component a pseudo-peripheral
+  start (repeated breadth-first search from the smallest-degree node of
+  the last level while the depth grows), neighbours by degree and index,
+  the order reversed; every tie goes to the smaller index, so it is
+  deterministic. `BandedLu` is LAPACK's `zgbtf2` (unblocked LU with
+  partial pivoting in band storage, `U` widened by `k_l` rows for the
+  fill of row interchanges) with solves for `A` and `A†`; its entries
+  `n(2k_l + k_u + 1)` and work `8n·k_l(k_l + k_u + 1)` are checked before
+  the band is allocated. It is sequential.
+
 ## Automorphism groups (`graph/automorphism.rs`)
 
 A stabiliser chain is built point by point. For base point `b` and candidate
@@ -1254,7 +1310,65 @@ agree with brute force on random graphs.
   critical value `γ_c = (1/N) Σ 1/λ_k` (exactly 1/N on K_N) together with
   the measurement time.
 * Dephasing walks integrate the Lindblad equation with adaptive RK4 (step
-  doubling, Richardson extrapolation).
+  doubling, Richardson extrapolation), with dephasing, traps, losses and
+  site energies per node as diagonal factors of the coherences and
+  populations (for equal rates the arithmetic of the uniform rate, bit for
+  bit).
+* Site energies in `ContinuousWalk` are added to the sparse Hamiltonian
+  (exact zeros leave it bit-identical). The eigendecomposition is computed
+  on first use (`OnceLock`) rather than in `new`, and beyond 2048 nodes the
+  quotient path colours the nodes by their energies (the start a cell of
+  its own) before colour refinement, so energies constant on the cells of
+  the equitable partition keep the walk on the cells; with all energies
+  distinct the cell limit fails and Lanczos on the cyclic subspace takes
+  over, as without energies.
+* Transport to a trap (`walks/transport.rs`, `transport/dense.rs`,
+  `symmetric/transport.rs`; 1.63) finds `X = ∫ρ dt` and `Y = ∫tρ dt`
+  from `𝓛(X) = −ρ₀` and `𝓛(Y) = −X` without time steps.
+  *Dense* (up to 2048 nodes): a closure finds the bright space `B`, the
+  smallest space that holds the traps and the nodes with more than the
+  smallest loss `Γ₀` and is closed under `H` and the projectors of the
+  dephased nodes it overlaps (two-pass Gram–Schmidt on `H` centred and
+  scaled, since a large common energy offset, as in FMO, would make
+  bright states look dark under a relative test; with dephasing on every
+  node simply the connected components of the seeds). The uniform loss
+  `Γ₀` is a shift of `H_eff`, not a seed, or every node would be bright.
+  On `B`, `H′_B = Vᵀ(H − cI)V − i·Vᵀdiag(κ + Γ′/2 + γ/2)V −
+  (i/2)Γ₀I` has one Schur form, and `𝓛(Z) = −C` splits into a triangular
+  Sylvester equation for the coherent and decaying part and GMRES over
+  the populations of the dephased bright nodes, which dephasing feeds
+  back; when every node is dephased, the rate matrix of incoherent
+  hopping (the classical limit) preconditions it. A uniform added rate
+  `e` shifts `H′_B` by `−(ie/2)I`, so a scan reuses the Schur form. The
+  residual `𝓛(X) + ρ₀` is computed in the bright basis (entry by entry on
+  node bases, where dephasing touches only coherences, which avoids the
+  cancellation between the decay in `T` and its refeeding), and the
+  solution is refined at most twice while it is above
+  `tolerance·‖ρ₀‖`. `η + lost + dark = 1` and the last correction give
+  `error`. `dark_states` completes `V` by two-pass Gram–Schmidt over the
+  unit vectors.
+  *Orbitals* (`SymmetricOpenWalk`, `HypercubeOpenWalk`): the generator in
+  the orthonormal basis of the orbitals, `M̂ = D^{½}MD^{−½}`, with site
+  terms added to the diagonal row by row in a fixed order (so builders
+  without terms leave it bit-identical). The adjoint solve
+  `M̂†â = −F̂` (`F = 2Σ_t κ_t P_t`) gives the efficiency of every start,
+  `η = â[o_ss]`, and with losses a second one the population lost; their
+  sum is the projector onto the bright states, so the forward solve
+  starts from the start's bright part, which keeps it consistent where a
+  dark subspace makes `M̂` singular, also on signed graphs. Then
+  `M̂x̂ = −x̂₀` gives `X`, and `ητ = ⟨A, X⟩`; a second forward solve
+  `𝓛(Y) = −X` is not used, since with dark states it fails silently.
+  GMRES is right-preconditioned by one
+  banded LU of `M̂ − σI` after reverse Cuthill–McKee, with
+  `σ = max(10⁻²·hopping, 10⁻⁶‖M̂‖∞)`, refactorised at each added
+  dephasing rate, and stops on the backward error; one step of iterative
+  refinement follows for the forward solve, and for the adjoint solves
+  when every node loses population (with dark states it would add
+  components in the kernel of `M̂`). The read-outs of both directions
+  are compared in `error`. Traces propagate `[x; y]` with `y′ = x` by the
+  orbital exponential, so the sinks and the loss are read off `y`.
+  The best rate is golden-section search on the logarithm of the rate
+  after a logarithmic grid, shared by all three walks.
 * Interacting walkers (`walks/interacting.rs`) work in the occupation
   basis. Configurations of bosons and fermions are sorted site lists,
   ranked in colex order by the combinatorial number system (a boson

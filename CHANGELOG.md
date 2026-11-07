@@ -8,6 +8,41 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Transport to a trap** (1.63, `walks::transport`: `TransportOptions`,
+  `TransportResult`, `SolveReport`, `DephasingOptimum`,
+  `TransportState`, `MAX_TRANSPORT_WORK`, `MAX_TRANSPORT_FACTOR_ENTRIES`;
+  `with_site_energies`, `with_traps`, `with_losses`,
+  `with_node_dephasing`, `transport`, `dephasing_scan`,
+  `optimal_dephasing` and `transport_trace` on `DephasingWalk`,
+  `SymmetricOpenWalk` and `HypercubeOpenWalk`, `transport_from` and
+  `dark_states` on `DephasingWalk`; `ContinuousWalk::with_site_energies`;
+  Python keyword arguments `site_energies`, `node_dephasing`, `traps` and
+  `losses` and the same methods; `qso transport`, `qso walk --energies`):
+  open walks with traps (`H_eff = H − iΣκ_t P_t − (i/2)ΣΓ_j P_j`, the sink
+  filling at `2κ_t ρ_tt`), losses, site energies and dephasing per node.
+  The efficiency `η` and the mean arrival time `τ` come from
+  `X = ∫ρ dt` and `Y = ∫tρ dt` by linear solves, without time steps:
+  dense up to 2048 nodes (a closure onto the bright states, one complex
+  Schur form with Bartels–Stewart solves, GMRES over the populations that
+  dephasing feeds, iterative refinement), and on orbitals (an adjoint
+  solve for the bright part of the start, then a forward solve, GMRES
+  preconditioned by a banded LU after reverse Cuthill–McKee): K_N on ten
+  orbitals at any size the symmetric walk accepts, hypercubes up to
+  d = 61. Every solve reports its iterations, backward error and a
+  condition estimate, and every result an error estimate of `η`, the
+  loss and the weight never absorbed (`η + lost + dark = 1`). Dark states
+  (`dark_states`), scans over a dephasing rate added to every node (one
+  Schur form for the whole scan), the rate of highest efficiency (grid
+  and golden section), and traces of the sinks and the loss in time. The
+  detuned dimer matches SymPy's exact rationals (`η = 32000/38881`,
+  `τ = 139260/38881` at dephasing 1; best rate 39/20 with `η = 800/963`),
+  complete graphs `1/(N − 1)`, `1/(N − 2)` and 1 (Caruso et al.) dense
+  and on orbitals, the hypercube without dephasing the column chain, and
+  the FMO complex, random graphs and hypercubes QuTiP's `liouvillian` and
+  `mesolve` (SymPy joins the cross-validation). `linalg` gains
+  crate-internal GMRES (1.54's, with a backward-error stop), complex
+  Schur form and Sylvester solver, and banded LU.
+
 - **Coupled-cluster references** (1.62, `chemistry::cc`: `mp2`, `ccsd`,
   `ccsd_t`, `CcOptions`, `Mp2`, `Ccsd`, `CcsdT`, `MAX_SPIN_ORBITALS`;
   Python `HartreeFock.mp2`, `.ccsd`, `.ccsd_t`; `qso scf --mp2 --ccsd
@@ -264,6 +299,13 @@ All notable changes to this project are documented here. The format follows
   images, checked once the Schreier trees are built).
 
 ### Changed
+
+- **Open walks for transport** (1.63): `DephasingWalk::new` accepts up to
+  2048 nodes (transport); `evolve`, `populations` and `transport_trace`
+  still refuse more than 512. `ContinuousWalk` computes its
+  eigendecomposition on first use instead of in `new` (Python releases
+  the interpreter lock for it). `ProductOpenWalk::new` refuses factors
+  with traps or losses, whose marginals are not distributions.
 
 - **Error models in one pass backwards** (1.61): what each error flips
   comes from one pass backwards through the circuit, the transpose of

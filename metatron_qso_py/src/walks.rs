@@ -7,12 +7,13 @@ use metatron_qso::walks::interacting::{
     InteractingWalk, Statistics, SymmetricInteractingWalk, certificate_distance,
 };
 use metatron_qso::walks::{
-    ContinuousWalk, DephasingWalk, Generator, SpatialSearch, classical_hitting_times,
-    classical_walk_probabilities,
+    ContinuousWalk, DephasingOptimum, DephasingWalk, Generator, SpatialSearch, TransportOptions,
+    TransportResult, TransportState, classical_hitting_times, classical_walk_probabilities,
 };
-use numpy::{PyArray1, PyArray2};
+use numpy::ndarray::Array2;
+use numpy::{IntoPyArray, PyArray1, PyArray2};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyMapping};
 
 use crate::algorithms::Indices;
 use crate::graph::PyGraph;
@@ -47,12 +48,13 @@ pub(crate) fn check_time(name: &str, t: f64) -> PyResult<()> {
 }
 
 /// Continuous-time quantum walk `|ψ(t)⟩ = exp(−iHt)|ψ(0)⟩` with
-/// `H = γL` (`"laplacian"`) or `H = −γA` (`"adjacency"`).
+/// `H = γL` (`"laplacian"`) or `H = −γA` (`"adjacency"`), plus
+/// `Σ_j ε_j|j⟩⟨j|` for `site_energies` (one per node, not scaled by `γ`).
 ///
-/// Graphs with up to 2048 nodes are diagonalised once; larger graphs use
-/// Krylov propagation, and limiting and averaged distributions through the
-/// start node's cyclic subspace (small for symmetric graphs); the dense
-/// propagator needs at most 2048 nodes.
+/// Graphs with up to 2048 nodes are diagonalised on first use; larger
+/// graphs use Krylov propagation, and limiting and averaged distributions
+/// through the start node's cyclic subspace (small for symmetric graphs);
+/// the dense propagator needs at most 2048 nodes.
 #[pyclass(name = "ContinuousWalk", module = "metatron_qso", frozen)]
 pub struct PyContinuousWalk {
     inner: ContinuousWalk,
@@ -61,11 +63,26 @@ pub struct PyContinuousWalk {
 #[pymethods]
 impl PyContinuousWalk {
     #[new]
-    #[pyo3(signature = (graph, generator = "laplacian", gamma = 1.0))]
-    fn new(py: Python<'_>, graph: &PyGraph, generator: &str, gamma: f64) -> PyResult<Self> {
+    #[pyo3(signature = (graph, generator = "laplacian", gamma = 1.0, site_energies = None))]
+    fn new(
+        py: Python<'_>,
+        graph: &PyGraph,
+        generator: &str,
+        gamma: f64,
+        site_energies: Option<RealArg<'_>>,
+    ) -> PyResult<Self> {
         let gen_ = self::generator(generator)?;
         let g = &graph.inner;
-        let inner = py.detach(|| ContinuousWalk::new(g, gen_, gamma)).raise()?;
+        let energies = site_energies.as_ref().map(real_vec);
+        let inner = py
+            .detach(|| {
+                let walk = ContinuousWalk::new(g, gen_, gamma)?;
+                match &energies {
+                    Some(e) => walk.with_site_energies(e),
+                    None => Ok(walk),
+                }
+            })
+            .raise()?;
         Ok(Self { inner })
     }
 
@@ -169,7 +186,18 @@ impl PyContinuousWalk {
     /// Eigenvalues of `H` (ascending), or `None` for Krylov-only walks.
     #[getter]
     fn spectrum<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<f64>>> {
-        self.inner.spectrum().map(|s| real_array(py, s.to_vec()))
+        // The eigendecomposition is computed on first use: without the GIL.
+        let w = &self.inner;
+        py.detach(|| w.spectrum().map(<[f64]>::to_vec))
+            .map(|s| real_array(py, s))
+    }
+
+    /// The site energies, or `None` if none were given.
+    #[getter]
+    fn site_energies<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<f64>>> {
+        self.inner
+            .site_energies()
+            .map(|e| real_array(py, e.to_vec()))
     }
 
     #[getter]
@@ -317,8 +345,157 @@ impl PySpatialSearch {
     }
 }
 
-/// Quantum walk with site dephasing at rate `rate` (Lindblad evolution of
-/// the density matrix; graphs with up to 512 nodes).
+/// Keyword-only settings of the transport solves.
+pub(crate) fn transport_options(
+    dark_tolerance: f64,
+    tolerance: f64,
+    max_iterations: usize,
+) -> TransportOptions {
+    let mut options = TransportOptions::default();
+    options.dark_tolerance = dark_tolerance;
+    options.tolerance = tolerance;
+    options.max_iterations = max_iterations;
+    options
+}
+
+/// A transport result as a `dict` (`TransportResult` in the stubs).
+pub(crate) fn transport_dict<'py>(
+    py: Python<'py>,
+    r: TransportResult,
+) -> PyResult<Bound<'py, PyDict>> {
+    let solves = r
+        .solves
+        .iter()
+        .map(|s| {
+            Ok(pydict!(py, {
+                "name" => &s.name,
+                "iterations" => s.iterations,
+                "backward_error" => s.backward_error,
+                "condition" => s.condition,
+            }))
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    Ok(pydict!(py, {
+        "efficiency" => r.efficiency,
+        "arrival_time" => r.arrival_time,
+        "trapped" => real_array(py, r.trapped),
+        "lost" => r.lost,
+        "dark" => r.dark,
+        "added_dephasing" => r.added_dephasing,
+        "dimension" => r.dimension,
+        "slowest_decay" => r.slowest_decay,
+        "condition" => r.condition,
+        "error" => r.error,
+        "solves" => solves,
+    }))
+}
+
+/// The best rate as a `dict`: the keys of the result at that rate plus
+/// `rate`, `interior` and `evaluations` (`DephasingOptimum` in the stubs).
+pub(crate) fn optimum_dict<'py>(
+    py: Python<'py>,
+    o: DephasingOptimum,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = transport_dict(py, o.result)?;
+    d.set_item("rate", o.rate)?;
+    d.set_item("interior", o.interior)?;
+    d.set_item("evaluations", o.evaluations)?;
+    Ok(d)
+}
+
+/// `rows × cols` real matrix from rows (missing entries NaN).
+fn rows_array<'py>(py: Python<'py>, rows: &[Vec<f64>], cols: usize) -> Bound<'py, PyArray2<f64>> {
+    Array2::from_shape_fn((rows.len(), cols), |(r, c)| {
+        rows[r].get(c).copied().unwrap_or(f64::NAN)
+    })
+    .into_pyarray(py)
+}
+
+/// A dephasing scan as a `dict` of arrays over the rates (`TransportScan`
+/// in the stubs); `arrival_time` is NaN where it is not defined.
+pub(crate) fn scan_dict<'py>(
+    py: Python<'py>,
+    rates: Vec<f64>,
+    results: Vec<TransportResult>,
+    traps: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let column = |f: fn(&TransportResult) -> f64| real_array(py, results.iter().map(f).collect());
+    let trapped: Vec<Vec<f64>> = results.iter().map(|r| r.trapped.clone()).collect();
+    Ok(pydict!(py, {
+        "rates" => real_array(py, rates),
+        "efficiency" => column(|r| r.efficiency),
+        "arrival_time" => column(|r| r.arrival_time.unwrap_or(f64::NAN)),
+        "trapped" => rows_array(py, &trapped, traps),
+        "lost" => column(|r| r.lost),
+        "dark" => column(|r| r.dark),
+        "condition" => column(|r| r.condition),
+        "error" => column(|r| r.error),
+    }))
+}
+
+/// A transport trace as a `dict` of arrays over the times
+/// (`TransportTrace` in the stubs).
+pub(crate) fn trace_dict<'py>(
+    py: Python<'py>,
+    states: Vec<TransportState>,
+    sites: usize,
+    traps: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let populations: Vec<Vec<f64>> = states.iter().map(|s| s.populations.clone()).collect();
+    let trapped: Vec<Vec<f64>> = states.iter().map(|s| s.trapped.clone()).collect();
+    Ok(pydict!(py, {
+        "times" => real_array(py, states.iter().map(|s| s.time).collect()),
+        "populations" => rows_array(py, &populations, sites),
+        "trapped" => rows_array(py, &trapped, traps),
+        "lost" => real_array(py, states.iter().map(|s| s.lost).collect()),
+    }))
+}
+
+/// Traps as `(site, rate)` pairs, from a mapping `{site: rate}` or a
+/// sequence of pairs.
+pub(crate) fn traps_arg(traps: &Bound<'_, PyAny>) -> PyResult<Vec<(usize, f64)>> {
+    let shape = || invalid("each trap is a pair (node, rate)");
+    let items = match traps.cast::<PyMapping>() {
+        Ok(m) => m.items()?.into_any(),
+        Err(_) => traps.clone(),
+    };
+    items
+        .try_iter()
+        .map_err(|_| shape())?
+        .map(|item| {
+            let item = item?;
+            // Tuples, and other sequences of two (lists).
+            let pair = match item.extract::<(usize, f64)>() {
+                Ok(pair) => Some(pair),
+                Err(_) => item
+                    .extract::<Vec<Bound<'_, PyAny>>>()
+                    .ok()
+                    .filter(|v| v.len() == 2)
+                    .and_then(|v| Some((v[0].extract().ok()?, v[1].extract().ok()?))),
+            };
+            pair.ok_or_else(shape)
+        })
+        .collect()
+}
+
+/// One rate per site: a number (the same for every site) or `sites`
+/// values.
+pub(crate) fn rates_arg(name: &str, rates: &Bound<'_, PyAny>, sites: usize) -> PyResult<Vec<f64>> {
+    if let Ok(v) = rates.extract::<RealArg<'_>>() {
+        return Ok(real_vec(&v));
+    }
+    rates
+        .extract::<f64>()
+        .map(|r| vec![r; sites])
+        .map_err(|_| invalid(format!("`{name}` must be a number or one value per site")))
+}
+
+/// Quantum walk with dephasing (Lindblad evolution of the density matrix):
+/// `rate` on every node, or one rate per node in `node_dephasing`; with
+/// `site_energies`, traps (`traps`: `{node: κ}` or `(node, κ)` pairs, the
+/// sink of node `t` filling at `2κ ρ_tt`) and losses (`losses`: `Γ_j ≥ 0`,
+/// a number or one per node). Evolution works up to 512 nodes, transport
+/// up to 2048.
 #[pyclass(name = "DephasingWalk", module = "metatron_qso", frozen)]
 pub struct PyDephasingWalk {
     pub(crate) inner: DephasingWalk,
@@ -328,14 +505,53 @@ pub struct PyDephasingWalk {
 #[pymethods]
 impl PyDephasingWalk {
     #[new]
-    #[pyo3(signature = (graph, generator = "laplacian", gamma = 1.0, rate = 0.0))]
-    fn new(graph: &PyGraph, generator: &str, gamma: f64, rate: f64) -> PyResult<Self> {
-        let inner =
-            DephasingWalk::new(&graph.inner, self::generator(generator)?, gamma, rate).raise()?;
-        Ok(Self {
-            inner,
-            n: graph.inner.num_nodes(),
-        })
+    #[pyo3(signature = (
+        graph, generator = "laplacian", gamma = 1.0, rate = 0.0, site_energies = None,
+        node_dephasing = None, traps = None, losses = None
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        py: Python<'_>,
+        graph: &PyGraph,
+        generator: &str,
+        gamma: f64,
+        rate: f64,
+        site_energies: Option<RealArg<'_>>,
+        node_dephasing: Option<RealArg<'_>>,
+        traps: Option<Bound<'_, PyAny>>,
+        losses: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        if rate != 0.0 && node_dephasing.is_some() {
+            return Err(invalid("give either rate or node_dephasing"));
+        }
+        let gen_ = self::generator(generator)?;
+        let (g, n) = (&graph.inner, graph.inner.num_nodes());
+        let energies = site_energies.as_ref().map(real_vec);
+        let dephasing = node_dephasing.as_ref().map(real_vec);
+        let traps = traps.as_ref().map(traps_arg).transpose()?;
+        let losses = losses
+            .as_ref()
+            .map(|l| rates_arg("losses", l, n))
+            .transpose()?;
+        let inner = py
+            .detach(|| -> metatron_qso::Result<DephasingWalk> {
+                let mut w = DephasingWalk::new(g, gen_, gamma, rate)?;
+                if let Some(e) = &energies {
+                    w = w.with_site_energies(e)?;
+                }
+                if let Some(r) = &dephasing {
+                    w = w.with_node_dephasing(r)?;
+                }
+                if let Some(t) = &traps {
+                    w = w.with_traps(t)?;
+                }
+                if let Some(l) = &losses {
+                    w = w.with_losses(l)?;
+                }
+                Ok(w)
+            })
+            .raise()?;
+        Ok(Self { inner, n })
     }
 
     /// Node populations at time `t ≥ 0` for a walker started at `start`.
@@ -359,22 +575,169 @@ impl PyDephasingWalk {
         rho0: ComplexMatrixArg<'_>,
         t: f64,
     ) -> PyResult<Bound<'py, PyArray2<metatron_qso::C64>>> {
-        let (dim, data) = square_complex("rho0", &rho0)?;
-        if dim != self.n {
-            return Err(invalid(format!(
-                "rho0 must be {n}x{n}, got {dim}x{dim}",
-                n = self.n
-            )));
-        }
-        let rho0 = metatron_qso::linalg::CMatrix::from_row_slice(dim, dim, &data);
+        let rho0 = self.density("rho0", &rho0)?;
         let w = &self.inner;
         let rho = py.detach(|| w.evolve(&rho0, t)).raise()?;
         Ok(cmatrix(py, &rho))
     }
 
+    /// Efficiency `η` (the population that reaches the traps), mean arrival
+    /// time `τ`, losses and dark weight of a walker started at `start`, by
+    /// linear solves; needs a trap.
+    #[pyo3(signature = (start, *, dark_tolerance = 1e-10, tolerance = 1e-13, max_iterations = 1000))]
+    fn transport<'py>(
+        &self,
+        py: Python<'py>,
+        start: usize,
+        dark_tolerance: f64,
+        tolerance: f64,
+        max_iterations: usize,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let o = transport_options(dark_tolerance, tolerance, max_iterations);
+        let w = &self.inner;
+        transport_dict(py, py.detach(|| w.transport(start, &o)).raise()?)
+    }
+
+    /// `transport` from the density matrix `rho0` (Hermitian with trace 1;
+    /// positivity is the caller's).
+    #[pyo3(signature = (rho0, *, dark_tolerance = 1e-10, tolerance = 1e-13, max_iterations = 1000))]
+    fn transport_from<'py>(
+        &self,
+        py: Python<'py>,
+        rho0: ComplexMatrixArg<'_>,
+        dark_tolerance: f64,
+        tolerance: f64,
+        max_iterations: usize,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let rho0 = self.density("rho0", &rho0)?;
+        let o = transport_options(dark_tolerance, tolerance, max_iterations);
+        let w = &self.inner;
+        transport_dict(py, py.detach(|| w.transport_from(&rho0, &o)).raise()?)
+    }
+
+    /// `transport` with each of `rates` (`≥ 0`) added to every node's
+    /// dephasing: arrays over the rates (one Schur form for every positive
+    /// rate).
+    #[pyo3(signature = (
+        start, rates, *, dark_tolerance = 1e-10, tolerance = 1e-13, max_iterations = 1000
+    ))]
+    fn dephasing_scan<'py>(
+        &self,
+        py: Python<'py>,
+        start: usize,
+        rates: RealArg<'_>,
+        dark_tolerance: f64,
+        tolerance: f64,
+        max_iterations: usize,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let rates = real_vec(&rates);
+        let o = transport_options(dark_tolerance, tolerance, max_iterations);
+        let w = &self.inner;
+        let results = py.detach(|| w.dephasing_scan(start, &rates, &o)).raise()?;
+        scan_dict(py, rates, results, w.traps().len())
+    }
+
+    /// The rate in `[low, high]` which, added to every node's dephasing,
+    /// gives the highest efficiency, with the result there.
+    #[pyo3(signature = (
+        start, low = 1e-3, high = 1e3, *, dark_tolerance = 1e-10, tolerance = 1e-13,
+        max_iterations = 1000
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn optimal_dephasing<'py>(
+        &self,
+        py: Python<'py>,
+        start: usize,
+        low: f64,
+        high: f64,
+        dark_tolerance: f64,
+        tolerance: f64,
+        max_iterations: usize,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let o = transport_options(dark_tolerance, tolerance, max_iterations);
+        let w = &self.inner;
+        let best = py
+            .detach(|| w.optimal_dephasing(start, low, high, &o))
+            .raise()?;
+        optimum_dict(py, best)
+    }
+
+    /// Orthonormal basis (columns, `n × (n − r)`) of the states that never
+    /// reach a trap or a node with more than the smallest loss.
+    #[pyo3(signature = (*, dark_tolerance = 1e-10, tolerance = 1e-13, max_iterations = 1000))]
+    fn dark_states<'py>(
+        &self,
+        py: Python<'py>,
+        dark_tolerance: f64,
+        tolerance: f64,
+        max_iterations: usize,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let o = transport_options(dark_tolerance, tolerance, max_iterations);
+        let w = &self.inner;
+        Ok(rmatrix(py, &py.detach(|| w.dark_states(&o)).raise()?))
+    }
+
+    /// Populations, sink populations (per trap) and the lost population at
+    /// each of `times` (non-decreasing) from `start`; up to 512 nodes.
+    fn transport_trace<'py>(
+        &self,
+        py: Python<'py>,
+        start: usize,
+        times: RealArg<'_>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let times = real_vec(&times);
+        let w = &self.inner;
+        let states = py.detach(|| w.transport_trace(start, &times)).raise()?;
+        trace_dict(py, states, self.n, w.traps().len())
+    }
+
     #[getter]
     fn num_nodes(&self) -> usize {
         self.n
+    }
+
+    /// The site energies (zeros unless given).
+    #[getter]
+    fn site_energies<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<f64>> {
+        real_array(py, self.inner.site_energies().to_vec())
+    }
+
+    /// The dephasing rate of every node.
+    #[getter]
+    fn node_dephasing<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<f64>> {
+        real_array(py, self.inner.node_dephasing().to_vec())
+    }
+
+    /// The loss rate of every node.
+    #[getter]
+    fn losses<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<f64>> {
+        real_array(py, self.inner.losses().to_vec())
+    }
+
+    /// The traps `(node, κ)` in the order given.
+    #[getter]
+    fn traps(&self) -> Vec<(usize, f64)> {
+        self.inner.traps().to_vec()
+    }
+}
+
+impl PyDephasingWalk {
+    /// An `n × n` density matrix argument.
+    fn density(
+        &self,
+        name: &str,
+        rho: &ComplexMatrixArg<'_>,
+    ) -> PyResult<metatron_qso::linalg::CMatrix> {
+        let (dim, data) = square_complex(name, rho)?;
+        if dim != self.n {
+            return Err(invalid(format!(
+                "{name} must be {n}x{n}, got {dim}x{dim}",
+                n = self.n
+            )));
+        }
+        Ok(metatron_qso::linalg::CMatrix::from_row_slice(
+            dim, dim, &data,
+        ))
     }
 }
 

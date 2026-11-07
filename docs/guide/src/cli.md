@@ -7,7 +7,8 @@ machine-readable output; `qso <command> --help` lists all options.
 |---|---|---|
 | `graph [SPEC]` | Structure, Laplacian spectrum, automorphism group and orbits, strongly regular parameters | `--save FILE` (edge list, or GraphML for `.graphml`/`.xml`) |
 | `iso A B` | Isomorphism test with an explicit mapping | — |
-| `walk` | Node probabilities at time t and limiting distribution | `--graph`, `--start`, `--time`, `--gamma`, `--generator laplacian\|adjacency` |
+| `walk` | Node probabilities at time t and limiting distribution | `--graph`, `--start`, `--time`, `--gamma`, `--generator laplacian\|adjacency`, `--energies 0.5,0,…` (site energies, one per node) |
+| `transport` | Transport to a trap ([Quantum walks](walks.md#transport-to-a-trap)): efficiency, mean arrival time, loss and the weight never absorbed of an open walk with traps, losses, site energies and dephasing per node (dense, up to 2048 nodes); optionally a scan over a dephasing rate added to every node and the best such rate | `--graph` (default `path:2`), `--start`, `--trap 1,3`, `--kappa` (one for every trap or one per trap), `--loss`, `--dephasing` (one for every node or one per node), `--energies`, `--gamma`, `--generator` (default `adjacency`, like `particles`), `--scan 0,1,10`, `--best-rate LOW,HIGH`, `--dark-tolerance` |
 | `spins` | Nuclear spin dynamics: a spin system (JSON), a pulse sequence (JSON events, or one pulse on the observed isotope), and the stick spectrum and polarisations after it | `SYSTEM.json`, `--observe 13C`, `--sequence EVENTS.json`, `--pulse 90`, `--initial thermal\|parahydrogen:0,1\|pasadena:0,1`, `--rates` (T₁ and T₂ of every spin) |
 | `particles` | Walk of several bosons, fermions or distinguishable particles with interaction: site densities, and with `--compare GRAPH` the certificate distance against its tolerance | `--graph`, `--particles`, `--statistics bosons\|fermions\|distinguishable`, `--start 0,1`, `--time`, `--gamma`, `--generator` (default `adjacency`, unlike `walk` and `search`), `--on-site U`, `--neighbour V`, `--compare` |
 | `search` | Spatial search; rate and time are optimised unless `--gamma` is given | `--graph`, `--marked 3,7`, `--gamma`, `--generator`, `--t-max` |
@@ -52,6 +53,29 @@ p=2  <C>=11.105320  C_max=12  ratio=0.925443  P(optimal)=0.4490  most likely 111
 p=3  <C>=11.648892  C_max=12  ratio=0.970741  P(optimal)=0.7626  most likely 1100110110 (cut 12)
 p=4  <C>=11.936517  C_max=12  ratio=0.994710  P(optimal)=0.9767  most likely 1001101101 (cut 12)
 ```
+
+`transport` solves the [transport to a trap](walks.md#transport-to-a-trap)
+on the dense path. The detuned dimer, start at energy 3 and trap at 0,
+with loss 0.05 on both sites, a scan over a dephasing rate added to every
+node and the best such rate:
+
+```text
+$ qso transport --graph path:2 --trap 1 --loss 0.05 --energies 3,0 --scan 0,1,3,10,100 --best-rate 0.01,100
+transport from node 0 to trap 1 on P2:
+  efficiency 0.771278 (lost 0.228722, never absorbed 0)
+  mean arrival time 4.525622
+  [bright dimension 2, slowest decay 0.208451, condition 2.23e1, error 0.0e0]
+dephasing rate added to every node:
+  rate 0: efficiency 0.771278, arrival 4.525622, lost 0.228722, never absorbed 0
+  rate 1: efficiency 0.823024, arrival 3.581698, lost 0.176976, never absorbed 0
+  rate 3: efficiency 0.825951, arrival 3.555290, lost 0.174049, never absorbed 0
+  rate 10: efficiency 0.738538, arrival 5.356309, lost 0.261462, never absorbed 0
+  rate 100: efficiency 0.274598, arrival 14.862230, lost 0.725402, never absorbed 0
+best rate 1.950000: efficiency 0.830737, arrival 3.447560
+```
+
+With `--dephasing` the walk dephases on its own, and `--best-rate`
+reports the rate added on top of that.
 
 `qasm` runs a program exactly, mid-circuit measurements and conditions
 included, and samples its classical bits (every qubit if it has none).

@@ -74,6 +74,8 @@ jobs:
           ./target/release/qso vqe --model h2 --json
           ./target/release/qso graph johnson:5,2 --save /tmp/j52.graphml
           ./target/release/qso iso /tmp/j52.graphml johnson:5,2
+          ./target/release/qso walk --graph cycle:8 --energies 0.5,0,0,0,0,0,0,0
+          ./target/release/qso transport --graph path:2 --trap 1 --loss 0.05 --dephasing 1 --energies 3,0 --best-rate 0.01,100
           ./target/release/qso reduce --graph hypercube:12
           ./target/release/qso transfer --graph path:3
           ./target/release/qso transfer --graph path:5 --t-max 200

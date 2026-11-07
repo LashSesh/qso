@@ -35,7 +35,7 @@ import frameworks as fw  # noqa: E402
 PACKAGES = [
     "metatron-qso", "qiskit", "qiskit-aer", "qulacs", "cirq-core", "pennylane",
     "pennylane-lightning", "thewalrus", "numpy", "projectq", "stim", "pymatching", "pyscf",
-    "ldpc", "qutip", "pycce",
+    "ldpc", "qutip", "pycce", "sympy",
 ]
 
 # ----------------------------------------------------------------------------
@@ -232,6 +232,7 @@ def correctness(quick: bool) -> dict:
         "redfield_vs_qutip": redfield_vs_qutip(),
         "bath_vs_pycce": bath_vs_pycce(),
         "generalised_bath_vs_pycce": generalised_bath_vs_pycce(),
+        "transport_vs_qutip": transport_in_child(quick),
     }
 
 
@@ -1092,6 +1093,20 @@ TOLERANCES = {
     "generalised_bath_coherence": 1e-6,
     "redfield_expectation": 1e-7,
     "qaoa_single": 1e-5,
+    # Transport to a trap (1.63), efficiency absolute, mean arrival time
+    # relative, against exact rationals and closed forms (SymPy; measured
+    # 2·10⁻¹⁴ and 4·10⁻¹⁴) and QuTiP's liouvillian solved by sparse LU
+    # (measured 1.7·10⁻¹³ on FMO without dephasing, condition 9·10⁴, and
+    # 3·10⁻¹⁴); QSO's GMRES stops at its own residual tolerance.
+    "transport_efficiency": 1e-11,
+    "transport_arrival": 1e-10,
+    # QuTiP's mesolve at atol 1e-13, rtol 1e-11, stopped when less than
+    # 10⁻¹² is left in the system: measured 6.7·10⁻¹³ in η and 6.8·10⁻¹¹
+    # in τ.
+    "transport_mesolve": 1e-9,
+    # The dimer's dephasing rate of highest efficiency (exactly 39/20), a
+    # golden-section search on a flat maximum: measured 1.3·10⁻⁷.
+    "transport_best_rate": 1e-6,
 }
 
 
@@ -1568,6 +1583,391 @@ def redfield_vs_qutip() -> dict:
     return out
 
 
+def node_class(u: int) -> str:
+    """The class of node u of K_N in transport_vs_qutip: start 0, trap 1, the rest."""
+    return "s" if u == 0 else ("t" if u == 1 else "r")
+
+
+def qso_transport(H, start, traps, loss, dephasing, kind="dense", **extra) -> dict:
+    """QSO's transport to a trap (1.63) for one case of transport_vs_qutip.
+
+    `kind` picks the path: "dense" (`DephasingWalk` on the graph whose −A
+    carries H's off-diagonal and whose site energies are H's diagonal),
+    "orbital" (K_N with the stabiliser of nodes 0 and 1: `extra` holds N
+    and the class parameters) or "hypercube" (`extra` holds d and the
+    energies and losses by Hamming weight; trap at the antipode, κ = 1).
+    """
+    import metatron_qso as q
+
+    if kind == "orbital":  # K_N; Python's edge cap allows N ≤ 2896
+        N, p = extra["N"], extra["params"]
+        per_node = lambda key: [float(p[key][node_class(u)]) for u in range(N)]  # noqa: E731
+        sym = [[0, 1, 3, 2] + list(range(4, N)), [0, 1] + list(range(3, N)) + [2]]
+        w = q.SymmetricOpenWalk(q.Graph.complete(N), "adjacency", -float(p["J"]), symmetries=sym,
+                                site_energies=per_node("eps"), traps=[(1, float(p["kappa"]))],
+                                losses=per_node("Gamma"), node_dephasing=per_node("gamma"))
+        return w.transport(0)
+    if kind == "hypercube":
+        d = extra["d"]
+        w = q.HypercubeOpenWalk(d, 1.0, site_energies=extra["energies"], losses=extra["losses"], traps=[(d, 1.0)])
+        return w.transport()
+    return transport_walk(H, traps, loss, dephasing).transport(start)
+
+
+def transport_walk(H, traps, loss, dephasing):
+    """QSO's `DephasingWalk` with Hamiltonian H (real symmetric)."""
+    import metatron_qso as q
+
+    H = np.asarray(H, dtype=float)
+    n = len(H)
+    edges = [(i, j) for i in range(n) for j in range(i + 1, n) if H[i, j] != 0.0]
+    g = q.Graph.from_edges(n, edges, weights=[-float(H[i, j]) for i, j in edges])  # H = −A off the diagonal
+    return q.DephasingWalk(g, "adjacency", 1.0, site_energies=[float(e) for e in np.diag(H)],
+                           traps=list(traps.items()), losses=[float(v) for v in loss],
+                           node_dephasing=[float(v) for v in dephasing])
+
+
+def transport_vs_qutip(quick: bool) -> dict:
+    """Transport to a trap (1.63) against QuTiP and SymPy.
+
+    The model: H_eff = H − iΣ_t κ_t P_t − (i/2)Σ_j Γ_j P_j and dephasing
+    √γ_j P_j; a trap feeds its sink at 2κ_t ρ_tt, a node loses Γ_j ρ_jj;
+    η = 2Σ_t κ_t X_tt and τ = 2Σ_t κ_t Y_tt/η with X = ∫ρ dt, Y = ∫tρ dt.
+    QuTiP gets the system plus a sink and a loss level and the collapse
+    operators √(2κ_t)|sink⟩⟨t|, √Γ_j|loss⟩⟨j|, √γ_j|j⟩⟨j|, built here. Two
+    QuTiP routes: ``liouvillian`` restricted to the system block (the sink
+    and loss levels only receive) with two sparse solves, L X = −ρ0 and
+    L Y = −X; and ``mesolve`` until less than 10⁻¹² of the population is
+    left in the system (the horizon from the slowest decay rate, checked
+    by SciPy's exponential of the same block), with an accumulator level
+    whose row, added to QuTiP's Liouvillian, integrates t·dp_sink/dt along
+    with the state: η = p_sink(T), τ = acc(T)/η. SymPy gives exact rationals:
+    the detuned dimer (η = 32000/38881, τ = 139260/38881 at dephasing 1;
+    highest efficiency 800/963 at rate 39/20), and K_N on the ten orbitals
+    of the stabiliser of start and trap (orbits on ordered node pairs ss,
+    tt, st, ts, sr, rs, tr, rt, rr, rq), with site energies, losses and
+    dephasing constant on {s}, {t} and the rest, the reduced generator
+    built from the orbit sums and checked against SymPy's solve of the full
+    Liouvillian at N = 4–6. Closed forms on K_N without loss (Caruso et
+    al.): η = 1/(N − 1) without dephasing, 1/(N − 2) with dephasing at one
+    other node, 1 with dephasing at every node. Compared: QSO's dense
+    (`DephasingWalk`), orbital (`SymmetricOpenWalk`, K_64 and in the full
+    run K_1024) and hypercube (`HypercubeOpenWalk`, trap at the antipode,
+    against QuTiP on the full cube) solves, and its best dephasing rate.
+
+    Runs in a child process pinned to one thread (`--transport-only`):
+    QuTiP's data layer starts OpenMP threads on these tiny matrices (the
+    quick run, unpinned on an idle 4-core machine, used 19 s of CPU in
+    7.6 s; pinned, 7.5 s in 7.3 s), which compete with any other load.
+    """
+    import qutip as qt
+    import scipy.linalg
+    import scipy.sparse
+    import scipy.sparse.linalg
+    import sympy as sp
+    from sympy.polys.matrices import DomainMatrix
+
+    started = time.perf_counter()
+    R = sp.Rational
+    # QuTiP 5 normalises mesolve's states by default: the system loses
+    # population into the sink, so that is switched off.
+    opts = {"atol": 1e-13, "rtol": 1e-11, "nsteps": 10**8, "normalize_output": False}
+
+    def levels(H, start, traps, loss, dephasing, extra=0):
+        n = len(H)
+        d = n + 2 + extra
+        ket = [qt.basis(d, j) for j in range(d)]
+        h = np.zeros((d, d), complex)
+        h[:n, :n] = H
+        c_ops = [math.sqrt(2 * k) * ket[n] * ket[t].dag() for t, k in traps.items()]
+        c_ops += [math.sqrt(g) * ket[n + 1] * ket[j].dag() for j, g in enumerate(loss) if g > 0]
+        c_ops += [math.sqrt(g) * ket[j] * ket[j].dag() for j, g in enumerate(dephasing) if g > 0]
+        return qt.Qobj(h), c_ops, ket[start] * ket[start].dag(), ket, d
+
+    def liouville(H, start, traps, loss, dephasing):
+        """QuTiP's liouvillian, system block: eta, tau, the block (dense)."""
+        h, c_ops, rho0, ket, d = levels(H, start, traps, loss, dephasing)
+        n = len(H)
+        full = qt.liouvillian(h, c_ops).to("csr").data.as_scipy().tocsr()
+        idx = np.array([i + d * j for j in range(n) for i in range(n)])
+        block = full[idx][:, idx].tocsc()
+        lu = scipy.sparse.linalg.splu(block)
+        b = np.zeros(n * n, complex)
+        b[start + n * start] = 1
+        x = lu.solve(-b)
+        y = lu.solve(-x)
+        # QuTiP's own sink row (a list index: SciPy 1.18 sparse arrays give
+        # a 1-d row for a scalar index).
+        sink = full[[n + d * n]][:, idx]
+        eta = float((sink @ x)[0].real)
+        return eta, float((sink @ y)[0].real) / eta, block.toarray(), b
+
+    def horizon(block, b, remain=1e-12):
+        n = int(round(math.sqrt(len(b))))
+        tr = lambda v: float(np.trace(v.reshape((n, n), order="F")).real)  # noqa: E731
+        left = lambda T: tr(scipy.linalg.expm(block * T) @ b)  # noqa: E731
+        T = math.log(1 / remain) / float(-np.linalg.eigvals(block).real.max())
+        while left(T) >= remain:
+            T *= 1.1
+        return T, left(T)
+
+    def mesolve(H, start, traps, loss, dephasing, T):
+        h, c_ops, rho0, ket, d = levels(H, start, traps, loss, dephasing, extra=1)
+        n = len(H)
+        L = qt.liouvillian(h, c_ops)
+        acc = scipy.sparse.lil_matrix((d * d, d * d), dtype=complex)
+        for t, k in traps.items():
+            acc[(n + 2) * (d + 1), t * (d + 1)] = 2 * k  # d acc/dt = t · Σ 2κ ρ_tt
+        gen = qt.QobjEvo([L, [qt.Qobj(acc.tocsr(), dims=L.dims), lambda t: t]])
+        P = lambda j: ket[j] * ket[j].dag()  # noqa: E731
+        stiff = max(list(dephasing) + [0.0]) * T > 1e5 or T > 2000
+        res = qt.mesolve(gen, rho0, [0.0, T], e_ops=[P(n), P(n + 2)],
+                         options={**opts, "method": "bdf" if stiff else "adams"})
+        ps, a = (float(np.asarray(e)[-1].real) for e in res.expect)
+        return ps, a / ps
+
+    def exact_solve(M, b):
+        A, B = DomainMatrix.from_Matrix(M).unify(DomainMatrix.from_Matrix(b))
+        A = A.to_field()
+        return A.lu_solve(B.convert_to(A.domain)).to_Matrix()
+
+    def exact_full(H, start, traps, loss, dephasing):
+        """SymPy on the full Liouvillian (rational parameters)."""
+        S = sp.nsimplify
+        H = sp.Matrix(H).applyfunc(S)
+        traps = {t: S(k) for t, k in traps.items()}
+        loss, dephasing = [S(v) for v in loss], [S(v) for v in dephasing]
+        n = H.shape[0]
+        a = [loss[j] / 2 + traps.get(j, 0) for j in range(n)]
+        L = sp.zeros(n * n, n * n)
+        for u in range(n):
+            for v in range(n):
+                r = u + n * v
+                for w in range(n):
+                    L[r, w + n * v] += -sp.I * H[u, w]
+                    L[r, u + n * w] += sp.I * H[w, v]
+                L[r, r] += -(a[u] + a[v]) - (0 if u == v else (dephasing[u] + dephasing[v]) / 2)
+        b = sp.zeros(n * n, 1)
+        b[start + n * start] = 1
+        x = exact_solve(L, -b)
+        y = exact_solve(L, -x)
+        eta = sum(2 * k * x[t + n * t] for t, k in traps.items())
+        return sp.nsimplify(eta), sp.nsimplify(sum(2 * k * y[t + n * t] for t, k in traps.items()) / eta)
+
+    ORB = ["ss", "tt", "st", "ts", "sr", "rs", "tr", "rt", "rr", "rq"]
+
+    def exact_orbitals(m, p):
+        """K_N, N = m + 2, on the ten orbitals: (L X)_uv = −i(ε_u − ε_v)x_uv
+        − iJ(S_col(v) − S_row(u)) − (a_u + a_v + [u≠v](γ_u + γ_v)/2) x_uv,
+        S_col, S_row the column and row sums of X written in orbitals."""
+        S = sp.nsimplify
+        p = {key: ({c: S(v) for c, v in val.items()} if isinstance(val, dict) else S(val)) for key, val in p.items()}
+        k = {o: i for i, o in enumerate(ORB)}
+
+        def row(**c):
+            r = [0] * 10
+            for o, v in c.items():
+                r[k[o]] += v
+            return r
+
+        col = {"s": row(ss=1, ts=1, rs=m), "t": row(st=1, tt=1, rt=m), "r": row(sr=1, tr=1, rr=1, rq=m - 1)}
+        rw = {"s": row(ss=1, st=1, sr=m), "t": row(ts=1, tt=1, tr=m), "r": row(rs=1, rt=1, rr=1, rq=m - 1)}
+        a = {c: p["Gamma"][c] / 2 + (p["kappa"] if c == "t" else 0) for c in "str"}
+        M = sp.zeros(10, 10)
+        for o in ORB:
+            u, v, i = o[0], ("r" if o[1] == "q" else o[1]), k[o]
+            diag = o in ("ss", "tt", "rr")
+            if not diag and o != "rq":
+                M[i, i] += -sp.I * (p["eps"][u] - p["eps"][v])
+            for j in range(10):
+                M[i, j] += -sp.I * p["J"] * (col[v][j] - rw[u][j])
+            M[i, i] += -(a[u] + a[v]) - (0 if diag else (p["gamma"][u] + p["gamma"][v]) / 2)
+        b = sp.zeros(10, 1)
+        b[0] = 1
+        x = exact_solve(M, -b)
+        y = exact_solve(M, -x)
+        eta = 2 * p["kappa"] * x[1]
+        return sp.nsimplify(eta), sp.nsimplify(2 * p["kappa"] * y[1] / eta)
+
+    def complete(N, p):
+        cls = [node_class(u) for u in range(N)]
+        H = float(p["J"]) * (np.ones((N, N)) - np.eye(N)) + np.diag([float(p["eps"][c]) for c in cls])
+        loss = [float(p["Gamma"][c]) for c in cls]
+        deph = [float(p["gamma"][c]) for c in cls]
+        return H, 0, {1: float(p["kappa"])}, loss, deph
+
+    diffs = {"exact": [0.0, 0.0], "liouvillian": [0.0, 0.0], "mesolve": [0.0, 0.0]}
+    out: dict = {}
+
+    def record(name, ref, eta, tau, got):
+        de = abs(got["efficiency"] - eta)
+        dt = abs(got["arrival_time"] / tau - 1)
+        diffs[ref][0] = max(diffs[ref][0], de)
+        diffs[ref][1] = max(diffs[ref][1], dt)
+        out.setdefault(name, {})[ref] = {"efficiency": eta, "arrival_time": tau,
+                                         "efficiency_difference": de, "relative_arrival_difference": dt}
+
+    # 1. The detuned dimer (units of the hopping): exact, liouvillian, mesolve.
+    dimer = np.array([[3.0, 1.0], [1.0, 0.0]])
+    for g in ([0, 1, 100] if quick else [0, 1, 3, 10, 100]):
+        eta_x, tau_x = exact_full(sp.Matrix([[3, 1], [1, 0]]), 0, {1: 1}, [R(1, 20)] * 2, [g, g])
+        args = (dimer, 0, {1: 1.0}, [0.05, 0.05], [float(g)] * 2)
+        got = qso_transport(*args)
+        name = f"dimer, dephasing {g}"
+        record(name, "exact", float(eta_x), float(tau_x), got)
+        eta_l, tau_l, block, b = liouville(*args)
+        record(name, "liouvillian", eta_l, tau_l, got)
+        T, left = horizon(block, b)
+        eta_m, tau_m = mesolve(*args, T)
+        record(name, "mesolve", eta_m, tau_m, got)
+        out[name].update({"exact": str(eta_x), "exact_arrival_time": str(tau_x), "horizon": T, "left": left})
+    best = transport_walk(dimer, {1: 1.0}, [0.05, 0.05], [0.0, 0.0]).optimal_dephasing(0, 0.01, 100.0)
+    out["dimer best rate"] = {"qso": best["rate"], "qso_efficiency": best["efficiency"], "exact": "39/20",
+                              "efficiency_at_best": "800/963"}
+    best_diff = abs(best["rate"] / 1.95 - 1)
+
+    # 2. K_N on the ten orbitals (with loss: regular), against SymPy: QSO's
+    # dense solve up to 64 nodes, its orbital solve at 64 (and 1024).
+    params = {
+        "uniform": {"J": -1, "kappa": 1, "eps": dict(s=0, t=0, r=0), "Gamma": dict(s=R(1, 20), t=R(1, 20), r=R(1, 20)),
+                    "gamma": dict(s=1, t=1, r=1)},
+        "classes": {"J": -1, "kappa": R(3, 2), "eps": dict(s=R(1, 2), t=-1, r=R(1, 4)),
+                    "Gamma": dict(s=R(1, 10), t=R(1, 50), r=R(1, 20)), "gamma": dict(s=R(1, 2), t=2, r=1)},
+    }
+    reduction = 0.0
+    for label, p in params.items():
+        for N in ([4, 7, 64] if quick else [4, 5, 6, 7, 8, 9, 64, 1024]):
+            eta_x, tau_x = exact_orbitals(N - 2, p)
+            if N <= 6:  # the reduction against SymPy on the full Liouvillian
+                cls = [node_class(u) for u in range(N)]
+                Hs = sp.Matrix([[p["eps"][cls[u]] if u == v else p["J"] for v in range(N)] for u in range(N)])
+                full = exact_full(Hs, 0, {1: p["kappa"]}, [p["Gamma"][c] for c in cls], [p["gamma"][c] for c in cls])
+                reduction = max(reduction, float(abs(full[0] - eta_x)), float(abs(full[1] - tau_x)))
+            if N >= 64:
+                name = f"K{N} {label}, orbitals"
+                record(name, "exact", float(eta_x), float(tau_x),
+                       qso_transport(None, 0, {1: p["kappa"]}, None, None, kind="orbital", N=N, params=p))
+                out[name]["exact_efficiency"] = str(eta_x)
+            if N > 64:
+                continue
+            args = complete(N, p)
+            got = qso_transport(*args)
+            name = f"K{N} {label}"
+            record(name, "exact", float(eta_x), float(tau_x), got)
+            if N == 5:
+                eta_l, tau_l, block, b = liouville(*args)
+                record(name, "liouvillian", eta_l, tau_l, got)
+                T, _ = horizon(block, b)
+                eta_m, tau_m = mesolve(*args, T)
+                record(name, "mesolve", eta_m, tau_m, got)
+            out[name]["exact_efficiency"] = str(eta_x)
+
+    # 3. K_N without loss: closed forms (Caruso et al.) and SymPy's bright
+    # subspace: τ = (N² − 2N + 3)/(2(N − 1)) without dephasing (κ = 1),
+    # N(N + 2)/4 with dephasing 1 everywhere; the rest is dark.
+    closed = 0.0
+    for N in ([5] if quick else range(4, 10)):
+        H = -(np.ones((N, N)) - np.eye(N))
+        for deph, eta, tau in [
+            ([0.0] * N, 1 / (N - 1), (N * N - 2 * N + 3) / (2 * (N - 1))),
+            ([0.0, 0.0, 1.0] + [0.0] * (N - 3), 1 / (N - 2), None),
+            ([1.0] * N, 1.0, N * (N + 2) / 4),
+        ]:
+            got = qso_transport(H, 0, {1: 1.0}, [0.0] * N, deph)
+            closed = max(closed, abs(got["efficiency"] - eta), abs(got["arrival_time"] / tau - 1) if tau else 0.0,
+                         abs(got["dark"] - (1 - eta)))
+    out["complete graphs without loss"] = {"max_difference_from_closed_forms": closed}
+    diffs["exact"][0] = max(diffs["exact"][0], closed)
+
+    # 4. Random weighted graphs with site energies (seeded).
+    for seed in ([1, 2] if quick else range(1, 9)):
+        rng = np.random.default_rng(seed)
+        n = 5 + (seed - 1) // 2
+        while True:  # connected
+            A = np.triu((rng.random((n, n)) < 0.6).astype(float), 1)
+            A = A + A.T
+            if np.all(scipy.linalg.expm(A)[0] > 0):
+                break
+        W = np.triu(A * rng.uniform(0.3, 1.5, (n, n)), 1)
+        H = -(W + W.T) + np.diag(rng.uniform(-1.0, 1.0, n))
+        traps = {n - 1: float(rng.uniform(0.5, 2.0))}
+        if seed % 2 == 0:
+            traps[n - 2] = float(rng.uniform(0.2, 1.0))
+        loss = list(rng.uniform(0.0, 0.1, n))
+        deph = list(rng.uniform(0.0, 2.0, n) * (rng.random(n) < 0.7))
+        args = (H, 0, traps, loss, deph)
+        got = qso_transport(*args)
+        eta_l, tau_l, block, b = liouville(*args)
+        name = f"random graph {seed} ({n} nodes)"
+        record(name, "liouvillian", eta_l, tau_l, got)
+        T, _ = horizon(block, b)
+        eta_m, tau_m = mesolve(*args, T)
+        record(name, "mesolve", eta_m, tau_m, got)
+
+    # 5. FMO (Adolphs & Renger 2006, C. tepidum, as tabulated by Sarovar et
+    # al. 2010 and Kreisbeck et al. 2011), ps: trap BChl 3 (κ = 1/ps),
+    # loss 1/ns, uniform dephasing; start BChl 1. A tutorial input.
+    fmo = np.array([
+        [12410.0, -87.7, 5.5, -5.9, 6.7, -13.7, -9.9], [-87.7, 12530.0, 30.8, 8.2, 0.7, 11.8, 4.3],
+        [5.5, 30.8, 12210.0, -53.5, -2.2, -9.6, 6.0], [-5.9, 8.2, -53.5, 12320.0, -70.7, -17.0, -63.3],
+        [6.7, 0.7, -2.2, -70.7, 12480.0, 81.1, -1.3], [-13.7, 11.8, -9.6, -17.0, 81.1, 12630.0, 39.7],
+        [-9.9, 4.3, 6.0, -63.3, -1.3, 39.7, 12440.0]])
+    cm = 2 * math.pi * 2.99792458e-2  # 1/cm in rad/ps
+    H = (fmo - np.trace(fmo) / 7 * np.eye(7)) * cm
+    for g in ([10.0] if quick else [0.0, 1.0, 10.0, 300 * cm, 100.0]):
+        args = (H, 0, {2: 1.0}, [1e-3] * 7, [g] * 7)
+        got = qso_transport(*args)
+        eta_l, tau_l, block, b = liouville(*args)
+        name = f"FMO, dephasing {g:.4g}/ps"
+        record(name, "liouvillian", eta_l, tau_l, got)
+        out[name]["condition"] = got["condition"]
+        if g > 0:  # without dephasing the horizon is 2.6·10⁴ ps: no mesolve
+            T, _ = horizon(block, b)
+            eta_m, tau_m = mesolve(*args, T)
+            record(name, "mesolve", eta_m, tau_m, got)
+            out[name]["horizon_ps"] = T
+
+    # 6. Hypercube, trap at the antipode, no dephasing: QSO's solve on the
+    # orbitals against QuTiP on the full cube (energies, losses by weight).
+    for d in ([3] if quick else [3, 4, 5]):
+        n = 1 << d
+        A = np.zeros((n, n))
+        for u in range(n):
+            for k in range(d):
+                A[u, u ^ (1 << k)] = 1.0
+        w = np.array([bin(u).count("1") for u in range(n)])
+        eps = 0.3 * np.arange(d + 1) - 0.1 * np.arange(d + 1) ** 2
+        loss = 0.02 + 0.01 * np.arange(d + 1)
+        args = (-A + np.diag(eps[w]), 0, {n - 1: 1.0}, list(loss[w]), [0.0] * n)
+        eta_l, tau_l, _, _ = liouville(*args)
+        record(f"hypercube Q{d}", "liouvillian", eta_l, tau_l,
+               qso_transport(*args, kind="hypercube", d=d, energies=list(eps), losses=list(loss)))
+
+    return {
+        **out,
+        "max_efficiency_difference_exact": diffs["exact"][0],
+        "max_relative_arrival_difference_exact": diffs["exact"][1],
+        "max_efficiency_difference_liouvillian": diffs["liouvillian"][0],
+        "max_relative_arrival_difference_liouvillian": diffs["liouvillian"][1],
+        "max_efficiency_difference_mesolve": diffs["mesolve"][0],
+        "max_relative_arrival_difference_mesolve": diffs["mesolve"][1],
+        "orbital_reduction_difference_exact": reduction,
+        "best_rate_relative_difference": best_diff,
+        "seconds": time.perf_counter() - started,
+    }
+
+
+def transport_in_child(quick: bool) -> dict:
+    """transport_vs_qutip in a child process pinned to one thread (pinning
+    this process would skew the other frameworks' timings)."""
+    env = {**os.environ, "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"}
+    cmd = [sys.executable, str(Path(__file__)), "--transport-only"] + (["--quick"] if quick else [])
+    res = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    if res.returncode != 0:
+        raise RuntimeError(f"{' '.join(cmd[1:])} failed:\n{res.stderr}")
+    return json.loads(res.stdout.strip().splitlines()[-1])
+
+
 def check(c: dict) -> list[str]:
     """Deviations in the correctness section that exceed TOLERANCES."""
     failures = []
@@ -1676,6 +2076,23 @@ def check(c: dict) -> list[str]:
         failures.append(f"Hartree–Fock or CASCI energies differ from PySCF by {chem['energy_max_difference']:.3g}")
     if not chem["correlation_max_difference"] <= TOLERANCES["correlation_energy"]:
         failures.append(f"MP2, CCSD or (T) energies differ from PySCF by {chem['correlation_max_difference']:.3g}")
+    tp = c["transport_vs_qutip"]
+    for ref, label in (("exact", "SymPy's exact rationals and closed forms"), ("liouvillian", "QuTiP's liouvillian")):
+        if not tp[f"max_efficiency_difference_{ref}"] <= TOLERANCES["transport_efficiency"]:
+            failures.append(f"transport efficiencies differ from {label} by {tp[f'max_efficiency_difference_{ref}']:.3g}")
+        if not tp[f"max_relative_arrival_difference_{ref}"] <= TOLERANCES["transport_arrival"]:
+            failures.append(
+                f"mean arrival times differ from {label} by {tp[f'max_relative_arrival_difference_{ref}']:.3g} (relative)"
+            )
+    worst = max(tp["max_efficiency_difference_mesolve"], tp["max_relative_arrival_difference_mesolve"])
+    if not worst <= TOLERANCES["transport_mesolve"]:
+        failures.append(f"transport differs from QuTiP's mesolve by {worst:.3g}")
+    if tp["orbital_reduction_difference_exact"] != 0.0:
+        failures.append("the ten-orbital SymPy reference differs from SymPy on the full Liouvillian")
+    if not tp["best_rate_relative_difference"] <= TOLERANCES["transport_best_rate"]:
+        failures.append(
+            f"the dimer's rate of highest efficiency differs from 39/20 by {tp['best_rate_relative_difference']:.3g} (relative)"
+        )
     return failures
 
 
@@ -1858,9 +2275,15 @@ def main() -> None:
     ap.add_argument("--check", action="store_true",
                     help="exit with status 1 if a correctness deviation exceeds its tolerance")
     ap.add_argument("--no-timing", action="store_true", help="correctness only")
+    ap.add_argument("--transport-only", action="store_true",
+                    help="print only the transport cross-validation as JSON (correctness() runs it so, "
+                    "in a child process pinned to one thread)")
     ap.add_argument("--qaoa", default="22,24",
                     help="qubit counts of the QAOA p = 10 comparison (comma-separated; empty: none)")
     args = ap.parse_args()
+    if args.transport_only:
+        print(json.dumps(transport_vs_qutip(args.quick)))
+        return
     started = time.time()
     report = {"environment": environment()}
     report["correctness"] = correctness(args.quick)

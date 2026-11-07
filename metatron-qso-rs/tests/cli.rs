@@ -177,6 +177,173 @@ fn walks_reduction_and_transfer() {
 }
 
 #[test]
+fn walks_with_site_energies() {
+    // The detuned dimer H = [[3, −1], [−1, 0]]: Rabi's formula gives 4/13
+    // on node 1 at t = π/√13, and the walker spends 2/13 of the time there.
+    let t = (std::f64::consts::PI / 13f64.sqrt()).to_string();
+    for (generator, energies) in [
+        ("adjacency", "3,0"),
+        ("laplacian", "3,0"),
+        ("adjacency", "-3,0"),
+    ] {
+        let w = qso(&[
+            "walk",
+            "--graph",
+            "path:2",
+            "--generator",
+            generator,
+            "--energies",
+            energies,
+            "--time",
+            &t,
+        ]);
+        let p: Vec<f64> = serde_json::from_value(w["probabilities"].clone()).unwrap();
+        close(p[1], 4.0 / 13.0, 1e-12);
+        let limit: Vec<f64> = serde_json::from_value(w["limiting_distribution"].clone()).unwrap();
+        close(limit[0], 11.0 / 13.0, 1e-12);
+        close(limit[1], 2.0 / 13.0, 1e-12);
+        let e: Vec<f64> = serde_json::from_value(w["site_energies"].clone()).unwrap();
+        assert_eq!(e.len(), 2);
+    }
+    let plain = qso(&["walk", "--graph", "path:2"]);
+    assert_eq!(plain["site_energies"], Value::Null);
+    assert!(
+        qso_text(&["walk", "--graph", "cycle:4", "--energies", "0.5,0,0,0"])
+            .contains("with site energies")
+    );
+    assert!(qso_fails(&["walk", "--graph", "cycle:4", "--energies", "1,2"]).contains('4'));
+}
+
+#[test]
+fn transport_to_a_trap() {
+    // The detuned dimer (energies 3, 0; loss 0.05 on both nodes; trap κ = 1
+    // on node 1; dephasing 1): η = 32000/38881 and τ = 139260/38881, with
+    // either generator (they differ by a constant on the diagonal).
+    let reference = [
+        "transport",
+        "--graph",
+        "path:2",
+        "--start",
+        "0",
+        "--trap",
+        "1",
+        "--kappa",
+        "1",
+        "--loss",
+        "0.05",
+        "--dephasing",
+        "1",
+        "--energies",
+        "3,0",
+    ];
+    for generator in ["adjacency", "laplacian"] {
+        let mut args = reference.to_vec();
+        args.extend(["--generator", generator]);
+        let r = qso(&args);
+        close(f(&r["efficiency"]), 0.823024099174, 1e-10);
+        close(f(&r["arrival_time"]), 3.581698001595, 1e-10);
+        close(f(&r["efficiency"]), 32000.0 / 38881.0, 1e-13);
+        close(f(&r["lost"]), 6881.0 / 38881.0, 1e-13);
+        close(f(&r["dark"]), 0.0, 1e-13);
+        assert!(f(&r["error"]) <= 1e-12);
+        assert_eq!(r["dimension"], 2);
+        assert_eq!(r["generator"], generator);
+        assert_eq!(r["traps"], json!([[1, 1.0]]));
+        assert_eq!(r["losses"], json!([0.05, 0.05]));
+        assert_eq!(r["dephasing"], json!([1.0, 1.0]));
+        assert_eq!(r["scan"], Value::Null);
+        assert_eq!(r["best"], Value::Null);
+        assert!(!r["solves"].as_array().unwrap().is_empty());
+    }
+    let text = qso_text(&reference);
+    assert!(text.contains("transport from node 0 to trap 1 on"));
+    assert!(text.contains("efficiency 0.823024 (lost 0.176976, never absorbed 0)"));
+    assert!(text.contains("mean arrival time 3.581698"));
+    assert!(text.contains("bright dimension 2"));
+
+    // The scan over a rate added to every node reproduces the exact
+    // rationals; the best rate is 39/20 with η* = 800/963.
+    let dimer = [
+        "transport",
+        "--trap",
+        "1",
+        "--loss",
+        "0.05",
+        "--energies",
+        "3,0",
+    ];
+    let mut args = dimer.to_vec();
+    args.extend(["--scan", "0,1,3,10,100", "--best-rate", "0.01,100"]);
+    let r = qso(&args);
+    let scan = r["scan"].as_array().unwrap();
+    let want = [
+        (0.0, 224000.0 / 290427.0, 9200540.0 / 2032989.0),
+        (1.0, 32000.0 / 38881.0, 139260.0 / 38881.0),
+        (3.0, 288000.0 / 348689.0, 100414940.0 / 28243809.0),
+        (10.0, 7072000.0 / 9575681.0, 11335156860.0 / 2116225501.0),
+        (
+            100.0,
+            64672000.0 / 235515281.0,
+            7074070324860.0 / 475976382901.0,
+        ),
+    ];
+    assert_eq!(scan.len(), want.len());
+    for (s, (rate, eta, tau)) in scan.iter().zip(want) {
+        assert_eq!(f(&s["rate"]), rate);
+        close(f(&s["efficiency"]), eta, 1e-12);
+        close(f(&s["arrival_time"]), tau, 1e-10 * tau);
+    }
+    close(f(&r["efficiency"]), 224000.0 / 290427.0, 1e-12);
+    let best = &r["best"];
+    close(f(&best["rate"]), 1.95, 1e-5);
+    close(f(&best["efficiency"]), 800.0 / 963.0, 1e-12);
+    assert_eq!(best["interior"], true);
+    let mut args = dimer.to_vec();
+    args.extend(["--best-rate", "0.01,100"]);
+    assert!(qso_text(&args).contains("best rate 1.950000: efficiency 0.830737"));
+    // With its own dephasing 1 the best rate added is 0.95.
+    args.extend(["--dephasing", "1"]);
+    let r = qso(&args);
+    close(f(&r["best"]["rate"]), 0.95, 1e-5);
+    assert!(qso_text(&args).contains("best added rate 0.950000: efficiency 0.830737"));
+    close(f(&r["best"]["efficiency"]), 800.0 / 963.0, 1e-12);
+
+    // K5 without loss from node 0 to node 1: a quarter arrives, the rest
+    // stays dark; two traps with their own rates are reported per trap.
+    let k5 = qso(&["transport", "--graph", "complete:5", "--trap", "1"]);
+    close(f(&k5["efficiency"]), 0.25, 1e-12);
+    close(f(&k5["dark"]), 0.75, 1e-12);
+    close(f(&k5["arrival_time"]), 9.0 / 4.0, 1e-9);
+    let two = qso(&[
+        "transport",
+        "--graph",
+        "cycle:6",
+        "--trap",
+        "2,4",
+        "--kappa",
+        "1,0.5",
+        "--loss",
+        "0.01",
+    ]);
+    let trapped: Vec<f64> = serde_json::from_value(two["trapped"].clone()).unwrap();
+    assert_eq!(trapped.len(), 2);
+    close(trapped.iter().sum(), f(&two["efficiency"]), 1e-12);
+    close(
+        f(&two["efficiency"]) + f(&two["lost"]) + f(&two["dark"]),
+        1.0,
+        1e-12,
+    );
+    assert_eq!(two["traps"], json!([[2, 1.0], [4, 0.5]]));
+
+    assert!(qso_fails(&["transport", "--graph", "path:3"]).contains("--trap"));
+    assert!(qso_fails(&["transport", "--trap", "1", "--kappa", "1,2"]).contains("kappa"));
+    assert!(qso_fails(&["transport", "--trap", "1", "--loss", "0.1,0.1,0.1"]).contains("loss"));
+    assert!(qso_fails(&["transport", "--trap", "1", "--best-rate", "1"]).contains("best-rate"));
+    assert!(qso_fails(&["transport", "--trap", "1", "--best-rate", "2,1"]).contains("range"));
+    assert!(qso_fails(&["transport", "--trap", "2"]).contains('2'));
+}
+
+#[test]
 fn algorithms() {
     // QAOA p = 1 on an even ring reaches the ratio 3/4.
     let q = qso(&["qaoa", "--graph", "cycle:6", "--p", "1"]);
