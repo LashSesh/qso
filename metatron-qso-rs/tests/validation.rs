@@ -1999,3 +1999,395 @@ fn nested_commutator_bounds_of_higher_orders_hold_and_fall_as_the_error() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Transport to a trap (1.63): exact rationals, complete graphs on orbitals,
+// hypercubes on orbitals.
+// ---------------------------------------------------------------------------
+
+mod transport {
+    use metatron_qso::graph::{Graph, generators};
+    use metatron_qso::walks::symmetric::{HypercubeOpenWalk, SymmetricOpenWalk};
+    use metatron_qso::walks::{DephasingWalk, Generator, TransportOptions, TransportResult};
+
+    fn opts() -> TransportOptions {
+        TransportOptions::default()
+    }
+
+    fn check(r: &TransportResult, eta: f64, tau: f64, eta_tol: f64, tau_tol: f64, what: &str) {
+        assert!(
+            (r.efficiency - eta).abs() <= eta_tol,
+            "{what}: η {:.16e} against {eta:.16e}",
+            r.efficiency
+        );
+        let t = r.arrival_time.expect("an arrival time");
+        assert!(
+            ((t - tau) / tau).abs() <= tau_tol,
+            "{what}: τ {t:.16e} against {tau:.16e}"
+        );
+        // The error estimate adds the disagreement of the adjoint and the
+        // forward solve, which grows with the condition (K₂₀₄₈ with
+        // dephasing everywhere, τ ≈ 10⁶: 1.3e-12, with η off by 4e-13).
+        assert!(r.error <= 1e-11, "{what}: error {:e}", r.error);
+    }
+
+    /// The detuned dimer: start at energy 3, trap (κ = 1) at energy 0, loss
+    /// 1/20 on both sites, dephasing `g`: η, τ and lost are rationals
+    /// (SymPy).
+    #[test]
+    fn the_detuned_dimer_in_exact_rationals() {
+        let table = [
+            (0.0, 224000.0 / 290427.0, 9200540.0 / 2032989.0),
+            (1.0, 32000.0 / 38881.0, 139260.0 / 38881.0),
+            (3.0, 288000.0 / 348689.0, 100414940.0 / 28243809.0),
+            (10.0, 7072000.0 / 9575681.0, 11335156860.0 / 2116225501.0),
+            (
+                100.0,
+                64672000.0 / 235515281.0,
+                7074070324860.0 / 475976382901.0,
+            ),
+        ];
+        let rounded = [
+            (0.771278, 4.5256),
+            (0.823024, 3.5817),
+            (0.825951, 3.5553),
+            (0.738538, 5.3563),
+            (0.274598, 14.8622),
+        ];
+        for generator in [Generator::Adjacency, Generator::Laplacian] {
+            for (&(g, eta, tau), &(eta4, tau4)) in table.iter().zip(&rounded) {
+                let r = DephasingWalk::new(&generators::path(2), generator, 1.0, g)
+                    .unwrap()
+                    .with_site_energies(&[3.0, 0.0])
+                    .unwrap()
+                    .with_traps(&[(1, 1.0)])
+                    .unwrap()
+                    .with_losses(&[0.05; 2])
+                    .unwrap()
+                    .transport(0, &opts())
+                    .unwrap();
+                check(&r, eta, tau, 1e-13, 1e-11, &format!("dimer at {g}"));
+                assert!((r.lost - (1.0 - eta)).abs() <= 1e-13);
+                assert_eq!(r.dark, 0.0);
+                assert!((r.efficiency - eta4).abs() < 5e-7);
+                assert!((r.arrival_time.unwrap() - tau4).abs() < 5e-5);
+            }
+        }
+        // The best rate 39/20 with η* = 800/963 and τ* = 3320/963.
+        let best = DephasingWalk::new(&generators::path(2), Generator::Adjacency, 1.0, 0.0)
+            .unwrap()
+            .with_site_energies(&[3.0, 0.0])
+            .unwrap()
+            .with_traps(&[(1, 1.0)])
+            .unwrap()
+            .with_losses(&[0.05; 2])
+            .unwrap()
+            .optimal_dephasing(0, 0.01, 100.0, &opts())
+            .unwrap();
+        assert!(best.interior);
+        assert!((best.rate / 1.95 - 1.0).abs() < 1e-6, "{}", best.rate);
+        assert!((best.result.efficiency - 800.0 / 963.0).abs() <= 1e-13);
+        // η is flat at its maximum, so the rate is known to about 1e-7
+        // relative only, and τ moves with it at dτ/dγ ≈ 0.0142.
+        let tau = best.result.arrival_time.unwrap();
+        let slack = 1e-9 * 3320.0 / 963.0 + 0.015 * (best.rate - 1.95).abs();
+        assert!((tau - 3320.0 / 963.0).abs() <= slack, "τ* {tau}");
+    }
+
+    /// `K_N` (`H = −A`, start 0, trap 1) on the orbitals of the stabiliser
+    /// of the points `0..fixed`.
+    fn complete(n: usize, fixed: usize) -> SymmetricOpenWalk {
+        let swap: Vec<usize> = (0..n)
+            .map(|u| match u {
+                _ if u == fixed => fixed + 1,
+                _ if u == fixed + 1 => fixed,
+                _ => u,
+            })
+            .collect();
+        let cycle: Vec<usize> = (0..n)
+            .map(|u| {
+                if u < fixed {
+                    u
+                } else if u + 1 < n {
+                    u + 1
+                } else {
+                    fixed
+                }
+            })
+            .collect();
+        SymmetricOpenWalk::new(
+            &generators::complete(n),
+            Generator::Adjacency,
+            1.0,
+            &[],
+            &[swap, cycle],
+        )
+        .unwrap()
+        .with_traps(&[(1, 1.0)])
+        .unwrap()
+    }
+
+    /// τ with dephasing `g` at node 2 of `K_N` (SymPy).
+    fn tau_one(n: f64, g: f64) -> f64 {
+        let num =
+            2.0 * n.powi(3) * g * g + 4.0 * n.powi(3) * g - 10.0 * n * n * g * g - 16.0 * n * n * g
+                + 4.0 * n * n
+                + 19.0 * n * g * g
+                + 28.0 * n * g
+                - 8.0 * n
+                - 12.0 * g * g
+                - 20.0 * g
+                + 4.0;
+        num / (2.0 * g * (n - 2.0) * (n - 1.0) * (g + 2.0))
+    }
+
+    /// Values on the start 0, the trap 1 and the rest.
+    fn classes(n: usize, v: [f64; 3]) -> Vec<f64> {
+        (0..n).map(|u| v[u.min(2)]).collect()
+    }
+
+    fn complete_cases(n: usize) {
+        let o = opts();
+        let nf = n as f64;
+        // Without dephasing (Caruso et al.): η = 1/(N − 1).
+        let r = complete(n, 2).transport(0, &o).unwrap();
+        let tau = (nf * nf - 2.0 * nf + 3.0) / (2.0 * (nf - 1.0));
+        check(
+            &r,
+            1.0 / (nf - 1.0),
+            tau,
+            1e-12,
+            1e-10,
+            &format!("K{n} none"),
+        );
+        assert!((r.dark - (nf - 2.0) / (nf - 1.0)).abs() <= 1e-12);
+        // Dephasing 0.8 at node 2: η = 1/(N − 2), 17 orbitals.
+        let mut deph = vec![0.0; n];
+        deph[2] = 0.8;
+        let r = complete(n, 3)
+            .with_node_dephasing(&deph)
+            .unwrap()
+            .transport(0, &o)
+            .unwrap();
+        check(
+            &r,
+            1.0 / (nf - 2.0),
+            tau_one(nf, 0.8),
+            1e-12,
+            1e-10,
+            &format!("K{n} one"),
+        );
+        // Dephasing 1 everywhere: η = 1, τ = N(N + 2)/4.
+        let r = complete(n, 2)
+            .with_node_dephasing(&vec![1.0; n])
+            .unwrap()
+            .transport(0, &o)
+            .unwrap();
+        check(
+            &r,
+            1.0,
+            nf * (nf + 2.0) / 4.0,
+            1e-12,
+            1e-10,
+            &format!("K{n} all"),
+        );
+    }
+
+    #[test]
+    fn complete_graphs_on_orbitals_at_1024_and_2048_nodes() {
+        for n in [1024, 2048] {
+            complete_cases(n);
+        }
+        // The SymPy systems at N = 1024.
+        let o = opts();
+        let n = 1024;
+        let uniform = complete(n, 2)
+            .with_losses(&vec![0.05; n])
+            .unwrap()
+            .with_node_dephasing(&vec![1.0; n])
+            .unwrap()
+            .transport(0, &o)
+            .unwrap();
+        check(
+            &uniform,
+            7.614_646_576_930_854e-5,
+            19.996716309063632,
+            1e-14,
+            1e-11,
+            "uniform K1024",
+        );
+        let classes_walk = complete(n, 2)
+            .with_traps(&[(1, 1.5)])
+            .unwrap()
+            .with_site_energies(&classes(n, [0.5, -1.0, 0.25]))
+            .unwrap()
+            .with_losses(&classes(n, [0.1, 0.02, 0.05]))
+            .unwrap()
+            .with_node_dephasing(&classes(n, [0.5, 2.0, 1.0]))
+            .unwrap()
+            .transport(0, &o)
+            .unwrap();
+        check(
+            &classes_walk,
+            3.498_010_816_826_605e-5,
+            10.172870833895368,
+            1e-14,
+            1e-11,
+            "classes K1024",
+        );
+    }
+
+    #[test]
+    fn hypercube_q20_on_orbitals() {
+        let o = opts();
+        // Coherent: equal to the column chain.
+        let r = HypercubeOpenWalk::new(20, 1.0, 0.0, 0.0)
+            .unwrap()
+            .with_traps(&[(20, 1.0)])
+            .unwrap()
+            .transport(&o)
+            .unwrap();
+        check(&r, 1.0, 10.760164716, 1e-11, 1e-8, "Q20 coherent");
+        let edges: Vec<(usize, usize, f64)> = (0..20)
+            .map(|k| (k, k + 1, (((k + 1) * (20 - k)) as f64).sqrt()))
+            .collect();
+        let chain = DephasingWalk::new(
+            &Graph::from_weighted_edges(21, &edges).unwrap(),
+            Generator::Adjacency,
+            1.0,
+            0.0,
+        )
+        .unwrap()
+        .with_traps(&[(20, 1.0)])
+        .unwrap()
+        .transport(0, &o)
+        .unwrap();
+        assert!((chain.efficiency - r.efficiency).abs() <= 1e-11);
+        assert!((chain.arrival_time.unwrap() / r.arrival_time.unwrap() - 1.0).abs() <= 1e-9);
+        // Loss 0.05 and site dephasing γ.
+        let table = [
+            (0.0, 0.788339765900, 3.869156672),
+            (0.1, 0.610340941731, 2.953654386),
+            (1.0, 0.152832682845, 1.682222886),
+            (10.0, 1.969715302715e-5, 20.52201218),
+        ];
+        for (g, eta, tau) in table {
+            let r = HypercubeOpenWalk::new(20, 1.0, g, 0.0)
+                .unwrap()
+                .with_losses(&[0.05; 21])
+                .unwrap()
+                .with_traps(&[(20, 1.0)])
+                .unwrap()
+                .transport(&o)
+                .unwrap();
+            check(&r, eta, tau, 1e-11, 1e-8, &format!("Q20, γ = {g}"));
+            assert_eq!(r.dimension, 1771);
+        }
+    }
+
+    #[test]
+    fn hypercube_q10_on_orbitals_equals_the_dense_path() {
+        let o = opts();
+        let d = 10;
+        let orbital = HypercubeOpenWalk::new(d, 1.0, 1.0, 0.0)
+            .unwrap()
+            .with_losses(&[0.05; 11])
+            .unwrap()
+            .with_traps(&[(d, 1.0)])
+            .unwrap()
+            .transport(&o)
+            .unwrap();
+        let dense = DephasingWalk::new(&generators::hypercube(d), Generator::Adjacency, 1.0, 1.0)
+            .unwrap()
+            .with_losses(&[0.05; 1024])
+            .unwrap()
+            .with_traps(&[(1023, 1.0)])
+            .unwrap()
+            .transport(0, &o)
+            .unwrap();
+        assert!((orbital.efficiency - dense.efficiency).abs() <= 1e-11);
+        assert!((orbital.lost - dense.lost).abs() <= 1e-11);
+        let (a, b) = (orbital.arrival_time.unwrap(), dense.arrival_time.unwrap());
+        assert!((a / b - 1.0).abs() <= 1e-11, "{a} against {b}");
+        assert!((orbital.efficiency - 0.234277029669).abs() <= 1e-11);
+    }
+
+    /// `K_8192` on 10 and 17 orbitals (about 6 GB in `SymmetricOpenWalk::new`).
+    #[test]
+    #[ignore]
+    fn complete_graph_on_8192_nodes_on_orbitals() {
+        let o = opts();
+        let n = 8192;
+        let r = complete(n, 2).transport(0, &o).unwrap();
+        check(
+            &r,
+            1.0 / 8191.0,
+            67092483.0 / 16382.0,
+            1e-12,
+            1e-10,
+            "K8192 none",
+        );
+        let mut deph = vec![0.0; n];
+        deph[2] = 0.8;
+        let r = complete(n, 3)
+            .with_node_dephasing(&deph)
+            .unwrap()
+            .transport(0, &o)
+            .unwrap();
+        check(
+            &r,
+            1.0 / 8190.0,
+            15386788806533.0 / 1878360120.0,
+            1e-12,
+            1e-10,
+            "K8192 one",
+        );
+        let walk = complete(n, 2);
+        let r = walk
+            .clone()
+            .with_node_dephasing(&vec![0.8; n])
+            .unwrap()
+            .transport(0, &o)
+            .unwrap();
+        check(&r, 1.0, 93232922.0 / 5.0, 1e-12, 1e-10, "K8192 all");
+        let r = walk
+            .with_traps(&[(1, 1.5)])
+            .unwrap()
+            .with_site_energies(&classes(n, [0.5, -1.0, 0.25]))
+            .unwrap()
+            .with_losses(&classes(n, [0.1, 0.02, 0.05]))
+            .unwrap()
+            .with_node_dephasing(&classes(n, [0.5, 2.0, 1.0]))
+            .unwrap()
+            .transport(0, &o)
+            .unwrap();
+        check(
+            &r,
+            5.296_733_072_539_545e-7,
+            9.415_971_166_730_365,
+            1e-12,
+            1e-10,
+            "K8192 classes",
+        );
+    }
+
+    /// Capacity: `Q₄₀` and `Q₆₁` with loss 0.05 and dephasing 1 conserve
+    /// the population, and the adjoint and forward solves agree.
+    #[test]
+    #[ignore]
+    fn hypercubes_up_to_61_coordinates() {
+        for d in [40, 61] {
+            let r = HypercubeOpenWalk::new(d, 1.0, 1.0, 0.0)
+                .unwrap()
+                .with_losses(&vec![0.05; d + 1])
+                .unwrap()
+                .with_traps(&[(d, 1.0)])
+                .unwrap()
+                .transport(&opts())
+                .unwrap();
+            assert!(r.error <= 1e-10, "Q{d}: error {:e}", r.error);
+            assert!((r.efficiency + r.lost - 1.0).abs() <= 1e-10);
+            assert!(r.arrival_time.is_some());
+        }
+    }
+}

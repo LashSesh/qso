@@ -3,7 +3,12 @@
 use num_complex::Complex64 as C64;
 
 use super::OrbitalMap;
+use super::transport::{OrbitalProblem, TraceReads, trace};
 use crate::error::{QsoError, Result};
+use crate::walks::transport::{
+    DephasingOptimum, TransportOptions, TransportResult, TransportState, check_energies,
+    check_rates, check_traps,
+};
 
 /// Most orbitals of a [`HypercubeOpenWalk`] (`C(d + 3, 3)`, so `d ≤ 230`).
 pub const MAX_HYPERCUBE_ORBITALS: usize = 1 << 21;
@@ -18,7 +23,11 @@ pub const MAX_HYPERCUBE_ORBITALS: usize = 1 << 21;
 /// `2^d` is, and the graph is never built: `Q₁₀₀` with dephasing is a
 /// problem in 176 851 dimensions. `H = γL` and `H = −γA` differ by `γd·I`
 /// on the hypercube, so they give the same density matrix. Entry `ρ_uv`
-/// decays at `κ_site·[u ≠ v] + κ_coordinate·dist(u, v)`.
+/// decays at `κ_site·[u ≠ v] + κ_coordinate·dist(u, v)`. Site energies,
+/// traps, losses and dephasing by Hamming weight
+/// ([`Self::with_site_energies`], [`Self::with_traps`], ...) keep the
+/// symmetry; [`Self::transport`] gives the efficiency and mean arrival time
+/// at the traps.
 ///
 /// ```
 /// use metatron_qso::walks::symmetric::HypercubeOpenWalk;
@@ -33,6 +42,29 @@ pub const MAX_HYPERCUBE_ORBITALS: usize = 1 << 21;
 pub struct HypercubeOpenWalk {
     d: usize,
     generator: OrbitalMap,
+    /// The hopping rate `γ`.
+    gamma: f64,
+    site_rate: f64,
+    coordinate_rate: f64,
+    /// Traps, losses, site energies and per-node dephasing by Hamming
+    /// weight (none until a builder sets them).
+    sites: Option<Box<HypercubeSites>>,
+}
+
+/// The site terms of a [`HypercubeOpenWalk`], by Hamming weight `0..=d`.
+#[derive(Clone, Debug)]
+struct HypercubeSites {
+    energies: Vec<f64>,
+    kappa: Vec<f64>,
+    losses: Vec<f64>,
+    dephasing: Vec<f64>,
+    /// Traps `(weight, κ)` in the order given.
+    traps: Vec<(usize, f64)>,
+}
+
+/// `C(d, k)` as a float, from [`log_size`].
+fn binomial(d: usize, k: usize) -> f64 {
+    log_size(d, [d - k, 0, 0, k]).exp()
 }
 
 /// Number of orbitals of `Q_d`: `(n₀₁, n₁₀, n₁₁)` with sum at most `d`.
@@ -126,7 +158,258 @@ impl HypercubeOpenWalk {
         Ok(HypercubeOpenWalk {
             d,
             generator: OrbitalMap::from_rows(rows),
+            gamma,
+            site_rate,
+            coordinate_rate,
+            sites: None,
         })
+    }
+
+    /// Site energies by Hamming weight (`d + 1` finite values, not scaled
+    /// by the hopping rate): every node of weight `k` at `by_weight[k]`.
+    /// Replaces earlier energies.
+    pub fn with_site_energies(mut self, by_weight: &[f64]) -> Result<Self> {
+        check_energies(by_weight, self.d + 1)?;
+        self.sites_mut().energies = by_weight.to_vec();
+        self.update_diagonal();
+        Ok(self)
+    }
+
+    /// Traps `(k, κ)` by Hamming weight: every node of weight `k ≤ d` is a
+    /// trap of rate `κ > 0` (`k = d` the antipode of `0…0`), weights
+    /// distinct. Replaces earlier traps (`&[]` removes them).
+    pub fn with_traps(mut self, traps: &[(usize, f64)]) -> Result<Self> {
+        let d = self.d;
+        if let Some(&(k, _)) = traps.iter().find(|t| t.0 > d) {
+            return Err(QsoError::invalid(
+                "traps",
+                format!("weight {k} exceeds d = {d}"),
+            ));
+        }
+        check_traps(traps, d + 1)?;
+        let sites = self.sites_mut();
+        sites.kappa = vec![0.0; d + 1];
+        for &(k, kappa) in traps {
+            sites.kappa[k] = kappa;
+        }
+        sites.traps = traps.to_vec();
+        self.update_diagonal();
+        Ok(self)
+    }
+
+    /// Loss rates by Hamming weight (`d + 1` values `≥ 0`). Replaces
+    /// earlier losses.
+    pub fn with_losses(mut self, by_weight: &[f64]) -> Result<Self> {
+        check_rates("losses", by_weight, self.d + 1)?;
+        self.sites_mut().losses = by_weight.to_vec();
+        self.update_diagonal();
+        Ok(self)
+    }
+
+    /// Dephasing rates by Hamming weight (`d + 1` values `≥ 0`), added to
+    /// the `site_rate` of [`Self::new`]: entry `ρ_ab` (`a ≠ b`) decays at
+    /// `(γ(|a|) + γ(|b|))/2` more. Replaces earlier rates.
+    pub fn with_node_dephasing(mut self, by_weight: &[f64]) -> Result<Self> {
+        check_rates("dephasing", by_weight, self.d + 1)?;
+        self.sites_mut().dephasing = by_weight.to_vec();
+        self.update_diagonal();
+        Ok(self)
+    }
+
+    /// The traps `(weight, κ)` in the order given.
+    pub fn traps(&self) -> &[(usize, f64)] {
+        self.sites.as_ref().map_or(&[], |s| &s.traps)
+    }
+
+    fn sites_mut(&mut self) -> &mut HypercubeSites {
+        let d = self.d;
+        self.sites.get_or_insert_with(|| {
+            Box::new(HypercubeSites {
+                energies: vec![0.0; d + 1],
+                kappa: vec![0.0; d + 1],
+                losses: vec![0.0; d + 1],
+                dephasing: vec![0.0; d + 1],
+                traps: Vec::new(),
+            })
+        })
+    }
+
+    /// The diagonal of every row `(n₀₁, n₁₀, n₁₁)` from the rates of
+    /// [`Self::new`] and the site terms, with `|a| = n₁₀ + n₁₁`,
+    /// `|b| = n₀₁ + n₁₁` and `k = κ + Γ/2`:
+    /// `−(base + k(|a|) + k(|b|) + [a ≠ b](γ(|a|) + γ(|b|))/2) − i(ε(|a|) − ε(|b|))`;
+    /// rows without terms keep the entry of `new` bit for bit.
+    fn update_diagonal(&mut self) {
+        let d = self.d;
+        let Some(sites) = &self.sites else {
+            return;
+        };
+        let k = |w: usize| sites.kappa[w] + 0.5 * sites.losses[w];
+        let mut row = 0;
+        for n01 in 0..=d {
+            for n10 in 0..=d - n01 {
+                for n11 in 0..=d - n01 - n10 {
+                    let differ = n01 + n10;
+                    let (wa, wb) = (n10 + n11, n01 + n11);
+                    let base = self.coordinate_rate * differ as f64
+                        + if differ > 0 { self.site_rate } else { 0.0 };
+                    let mut term = k(wa) + k(wb);
+                    if differ > 0 {
+                        term += 0.5 * (sites.dephasing[wa] + sites.dephasing[wb]);
+                    }
+                    let rotation = sites.energies[wa] - sites.energies[wb];
+                    let at = self.generator.diagonal(row);
+                    self.generator.vals[at] = if term == 0.0 && rotation == 0.0 {
+                        C64::new(-base, 0.0)
+                    } else {
+                        C64::new(-(base + term), -rotation)
+                    };
+                    row += 1;
+                }
+            }
+        }
+    }
+
+    /// The transport problem from `0…0`.
+    fn problem(&self, options: &TransportOptions) -> Result<OrbitalProblem<'_>> {
+        options.validate()?;
+        let d = self.d;
+        let sites = match &self.sites {
+            Some(s) if !s.traps.is_empty() => s,
+            _ => {
+                return Err(QsoError::invalid(
+                    "traps",
+                    "transport needs at least one trap (with_traps)",
+                ));
+            }
+        };
+        let n = self.num_orbitals();
+        let mut sqrt_size = vec![0.0; n];
+        let mut coherence = vec![false; n];
+        for n01 in 0..=d {
+            for n10 in 0..=d - n01 {
+                for n11 in 0..=d - n01 - n10 {
+                    let o = index(d, n01, n10, n11);
+                    let n00 = d - n01 - n10 - n11;
+                    sqrt_size[o] = (0.5 * log_size(d, [n00, n01, n10, n11])).exp();
+                    coherence[o] = n01 + n10 > 0;
+                }
+            }
+        }
+        // The diagonal orbital of weight k is index(d, 0, 0, k) = k.
+        let root: Vec<f64> = (0..=d).map(|k| sqrt_size[k]).collect();
+        let mut traps = vec![C64::new(0.0, 0.0); n];
+        let mut losses = vec![C64::new(0.0, 0.0); n];
+        let mut lost = Vec::new();
+        for k in 0..=d {
+            traps[k] = C64::new(root[k] * 2.0 * sites.kappa[k], 0.0);
+            if sites.losses[k] > 0.0 {
+                losses[k] = C64::new(root[k] * sites.losses[k], 0.0);
+                lost.push((k, sites.losses[k] * root[k]));
+            }
+        }
+        let trapped = sites
+            .traps
+            .iter()
+            .map(|&(k, kappa)| (k, 2.0 * kappa * root[k]))
+            .collect();
+        let sqrt = sqrt_size.clone();
+        let bright = Box::new(move |p: &[C64]| -> (Vec<C64>, f64) {
+            // q_w = Π_B[u, 0…0] for |u| = w: the plain coefficient of the
+            // orbital (n₀₁, n₁₀, n₁₁) = (0, w, 0).
+            let q: Vec<C64> = (0..=d).map(|w| p[index(d, 0, w, 0)]).collect();
+            let qn = (0..=d)
+                .map(|w| binomial(d, w) * q[w].norm_sqr())
+                .sum::<f64>();
+            let mut x0 = vec![C64::new(0.0, 0.0); sqrt.len()];
+            for n01 in 0..=d {
+                for n10 in 0..=d - n01 {
+                    for n11 in 0..=d - n01 - n10 {
+                        let o = index(d, n01, n10, n11);
+                        x0[o] = q[n10 + n11] * q[n01 + n11].conj() * sqrt[o];
+                    }
+                }
+            }
+            (x0, qn)
+        });
+        Ok(OrbitalProblem {
+            m: self.generator.clone(),
+            coherence,
+            hopping: self.gamma,
+            traps,
+            losses: if lost.is_empty() { None } else { Some(losses) },
+            start: 0,
+            all_lose: sites.losses.iter().all(|&g| g > 0.0),
+            trapped,
+            lost,
+            sqrt_size,
+            bright,
+        })
+    }
+
+    /// Efficiency, mean arrival time, losses and dark weight of a walker
+    /// started at `0…0`, by linear solves on the orbitals (see
+    /// [`crate::walks::transport`]); needs a trap. Up to `d = 61` (the
+    /// banded factorisation of the preconditioner needs at most
+    /// [`crate::walks::transport::MAX_TRANSPORT_FACTOR_ENTRIES`] entries).
+    /// Without dephasing at interior weights the walk stays on the
+    /// `d + 1` symmetric states, and the [`crate::walks::DephasingWalk`]
+    /// on the path with couplings `−√((k + 1)(d − k))`
+    /// ([`crate::walks::Generator::Adjacency`]) gives the same result at
+    /// any `d`. Coherent transport on a large cube is ill-conditioned:
+    /// the chain's eigenstates near its ends reach the trap at rates of
+    /// order `2^{−d}`, and `τ` depends on their tiny populations, so it
+    /// loses digits that [`TransportResult::error`] (an estimate for `η`)
+    /// does not show (`Q₄₀` without dephasing: `τ` to about `10⁻⁴`
+    /// relative here, `4·10⁻⁷` on the chain).
+    pub fn transport(&self, options: &TransportOptions) -> Result<TransportResult> {
+        self.problem(options)?.transport(options)
+    }
+
+    /// One result per rate `e ≥ 0` (in input order), with `e` added to
+    /// every node's dephasing; one factorisation per rate.
+    pub fn dephasing_scan(
+        &self,
+        rates: &[f64],
+        options: &TransportOptions,
+    ) -> Result<Vec<TransportResult>> {
+        self.problem(options)?.scan(rates, options)
+    }
+
+    /// The uniform rate in `[low, high]` (`0 < low < high`, finite) which,
+    /// added to every node's dephasing, gives the highest efficiency.
+    pub fn optimal_dephasing(
+        &self,
+        low: f64,
+        high: f64,
+        options: &TransportOptions,
+    ) -> Result<DephasingOptimum> {
+        self.problem(options)?.optimum(low, high, options)
+    }
+
+    /// Propagated populations per Hamming weight `0..=d`, sink populations
+    /// (per listed trap weight) and the population lost at each of `times`
+    /// (finite, `≥ 0`, non-decreasing), from `0…0`.
+    pub fn transport_trace(&self, times: &[f64]) -> Result<Vec<TransportState>> {
+        let d = self.d;
+        let root: Vec<f64> = (0..=d).map(|k| binomial(d, k).sqrt()).collect();
+        let mut reads = TraceReads {
+            populations: (0..=d).map(|k| (k, root[k])).collect(),
+            trapped: Vec::new(),
+            lost: Vec::new(),
+        };
+        if let Some(sites) = &self.sites {
+            reads.trapped = sites
+                .traps
+                .iter()
+                .map(|&(k, kappa)| (k, 2.0 * kappa * root[k]))
+                .collect();
+            reads.lost = (0..=d)
+                .filter(|&k| sites.losses[k] > 0.0)
+                .map(|k| (k, sites.losses[k] * root[k]))
+                .collect();
+        }
+        trace(&self.generator, &self.localized(), times, &reads)
     }
 
     /// Number of coordinates.

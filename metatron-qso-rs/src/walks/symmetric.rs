@@ -18,13 +18,18 @@
 //!   `P_{m,j}` onto the blocks of partitions of the nodes ([`Dephasing`]):
 //!   singletons give the site dephasing of [`super::DephasingWalk`], the
 //!   coordinates of a hypercube dephasing per coordinate. Entry `ρ_uv`
-//!   decays at `Σ_m κ_m [u, v in different blocks of m]`.
+//!   decays at `Σ_m κ_m [u, v in different blocks of m]`. Site energies,
+//!   traps, losses and per-node dephasing that are constant on every orbit
+//!   of points add to the diagonal of the reduced generator, and
+//!   [`SymmetricOpenWalk::transport`] gives the efficiency and mean
+//!   arrival time at the traps by linear solves on the orbitals (see
+//!   [`super::transport`]).
 //! * [`SymmetricCoinedWalk`] — the coined walks with decoherence of
 //!   [`super::DecoherentCoinedWalk`], on orbitals of pairs of arcs.
 //! * [`HypercubeOpenWalk`] — the hypercube with site and coordinate
 //!   dephasing on the `C(d + 3, 3)` orbitals of the coordinate
 //!   permutations, written down without building the graph (any `d` up to
-//!   230).
+//!   230), with site terms by Hamming weight and transport up to `d = 61`.
 //! * [`ProductOpenWalk`] — walks on Cartesian products whose factors
 //!   dephase independently: from a product state the state stays a
 //!   product, so every factor evolves on its own, at any number of factors.
@@ -66,6 +71,10 @@ use std::sync::Arc;
 
 use num_complex::Complex64 as C64;
 
+use super::transport::{
+    DephasingOptimum, TransportOptions, TransportResult, TransportState, check_energies,
+    check_rates, check_traps,
+};
 use super::{DecoherentCoinedWalk, DephasingWalk, Generator};
 use crate::error::{QsoError, Result};
 use crate::graph::Graph;
@@ -373,6 +382,74 @@ impl OrbitalMap {
         self.cols.len()
     }
 
+    /// `D^{½}MD^{−½}` with `D = diag(sizes)`: entry `(O, O′)` times
+    /// `√(|O|/|O′|)`, the map in orthonormal coordinates `√|O|·x_O`.
+    fn scaled(&self, sizes: &[f64]) -> OrbitalMap {
+        let mut vals = self.vals.clone();
+        for r in 0..self.indptr.len() - 1 {
+            for k in self.indptr[r]..self.indptr[r + 1] {
+                vals[k] *= (sizes[r] / sizes[self.cols[k] as usize]).sqrt();
+            }
+        }
+        OrbitalMap {
+            indptr: self.indptr.clone(),
+            cols: self.cols.clone(),
+            vals,
+        }
+    }
+
+    /// The conjugate transpose (columns of every row ascending).
+    fn adjoint(&self) -> OrbitalMap {
+        let n = self.indptr.len() - 1;
+        let mut indptr = vec![0usize; n + 1];
+        for &c in &self.cols {
+            indptr[c as usize + 1] += 1;
+        }
+        for r in 0..n {
+            indptr[r + 1] += indptr[r];
+        }
+        let mut next = indptr.clone();
+        let mut cols = vec![0u32; self.nnz()];
+        let mut vals = vec![C64::new(0.0, 0.0); self.nnz()];
+        for r in 0..n {
+            for k in self.indptr[r]..self.indptr[r + 1] {
+                let c = self.cols[k] as usize;
+                cols[next[c]] = r as u32;
+                vals[next[c]] = self.vals[k].conj();
+                next[c] += 1;
+            }
+        }
+        OrbitalMap { indptr, cols, vals }
+    }
+
+    /// The map of `[x; y]` with `x′ = Mx` and `y′ = x`, so that `y` is the
+    /// time integral of `x` (rows `N..2N` hold the single entry 1 at
+    /// column `r − N`).
+    fn doubled(&self) -> OrbitalMap {
+        let n = self.indptr.len() - 1;
+        let mut indptr = self.indptr.clone();
+        let mut cols = self.cols.clone();
+        let mut vals = self.vals.clone();
+        indptr.reserve(n);
+        cols.reserve(n);
+        vals.reserve(n);
+        for r in 0..n {
+            cols.push(r as u32);
+            vals.push(C64::new(1.0, 0.0));
+            indptr.push(cols.len());
+        }
+        OrbitalMap { indptr, cols, vals }
+    }
+
+    /// Position of row `r`'s diagonal entry in `vals` (every generator of
+    /// an open walk has one).
+    fn diagonal(&self, r: usize) -> usize {
+        let (from, to) = (self.indptr[r], self.indptr[r + 1]);
+        from + self.cols[from..to]
+            .binary_search(&(r as u32))
+            .expect("every row of the generator holds its diagonal")
+    }
+
     /// Largest absolute row sum (the ∞-norm).
     fn norm(&self) -> f64 {
         (0..self.indptr.len() - 1)
@@ -536,6 +613,64 @@ fn check_entries(rows: impl Iterator<Item = usize>) -> Result<usize> {
 pub struct SymmetricOpenWalk {
     orbitals: Arc<Orbitals>,
     generator: OrbitalMap,
+    /// `γ·max|w_e|`, the hopping scale of the transport preconditioner.
+    hopping: f64,
+    /// Traps, losses, site energies and per-node dephasing (none until a
+    /// builder sets them).
+    sites: Option<Box<OrbitalSites>>,
+}
+
+/// The site terms of a [`SymmetricOpenWalk`], constant on every orbit of
+/// points.
+#[derive(Clone, Debug)]
+struct OrbitalSites {
+    /// Traps `(node, κ)` in the order given.
+    traps: Vec<(usize, f64)>,
+    /// Every diagonal orbital (an orbit of points), ascending, with its
+    /// site energy `ε`, trap rate `κ`, loss `Γ` and dephasing `γ`.
+    values: Vec<(u32, [f64; 4])>,
+    /// The diagonal of the generator as [`SymmetricOpenWalk::new`] built
+    /// it.
+    base: Vec<C64>,
+    /// Position of every row's diagonal entry in the generator's values.
+    diagonal: Vec<usize>,
+}
+
+/// Columns of [`OrbitalSites::values`].
+const ENERGY: usize = 0;
+const TRAP: usize = 1;
+const LOSS: usize = 2;
+const DEPHASING: usize = 3;
+
+impl OrbitalSites {
+    /// `[ε, κ, Γ, γ]` of the diagonal orbital `o`.
+    fn of(&self, o: usize) -> &[f64; 4] {
+        let k = self
+            .values
+            .binary_search_by_key(&(o as u32), |v| v.0)
+            .expect("a diagonal orbital");
+        &self.values[k].1
+    }
+}
+
+/// Refuse `f` (one value per point) unless it is constant on every orbit
+/// of points, to `1e-12·(1 + |f(a)|)`: `O(n)` lookups, exact because the
+/// diagonal orbitals are the orbits on points.
+fn check_invariant(orbitals: &Orbitals, name: &'static str, f: &[f64]) -> Result<()> {
+    for (u, &x) in f.iter().enumerate() {
+        let (a, _) = orbitals.representative(orbitals.of(u, u));
+        if (x - f[a]).abs() > 1e-12 * (1.0 + f[a].abs()) {
+            return Err(QsoError::invalid(
+                name,
+                format!(
+                    "not invariant under the symmetries: nodes {u} and {a} lie in one orbit with \
+                     {x} and {}",
+                    f[a]
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 impl SymmetricOpenWalk {
@@ -642,9 +777,14 @@ impl SymmetricOpenWalk {
                 row.push((orbitals.of(a, w) as u32, i * x));
             }
         });
+        let hopping = (0..n)
+            .flat_map(|a| h.row(a).filter(move |&(w, _)| w != a))
+            .fold(0.0f64, |m, (_, x)| m.max(x.abs()));
         Ok(SymmetricOpenWalk {
             orbitals: Arc::new(orbitals),
             generator,
+            hopping,
+            sites: None,
         })
     }
 
@@ -685,6 +825,229 @@ impl SymmetricOpenWalk {
         let o = &self.orbitals;
         o.check_len(x.len())?;
         Ok((0..o.n).map(|u| x[o.of(u, u)].re).collect())
+    }
+
+    /// Site energies `ε_j` added to the diagonal of `H` (not scaled by the
+    /// hopping rate): one per node, equal on every orbit of points of the
+    /// symmetries; replaces earlier energies.
+    pub fn with_site_energies(self, energies: &[f64]) -> Result<Self> {
+        check_energies(energies, self.orbitals.n)?;
+        self.with_site_term(ENERGY, "energies", energies)
+    }
+
+    /// Traps `(node, κ)`, the sink of node `t` filling at `2κ ρ_tt` (nodes
+    /// distinct, `κ > 0`); `κ` must be equal on every orbit of points, so
+    /// a whole orbit of traps of equal rate is allowed. Replaces earlier
+    /// traps (`&[]` removes them).
+    pub fn with_traps(mut self, traps: &[(usize, f64)]) -> Result<Self> {
+        let n = self.orbitals.n;
+        check_traps(traps, n)?;
+        let mut kappa = vec![0.0; n];
+        for &(t, k) in traps {
+            kappa[t] = k;
+        }
+        self = self.with_site_term(TRAP, "traps", &kappa)?;
+        self.sites.as_mut().expect("set by the term").traps = traps.to_vec();
+        Ok(self)
+    }
+
+    /// Loss rates `Γ_j ≥ 0`, one per node and equal on every orbit of
+    /// points: population leaves node `j` at `Γ_j ρ_jj`. Replaces earlier
+    /// losses.
+    pub fn with_losses(self, rates: &[f64]) -> Result<Self> {
+        check_rates("losses", rates, self.orbitals.n)?;
+        self.with_site_term(LOSS, "losses", rates)
+    }
+
+    /// Dephasing rates `γ_j ≥ 0`, one per node and equal on every orbit of
+    /// points, added to the partition [`Dephasing`] terms of [`Self::new`]
+    /// (entry `ρ_ab` decays at `(γ_a + γ_b)/2` more). Replaces earlier
+    /// per-node rates.
+    pub fn with_node_dephasing(self, rates: &[f64]) -> Result<Self> {
+        check_rates("dephasing", rates, self.orbitals.n)?;
+        self.with_site_term(DEPHASING, "dephasing", rates)
+    }
+
+    /// The traps `(node, κ)` in the order given.
+    pub fn traps(&self) -> &[(usize, f64)] {
+        self.sites.as_ref().map_or(&[], |s| &s.traps)
+    }
+
+    /// Set column `column` of the site terms to `f` (checked for
+    /// invariance) and update the diagonal of the generator.
+    fn with_site_term(mut self, column: usize, name: &'static str, f: &[f64]) -> Result<Self> {
+        let orbitals = &self.orbitals;
+        check_invariant(orbitals, name, f)?;
+        let generator = &self.generator;
+        let sites = self.sites.get_or_insert_with(|| {
+            let mut diagonal: Vec<u32> =
+                (0..orbitals.n).map(|u| orbitals.of(u, u) as u32).collect();
+            diagonal.sort_unstable();
+            diagonal.dedup();
+            let positions: Vec<usize> =
+                (0..orbitals.len()).map(|o| generator.diagonal(o)).collect();
+            Box::new(OrbitalSites {
+                traps: Vec::new(),
+                values: diagonal.into_iter().map(|o| (o, [0.0; 4])).collect(),
+                base: positions.iter().map(|&k| generator.vals[k]).collect(),
+                diagonal: positions,
+            })
+        });
+        for (o, v) in &mut sites.values {
+            let (a, _) = orbitals.representative(*o as usize);
+            v[column] = f[a];
+        }
+        // Row O at its representative (a, b) gains
+        // −(k_a + k_b) − [a ≠ b](γ_a + γ_b)/2 − i(ε_a − ε_b), k = κ + Γ/2,
+        // always from the diagonal of `new` and in this order, so that the
+        // order of the builders changes no bit and zero terms none at all.
+        for o in 0..orbitals.len() {
+            let (a, b) = orbitals.representative(o);
+            let (va, vb) = (sites.of(orbitals.of(a, a)), sites.of(orbitals.of(b, b)));
+            let (ka, kb) = (va[TRAP] + 0.5 * va[LOSS], vb[TRAP] + 0.5 * vb[LOSS]);
+            let mut decay = -(ka + kb);
+            if a != b {
+                decay -= 0.5 * (va[DEPHASING] + vb[DEPHASING]);
+            }
+            let term = C64::new(decay, -(va[ENERGY] - vb[ENERGY]));
+            self.generator.vals[sites.diagonal[o]] = if term == C64::new(0.0, 0.0) {
+                sites.base[o]
+            } else {
+                sites.base[o] + term
+            };
+        }
+        Ok(self)
+    }
+
+    /// The transport problem from `start` (which every symmetry must fix).
+    fn problem(&self, start: usize, options: &TransportOptions) -> Result<OrbitalProblem<'_>> {
+        options.validate()?;
+        let sites = match &self.sites {
+            Some(s) if !s.traps.is_empty() => s,
+            _ => {
+                return Err(QsoError::invalid(
+                    "traps",
+                    "transport needs at least one trap (with_traps)",
+                ));
+            }
+        };
+        let orbitals = &*self.orbitals;
+        localized(orbitals, &[start])?;
+        let start_orbital = orbitals.of(start, start);
+        let size: Vec<f64> = orbitals.sizes.iter().map(|&s| s as f64).collect();
+        let sqrt_size: Vec<f64> = size.iter().map(|s| s.sqrt()).collect();
+        let n = orbitals.len();
+        let mut traps = vec![C64::new(0.0, 0.0); n];
+        let mut losses = vec![C64::new(0.0, 0.0); n];
+        let mut lost = Vec::new();
+        for &(o, v) in &sites.values {
+            let o = o as usize;
+            traps[o] = C64::new(sqrt_size[o] * 2.0 * v[TRAP], 0.0);
+            if v[LOSS] > 0.0 {
+                losses[o] = C64::new(sqrt_size[o] * v[LOSS], 0.0);
+                lost.push((o, v[LOSS] * sqrt_size[o]));
+            }
+        }
+        let all_lose = sites.values.iter().all(|v| v.1[LOSS] > 0.0);
+        let trapped = sites
+            .traps
+            .iter()
+            .map(|&(t, kappa)| {
+                let o = orbitals.of(t, t);
+                (o, 2.0 * kappa / sqrt_size[o])
+            })
+            .collect();
+        let coherence = (0..n)
+            .map(|o| {
+                let (a, b) = orbitals.representative(o);
+                a != b
+            })
+            .collect();
+        let sqrt = sqrt_size.clone();
+        let bright = Box::new(move |p: &[C64]| -> (Vec<C64>, f64) {
+            let q: Vec<C64> = (0..orbitals.n).map(|u| p[orbitals.of(u, start)]).collect();
+            let qn = q.iter().map(|z| z.norm_sqr()).sum();
+            let x0 = (0..orbitals.len())
+                .map(|o| {
+                    let (a, b) = orbitals.representative(o);
+                    q[a] * q[b].conj() * sqrt[o]
+                })
+                .collect();
+            (x0, qn)
+        });
+        Ok(OrbitalProblem {
+            m: self.generator.scaled(&size),
+            coherence,
+            hopping: self.hopping,
+            traps,
+            losses: if lost.is_empty() { None } else { Some(losses) },
+            start: start_orbital,
+            all_lose,
+            trapped,
+            lost,
+            sqrt_size,
+            bright,
+        })
+    }
+
+    /// Efficiency, mean arrival time, losses and dark weight of a walker
+    /// started at `start` (fixed by every symmetry), by linear solves on
+    /// the orbitals (see [`super::transport`]); needs a trap.
+    pub fn transport(&self, start: usize, options: &TransportOptions) -> Result<TransportResult> {
+        self.problem(start, options)?.transport(options)
+    }
+
+    /// One result per rate `e ≥ 0` (in input order), with `e` added to
+    /// every node's dephasing; one factorisation per rate.
+    pub fn dephasing_scan(
+        &self,
+        start: usize,
+        rates: &[f64],
+        options: &TransportOptions,
+    ) -> Result<Vec<TransportResult>> {
+        self.problem(start, options)?.scan(rates, options)
+    }
+
+    /// The uniform rate in `[low, high]` (`0 < low < high`, finite) which,
+    /// added to every node's dephasing, gives the highest efficiency (see
+    /// [`super::DephasingWalk::optimal_dephasing`]).
+    pub fn optimal_dephasing(
+        &self,
+        start: usize,
+        low: f64,
+        high: f64,
+        options: &TransportOptions,
+    ) -> Result<DephasingOptimum> {
+        self.problem(start, options)?.optimum(low, high, options)
+    }
+
+    /// Propagated populations (per node), sink populations (per trap, in
+    /// the order of [`Self::traps`]) and the population lost at each of
+    /// `times` (finite, `≥ 0`, non-decreasing), from `start` (fixed by
+    /// every symmetry): the time integral of the populations is propagated
+    /// with them.
+    pub fn transport_trace(&self, start: usize, times: &[f64]) -> Result<Vec<TransportState>> {
+        let x0 = self.localized(start)?;
+        let o = &*self.orbitals;
+        let mut reads = TraceReads {
+            populations: (0..o.n).map(|u| (o.of(u, u), 1.0)).collect(),
+            trapped: Vec::new(),
+            lost: Vec::new(),
+        };
+        if let Some(sites) = &self.sites {
+            reads.trapped = sites
+                .traps
+                .iter()
+                .map(|&(t, kappa)| (o.of(t, t), 2.0 * kappa))
+                .collect();
+            reads.lost = sites
+                .values
+                .iter()
+                .filter(|v| v.1[LOSS] > 0.0)
+                .map(|&(d, v)| (d as usize, v[LOSS] * o.size(d as usize) as f64))
+                .collect();
+        }
+        trace(&self.generator, &x0, times, &reads)
     }
 }
 
@@ -932,10 +1295,23 @@ pub struct ProductOpenWalk {
 }
 
 impl ProductOpenWalk {
-    /// Factors with their multiplicities (at least one copy in all).
+    /// Factors with their multiplicities (at least one copy in all). A
+    /// factor with traps or a positive loss is refused: it loses
+    /// population, so its marginals are not distributions (site energies
+    /// and per-node dephasing factorise and are allowed).
     pub fn new(factors: Vec<(DephasingWalk, usize)>) -> Result<Self> {
         if factors.iter().map(|f| f.1).sum::<usize>() == 0 {
             return Err(QsoError::invalid("factors", "at least one factor"));
+        }
+        if factors
+            .iter()
+            .any(|(w, _)| !w.traps().is_empty() || w.losses().iter().any(|&g| g > 0.0))
+        {
+            return Err(QsoError::invalid(
+                "factors",
+                "a factor with traps or losses loses population, so its marginals are not \
+                 distributions; use the walk on the product graph",
+            ));
         }
         Ok(ProductOpenWalk { factors })
     }
@@ -1014,9 +1390,11 @@ impl ProductOpenWalk {
 
 mod hypercube;
 mod suborbits;
+mod transport;
 pub use hypercube::{HypercubeOpenWalk, MAX_HYPERCUBE_ORBITALS};
 use suborbits::Suborbits;
 pub use suborbits::{MAX_SUBORBIT_LABELS, MAX_SUBORBIT_WORK};
+use transport::{OrbitalProblem, TraceReads, trace};
 
 #[cfg(test)]
 mod tests;

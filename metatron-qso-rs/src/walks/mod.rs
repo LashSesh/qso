@@ -20,7 +20,11 @@
 //!   cyclotomic arithmetic for paths, cycles and abelian Cayley graphs.
 //! * [`circuits`] — walks as gate circuits: exact for circulant graphs and
 //!   Cayley graphs of `Z₂ⁿ`, product formulas for any graph.
-//! * [`dephasing`] — open-system walks with site dephasing (Lindblad).
+//! * [`dephasing`] — open-system walks with site dephasing (Lindblad),
+//!   traps, losses and site energies.
+//! * [`transport`] — transport to a trap: efficiency, mean arrival time,
+//!   dark states, dephasing scans and the best dephasing rate, by linear
+//!   solves instead of time steps.
 //! * [`discrete`] — discrete-time walks: coined walks and their search,
 //!   the walk on the line, and Szegedy walks with quantum hitting times.
 //! * [`driven`] — walks with a time-dependent Hamiltonian (adiabatic and
@@ -56,6 +60,7 @@ pub mod quotient;
 pub mod search;
 pub mod symmetric;
 pub mod transfer;
+pub mod transport;
 
 use num_complex::Complex64 as C64;
 use serde::{Deserialize, Serialize};
@@ -83,6 +88,10 @@ pub use symmetric::{
     SymmetricOpenWalk, coordinate_permutations,
 };
 pub use transfer::{StateTransfer, TransferResult};
+pub use transport::{
+    DephasingOptimum, MAX_TRANSPORT_FACTOR_ENTRIES, MAX_TRANSPORT_WORK, SolveReport,
+    TransportOptions, TransportResult, TransportState,
+};
 
 /// Largest graph for which dense eigendecompositions are used.
 pub const DENSE_LIMIT: usize = 2048;
@@ -305,14 +314,17 @@ impl ContinuousWalk {
         self.energies.as_deref()
     }
 
+    /// Number of nodes.
     pub fn num_nodes(&self) -> usize {
         self.n
     }
 
+    /// Hopping rate `γ`.
     pub fn gamma(&self) -> f64 {
         self.gamma
     }
 
+    /// Which matrix generates the walk.
     pub fn generator(&self) -> Generator {
         self.generator
     }
@@ -868,6 +880,51 @@ mod tests {
     }
 
     #[test]
+    fn site_energies_reach_lanczos_when_the_quotient_is_too_large() {
+        // Q₁₂ with energies by Hamming weight next to a path of 1000 nodes
+        // with distinct energies: the coloured quotient has more than the
+        // 918 cells allowed at 5096 nodes, so the walker from 0…0 is
+        // followed by Lanczos, which must find the 13-site chain again.
+        let d = 12;
+        let cube = generators::hypercube(d);
+        let m = cube.num_nodes();
+        let mut edges: Vec<(usize, usize)> = cube.edges().iter().map(|&(u, v, _)| (u, v)).collect();
+        edges.extend((1..1000).map(|j| (m + j - 1, m + j)));
+        let g = Graph::from_edges(m + 1000, &edges).unwrap();
+        let n = g.num_nodes();
+        let by_weight: Vec<f64> = (0..=d).map(|k| 0.4 * (k % 4) as f64 - 0.5).collect();
+        let mut energies: Vec<f64> = (0..m).map(|v| by_weight[v.count_ones() as usize]).collect();
+        energies.extend(rough_energies(1000).iter().map(|e| e + 3.0));
+        let walk = ContinuousWalk::new(&g, Generator::Laplacian, 1.0)
+            .unwrap()
+            .with_site_energies(&energies)
+            .unwrap();
+        assert!(walk.quotient_spectrum(&g, 0, cyclic_limit(n)).is_none());
+        let q = Quotient::hypercube(d).unwrap();
+        let mut chain = q.hamiltonian(Generator::Laplacian, 1.0);
+        for (k, e) in by_weight.iter().enumerate() {
+            chain[(k, k)] += e;
+        }
+        let (_, y) = eigh_real(&chain);
+        let limit = walk.limiting_distribution(0).unwrap();
+        let mut worst = 0.0f64;
+        for (v, p) in limit.iter().enumerate() {
+            let want = if v < m {
+                let k = v.count_ones() as usize;
+                (0..=d)
+                    .map(|a| (y[(k, a)] * y[(0, a)]).powi(2))
+                    .sum::<f64>()
+                    / q.sizes()[k]
+            } else {
+                0.0
+            };
+            worst = worst.max((p - want).abs());
+        }
+        assert!(worst < 1e-12, "{worst:e}");
+        assert_eq!(walk.cyclic_dimension(0).unwrap(), d + 1);
+    }
+
+    #[test]
     fn the_coloured_quotient_matches_the_dense_walk() {
         // Q₆ with energies by Hamming weight and a bump on node 5 (15 cells
         // from node 0): the coloured quotient, called directly because a
@@ -1013,5 +1070,215 @@ mod tests {
                 QsoError::invalid("energies", "site energies must be finite")
             );
         }
+    }
+
+    #[test]
+    fn site_energies_match_an_independent_eigendecomposition() {
+        // The star S₆ (centre 0) with ε = (−0.3, 0.5, 0.5, 0.5, −1.1, −0.0):
+        // the equal leaves 1, 2, 3 give a doubly degenerate eigenvalue
+        // (γ + 0.5 with the Laplacian, 0.5 with the adjacency matrix).
+        // References from LAPACK (numpy.linalg.eigh, degenerate eigenspaces
+        // grouped) and scipy.linalg.expm, the time average by 400-point
+        // Gauss–Legendre quadrature; the Laplacian limit agrees with a
+        // 40-digit mpmath eigendecomposition to 4·10⁻¹⁷.
+        let g = generators::star(6);
+        let energies = [-0.3, 0.5, 0.5, 0.5, -1.1, -0.0];
+        #[rustfmt::skip]
+        let cases = [
+            (Generator::Laplacian, 1, [-0.5893509203579675, 0.39378421972303546, 0.9076027081868844, 1.2, 1.2, 3.987963992448048],
+             [0.05557310280981699, 0.4905330922347091, 0.1571997589013758, 0.1571997589013758, 0.01847948399985487, 0.12101480315286742],
+             [0.0052835922954572, 0.7733631152578394, 0.07138184327263099, 0.07138184327263099, 0.02326892047898068, 0.05532068542246057],
+             [0.06208929743721511, 0.8099790383208939, 0.03865634103854884, 0.03865634103854885, 0.01808002848414637, 0.03253895368064648]),
+            (Generator::Adjacency, 0, [-1.8472550927577038, -0.7469532767120163, 0.12442222664427385, 0.5, 0.5, 1.5697861428254456],
+             [0.36702244670486783, 0.09147933836189454, 0.09147933836189459, 0.09147933836189459, 0.2645252363346362, 0.09401430187481202],
+             [0.568537862773277, 0.03886698154837016, 0.03886698154837021, 0.03886698154837018, 0.28890346716275145, 0.02595772541886146],
+             [0.41989802217235506, 0.09641865988904619, 0.09641865988904619, 0.09641865988904619, 0.19579826780292744, 0.09504773035757916]),
+        ];
+        for (generator, start, spectrum, limit, p, average) in cases {
+            let walk = ContinuousWalk::new(&g, generator, 0.7)
+                .unwrap()
+                .with_site_energies(&energies)
+                .unwrap();
+            let pairs = [
+                (walk.spectrum().unwrap().to_vec(), spectrum),
+                (walk.limiting_distribution(start).unwrap(), limit),
+                (walk.probabilities(start, 1.9).unwrap(), p),
+                (walk.average_distribution(start, 2.3).unwrap(), average),
+            ];
+            for (got, want) in pairs {
+                for (x, y) in got.iter().zip(&want) {
+                    assert!((x - y).abs() < 1e-12, "{generator:?}: {x} against {y}");
+                }
+            }
+        }
+        // The detuned dimer H = [[3, −1], [−1, 0]]: tan 2θ = 2/3, so the
+        // walker from node 0 spends ½·sin²2θ = 2/13 of the time on node 1.
+        let dimer = ContinuousWalk::new(&generators::path(2), Generator::Adjacency, 1.0)
+            .unwrap()
+            .with_site_energies(&[3.0, 0.0])
+            .unwrap();
+        let limit = dimer.limiting_distribution(0).unwrap();
+        assert!((limit[1] - 2.0 / 13.0).abs() < 1e-15);
+        assert!((limit[0] - 11.0 / 13.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn uniform_and_negative_energies_only_shift_the_spectrum() {
+        // ε_j = c for every node adds c·I: the spectrum moves by c and the
+        // probabilities stay. Petersen (eigenvalues of multiplicity 4 and 5)
+        // is dense; Q₁₂ goes through the coloured quotient, whose cells are
+        // then those of the walk without energies.
+        let c = -0.75;
+        let g = generators::petersen();
+        for generator in [Generator::Laplacian, Generator::Adjacency] {
+            let plain = ContinuousWalk::new(&g, generator, 1.3).unwrap();
+            let shifted = plain.clone().with_site_energies(&[c; 10]).unwrap();
+            for (x, y) in shifted
+                .spectrum()
+                .unwrap()
+                .iter()
+                .zip(plain.spectrum().unwrap())
+            {
+                assert!((x - (y + c)).abs() < 1e-12);
+            }
+            for start in [0, 7] {
+                let pairs = [
+                    (
+                        shifted.limiting_distribution(start).unwrap(),
+                        plain.limiting_distribution(start).unwrap(),
+                    ),
+                    (
+                        shifted.probabilities(start, 2.9).unwrap(),
+                        plain.probabilities(start, 2.9).unwrap(),
+                    ),
+                    (
+                        shifted.average_distribution(start, 1.7).unwrap(),
+                        plain.average_distribution(start, 1.7).unwrap(),
+                    ),
+                ];
+                for (a, b) in pairs {
+                    for (x, y) in a.iter().zip(&b) {
+                        assert!((x - y).abs() < 1e-12, "{generator:?}: {x} against {y}");
+                    }
+                }
+                assert_eq!(
+                    shifted.cyclic_dimension(start).unwrap(),
+                    plain.cyclic_dimension(start).unwrap()
+                );
+            }
+        }
+        let g = generators::hypercube(12);
+        let n = g.num_nodes();
+        let plain = ContinuousWalk::new(&g, Generator::Laplacian, 1.0).unwrap();
+        let shifted = plain.clone().with_site_energies(&vec![c; n]).unwrap();
+        for start in [0, 1234] {
+            let a = shifted.limiting_distribution(start).unwrap();
+            let b = plain.limiting_distribution(start).unwrap();
+            assert!(a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-12));
+            assert_eq!(shifted.cyclic_dimension(start).unwrap(), 13);
+        }
+    }
+
+    #[test]
+    fn negative_zero_energies_are_zeros() {
+        // −0.0 and 0.0 are the same energy: same Hamiltonian, same cells of
+        // the coloured quotient, bit-identical results, dense and reduced.
+        let by_weight = |d: usize, signed: bool| -> Vec<f64> {
+            (0..1usize << d)
+                .map(|v| match v.count_ones() % 3 {
+                    0 if signed && v % 2 == 1 => -0.0,
+                    0 => 0.0,
+                    1 => 0.5,
+                    _ => -1.25,
+                })
+                .collect()
+        };
+        for d in [6, 12] {
+            let g = generators::hypercube(d);
+            for generator in [Generator::Laplacian, Generator::Adjacency] {
+                let walk = ContinuousWalk::new(&g, generator, 0.9).unwrap();
+                let plus = walk
+                    .clone()
+                    .with_site_energies(&by_weight(d, false))
+                    .unwrap();
+                let minus = walk.with_site_energies(&by_weight(d, true)).unwrap();
+                assert!(
+                    minus
+                        .site_energies()
+                        .unwrap()
+                        .iter()
+                        .any(|e| e.is_sign_negative() && *e == 0.0)
+                );
+                assert_eq!(plus.hamiltonian(), minus.hamiltonian());
+                assert_eq!(plus.spectrum(), minus.spectrum());
+                for start in [0, 3] {
+                    assert_eq!(
+                        plus.limiting_distribution(start).unwrap(),
+                        minus.limiting_distribution(start).unwrap()
+                    );
+                    assert_eq!(
+                        plus.average_distribution(start, 2.0).unwrap(),
+                        minus.average_distribution(start, 2.0).unwrap()
+                    );
+                    assert_eq!(
+                        plus.probabilities(start, 0.8).unwrap(),
+                        minus.probabilities(start, 0.8).unwrap()
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            energy_colours(&[0.0, -0.0, 1.0, -0.0, 0.0], 2),
+            [1, 1, 0, 1, 1]
+        );
+        assert_eq!(energy_colours(&[2.0, -1.0, -0.0, 2.0], 0), [0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn walks_stay_send_and_sync() {
+        fn assert_traits<
+            T: Send + Sync + Clone + std::panic::UnwindSafe + std::panic::RefUnwindSafe,
+        >() {
+        }
+        assert_traits::<ContinuousWalk>();
+    }
+
+    /// The lazy eigendecomposition, first requested by several threads at
+    /// once, is computed once and gives the results of a single thread.
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn the_lazy_spectrum_is_shared_between_threads() {
+        let g = generators::hypercube(7);
+        let energies = rough_energies(g.num_nodes());
+        let build = || {
+            ContinuousWalk::new(&g, Generator::Laplacian, 1.0)
+                .unwrap()
+                .with_site_energies(&energies)
+                .unwrap()
+        };
+        let serial = build();
+        let want: Vec<Vec<f64>> = (0..8)
+            .map(|s| serial.limiting_distribution(s).unwrap())
+            .collect();
+        let walk = build();
+        let got: Vec<(Vec<f64>, usize)> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8)
+                .map(|s| {
+                    let walk = &walk;
+                    scope.spawn(move || {
+                        let limit = walk.limiting_distribution(s).unwrap();
+                        (limit, walk.spectrum().unwrap().as_ptr() as usize)
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        // One eigendecomposition: every thread sees the same allocation.
+        let shared = walk.spectrum().unwrap().as_ptr() as usize;
+        for (s, (limit, ptr)) in got.iter().enumerate() {
+            assert_eq!(limit, &want[s]);
+            assert_eq!(*ptr, shared);
+        }
+        assert_eq!(walk.spectrum(), serial.spectrum());
     }
 }

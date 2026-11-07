@@ -1170,6 +1170,7 @@ fn many_generators_and_identities_reach_every_orbital() {
         }
     }
     // Huge point sets without generators are refused before they are built.
+    #[cfg(target_pointer_width = "64")]
     assert!(Orbitals::new(1 << 40, &[]).is_err());
     assert!(Orbitals::new(1 << 20, &[]).is_err());
 }
