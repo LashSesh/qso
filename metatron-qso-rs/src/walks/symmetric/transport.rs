@@ -18,9 +18,24 @@
 //!    (`𝓛†(Π_B) = −(F + F_loss)`), so `q = Π_B e_s` is the start's bright
 //!    part and `1 − η − lost` its dark weight. The forward solve starts
 //!    from `|q⟩⟨q|`, which keeps it consistent; this works on signed graphs
-//!    too, where a closure over orbits of points fails.
+//!    too, where a closure over orbits of points fails. When every node
+//!    loses population and the smallest loss `Γ₀` is below
+//!    `10⁻⁶‖M̂‖∞`, `Γ₀` is a uniform shift (as on the dense path): `Π_B` comes from two more adjoint solves on
+//!    `M̂ + Γ₀I` (seeds `F` and the losses above `Γ₀`), and the dark weight
+//!    `1 − ‖q‖²`, which only `Γ₀` removes, counts as lost. Starting from
+//!    `e_s` instead would put dark components of size `1/Γ₀` into `X`,
+//!    which multiply the rounding errors of `A` in `⟨A, X⟩`. A larger `Γ₀`
+//!    keeps the start `e_s`.
 //! 3. **Forward.** `M̂x̂ = −x̂₀` gives `X`, and `ητ = ⟨A, X⟩`. A second
 //!    solve `𝓛(Y) = −X` is not used: with dark states it fails silently.
+//!    Instead, a goal-oriented check solves `M̂†b̂ = −â`, which gives
+//!    `ητ = ⟨b̂, x̂₀⟩` independently; `τ` is reported only when the two
+//!    agree to [`TAU_AGREEMENT`] relative.
+//! 4. **Checks.** A dark weight above `dark_tolerance` cannot be told
+//!    from a bright state decaying below rounding once
+//!    `condition·ε_mach > 10³·dark_tolerance`, nor when it is below
+//!    `10³·condition·ε_mach` ([`DARK_CONDITION`]); it is then added to
+//!    `error` and `τ` is withheld.
 //!
 //! Both directions are preconditioned on the right by one banded LU of
 //! `M̂ − σI` after a reverse Cuthill–McKee ordering, with
@@ -29,9 +44,12 @@
 //! solutions). GMRES stops on the backward error
 //! `‖b − M̂x‖ ≤ tol·(‖b‖ + ‖M̂‖∞‖x‖)`; one step of iterative refinement
 //! follows for the forward solve, and for the adjoint solves when every
-//! node loses population (`M̂` nonsingular), so that read-outs on small
+//! node loses population and `Γ₀` is not a uniform shift (`M̂` well
+//! nonsingular), so that read-outs on small
 //! orbitals keep their relative accuracy and those on large ones their
-//! absolute accuracy. Everything is sequential
+//! absolute accuracy. The correction may take at most twice the solve's
+//! iterations plus [`REFINE_SLACK`] and is kept only if it lowers the
+//! residual. Everything is sequential
 //! except the row-parallel products, so results do not depend on the thread
 //! count.
 //!
@@ -46,9 +64,9 @@ use crate::error::{QsoError, Result};
 use crate::linalg::banded::{BandedLu, reverse_cuthill_mckee};
 use crate::linalg::gmres::{GmresEnd, GmresOptions, gmres};
 use crate::walks::transport::{
-    DephasingOptimum, MAX_TRANSPORT_FACTOR_ENTRIES, MAX_TRANSPORT_WORK, SolveReport,
-    TransportOptions, TransportResult, TransportState, arrival_time, check_scan_rates, check_times,
-    optimise,
+    Budget, DephasingOptimum, MAX_TRANSPORT_FACTOR_ENTRIES, MAX_TRANSPORT_WORK, SolveReport,
+    TAU_AGREEMENT, TransportOptions, TransportResult, TransportState, arrival_time,
+    check_scan_rates, check_times, optimise,
 };
 
 #[cfg(test)]
@@ -67,6 +85,27 @@ const SIGMA_HOPPING: f64 = 1e-2;
 
 /// `σ` of the preconditioner relative to `‖M̂‖∞` at least.
 const SIGMA_NORM: f64 = 1e-6;
+
+/// The correction of the refinement may take at most twice the solve's
+/// iterations plus this many: Q₃₀ with loss 0.05 everywhere needs a few
+/// more than the solve, coherent hypercubes needed about 100 more for no
+/// gain.
+const REFINE_SLACK: usize = 10;
+
+/// `Γ₀` below this times `‖M̂‖∞` is a uniform shift (step 2 of the module
+/// docs).
+const UNIFORM_SHIFT: f64 = 1e-6;
+
+/// A dark weight above `dark_tolerance` is doubtful (step 4 of the module
+/// docs) once `condition·ε_mach` exceeds `dark_tolerance` times this, or
+/// when it is below this times `condition·ε_mach` (K₁₆ with loss 10⁻⁶ on
+/// 14 nodes: a dark weight of 2.9·10⁻⁸ at condition 3.7·10⁸ was a missed
+/// slow mode, and τ came out 46 % short). For the first rule,
+/// with genuine dark states `K_N` measured a condition of 3.9·10⁴, 5.7·10⁵
+/// and 2.2·10⁶ at N = 256, 1024 and 2048 (growing as N², about 4·10⁷ at
+/// 8192), while the slow bright states of `C₃₂`, `C₄₈` and `C₆₄` with site
+/// energies `0.7·cos(2πu/N)` show 8.6·10⁹, 1.1·10¹¹ and 5.8·10⁹.
+const DARK_CONDITION: f64 = 1e3;
 
 /// The bright part of the start from `Π_B` in plain coordinates: `x̂₀`
 /// (orthonormal coordinates of `|q⟩⟨q|`) and `‖q‖²`.
@@ -89,6 +128,11 @@ pub(super) struct OrbitalProblem<'a> {
     pub(super) start: usize,
     /// Whether every node loses population (`Γ₀ = min_j Γ_j > 0`).
     pub(super) all_lose: bool,
+    /// `Γ₀ = min_j Γ_j`.
+    pub(super) gamma0: f64,
+    /// `√|O|·(Γ_O − Γ₀)` on the diagonal orbitals, if any is positive and
+    /// every node loses population.
+    pub(super) excess: Option<Vec<C64>>,
     /// Per entry of `TransportResult::trapped`: the orbital and the factor
     /// `f` of `trapped = f·Re x̂_O`.
     pub(super) trapped: Vec<(usize, f64)>,
@@ -98,12 +142,6 @@ pub(super) struct OrbitalProblem<'a> {
     pub(super) sqrt_size: Vec<f64>,
     /// `x̂₀` and `‖q‖²` from `Π_B` (see [`BrightStart`]).
     pub(super) bright: BrightStart<'a>,
-}
-
-/// Operations and GMRES iterations of one solve so far.
-struct Budget {
-    spent: f64,
-    iterations: usize,
 }
 
 /// `‖x‖₂`, summed sequentially.
@@ -133,8 +171,9 @@ struct Shifted<'p, 'a> {
 }
 
 impl Shifted<'_, '_> {
-    /// `y = M̂(e)x` (`adjoint`: `y = M̂(e)†x`; the shift is real).
-    fn apply(&self, adjoint: bool, x: &[C64], y: &mut [C64]) {
+    /// `y = (M̂(e) + lift·I)x` (`adjoint`: `y = (M̂(e) + lift·I)†x`; the
+    /// shifts are real).
+    fn apply(&self, adjoint: bool, lift: f64, x: &[C64], y: &mut [C64]) {
         let m = if adjoint {
             self.adjoint
         } else {
@@ -148,14 +187,24 @@ impl Shifted<'_, '_> {
                 }
             }
         }
+        if lift != 0.0 {
+            for (o, xi) in y.iter_mut().zip(x) {
+                *o += xi * lift;
+            }
+        }
     }
 
-    /// GMRES on `M̂(e)z = b` (or `M̂(e)†z = b`), named `name` in the
-    /// report.
+    /// GMRES on `(M̂(e) + lift·I)z = b` (or its adjoint), named `name` in
+    /// the report, refined once if `refine`. The preconditioner
+    /// `M̂(e) − σI` is a shift of the operator for any `lift`, so it keeps
+    /// the operator's invariant subspaces.
+    #[allow(clippy::too_many_arguments)]
     fn solve(
         &self,
         name: &str,
         adjoint: bool,
+        lift: f64,
+        refine: bool,
         b: &[C64],
         options: &TransportOptions,
         budget: &mut Budget,
@@ -180,7 +229,7 @@ impl Shifted<'_, '_> {
             }
             z
         };
-        let apply = |x: &[C64], y: &mut [C64]| self.apply(adjoint, x, y);
+        let apply = |x: &[C64], y: &mut [C64]| self.apply(adjoint, lift, x, y);
         let sol = gmres(n, apply, precondition, b, &opts);
         budget.spent += sol.spent;
         budget.iterations += sol.iterations;
@@ -206,8 +255,10 @@ impl Shifted<'_, '_> {
         // one (Q₄₀ with loss on odd weights only and a trap at weight 20:
         // that trap's share wrong by 2.3·10⁻¹⁰, τ by 6·10⁻¹¹ relative; after
         // one step 10⁻¹⁴ and 10⁻¹³). The correction solves for the residual
-        // with the same rule, relative to the much smaller residual, and is
-        // kept only if it converges. The forward solve is always refined:
+        // with the same rule, relative to the much smaller residual, in at
+        // most 2k + REFINE_SLACK iterations after a solve of k (coherent
+        // hypercubes needed about 100 more for no gain), and is kept only if
+        // it converges and lowers the residual. The forward solve is always refined:
         // with dark states `M̂` is singular, but its kernel (stationary
         // states of the dark subspace) holds no trap, loss or bright state,
         // so a kernel component of the correction reaches no read-out. The
@@ -221,10 +272,11 @@ impl Shifted<'_, '_> {
             apply(x, &mut r);
             r.iter().zip(b).map(|(ax, bi)| bi - ax).collect()
         };
-        if self.problem.all_lose || !adjoint {
+        if refine {
             let r = residual(&x);
             let opts = GmresOptions {
                 work: (per, MAX_TRANSPORT_WORK - budget.spent),
+                max_iterations: (2 * sol.iterations + REFINE_SLACK).min(options.max_iterations),
                 ..opts
             };
             let correction = gmres(n, apply, precondition, &r, &opts);
@@ -232,8 +284,9 @@ impl Shifted<'_, '_> {
             budget.iterations += correction.iterations;
             iterations += correction.iterations;
             if correction.end == GmresEnd::Converged && correction.x.iter().all(|d| d.is_finite()) {
-                for (xi, d) in x.iter_mut().zip(&correction.x) {
-                    *xi += d;
+                let refined: Vec<C64> = x.iter().zip(&correction.x).map(|(xi, d)| xi + d).collect();
+                if norm2(&residual(&refined)) < norm2(&r) {
+                    x = refined;
                 }
             }
         }
@@ -337,68 +390,183 @@ impl<'a> OrbitalProblem<'a> {
         e: f64,
         want_tau: bool,
         options: &TransportOptions,
+        budget: &mut Budget,
     ) -> Result<TransportResult> {
         let n = self.sqrt_size.len();
-        let mut budget = Budget {
-            spent: 0.0,
-            iterations: 0,
-        };
-        let shifted = self.shifted(adjoint, order, e, &mut budget)?;
+        let shifted = self.shifted(adjoint, order, e, budget)?;
         let minus = |f: &[C64]| -> Vec<C64> { f.iter().map(|z| -z).collect() };
-        let (a, report_a) =
-            shifted.solve("adjoint", true, &minus(&self.traps), options, &mut budget)?;
+        let lose = self.all_lose;
+        // Step 2 of the module docs: a small `Γ₀` is a uniform shift. A
+        // larger one keeps the start itself, since `M̂ + Γ₀I` can be far
+        // worse conditioned than `M̂` (Q₂₀ with loss 0.05 and dephasing 0.1:
+        // η's error 3·10⁻¹¹ instead of 2·10⁻¹⁵).
+        let route = lose && self.gamma0 < UNIFORM_SHIFT * shifted.norm;
+        // `M̂` is nonsingular when every node loses population, and its
+        // adjoint solves are refined unless `Γ₀` is so small that `M̂` is
+        // nearly singular (K₁₆ at Γ₀ = 10⁻¹²: the refinement moved η by
+        // 4·10⁻⁹).
+        let refine_adjoint = lose && !route;
+        let (a, report_a) = shifted.solve(
+            "adjoint",
+            true,
+            0.0,
+            refine_adjoint,
+            &minus(&self.traps),
+            options,
+            budget,
+        )?;
         let eta_a = a[self.start].re;
         let mut solves = vec![report_a];
         if !want_tau {
             return Ok(self.result(eta_a, None, Vec::new(), 0.0, 0.0, 0.0, e, solves));
         }
+        // On the route of step 2 the loss is read from the forward solve and the
+        // bright projection: the adjoint loss solve on the nonsingular but
+        // ill-conditioned `M̂` lost 7·10⁻¹⁰ on K₁₆ at Γ₀ = 10⁻¹².
         let a_loss = match &self.losses {
-            Some(f) => {
-                let (x, report) =
-                    shifted.solve("adjoint loss", true, &minus(f), options, &mut budget)?;
+            Some(f) if !route => {
+                let (x, report) = shifted.solve(
+                    "adjoint loss",
+                    true,
+                    0.0,
+                    refine_adjoint,
+                    &minus(f),
+                    options,
+                    budget,
+                )?;
                 solves.push(report);
                 Some(x)
             }
-            None => None,
+            _ => None,
         };
         let lost_a = a_loss.as_ref().map_or(0.0, |x| x[self.start].re);
         let dark_raw = 1.0 - eta_a - lost_a;
-        let (x0, qn) = if self.all_lose {
+        // `Π_B` (step 2 of the module docs): on `M̂ + Γ₀I` when every node
+        // loses population, which is singular but consistent.
+        let lifted = if route {
+            let g = self.gamma0;
+            let (pa, report) = shifted.solve(
+                "adjoint without Γ₀",
+                true,
+                g,
+                false,
+                &minus(&self.traps),
+                options,
+                budget,
+            )?;
+            solves.push(report);
+            let pl = match &self.excess {
+                Some(f) => {
+                    let (x, report) = shifted.solve(
+                        "adjoint loss without Γ₀",
+                        true,
+                        g,
+                        false,
+                        &minus(f),
+                        options,
+                        budget,
+                    )?;
+                    solves.push(report);
+                    Some(x)
+                }
+                None => None,
+            };
+            Some((pa, pl))
+        } else {
+            None
+        };
+        let (pa, pl) = match &lifted {
+            Some((pa, pl)) => (pa, pl.as_ref()),
+            None => (&a, a_loss.as_ref()),
+        };
+        let bright_weight = pa[self.start].re + pl.map_or(0.0, |x| x[self.start].re);
+        if (!lose || route) && bright_weight <= options.dark_tolerance {
+            // The start is dark: nothing reaches a trap or a lossier node;
+            // with loss everywhere, `Γ₀` removes it.
+            let trapped = vec![0.0; self.trapped.len()];
+            let (lost, dark, error) = if lose {
+                (1.0, 0.0, eta_a.abs() + bright_weight.abs())
+            } else {
+                (0.0, 1.0, bright_weight.abs())
+            };
+            return Ok(self.result(0.0, None, trapped, lost, dark, error, e, solves));
+        }
+        let (x0, qn) = if lose && !route {
             let mut x0 = vec![ZERO; n];
             x0[self.start] = C64::new(1.0, 0.0);
             (x0, 1.0)
-        } else if eta_a + lost_a <= options.dark_tolerance {
-            // The start is dark: nothing reaches a trap or a loss.
-            let error = (eta_a + lost_a).abs();
-            let trapped = vec![0.0; self.trapped.len()];
-            return Ok(self.result(0.0, None, trapped, 0.0, 1.0, error, e, solves));
         } else {
             let p: Vec<C64> = (0..n)
                 .map(|o| {
-                    let l = a_loss.as_ref().map_or(ZERO, |x| x[o]);
-                    (a[o] + l) / self.sqrt_size[o]
+                    let l = pl.map_or(ZERO, |x| x[o]);
+                    (pa[o] + l) / self.sqrt_size[o]
                 })
                 .collect();
             (self.bright)(&p)
         };
-        let (x, report_x) = shifted.solve("forward", false, &minus(&x0), options, &mut budget)?;
+        let (x, report_x) =
+            shifted.solve("forward", false, 0.0, true, &minus(&x0), options, budget)?;
         solves.push(report_x);
         let trapped: Vec<f64> = self.trapped.iter().map(|&(o, f)| f * x[o].re).collect();
         let eta_x: f64 = trapped.iter().sum();
         let lost_x: f64 = self.lost.iter().map(|&(o, f)| f * x[o].re).sum();
         let eta_tau: f64 = a.iter().zip(&x).map(|(p, q)| (p.conj() * q).re).sum();
-        let dark = if !self.all_lose && dark_raw > options.dark_tolerance {
-            dark_raw
+        // With loss everywhere the dark weight goes to the uniform loss and
+        // stays outside the forward solve's read-outs.
+        let (lost, dark) = if route {
+            (lost_x + (1.0 - qn), 0.0)
+        } else if lose {
+            (lost_a, 0.0)
+        } else if dark_raw > options.dark_tolerance {
+            (lost_a, dark_raw)
         } else {
-            0.0
+            (lost_a, 0.0)
         };
-        let mut error =
-            (eta_a - eta_x).abs() + (lost_a - lost_x).abs() + (1.0 - eta_a - lost_a - dark).abs();
-        if !self.all_lose {
-            error += (qn - (eta_a + lost_a)).abs();
+        let mut error = (eta_a - eta_x).abs() + (1.0 - eta_a - lost - dark).abs();
+        if !lose || route {
+            error += (qn - bright_weight).abs();
         }
-        let tau = arrival_time(eta_a, eta_tau, error);
-        Ok(self.result(eta_a, tau, trapped, lost_a, dark, error, e, solves))
+        if !route {
+            error += (lost_a - lost_x).abs();
+        }
+        // Step 4 of the module docs: a dark weight that may be a bright
+        // state decaying below rounding is an error of `η` as well.
+        let condition = solves.iter().map(|s| s.condition).fold(0.0, f64::max);
+        let rounding = condition * f64::EPSILON;
+        let doubtful = dark > 0.0
+            && (rounding > DARK_CONDITION * options.dark_tolerance
+                || dark < DARK_CONDITION * rounding);
+        if doubtful {
+            error += dark;
+        }
+        let mut tau = arrival_time(eta_a, eta_tau, error).filter(|_| !doubtful);
+        if tau.is_some() {
+            // The goal-oriented check of step 3.
+            // A check that does not converge withholds `τ`.
+            let time = shifted.solve(
+                "adjoint time",
+                true,
+                0.0,
+                refine_adjoint,
+                &minus(&a),
+                options,
+                budget,
+            );
+            match time {
+                Ok((b, report_b)) => {
+                    solves.push(report_b);
+                    let check: f64 = b.iter().zip(&x0).map(|(p, q)| (p.conj() * q).re).sum();
+                    // NaN disagrees too.
+                    let agree = (check - eta_tau).abs() <= TAU_AGREEMENT * eta_tau.abs();
+                    if !agree {
+                        tau = None;
+                    }
+                }
+                Err(QsoError::NoConvergence { .. }) => tau = None,
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(self.result(eta_a, tau, trapped, lost, dark, error, e, solves))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -432,10 +600,12 @@ impl<'a> OrbitalProblem<'a> {
     /// The transport without added dephasing.
     pub(super) fn transport(&self, options: &TransportOptions) -> Result<TransportResult> {
         let adjoint = self.m.adjoint();
-        self.solve(&adjoint, &self.order(), 0.0, true, options)
+        let mut budget = Budget::default();
+        self.solve(&adjoint, &self.order(), 0.0, true, options, &mut budget)
     }
 
-    /// One result per added rate (one ordering, one LU per rate).
+    /// One result per added rate (one ordering, one LU per rate, one work
+    /// limit for all).
     pub(super) fn scan(
         &self,
         rates: &[f64],
@@ -444,9 +614,10 @@ impl<'a> OrbitalProblem<'a> {
         check_scan_rates(rates)?;
         let adjoint = self.m.adjoint();
         let order = self.order();
+        let mut budget = Budget::default();
         rates
             .iter()
-            .map(|&e| self.solve(&adjoint, &order, e, true, options))
+            .map(|&e| self.solve(&adjoint, &order, e, true, options, &mut budget))
             .collect()
     }
 
@@ -465,11 +636,18 @@ impl<'a> OrbitalProblem<'a> {
         }
         let adjoint = self.m.adjoint();
         let order = self.order();
+        // One work limit for the whole optimisation.
+        let budget = std::cell::RefCell::new(Budget::default());
         optimise(
             low,
             high,
-            |e| Ok(self.solve(&adjoint, &order, e, false, options)?.efficiency),
-            |e| self.solve(&adjoint, &order, e, true, options),
+            |e| {
+                let mut b = budget.borrow_mut();
+                Ok(self
+                    .solve(&adjoint, &order, e, false, options, &mut b)?
+                    .efficiency)
+            },
+            |e| self.solve(&adjoint, &order, e, true, options, &mut budget.borrow_mut()),
         )
     }
 }

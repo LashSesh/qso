@@ -226,7 +226,17 @@ probability of being trapped or lost from there, which projects the
 start onto the bright states. The forward solve starts from that
 projection, so it stays consistent where the generator is singular, also
 on graphs with signed couplings, and the efficiency is read from both
-solves; their difference enters `error`.
+solves; their difference enters `error`. When every node loses
+population and the smallest loss is below 10⁻⁶ of the generator's norm,
+it is treated as a uniform shift, as on the dense path: the projection comes from the generator without it, and the
+start's weight outside the bright states counts as lost. Without a
+closure, "dark" on orbitals can only mean "not absorbed within about
+1/(ε·‖M‖)": when `condition·ε` exceeds 10³·`dark_tolerance`, or the
+dark weight is below 10³·`condition·ε`, a dark weight above
+`dark_tolerance` is added to `error` and τ is withheld, since a bright state
+decaying below rounding would look the same (raise `dark_tolerance` to
+accept it as dark). The arrival time is checked by a second, goal-oriented adjoint
+solve and reported only when both agree to 10⁻³.
 
 `HypercubeOpenWalk` takes the same terms by Hamming weight (arrays of
 `d + 1` values) and traps as `(weight, κ)`: every node of that weight is
@@ -277,7 +287,9 @@ classical and the arrival time grows to 6.6·10¹¹ at Q₄₀; there η is off
 by 1.0·10⁻⁹ at Q₃₀, 7.1·10⁻⁷ at Q₄₀ and 4.1·10⁻³ at Q₅₀, which `error`
 does show (3.1·10⁻⁹, 2.1·10⁻⁶, 1.2·10⁻²), and τ is not resolved at Q₅₀.
 With a loss of 0.05 on every node, as in the examples above, the error
-estimates stay below 3·10⁻¹⁵ up to Q₄₀ (condition below 2·10³).
+estimates stay below 3·10⁻¹⁵ up to Q₄₀ (condition below 2·10³). Slow
+bright modes cost τ digits on small graphs as well, for instance with a
+loss of 10⁻⁶ on most nodes of K₁₆; `condition` then is large.
 
 **Coined walks.** `SymmetricCoinedWalk` reduces a `DecoherentCoinedWalk` to
 the orbitals of pairs of arcs. The coin must be invariant under the

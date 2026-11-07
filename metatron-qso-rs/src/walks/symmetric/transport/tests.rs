@@ -295,7 +295,7 @@ fn orbital_transport_matches_the_dense_transport() {
     assert_eq!(r.dimension, 17);
     assert_eq!(r.slowest_decay, None);
     let names: Vec<&str> = r.solves.iter().map(|s| s.name.as_str()).collect();
-    assert_eq!(names, ["adjoint", "forward"]);
+    assert_eq!(names, ["adjoint", "forward", "adjoint time"]);
     let r = walk
         .clone()
         .with_site_energies(&[0.3, -0.2, 0.5, 0.1, 0.1, 0.1])
@@ -379,7 +379,10 @@ fn orbital_transport_matches_the_dense_transport() {
     }
     assert_abs(r.lost, 1.0 - r.efficiency, 1e-11, "Petersen: lost");
     let names: Vec<&str> = r.solves.iter().map(|s| s.name.as_str()).collect();
-    assert_eq!(names, ["adjoint", "adjoint loss", "forward"]);
+    assert_eq!(
+        names,
+        ["adjoint", "adjoint loss", "forward", "adjoint time"]
+    );
     for s in &r.solves {
         assert!(s.backward_error <= 1e-13 && s.condition >= 1.0, "{s:?}");
     }
@@ -945,10 +948,18 @@ fn refusals() {
         .with_traps(&[(62, 1.0)])
         .unwrap();
     match big.transport(&o) {
-        Err(QsoError::TooManyQubits { max, requested, .. }) => {
-            assert!(requested > max, "{requested} ≤ {max}")
+        Err(
+            e @ QsoError::InvalidArgument {
+                name: "symmetries", ..
+            },
+        ) => {
+            let text = e.to_string();
+            assert!(
+                text.contains("needs 138290880 band entries (limit 134217728)"),
+                "{text}"
+            );
         }
-        other => panic!("expected TooManyQubits, got {other:?}"),
+        other => panic!("expected a refusal of the band entries, got {other:?}"),
     }
     // A product walk cannot hold a trapped or lossy factor.
     let edge = DephasingWalk::new(&generators::path(2), Generator::Laplacian, 1.0, 0.1).unwrap();
@@ -1044,4 +1055,158 @@ fn measure_orbital_transport() {
         r.efficiency,
         r.arrival_time
     );
+}
+
+#[test]
+fn a_tiny_loss_on_every_node_is_a_uniform_shift() {
+    // With the same small loss Γ on every node the trap-dark states decay
+    // at Γ alone. Starting the forward solve from the start itself gave
+    // τ = −10148 on K₂₅₆ at Γ = 10⁻¹² (error 10⁻⁹); from the bright part
+    // of the start, as on the dense path, τ is right.
+    let o = opts();
+    for (n, gamma) in [(16usize, 1e-12), (256, 1e-12), (256, 1e-9)] {
+        let orbital = complete(n, 2)
+            .with_traps(&[(1, 1.0)])
+            .unwrap()
+            .with_losses(&vec![gamma; n])
+            .unwrap()
+            .transport(0, &o)
+            .unwrap();
+        let dense = dense_walk(&generators::complete(n))
+            .with_traps(&[(1, 1.0)])
+            .unwrap()
+            .with_losses(&vec![gamma; n])
+            .unwrap()
+            .transport(0, &o)
+            .unwrap();
+        let what = format!("K{n}, Γ = {gamma:e}");
+        assert_abs(orbital.efficiency, dense.efficiency, 1e-12, &what);
+        assert_abs(orbital.lost, dense.lost, 1e-12, &what);
+        assert_eq!(orbital.dark, 0.0);
+        assert!(orbital.error <= 1e-11, "{what}: error {:e}", orbital.error);
+        assert_rel(
+            orbital.arrival_time.expect("τ"),
+            dense.arrival_time.expect("τ"),
+            1e-8,
+            &format!("{what}: τ"),
+        );
+    }
+    // Q₁₆ against its column chain.
+    let d = 16;
+    let gamma = 1e-12;
+    let cube = HypercubeOpenWalk::new(d, 1.0, 0.0, 0.0)
+        .unwrap()
+        .with_losses(&vec![gamma; d + 1])
+        .unwrap()
+        .with_traps(&[(d, 1.0)])
+        .unwrap()
+        .transport(&o)
+        .unwrap();
+    let chain = dense_walk(&chain(d))
+        .with_losses(&vec![gamma; d + 1])
+        .unwrap()
+        .with_traps(&[(d, 1.0)])
+        .unwrap()
+        .transport(0, &o)
+        .unwrap();
+    assert_abs(cube.efficiency, chain.efficiency, 1e-12, "Q16: η");
+    assert_rel(
+        cube.arrival_time.expect("τ"),
+        chain.arrival_time.expect("τ"),
+        1e-8,
+        "Q16: τ",
+    );
+}
+
+#[test]
+fn tau_needs_the_goal_oriented_check() {
+    // K₁₆, trap 1, loss 10⁻⁶ on nodes 2…15 only: a bright mode decays at
+    // about the loss, and the forward read-out ⟨A, X⟩ gave τ = 7.5668
+    // against the exact 14.0999807 (60-digit eigen-solve) with η's error
+    // 10⁻⁷. The arrival time is now either right or withheld.
+    let n = 16;
+    let losses: Vec<f64> = (0..n).map(|u| if u >= 2 { 1e-6 } else { 0.0 }).collect();
+    let r = complete(n, 2)
+        .with_traps(&[(1, 1.0)])
+        .unwrap()
+        .with_losses(&losses)
+        .unwrap()
+        .transport(0, &opts())
+        .unwrap();
+    if let Some(tau) = r.arrival_time {
+        assert_rel(tau, 14.0999807, 1e-3, "K16: τ");
+    }
+}
+
+#[test]
+fn a_dark_weight_that_may_be_slow_decay_counts_as_error() {
+    // C₆₄ with site energies 0.7·cos(2πu/64), trap at 32 and the
+    // reflection fixing 0: the symmetric sector is a path ending at the
+    // trap, so η = 1 (τ = 1.56·10¹⁹), but some of its states decay below
+    // rounding. The orbitals reported η = 0.7487 with dark 0.25 and error
+    // 1.9·10⁻⁴ (the dense path refuses); now the dark weight counts in
+    // `error` and τ is withheld.
+    let n = 64;
+    let g = generators::cycle(n);
+    let reflection: Vec<usize> = (0..n).map(|u| (n - u) % n).collect();
+    let energies: Vec<f64> = (0..n)
+        .map(|u| 0.7 * (2.0 * std::f64::consts::PI * u as f64 / n as f64).cos())
+        .collect();
+    let walk = SymmetricOpenWalk::new(&g, Generator::Laplacian, 1.0, &[], &[reflection])
+        .unwrap()
+        .with_site_energies(&energies)
+        .unwrap()
+        .with_traps(&[(32, 1.0)])
+        .unwrap();
+    let r = walk.transport(0, &opts()).unwrap();
+    assert!(r.dark > 0.1, "dark {}", r.dark);
+    assert!(
+        (r.efficiency - 1.0).abs() <= r.error,
+        "η {} error {:e}",
+        r.efficiency,
+        r.error
+    );
+    assert_eq!(r.arrival_time, None);
+}
+
+#[test]
+fn rates_must_vanish_on_whole_orbits() {
+    // A star 0–1, 0–2 with the swap of 1 and 2: a trap of 5·10⁻¹³ at node
+    // 2 alone passed the absolute tolerance and made η = 0 with error 0.
+    let g = Graph::from_edges(3, &[(0, 1), (0, 2)]).unwrap();
+    let walk = orbital_walk(&g, &[vec![0, 2, 1]])
+        .with_node_dephasing(&[1.0; 3])
+        .unwrap();
+    assert_invalid(walk.clone().with_traps(&[(2, 5e-13)]), "traps");
+    assert_invalid(walk.clone().with_traps(&[(1, 5e-13)]), "traps");
+    assert_invalid(walk.clone().with_losses(&[0.0, 0.0, 1e-14]), "losses");
+    assert_invalid(
+        walk.clone().with_node_dephasing(&[1.0, 1e-14, 0.0]),
+        "dephasing",
+    );
+    // Equal rates and energies within rounding pass.
+    assert!(walk.clone().with_traps(&[(1, 0.1), (2, 0.1)]).is_ok());
+    assert!(walk.with_site_energies(&[0.0, 6e-17, -1.8e-16]).is_ok());
+}
+
+#[test]
+fn the_refinement_costs_at_most_the_solve() {
+    // Coherent Q₂₀ with the trap at the antipode: the correction of the
+    // forward solve took about 100 iterations more than the solve (119
+    // against 19 for the adjoint) for no gain.
+    let r = HypercubeOpenWalk::new(20, 1.0, 0.0, 0.0)
+        .unwrap()
+        .with_traps(&[(20, 1.0)])
+        .unwrap()
+        .transport(&opts())
+        .unwrap();
+    let forward = r.solves.iter().find(|s| s.name == "forward").unwrap();
+    let adjoint = r.solves.iter().find(|s| s.name == "adjoint").unwrap();
+    assert!(
+        forward.iterations <= 4 * adjoint.iterations,
+        "forward {} against adjoint {}",
+        forward.iterations,
+        adjoint.iterations
+    );
+    assert_abs(r.efficiency, 1.0, 1e-12, "Q20: η");
 }

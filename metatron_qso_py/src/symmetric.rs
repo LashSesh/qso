@@ -20,8 +20,8 @@ use crate::discrete::PyDecoherentCoinedWalk;
 use crate::graph::PyGraph;
 use crate::reduced::PyQuotient;
 use crate::walks::{
-    PyDephasingWalk, driven_result, generator, optimum_dict, rates_arg, scan_dict, trace_dict,
-    transport_dict, transport_options, traps_arg,
+    PyDephasingWalk, driven_result, generator, optimum_dict, rates_arg, rates_value, scan_dict,
+    trace_dict, transport_dict, transport_options, traps_arg,
 };
 use crate::{
     ComplexArg, ComplexMatrixArg, Raise, RealArg, cmatrix, complex_array, complex_vec, invalid,
@@ -612,9 +612,11 @@ impl PyHypercubeOpenWalk {
         let energies = site_energies.as_ref().map(real_vec);
         let node_rates = node_dephasing.as_ref().map(real_vec);
         let traps = traps.as_ref().map(traps_arg).transpose()?;
+        // A single loss is expanded to the d + 1 weights only after `new`
+        // has checked d.
         let losses = losses
             .as_ref()
-            .map(|l| rates_arg("losses", l, d.saturating_add(1)))
+            .map(|l| rates_value("losses", l))
             .transpose()?;
         py.detach(|| -> metatron_qso::Result<HypercubeOpenWalk> {
             let mut w = HypercubeOpenWalk::new(d, gamma, site_rate, coordinate_rate)?;
@@ -627,8 +629,8 @@ impl PyHypercubeOpenWalk {
             if let Some(t) = &traps {
                 w = w.with_traps(t)?;
             }
-            if let Some(l) = &losses {
-                w = w.with_losses(l)?;
+            if let Some(l) = losses {
+                w = w.with_losses(&l.expand(d + 1))?;
             }
             Ok(w)
         })

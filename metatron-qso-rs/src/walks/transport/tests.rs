@@ -1278,11 +1278,23 @@ fn measure_transport() {
                 dephasing: gam,
             };
             let t0 = Instant::now();
-            let bright = Bright::new(&model, false, &o).unwrap();
+            let bright = match Bright::new(&model, false, &o) {
+                Ok(b) => b,
+                Err(e) => {
+                    println!("n = {n}, {label}: refused: {e}");
+                    continue;
+                }
+            };
             let setup = t0.elapsed().as_secs_f64();
             let report = |name: &str, b: &Bright| {
                 let t0 = Instant::now();
-                let r = b.solve(&Start::Node(0), 0.0, true, &o).unwrap();
+                let r = match b.solve(&Start::Node(0), 0.0, true, &o) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        println!("  n = {n}, {label}, {name}: refused: {e}");
+                        return;
+                    }
+                };
                 let its: Vec<String> = r
                     .solves
                     .iter()
@@ -1310,4 +1322,157 @@ fn measure_transport() {
             }
         }
     }
+}
+
+/// Path 0–1–2 with the weights `w01` and 1, trap (0, κ = 1) at energy `e0`,
+/// start 2, dephasing `rate`.
+fn weak_link(w01: f64, e0: f64, rate: f64) -> DephasingWalk {
+    let g = Graph::from_weighted_edges(3, &[(0, 1, w01), (1, 2, 1.0)]).unwrap();
+    walk(&g, rate)
+        .with_site_energies(&[e0, 0.0, 0.0])
+        .unwrap()
+        .with_traps(&[(0, 1.0)])
+        .unwrap()
+}
+
+#[test]
+fn a_weak_link_is_dark_whatever_the_trap_energy() {
+    // A link of 10⁻¹² (below dark_tolerance relative to the hopping 1)
+    // used to count as bright when the trap's energy sat at the centre of
+    // the diagonal, and the call was refused (a decay of 5·10⁻²⁵); with
+    // dephasing everywhere GMRES broke down.
+    for o in [
+        opts(),
+        TransportOptions {
+            dark_tolerance: 1e-2,
+            ..opts()
+        },
+    ] {
+        for e0 in [0.0, 1e-3, 0.1] {
+            for rate in [0.0, 1.0] {
+                let what = format!("trap energy {e0}, dephasing {rate}");
+                let r = weak_link(1e-12, e0, rate).transport(2, &o).unwrap();
+                assert_eq!(r.dimension, 1, "{what}");
+                assert_abs(r.efficiency, 0.0, 1e-12, &what);
+                assert_abs(r.dark, 1.0, 1e-12, &what);
+                assert!(r.error <= 1e-11, "{what}: error {:e}", r.error);
+            }
+        }
+    }
+    // A link above the tolerance stays bright: η = 1 without loss.
+    let r = weak_link(1e-3, 0.0, 1.0).transport(2, &opts()).unwrap();
+    assert_eq!(r.dimension, 3);
+    assert_abs(r.efficiency, 1.0, 1e-10, "bright link");
+}
+
+#[test]
+fn the_dark_tolerance_truncation_enters_the_error() {
+    // Trap 0 (κ = 1), path 0–1, node 1 linked to the twins 2 and 3 with the
+    // weights 1 and 1 + ε, the twins to node 4 with 0.7, loss 0.01
+    // everywhere, start 2. Above ε the twins' difference is bright; at a
+    // dark_tolerance above ε it is dropped, which moves η by about 0.3·ε
+    // while `error` used to stay at rounding.
+    for (eps, tol) in [(5e-7, 1e-6), (5e-4, 1e-3)] {
+        let g = Graph::from_weighted_edges(
+            5,
+            &[
+                (0, 1, 1.0),
+                (1, 2, 1.0),
+                (1, 3, 1.0 + eps),
+                (2, 4, 0.7),
+                (3, 4, 0.7),
+            ],
+        )
+        .unwrap();
+        let energies = [0.3, -0.2, 0.5, 0.5, 0.1];
+        let w = walk(&g, 0.0)
+            .with_site_energies(&energies)
+            .unwrap()
+            .with_traps(&[(0, 1.0)])
+            .unwrap()
+            .with_losses(&[0.01; 5])
+            .unwrap();
+        let o = TransportOptions {
+            dark_tolerance: tol,
+            ..opts()
+        };
+        let r = w.transport(2, &o).unwrap();
+        let mut h = -g.adjacency_matrix();
+        for (j, e) in energies.iter().enumerate() {
+            h[(j, j)] += e;
+        }
+        let mut rho0 = CMatrix::zeros(5, 5);
+        rho0[(2, 2)] = C64::new(1.0, 0.0);
+        let (eta, ..) = brute_force(&h, &[(0, 1.0)], &[0.01; 5], &[0.0; 5], &rho0);
+        let what = format!("ε = {eps:e}");
+        assert_eq!(r.dimension, 4, "{what}: the truncated bright space");
+        assert!(
+            (r.efficiency - eta).abs() <= r.error,
+            "{what}: |η − exact| = {:e} above error {:e}",
+            (r.efficiency - eta).abs(),
+            r.error
+        );
+        assert!(r.error <= 1e2 * eps, "{what}: error {:e}", r.error);
+    }
+}
+
+#[test]
+fn scans_share_one_work_limit() {
+    let n = 16;
+    let model = DenseModel {
+        h: -generators::complete(n).adjacency_matrix(),
+        traps: vec![(1, 1.0)],
+        losses: vec![0.0; n],
+        dephasing: vec![1.0; n],
+    };
+    let bright = Bright::new(&model, false, &opts()).unwrap();
+    let mut budget = Budget::default();
+    let s = Start::Node(0);
+    bright
+        .solve_within(&s, 0.0, true, &opts(), &mut budget)
+        .unwrap();
+    let one = budget.spent;
+    assert!(one > 0.0);
+    bright
+        .solve_within(&s, 0.0, true, &opts(), &mut budget)
+        .unwrap();
+    assert_rel(budget.spent, 2.0 * one, 1e-12, "two solves");
+    // A budget with less than one solve left refuses the next.
+    let mut nearly = Budget {
+        spent: MAX_TRANSPORT_WORK - 0.5 * one,
+        iterations: 0,
+    };
+    assert_invalid(
+        bright.solve_within(&s, 0.0, true, &opts(), &mut nearly),
+        "graph",
+    );
+}
+
+#[test]
+fn an_arrival_time_is_positive_and_finite() {
+    assert_eq!(arrival_time(0.5, 1.0, 0.0), Some(2.0));
+    assert_eq!(arrival_time(0.5, -1.0, 0.0), None);
+    assert_eq!(arrival_time(0.5, 0.0, 0.0), None);
+    assert_eq!(arrival_time(0.5, f64::NAN, 0.0), None);
+    assert_eq!(arrival_time(1e-300, 1.0, 0.0), None);
+}
+
+#[test]
+fn an_unsettled_arrival_time_is_withheld() {
+    // K₁₆, trap 1, loss 10⁻⁶ on nodes 2…15: the exact τ is 14.0999807
+    // (60-digit eigen-solve); the solve of Y gave 14.0307 (5·10⁻³ off) and
+    // its refinement still moved ητ by 6 %. At loss 10⁻⁴ it settles.
+    let n = 16;
+    let k16 = |g: f64| {
+        let losses: Vec<f64> = (0..n).map(|u| if u >= 2 { g } else { 0.0 }).collect();
+        walk(&generators::complete(n), 0.0)
+            .with_traps(&[(1, 1.0)])
+            .unwrap()
+            .with_losses(&losses)
+            .unwrap()
+            .transport(0, &opts())
+            .unwrap()
+    };
+    assert_eq!(k16(1e-6).arrival_time, None);
+    assert!(k16(1e-4).arrival_time.is_some());
 }

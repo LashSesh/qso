@@ -227,7 +227,9 @@ enum Command {
         #[arg(long, value_delimiter = ',', value_name = "LOW,HIGH")]
         best_rate: Option<Vec<f64>>,
         /// States coupled to the traps (and lossier nodes) more weakly than
-        /// this, relative to the hopping, count as dark; in (0, 1e-2].
+        /// this, relative to the largest entry of H after removing its mean
+        /// diagonal (the hopping or the site energies, whichever is
+        /// larger), count as dark; in (0, 1e-2].
         #[arg(long, default_value_t = 1e-10)]
         dark_tolerance: f64,
     },

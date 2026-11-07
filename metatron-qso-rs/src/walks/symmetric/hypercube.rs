@@ -308,6 +308,16 @@ impl HypercubeOpenWalk {
                 lost.push((k, sites.losses[k] * root[k]));
             }
         }
+        let all_lose = sites.losses.iter().all(|&g| g > 0.0);
+        let gamma0 = sites.losses.iter().copied().fold(f64::INFINITY, f64::min);
+        let mut excess = vec![C64::new(0.0, 0.0); n];
+        let mut any_excess = false;
+        for k in 0..=d {
+            if sites.losses[k] > gamma0 {
+                excess[k] = C64::new(root[k] * (sites.losses[k] - gamma0), 0.0);
+                any_excess = true;
+            }
+        }
         let trapped = sites
             .traps
             .iter()
@@ -339,7 +349,9 @@ impl HypercubeOpenWalk {
             traps,
             losses: if lost.is_empty() { None } else { Some(losses) },
             start: 0,
-            all_lose: sites.losses.iter().all(|&g| g > 0.0),
+            all_lose,
+            gamma0: if all_lose { gamma0 } else { 0.0 },
+            excess: (all_lose && any_excess).then_some(excess),
             trapped,
             lost,
             sqrt_size,

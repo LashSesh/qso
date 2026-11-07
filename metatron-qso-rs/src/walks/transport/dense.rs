@@ -25,13 +25,18 @@
 //!    classical (incoherent hopping) rate matrix when every node is
 //!    dephased.
 //! 4. **Refinement** while the residual `𝓛(X) + ρ₀` is above the tolerance
-//!    (at most twice), then the read-outs.
+//!    (at most twice), then the read-outs. `τ` is withheld when the last
+//!    refinement of `Y` changed `ητ` by more than [`TAU_AGREEMENT`]
+//!    relative.
 
 use nalgebra::DVector;
 use nalgebra::linalg::LU;
 use num_complex::Complex64 as C64;
 
-use super::{MAX_TRANSPORT_WORK, SolveReport, TransportOptions, TransportResult, arrival_time};
+use super::{
+    Budget, MAX_TRANSPORT_WORK, SolveReport, TAU_AGREEMENT, TransportOptions, TransportResult,
+    arrival_time,
+};
 use crate::error::{QsoError, Result};
 use crate::linalg::dense::cmul;
 use crate::linalg::gmres::{GmresEnd, GmresOptions, gmres};
@@ -52,6 +57,10 @@ const POPULATION_SCALE: f64 = 2.0;
 
 /// Refinement steps after the first solve at most.
 const REFINEMENTS: usize = 2;
+
+/// A remainder of the closure below `ROUNDING·max(1, ‖w‖)` is rounding, not
+/// a coupling dropped as dark.
+const ROUNDING: f64 = 1e3 * f64::EPSILON;
 
 /// An open walk as the dense solver sees it.
 #[derive(Clone, Debug)]
@@ -189,17 +198,22 @@ fn norm(a: &[f64]) -> f64 {
     dot(a, a).sqrt()
 }
 
-/// Add `w` to the orthonormal `basis` (two passes of Gram–Schmidt) if
-/// more than `tolerance` of its norm is left, and queue its index.
+/// Add `w` to the orthonormal `basis` (two passes of Gram–Schmidt) if the
+/// norm left exceeds `tolerance`, and queue its index. `w` is a unit vector
+/// or the image of a unit vector under the scaled `H_s` (largest entry 1),
+/// so the remainder is the coupling to the basis relative to the largest
+/// `|H_ij − cδ_ij|`, as documented for `dark_tolerance`. Returns the norm of
+/// a rejected remainder above rounding (the coupling dropped as dark), 0
+/// otherwise.
 fn extend(
     mut w: Vec<f64>,
     basis: &mut Vec<Vec<f64>>,
     queue: &mut std::collections::VecDeque<usize>,
     tolerance: f64,
-) {
+) -> f64 {
     let before = norm(&w);
     if before == 0.0 {
-        return;
+        return 0.0;
     }
     for _ in 0..2 {
         for b in basis.iter() {
@@ -210,9 +224,14 @@ fn extend(
         }
     }
     let after = norm(&w);
-    if after > tolerance * before {
+    if after > tolerance {
         queue.push_back(basis.len());
         basis.push(w.into_iter().map(|x| x / after).collect());
+        0.0
+    } else if after > ROUNDING * before.max(1.0) {
+        after
+    } else {
+        0.0
     }
 }
 
@@ -247,6 +266,10 @@ pub(crate) struct Closure {
     gamma0: f64,
     /// Nodes with `Γ′_j = Γ_j − Γ₀ > 0`, with `Γ′_j`.
     excess: Vec<(usize, f64)>,
+    /// The largest coupling (absolute, `H`'s units) or dephased weight
+    /// (times `s`) dropped as dark above rounding: what `dark_tolerance`
+    /// truncated.
+    truncated: f64,
 }
 
 impl Closure {
@@ -270,33 +293,6 @@ impl Closure {
         seeds.dedup();
         let dephased: Vec<bool> = model.dephasing.iter().map(|&g| all || g > 0.0).collect();
         let rows = rows_of(&model.h);
-        if dephased.iter().all(|&d| d) {
-            // Components of the hopping pattern that hold a seed.
-            let mut seen = vec![false; n];
-            let mut stack = Vec::new();
-            for &s in &seeds {
-                if !seen[s] {
-                    seen[s] = true;
-                    stack.push(s);
-                }
-            }
-            while let Some(u) = stack.pop() {
-                for &(v, _) in &rows[u] {
-                    if v != u && !seen[v] {
-                        seen[v] = true;
-                        stack.push(v);
-                    }
-                }
-            }
-            let nodes: Vec<usize> = (0..n).filter(|&u| seen[u]).collect();
-            return Closure {
-                basis: Basis::Nodes(nodes.clone()),
-                delta: nodes,
-                every_node_dephased: true,
-                gamma0,
-                excess,
-            };
-        }
         // H centred and scaled: Hs = (H − cI)/s.
         let c = centre(&model.h);
         let mut s = 0.0f64;
@@ -311,6 +307,43 @@ impl Closure {
         }
         if s == 0.0 {
             s = 1.0;
+        }
+        if dephased.iter().all(|&d| d) {
+            // Components that hold a seed of the hopping pattern without the
+            // hops weaker than `dark_tolerance` (relative to `s`).
+            let mut seen = vec![false; n];
+            let mut stack = Vec::new();
+            for &u in &seeds {
+                if !seen[u] {
+                    seen[u] = true;
+                    stack.push(u);
+                }
+            }
+            while let Some(u) = stack.pop() {
+                for &(v, x) in &rows[u] {
+                    if v != u && !seen[v] && x.abs() > dark_tolerance * s {
+                        seen[v] = true;
+                        stack.push(v);
+                    }
+                }
+            }
+            let mut truncated = 0.0f64;
+            for u in (0..n).filter(|&u| seen[u]) {
+                for &(v, x) in &rows[u] {
+                    if !seen[v] {
+                        truncated = truncated.max(x.abs());
+                    }
+                }
+            }
+            let nodes: Vec<usize> = (0..n).filter(|&u| seen[u]).collect();
+            return Closure {
+                basis: Basis::Nodes(nodes.clone()),
+                delta: nodes,
+                every_node_dephased: true,
+                gamma0,
+                excess,
+                truncated,
+            };
         }
         let apply = |v: &[f64]| -> Vec<f64> {
             rows.iter()
@@ -331,14 +364,16 @@ impl Closure {
             e[j] = 1.0;
             e
         };
+        // The largest remainder dropped as dark, relative to `s`.
+        let mut dropped = 0.0f64;
         for &u in &seeds {
-            extend(unit(u), &mut basis, &mut queue, dark_tolerance);
+            dropped = dropped.max(extend(unit(u), &mut basis, &mut queue, dark_tolerance));
         }
         let mut included = vec![false; n];
         loop {
             while let Some(k) = queue.pop_front() {
                 let w = apply(&basis[k]);
-                extend(w, &mut basis, &mut queue, dark_tolerance);
+                dropped = dropped.max(extend(w, &mut basis, &mut queue, dark_tolerance));
             }
             let mut grew = false;
             for j in 0..n {
@@ -348,7 +383,7 @@ impl Closure {
                 let weight = basis.iter().map(|b| b[j] * b[j]).sum::<f64>().sqrt();
                 if weight > dark_tolerance {
                     included[j] = true;
-                    extend(unit(j), &mut basis, &mut queue, dark_tolerance);
+                    dropped = dropped.max(extend(unit(j), &mut basis, &mut queue, dark_tolerance));
                     grew = true;
                 }
             }
@@ -357,6 +392,14 @@ impl Closure {
                 break;
             }
         }
+        // Dephased nodes left out of `Δ_B` with a weight above rounding.
+        for j in (0..n).filter(|&j| dephased[j] && !included[j]) {
+            let weight = basis.iter().map(|b| b[j] * b[j]).sum::<f64>().sqrt();
+            if weight > ROUNDING {
+                dropped = dropped.max(weight);
+            }
+        }
+        let truncated = dropped * s;
         let r = basis.len();
         if r >= n {
             let delta: Vec<usize> = (0..n).filter(|&j| dephased[j]).collect();
@@ -366,6 +409,7 @@ impl Closure {
                 delta,
                 gamma0,
                 excess,
+                truncated,
             };
         }
         let v = RMatrix::from_fn(n, r, |i, k| basis[k][i]);
@@ -375,6 +419,7 @@ impl Closure {
             every_node_dephased: false,
             gamma0,
             excess,
+            truncated,
         }
     }
 
@@ -474,12 +519,6 @@ struct Hopping {
     hops: Vec<(usize, usize, f64)>,
 }
 
-/// Operations and GMRES iterations of one transport call so far.
-struct Budget {
-    spent: f64,
-    iterations: usize,
-}
-
 /// The generator on the bright space in the basis `V`, for residuals that
 /// keep the dephasing of populations and coherences apart.
 enum Local {
@@ -515,8 +554,8 @@ pub(crate) struct Bright {
     classical: Option<Hopping>,
     /// Use the classical preconditioner where it applies.
     use_classical: bool,
-    /// Operations counted as spent before each solve (0; tests of the work
-    /// limit set it).
+    /// Operations counted as spent before a [`Self::solve`] (0; tests of
+    /// the work limit set it).
     spent_before: f64,
     /// The generator in the basis `V`.
     local: Local,
@@ -796,7 +835,18 @@ impl Bright {
                     ),
                 ));
             }
-            GmresEnd::Iterations | GmresEnd::Breakdown => {
+            GmresEnd::Breakdown => {
+                return Err(QsoError::invalid(
+                    "dark_tolerance",
+                    format!(
+                        "the population equations of the dephased bright nodes are singular to \
+                         rounding (GMRES broke down after {} iterations at residual {:.1e}): a \
+                         bright state decays below rounding; raise dark_tolerance",
+                        sol.iterations, sol.residual
+                    ),
+                ));
+            }
+            GmresEnd::Iterations => {
                 return Err(QsoError::NoConvergence {
                     method: "GMRES (transport populations)",
                     iterations: sol.iterations,
@@ -968,6 +1018,23 @@ impl Bright {
         want_tau: bool,
         options: &TransportOptions,
     ) -> Result<TransportResult> {
+        let mut budget = Budget {
+            spent: self.spent_before,
+            iterations: 0,
+        };
+        self.solve_within(start, e, want_tau, options, &mut budget)
+    }
+
+    /// [`Self::solve`] with the operations counted against `budget`, which
+    /// the solves of one scan or optimisation share.
+    pub(crate) fn solve_within(
+        &self,
+        start: &Start<'_>,
+        e: f64,
+        want_tau: bool,
+        options: &TransportOptions,
+        budget: &mut Budget,
+    ) -> Result<TransportResult> {
         let slowest = 2.0 * self.schur.slowest_decay() + e;
         if slowest.is_nan() || slowest <= 1e-14 * self.t_max {
             return Err(QsoError::invalid(
@@ -981,10 +1048,6 @@ impl Bright {
         let max_rate = rates.iter().copied().fold(0.0, f64::max);
         let norm_l = self.t_norm + e + max_rate;
         let classical = self.classical(&rates);
-        let mut budget = Budget {
-            spent: self.spent_before,
-            iterations: 0,
-        };
         let (rho, rho_v, outside) = self.start(start);
         let (x, x_v, report_x, change) = self.refined(
             "X",
@@ -995,7 +1058,7 @@ impl Bright {
             classical.as_ref(),
             norm_l,
             options,
-            &mut budget,
+            budget,
         )?;
         let trapped = self.trapped(&x);
         let efficiency: f64 = trapped.iter().sum();
@@ -1014,7 +1077,10 @@ impl Bright {
         } else {
             dark = outside.max(0.0);
         }
-        let error = (efficiency + lost + dark - 1.0).abs() + change.abs();
+        // The couplings `dark_tolerance` dropped move the bright space by
+        // about their size over the slowest decay, and `η` with it.
+        let truncation = (self.closure.truncated / slowest).min(1.0);
+        let error = (efficiency + lost + dark - 1.0).abs() + change.abs() + truncation;
         let mut solves = vec![
             SolveReport {
                 name: "schur".to_string(),
@@ -1026,7 +1092,7 @@ impl Bright {
         ];
         let mut arrival = None;
         if want_tau {
-            let (y, _, report_y, _) = self.refined(
+            let (y, _, report_y, change_y) = self.refined(
                 "Y",
                 &x,
                 &x_v,
@@ -1035,10 +1101,13 @@ impl Bright {
                 classical.as_ref(),
                 norm_l,
                 options,
-                &mut budget,
+                budget,
             )?;
             let eta_tau: f64 = self.trapped(&y).iter().sum();
-            arrival = arrival_time(efficiency, eta_tau, error);
+            // The last refinement of `Y` measures the error of `ητ` (K₁₆
+            // with loss 10⁻⁶ on 14 nodes: τ off by 5·10⁻³, change 6%).
+            arrival = arrival_time(efficiency, eta_tau, error)
+                .filter(|_| change_y.abs() <= TAU_AGREEMENT * eta_tau.abs());
             solves.push(report_y);
         }
         let condition = solves.iter().map(|s| s.condition).fold(0.0, f64::max);

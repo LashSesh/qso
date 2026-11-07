@@ -142,7 +142,23 @@ def test_traps_and_losses_take_every_form():
         traps={1: 1.0},
         losses=0.05,
     )
-    assert per_node.transport(0) == pytest.approx(reference)
+    # Key by key: pytest 9's approx refuses dicts with array or list values.
+    r = per_node.transport(0)
+    assert set(r) == set(reference)
+    np.testing.assert_allclose(r["trapped"], reference["trapped"])
+    for key in (
+        "efficiency",
+        "arrival_time",
+        "lost",
+        "dark",
+        "added_dephasing",
+        "slowest_decay",
+        "condition",
+        "error",
+    ):
+        assert r[key] == pytest.approx(reference[key]), key
+    assert r["dimension"] == reference["dimension"]
+    assert [s["name"] for s in r["solves"]] == [s["name"] for s in reference["solves"]]
 
 
 def test_one_schur_form_serves_the_dimer_scan():
@@ -369,6 +385,14 @@ def test_the_lazy_spectrum_with_site_energies():
         (lambda: q.DephasingWalk(q.Graph.cycle(4), losses="abc"), "number or one value per site"),
         (lambda: q.DephasingWalk(q.Graph.cycle(4), losses=[0.1] * 3), "dimension"),
         (lambda: q.HypercubeOpenWalk(3, losses=[0.1] * 3), "dimension"),
+        # A single loss is expanded only after d is checked (this allocated
+        # 8 GB and aborted).
+        (lambda: q.HypercubeOpenWalk(10**9, losses=0.1), "d ≤ 230"),
+        (lambda: q.HypercubeOpenWalk(2**64 - 1, losses=0.1), "d ≤ 230"),
+        (
+            lambda: q.HypercubeOpenWalk(62, site_rate=1.0, traps={62: 1.0}).transport(),
+            r"needs 138290880 band entries \(limit 134217728\)",
+        ),
     ],
 )
 def test_binding_errors_name_the_problem(call, message):

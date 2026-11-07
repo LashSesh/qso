@@ -145,9 +145,9 @@ impl BandedLu {
     /// `order` (a permutation of `0..n`, such as [`reverse_cuthill_mckee`]'s).
     ///
     /// Before the band storage is allocated it refuses more than
-    /// `max_entries` band entries (`TooManyQubits`) and more than `max_work`
-    /// estimated operations, `8·n·k_l·(k_l + k_u + 1)` (an invalid
-    /// argument); then it refuses an exactly singular matrix (an invalid
+    /// `max_entries` band entries and more than `max_work` estimated
+    /// operations, `8·n·k_l·(k_l + k_u + 1)` (both an invalid argument
+    /// `symmetries`); then it refuses an exactly singular matrix (an invalid
     /// argument). The errors are phrased for the one caller, the
     /// preconditioner of the orbital transport solves.
     pub(crate) fn new(
@@ -187,10 +187,15 @@ impl BandedLu {
         let size = n
             .checked_mul(ld)
             .filter(|&size| size <= max_entries)
-            .ok_or(QsoError::TooManyQubits {
-                what: "transport preconditioner (band entries)",
-                max: max_entries,
-                requested: n.saturating_mul(ld),
+            .ok_or_else(|| {
+                QsoError::invalid(
+                    "symmetries",
+                    format!(
+                        "the transport preconditioner needs {} band entries (limit \
+                         {max_entries}); on hypercubes d ≤ 61",
+                        n.saturating_mul(ld)
+                    ),
+                )
             })?;
         let work = 8.0 * n as f64 * kl as f64 * (kl + ku + 1) as f64;
         if work > max_work {
@@ -746,9 +751,14 @@ mod tests {
         };
         let order: Vec<u32> = (0..n as u32).collect();
         match BandedLu::new(n, order, far, 1 << 27, f64::INFINITY) {
-            Err(QsoError::TooManyQubits { max, requested, .. }) => {
-                assert_eq!(max, 1 << 27);
-                assert!(requested > 1 << 27);
+            Err(
+                e @ QsoError::InvalidArgument {
+                    name: "symmetries", ..
+                },
+            ) => {
+                let text = e.to_string();
+                assert!(text.contains("band entries (limit 134217728)"), "{text}");
+                assert!(!text.contains("qubits"), "{text}");
             }
             other => panic!("{:?}", other.map(|lu| lu.entries())),
         }

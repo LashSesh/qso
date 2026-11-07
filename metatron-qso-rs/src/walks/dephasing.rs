@@ -32,7 +32,7 @@ use num_complex::Complex64 as C64;
 
 use super::transport::dense::{Bright, Closure, DenseModel, Start};
 use super::transport::{
-    DephasingOptimum, TransportOptions, TransportResult, TransportState, check_energies,
+    Budget, DephasingOptimum, TransportOptions, TransportResult, TransportState, check_energies,
     check_rates, check_scan_rates, check_times, check_traps, optimise,
 };
 use super::{DENSE_LIMIT, Generator};
@@ -481,6 +481,7 @@ impl DephasingWalk {
         self.check_start(start)?;
         check_scan_rates(rates)?;
         let own_everywhere = self.dephasing.iter().all(|&g| g > 0.0);
+        let mut budget = Budget::default();
         let mut plus: Option<Bright> = None;
         let mut zero: Option<Bright> = None;
         let mut out = Vec::with_capacity(rates.len());
@@ -497,7 +498,7 @@ impl DephasingWalk {
                 zero.as_ref()
             };
             let bright = bright.expect("built above");
-            out.push(bright.solve(&Start::Node(start), e, true, options)?);
+            out.push(bright.solve_within(&Start::Node(start), e, true, options, &mut budget)?);
         }
         Ok(out)
     }
@@ -524,11 +525,18 @@ impl DephasingWalk {
         }
         let bright = Bright::new(&model, true, options)?;
         let s = Start::Node(start);
+        // One work limit for the whole optimisation.
+        let budget = std::cell::RefCell::new(Budget::default());
         optimise(
             low,
             high,
-            |e| Ok(bright.solve(&s, e, false, options)?.efficiency),
-            |e| bright.solve(&s, e, true, options),
+            |e| {
+                let mut b = budget.borrow_mut();
+                Ok(bright
+                    .solve_within(&s, e, false, options, &mut b)?
+                    .efficiency)
+            },
+            |e| bright.solve_within(&s, e, true, options, &mut budget.borrow_mut()),
         )
     }
 

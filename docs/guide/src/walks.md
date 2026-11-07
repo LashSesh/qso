@@ -242,12 +242,17 @@ assert abs(opened.transport(2)["arrival_time"] - 377 / 20) < 1e-9
 
 The bright states are found by a closure: start from the traps and the
 nodes with more than the smallest loss, apply `H` and, at dephased nodes,
-the node projectors, and keep every new direction longer than
-`dark_tolerance` (default 10⁻¹⁰, relative to the largest entry of the
-centred `H`). A state coupled more weakly than that counts as dark. An
-almost dark state shows as a small `slowest_decay`, the slowest decay
-rate of the bright states without the refeeding by dephasing; a bright
-state that decays below rounding is refused with the advice to raise
+the node projectors, and keep every new direction coupled more strongly
+than `dark_tolerance` (default 10⁻¹⁰, relative to the largest entry of
+the centred `H`). A state coupled more weakly than that counts as dark;
+with dephasing on every node, hops weaker than that are cut. A dropped
+coupling of size `c` (in units of `H`) moves η by about
+`c/slowest_decay`, which is added to `error`. When every node loses
+population, the weight left out of the bright states is reported in
+`lost` (the smallest loss removes it), not in `dark`. An almost dark
+state shows as a small `slowest_decay`, the slowest decay rate of the
+bright states without the refeeding by dephasing; a bright state that
+decays below rounding is refused with the advice to raise
 `dark_tolerance`.
 
 ### Scans and the best dephasing rate
@@ -344,15 +349,19 @@ print(f"{best['rate']:.1f} /ps ({best['rate'] / cm:.0f} cm⁻¹): {best['efficie
 ```
 
 Without dephasing 5.3 % of the excitation is lost; at the best rate,
-0.56 %, and it arrives eight times sooner (5.6 ps instead of 47 ps). These values agree with
-QuTiP's `mesolve` integrated until less than 10⁻¹² of the population is
-left (see [validation](validation.md)).
+0.56 %, and it arrives eight times sooner (5.6 ps instead of 47 ps). The
+scan values agree with QuTiP's `liouvillian` solved directly, and at the
+positive rates with `mesolve` integrated until less than 10⁻¹² of the
+population is left (see [validation](validation.md)). The best rate was
+checked against an independent maximisation of η over a Liouville-space
+solve (26.018 /ps, η = 0.994386), not against QuTiP.
 
 ### Accuracy and limits
 
 - **Sizes.** The dense solves take up to 2048 nodes; evolution and
   traces up to 512. A transport call estimates its work and stops beyond
-  2·10¹³ operations (`MAX_TRANSPORT_WORK`). On four cores a random graph
+  2·10¹³ operations (`MAX_TRANSPORT_WORK`); a scan or an optimisation is
+  one call, all its rates together (the Schur forms are not counted). On four cores a random graph
   of 1024 nodes with dephasing everywhere takes 26 s for the Schur form
   and 47 s for the solves; at 2048 nodes 5.5 and 6 minutes, and there
   the limit leaves room for only about a hundred iterations over the
@@ -361,11 +370,17 @@ left (see [validation](validation.md)).
   [Symmetry and state transfer](symmetry.md)).
 - **η** comes with `error`, an estimate of its absolute error.
 - **τ** has no error estimate of its own. It is reported only when
-  `η ≥ max(10⁻¹², 10³·error)` and is `None` otherwise: for a walker that
-  hardly arrives, τ is not resolved. Its accuracy follows the
-  conditioning of the problem, which `condition` estimates for each
-  solve; on large coherent hypercubes the orbital solves lose digits
-  that their `condition` does not show (see [accuracy on large
+  `η ≥ max(10⁻¹², 10³·error)` and τ is a positive finite number, and is
+  `None` otherwise: for a walker that hardly arrives, τ is not resolved.
+  On orbitals a second, goal-oriented solve computes `ητ` independently,
+  and τ is reported only when the two agree to 10⁻³ relative; on the
+  dense path only when the last refinement of `Y` moved `ητ` by less
+  than 10⁻³ relative. Beyond
+  that, τ's accuracy follows the conditioning of the problem, which
+  `condition` estimates for each solve: wherever a bright mode decays
+  slowly (a tiny loss, a long chain, large coherent hypercubes), τ can
+  lose digits that `error` (an estimate for η) does not show, on small
+  graphs too (see [accuracy on large
   hypercubes](symmetry.md#driven-and-decoherent-walks-reduced-by-symmetry)).
 - **Optimum.** The best rate is found to about 10⁻⁷ relative where η is
   flat at its maximum (η itself to rounding).

@@ -654,12 +654,21 @@ impl OrbitalSites {
 }
 
 /// Refuse `f` (one value per point) unless it is constant on every orbit
-/// of points, to `1e-12·(1 + |f(a)|)`: `O(n)` lookups, exact because the
-/// diagonal orbitals are the orbits on points.
+/// of points: `O(n)` lookups, exact because the diagonal orbitals are the
+/// orbits on points. Energies agree to `1e-12·(1 + |f(a)|)`; rates (any
+/// `name` but `"energies"`) must vanish on the same points, since the
+/// representative's value decides the whole orbit, and agree to
+/// `1e-12·max(|f(u)|, |f(a)|)`.
 fn check_invariant(orbitals: &Orbitals, name: &'static str, f: &[f64]) -> Result<()> {
+    let rate = name != "energies";
     for (u, &x) in f.iter().enumerate() {
         let (a, _) = orbitals.representative(orbitals.of(u, u));
-        if (x - f[a]).abs() > 1e-12 * (1.0 + f[a].abs()) {
+        let differ = if rate {
+            (x == 0.0) != (f[a] == 0.0) || (x - f[a]).abs() > 1e-12 * x.abs().max(f[a].abs())
+        } else {
+            (x - f[a]).abs() > 1e-12 * (1.0 + f[a].abs())
+        };
+        if differ {
             return Err(QsoError::invalid(
                 name,
                 format!(
@@ -949,6 +958,19 @@ impl SymmetricOpenWalk {
             }
         }
         let all_lose = sites.values.iter().all(|v| v.1[LOSS] > 0.0);
+        let gamma0 = sites
+            .values
+            .iter()
+            .map(|v| v.1[LOSS])
+            .fold(f64::INFINITY, f64::min);
+        let mut excess = vec![C64::new(0.0, 0.0); n];
+        let mut any_excess = false;
+        for &(o, v) in &sites.values {
+            if v[LOSS] > gamma0 {
+                excess[o as usize] = C64::new(sqrt_size[o as usize] * (v[LOSS] - gamma0), 0.0);
+                any_excess = true;
+            }
+        }
         let trapped = sites
             .traps
             .iter()
@@ -983,6 +1005,8 @@ impl SymmetricOpenWalk {
             losses: if lost.is_empty() { None } else { Some(losses) },
             start: start_orbital,
             all_lose,
+            gamma0: if all_lose { gamma0 } else { 0.0 },
+            excess: (all_lose && any_excess).then_some(excess),
             trapped,
             lost,
             sqrt_size,

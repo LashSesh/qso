@@ -2286,6 +2286,9 @@ mod transport {
     }
 
     #[test]
+    // Dense Q₁₀ (1024 nodes): 63 s on one thread in release, far longer in
+    // the single-threaded WebAssembly run.
+    #[cfg_attr(target_arch = "wasm32", ignore)]
     fn hypercube_q10_on_orbitals_equals_the_dense_path() {
         let o = opts();
         let d = 10;

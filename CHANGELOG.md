@@ -31,8 +31,9 @@ All notable changes to this project are documented here. The format follows
   d = 61. Every solve reports its iterations, backward error and a
   condition estimate, and every result an error estimate of `η`, the
   loss and the weight never absorbed (`η + lost + dark = 1`). Dark states
-  (`dark_states`), scans over a dephasing rate added to every node (one
-  Schur form for the whole scan), the rate of highest efficiency (grid
+  (`dark_states`), scans over a dephasing rate added to every node (at
+  most two Schur forms for the whole scan: one for the positive rates,
+  one for rate 0), the rate of highest efficiency (grid
   and golden section), and traces of the sinks and the loss in time. The
   detuned dimer matches SymPy's exact rationals (`η = 32000/38881`,
   `τ = 139260/38881` at dephasing 1; best rate 39/20 with `η = 800/963`),

@@ -73,9 +73,11 @@ pub(crate) mod dense;
 mod tests;
 
 /// Most estimated operations (8 per complex multiply-add) of one transport
-/// call: GMRES iterations of every solve plus the orbital factorisation.
-/// About 20 minutes on one thread at the measured 1.8·10⁹ complex
-/// multiply-adds per second.
+/// call: GMRES iterations of every solve plus the orbital factorisations. A
+/// scan or an optimisation of the added dephasing is one call: all its
+/// rates share the limit. About 20 minutes on one thread at the measured
+/// 1.8·10⁹ complex multiply-adds per second (the dense path's Schur forms
+/// are not counted).
 pub const MAX_TRANSPORT_WORK: f64 = 2e13;
 
 /// Most complex entries (16 bytes, 2 GiB) of the banded LU that
@@ -83,15 +85,33 @@ pub const MAX_TRANSPORT_WORK: f64 = 2e13;
 /// 1.91 GiB, 47 s at d = 61).
 pub const MAX_TRANSPORT_FACTOR_ENTRIES: usize = 1 << 27;
 
+/// Largest relative error estimate of `ητ` at which `τ` is reported: on
+/// orbitals the difference of the goal-oriented check, on the dense path
+/// the last refinement of `Y`.
+pub(crate) const TAU_AGREEMENT: f64 = 1e-3;
+
+/// Operations and GMRES iterations of one transport call so far (see
+/// [`MAX_TRANSPORT_WORK`]).
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Budget {
+    pub(crate) spent: f64,
+    pub(crate) iterations: usize,
+}
+
 /// Settings of the transport solves.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct TransportOptions {
     /// Dense path: a state coupled to the traps and to nodes with more than
     /// the smallest loss more weakly than this (relative to the largest
-    /// `|H_ij − c δ_ij|`) counts as dark. Orbitals: dark weights below it
-    /// are reported as 0 (the rest goes to `error`). Default 1e-10, in
-    /// (0, 1e-2].
+    /// `|H_ij − c δ_ij|`) counts as dark; the coupling dropped enters
+    /// `error`, and when every node loses population the dropped weight is
+    /// reported in `lost`, not `dark`. Orbitals: dark weights below it are
+    /// reported as 0 (the rest goes to `error`), and a dark weight above it
+    /// is added to `error` (and `τ` withheld) once `condition·ε_mach`
+    /// exceeds 10³ times it or the weight is below `10³·condition·ε_mach`,
+    /// since a bright state decaying below rounding would look
+    /// the same. Default 1e-10, in (0, 1e-2].
     pub dark_tolerance: f64,
     /// GMRES stops at `‖b − Ax‖ ≤ tolerance·(‖b‖ + ‖A‖‖x‖)`; the dense path
     /// refines while `𝓛(X) + ρ₀` is above it. Default 1e-13, in
@@ -141,7 +161,8 @@ impl TransportOptions {
 #[non_exhaustive]
 pub struct SolveReport {
     /// `"schur"`, `"X"`, `"Y"` (dense); `"adjoint"`, `"adjoint loss"`,
-    /// `"forward"` (orbitals).
+    /// `"adjoint without Γ₀"` and `"adjoint loss without Γ₀"` (every node
+    /// lossy), `"forward"`, `"adjoint time"` (the check of `τ`) (orbitals).
     pub name: String,
     /// GMRES iterations, refinements included (0 for direct solves).
     pub iterations: usize,
@@ -159,7 +180,10 @@ pub struct TransportResult {
     /// `η = 2Σ_t κ_t X_tt`, the population that reaches the traps.
     pub efficiency: f64,
     /// Mean arrival time of the trapped walker, `τ = 2Σ_t κ_t Y_tt/η`;
-    /// `None` when `η < max(1e-12, 1e3·error)`, where it is not accurate.
+    /// `None` when `η < max(1e-12, 1e3·error)`, where it is not accurate,
+    /// when it is not positive and finite, and when its error estimate
+    /// (orbitals: a second, goal-oriented solve; dense: the last refinement
+    /// of `Y`) exceeds 10⁻³ relative.
     pub arrival_time: Option<f64>,
     /// `2κ_t X_tt` per trap in the order of `traps()` (hypercube: per
     /// listed weight, all traps of that weight together). Sums to `η`
@@ -182,7 +206,9 @@ pub struct TransportResult {
     pub slowest_decay: Option<f64>,
     /// Largest `condition` of `solves`.
     pub condition: f64,
-    /// Estimated absolute error of `η`.
+    /// Estimated absolute error of `η`, including (dense path) the
+    /// couplings `dark_tolerance` dropped, as their size over
+    /// `slowest_decay`.
     pub error: f64,
     /// Every linear solve of the calculation, in order.
     pub solves: Vec<SolveReport>,
@@ -300,14 +326,16 @@ pub(crate) fn check_times(t: &[f64]) -> Result<()> {
     Ok(())
 }
 
-/// `τ = ητ/η`, or `None` when `η < max(1e-12, 1e3·error)`: below that the
+/// `τ = ητ/η`, or `None` when `η < max(1e-12, 1e3·error)` (below that the
 /// arrival time changed sign or by orders of magnitude between equivalent
-/// solver paths (cycles of 64 and 256 nodes under strong dephasing).
+/// solver paths: cycles of 64 and 256 nodes under strong dephasing) or when
+/// `τ` is not a positive finite number, which a mean arrival time always is.
 pub(crate) fn arrival_time(eta: f64, eta_tau: f64, error: f64) -> Option<f64> {
     if eta.is_nan() || eta < 1e-12f64.max(1e3 * error) {
         return None;
     }
-    Some(eta_tau / eta)
+    let tau = eta_tau / eta;
+    (tau.is_finite() && tau > 0.0).then_some(tau)
 }
 
 /// Grid points of [`optimise`]: `max(13, ⌈4·log₁₀(high/low)⌉ + 1)`.

@@ -7210,7 +7210,9 @@ for K₈₁₉₂ on ten and seventeen orbitals (four cases, peak 6.0 GiB) and
 53 s for Q₄₀ and Q₆₁ (peak 1.95 GiB).
 
 Without loss, coherent Q₄₀ takes 15.2 s (69 adjoint and 166 forward
-iterations). K₂₀₄₈ on ten orbitals takes 1.2 s to build and under a
+iterations); after the review the check of τ adds 100 iterations (21.4 s
+in all), and with loss 0.05 one solve of about 20 iterations (Q₄₀: 6.4 s
+through Python). K₂₀₄₈ on ten orbitals takes 1.2 s to build and under a
 millisecond to solve. In Python the dimer's `transport` takes 27 µs and
 its `optimal_dephasing` (59 solves) 0.48 ms; the transport
 cross-validation takes 29 s on one thread.
@@ -7258,13 +7260,58 @@ Open issues, recorded for the review:
   needed 88 with the classical preconditioner and was refused after 98
   without it, so "dense up to 2048 nodes" holds for well-conditioned
   dephasing only.
-- **The band limit's message.** Q₆₂ is refused through `TooManyQubits`
-  ("transport preconditioner (band entries) supports at most 134217728
-  qubits, requested 138290880"): the existing error variant names qubits
-  where it means band entries.
+- **The band limit's message** (fixed in review). Q₆₂ was refused through
+  `TooManyQubits`, which named band entries qubits; it is now an invalid
+  argument `symmetries`: "the transport preconditioner needs 138290880
+  band entries (limit 134217728); on hypercubes d ≤ 61".
 - **A slow validation test.** `hypercube_q10_on_orbitals_equals_the_dense_path`
-  (dense Q₁₀, 1024 nodes) takes 63 s on one thread in release; the
-  WebAssembly test run, single-threaded and slower, was not timed.
+  (dense Q₁₀, 1024 nodes) takes 63 s on one thread in release; it is
+  skipped in the WebAssembly test run (single-threaded and slower).
+
+Review (independent, after delivery): four reviewers (the dense
+numerics, orbits and hypercubes, the API with bindings and command line,
+and the documentation's claims) checked against full Liouville-space
+solves, 90- to 120-digit mpmath solutions and QuTiP; a second agent
+reproduced each finding (15 confirmed, one rejected). Over 600 random
+dense solves and 4992 orbital-against-dense comparisons the results held
+within their reported error. Findings, all fixed, each with a regression
+test:
+
+- **`dark_tolerance` on the dense path** is now absolute in the scaled
+  operator, as documented: a link of 10⁻¹² to a trap at the centre
+  energy was bright (and refused) while the same link to a trap at
+  energy 0.1 was dark. With dephasing on every node, hops below the
+  tolerance are cut, and a GMRES breakdown of the population equations
+  is reported as near-singular instead of as an iteration count.
+- **The truncation enters `error`**: a dropped coupling `c` adds
+  `c/slowest_decay` (twin model with loss 0.01: |η − exact| 1.4·10⁻⁷
+  and 1.5·10⁻⁴ against error 1.6·10⁻⁶ and 1.6·10⁻³, before 3·10⁻¹⁵).
+- **One work limit per call**: `dephasing_scan` and
+  `optimal_dephasing` share `MAX_TRANSPORT_WORK` over all their rates,
+  dense and on orbitals.
+- **Loss on every node, on orbitals**: a smallest loss below
+  10⁻⁶‖M̂‖∞ is a uniform shift, as on the dense path (`Π_B` from two
+  adjoint solves on `M̂ + Γ₀I`). K₂₅₆ at Γ = 10⁻¹² gave τ = −10 148; now 127.50392155,
+  as the dense path; Q₁₆ at Γ = 10⁻¹⁶ was 10 % off, now 1.5·10⁻¹³.
+- **τ is checked**: never negative or infinite; on orbitals a
+  goal-oriented adjoint solve (`"adjoint time"`) must agree to 10⁻³, on
+  the dense path the last refinement of `Y`. K₁₆ with loss 10⁻⁶ on 14
+  nodes returned τ 46 % off (orbitals) and 0.5 % off (dense); both now
+  withhold it (on orbitals through the dark-weight check below: both
+  estimates of `ητ` missed the same slow mode).
+- **A dark weight that may be slow decay** (orbitals, `condition·ε >
+  10³·dark_tolerance`, or the weight below `10³·condition·ε`) is added to `error` and τ withheld: C₆₄ with site
+  energies reported η = 0.749 with error 1.9·10⁻⁴ (exact η = 1); now
+  error 0.25.
+- **Invariance of rates** compares supports exactly: a trap of 5·10⁻¹³
+  on half an orbit is refused.
+- **The refinement** may take at most twice the solve's iterations plus
+  10 and is kept only if it lowers the residual (coherent Q₂₀: 119
+  forward iterations before, now at most 67).
+- Smaller: the band-limit message, `HypercubeOpenWalk(d, losses=x)` with
+  a huge `d` (a ValueError instead of an abort), pytest 9 in
+  `test_transport.py`, the `--dark-tolerance` help, and the provenance
+  of the FMO values in the guide and README.
 
 ### 1.64 — Expectation values of large noisy circuits by Pauli propagation (M)
 

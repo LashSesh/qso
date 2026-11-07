@@ -341,6 +341,24 @@ fn transport_to_a_trap() {
     assert!(qso_fails(&["transport", "--trap", "1", "--best-rate", "1"]).contains("best-rate"));
     assert!(qso_fails(&["transport", "--trap", "1", "--best-rate", "2,1"]).contains("range"));
     assert!(qso_fails(&["transport", "--trap", "2"]).contains('2'));
+    // The dark tolerance is relative to the largest centred entry of H,
+    // not to the hopping: with energies 100, 0 and hopping 10⁻⁹ the
+    // coupling counts as dark.
+    let help = qso_text(&["transport", "--help"]);
+    assert!(help.contains("after removing its mean"), "{help}");
+    assert!(!help.contains("relative to the hopping"), "{help}");
+    let detuned = qso(&[
+        "transport",
+        "--graph",
+        "path:2",
+        "--trap",
+        "1",
+        "--energies",
+        "100,0",
+        "--gamma",
+        "1e-9",
+    ]);
+    close(f(&detuned["dark"]), 1.0, 1e-12);
 }
 
 #[test]

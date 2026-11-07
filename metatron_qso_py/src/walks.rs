@@ -481,12 +481,34 @@ pub(crate) fn traps_arg(traps: &Bound<'_, PyAny>) -> PyResult<Vec<(usize, f64)>>
 /// One rate per site: a number (the same for every site) or `sites`
 /// values.
 pub(crate) fn rates_arg(name: &str, rates: &Bound<'_, PyAny>, sites: usize) -> PyResult<Vec<f64>> {
+    Ok(rates_value(name, rates)?.expand(sites))
+}
+
+/// A rate argument as given: one number for every site, or one per site.
+pub(crate) enum Rates {
+    One(f64),
+    Each(Vec<f64>),
+}
+
+impl Rates {
+    /// One value per site (`sites` copies of a single number).
+    pub(crate) fn expand(self, sites: usize) -> Vec<f64> {
+        match self {
+            Rates::One(r) => vec![r; sites],
+            Rates::Each(v) => v,
+        }
+    }
+}
+
+/// [`rates_arg`] without expanding a single number, for callers whose
+/// number of sites is checked later.
+pub(crate) fn rates_value(name: &str, rates: &Bound<'_, PyAny>) -> PyResult<Rates> {
     if let Ok(v) = rates.extract::<RealArg<'_>>() {
-        return Ok(real_vec(&v));
+        return Ok(Rates::Each(real_vec(&v)));
     }
     rates
         .extract::<f64>()
-        .map(|r| vec![r; sites])
+        .map(Rates::One)
         .map_err(|_| invalid(format!("`{name}` must be a number or one value per site")))
 }
 
