@@ -6,10 +6,33 @@
 //! * [`krylov`] — matrix-free Lanczos ground states, Krylov propagation
 //!   `exp(−iHt)|v⟩` and cyclic-subspace spectra for operators far too large
 //!   to store densely.
+//!
+//! Crate-internal solvers (used by the steady states of exchange and by the
+//! transport to a trap):
+//!
+//! * `gmres` — restarted GMRES with right preconditioning, the iteration of
+//!   the exchange steady states (1.54) with a backward-error stopping rule,
+//!   a relative breakdown test and a condition estimate.
+//! * `sylvester` — the complex Schur form `A = QTQ†` with a bounded
+//!   iteration and one retry, and Bartels–Stewart solves of
+//!   `AX − XA† − σX = C` (recursive blocked, products in fixed panels, so
+//!   bit-identical on any number of threads).
+//! * `banded` — reverse Cuthill–McKee ordering and LU with partial pivoting
+//!   in band storage, with solves for `A` and `A†`.
 
 pub mod dense;
 pub mod krylov;
 pub mod sparse;
+
+// Used from 1.63's transport code.
+#[allow(dead_code)]
+pub(crate) mod banded;
+// Used from 1.63's transport code (and by the exchange steady states).
+#[allow(dead_code)]
+pub(crate) mod gmres;
+// Used from 1.63's transport code.
+#[allow(dead_code)]
+pub(crate) mod sylvester;
 
 pub use dense::{CMatrix, RMatrix, eigh, eigh_real, expm_hermitian};
 pub use krylov::{

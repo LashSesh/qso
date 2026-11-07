@@ -1,7 +1,8 @@
 //! The sparse joint blocks against the dense blocks of 1.35.
 
 use super::super::*;
-use crate::spin::{Event, Frame, Isotope, SpinSystem, Target};
+use super::{GMRES_ITERATIONS, GMRES_RESTART, GMRES_TOLERANCE, gmres, norm2};
+use crate::spin::{Event, Frame, Isotope, MAX_RELAXATION_WORK, SpinSystem, Target};
 
 /// SABRE with `ring` protons beside the ¹⁵N: the complex (two hydrides,
 /// the bound ¹⁵N and its ring protons) and the free substrate (¹⁵N and its
@@ -454,4 +455,409 @@ fn field_profiles_with_field_dependent_relaxation() {
     let fd = (4.0 * along(h / 2.0) - along(h)) / 3.0;
     let exact: f64 = grad.iter().zip(&dir).map(|(g, d)| g * d).sum();
     assert!((fd - exact).abs() < 1e-5 * exact.abs(), "{fd} vs {exact}");
+}
+
+/// 1.54's `gmres` as it was before the iteration moved to
+/// `linalg::gmres`, verbatim, for the comparison below.
+fn gmres_154(
+    n: usize,
+    apply: impl Fn(&[C64], &mut [C64]),
+    precondition: impl Fn(&[C64]) -> Vec<C64>,
+    b: &[C64],
+    room: usize,
+    (per, limit): (f64, f64),
+) -> Result<Option<Vec<C64>>> {
+    let target = GMRES_TOLERANCE * norm2(b);
+    let mut x = vec![ZERO; n];
+    if target == 0.0 {
+        return Ok(Some(x));
+    }
+    let restart = room.max(GMRES_RESTART).min(n.max(1));
+    let mut spent = 0.0;
+    let mut iterations = 0;
+    let mut w = vec![ZERO; n];
+    loop {
+        apply(&x, &mut w);
+        let r: Vec<C64> = b.iter().zip(&w).map(|(b, ax)| b - ax).collect();
+        let beta = norm2(&r);
+        if beta <= target {
+            return Ok(Some(x));
+        }
+        if iterations >= GMRES_ITERATIONS {
+            return Ok(None);
+        }
+        let mut basis: Vec<Vec<C64>> = vec![r.iter().map(|v| v / beta).collect()];
+        let mut h: Vec<Vec<C64>> = Vec::new();
+        let mut rotations: Vec<(f64, C64)> = Vec::new();
+        let mut g = vec![ZERO; restart + 1];
+        g[0] = C64::new(beta, 0.0);
+        let mut k = 0;
+        while k < restart && iterations < GMRES_ITERATIONS {
+            iterations += 1;
+            spent += per + 16.0 * ((k + 1) * n) as f64;
+            if spent > limit {
+                return Err(QsoError::invalid(
+                    "steady state",
+                    format!(
+                        "GMRES needs more than {:.1e} operations after {iterations} \
+                         iterations; use fewer spins",
+                        MAX_RELAXATION_WORK
+                    ),
+                ));
+            }
+            let z = precondition(&basis[k]);
+            apply(&z, &mut w);
+            let mut column = vec![ZERO; k + 2];
+            for (i, v) in basis.iter().enumerate() {
+                let hij: C64 = v.iter().zip(&w).map(|(a, b)| a.conj() * b).sum();
+                column[i] = hij;
+                for (x, b) in w.iter_mut().zip(v) {
+                    *x -= hij * b;
+                }
+            }
+            let s = norm2(&w);
+            column[k + 1] = C64::new(s, 0.0);
+            for (i, &(c, sn)) in rotations.iter().enumerate() {
+                let (p, q) = (column[i], column[i + 1]);
+                column[i] = p * c + sn * q;
+                column[i + 1] = -sn.conj() * p + q * c;
+            }
+            let (p, q) = (column[k], column[k + 1]);
+            let r = (p.norm_sqr() + q.norm_sqr()).sqrt();
+            let (c, sn) = if r == 0.0 {
+                (1.0, ZERO)
+            } else if p.norm() == 0.0 {
+                (0.0, C64::new(1.0, 0.0))
+            } else {
+                (p.norm() / r, (p / p.norm()) * q.conj() / r)
+            };
+            column[k] = p * c + sn * q;
+            column[k + 1] = ZERO;
+            g[k + 1] = -sn.conj() * g[k];
+            g[k] *= c;
+            rotations.push((c, sn));
+            h.push(column);
+            k += 1;
+            if g[k].norm() <= target || s == 0.0 {
+                break;
+            }
+            basis.push(w.iter().map(|v| v / s).collect());
+        }
+        // y from the triangle, x += M⁻¹ V y.
+        let mut y = vec![ZERO; k];
+        for i in (0..k).rev() {
+            let mut acc = g[i];
+            for j in i + 1..k {
+                acc -= h[j][i] * y[j];
+            }
+            if h[i][i].norm() == 0.0 {
+                return Ok(None);
+            }
+            y[i] = acc / h[i][i];
+        }
+        let mut update = vec![ZERO; n];
+        for (v, yi) in basis.iter().zip(&y) {
+            for (u, b) in update.iter_mut().zip(v) {
+                *u += yi * b;
+            }
+        }
+        for (xi, d) in x.iter_mut().zip(precondition(&update)) {
+            *xi += d;
+        }
+    }
+}
+
+/// A sparse non-normal operator: a convection–diffusion stencil on a ring
+/// with a complex shift, plus two random couplings per row.
+struct Ring {
+    rows: Vec<Vec<(usize, C64)>>,
+}
+
+impl Ring {
+    fn new(n: usize, seed: u64, shift: C64, convection: f64) -> Self {
+        let mut rng = crate::rng::Rng::seed_from_u64(seed);
+        let rows = (0..n)
+            .map(|i| {
+                let mut row = vec![
+                    (i, C64::new(2.0, 0.0) + shift),
+                    ((i + 1) % n, C64::new(-1.0 + convection, 0.0)),
+                    ((i + n - 1) % n, C64::new(-1.0 - convection, 0.0)),
+                ];
+                for _ in 0..2 {
+                    let j = rng.below(n as u64) as usize;
+                    row.push((j, C64::new(0.2 * rng.normal(), 0.2 * rng.normal())));
+                }
+                row
+            })
+            .collect();
+        Ring { rows }
+    }
+
+    fn apply(&self, x: &[C64], y: &mut [C64]) {
+        for (yi, row) in y.iter_mut().zip(&self.rows) {
+            *yi = row.iter().map(|&(j, v)| v * x[j]).sum();
+        }
+    }
+
+    fn diagonal(&self) -> Vec<C64> {
+        (0..self.rows.len())
+            .map(|i| self.rows[i].iter().filter(|e| e.0 == i).map(|e| e.1).sum())
+            .collect()
+    }
+}
+
+#[test]
+fn gmres_through_linalg_is_bit_identical_to_1_54() {
+    type Outcome = Result<Option<Vec<C64>>>;
+    let same = |a: &Outcome, b: &Outcome| match (a, b) {
+        (Ok(Some(x)), Ok(Some(y))) => {
+            x.len() == y.len()
+                && x.iter().zip(y).all(|(p, q)| {
+                    p.re.to_bits() == q.re.to_bits() && p.im.to_bits() == q.im.to_bits()
+                })
+        }
+        (Ok(None), Ok(None)) => true,
+        (Err(e), Err(f)) => e == f,
+        _ => false,
+    };
+    let kind = |a: &Outcome| match a {
+        Ok(Some(_)) => "converged",
+        Ok(None) => "none",
+        Err(_) => "error",
+    };
+    // Converging runs with and without the Jacobi preconditioner (2 to 199
+    // restart cycles, 99 to 11 922 iterations), one with a larger room, and
+    // the same runs under a work limit that bites.
+    for (n, seed, shift, convection, room, jacobi) in [
+        (200, 1, C64::new(0.3, 0.1), 0.2, 0, true),
+        (200, 2, C64::new(0.05, 0.0), 0.4, 0, false),
+        (200, 3, C64::new(0.01, 0.02), 0.6, 0, true),
+        (1000, 3, C64::new(0.1, 0.02), 0.6, 0, true),
+        (1000, 4, C64::new(0.1, 0.02), 0.6, 300, true),
+        (5000, 5, C64::new(0.2, 0.0), 0.3, 0, true),
+    ] {
+        let op = Ring::new(n, seed, shift, convection);
+        let d = op.diagonal();
+        let mut rng = crate::rng::Rng::seed_from_u64(seed + 100);
+        let b: Vec<C64> = (0..n)
+            .map(|_| C64::new(rng.normal(), rng.normal()))
+            .collect();
+        let pre = |r: &[C64]| -> Vec<C64> {
+            if jacobi {
+                r.iter().zip(&d).map(|(x, d)| x / d).collect()
+            } else {
+                r.to_vec()
+            }
+        };
+        let work = (8.0 * 5.0 * n as f64, MAX_RELAXATION_WORK);
+        let old = gmres_154(n, |x, y| op.apply(x, y), pre, &b, room, work);
+        let new = gmres(n, |x, y| op.apply(x, y), pre, &b, room, work);
+        assert!(
+            same(&old, &new),
+            "n = {n}, seed {seed}: {} / {}",
+            kind(&old),
+            kind(&new)
+        );
+        assert_eq!(kind(&new), "converged", "n = {n}, seed {seed}");
+        let tight = (work.0, 30.0 * work.0);
+        let old = gmres_154(n, |x, y| op.apply(x, y), pre, &b, room, tight);
+        let new = gmres(n, |x, y| op.apply(x, y), pre, &b, room, tight);
+        assert!(same(&old, &new), "tight, n = {n}");
+        assert_eq!(kind(&new), "error");
+    }
+    // The iterations run out on a nearly singular operator (334 cycles).
+    let n = 200;
+    let op = Ring::new(n, 9, C64::new(1e-9, 0.0), 0.0);
+    let mut rng = crate::rng::Rng::seed_from_u64(109);
+    let b: Vec<C64> = (0..n)
+        .map(|_| C64::new(rng.normal(), rng.normal()))
+        .collect();
+    let identity = |r: &[C64]| r.to_vec();
+    let unlimited = (1.0, f64::INFINITY);
+    let old = gmres_154(n, |x, y| op.apply(x, y), identity, &b, 0, unlimited);
+    let new = gmres(n, |x, y| op.apply(x, y), identity, &b, 0, unlimited);
+    assert!(same(&old, &new) && kind(&new) == "none", "{}", kind(&new));
+    // Breakdown on the zero operator, and b = 0.
+    let ones = [C64::new(1.0, 0.0); 5];
+    let zero = |_: &[C64], y: &mut [C64]| y.fill(ZERO);
+    let old = gmres_154(5, zero, identity, &ones, 0, (1.0, 1e12));
+    let new = gmres(5, zero, identity, &ones, 0, (1.0, 1e12));
+    assert!(same(&old, &new) && kind(&new) == "none");
+    let copy = |x: &[C64], y: &mut [C64]| y.copy_from_slice(x);
+    let old = gmres_154(3, copy, identity, &[ZERO; 3], 0, (1.0, 1e12));
+    let new = gmres(3, copy, identity, &[ZERO; 3], 0, (1.0, 1e12));
+    assert!(same(&old, &new) && kind(&new) == "converged");
+}
+
+// TEMPORARY (verification): random comparison of the wrapper with 1.54.
+#[test]
+fn tmp_gmres_wrapper_random_bit_identity() {
+    use std::cell::Cell;
+    type Outcome = Result<Option<Vec<C64>>>;
+    let bits = |a: &Outcome| -> String {
+        match a {
+            Ok(Some(x)) => format!(
+                "some {:?}",
+                x.iter()
+                    .map(|z| (z.re.to_bits(), z.im.to_bits()))
+                    .collect::<Vec<_>>()
+            ),
+            Ok(None) => "none".into(),
+            Err(e) => format!("err {e}"),
+        }
+    };
+    let mut rng = crate::rng::Rng::seed_from_u64(20261107);
+    let mut tally = std::collections::BTreeMap::<String, usize>::new();
+    for case in 0..1500u64 {
+        let n = match rng.below(10) {
+            0 => 1 + rng.below(3) as usize,
+            1 => 400 + rng.below(700) as usize,
+            _ => 2 + rng.below(120) as usize,
+        };
+        let kind = rng.below(9);
+        // Dense coefficients for kind 1.
+        let dense: Vec<C64> = if kind == 1 && n <= 150 {
+            (0..n * n)
+                .map(|_| C64::new(rng.normal(), rng.normal()) / (n as f64).sqrt())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let shift = match rng.below(4) {
+            0 => C64::new(1e-9, 0.0),
+            1 => C64::new(rng.normal(), rng.normal()),
+            2 => ZERO,
+            _ => C64::new(0.05 * rng.uniform(), 0.02 * rng.normal()),
+        };
+        let ring = Ring::new(n, case, shift, rng.uniform());
+        let levels: Vec<f64> = (0..n)
+            .map(|i| ((i * 7 + case as usize) % 4) as f64)
+            .collect();
+        let poison = rng.below(40) == 0;
+        let apply = |x: &[C64], y: &mut [C64]| match kind {
+            0 | 8 => ring.apply(x, y),
+            1 if !dense.is_empty() => {
+                for i in 0..n {
+                    let mut acc = shift * x[i];
+                    for j in 0..n {
+                        acc += dense[i + j * n] * x[j];
+                    }
+                    y[i] = acc;
+                }
+            }
+            2 => {
+                for i in 0..n {
+                    y[i] = levels[i] * x[i];
+                }
+            }
+            3 => y.fill(ZERO),
+            4 => {
+                for i in 0..n {
+                    y[i] = if i + 1 < n { x[i + 1] } else { ZERO };
+                }
+            }
+            5 => y.copy_from_slice(x),
+            6 => {
+                ring.apply(x, y);
+                if poison {
+                    y[0] = C64::new(f64::NAN, 0.0);
+                }
+            }
+            _ => ring.apply(x, y),
+        };
+        let diag = ring.diagonal();
+        let scaling: Vec<C64> = (0..n)
+            .map(|_| C64::new(0.5 + rng.uniform(), 0.3 * rng.normal()))
+            .collect();
+        let pre_kind = rng.below(5);
+        let pre = |r: &[C64]| -> Vec<C64> {
+            match pre_kind {
+                0 | 1 => r.to_vec(),
+                2 => r.iter().zip(&diag).map(|(x, d)| x / d).collect(),
+                3 => r.iter().zip(&scaling).map(|(x, d)| x * d).collect(),
+                _ => {
+                    if kind == 7 {
+                        vec![ZERO; r.len()]
+                    } else {
+                        r.iter().zip(&scaling).map(|(x, d)| x / d).collect()
+                    }
+                }
+            }
+        };
+        let b: Vec<C64> = match rng.below(9) {
+            0 => vec![ZERO; n],
+            1 => {
+                let mut b = vec![ZERO; n];
+                b[rng.below(n as u64) as usize] = C64::new(1.0, -0.5);
+                b
+            }
+            2 => (0..n)
+                .map(|_| C64::new(rng.normal(), rng.normal()) * 1e-200)
+                .collect(),
+            3 => (0..n)
+                .map(|_| C64::new(rng.normal(), rng.normal()) * 1e200)
+                .collect(),
+            4 => (0..n)
+                .map(|_| C64::new(5e-324 * rng.below(3) as f64, 0.0))
+                .collect(),
+            _ => (0..n)
+                .map(|_| C64::new(rng.normal(), rng.normal()))
+                .collect(),
+        };
+        let room = match rng.below(4) {
+            0 => 0,
+            1 => 1 + rng.below(2 * n as u64) as usize,
+            2 => 10 * n,
+            _ => rng.below(70) as usize,
+        };
+        let per = 8.0 * 5.0 * n as f64;
+        let limit = match rng.below(5) {
+            0 => f64::INFINITY,
+            1 => per * (1.0 + 50.0 * rng.uniform()),
+            2 => 0.0,
+            3 => MAX_RELAXATION_WORK,
+            _ => per * 2000.0 * rng.uniform() + 16.0 * (n * 60 * 40) as f64,
+        };
+        let calls = [Cell::new(0usize), Cell::new(0usize)];
+        let pcalls = [Cell::new(0usize), Cell::new(0usize)];
+        let old = gmres_154(
+            n,
+            |x, y| {
+                calls[0].set(calls[0].get() + 1);
+                apply(x, y)
+            },
+            |r| {
+                pcalls[0].set(pcalls[0].get() + 1);
+                pre(r)
+            },
+            &b,
+            room,
+            (per, limit),
+        );
+        let new = gmres(
+            n,
+            |x, y| {
+                calls[1].set(calls[1].get() + 1);
+                apply(x, y)
+            },
+            |r| {
+                pcalls[1].set(pcalls[1].get() + 1);
+                pre(r)
+            },
+            &b,
+            room,
+            (per, limit),
+        );
+        assert_eq!(bits(&old), bits(&new), "case {case}: n {n}, kind {kind}");
+        assert_eq!(calls[0].get(), calls[1].get(), "case {case}");
+        assert_eq!(pcalls[0].get(), pcalls[1].get(), "case {case}");
+        let label = match &new {
+            Ok(Some(x)) if x.iter().any(|z| z.re.is_nan() || z.im.is_nan()) => "some-nan",
+            Ok(Some(_)) => "some",
+            Ok(None) => "none",
+            Err(_) => "err",
+        };
+        *tally.entry(format!("kind {kind} {label}")).or_default() += 1;
+    }
+    println!("{tally:#?}");
 }

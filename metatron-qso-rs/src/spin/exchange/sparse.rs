@@ -23,6 +23,7 @@ use super::{Exchange, Joint};
 use crate::error::{QsoError, Result};
 use crate::linalg::CMatrix;
 use crate::linalg::dense::{expm, expm_squarings};
+use crate::linalg::gmres::{GmresEnd, GmresOptions};
 
 /// How the blocks of an exchange propagate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -411,112 +412,36 @@ impl Exchange {
 /// [`GMRES_RESTART`]), to [`GMRES_TOLERANCE`] of `‖b‖`; `None` if it does
 /// not converge within [`GMRES_ITERATIONS`], an error once its iterations
 /// (`work.0` operations each, besides the orthogonalisation) would pass
-/// `work.1`.
+/// `work.1`. The iteration is [`linalg::gmres`](crate::linalg::gmres) with
+/// 1.54's rules (`scale = 0`, `breakdown = 0`), bit for bit as before it
+/// moved there.
 fn gmres(
     n: usize,
     apply: impl Fn(&[C64], &mut [C64]),
     precondition: impl Fn(&[C64]) -> Vec<C64>,
     b: &[C64],
     room: usize,
-    (per, limit): (f64, f64),
+    work: (f64, f64),
 ) -> Result<Option<Vec<C64>>> {
-    let target = GMRES_TOLERANCE * norm2(b);
-    let mut x = vec![ZERO; n];
-    if target == 0.0 {
-        return Ok(Some(x));
-    }
-    let restart = room.max(GMRES_RESTART).min(n.max(1));
-    let mut spent = 0.0;
-    let mut iterations = 0;
-    let mut w = vec![ZERO; n];
-    loop {
-        apply(&x, &mut w);
-        let r: Vec<C64> = b.iter().zip(&w).map(|(b, ax)| b - ax).collect();
-        let beta = norm2(&r);
-        if beta <= target {
-            return Ok(Some(x));
-        }
-        if iterations >= GMRES_ITERATIONS {
-            return Ok(None);
-        }
-        let mut basis: Vec<Vec<C64>> = vec![r.iter().map(|v| v / beta).collect()];
-        let mut h: Vec<Vec<C64>> = Vec::new();
-        let mut rotations: Vec<(f64, C64)> = Vec::new();
-        let mut g = vec![ZERO; restart + 1];
-        g[0] = C64::new(beta, 0.0);
-        let mut k = 0;
-        while k < restart && iterations < GMRES_ITERATIONS {
-            iterations += 1;
-            spent += per + 16.0 * ((k + 1) * n) as f64;
-            if spent > limit {
-                return Err(QsoError::invalid(
-                    "steady state",
-                    format!(
-                        "GMRES needs more than {:.1e} operations after {iterations} \
-                         iterations; use fewer spins",
-                        MAX_RELAXATION_WORK
-                    ),
-                ));
-            }
-            let z = precondition(&basis[k]);
-            apply(&z, &mut w);
-            let mut column = vec![ZERO; k + 2];
-            for (i, v) in basis.iter().enumerate() {
-                let hij: C64 = v.iter().zip(&w).map(|(a, b)| a.conj() * b).sum();
-                column[i] = hij;
-                for (x, b) in w.iter_mut().zip(v) {
-                    *x -= hij * b;
-                }
-            }
-            let s = norm2(&w);
-            column[k + 1] = C64::new(s, 0.0);
-            for (i, &(c, sn)) in rotations.iter().enumerate() {
-                let (p, q) = (column[i], column[i + 1]);
-                column[i] = p * c + sn * q;
-                column[i + 1] = -sn.conj() * p + q * c;
-            }
-            let (p, q) = (column[k], column[k + 1]);
-            let r = (p.norm_sqr() + q.norm_sqr()).sqrt();
-            let (c, sn) = if r == 0.0 {
-                (1.0, ZERO)
-            } else if p.norm() == 0.0 {
-                (0.0, C64::new(1.0, 0.0))
-            } else {
-                (p.norm() / r, (p / p.norm()) * q.conj() / r)
-            };
-            column[k] = p * c + sn * q;
-            column[k + 1] = ZERO;
-            g[k + 1] = -sn.conj() * g[k];
-            g[k] *= c;
-            rotations.push((c, sn));
-            h.push(column);
-            k += 1;
-            if g[k].norm() <= target || s == 0.0 {
-                break;
-            }
-            basis.push(w.iter().map(|v| v / s).collect());
-        }
-        // y from the triangle, x += M⁻¹ V y.
-        let mut y = vec![ZERO; k];
-        for i in (0..k).rev() {
-            let mut acc = g[i];
-            for j in i + 1..k {
-                acc -= h[j][i] * y[j];
-            }
-            if h[i][i].norm() == 0.0 {
-                return Ok(None);
-            }
-            y[i] = acc / h[i][i];
-        }
-        let mut update = vec![ZERO; n];
-        for (v, yi) in basis.iter().zip(&y) {
-            for (u, b) in update.iter_mut().zip(v) {
-                *u += yi * b;
-            }
-        }
-        for (xi, d) in x.iter_mut().zip(precondition(&update)) {
-            *xi += d;
-        }
+    let options = GmresOptions {
+        tol: GMRES_TOLERANCE,
+        restart: room.max(GMRES_RESTART).min(n.max(1)),
+        max_iterations: GMRES_ITERATIONS,
+        work,
+        scale: 0.0,
+        breakdown: 0.0,
+    };
+    let out = crate::linalg::gmres::gmres(n, apply, precondition, b, &options);
+    match out.end {
+        GmresEnd::Converged => Ok(Some(out.x)),
+        GmresEnd::Iterations | GmresEnd::Breakdown => Ok(None),
+        GmresEnd::Work => Err(QsoError::invalid(
+            "steady state",
+            format!(
+                "GMRES needs more than {:.1e} operations after {} iterations; use fewer spins",
+                MAX_RELAXATION_WORK, out.iterations
+            ),
+        )),
     }
 }
 
