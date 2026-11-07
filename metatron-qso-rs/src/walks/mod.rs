@@ -10,7 +10,7 @@
 //!   (n ≤ [`DENSE_LIMIT`]) or Krylov propagation on sparse matrices (any n);
 //!   exact limiting and time-averaged distributions with correct handling of
 //!   degenerate eigenvalues, beyond `DENSE_LIMIT` through symmetry
-//!   reduction or the start node's cyclic subspace.
+//!   reduction or the start node's cyclic subspace; optional site energies.
 //! * [`search`] — Childs–Goldstone spatial search.
 //! * [`quotient`] — exact walks and searches reduced by symmetry to a few
 //!   dimensions (equitable partitions), for graphs of any size.
@@ -185,17 +185,24 @@ pub fn total_variation(p: &[f64], q: &[f64]) -> f64 {
     0.5 * p.iter().zip(q).map(|(a, b)| (a - b).abs()).sum::<f64>()
 }
 
-/// Continuous-time quantum walk on a graph.
+/// Continuous-time quantum walk on a graph, optionally with site energies
+/// ([`with_site_energies`](Self::with_site_energies)).
 #[derive(Clone, Debug)]
 pub struct ContinuousWalk {
     n: usize,
     gamma: f64,
     generator: Generator,
     hamiltonian: CsrMatrix,
-    /// Eigenvalues (ascending) and eigenvectors (columns) for n ≤ DENSE_LIMIT.
-    spectral: Option<(Vec<f64>, RMatrix)>,
+    /// Eigenvalues (ascending) and eigenvectors (columns), computed on first
+    /// use (`None` beyond DENSE_LIMIT).
+    spectral: std::sync::OnceLock<Option<(Vec<f64>, RMatrix)>>,
     /// The graph, kept beyond DENSE_LIMIT for symmetry reduction.
     graph: Option<Graph>,
+    /// Site energies `ε_j`, if set.
+    energies: Option<Vec<f64>>,
+    /// The graph part of `H` (`γL` or `−γA`), kept by the first
+    /// `with_site_energies` so that later energies replace earlier ones.
+    base: Option<CsrMatrix>,
 }
 
 impl ContinuousWalk {
@@ -215,15 +222,87 @@ impl ContinuousWalk {
             Generator::Adjacency => graph.adjacency_csr().scaled(-gamma),
         };
         let n = graph.num_nodes();
-        let spectral = (n <= DENSE_LIMIT).then(|| eigh_real(&hamiltonian.to_dense()));
         Ok(Self {
             n,
             gamma,
             generator,
             hamiltonian,
-            spectral,
+            spectral: std::sync::OnceLock::new(),
             graph: (n > DENSE_LIMIT).then(|| graph.clone()),
+            energies: None,
+            base: None,
         })
+    }
+
+    /// The same walk with site energies `ε_j`:
+    /// `H = γL + Σ_j ε_j|j⟩⟨j|` (or `−γA + Σ_j ε_j|j⟩⟨j|`). The energies
+    /// are not scaled by `γ`; one finite value per node. They replace
+    /// earlier energies, and exact zeros leave `H` bit-identical to the walk
+    /// without energies.
+    ///
+    /// Eigenvalues closer than 10⁻¹¹ of the largest eigenvalue magnitude
+    /// count as degenerate, so give energies relative to a reference energy
+    /// rather than with a large common offset. Beyond [`DENSE_LIMIT`] nodes
+    /// the limiting and time-averaged distributions use the quotient in
+    /// which nodes of different energies lie in different cells (see
+    /// [`limiting_distribution`](Self::limiting_distribution)); with many
+    /// distinct energies that has too many cells, and Lanczos takes over.
+    ///
+    /// ```
+    /// use metatron_qso::graph::generators;
+    /// use metatron_qso::walks::{ContinuousWalk, Generator};
+    ///
+    /// // A detuned dimer: H = [[3, −1], [−1, 0]]. From node 0 the walker
+    /// // reaches node 1 with probability 4/13 at most (Rabi's formula
+    /// // 4J²/(4J² + Δ²) with J = 1, Δ = 3).
+    /// let walk = ContinuousWalk::new(&generators::path(2), Generator::Adjacency, 1.0)
+    ///     .unwrap()
+    ///     .with_site_energies(&[3.0, 0.0])
+    ///     .unwrap();
+    /// let t = std::f64::consts::PI / 13f64.sqrt();
+    /// assert!((walk.probabilities(0, t).unwrap()[1] - 4.0 / 13.0).abs() < 1e-12);
+    /// ```
+    pub fn with_site_energies(mut self, energies: &[f64]) -> Result<Self> {
+        if energies.len() != self.n {
+            return Err(QsoError::DimensionMismatch {
+                expected: self.n,
+                actual: energies.len(),
+            });
+        }
+        if energies.iter().any(|e| !e.is_finite()) {
+            return Err(QsoError::invalid(
+                "energies",
+                "site energies must be finite",
+            ));
+        }
+        let base = match self.base.take() {
+            Some(base) => base,
+            None => std::mem::replace(&mut self.hamiltonian, CsrMatrix::from_triplets(0, &[])?),
+        };
+        let mut triplets = Vec::with_capacity(base.nnz() + self.n);
+        for r in 0..self.n {
+            triplets.extend(base.row(r).map(|(c, v)| (r, c, v)));
+        }
+        // After the graph's entries: duplicates are summed in input order,
+        // so a diagonal entry becomes H_jj + ε_j.
+        triplets.extend(
+            energies
+                .iter()
+                .enumerate()
+                .filter(|&(_, &e)| e != 0.0)
+                .map(|(j, &e)| (j, j, e)),
+        );
+        self.hamiltonian = CsrMatrix::from_triplets(self.n, &triplets)?;
+        self.base = Some(base);
+        self.energies = Some(energies.to_vec());
+        self.spectral = std::sync::OnceLock::new();
+        Ok(self)
+    }
+
+    /// The site energies `ε_j`, if set by
+    /// [`with_site_energies`](Self::with_site_energies).
+    pub fn site_energies(&self) -> Option<&[f64]> {
+        self.energies.as_deref()
     }
 
     pub fn num_nodes(&self) -> usize {
@@ -238,18 +317,29 @@ impl ContinuousWalk {
         self.generator
     }
 
-    /// The (sparse) Hamiltonian.
+    /// The (sparse) Hamiltonian, site energies included.
     pub fn hamiltonian(&self) -> &CsrMatrix {
         &self.hamiltonian
     }
 
-    /// Eigenvalues of `H` (ascending), if computed.
+    /// Eigenvalues of `H` (ascending) up to [`DENSE_LIMIT`] nodes; the
+    /// eigendecomposition is computed on first use.
     pub fn spectrum(&self) -> Option<&[f64]> {
-        self.spectral.as_ref().map(|(v, _)| v.as_slice())
+        self.spectral().map(|(v, _)| v.as_slice())
+    }
+
+    /// Eigenvalues and eigenvectors of `H`, computed on first use (`None`
+    /// beyond [`DENSE_LIMIT`] nodes).
+    fn spectral(&self) -> Option<&(Vec<f64>, RMatrix)> {
+        self.spectral
+            .get_or_init(|| {
+                (self.n <= DENSE_LIMIT).then(|| eigh_real(&self.hamiltonian.to_dense()))
+            })
+            .as_ref()
     }
 
     fn require_dense(&self) -> Result<&(Vec<f64>, RMatrix)> {
-        self.spectral.as_ref().ok_or_else(|| {
+        self.spectral().ok_or_else(|| {
             QsoError::invalid(
                 "graph",
                 format!(
@@ -278,7 +368,7 @@ impl ContinuousWalk {
                 actual: psi0.len(),
             });
         }
-        match &self.spectral {
+        match self.spectral() {
             Some((values, vectors)) => {
                 // c = Vᵀψ₀, ψ(t) = V·diag(e^{−iλt})·c
                 let n = self.n;
@@ -332,10 +422,11 @@ impl ContinuousWalk {
 
     /// Spectral data of the walker started at `start`: the full
     /// eigendecomposition up to [`DENSE_LIMIT`] nodes, beyond that the
+    /// quotient of [`quotient_spectrum`](Self::quotient_spectrum) or the
     /// start node's cyclic subspace (see [`cyclic_spectrum`]).
     pub(crate) fn start_spectrum(&self, start: usize) -> Result<StartSpectrum<'_>> {
         self.check_node(start)?;
-        match &self.spectral {
+        match self.spectral() {
             Some((values, vectors)) => Ok(StartSpectrum {
                 values: std::borrow::Cow::Borrowed(values),
                 coeffs: (0..self.n).map(|k| vectors[(start, k)]).collect(),
@@ -343,25 +434,12 @@ impl ContinuousWalk {
             }),
             None => {
                 let limit = cyclic_limit(self.n);
-                // First the quotient by the equitable partition with the
-                // start node as a cell of its own: an exact invariant
-                // subspace, solved densely.
+                // First an exact invariant subspace from an equitable
+                // partition, solved densely.
                 if let Some(graph) = &self.graph
-                    && let Ok(q) = Quotient::with_singletons(graph, &[start])
-                    && q.num_cells() <= limit
+                    && let Some(spectrum) = self.quotient_spectrum(graph, start, limit)
                 {
-                    let (values, y) = eigh_real(&q.hamiltonian(self.generator, self.gamma));
-                    let cells = q.cell_of().expect("explicit graph");
-                    let sizes = q.sizes();
-                    let k = values.len();
-                    let vectors = RMatrix::from_fn(self.n, k, |j, a| {
-                        y[(cells[j], a)] / sizes[cells[j]].sqrt()
-                    });
-                    return Ok(StartSpectrum {
-                        values: std::borrow::Cow::Owned(values),
-                        coeffs: (0..k).map(|a| y[(cells[start], a)]).collect(),
-                        vectors: std::borrow::Cow::Owned(vectors),
-                    });
+                    return Ok(spectrum);
                 }
                 // Otherwise the start vector's cyclic subspace by Lanczos.
                 let mut v = vec![0.0; self.n];
@@ -375,6 +453,50 @@ impl ContinuousWalk {
                 })
             }
         }
+    }
+
+    /// Spectral data of the walker started at `start` on the quotient by
+    /// the coarsest equitable partition of `graph` in which the start node
+    /// is a cell of its own and, with site energies, nodes of different
+    /// energies lie in different cells: every cell then has one energy, so
+    /// the cell states span an exact invariant subspace of `H`. Solved
+    /// densely and lifted to the nodes; `None` if the partition has more
+    /// than `limit` cells.
+    fn quotient_spectrum(
+        &self,
+        graph: &Graph,
+        start: usize,
+        limit: usize,
+    ) -> Option<StartSpectrum<'static>> {
+        let q = match &self.energies {
+            None => Quotient::with_singletons(graph, &[start]),
+            Some(energies) => Quotient::equitable(graph, &energy_colours(energies, start)),
+        }
+        .ok()
+        .filter(|q| q.num_cells() <= limit)?;
+        let cells = q.cell_of().expect("explicit graph");
+        let mut h = q.hamiltonian(self.generator, self.gamma);
+        if let Some(energies) = &self.energies {
+            // The energy of each cell is that of its smallest node.
+            let mut first = vec![0; q.num_cells()];
+            for (v, &c) in cells.iter().enumerate().rev() {
+                first[c] = v;
+            }
+            for (c, &v) in first.iter().enumerate() {
+                if energies[v] != 0.0 {
+                    h[(c, c)] += energies[v];
+                }
+            }
+        }
+        let (values, y) = eigh_real(&h);
+        let sizes = q.sizes();
+        let k = values.len();
+        let vectors = RMatrix::from_fn(self.n, k, |j, a| y[(cells[j], a)] / sizes[cells[j]].sqrt());
+        Some(StartSpectrum {
+            values: std::borrow::Cow::Owned(values),
+            coeffs: (0..k).map(|a| y[(cells[start], a)]).collect(),
+            vectors: std::borrow::Cow::Owned(vectors),
+        })
     }
 
     /// Dimension of the smallest invariant subspace containing `|start⟩`:
@@ -395,7 +517,8 @@ impl ContinuousWalk {
     /// Beyond [`DENSE_LIMIT`] nodes the walk is reduced to the quotient by
     /// the coarsest equitable partition in which the start node is a cell
     /// of its own (exact; 21 cells on the 2²⁰-node hypercube, 561 on the
-    /// 64×64 torus), solved densely. If that has more than
+    /// 64×64 torus) and, with site energies, nodes of different energies
+    /// lie in different cells, solved densely. If that has more than
     /// `min(DENSE_LIMIT, 2²⁵/n, √(2³²/n))` cells, the start node's cyclic
     /// subspace is built by Lanczos instead, which can fail when the walker
     /// sees many eigenvalues.
@@ -455,6 +578,29 @@ impl ContinuousWalk {
         }
         Ok(mixed)
     }
+}
+
+/// Colours that keep the start node and nodes of different energies apart:
+/// 0 for the start, `1 + rank` of the energy among the distinct values for
+/// every other node (exact equality, −0.0 equal to 0.0).
+fn energy_colours(energies: &[f64], start: usize) -> Vec<usize> {
+    // Adding 0.0 turns −0.0 into 0.0 and leaves every other value alone.
+    let mut distinct: Vec<f64> = energies.iter().map(|&e| e + 0.0).collect();
+    distinct.sort_by(f64::total_cmp);
+    distinct.dedup();
+    energies
+        .iter()
+        .enumerate()
+        .map(|(u, &e)| {
+            if u == start {
+                0
+            } else {
+                1 + distinct
+                    .binary_search_by(|x| x.total_cmp(&(e + 0.0)))
+                    .expect("present")
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -621,6 +767,251 @@ mod tests {
         let pl = l.probabilities(0, 1.7).unwrap();
         for (x, y) in pa.iter().zip(&pl) {
             assert!((x - y).abs() < 1e-12);
+        }
+    }
+
+    fn node_state(n: usize, j: usize) -> Vec<C64> {
+        let mut psi = vec![C64::new(0.0, 0.0); n];
+        psi[j] = C64::new(1.0, 0.0);
+        psi
+    }
+
+    /// Site energies without any symmetry.
+    fn rough_energies(n: usize) -> Vec<f64> {
+        (0..n)
+            .map(|j| 0.6 * (0.37 * j as f64).sin() + 0.25 * (1.9 * j as f64).cos() - 0.1)
+            .collect()
+    }
+
+    #[test]
+    fn site_energies_match_the_driven_walk() {
+        // γL + E (or −γA + E) is the driven walk with the terms H_graph
+        // and E and the constant coefficients γ and 1: by the dense
+        // eigendecomposition on Q₄, by Krylov steps on C₃₀₀₀.
+        for (g, start) in [(generators::hypercube(4), 0), (generators::cycle(3000), 7)] {
+            let n = g.num_nodes();
+            let energies = rough_energies(n);
+            let psi0 = node_state(n, start);
+            for generator in [Generator::Laplacian, Generator::Adjacency] {
+                let walk = ContinuousWalk::new(&g, generator, 0.7)
+                    .unwrap()
+                    .with_site_energies(&energies)
+                    .unwrap();
+                assert_eq!(walk.spectrum().is_some(), n <= DENSE_LIMIT);
+                let terms = vec![
+                    driven::Term::graph(&g, generator),
+                    driven::Term::potential(&energies).unwrap(),
+                ];
+                let driven = DrivenWalk::new(n, terms)
+                    .unwrap()
+                    .evolve(
+                        &psi0,
+                        0.0,
+                        2.5,
+                        |_| Ok(vec![0.7, 1.0]),
+                        &MagnusOptions::default(),
+                    )
+                    .unwrap();
+                let exact = walk.evolve(&psi0, 2.5).unwrap();
+                let distance = driven
+                    .state
+                    .iter()
+                    .zip(&exact)
+                    .map(|(a, b)| (a - b).norm_sqr())
+                    .sum::<f64>()
+                    .sqrt();
+                assert!(distance < 1e-9, "{n} nodes, {generator:?}: {distance:e}");
+            }
+        }
+    }
+
+    #[test]
+    fn site_energies_on_the_coloured_quotient() {
+        // Q₁₂ (4096 > DENSE_LIMIT nodes) with energies by Hamming weight:
+        // −1 for the weights 0, 3, 6, …, 0 for 1, 4, 7, … and 1 for the
+        // rest. Colour refinement splits the three classes into the 13
+        // weights again, and the walker from 0…0 lives on the 13-site
+        // chain with the energies on its diagonal.
+        let d = 12;
+        let g = generators::hypercube(d);
+        let by_weight: Vec<f64> = (0..=d).map(|k| (k % 3) as f64 - 1.0).collect();
+        let energies: Vec<f64> = (0..g.num_nodes())
+            .map(|v| by_weight[v.count_ones() as usize])
+            .collect();
+        let walk = ContinuousWalk::new(&g, Generator::Adjacency, 1.0)
+            .unwrap()
+            .with_site_energies(&energies)
+            .unwrap();
+        assert!(walk.spectrum().is_none());
+        let q = Quotient::hypercube(d).unwrap();
+        let mut chain = q.hamiltonian(Generator::Adjacency, 1.0);
+        for (k, e) in by_weight.iter().enumerate() {
+            chain[(k, k)] += e;
+        }
+        // An irreducible tridiagonal matrix has simple eigenvalues, so
+        // P̄(k) = Σ_a (y_ka·y_0a)² over its eigenvectors y_a.
+        let (_, y) = eigh_real(&chain);
+        let cells: Vec<f64> = (0..=d)
+            .map(|k| (0..=d).map(|a| (y[(k, a)] * y[(0, a)]).powi(2)).sum())
+            .collect();
+        let limit = walk.limiting_distribution(0).unwrap();
+        for (v, p) in limit.iter().enumerate() {
+            let k = v.count_ones() as usize;
+            assert!((p - cells[k] / q.sizes()[k]).abs() < 1e-12, "v = {v}");
+        }
+        assert_eq!(walk.cyclic_dimension(0).unwrap(), d + 1);
+        let plain = ContinuousWalk::new(&g, Generator::Adjacency, 1.0)
+            .unwrap()
+            .limiting_distribution(0)
+            .unwrap();
+        assert!(total_variation(&limit, &plain) > 0.01);
+    }
+
+    #[test]
+    fn the_coloured_quotient_matches_the_dense_walk() {
+        // Q₆ with energies by Hamming weight and a bump on node 5 (15 cells
+        // from node 0): the coloured quotient, called directly because a
+        // walk this small is dense, gives the dense walk's distributions.
+        let g = generators::hypercube(6);
+        let n = g.num_nodes();
+        let mut energies: Vec<f64> = (0..n)
+            .map(|v| {
+                let w = v.count_ones() as f64;
+                0.3 * w * w - 0.7 * w
+            })
+            .collect();
+        energies[5] += 1.1;
+        for generator in [Generator::Laplacian, Generator::Adjacency] {
+            let walk = ContinuousWalk::new(&g, generator, 0.8)
+                .unwrap()
+                .with_site_energies(&energies)
+                .unwrap();
+            for start in [0, 5, 6, 63] {
+                let reduced = walk.quotient_spectrum(&g, start, DENSE_LIMIT).unwrap();
+                let dense = walk.start_spectrum(start).unwrap();
+                if start == 0 {
+                    assert_eq!(reduced.values.len(), 15);
+                }
+                assert!(reduced.values.len() < n);
+                let pairs = [
+                    (
+                        reduced.limiting_distribution(),
+                        dense.limiting_distribution(),
+                    ),
+                    (
+                        reduced.average_distribution(2.3),
+                        dense.average_distribution(2.3),
+                    ),
+                ];
+                for (a, b) in pairs {
+                    for (x, y) in a.iter().zip(&b) {
+                        assert!((x - y).abs() < 1e-12, "start {start}: {x} against {y}");
+                    }
+                }
+            }
+            assert!(walk.quotient_spectrum(&g, 0, 14).is_none());
+        }
+        // Every energy distinct: no reduction.
+        let walk = ContinuousWalk::new(&g, Generator::Laplacian, 1.0)
+            .unwrap()
+            .with_site_energies(&rough_energies(n))
+            .unwrap();
+        assert_eq!(walk.quotient_spectrum(&g, 0, n).unwrap().values.len(), n);
+        assert!(walk.quotient_spectrum(&g, 0, n - 1).is_none());
+    }
+
+    #[test]
+    fn site_energies_replace_earlier_ones_and_zeros_change_nothing() {
+        let g = generators::petersen();
+        let first = rough_energies(10);
+        let second: Vec<f64> = (0..10).map(|j| 0.1 * j as f64 - 0.4).collect();
+        let mut zeros = vec![0.0; 10];
+        zeros[4] = -0.0;
+        for generator in [Generator::Laplacian, Generator::Adjacency] {
+            let plain = ContinuousWalk::new(&g, generator, 0.9).unwrap();
+            assert_eq!(plain.site_energies(), None);
+            let fresh = plain.clone().with_site_energies(&second).unwrap();
+            let replaced = plain
+                .clone()
+                .with_site_energies(&first)
+                .unwrap()
+                .with_site_energies(&second)
+                .unwrap();
+            assert_eq!(replaced.site_energies(), Some(second.as_slice()));
+            assert_eq!(replaced.hamiltonian(), fresh.hamiltonian());
+            assert_eq!(replaced.spectrum(), fresh.spectrum());
+            assert_eq!(
+                replaced.probabilities(3, 1.3).unwrap(),
+                fresh.probabilities(3, 1.3).unwrap()
+            );
+            assert_eq!(
+                replaced.limiting_distribution(3).unwrap(),
+                fresh.limiting_distribution(3).unwrap()
+            );
+            assert_ne!(fresh.hamiltonian(), plain.hamiltonian());
+            // Exact zeros of either sign: H and everything computed from it
+            // as without energies.
+            let zero = plain.clone().with_site_energies(&zeros).unwrap();
+            assert_eq!(zero.site_energies(), Some(zeros.as_slice()));
+            assert_eq!(zero.hamiltonian(), plain.hamiltonian());
+            assert_eq!(zero.spectrum(), plain.spectrum());
+            assert_eq!(
+                zero.probabilities(3, 1.3).unwrap(),
+                plain.probabilities(3, 1.3).unwrap()
+            );
+            let cleared = fresh.with_site_energies(&zeros).unwrap();
+            assert_eq!(cleared.hamiltonian(), plain.hamiltonian());
+            assert_eq!(
+                cleared.propagator(0.4).unwrap(),
+                plain.propagator(0.4).unwrap()
+            );
+        }
+        // A spectrum computed before the energies is not reused.
+        let walk = ContinuousWalk::new(&g, Generator::Adjacency, 1.0).unwrap();
+        let before = walk.spectrum().unwrap().to_vec();
+        let walk = walk.with_site_energies(&first).unwrap();
+        let fresh = ContinuousWalk::new(&g, Generator::Adjacency, 1.0)
+            .unwrap()
+            .with_site_energies(&first)
+            .unwrap();
+        assert_eq!(walk.spectrum(), fresh.spectrum());
+        assert_ne!(walk.spectrum().unwrap(), before.as_slice());
+        // Beyond the dense limit zero energies leave the quotient alone.
+        let g = generators::hypercube(12);
+        let mut zeros = vec![0.0; g.num_nodes()];
+        zeros[77] = -0.0;
+        let plain = ContinuousWalk::new(&g, Generator::Laplacian, 1.0).unwrap();
+        let zero = plain.clone().with_site_energies(&zeros).unwrap();
+        assert_eq!(zero.hamiltonian(), plain.hamiltonian());
+        assert_eq!(
+            zero.limiting_distribution(5).unwrap(),
+            plain.limiting_distribution(5).unwrap()
+        );
+        assert_eq!(
+            zero.average_distribution(5, 3.0).unwrap(),
+            plain.average_distribution(5, 3.0).unwrap()
+        );
+    }
+
+    #[test]
+    fn site_energies_are_checked() {
+        let walk = ContinuousWalk::new(&generators::cycle(5), Generator::Laplacian, 1.0).unwrap();
+        for wrong in [&[0.0; 4][..], &[0.0; 6], &[]] {
+            assert_eq!(
+                walk.clone().with_site_energies(wrong).unwrap_err(),
+                QsoError::DimensionMismatch {
+                    expected: 5,
+                    actual: wrong.len()
+                }
+            );
+        }
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut energies = [0.5; 5];
+            energies[2] = bad;
+            assert_eq!(
+                walk.clone().with_site_energies(&energies).unwrap_err(),
+                QsoError::invalid("energies", "site energies must be finite")
+            );
         }
     }
 }
