@@ -602,6 +602,137 @@ mod tests {
     }
 
     #[test]
+    fn unequal_bands_zero_diagonals_and_any_order() {
+        // k_l ≠ k_u, diagonal entries missing (pivoting forced), repeated
+        // entries, and natural, reversed, random and RCM orders: backward
+        // errors of both solves at rounding level.
+        let mut rng = Rng::seed_from_u64(99);
+        let mut solved = 0;
+        for trial in 0..80 {
+            let n = 1 + rng.below(120) as usize;
+            let (kl, ku) = (rng.below(13) as usize, rng.below(13) as usize);
+            let rows: Vec<Vec<(u32, C64)>> = (0..n)
+                .map(|i| {
+                    let drop = rng.below(3) == 0;
+                    let mut row = Vec::new();
+                    for j in i.saturating_sub(kl)..(i + ku + 1).min(n) {
+                        if !(drop && j == i) {
+                            row.push((j as u32, C64::new(rng.normal(), rng.normal())));
+                        }
+                    }
+                    if let Some(&(j, _)) = row.first() {
+                        row.push((j, C64::new(0.5, 0.0)));
+                    }
+                    row
+                })
+                .collect();
+            let order: Vec<u32> = match trial % 4 {
+                0 => (0..n as u32).collect(),
+                1 => (0..n as u32).rev().collect(),
+                2 => {
+                    let mut o: Vec<u32> = (0..n as u32).collect();
+                    rng.shuffle(&mut o);
+                    o
+                }
+                _ => reverse_cuthill_mckee(&pattern(&rows)),
+            };
+            // Some patterns are structurally singular: refused, not solved.
+            let Ok(lu) = BandedLu::new(
+                n,
+                order,
+                |r, e| e.extend(&rows[r]),
+                usize::MAX,
+                f64::INFINITY,
+            ) else {
+                continue;
+            };
+            solved += 1;
+            let a = dense(&rows);
+            let b = DVector::from_fn(n, |_, _| C64::new(rng.normal(), rng.normal()));
+            let mut x = b.as_slice().to_vec();
+            lu.solve(&mut x);
+            let x = DVector::from_vec(x);
+            let e = (&a * &x - &b).norm() / (a.norm() * x.norm());
+            assert!(e <= 1e-14, "trial {trial}: {e:e}");
+            let mut y = b.as_slice().to_vec();
+            lu.solve_adjoint(&mut y);
+            let y = DVector::from_vec(y);
+            let e = (a.adjoint() * &y - &b).norm() / (a.norm() * y.norm());
+            assert!(e <= 1e-14, "trial {trial} (adjoint): {e:e}");
+        }
+        assert!(solved >= 60, "{solved}");
+        // The empty matrix.
+        let lu = BandedLu::new(0, vec![], |_, _| {}, usize::MAX, f64::INFINITY).unwrap();
+        lu.solve(&mut []);
+        lu.solve_adjoint(&mut []);
+        assert_eq!(lu.entries(), 0);
+    }
+
+    #[test]
+    fn components_stay_contiguous_in_the_order() {
+        // Paths, cycles, grids, stars and isolated nodes, relabelled at
+        // random: every component occupies consecutive positions.
+        let mut rng = Rng::seed_from_u64(7);
+        for trial in 0..50 {
+            let mut adjacency: Vec<Vec<u32>> = Vec::new();
+            let mut components: Vec<Vec<usize>> = Vec::new();
+            for _ in 0..1 + rng.below(8) {
+                let base = adjacency.len();
+                let size = 1 + rng.below(30) as usize;
+                let (size, edges): (usize, Vec<(usize, usize)>) = match rng.below(5) {
+                    0 => (size, (1..size).map(|i| (i - 1, i)).collect()),
+                    1 if size > 2 => (size, (0..size).map(|i| (i, (i + 1) % size)).collect()),
+                    2 => {
+                        let (w, h) = (1 + rng.below(5) as usize, 1 + rng.below(6) as usize);
+                        let mut e = Vec::new();
+                        for i in 0..h {
+                            for j in 0..w {
+                                if j + 1 < w {
+                                    e.push((i * w + j, i * w + j + 1));
+                                }
+                                if i + 1 < h {
+                                    e.push((i * w + j, (i + 1) * w + j));
+                                }
+                            }
+                        }
+                        (w * h, e)
+                    }
+                    3 => (size, (1..size).map(|i| (0, i)).collect()),
+                    _ => (1, vec![]),
+                };
+                adjacency.extend((0..size).map(|_| Vec::new()));
+                for (u, v) in edges {
+                    adjacency[base + u].push((base + v) as u32);
+                    adjacency[base + v].push((base + u) as u32);
+                }
+                components.push((base..base + size).collect());
+            }
+            let n = adjacency.len();
+            let mut label: Vec<u32> = (0..n as u32).collect();
+            rng.shuffle(&mut label);
+            let mut relabelled = vec![Vec::new(); n];
+            for (u, nb) in adjacency.iter().enumerate() {
+                relabelled[label[u] as usize] = nb.iter().map(|&v| label[v as usize]).collect();
+            }
+            let order = reverse_cuthill_mckee(&relabelled);
+            assert!(is_permutation(&order), "trial {trial}");
+            assert_eq!(order, reverse_cuthill_mckee(&relabelled));
+            let mut position = vec![0usize; n];
+            for (k, &o) in order.iter().enumerate() {
+                position[o as usize] = k;
+            }
+            for component in &components {
+                let p: Vec<usize> = component
+                    .iter()
+                    .map(|&u| position[label[u] as usize])
+                    .collect();
+                let span = p.iter().max().unwrap() - p.iter().min().unwrap() + 1;
+                assert_eq!(span, component.len(), "trial {trial}");
+            }
+        }
+    }
+
+    #[test]
     fn limits_are_checked_before_the_band_is_allocated() {
         // Two million nodes, each coupled to the nodes 100 000 positions
         // away: 6·10¹¹ band entries (9.6 TB) are refused before any is

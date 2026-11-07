@@ -291,6 +291,27 @@ fn gemm_planar(c: Target<'_>, alpha: f64, a: Operand<'_>, b: Operand<'_>, beta: 
     if m == 0 || n == 0 {
         return;
     }
+    // nalgebra's `gemm` falls back to column-by-column updates once a
+    // dimension is at most 5, and there (nalgebra 0.35, `axcpy_uninit`) it
+    // takes the length of a column of `A` with a row stride for its number
+    // of entries, reading and writing past both columns. A transposed `A`
+    // is therefore copied to column-major storage first (`m·k` entries
+    // against `m·k·n` multiply-adds; the products are the same).
+    let copy;
+    let a = if a.trans {
+        copy = (a.view(a.re).into_owned(), a.view(a.im).into_owned());
+        Operand {
+            re: copy.0.as_slice(),
+            im: copy.1.as_slice(),
+            ld: m,
+            r0: 0,
+            c0: 0,
+            trans: false,
+            ..a
+        }
+    } else {
+        a
+    };
     // (Saturating: 2048³ passes usize::MAX on 32-bit targets.)
     if m.saturating_mul(k).saturating_mul(n) < PARALLEL_WORK || n <= PANEL {
         product(c, alpha, a, b, beta);
@@ -330,6 +351,7 @@ fn gemm_planar(c: Target<'_>, alpha: f64, a: Operand<'_>, b: Operand<'_>, beta: 
 
 /// [`gemm_planar`] in one call of each of the four real products.
 fn product(c: Target<'_>, alpha: f64, a: Operand<'_>, b: Operand<'_>, beta: f64) {
+    debug_assert!(!a.trans, "a transposed A is copied by gemm_planar");
     let (m, k, n) = (a.rows, a.cols, b.cols);
     let mut cr = ViewMut::from_slice_with_strides_mut(c.re, m, n, 1, c.ld);
     let mut ci = ViewMut::from_slice_with_strides_mut(c.im, m, n, 1, c.ld);
@@ -437,9 +459,19 @@ impl SchurForm {
             backward_error: 0.0,
         };
         let rebuilt = form.from_schur(&form.tp);
-        let size = a.norm();
-        let defect = (rebuilt - a).norm();
-        form.backward_error = if size > 0.0 { defect / size } else { defect };
+        // Both norms relative to the largest entry, so that their squares
+        // neither underflow (entries below about 1e-154 would give a
+        // defect of 0) nor overflow.
+        let largest = a
+            .iter()
+            .map(|z| z.re.abs().max(z.im.abs()))
+            .fold(0.0, f64::max);
+        let defect = rebuilt - a;
+        form.backward_error = if largest > 0.0 {
+            defect.unscale(largest).norm() / a.unscale(largest).norm()
+        } else {
+            defect.norm()
+        };
         Ok(form)
     }
 
@@ -943,6 +975,64 @@ mod tests {
                 "{rows} {inner} {cols}"
             );
         }
+    }
+
+    #[test]
+    fn small_matrices_and_leaf_boundaries_solve_exactly() {
+        // Up to 5 rows or columns nalgebra's product takes a path that must
+        // never see a left operand with a row stride (`Q†` in `to_schur`:
+        // it used to read and write past the columns); 48 and 49 lie on
+        // either side of a leaf.
+        let mut rng = Rng::seed_from_u64(14);
+        for n in [1, 2, 3, 4, 5, 6, 48, 49] {
+            let a = transport_like(n, 20 + n as u64);
+            let s = SchurForm::new(&a).unwrap();
+            let c = random_complex(n, n, &mut rng);
+            for sigma in [ZERO, C64::new(0.0, 0.7)] {
+                let x = s.solve(&c, sigma);
+                let back = &a * &x - &x * a.adjoint() - &x * sigma;
+                assert!(relative(&back, &c) <= 1e-13, "{n}");
+                if n <= 6 {
+                    let want = kronecker(&a, sigma)
+                        .lu()
+                        .solve(&nalgebra::DVector::from_column_slice(c.as_slice()))
+                        .unwrap();
+                    let want = CMatrix::from_column_slice(n, n, want.as_slice());
+                    assert!(relative(&x, &want) <= 1e-12, "{n}");
+                }
+            }
+        }
+        // Small products with an adjoint on the left.
+        for (rows, inner, cols) in [(1, 1, 1), (2, 3, 4), (5, 5, 5), (5, 9, 70), (3, 70, 2)] {
+            let a = random_complex(inner, rows, &mut rng);
+            let b = random_complex(inner, cols, &mut rng);
+            let mut c = Planar::zeros(rows, cols);
+            gemm_planar(
+                c.target(0, 0),
+                1.0,
+                Operand::adjoint(&Planar::from_complex(&a)),
+                Operand::plain(&Planar::from_complex(&b)),
+                0.0,
+            );
+            let want = a.adjoint() * &b;
+            assert!(
+                relative(&c.to_complex(), &want) <= 1e-14,
+                "{rows} {inner} {cols}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_backward_error_of_tiny_matrices_does_not_underflow() {
+        // Entries of 1e-160: the squares of the defect's entries (about
+        // 1e-176) lie below the smallest number, which made the error 0.
+        let a = transport_like(20, 3);
+        let unit = SchurForm::new(&a).unwrap().backward_error();
+        let tiny = SchurForm::new(&(&a * C64::new(1e-160, 0.0)))
+            .unwrap()
+            .backward_error();
+        assert!(unit > 0.0 && unit <= 1e-13, "{unit:e}");
+        assert!(tiny > 0.0 && tiny <= 1e-13, "{tiny:e}");
     }
 
     #[cfg(feature = "parallel")]

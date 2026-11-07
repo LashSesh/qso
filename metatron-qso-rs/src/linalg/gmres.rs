@@ -38,7 +38,8 @@ const CONDITION_BY_SVD: usize = 256;
 /// Settings of [`gmres`].
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct GmresOptions {
-    /// Relative tolerance of the stopping rule (see `scale`).
+    /// Relative tolerance of the stopping rule (see `scale`); 0 stops
+    /// only on an exact solution (or `b = 0`).
     pub tol: f64,
     /// Basis vectors before a restart (at least 1; 0 counts as 1).
     pub restart: usize,
@@ -126,7 +127,9 @@ pub(crate) fn gmres(
     let bnorm = norm2(b);
     let mut target = opts.tol * bnorm;
     let mut x = vec![ZERO; n];
-    if target == 0.0 {
+    // `b = 0`, or (as in 1.54) a target below the smallest number; with
+    // `tol = 0` the iteration still has to run.
+    if bnorm == 0.0 || (target == 0.0 && opts.tol > 0.0) {
         return GmresSolution {
             x,
             end: GmresEnd::Converged,
@@ -472,6 +475,30 @@ mod tests {
             assert_eq!(out.end, GmresEnd::Breakdown);
             assert_eq!(out.condition, f64::INFINITY);
         }
+    }
+
+    #[test]
+    fn a_zero_tolerance_iterates() {
+        // tol = 0 used to return x = 0 as converged without an iteration.
+        let n = 6;
+        let apply = |x: &[C64], y: &mut [C64]| {
+            for i in 0..n {
+                y[i] = x[i] * (1.0 + i as f64);
+            }
+        };
+        let identity = |r: &[C64]| r.to_vec();
+        let b = vec![C64::new(1.0, -0.5); n];
+        for scale in [0.0, 1.0] {
+            let mut opts = options(0.0, n, 30);
+            opts.scale = scale;
+            let out = gmres(n, apply, identity, &b, &opts);
+            assert!(out.iterations > 0, "{out:?}");
+            assert!(residual_norm(apply, &out.x, &b) <= 1e-14 * norm2(&b));
+            assert_eq!(out.end == GmresEnd::Converged, out.residual == 0.0);
+        }
+        // b = 0 is solved by x = 0 at any tolerance.
+        let zero = gmres(n, apply, identity, &vec![ZERO; n], &options(0.0, n, 30));
+        assert_eq!((zero.end, zero.iterations), (GmresEnd::Converged, 0));
     }
 
     #[test]
