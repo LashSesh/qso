@@ -2394,3 +2394,420 @@ mod transport {
         }
     }
 }
+
+/// Pauli propagation (1.64): Clifford circuits of 10³–10⁴ qubits against
+/// Stim and the tableau, and the kicked Ising model of Kim et al. (Nature
+/// 618, 500 (2023)) on the 115-qubit heavy-hex lattice against Aer and
+/// qiskit-addon-obp. The data files are written by
+/// `benchmarks/cross_framework/propagation_data.py`.
+mod pauli_propagation {
+    use std::f64::consts::{FRAC_PI_2, FRAC_PI_4};
+
+    use metatron_qso::propagation::{
+        Layer, PauliOperator, PropagationOptions, PropagationResult, propagate,
+    };
+    use metatron_qso::quantum::Circuit;
+    use metatron_qso::stabilizer::StabilizerState;
+    use serde_json::Value;
+
+    /// splitmix64, as in `propagation_data.py`.
+    struct SplitMix64(u64);
+
+    impl SplitMix64 {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+    }
+
+    const GATES: [&str; 12] = [
+        "H",
+        "S",
+        "S_DAG",
+        "SQRT_X",
+        "SQRT_X_DAG",
+        "X",
+        "Y",
+        "Z",
+        "CX",
+        "CY",
+        "CZ",
+        "SWAP",
+    ];
+
+    /// The seeded Clifford circuit of `propagation_data.py`, and its first
+    /// gates as `[name, qubits…]`.
+    fn clifford_circuit(n: usize, gates: usize, seed: u64) -> (Circuit, Vec<Vec<String>>) {
+        let mut rng = SplitMix64(seed);
+        let mut c = Circuit::new(n);
+        let mut first = Vec::new();
+        for _ in 0..gates {
+            let kind = rng.below(GATES.len());
+            let a = rng.below(n);
+            let b = if kind >= 8 {
+                Some((a + 1 + rng.below(n - 1)) % n)
+            } else {
+                None
+            };
+            match (GATES[kind], b) {
+                ("H", _) => c.h(a),
+                ("S", _) => c.s(a),
+                ("S_DAG", _) => c.sdg(a),
+                ("SQRT_X", _) => c.sx(a),
+                ("SQRT_X_DAG", _) => c.sxdg(a),
+                ("X", _) => c.x(a),
+                ("Y", _) => c.y(a),
+                ("Z", _) => c.z(a),
+                ("CX", Some(b)) => c.cx(a, b),
+                ("CY", Some(b)) => c.cy(a, b),
+                ("CZ", Some(b)) => c.cz(a, b),
+                ("SWAP", Some(b)) => c.swap(a, b),
+                _ => unreachable!(),
+            };
+            if first.len() < 8 {
+                let mut g = vec![GATES[kind].to_string(), a.to_string()];
+                g.extend(b.map(|b| b.to_string()));
+                first.push(g);
+            }
+        }
+        (c, first)
+    }
+
+    /// The single signed string of a Clifford image.
+    fn single_string(r: &PropagationResult) -> (f64, Vec<(usize, char)>) {
+        let op = r.operator.as_ref().unwrap();
+        assert_eq!(op.len(), 1, "{op}");
+        let (c, factors) = op.terms().next().unwrap();
+        let factors = factors
+            .into_iter()
+            .map(|(q, p)| (q, format!("{p:?}").chars().next().unwrap()))
+            .collect();
+        (c, factors)
+    }
+
+    /// Stim's form `+_XZ…` of a signed string on `n` qubits.
+    fn stim_form(c: f64, factors: &[(usize, char)], n: usize) -> String {
+        let mut s = vec!['_'; n];
+        for &(q, p) in factors {
+            s[q] = p;
+        }
+        let sign = if c > 0.0 { '+' } else { '-' };
+        std::iter::once(sign).chain(s).collect()
+    }
+
+    /// The tableau's form `+X0 Z1`.
+    fn tableau_form(c: f64, factors: &[(usize, char)]) -> String {
+        let body: Vec<String> = factors.iter().map(|(q, p)| format!("{p}{q}")).collect();
+        format!("{}{}", if c > 0.0 { '+' } else { '-' }, body.join(" "))
+    }
+
+    fn z(n: usize, q: usize) -> PauliOperator {
+        PauliOperator::parse(n, &format!("Z{q}")).unwrap()
+    }
+
+    fn exact() -> PropagationOptions {
+        PropagationOptions::default().with_operator(true)
+    }
+
+    #[test]
+    fn clifford_images_match_stim_and_the_tableau() {
+        let data: Value = serde_json::from_str(include_str!("data/stim_before_1000.json")).unwrap();
+        let n = data["n_qubits"].as_u64().unwrap() as usize;
+        let gates = data["gates"].as_u64().unwrap() as usize;
+        let (c, first) = clifford_circuit(n, gates, data["seed"].as_u64().unwrap());
+        let listed: Vec<Vec<String>> = data["first_gates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|g| {
+                g.as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| match v {
+                        Value::String(s) => s.clone(),
+                        v => v.to_string(),
+                    })
+                    .collect()
+            })
+            .collect();
+        assert_eq!(first, listed, "the generator differs from the script's");
+        let tableau = StabilizerState::from_circuit(&c.inverse(), &[]).unwrap();
+        let generators = tableau.stabilizers();
+        let layers = [Layer::gates(c)];
+        let strings = data["strings"].as_array().unwrap();
+        assert_eq!(strings.len(), 20);
+        let mut negative = 0;
+        for s in strings {
+            let q = s["qubit"].as_u64().unwrap() as usize;
+            let r = propagate(&layers, &z(n, q), None, &exact()).unwrap();
+            assert!(r.truncation_bound == 0.0);
+            let (coef, factors) = single_string(&r);
+            assert_eq!(coef.abs(), 1.0);
+            negative += (coef < 0.0) as usize;
+            assert_eq!(
+                stim_form(coef, &factors, n),
+                s["before"].as_str().unwrap(),
+                "Z{q}"
+            );
+            assert_eq!(tableau_form(coef, &factors), generators[q], "Z{q}");
+            assert_eq!(factors.len(), s["weight"].as_u64().unwrap() as usize);
+        }
+        assert!(negative > 0, "signs are exercised");
+
+        // 10⁴ qubits and 10⁴ gates against the tableau (which shares the
+        // gate rules: a consistency check).
+        let n = 10_000;
+        let (c, _) = clifford_circuit(n, 10_000, 1641);
+        let generators = StabilizerState::from_circuit(&c.inverse(), &[])
+            .unwrap()
+            .stabilizers();
+        let layers = [Layer::gates(c)];
+        for k in 0..20 {
+            let q = (523 * k + 17) % n;
+            let r = propagate(&layers, &z(n, q), None, &exact()).unwrap();
+            let (coef, factors) = single_string(&r);
+            assert_eq!(tableau_form(coef, &factors), generators[q], "Z{q}");
+        }
+    }
+
+    /// The heavy-hex lattice: qubits, central qubit and the three colour
+    /// classes of edges.
+    fn heavy_hex() -> (usize, usize, Vec<Vec<(usize, usize)>>) {
+        let data: Value = serde_json::from_str(include_str!("data/heavy_hex_7.json")).unwrap();
+        let colours: Vec<Vec<(usize, usize)>> = data["colours"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|class| {
+                class
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|e| {
+                        (
+                            e[0].as_u64().unwrap() as usize,
+                            e[1].as_u64().unwrap() as usize,
+                        )
+                    })
+                    .collect()
+            })
+            .collect();
+        let n = data["n_qubits"].as_u64().unwrap() as usize;
+        assert_eq!(n, 115);
+        assert_eq!(colours.iter().map(Vec::len).sum::<usize>(), 132);
+        (n, data["central_qubit"].as_u64().unwrap() as usize, colours)
+    }
+
+    /// `steps` kicked-Ising steps: `RX(θ_h)` on every qubit, then
+    /// `RZZ(−π/2)` on the edges of colour 0, 1 and 2, each followed by a
+    /// Pauli–Lindblad layer of `rates[k]` for every factor of `factors`.
+    fn kicked_ising(
+        n: usize,
+        colours: &[Vec<(usize, usize)>],
+        steps: usize,
+        theta: f64,
+        rates: Option<&[PauliOperator]>,
+        factors: &[f64],
+    ) -> Vec<Layer> {
+        let mut layers = Vec::new();
+        let mut c = Circuit::new(n);
+        for _ in 0..steps {
+            for q in 0..n {
+                c.rx(q, theta);
+            }
+            for (k, class) in colours.iter().enumerate() {
+                for &(a, b) in class {
+                    c.rzz(a, b, -FRAC_PI_2);
+                }
+                if let Some(rates) = rates {
+                    layers.push(Layer::gates(std::mem::replace(&mut c, Circuit::new(n))));
+                    for &alpha in factors {
+                        layers.push(Layer::pauli_lindblad(rates[k].clone(), alpha));
+                    }
+                }
+            }
+        }
+        if !c.instructions().is_empty() {
+            layers.push(Layer::gates(c));
+        }
+        layers
+    }
+
+    #[test]
+    fn kicked_ising_at_clifford_points_is_one_string() {
+        let (n, centre, colours) = heavy_hex();
+        // Weights of the image of Z57 at θ_h = π/2 (Stim, 1–20 steps).
+        let weights = [
+            1, 3, 5, 9, 13, 19, 23, 27, 33, 34, 41, 58, 70, 70, 76, 86, 81, 78, 77, 84,
+        ];
+        for steps in 1..=20 {
+            let layers = kicked_ising(n, &colours, steps, 0.0, None, &[]);
+            let r = propagate(&layers, &z(n, centre), None, &exact()).unwrap();
+            assert_eq!((r.value, r.terms), (1.0, 1), "θ = 0, {steps} steps");
+            let layers = kicked_ising(n, &colours, steps, FRAC_PI_2, None, &[]);
+            let r = propagate(&layers, &z(n, centre), None, &exact()).unwrap();
+            assert_eq!(r.terms, 1, "θ = π/2, {steps} steps");
+            assert_eq!(r.value, 0.0);
+            assert!(r.truncation_bound < 1e-13, "{}", r.truncation_bound);
+            let op = r.operator.unwrap();
+            assert_eq!(op.max_weight(), weights[steps - 1], "{steps} steps");
+            let (c, _) = op.terms().next().unwrap();
+            if steps <= 10 {
+                let sign = if steps <= 5 { 1.0 } else { -1.0 };
+                assert_eq!(c, sign, "{steps} steps");
+            } else {
+                assert_eq!(c.abs(), 1.0);
+            }
+        }
+    }
+
+    #[test]
+    fn kicked_ising_light_cone_matches_aer() {
+        let (n, centre, colours) = heavy_hex();
+        // ⟨Z57⟩ by Aer's state vector on the light cone (steps 1–5).
+        let aer: [(f64, [f64; 5]); 3] = [
+            (
+                0.3,
+                [
+                    0.9553364891256059,
+                    0.9923730881452545,
+                    0.9552809174079654,
+                    0.9730705099376793,
+                    0.9561991039857797,
+                ],
+            ),
+            (
+                FRAC_PI_4,
+                [
+                    0.7071067811865475,
+                    0.75,
+                    0.6629126073623881,
+                    0.4628906249999995,
+                    0.47234681193213773,
+                ],
+            ),
+            (
+                1.0,
+                [
+                    0.5403023058681398,
+                    0.49863203433438036,
+                    0.40448660331367436,
+                    0.17588249235816558,
+                    0.1515659742586892,
+                ],
+            ),
+        ];
+        for (theta, values) in aer {
+            for (s, &expected) in values.iter().enumerate() {
+                let steps = s + 1;
+                let layers = kicked_ising(n, &colours, steps, theta, None, &[]);
+                let r = propagate(&layers, &z(n, centre), None, &PropagationOptions::default())
+                    .unwrap();
+                assert!(
+                    (r.value - expected).abs() <= 1e-10,
+                    "θ = {theta}, {steps} steps: {} vs Aer {expected}",
+                    r.value
+                );
+                assert!(r.truncation_bound <= 1e-12, "{}", r.truncation_bound);
+                // At θ = π/4 (cos = sin) 488 strings of the fifth step
+                // vanish (checked in exact arithmetic over Q(√2)); in
+                // floating point most leave rounding residues, which the
+                // cancellation rule removes (an independent propagator
+                // without the rule keeps 134 740 strings).
+                let five = if theta == FRAC_PI_4 { 134_256 } else { 134_744 };
+                assert_eq!(
+                    r.terms,
+                    [2, 10, 70, 1620, five][s],
+                    "θ = {theta}, {steps} steps"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn truncated_kicked_ising_stays_within_its_bound() {
+        let (n, centre, colours) = heavy_hex();
+        for (steps, aer) in [(6, 0.9512884369194023), (7, 0.9559990282385086)] {
+            let layers = kicked_ising(n, &colours, steps, 0.3, None, &[]);
+            for tau in [1e-3, 1e-4] {
+                let o = PropagationOptions::default().with_min_coefficient(tau);
+                let r = propagate(&layers, &z(n, centre), None, &o).unwrap();
+                let err = (r.value - aer).abs();
+                assert!(
+                    err <= r.truncation_bound && r.truncation_bound < 1.0,
+                    "{steps} steps, τ = {tau}: error {err:e}, bound {:e}",
+                    r.truncation_bound
+                );
+                assert!(r.dropped_terms > 0);
+            }
+        }
+    }
+
+    #[test]
+    fn noisy_kicked_ising_matches_obp() {
+        let (n, centre, colours) = heavy_hex();
+        // Uniform model after the ZZ layer of colour k: 10⁻³ (X + Y + Z) on
+        // every qubit, 2·10⁻⁴ XX + 5·10⁻⁴ ZZ on the edges of colour k.
+        let rates: Vec<PauliOperator> = colours
+            .iter()
+            .map(|class| {
+                let mut terms: Vec<String> = (0..n)
+                    .flat_map(|q| ["X", "Y", "Z"].map(|p| format!("0.001 {p}{q}")))
+                    .collect();
+                for &(a, b) in class {
+                    terms.push(format!("0.0002 X{a} X{b}"));
+                    terms.push(format!("0.0005 Z{a} Z{b}"));
+                }
+                PauliOperator::parse(n, &terms.join(" + ")).unwrap()
+            })
+            .collect();
+        // Values of qiskit-addon-obp's PauliLindbladErrorInstruction (and of
+        // an independent propagator, ≤ 1.5·10⁻¹⁵ apart).
+        let cases: [(f64, usize, [f64; 4]); 2] = [
+            (
+                1.0,
+                3,
+                [
+                    0.4044866033136744,
+                    0.3825995702888403,
+                    0.362017758764708,
+                    0.4277696033925958,
+                ],
+            ),
+            (
+                FRAC_PI_4,
+                4,
+                [
+                    0.462890625,
+                    0.43270212250594453,
+                    0.4047109921033301,
+                    0.4954744858665631,
+                ],
+            ),
+        ];
+        for (theta, steps, values) in cases {
+            let run = |factors: &[f64]| {
+                let layers = kicked_ising(n, &colours, steps, theta, Some(&rates), factors);
+                propagate(&layers, &z(n, centre), None, &PropagationOptions::default()).unwrap()
+            };
+            for (alpha, expected) in [0.0, 1.0, 2.0, -1.0].into_iter().zip(values) {
+                let r = run(&[alpha]);
+                assert!(
+                    (r.value - expected).abs() <= 1e-13,
+                    "θ = {theta}, α = {alpha}: {} vs {expected}",
+                    r.value
+                );
+                assert!(r.truncation_bound <= 1e-12);
+            }
+            let r = run(&[1.0, -1.0]);
+            assert!((r.value - values[0]).abs() <= 1e-13, "{}", r.value);
+        }
+    }
+}

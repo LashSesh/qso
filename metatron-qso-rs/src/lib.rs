@@ -14,6 +14,7 @@
 //! | [`graph`] | graphs, Platonic solids, Metatron's Cube / Fruit of Life, exact automorphism groups |
 //! | [`walks`] | continuous-time quantum walks, spatial search, dephasing, transport to a trap, classical baselines |
 //! | [`photonics`] | linear interferometers, permanents, exact boson sampling |
+//! | [`propagation`] | expectation values of large noisy circuits by Pauli propagation |
 //! | [`backend`] | execution backends and shot-based expectation values |
 //! | [`linalg`] | Hermitian eigensolvers, Lanczos, Krylov propagation, sparse matrices |
 //!
@@ -63,6 +64,7 @@ pub(crate) mod parallel;
 pub mod photonics;
 #[cfg(feature = "parallel")]
 pub(crate) mod pool;
+pub mod propagation;
 pub mod qec;
 pub mod quantum;
 pub mod rng;

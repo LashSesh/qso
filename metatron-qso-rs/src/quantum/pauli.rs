@@ -593,139 +593,158 @@ impl FromStr for PauliSum {
     /// coefficient is followed by Pauli factors `X<q>`, `Y<q>`, `Z<q>` (or a
     /// bare `I`), separated by whitespace or `*`.
     fn from_str(s: &str) -> Result<Self> {
-        let chars: Vec<char> = s.chars().collect();
         let mut terms = Vec::new();
-        let mut pos = 0usize;
-        // State of the term being read.
-        let mut sign = 1.0;
-        let mut coef: Option<f64> = None;
-        let mut factors: Vec<(usize, Pauli)> = Vec::new();
-        let mut has_content = false;
-        // An operator was read and no term has followed it yet.
-        let mut dangling = false;
-
-        let finish = |sign: f64,
-                      coef: Option<f64>,
-                      factors: &mut Vec<(usize, Pauli)>,
-                      terms: &mut Vec<(f64, PauliString)>|
-         -> Result<()> {
-            let string = PauliString::new(factors)?;
-            terms.push((sign * coef.unwrap_or(1.0), string));
-            factors.clear();
+        parse_terms_with(s, |c, factors| {
+            terms.push((c, PauliString::new(factors)?));
             Ok(())
-        };
-
-        // The previous token was `*`, so a following sign is unary.
-        let mut after_star = false;
-        while pos < chars.len() {
-            let c = chars[pos];
-            if c.is_whitespace() {
-                pos += 1;
-                continue;
-            }
-            if c == '*' {
-                if !has_content || after_star {
-                    return Err(QsoError::Parse(format!("unexpected '*' at {pos}")));
-                }
-                after_star = true;
-                dangling = true;
-                pos += 1;
-                continue;
-            }
-            if (c == '+' || c == '-') && after_star {
-                // `2*-X0`: the sign belongs to the factor, not a new term.
-                if c == '-' {
-                    sign = -sign;
-                }
-                pos += 1;
-                continue;
-            }
-            if c == '+' || c == '-' {
-                if has_content {
-                    // Binary operator: close the current term.
-                    finish(sign, coef, &mut factors, &mut terms)?;
-                    coef = None;
-                    has_content = false;
-                    sign = 1.0;
-                }
-                // Binary or unary, the operator applies to the next term.
-                if c == '-' {
-                    sign = -sign;
-                }
-                dangling = true;
-                pos += 1;
-                continue;
-            }
-            dangling = false;
-            after_star = false;
-            if c.is_ascii_digit() || c == '.' {
-                if coef.is_some() || !factors.is_empty() {
-                    return Err(QsoError::Parse(format!("unexpected number at {pos}")));
-                }
-                let start = pos;
-                pos += 1;
-                while pos < chars.len() {
-                    let d = chars[pos];
-                    let prev = chars[pos - 1];
-                    let mantissa = d.is_ascii_digit() || d == '.' || d == 'e' || d == 'E';
-                    let exponent_sign = (d == '+' || d == '-') && (prev == 'e' || prev == 'E');
-                    if mantissa || exponent_sign {
-                        pos += 1;
-                    } else {
-                        break;
-                    }
-                }
-                let text: String = chars[start..pos].iter().collect();
-                let value: f64 = text
-                    .parse()
-                    .ok()
-                    .filter(|v: &f64| v.is_finite())
-                    .ok_or_else(|| QsoError::Parse(format!("invalid number '{text}'")))?;
-                coef = Some(value);
-                has_content = true;
-                continue;
-            }
-            let pauli = match c.to_ascii_uppercase() {
-                'I' => Pauli::I,
-                'X' => Pauli::X,
-                'Y' => Pauli::Y,
-                'Z' => Pauli::Z,
-                _ => {
-                    return Err(QsoError::Parse(format!(
-                        "unexpected character '{c}' at {pos}"
-                    )));
-                }
-            };
-            pos += 1;
-            let start = pos;
-            while pos < chars.len() && chars[pos].is_ascii_digit() {
-                pos += 1;
-            }
-            if start == pos {
-                if pauli != Pauli::I {
-                    return Err(QsoError::Parse(format!(
-                        "Pauli {pauli:?} without qubit index"
-                    )));
-                }
-            } else {
-                let text: String = chars[start..pos].iter().collect();
-                let q: usize = text
-                    .parse()
-                    .map_err(|_| QsoError::Parse(format!("invalid qubit index '{text}'")))?;
-                if pauli != Pauli::I {
-                    factors.push((q, pauli));
-                }
-            }
-            has_content = true;
-        }
-        if dangling {
-            return Err(QsoError::Parse("expression ends with an operator".into()));
-        }
-        if has_content {
-            finish(sign, coef, &mut factors, &mut terms)?;
-        }
+        })?;
         Ok(PauliSum::from_terms(terms))
     }
+}
+
+/// One term of [`parse_terms`]: the coefficient and the factors.
+pub(crate) type ParsedTerm = (f64, Vec<(usize, Pauli)>);
+
+/// The terms `(coefficient, factors)` of a sum in the grammar of
+/// [`PauliSum`]'s `FromStr`, in the order written, on any number of qubits.
+/// Identity factors are left out; qubits are neither bounded nor checked
+/// for repeats (the caller builds the strings).
+pub(crate) fn parse_terms(s: &str) -> Result<Vec<ParsedTerm>> {
+    let mut terms = Vec::new();
+    parse_terms_with(s, |c, factors| {
+        terms.push((c, factors.to_vec()));
+        Ok(())
+    })?;
+    Ok(terms)
+}
+
+/// The tokenizer of [`parse_terms`]: `finish` receives every term as soon
+/// as it is complete, so its errors come in the order of the text.
+fn parse_terms_with(
+    s: &str,
+    mut finish: impl FnMut(f64, &[(usize, Pauli)]) -> Result<()>,
+) -> Result<()> {
+    let chars: Vec<char> = s.chars().collect();
+    let mut pos = 0usize;
+    // State of the term being read.
+    let mut sign = 1.0;
+    let mut coef: Option<f64> = None;
+    let mut factors: Vec<(usize, Pauli)> = Vec::new();
+    let mut has_content = false;
+    // An operator was read and no term has followed it yet.
+    let mut dangling = false;
+
+    // The previous token was `*`, so a following sign is unary.
+    let mut after_star = false;
+    while pos < chars.len() {
+        let c = chars[pos];
+        if c.is_whitespace() {
+            pos += 1;
+            continue;
+        }
+        if c == '*' {
+            if !has_content || after_star {
+                return Err(QsoError::Parse(format!("unexpected '*' at {pos}")));
+            }
+            after_star = true;
+            dangling = true;
+            pos += 1;
+            continue;
+        }
+        if (c == '+' || c == '-') && after_star {
+            // `2*-X0`: the sign belongs to the factor, not a new term.
+            if c == '-' {
+                sign = -sign;
+            }
+            pos += 1;
+            continue;
+        }
+        if c == '+' || c == '-' {
+            if has_content {
+                // Binary operator: close the current term.
+                finish(sign * coef.unwrap_or(1.0), &factors)?;
+                factors.clear();
+                coef = None;
+                has_content = false;
+                sign = 1.0;
+            }
+            // Binary or unary, the operator applies to the next term.
+            if c == '-' {
+                sign = -sign;
+            }
+            dangling = true;
+            pos += 1;
+            continue;
+        }
+        dangling = false;
+        after_star = false;
+        if c.is_ascii_digit() || c == '.' {
+            if coef.is_some() || !factors.is_empty() {
+                return Err(QsoError::Parse(format!("unexpected number at {pos}")));
+            }
+            let start = pos;
+            pos += 1;
+            while pos < chars.len() {
+                let d = chars[pos];
+                let prev = chars[pos - 1];
+                let mantissa = d.is_ascii_digit() || d == '.' || d == 'e' || d == 'E';
+                let exponent_sign = (d == '+' || d == '-') && (prev == 'e' || prev == 'E');
+                if mantissa || exponent_sign {
+                    pos += 1;
+                } else {
+                    break;
+                }
+            }
+            let text: String = chars[start..pos].iter().collect();
+            let value: f64 = text
+                .parse()
+                .ok()
+                .filter(|v: &f64| v.is_finite())
+                .ok_or_else(|| QsoError::Parse(format!("invalid number '{text}'")))?;
+            coef = Some(value);
+            has_content = true;
+            continue;
+        }
+        let pauli = match c.to_ascii_uppercase() {
+            'I' => Pauli::I,
+            'X' => Pauli::X,
+            'Y' => Pauli::Y,
+            'Z' => Pauli::Z,
+            _ => {
+                return Err(QsoError::Parse(format!(
+                    "unexpected character '{c}' at {pos}"
+                )));
+            }
+        };
+        pos += 1;
+        let start = pos;
+        while pos < chars.len() && chars[pos].is_ascii_digit() {
+            pos += 1;
+        }
+        if start == pos {
+            if pauli != Pauli::I {
+                return Err(QsoError::Parse(format!(
+                    "Pauli {pauli:?} without qubit index"
+                )));
+            }
+        } else {
+            let text: String = chars[start..pos].iter().collect();
+            let q: usize = text
+                .parse()
+                .map_err(|_| QsoError::Parse(format!("invalid qubit index '{text}'")))?;
+            if pauli != Pauli::I {
+                factors.push((q, pauli));
+            }
+        }
+        has_content = true;
+    }
+    if dangling {
+        return Err(QsoError::Parse("expression ends with an operator".into()));
+    }
+    if has_content {
+        finish(sign * coef.unwrap_or(1.0), &factors)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

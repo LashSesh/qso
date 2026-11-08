@@ -35,7 +35,7 @@ import frameworks as fw  # noqa: E402
 PACKAGES = [
     "metatron-qso", "qiskit", "qiskit-aer", "qulacs", "cirq-core", "pennylane",
     "pennylane-lightning", "thewalrus", "numpy", "projectq", "stim", "pymatching", "pyscf",
-    "ldpc", "qutip", "pycce", "sympy",
+    "ldpc", "qutip", "pycce", "sympy", "qiskit-addon-obp", "qiskit-ibm-runtime",
 ]
 
 # ----------------------------------------------------------------------------
@@ -233,6 +233,7 @@ def correctness(quick: bool) -> dict:
         "bath_vs_pycce": bath_vs_pycce(),
         "generalised_bath_vs_pycce": generalised_bath_vs_pycce(),
         "transport_vs_qutip": transport_in_child(quick),
+        "pauli_propagation": pauli_propagation_vs_references(quick),
     }
 
 
@@ -1107,6 +1108,16 @@ TOLERANCES = {
     # The dimer's dephasing rate of highest efficiency (exactly 39/20), a
     # golden-section search on a flat maximum: measured 1.3·10⁻⁷.
     "transport_best_rate": 1e-6,
+    # Pauli propagation (1.64): values against Aer's state vector of the
+    # light cone (2^26 amplitudes at 7 steps; Aer and obp agree to
+    # 1.8·10⁻¹⁴); the Heisenberg operator string for string against
+    # qiskit-addon-obp, which trims |c| ≤ 10⁻¹⁵ after every gate (measured
+    # 6.3·10⁻¹⁵ at θ_h = 0.3 and 5 steps, 134 744 strings each); noisy
+    # values against obp and Aer's density matrix (Aer against an
+    # independent NumPy density matrix: 1.5·10⁻¹⁵).
+    "propagation_value": 1e-10,
+    "propagation_coefficient": 1e-13,
+    "propagation_noisy": 1e-12,
 }
 
 
@@ -1968,6 +1979,387 @@ def transport_in_child(quick: bool) -> dict:
     return json.loads(res.stdout.strip().splitlines()[-1])
 
 
+# ----------------------------------------------------------------------------
+# Pauli propagation (1.64): Stim, Qiskit Aer and qiskit-addon-obp on the
+# kicked Ising circuits of Kim et al. on heavy_hex(7) (frameworks.py).
+
+# Pauli–Lindblad layers scaled by these factors G (in order) after every RZZ
+# layer: noiseless (0), amplified, inverted (PEC's limit), and amplified then
+# inverted, which must give the noiseless value.
+PROPAGATION_SCALES = ([0.0], [1.0], [1.5], [2.0], [-1.0], [1.0, -1.0])
+
+
+def kim_noise_model(n: int, colours: list, kind: str) -> list:
+    """Sparse Pauli–Lindblad noise after the RZZ layer of each colour, as a
+    list per colour of (qubits, Qiskit labels, rates). "uniform": 10⁻³ on
+    X, Y and Z of every qubit, 2·10⁻⁴ on XX and 5·10⁻⁴ on ZZ of every edge
+    of the layer; "seeded": X, Y and Z on every qubit (rates uniform in
+    [10⁻⁴, 2·10⁻³]) and the nine weight-2 Paulis on every edge of the layer
+    (uniform in [10⁻⁴, 10⁻³]), seed 1640. A Qiskit label's last letter
+    acts on the first qubit."""
+    rng = np.random.default_rng(1640)
+    one = ["X", "Y", "Z"]
+    two = [a + b for a in "XYZ" for b in "XYZ"]
+    model = []
+    for edges in colours:
+        if kind == "uniform":
+            terms = [((q,), one, np.full(3, 1e-3)) for q in range(n)]
+            terms += [(e, ["XX", "ZZ"], np.array([2e-4, 5e-4])) for e in edges]
+        else:
+            terms = [((q,), one, rng.uniform(1e-4, 2e-3, 3)) for q in range(n)]
+            terms += [(e, two, rng.uniform(1e-4, 1e-3, 9)) for e in edges]
+        model.append(terms)
+    return model
+
+
+def kim_timeline(n: int, colours: list, steps: int, theta_h: float, scales=()) -> list:
+    """The kicked Ising circuit in time order: ("gates", operations) per
+    layer and, after the RZZ layer of colour k, ("noise", k, G) for each G
+    in `scales`."""
+    out = []
+    for i, ops in enumerate(fw.kicked_ising_layers(n, colours, steps, theta_h)):
+        out.append(("gates", ops))
+        k = i % (1 + len(colours)) - 1
+        if k >= 0:
+            out += [("noise", k, G) for G in scales]
+    return out
+
+
+def qso_kicked_ising(n: int, timeline: list, model=None, **options) -> tuple[dict, dict, float]:
+    """⟨Z_{n//2}⟩ by metatron_qso.propagate (OpenQASM per gate layer,
+    (rates, factor) per noise layer): the result, the Heisenberg operator
+    as {label: coefficient} and the seconds of the call."""
+    import metatron_qso as q
+
+    items = []
+    for item in timeline:
+        if item[0] == "gates":
+            items.append(fw.qasm2(n, item[1]))
+            continue
+        _, k, G = item
+        rates = [
+            (float(r), fw.pauli_label((qb, lab[len(qs) - 1 - pos]) for pos, qb in enumerate(qs)))
+            for qs, labels, rr in model[k]
+            for lab, r in zip(labels, rr)
+        ]
+        items.append((rates, float(G)))
+    t = time.perf_counter()
+    r = q.propagate(items, f"Z{n // 2}", n_qubits=n, return_operator=True, **options)
+    seconds = time.perf_counter() - t
+    return r, fw.qso_operator_dict(r["operator"]), seconds
+
+
+def obp_kicked_ising(n: int, timeline: list, model=None) -> tuple[dict, float]:
+    """The Heisenberg operator of Z_{n//2} by qiskit-addon-obp's
+    backpropagate, one slice per layer, with Pauli–Lindblad layers as
+    PauliLindbladErrorInstruction. obp splits every gate with
+    SparsePauliOp.from_operator, which drops components below
+    max(SparsePauliOp.atol, rtol) = 10⁻⁵ whatever the operator budget, so
+    both are lowered to 10⁻¹⁶ for the call; the budget trims |c| ≤ 10⁻¹⁵
+    after every gate (with no trimming, rounding residues of 10⁻¹⁷ are
+    never removed and the 5-step operator grows towards 6·10⁷ strings;
+    trimming at 10⁻¹⁴ loses 14 of the 134 744 strings at θ_h = 0.3 and 5
+    steps and moves others by up to 1.3·10⁻¹³ against a long-double
+    propagation, which QSO matches to 1.6·10⁻¹⁶)."""
+    import warnings
+
+    from qiskit import QuantumCircuit
+    from qiskit.quantum_info import PauliList, SparsePauliOp
+
+    with warnings.catch_warnings():
+        # obp 0.3 imports PauliLindbladError from its pre-0.48 location.
+        warnings.simplefilter("ignore", DeprecationWarning)
+        from qiskit_addon_obp import backpropagate
+        from qiskit_addon_obp.utils.noise import PauliLindbladErrorInstruction
+        from qiskit_addon_obp.utils.simplify import OperatorBudget
+        from qiskit_ibm_runtime.results import PauliLindbladError
+
+    slices = []
+    for item in timeline:
+        if item[0] == "gates":
+            slices.append(fw.qiskit_circuit(n, item[1], save=False))
+            continue
+        _, k, G = item
+        qc = QuantumCircuit(n)
+        for qs, labels, rates in model[k]:
+            qc.append(PauliLindbladErrorInstruction(PauliLindbladError(PauliList(labels), G * rates)), list(qs))
+        slices.append(qc)
+    old = SparsePauliOp.atol, SparsePauliOp.rtol
+    SparsePauliOp.atol = SparsePauliOp.rtol = 1e-16
+    try:
+        obs = SparsePauliOp.from_sparse_list([("Z", [n // 2], 1.0)], n)
+        t = time.perf_counter()
+        out, rest, _ = backpropagate(obs, slices, operator_budget=OperatorBudget(atol=1e-15))
+        seconds = time.perf_counter() - t
+    finally:
+        SparsePauliOp.atol, SparsePauliOp.rtol = old
+    assert len(rest) == 0, "qiskit-addon-obp left slices unabsorbed"
+    return fw.qiskit_operator_dict(out), seconds
+
+
+def aer_kicked_ising(n: int, timeline: list, model=None) -> tuple[float, int, float]:
+    """⟨Z_{n//2}⟩ by Qiskit Aer on the light cone (fw.reduce_to_light_cone;
+    Pauli–Lindblad generators restricted to it, exact because their parts
+    outside commute with every string inside): a state vector without
+    noise, else a density matrix with qiskit_aer.noise.PauliLindbladError
+    (which refuses negative rates). Returns the value, the qubits of the
+    cone and the seconds of the run."""
+    from qiskit import QuantumCircuit, transpile
+    from qiskit.quantum_info import Pauli
+    from qiskit_aer import AerSimulator
+    from qiskit_aer.noise import PauliLindbladError
+
+    gates = [op for item in timeline if item[0] == "gates" for op in item[1]]
+    kept, support = fw.reduce_to_light_cone(gates, n // 2)
+    kept = set(kept)
+    idx = {q: i for i, q in enumerate(support)}
+    qc = QuantumCircuit(len(support))
+    g = 0
+    noisy = False
+    for item in timeline:
+        if item[0] == "gates":
+            for name, qs, ps in item[1]:
+                if g in kept:
+                    getattr(qc, name)(*ps, *[idx[q] for q in qs])
+                g += 1
+            continue
+        _, k, G = item
+        noisy = True
+        for qs, labels, rates in model[k]:
+            inside = [p for p, q in enumerate(qs) if q in idx]
+            if not inside:
+                continue
+            gens = [Pauli("".join(lab[len(qs) - 1 - p] for p in reversed(inside))) for lab in labels]
+            qc.append(PauliLindbladError(gens, G * rates), [idx[qs[p]] for p in inside])
+    qc.save_expectation_value(Pauli("Z"), [idx[n // 2]])
+    sim = AerSimulator(method="density_matrix" if noisy else "statevector")
+    tqc = transpile(qc, sim, optimization_level=0)
+    t = time.perf_counter()
+    r = sim.run(tqc).result()
+    seconds = time.perf_counter() - t
+    return float(np.real(r.data()["expectation_value"])), len(support), seconds
+
+
+def stim_kicked_ising(n: int, colours: list, steps: int, theta_h: float):
+    """The kicked Ising circuit at θ_h = 0 or π/2 as a Stim circuit
+    (RX(π/2) = SQRT_X and RZZ(−π/2) = SQRT_ZZ_DAG up to global phases)."""
+    import stim
+
+    c = stim.Circuit()
+    for _ in range(steps):
+        if theta_h != 0.0:
+            assert theta_h == np.pi / 2
+            c.append("SQRT_X", list(range(n)))
+        for edges in colours:
+            c.append("SQRT_ZZ_DAG", [q for e in edges for q in e])
+    return c
+
+
+def zero_state_value(d: dict) -> float:
+    """⟨0…0| O |0…0⟩ of {label: coefficient}: the strings of I and Z."""
+    return sum(c for k, c in d.items() if not any(t[0] in "XY" for t in k.split()))
+
+
+def propagation_clifford_vs_stim(quick: bool) -> dict:
+    """Seeded Clifford brickwork circuits on 10³ and 10⁴ qubits: single Z
+    and random dense Pauli strings through QSO and Stim's
+    PauliString.before (C†PC), string and sign."""
+    import stim
+
+    import metatron_qso as q
+
+    rng = np.random.default_rng(1640)
+    one = ["H", "S", "S_DAG", "SQRT_X", "SQRT_X_DAG", "X", "Y", "Z"]
+    two = ["CX", "CZ", "CY", "SWAP", "ISWAP"]
+    out = {}
+    for n, layers in ((1000, 20), (10_000, 10)):
+        circuit = stim.Circuit()
+        ops = []
+        for layer in range(layers):
+            kinds = rng.integers(len(one), size=n)
+            for k, g in enumerate(one):
+                qs = np.flatnonzero(kinds == k).tolist()
+                if qs:
+                    circuit.append(g, qs)
+                    ops += [(g, (qb,)) for qb in qs]
+            pairs = {}
+            for a in range(layer % 2, n - 1, 2):
+                g = two[rng.integers(len(two))]
+                qs = (a, a + 1) if rng.random() < 0.5 else (a + 1, a)
+                pairs.setdefault(g, []).extend(qs)
+                ops.append((g, qs))
+            for g, targets in pairs.items():
+                circuit.append(g, targets)
+        program = q.Program.from_qasm(fw.qasm2(n, [(fw.STIM_TO_QASM[g], qs, ()) for g, qs in ops], fw.QASM_ISWAP))
+        worst, unmatched, strings, seconds = 0.0, 0, 0, 0.0
+        for k in range(10 if quick else 50):
+            if k % 5 == 0:
+                p = stim.PauliString(n)
+                p[int(rng.integers(n))] = "Z"
+            else:
+                # stim.PauliString.random draws from Stim's unseeded generator.
+                p = stim.PauliString("".join(rng.choice(list("_XYZ"), n)))
+            observable = fw.pauli_label((i, ch) for i, ch in enumerate(str(p)[1:]) if ch != "_")
+            t = time.perf_counter()
+            r = q.propagate(program, observable, n_qubits=n, return_operator=True)
+            seconds += time.perf_counter() - t
+            c = fw.compare_operators(fw.qso_operator_dict(r["operator"]), fw.stim_operator_dict(p.before(circuit)), 0.0)
+            worst = max(worst, c["max_coefficient_difference"])
+            unmatched += c["only_qso"] + c["only_reference"]
+            strings += 1
+        out[f"n={n}"] = {
+            "gates": len(ops),
+            "strings": strings,
+            "max_coefficient_difference": worst,
+            "unmatched_strings": unmatched,
+            "seconds_qso": seconds,
+        }
+    return out
+
+
+def pauli_propagation_vs_references(quick: bool) -> dict:
+    """Heisenberg propagation (1.64) of ⟨Z_57⟩ on the 115-qubit kicked Ising
+    circuits of Kim et al. on heavy_hex(7) (qubit 57 = n // 2, whose light
+    cones have 1, 3, 5, 9, 13, 20 and 26 qubits after 1–7 steps), without
+    truncation unless stated: Clifford circuits on 10³ and 10⁴ qubits and
+    the Clifford points θ_h = 0 and π/2 against Stim (strings and signs);
+    θ_h ∈ {0.3, π/4, 1} against Qiskit Aer's state vector of the light
+    cone; the Heisenberg operator string for string against
+    qiskit-addon-obp 0.3; truncated runs at 6 and 7 steps against Aer
+    within the reported bound (not with --quick); and scaled sparse
+    Pauli–Lindblad noise against obp and Aer's density matrix."""
+    import stim
+
+    started = time.perf_counter()
+    out = {"clifford_vs_stim": propagation_clifford_vs_stim(quick)}
+    n, colours = fw.heavy_hex_lattice(7)
+
+    # Clifford points against Stim on all 115 qubits.
+    points = {}
+    for theta, expect in ((0.0, 1.0), (np.pi / 2, 0.0)):
+        rows = []
+        for steps in range(1, 11 if quick else 21):
+            r, d, seconds = qso_kicked_ising(n, kim_timeline(n, colours, steps, theta))
+            p = stim_kicked_ising(n, colours, steps, theta)
+            ref = fw.stim_operator_dict(stim.PauliString("_" * (n // 2) + "Z" + "_" * (n - n // 2 - 1)).before(p))
+            rows.append({
+                "steps": steps,
+                "value": r["value"],
+                "value_difference": abs(r["value"] - expect),
+                "strings": r["terms"],
+                "weight": max((len(k.split()) for k in d), default=0),
+                "truncation_bound": r["truncation_bound"],
+                "seconds_qso": seconds,
+                **fw.compare_operators(d, ref, 0.0),
+            })
+        points[f"theta_h={theta:.6f}"] = rows
+    out["kicked_ising_clifford_points"] = points
+
+    # Light cones against Aer's state vector; operators against obp.
+    light, aer_value = [], {}
+    for theta in (0.3, np.pi / 4, 1.0):
+        for steps in range(1, 5 if quick else 6):
+            timeline = kim_timeline(n, colours, steps, theta)
+            ref, cone, aer_seconds = aer_kicked_ising(n, timeline)
+            r, _, seconds = qso_kicked_ising(n, timeline)
+            aer_value[(theta, steps)] = ref
+            light.append({
+                "theta_h": theta, "steps": steps, "light_cone": cone, "strings": r["terms"],
+                "peak_strings": r["peak_terms"], "aer": ref, "qso": r["value"],
+                "difference": abs(r["value"] - ref), "truncation_bound": r["truncation_bound"],
+                "seconds_qso": seconds, "seconds_aer": aer_seconds,
+            })
+    out["kicked_ising_vs_aer_light_cone"] = light
+    strings = []
+    for theta in (0.3, 1.0):
+        for steps in (3, 4) if quick else (3, 4, 5):
+            timeline = kim_timeline(n, colours, steps, theta)
+            ref, obp_seconds = obp_kicked_ising(n, timeline)
+            r, d, seconds = qso_kicked_ising(n, timeline)
+            row = {"theta_h": theta, "steps": steps}
+            row.update(fw.compare_operators(d, ref, TOLERANCES["propagation_coefficient"]))
+            row.update({"value_difference": abs(r["value"] - zero_state_value(ref)),
+                        "seconds_qso": seconds, "seconds_obp": obp_seconds})
+            strings.append(row)
+    out["kicked_ising_vs_obp"] = strings
+
+    # Truncated runs beyond the exact reach of obp: error within the bound.
+    truncated = []
+    if not quick:
+        theta = 0.3
+        for steps in (6, 7):
+            timeline = kim_timeline(n, colours, steps, theta)
+            ref, cone, aer_seconds = aer_kicked_ising(n, timeline)
+            for tau in (1e-3, 1e-4):
+                r, _, seconds = qso_kicked_ising(n, timeline, min_coefficient=tau)
+                truncated.append({
+                    "theta_h": theta, "steps": steps, "light_cone": cone, "min_coefficient": tau,
+                    "aer": ref, "qso": r["value"], "error": abs(r["value"] - ref),
+                    "truncation_bound": r["truncation_bound"], "strings": r["terms"],
+                    "peak_strings": r["peak_terms"], "dropped_strings": r["dropped_terms"],
+                    "seconds_qso": seconds, "seconds_aer": aer_seconds,
+                })
+    out["kicked_ising_truncated"] = truncated
+
+    # Scaled sparse Pauli–Lindblad noise after every RZZ layer.
+    noisy = []
+    cases = [(1.0, 3)] + ([] if quick else [(np.pi / 4, 4)])
+    for kind in ("uniform", "seeded"):
+        model = kim_noise_model(n, colours, kind)
+        for theta, steps in cases:
+            noiseless = aer_value[(theta, steps)]
+            for scales in PROPAGATION_SCALES:
+                timeline = kim_timeline(n, colours, steps, theta, scales)
+                r, d, seconds = qso_kicked_ising(n, timeline, model)
+                ref, obp_seconds = obp_kicked_ising(n, timeline, model)
+                row = {"model": kind, "theta_h": theta, "steps": steps, "scales": list(scales),
+                       "qso": r["value"], "obp": zero_state_value(ref),
+                       "obp_difference": abs(r["value"] - zero_state_value(ref))}
+                row.update(fw.compare_operators(d, ref, TOLERANCES["propagation_coefficient"]))
+                if min(scales) >= 0:
+                    aer, _, aer_seconds = aer_kicked_ising(n, timeline, model)
+                    row.update({"aer": aer, "aer_difference": abs(r["value"] - aer), "seconds_aer": aer_seconds})
+                if sum(scales) == 0.0:
+                    # Noise amplified and inverted (or scaled by 0) is no noise.
+                    row["noiseless_difference"] = abs(r["value"] - noiseless)
+                row.update({"truncation_bound": r["truncation_bound"], "seconds_qso": seconds, "seconds_obp": obp_seconds})
+                noisy.append(row)
+    out["kicked_ising_noisy"] = noisy
+    out["seconds"] = time.perf_counter() - started
+    return out
+
+
+def pauli_propagation_failures(p: dict) -> list[str]:
+    """The deviations of pauli_propagation_vs_references beyond
+    TOLERANCES."""
+    failures = []
+    for k, r in p["clifford_vs_stim"].items():
+        if r["unmatched_strings"] or r["max_coefficient_difference"] != 0.0:
+            failures.append(f"Clifford propagation at {k} differs from Stim's: {r}")
+    for k, rows in p["kicked_ising_clifford_points"].items():
+        for r in rows:
+            if (r["value_difference"] != 0.0 or r["strings"] != 1 or r["only_qso"] or r["only_reference"]
+                    or r["max_coefficient_difference"] != 0.0 or not r["truncation_bound"] <= 1e-13):
+                failures.append(f"kicked Ising at the Clifford point {k} differs from Stim's: {r}")
+    for r in p["kicked_ising_vs_aer_light_cone"]:
+        if not r["difference"] <= TOLERANCES["propagation_value"]:
+            failures.append(f"kicked Ising differs from Qiskit Aer's light cone: {r}")
+    for r in p["kicked_ising_vs_obp"]:
+        if (r["only_qso"] or r["only_reference"] or not r["max_coefficient_difference"] <= TOLERANCES["propagation_coefficient"]
+                or not r["value_difference"] <= TOLERANCES["propagation_value"]):
+            failures.append(f"kicked Ising operator differs from qiskit-addon-obp's: {r}")
+    for r in p["kicked_ising_truncated"]:
+        # The bound excludes rounding, which the reference has too.
+        if not r["error"] <= r["truncation_bound"] + TOLERANCES["propagation_value"]:
+            failures.append(f"truncated kicked Ising exceeds its bound: {r}")
+    for r in p["kicked_ising_noisy"]:
+        worst = max(r["obp_difference"], r.get("aer_difference", 0.0), r.get("noiseless_difference", 0.0))
+        if (not worst <= TOLERANCES["propagation_noisy"] or r["only_qso"] or r["only_reference"]
+                or not r["max_coefficient_difference"] <= TOLERANCES["propagation_coefficient"]):
+            failures.append(f"noisy kicked Ising differs from qiskit-addon-obp or Qiskit Aer: {r}")
+    return failures
+
+
 def check(c: dict) -> list[str]:
     """Deviations in the correctness section that exceed TOLERANCES."""
     failures = []
@@ -2093,6 +2485,7 @@ def check(c: dict) -> list[str]:
         failures.append(
             f"the dimer's rate of highest efficiency differs from 39/20 by {tp['best_rate_relative_difference']:.3g} (relative)"
         )
+    failures += pauli_propagation_failures(c["pauli_propagation"])
     return failures
 
 

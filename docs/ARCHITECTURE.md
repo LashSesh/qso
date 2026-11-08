@@ -19,6 +19,7 @@ walks       │ CTQW · quotients · transfer · coined/Szegedy ·     │
             │ search · walk circuits · dephasing · classical ·   │
             │ interacting walkers · orbitals (open walks)        │
 mitigation  │ readout calibration · ZNE · PEC · Pauli twirling    │
+propagation │ Pauli strings in the Heisenberg picture · bounds    │
 estimation  │ estimates with errors · shot allocation · shadows   │
 backend     │ statevector / density-matrix / device backends      │
 quantum     │ StateVector · Circuit · plans (fusion, blocking) · │
@@ -563,6 +564,95 @@ layered PEC and PEA are density matrices, trajectories, or
 matrix-product states on which every channel, a mixture of unitaries,
 is one of its unitaries.
 
+## Pauli propagation (`propagation/`)
+
+`propagate` carries an observable backwards through a noisy circuit,
+`O ↦ G†OG` per gate and `O ↦ E†(O)` per channel, as a table of Pauli
+strings with real coefficients, and reads `Tr(ρ O)` in a product state at
+the end. A string is two bit masks of `W = ⌈m/64⌉` words on the `m`
+qubits of the light cone, so registers of up to 16384 qubits cost words
+for the cone only.
+
+**Ops.** Every layer compiles, in time order, to ops of two kinds. A
+local op on `k ≤ 4` qubits is a table of the images of all `4ᵏ` local
+strings, `P_b ↦ Σ f·P_{b′}` (`b = xbits | zbits << k`), shared through
+an `Arc` and cached by gate kind and angle bits, never by qubits:
+
+* Clifford gates get their signed images from the tableau's rules
+  (`stabilizer/rules.rs`, shared with `StabilizerState`), applied to a
+  local string with the gate's inverse;
+* rotations `exp(−iθG/2)` split an anticommuting string into
+  `cos θ·P + sin θ·(iGP)`, the phase of `iGP` from the product rule of
+  `PauliString::multiply`;
+* other gates (controls included) and the adjoints of channels get
+  transfer matrices `2^{−k} Re Tr(P_a U† P_b U)` and
+  `2^{−k} Re Tr(E(P_a) P_b)` from `instruction_matrix` (moved from the
+  MPS code into `quantum/gates.rs`) and the channel's superoperator.
+
+Entries with `|T| ≤ 10⁻¹⁴` are snapped to zero and their magnitude kept
+as the column's residual, so rotations at multiples of π/2 and Pauli
+channels become signed permutations. A Pauli–Lindblad layer is a
+diagonal op: the generators as sparse lists of their factors (so a
+wide layer of low-weight generators costs memory by its factors), and a
+string's factor
+`exp(−2α Σ λ_k)` over the anticommuting generators, summed in generator
+order.
+
+**Plan.** In propagation order every op gets the as-soon-as-possible
+level of its full support, which only swaps ops on disjoint qubits.
+Walking that order from the observable, the set of letters every qubit
+may carry is tracked, from every image of a table, the snapped ones
+included (the exact map carries them on, and the bound counts them
+through every later op): an op that leaves every string it can meet
+unchanged is removed (this covers every op off the strings' support,
+since adjoint channels and unitaries are unital), and a Pauli–Lindblad
+generator is cut to the factors some possible letter anticommutes with.
+The remaining qubits are relabelled `0..m`, the kept ops levelled again,
+and consecutive levels of bijections (Clifford tables, Pauli channels,
+diagonal ops) form one in-place pass; every other level is a splitting
+pass.
+
+**Passes.** The table is a structure of arrays, `2W` words and one
+coefficient per string. An in-place pass rewrites every chunk of 4096
+strings independently, in parallel. A splitting pass reads the table in
+batches of 16 chunks: phase A (parallel over chunks) drops strings below
+`min_coefficient` or above `max_weight`, expands every other string into
+its images under the level's ops and sorts the images into 64 shards by
+the top bits of a fixed hash (multiply–xorshift and the splitmix64
+finaliser, no random state); phase B (parallel over shards) inserts each
+chunk's images, in chunk order, into the shard's open-addressing index
+(power-of-two capacity, load at most one half, a 32-bit tag beside the
+row), adding the coefficients of equal strings and the sum of their
+magnitudes. Closing the pass drops strings whose coefficient is at most
+`2⁻⁵⁰` of that sum (exact cancellations up to rounding) and concatenates
+the shards in shard order. Below 4096 strings (or images to merge) the
+chunks and shards run on the calling thread, which saves the dispatch of
+tasks (tens of microseconds) on deep, narrow circuits and changes neither
+the work nor its order. Every string lives in one shard and is summed
+in (chunk, row, image) order, and chunks and batches have fixed sizes, so
+the result is bit-identical for any number of threads and in the serial
+build. Images held before merging count towards `max_terms`; exceeding it
+is an error. Peak memory is that of a splitting pass: the batch's images
+next to the shards' rows, index and magnitudes (about 100 bytes per
+string at `W = 1` when no images merge).
+
+**Bound.** A dropped, snapped or cancelled magnitude `|c|` changes the
+value by at most `|c|` times the norms of the maps between it and the
+start: 1 for adjoint channels and unitaries (unital and completely
+positive), `e^{2|α| Σ λ_k}` for a Pauli–Lindblad layer with `α < 0`, over
+the generators left after the light-cone cut. These products are
+computed per pass at compile time (a value that is not finite, or one
+whose product with the observable's 1-norm is not, is an error), and
+`truncation_bound` sums them with the magnitudes. A coefficient, value or
+bound that overflows on the way is an error too, never a result.
+
+**Devices.** `device_layers` compiles a circuit against a Markovian
+device with `noise::device::Program::compile` and turns its segments
+into gate layers and its channels into channel layers. The per-qubit
+entry limit of device models is checked through
+`DeviceModel::validate_entries(max)`, 34 for the simulators and 16384 on
+this path (`device_from_json`).
+
 ## Spin dynamics (`spin/`)
 
 A `SpinSystem` works on dense density matrices over the product basis of
@@ -1080,6 +1170,10 @@ VQD reuses the adjoint method with the observable `H + Σ β_j |ψ_j⟩⟨ψ_j|`
   depend on the number of threads.
 * Multi-start optimisers derive one independent stream per restart with
   `Rng::fork`, so parallel restarts are reproducible.
+* Pauli propagation merges equal strings in 64 shards chosen by a fixed
+  hash, each summed in a fixed order of chunks, rows and images, so its
+  values, bounds and operators are bit-identical for any number of
+  threads.
 
 ## Gradients (`algorithms/gradients.rs`)
 

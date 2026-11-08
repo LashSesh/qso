@@ -22,6 +22,7 @@
 - [Optimisation problems and amplitude estimation](optimization.md)
 - [Noise](noise.md)
 - [Estimation and error mitigation](mitigation.md)
+- [Pauli propagation of large noisy circuits](propagation.md)
 - [Graphs](graphs.md)
 - [Quantum walks](walks.md)
 - [Symmetry and state transfer](symmetry.md)

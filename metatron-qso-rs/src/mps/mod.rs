@@ -30,7 +30,7 @@ use num_complex::Complex64 as C64;
 
 use crate::error::{QsoError, Result};
 use crate::linalg::dense::cmul;
-use crate::quantum::gates::{matrix_1q, matrix_2q};
+use crate::quantum::gates::instruction_matrix;
 use crate::quantum::{Circuit, GateKind, Instruction, Pauli, PauliSum, StateVector};
 use crate::rng::Rng;
 
@@ -155,33 +155,6 @@ fn is_unitary(m: &[C64], d: usize, tol: f64) -> bool {
             (dot - target).norm() <= tol
         })
     })
-}
-
-/// The matrix of an instruction on `controls ++ targets`, the first
-/// qubit most significant.
-fn instruction_matrix(inst: &Instruction, angles: &[f64]) -> Vec<C64> {
-    let t = inst.targets.len();
-    let u: Vec<C64> = match inst.kind {
-        GateKind::Unitary => inst.matrix.as_ref().expect("validated").to_vec(),
-        k if k.num_targets() == Some(1) => matrix_1q(k, angles).to_vec(),
-        k => matrix_2q(k, angles).to_vec(),
-    };
-    let c = inst.controls.len();
-    if c == 0 {
-        return u;
-    }
-    let (dt, d) = (1usize << t, 1usize << (c + t));
-    let mut m = vec![ZERO; d * d];
-    for (i, row) in m.chunks_mut(d).enumerate() {
-        row[i] = ONE;
-    }
-    let base = (d - 1) & !(dt - 1); // all controls set
-    for i in 0..dt {
-        for j in 0..dt {
-            m[(base + i) * d + base + j] = u[i * dt + j];
-        }
-    }
-    m
 }
 
 impl Mps {

@@ -24,6 +24,7 @@ mod noise;
 mod nv;
 mod optimization;
 mod photonics;
+mod propagation;
 mod qec;
 mod reduced;
 mod simulation;
@@ -215,5 +216,6 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     spin::register(m)?;
     nv::register(m)?;
     symmetric::register(m)?;
+    propagation::register(m)?;
     Ok(())
 }

@@ -36,6 +36,7 @@ reports them in full.
 | [Optimisation problems and amplitude estimation](optimization.md) | QUBO/Ising, QAOA mixers, canonical, iterative and maximum-likelihood amplitude estimation |
 | [Noise](noise.md) | Channels, noise models, device models, density matrices, quantum trajectories |
 | [Estimation and error mitigation](mitigation.md) | Estimates with error bars, shot allocation, readout mitigation, ZNE, PEC, twirling, classical shadows |
+| [Pauli propagation of large noisy circuits](propagation.md) | Expectation values on up to 16 384 qubits in the Heisenberg picture, with device noise, noise scaled for PEA and PEC, and a rigorous truncation bound |
 | [Graphs](graphs.md) | Graph library, specifications, symmetry groups, isomorphism, files |
 | [Quantum walks](walks.md) | Continuous-time walks, spatial search, dephasing |
 | [Symmetry and state transfer](symmetry.md) | Quotients by equitable partitions, perfect state transfer |

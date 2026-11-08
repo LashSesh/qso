@@ -608,16 +608,22 @@ impl DeviceModel {
 
     /// Check every value and channel.
     pub fn validate(&self) -> Result<()> {
+        self.validate_entries(crate::quantum::MAX_QUBITS)
+    }
+
+    /// [`DeviceModel::validate`] with at most `max` per-qubit entries
+    /// (Pauli propagation takes more than the simulators' 34).
+    pub(crate) fn validate_entries(&self, max: usize) -> Result<()> {
         if self.num_qubits == Some(0) {
             return Err(QsoError::invalid(
                 "num_qubits",
                 "a device needs at least one qubit",
             ));
         }
-        if self.qubits.len() > crate::quantum::MAX_QUBITS {
+        if self.qubits.len() > max {
             return Err(QsoError::invalid(
                 "qubits",
-                format!("more than {} qubit entries", crate::quantum::MAX_QUBITS),
+                format!("more than {max} qubit entries"),
             ));
         }
         if let Some(n) = self.num_qubits

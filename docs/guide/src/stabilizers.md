@@ -154,3 +154,9 @@ fn main() -> Result<()> {
 | Programs of gates followed by measurements | simulated once, then O(1) per shot for their at most 64 bits |
 | Other programs | simulated shot by shot; shots × operations × qubits² at most 2³⁶ |
 | Conversion to a state vector | 20 qubits |
+
+The tableau takes Clifford gates only. For one expectation value of a
+circuit that is Clifford except for some rotations or other gates, or
+that carries noise, [Pauli propagation](propagation.md) carries the
+observable backwards through it on the same register sizes, with the
+tableau's rules for the Clifford gates.

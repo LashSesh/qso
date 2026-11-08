@@ -57,12 +57,12 @@ which withdraws the results of version 1.
 |---|---|---|
 | Statevector speed | specialised kernels (1.1); gate fusion and cache blocking (1.3.0): 16-qubit layers 4.7× and 18–24-qubit layers 1.6–2.6× faster than in 1.2; batched evaluation; AVX and NEON kernels close to memory bandwidth and a blocked adjoint pass (1.11); single precision, one more qubit and about twice the speed on large registers (1.20); a worker pool that stays awake between short simulations (1.24) | spinning workers cost CPU time between simulations (`QSO_POOL_SPIN_US=0` turns it off) |
 | Boson sampling | exact probabilities and exact sampling (1.1); partial distinguishability, loss and Gaussian boson sampling with hafnians and torontonians (1.14) | mixed Gaussian states with many photons spread over many modes are impractical (10¹² operations at 20 photons in 10 modes) |
-| Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4); slow noise from Markov processes (telegraph, Ornstein–Uhlenbeck, quasi-static, 1/f) averaged exactly on density matrices (1.44) | noise learning for layers of two-qubit Clifford gates only, on density matrices up to 10 qubits and Pauli frames up to 64 (1.12, 1.31), with non-Pauli channels twirled one at a time; mitigation with the learned model above 24 qubits only on matrix-product states, for channels that are mixtures of unitaries (1.31); no leakage; channels on at most four qubits (1.30); slow noise averaged exactly up to 12 qubits and processes with finitely many states (1.44), sampled on trajectories beyond (1.30); virtual distillation (1.17) mitigates only its measured copies' preparation |
+| Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4); slow noise from Markov processes (telegraph, Ornstein–Uhlenbeck, quasi-static, 1/f) averaged exactly on density matrices (1.44); expectation values of noisy circuits on up to 16 384 qubits by Pauli propagation, with sparse Pauli–Lindblad noise amplified for PEA or inverted for PEC's limit and device models beyond 34 qubits (1.64) | noise learning for layers of two-qubit Clifford gates only, on density matrices up to 10 qubits and Pauli frames up to 64 (1.12, 1.31), with non-Pauli channels twirled one at a time; sampled mitigation with the learned model above 24 qubits only on matrix-product states, for channels that are mixtures of unitaries (1.31); the values it converges to by Pauli propagation exact only while the observable stays sparse in the Heisenberg picture, beyond that with a rigorous bound that can lie far above the error, and with gates and channels on at most four qubits, product input states and no readout errors (1.64); no leakage; channels on at most four qubits (1.30); slow noise averaged exactly up to 12 qubits and processes with finitely many states (1.44), sampled on trajectories beyond (1.30); virtual distillation (1.17) mitigates only its measured copies' preparation |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18); interacting bosons, fermions and distinguishable particles with certificates for graph isomorphism (1.29); symmetry for driven walks, open walks on orbitals, coined walks with dephasing, hypercubes with dephasing up to d = 230 (1.38); interacting walkers on the orbits of automorphisms (three bosons on Q₉: 2284 orbits of 22.5 million configurations) and up to four particles on hypercubes (1.43); open walks on large symmetric graphs from point stabilisers (Q₁₈, H(4, 10), J(24, 4); 1.48); interacting walkers on Hamming, Johnson and Kneser graphs from canonical forms (1.53) and on any graph from minimal images under a group (three fermions on Paley(3209): 1068 orbits of 5.5·10⁹ configurations; 1.58); transport to a trap with traps, losses, site energies and dephasing per node, its efficiency and mean arrival time by linear solves, dark states and the best dephasing rate, dense to 2048 nodes, on orbitals (K₈₁₉₂ on ten orbitals) and on hypercubes to d = 61 (1.63) | interacting walkers without symmetry stop at 2²² configurations, and dense graphs with small groups stay dense on their orbits (three bosons from one node of Paley(809) exceed 2²⁶ entries; 1.58); open walks beyond 8192 nodes need a start whose stabiliser leaves few orbitals (dense graphs and circulants stay at 8192 nodes; 1.48); pretty good transfer on other graphs has no exact reference; the arrival time of transport has no error estimate and on large coherent hypercubes is limited by the conditioning (Q₄₀: 1.2·10⁻⁴ relative), and the orbital solves refactorise a banded LU at every dephasing rate (1.63) |
 | Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); MP2, CCSD and CCSD(T) with frozen cores, closed shells in spatial orbitals and UHF and ROHF in spin orbitals, equal to PySCF's to 2.1·10⁻¹⁰ Ha (1.62); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37); the ¹³C bath of an NV centre by the cluster-correlation expansion (1.39); the optical cycle, ODMR, pulsed readout and magnetometer sensitivity in fields of any direction, and ensembles (1.40); sparse relaxation blocks propagated by Krylov steps, Redfield relaxation from sparse terms and equivalent spins: seven and eight relaxing protons for seconds (1.41); optimal control with relaxation on sparse blocks and on the orbits of equivalent spins, seven and eight spins (1.46); Redfield relaxation with anisotropic diffusion and model-free internal motion (1.49); reaction kinetics with spins: PASADENA, ALTADENA and SABRE as they run (1.50); field profiles with relaxation beyond six spins, the relaxation interpolated over the field (1.51); exchange and reactions on sparse blocks with iterative steady states and field profiles: SABRE with nine spins in the complex beside seven in the substrate (1.54); reactions of two spin-carrying reactants, the product formed in the product of their states: SABRE whose complex keeps its hydrides and swaps them with a hydrogen pool, PHIP from a pool whose singlet decays (1.59); the optical cycle with the nitrogen and one ¹³C at the level anticrossings, ¹⁵N polarised to 0.95 at 51 mT, the fluorescence dip at 102.4 mT, a microwave in the laboratory frame by Floquet harmonics (1.60); Redfield relaxation applied without storing it, with its analytic field derivative: nine and ten relaxing spins whose superoperator would need 6 to 74 GB (1.55); product-formula bounds whose remainder runs over the terms that do not commute, the error averaged over states, and step counts for a target error: half the steps of the bounds of Childs et al. for Heisenberg chains of 10 to 64 spins (1.56) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); coupled cluster holds every integral (64 basis functions, 100 correlated spin orbitals: 1.55 GB at 96) and runs on one thread, 1.6 to 2 times PySCF's time per closed-shell iteration and 6 to 12 times per open-shell one; no (T) for ROHF (1.62); the commutator bound of product formulas (1.56) still sums its remainder by the triangle inequality, about 2.3 times the empirical step counts of Heisenberg chains and loose at few steps and order 6, where its budget stops the degree early; Redfield relaxation takes rigid-body diffusion and model-free internal motion, not correlated motions of groups (1.49), and propagations beyond 1.5·10¹² operations or 2 GiB are refused (eleven protons with dipolar relaxation, nine for 100 s; 1.41); chemical exchange and reaction kinetics take Krylov steps beyond 2048 elements per block (1.54), unaffordable in the laboratory frame at millitesla fields and more; reactants meet uncorrelated (no cage effects), and a reaction whose partner's amount changes takes steps that resolve the frequencies of the blocks it feeds (PHIP at 1 µT with a three-spin product: 2 s of reaction in 2 s, 9 s with the hydrogen a pool with spins; a four-spin product at 5 µT over 3 s exceeds the work limit; 1.50, 1.59); field profiles with relaxation hold the relaxation at up to 33 fields (1.51), or apply Redfield relaxation without storing it where those would not fit (1.55), where work bounds them (eight spins with dipolar relaxation: two steps over 0.02 s per evaluation within the limit), and have many local optima; an evaluation of eight relaxing spins takes tens of seconds (1.46); the NV bath of 1.39 takes ideal pulses only (finite ones: the generalised expansion, 1.45), its expansion can diverge (results beyond `|L| = 1` are refused), and the nuclei next to the vacancy need given contact couplings (1.39); the optical cycle with nuclei is dense in Liouville space: 42 levels (¹⁴N and ¹³C) take 9 s for a steady state and 230 s with a microwave, and more nuclei do not fit (1.60) |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
 | Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22); exact circuit distances of any model by a parallel search or the Brouwer–Zimmermann enumeration, with the lightest logical error as circuit locations (1.42); the search on the orbits of an error model's symmetries: [[144, 12, 12]] over three rounds of the depth-8 cycle has circuit distance 10 (1.47); logical failure rates far below sampling by splitting, with their leading term (surface codes to 10⁻⁹, [[72, 12, 6]] to 10⁻¹³; 1.52); decoding in sliding windows of rounds by matching or BP+OSD, round by round, at constant time per round up to 4000 rounds (1.57); error models in one pass backwards, linear in the rounds; circuits that keep their repeated blocks, sampled as they run, their models folded: 10⁵ rounds of distance 5 in 1.4 s, equal to Stim's at 10⁴; windows decoded in parallel, 2 to 2.4 times as fast on four cores (1.61) | exact circuit distances need time exponential in the distance (each weight about 17 times the last on bicycle circuits); symmetries divide it by a factor that grows with their number (41 to 43 for 72); splitting needs a burn-in long enough, which its error does not show (1.52); the folded model is still expanded into all its errors (5.6 million, about 350 MB, for 10⁵ rounds of distance 5), and parallel windows gain 2 to 2.4 on four cores, as a shot's syndrome and commits stay on one thread (1.61) |
-| Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9), in the browser build too (1.25) | — |
+| Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9), in the browser build too (1.25); expectation values by Pauli propagation on up to 16 384 qubits, exact or with a rigorous truncation bound (1.64) | — |
 | Documentation | user guide, executed tutorials and Python reference on GitHub Pages (1.2); Rust tutorials from the examples and the documentation of every release since 1.2.0 (1.25) | — |
 | Engineering | CI on Linux (x86_64, arm64), macOS and Windows; Miri, fuzzing, API checks, weekly cross-validation and benchmark tracking; Trusted Publishing (1.2); line and branch coverage, and differential tests of all simulators on random circuits (1.21); coverage of the CLI and of the Python tests (1.25) | — |
 
@@ -7313,7 +7313,7 @@ test:
   `test_transport.py`, the `--dark-tolerance` help, and the provenance
   of the FMO values in the guide and README.
 
-### 1.64 — Expectation values of large noisy circuits by Pauli propagation (M)
+### 1.64 — Expectation values of large noisy circuits by Pauli propagation (M, delivered)
 
 Use case: noisy and noise-scaled expectation values of circuits on 100
 to 1000 qubits, such as the 127-qubit kicked-Ising experiment of Kim et
@@ -7341,12 +7341,12 @@ spread over 4ⁿ strings) and to density matrices with every channel kind
 string and sign for sign against Stim's `PauliString.before` (which
 gives `C†PC`) and QSO's tableau; the kicked-Ising circuits of Kim et al.
 on the 115-qubit heavy-hex lattice of Qiskit's
-`CouplingMap.from_heavy_hex(7)`, for `⟨Z⟩` of its central qubit: exact
+`CouplingMap.from_heavy_hex(7)`, for `⟨Z⟩` of its central qubit (57): exact
 at `θ_h` = 0 and π/2, where they are Clifford, and at other angles equal
 through five steps to Qiskit Aer's state vector of the light cone to
 10⁻¹⁰ (qiskit-addon-obp, run for this proposal, needs 70, 1620 and about
-10⁵ strings after three, four and five steps, on light cones of 5, 9 and
-13 qubits); at six and seven steps (light cones of 20 and 26 qubits),
+1.35·10⁵ strings after three, four and five steps, on light cones of 5, 9
+and 13 qubits); at six and seven steps (light cones of 20 and 26 qubits),
 with truncation, the actual error against the light cone's state vector
 never above the reported bound; qiskit-addon-obp 0.3's `backpropagate`
 without budgets and with its trimming tolerance set to 10⁻¹⁴ (by default
@@ -7356,6 +7356,317 @@ scaled model up to 12 qubits, and beyond to qiskit-addon-obp's
 propagation through Pauli–Lindblad layers
 (`PauliLindbladErrorInstruction`, equal to density matrices to 10⁻¹⁶ on
 four qubits, checked for this proposal).
+
+Delivered in `propagation/` (`propagate`, `PauliOperator`, `Layer`,
+`PropagationOptions`, `PropagationResult`, `device_layers`,
+`device_from_json`, `program_circuit`, `MAX_PROPAGATION_QUBITS`,
+`MAX_PROPAGATION_TERMS`, `DEFAULT_MAX_TERMS`, `MAX_TRANSFER_QUBITS`) and
+`stabilizer/rules.rs`;
+Python `propagate`; `qso propagate`; the example `pauli_propagation`:
+
+- **Operators.** `PauliOperator` holds real combinations of Pauli strings
+  on up to 16 384 qubits, two masks of `⌈n/64⌉` words per string, always
+  canonical (merged, sorted, no zero terms); it reads `PauliSum`'s
+  grammar (the tokenizer now shared, without the 64-qubit check), converts
+  to and from `PauliSum` up to 64 qubits and places a learned model's
+  rates on register qubits (`from_lindblad`). The fuzz target of the
+  Pauli-sum parser checks it against `PauliSum` and its round trip.
+- **Gates.** Clifford gates map strings by the tableau's rules, now
+  functions in `stabilizer/rules.rs` shared with `StabilizerState`,
+  applied to a local string with the gate's inverse; rotations
+  `exp(−iθG/2)` split anticommuting strings into `cos θ·P + sin θ·(iGP)`
+  (P, T and T† as Z rotations); every other gate on at most four qubits,
+  controls included, acts by its transfer matrix from
+  `instruction_matrix` (moved from the MPS code into `quantum/gates.rs`).
+  Larger gates are refused. Entries of at most 10⁻¹⁴ are snapped to zero
+  into the bound, which makes rotations at multiples of π/2 and Pauli
+  channels signed permutations. Tables are cached by gate kind and angle
+  bits.
+- **Noise.** Every channel acts by the transfer matrix of its adjoint (a
+  Pauli channel too, so the 10⁻¹² tolerance of `pauli_probabilities`
+  does not enter); Pauli–Lindblad layers are diagonal ops with any finite
+  factor; `device_layers` compiles a circuit with `Program::compile` and
+  refuses non-Markovian devices; `DeviceModel::validate` became
+  `validate_entries(34)`, and this path checks 16 384 entries.
+- **Plan.** Ops get as-soon-as-possible levels on their full supports;
+  the light cone is followed by the letters each qubit may carry (from
+  every image of a table, snapped ones included), so an
+  op that leaves every string it can meet unchanged is removed and a
+  Pauli–Lindblad generator is cut to the factors some possible letter
+  anticommutes with; the cone's qubits are relabelled `0..m`.
+  Consecutive levels of bijections form one in-place pass, every other
+  level one splitting pass.
+- **Engine.** A structure of arrays; in-place passes over chunks of 4096
+  strings; splitting passes in batches of 16 chunks, whose images go
+  into 64 shards by a fixed hash and are merged in open-addressing
+  indexes (`parallel::for_each_task_mut` runs the shards in parallel at
+  any count). Strings whose coefficient is at most `2⁻⁵⁰` of the
+  magnitudes summed into them are exact cancellations and dropped into
+  the bound. Results are bit-identical on any number of threads and in
+  the serial build.
+- **Bound.** Dropped (by `min_coefficient` or `max_weight`, on the
+  observable and before every splitting level), snapped and cancelled
+  magnitudes, each times `e^{2|α|Σλ_k}` for the inverted layers between
+  it and the start, over the generators left on the light cone.
+- **Python, command line and cross-validation.** `propagate(layers,
+  observable, …)` takes circuits, programs and OpenQASM text (unrolled
+  in Rust, so beyond the Python `Circuit`'s 34 qubits), `(Channel,
+  qubits)`, `(SparsePauliLindblad, qubits, G)` and `(rates, G)`, a device
+  as a model or JSON text, a basis or Bloch-vector input state, and
+  returns a dict; `qso propagate FILE --observable` with `--device`,
+  `--state`, the truncation options and `--operator`. qiskit-addon-obp
+  0.3 joins the cross-validation (`pauli_propagation`), with Stim and
+  Aer; `propagation_data.py` writes the lattice (`heavy_hex_7.json`,
+  three colour classes of 44 edges) and Stim's images of a seeded
+  1000-qubit Clifford circuit (`stim_before_1000.json`) for the tests.
+
+Changes to the plan:
+
+- **A finer light cone.** The plan and the design cut ops off the
+  observable's support; following the letters each qubit may carry also
+  removes gates that commute with every string they can meet and cuts
+  Pauli–Lindblad generators to the factors that can anticommute, which
+  makes the bound of an inverted layer count only the generators that
+  can act (rates 0.1·X₀ + 0.3·X₁ inverted, observable Z₀ dropped: bound
+  e^{0.2}, not e^{0.8}).
+- **Exact cancellations leave the table.** At θ_h = π/4 (cos = sin) 488
+  strings of the generic 134 744 of the fifth kicked-Ising step vanish
+  (exact arithmetic over Q(√2) gives 134 256); in floating point most
+  leave residues of at most 10⁻¹⁷, which the cancellation rule removes
+  (an independent dictionary propagator, rerun for this milestone, keeps
+  134 740 strings without the rule and 134 256 with it, its residues
+  summing to 2.2·10⁻¹⁶). QSO holds 134 256; its whole bound is
+  7.3·10⁻¹⁵, mostly snapped table entries (θ_h = 1, with no
+  cancellations, has 1.1·10⁻¹⁴). At 0.3 and 1 there are 134 744 strings,
+  as with obp.
+- **The bound counts snapped entries and cancellations** as well as
+  dropped strings, so it holds for every product input state without
+  exceptions beyond rounding of the kept arithmetic and the ≤ 10⁻⁹
+  defects channel and gate validation accept.
+- **`max_terms` counts the images of a splitting level before they
+  merge**, which is what sets the peak memory; exceeding it is an error,
+  not a truncation.
+- **The obp comparison trims at 10⁻¹⁵ after every gate**, not 10⁻¹⁴,
+  with `SparsePauliOp`'s tolerances lowered to 10⁻¹⁶ for the call (obp
+  splits every gate with `SparsePauliOp.from_operator`, which drops small
+  components). The 10⁴-qubit Clifford circuit is also compared with Stim
+  in the cross-validation (1.5·10⁵ gates, 50 strings).
+- **A Python `Circuit` stays at 34 qubits**; larger circuits go in as
+  OpenQASM text or a `Program`, unrolled in Rust. Gates on more than
+  four qubits are refused.
+
+Not done, and why:
+
+- **Twirled layers.** The device's noise is propagated as given; the
+  exact rule for Pauli-twirled layers (keep only the diagonal of a
+  layer's noise after propagating through it) needs noiseless frames in
+  the device compiler and can come as a further `Layer` variant.
+- **PEA and ZNE wrappers.** The guide shows the loop over `G`, the
+  extrapolation with `extrapolate` and the bound `Σ|w_i|·b_i` of the
+  extrapolated value (Richardson on 1, 1.2, 1.6: weights 16, −20, 5).
+- **Faster passes.** On synthetic tables of 10⁶ strings QSO's in-place CX
+  brickwork takes 4.0–4.5 times and its RZ splitting layer 2.1–6.5 times
+  the time of the design's scratch benchmark (which applied one layer to
+  a bare table). In a kicked-Ising run in-place passes take under 0.1 %
+  of the instructions (callgrind), so the benchmark's compiled shift
+  groups, planned for more than 10 %, were not added; the Pauli–Lindblad
+  factors cost nothing measurable on one thread (the extra passes cost
+  thread dispatch on four, below), so the grouped lookup tables planned
+  for more than 25 % were not added either.
+- **Readout errors and slow noise**: readout is not applied (as in a
+  density matrix's `expectation`); slow noise is refused.
+- **WebAssembly bindings.**
+
+Measured (release build, this four-core machine; `measure_kicked_ising`
+and `measure_synthetic_tables` in the unit tests, the example and a
+temporary program for the noisy runs and memory; exact runs best of
+five, synthetic tables best of three, truncated runs once; peak memory
+is the resident peak of the process, for the truncated runs that of a
+fresh process per row at its smallest `min_coefficient` on four
+threads). Kicked Ising on heavy-hex(7),
+`⟨Z₅₇⟩`, five steps without truncation:
+
+| θ_h | Strings | 1 / 2 / 4 threads | Peak memory | Value |
+|---|---|---|---|---|
+| 0.3 | 134 744 | 29.7 / 19.2 / 14.9 ms | 30 MB | 0.9561991039857720 |
+| π/4 | 134 256 | 27.8 / 17.1 / 15.7 ms | 40 MB | 0.4723468119321395 |
+| 1 | 134 744 | 30.6 / 18.2 / 14.8 ms | 34 MB | 0.1515659742586887 |
+
+qiskit-addon-obp's `backpropagate` takes 4.7 and 5.0 s for the same
+operators (θ_h = 0.3 and 1); through Python, with the OpenQASM text
+parsed and the operator returned, QSO takes 0.22 s. Values, bounds and
+string counts are bit-identical on 1, 2 and 4 threads. Truncated runs (1
+and 4 threads; errors against Aer's state vector of the light cone; the
+1-thread values equal the 4-thread ones bit for bit):
+
+| θ_h, steps | `min_coefficient` | Strings (peak) | Error | Bound | 1 / 4 threads | Peak memory |
+|---|---|---|---|---|---|---|
+| 0.3, 6 | 10⁻³ / 10⁻⁴ / 10⁻⁵ | 382 (833) / 1933 (4827) / 9506 (20 798) | 1.6·10⁻³ / 1.5·10⁻⁴ / 2.4·10⁻⁵ | 0.36 / 0.20 / 0.075 | 1.3 / 3.4 / 13.7 ms; 3.6 / 4.5 / 9.2 ms | 12 MB |
+| 0.3, 7 | 10⁻³ / 10⁻⁴ / 10⁻⁵ | 476 / 3105 / 19 286 (48 685) | 2.9·10⁻³ / 2.1·10⁻⁴ / 3.4·10⁻⁵ | 0.68 / 0.41 / 0.22 | 1.8 / 7.2 / 34.7 ms; 4.7 / 8.1 / 19.6 ms | 17 MB |
+| π/4, 6 | 10⁻³ / 10⁻⁴ | 39 802 / 717 902 (2.9·10⁶) | 1.9·10⁻³ / 1.2·10⁻³ | 91 / 103 | 78 / 1530 ms; 39 / 717 ms | 263 MB |
+| π/4, 7 | 10⁻³ / 10⁻⁴ | 44 600 / 1.77·10⁶ (1.09·10⁷) | 2.6·10⁻² / 7.0·10⁻³ | 238 / 657 | 178 / 7557 ms; 73 / 2948 ms | 1.04 GB |
+| 1, 6 | 10⁻³ / 10⁻⁴ | 101 046 / 2.50·10⁶ (9.1·10⁶) | 2.2·10⁻³ / 6.4·10⁻⁴ | 289 / 240 | 216 / 4663 ms; 91 / 1608 ms | 0.83 GB |
+| 1, 7 | 10⁻³ | 119 646 (1.9·10⁶) | 1.9·10⁻² | 1016 | 689 ms; 268 ms | 0.18 GB |
+
+At π/4 and 1 with `min_coefficient` 10⁻⁵ (and at 1, seven steps, 10⁻⁴)
+the images of one level exceed the default `max_terms` of 2²⁴ and the
+call stops with the error. At θ_h = 0.3 the bound is 230 to 6500 times
+the error; at π/4 and 1 it exceeds 1. With the uniform Pauli–Lindblad
+model after every RZZ layer (factor ±1, three repetitions of best-of-seven
+timings) five steps take 29–31 ms on one thread against 34–40 ms without
+the layers (the circuit cut at the same places), and on four threads
+17–18 ms against 11–18 ms (θ_h = 0.3: 17–18 against 11–12 ms). The
+factors themselves cost nothing measurable on one thread; on four the
+extra in-place passes cost dispatch over small tables. Synthetic tables
+of 10⁶ strings, one pass:
+
+| Qubits | CX brickwork in place, 1 / 2 / 4 threads | RZ on every qubit, splitting to 2·10⁶ strings |
+|---|---|---|
+| 64 | 537 / 269 / 146 ms | 673 / 384 / 222 ms |
+| 127 | 935 / 518 / 264 ms | 1066 / 572 / 347 ms |
+| 1024 | 7854 / 4227 / 2045 ms | 7342 / 3951 / 2329 ms |
+
+Peak memory of one splitting level whose images are all distinct (one
+string split into 2²⁰–2²² by RX on 20–22 qubits) is 99–105 bytes per
+string on light cones of up to 64 qubits, 136–139 on 70 qubits and 200–201 on 200
+qubits, against the design's estimate of 48, 64 and 96 bytes for the
+table, its index and the summed magnitudes: the batch's images are held
+next to the shards' rows. A brickwork on 30 qubits (seven rounds of RX on
+every qubit and CX on even and odd pairs, 2²⁰ strings) peaks at 663
+bytes per string, as many images merge into each string. In a kicked-Ising run (θ_h = 1, five
+steps, one thread) phase A of the splitting passes (expanding strings)
+takes 47 % of the instructions, phase B (merging in the shards) 27 % and
+copies 14 %. The example `pauli_propagation` runs in 0.28 s on one
+thread and 0.16 s on four (23–25 MB).
+
+Validation: the propagation unit tests (32, release build, 20 s on four
+threads) compare random circuits of the whole gate set with the state
+vector to 10⁻¹² (2–6 qubits, 25 gates; 3, 5 and 8 qubits at depth 20;
+12 and 20 qubits at depth 20 for Cliffords with six rotations), every
+channel kind and random Kraus channels on one to four qubits with the
+density matrix (4–5 qubits) and compiled devices with every Markovian
+kind of noise (4 to 12 qubits) to 10⁻¹²; the closed forms of damping,
+thermal relaxation and two-qubit depolarising noise to 10⁻¹⁵ (0.8118737498275908,
+−0.4, e^{−1/7}, 1 − 2e^{−0.2}, 0.936); a Pauli–Lindblad layer in the
+middle of a three-qubit circuit at factors 0, 1, 2.5, −1 and −0.5, and 1
+then −1, against a dense reference to 10⁻¹⁴; the bound on 24 random
+noisy circuits of 3–7 qubits (216 truncated runs) (every channel kind, factors 0, 1, 2 and
+−1, `min_coefficient` 10⁻³, 10⁻² and 5·10⁻², `max_weight` none, 2 and 3,
+from `|0…0⟩`, random product and mixed states) and its tightness; exact
+cancellations string for string; bit-identity on 1, 2 and 4 threads;
+every error of the API. The validation tests (5) compare the images of
+`Z_q` under a seeded Clifford circuit of 10³ qubits and 10⁴ gates with
+Stim's `PauliString.before` (20 strings, with signs) and the tableau, and
+on 10⁴ qubits with the tableau; the kicked-Ising circuits at θ_h = 0 and
+π/2 for 1–20 steps (one string; at π/2 the weights of Stim, 1, 3, 5, 9,
+13, 19, 23, 27, 33, 34, … 84, sign +1 for steps 1–5 and −1 for 6–10); at
+θ_h = 0.3, π/4 and 1 for 1–5 steps Aer's light-cone values to 10⁻¹⁰ with
+the string counts 2, 10, 70, 1620 and 134 744 (134 256 at π/4); the
+truncated runs at six and seven steps (θ_h = 0.3) within their bounds,
+which stay below 1;
+and the uniform noisy model at factors 0, 1, 2, −1 and 1 then −1 against
+obp's values to 10⁻¹³. The Python tests (12) and the command-line test
+(GHZ on 70 qubits, a truncated run) pass. In the cross-validation (63 s,
+no failure): Stim's `PauliString.before` on 10³ and 10⁴ qubits (29 990
+and 149 995 gates, 50 strings each: 10 single `Z_q`, 40 random dense) and at the Clifford points (40 runs)
+string and sign exactly; Aer's light cone at 1–5 steps to 7.7·10⁻¹⁵ (light
+cones of 1, 3, 5, 9 and 13 qubits, and 20 and 26 at six and seven
+steps); obp's operators at 3–5 steps (θ_h = 0.3 and 1) string for string
+to 6.3·10⁻¹⁵ in the coefficients, none missing on either side; the
+truncated runs at six and seven steps within their bounds; and both
+noise models at factors 0, 1, 1.5, 2, −1 and 1 then −1 (24 runs) against
+obp to 2.1·10⁻¹⁵ and, for factors ≥ 0, Aer's density matrix of the light
+cone to 8.3·10⁻¹⁶, with 1 then −1 equal to the noiseless value to
+6.7·10⁻¹⁶.
+
+Open issues, recorded for the review:
+
+- **The bound is loose where it matters.** It adds magnitudes, so on the
+  kicked-Ising circuits at θ_h = π/4 and 1 it reaches 90 to 1000 while
+  the values are within 2.6·10⁻² of Aer's. A bound that uses the input
+  state, or an estimate of the error beside it, would be more useful.
+- **Memory is set by the images before merging**: two to seven times the
+  design's estimate per string; a level whose strings split into many
+  images that merge again (the 30-qubit brickwork: 663 bytes per string)
+  needs more than its result.
+- **Passes slower than the scratch benchmark** by 2 to 6.5 times on
+  synthetic tables (above); not a bottleneck in the measured circuits.
+- **Python `Circuit` stays at 34 qubits**: large circuits must be passed
+  as OpenQASM text or a `Program`.
+
+Review (independent, after delivery): three reviewers (the numerics and
+the bound, the API with bindings and command line, and the
+documentation's claims) checked against their own NumPy density
+matrices (450 random noisy circuits, 3150 truncated runs, every channel
+kind and factors down to −2), Stim on up to 16 384 qubits, Aer,
+qiskit-addon-obp and fresh measurements; each finding was reproduced
+before it was fixed (15 reported, 13 distinct, all confirmed: the −0.0
+and the reading of measurements were each reported twice). Values,
+the light cone, the schedule and bit-identity on 1–4 threads and in the
+serial build held. Findings, all fixed, each with a regression test or a
+corrected number:
+
+- **The bound missed inverted layers reached only by snapped entries.**
+  The light cone followed the images a table keeps; a branch snapped
+  into the bound (RXX(9·10⁻¹⁵) on `Z₀`: `sin ε·Y₀X₁`) is carried on by
+  the exact map, through inverted layers on qubits the cone never
+  recorded, which were cut away with their overhead. With
+  `λ·Z₁` inverted before the gate and `⟨Y₀⟩ = ⟨X₁⟩ = 1` the error was
+  9.6·10⁻² against a bound of 9·10⁻¹⁵ (λ = 15), 4.4·10⁻⁶ (λ = 1, ten
+  layers) and 2.7·10⁻¹¹ (λ = 0.1, forty layers). Each table now records
+  the letters of all its images, snapped ones included, and the cone
+  follows them; the three bounds are now 9.6·10⁻², 4.4·10⁻⁶ and
+  2.7·10⁻¹¹, equal to the errors. The kicked-Ising cones (1–26 qubits)
+  and every value and bound measured above are unchanged.
+- **Overflow passed as a result.** Γ = e^{600} is finite, Γ·‖O‖₁ with
+  `‖O‖₁ = 10¹⁰⁰` is not: H·H gave `inf` with a NaN bound, RY(0.3) gave
+  −0 with every string dropped as a "cancellation", and with the
+  operator an unrelated message. `plan` now refuses a Γ·‖O‖₁ beyond
+  floating point (`"factor"`, or `"observable"` without inverted layers),
+  a coefficient that is not finite is never a cancellation, and a
+  coefficient, value or bound that overflows on the way is an error.
+- **A measurement in the middle was ignored on the command line.**
+  `h; measure; h` printed `⟨Z₀⟩ = 1` (exact 0), while Python refused even
+  a final measurement. Both now read programs through the new
+  `program_circuit`: final measurements (no later gate on the qubit)
+  are left out, other measurements, resets and conditions are refused.
+- **Lists of terms in Python took quadratic time** (`add_term` is a
+  sorted insert): 16 384 observable terms 24 s, 12 000 rates 2.4 s; now
+  0.32 and 0.04 s through the new `PauliOperator::from_terms`.
+- **Each splitting level cost 66 µs on one thread and 159 µs on four**
+  (20 000 RX/RY levels on three strings) in task dispatch and shard
+  allocation; below 4096 strings or images the chunks and shards now
+  run on the calling thread and the shards' indexes are allocated on
+  first use: 3.2 and 2.9 µs, the same bits.
+- **Pauli–Lindblad generators were copied as dense rows** (2·⌈n/64⌉ words
+  each, a second copy of a 65 535-generator layer on 16 384 qubits,
+  268 MB); they are now lists of their factors. Four such layers (rates
+  on every qubit and neighbouring pair, observable on every qubit) peak
+  at 1.31 GB, almost all of it the four input operators (the review
+  measured 2.1 GB before);
+  the noisy kicked-Ising runs are not slower (24–32 ms on one thread).
+- **An empty sum read −0.0** (`f64` sums start at −0); `propagate` now
+  returns +0, and the command line's workaround is gone.
+- **A tuple of circuits** was read as a `(rates, factor)` layer with a
+  confusing message; it now says to pass several layers as a list.
+- **The α < 0 reference of the bound test** was the untruncated
+  propagation itself; it is now the density matrix with the inverted
+  map, for every factor.
+- **Peak memory of the truncated runs was overstated**: the measurement
+  reset the peak after a failed run of 1.7·10⁷ strings. In a fresh
+  process per row the θ_h = 1 rows peak at 0.83 GB and 0.18 GB (claimed
+  1.30 and 0.77 GB), π/4 at 263 MB and 1.04 GB, θ_h = 0.3 at 12 and
+  17 MB (`QSO_KIM_CASE` selects one row of `measure_kicked_ising`).
+- **Counts in the docs**: the bound test runs 24 random noisy circuits
+  (216 truncated runs), not 216 circuits; the cross-validation's Stim
+  strings are 10 single `Z_q` and 40 random dense strings per circuit,
+  not images of `Z_q` only; at θ_h = π/4, 488 strings of the generic
+  134 744 vanish (exact arithmetic over Q(√2), rechecked in review,
+  gives 134 256), not 484, and the 7.3·10⁻¹⁵ is the whole bound, mostly
+  snapped entries, not the residues of the cancellations (2·10⁻¹⁶).
+
+After the fixes: propagation unit tests 37 (and 2 ignored measurements),
+validation 5, command line 1 (with the measurement cases), Python 13.
 
 ### 1.65 — Radical pairs: spin-selective recombination, field effects and CIDNP (M)
 

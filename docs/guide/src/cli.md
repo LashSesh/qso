@@ -22,6 +22,7 @@ machine-readable output; `qso <command> --help` lists all options.
 | `grover` | Grover search, simulated against theoretical success | `--qubits`, `--marked`, `--iterations` |
 | `qasm FILE` | Run an OpenQASM 2 or 3 program (mid-circuit measurement, reset, conditions) and sample its bits; or convert it | `--shots`, `--seed`, `--export qasm2\|qasm3`, `--stabilizer`, `--mps`, `--max-bond N`, `--noise p1,p2`, `--device FILE`, `--trajectories N` |
 | `estimate FILE` | ⟨H⟩ of an OpenQASM circuit with standard error and 95 % interval, optionally mitigated | `--observable`, `--shots`, `--allocation`, `--device`, `--trajectories`, `--mitigate-readout`, `--zne 1,3,5`, `--extrapolation`, `--pec N` |
+| `propagate FILE` | ⟨O⟩ of an OpenQASM circuit on up to 16384 qubits by Pauli propagation (gates on at most four qubits; final measurements are left out, others, resets and conditions refused): exact, or truncated with a rigorous bound on the error; with a device, its gate rules, idle relaxation and spectators as channels (readout errors are not applied). JSON keys `value`, `truncation_bound`, `terms`, `peak_terms`, `dropped_terms`, `operator` | `--observable`, `--device FILE` (up to 16384 per-qubit entries), `--state BITS` (qubit 0 on the right), `--min-coefficient`, `--max-weight`, `--max-terms`, `--operator` |
 | `molecule FILE` | Qubit Hamiltonian, Hartree–Fock and full-CI energies of an FCIDUMP molecule, and a variational solution | `--mapping jordan-wigner\|parity\|bravyi-kitaev`, `--two-qubit-reduction`, `--method none\|uccsd\|upccgsd\|adapt`, `--k`, `--roots` |
 | `trotter` | Trotter–Suzuki circuit for exp(−iHt) with its error bound | `--hamiltonian`, `--qubits`, `--time`, `--steps`, `--order`, `--output FILE` |
 | `qec` | Repetition, surface, colour or bivariate bicycle code memory experiment under circuit-level noise, or a circuit in Stim's format: logical error rate with union-find, matching, correlated matching or BP+OSD decoding; optionally the exact circuit distance, or bounds when `--max-seconds` runs out ([Error correction](qec.md)) | `--code surface\|repetition\|color\|bb`, `--basis z\|x`, `--decoder union-find\|matching\|correlated-matching\|bposd`, `--window`, `--commit`, `--schedule greedy\|bicycle\|0,1,2,3,4,5`, `--circuit-distance`, `--max-seconds`, `--symmetry`, `--distance 3,5,7`, `--rounds`, `--p 0.001,0.01`, `--shots`, `--seed`, `--stim FILE`, `--circuit FILE` |
@@ -117,6 +118,23 @@ $ qso estimate ghz.qasm --observable "Z0 Z1 + Z1 Z2" --device toy_device.json --
 <H> (readout mitigated) = 1.963079 ± 0.004379 (95% CI [1.954496, 1.971662], 50000 samples)
 noiseless <H> = 2.000000
 ZNE ([1.0, 3.0, 5.0]) <H> = 1.998613 ± 0.010336 (95% CI [1.978355, 2.018871], 150000 samples)
+```
+
+`propagate` computes one expectation value without shots on circuits of
+up to 16384 qubits by carrying the observable backwards as Pauli strings
+(see [Pauli propagation](propagation.md)). A device file may list up to
+16384 qubits there. For a 100-qubit GHZ circuit followed by RY(0.2) on
+every qubit, exactly and on a device with T₁ = 100, T₂ = 80 and
+depolarising noise on every `cx` (`chain.json`):
+
+```text
+$ qso propagate ghz100.qasm --observable "Z0 Z99 + 0.5*X50"
+<O> = 0.960530497001 (truncation bound 0.000e0)
+100 qubits, 1 layer; 6 strings at the start, at most 6 held, 0 dropped
+
+$ qso propagate ghz100.qasm --observable "Z0 Z99" --device chain.json
+<O> = 0.224540781668 (truncation bound 1.702e-15)
+100 qubits, 791 layers; 303 strings at the start, at most 303 held, 0 dropped
 ```
 
 `molecule` reads an FCIDUMP file (see [Electronic structure](chemistry.md))

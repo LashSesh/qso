@@ -481,6 +481,27 @@ where
     }
 }
 
+/// Mutate independent coarse-grained items (e.g. the shards of a table)
+/// with knowledge of their index, in parallel regardless of their count
+/// (unlike [`for_each_mut`], which runs in parallel only from
+/// [`PAR_THRESHOLD`] items on).
+pub(crate) fn for_each_task_mut<T, F>(items: &mut [T], f: F)
+where
+    T: Send,
+    F: Fn(usize, &mut T) + Sync + Send,
+{
+    #[cfg(feature = "parallel")]
+    {
+        items.par_iter_mut().enumerate().for_each(|(i, x)| f(i, x));
+    }
+    #[cfg(not(feature = "parallel"))]
+    {
+        for (i, x) in items.iter_mut().enumerate() {
+            f(i, x);
+        }
+    }
+}
+
 /// Most partial sums [`sum_ranges`] keeps in memory at once.
 const MAX_PARTS: u64 = 1 << 16;
 
@@ -553,6 +574,18 @@ mod tests {
             total
         };
         assert_eq!(sum_f64(n, f).to_bits(), serial.to_bits());
+    }
+
+    #[test]
+    fn task_mutation_reaches_every_item_once_with_its_index() {
+        for n in [0usize, 1, 3, 64, 1000] {
+            let mut items = vec![0usize; n];
+            for_each_task_mut(&mut items, |i, x| *x += i + 1);
+            assert!(
+                items.iter().enumerate().all(|(i, &x)| x == i + 1),
+                "n = {n}"
+            );
+        }
     }
 
     #[test]

@@ -23,6 +23,7 @@
 //! sign `+` or `-` in front.
 
 pub mod program;
+pub(crate) mod rules;
 
 use std::collections::BTreeMap;
 use std::f64::consts::FRAC_PI_2;
@@ -731,54 +732,50 @@ pub(crate) trait CliffordTarget {
 
 impl CliffordTarget for StabilizerState {
     fn h(&mut self, q: usize) {
-        self.column(q, |x, z, r| {
-            *r ^= *x & *z;
-            std::mem::swap(x, z);
-        });
+        self.column(q, rules::h);
     }
 
     fn s(&mut self, q: usize) {
-        self.column(q, |x, z, r| {
-            *r ^= *x & *z;
-            *z ^= *x;
-        });
+        self.column(q, rules::s);
     }
 
     fn sdg(&mut self, q: usize) {
-        self.column(q, |x, z, r| {
-            *r ^= *x & !*z;
-            *z ^= *x;
-        });
+        self.column(q, rules::sdg);
     }
 
     fn x(&mut self, q: usize) {
-        self.column(q, |_, z, r| *r ^= *z);
+        self.column(q, rules::x);
     }
 
     fn y(&mut self, q: usize) {
-        self.column(q, |x, z, r| *r ^= *x ^ *z);
+        self.column(q, rules::y);
     }
 
     fn z(&mut self, q: usize) {
-        self.column(q, |x, _, r| *r ^= *x);
+        self.column(q, rules::z);
     }
 
     fn cx(&mut self, c: usize, t: usize) {
         let (oc, ot) = (c * self.rw, t * self.rw);
         for w in 0..self.rw {
-            let (xc, zc) = (self.x[oc + w], self.z[oc + w]);
-            let (xt, zt) = (self.x[ot + w], self.z[ot + w]);
-            self.r[w] ^= xc & zt & !(xt ^ zc);
-            self.x[ot + w] = xt ^ xc;
-            self.z[oc + w] = zc ^ zt;
+            let (mut xc, mut zc) = (self.x[oc + w], self.z[oc + w]);
+            let (mut xt, mut zt) = (self.x[ot + w], self.z[ot + w]);
+            rules::cx(&mut xc, &mut zc, &mut xt, &mut zt, &mut self.r[w]);
+            self.x[ot + w] = xt;
+            self.z[oc + w] = zc;
         }
     }
 
     fn swap(&mut self, a: usize, b: usize) {
         let (oa, ob) = (a * self.rw, b * self.rw);
         for w in 0..self.rw {
-            self.x.swap(oa + w, ob + w);
-            self.z.swap(oa + w, ob + w);
+            let (mut xa, mut za) = (self.x[oa + w], self.z[oa + w]);
+            let (mut xb, mut zb) = (self.x[ob + w], self.z[ob + w]);
+            rules::swap(&mut xa, &mut za, &mut xb, &mut zb);
+            self.x[oa + w] = xa;
+            self.z[oa + w] = za;
+            self.x[ob + w] = xb;
+            self.z[ob + w] = zb;
         }
     }
 }

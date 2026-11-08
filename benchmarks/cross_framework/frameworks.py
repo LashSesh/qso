@@ -421,3 +421,157 @@ def aer_qaoa_energy_fn(n: int, ops: list, terms: list, constant: float, precisio
         return float(sim.run(bound).result().data()["expectation_value"].real)
 
     return run
+
+
+# --------------------------------------------------------------------------- Pauli propagation
+# The kicked Ising circuits of Kim et al., Nature 618, 500 (2023), on Qiskit's
+# CouplingMap.from_heavy_hex(7) (115 qubits, 132 edges): one step is
+# RX(θ_h) on every qubit, then RZZ(−π/2) on the edges of each of three colour
+# classes (a bipartite edge colouring; the ZZ gates commute, so the colouring
+# changes slices, never values). Operations use the format above.
+KIM_THETA_J = -np.pi / 2
+
+# Stim's Clifford gates as OpenQASM 2 (equal up to a global phase). Qiskit's
+# iSWAP decomposition defines `iswap`, which qelib1.inc lacks.
+STIM_TO_QASM = {
+    "H": "h", "S": "s", "S_DAG": "sdg", "SQRT_X": "sx", "SQRT_X_DAG": "sxdg",
+    "X": "x", "Y": "y", "Z": "z", "CX": "cx", "CY": "cy", "CZ": "cz", "SWAP": "swap", "ISWAP": "iswap",
+}
+QASM_ISWAP = "gate iswap a, b { s a; s b; h a; cx a, b; cx b, a; h b; }\n"
+
+
+def heavy_hex_lattice(distance: int = 7) -> tuple[int, list]:
+    """The qubit count and the three colour classes of the edges (each
+    sorted, edges as (low, high)) of CouplingMap.from_heavy_hex(distance),
+    coloured by rustworkx's graph_bipartite_edge_color."""
+    import rustworkx as rx
+    from qiskit.transpiler import CouplingMap
+
+    cm = CouplingMap.from_heavy_hex(distance)
+    g = cm.graph.to_undirected(multigraph=False)
+    colour = rx.graph_bipartite_edge_color(g)
+    classes = [[] for _ in range(1 + max(colour.values()))]
+    for idx in g.edge_indices():
+        a, b = g.get_edge_endpoints_by_index(idx)
+        classes[colour[idx]].append((min(a, b), max(a, b)))
+    classes = [sorted(c) for c in classes]
+    for c in classes:
+        qs = [q for e in c for q in e]
+        assert len(qs) == len(set(qs)), "a colour class is not a matching"
+    return g.num_nodes(), classes
+
+
+def kicked_ising_layers(n: int, colours: list, steps: int, theta_h: float) -> list:
+    """The circuit as a list of layers in time order (an RX layer, then one
+    RZZ layer per colour, per step), each a list of operations."""
+    out = []
+    for _ in range(steps):
+        out.append([("rx", (q,), (theta_h,)) for q in range(n)])
+        for c in colours:
+            out.append([("rzz", e, (KIM_THETA_J,)) for e in c])
+    return out
+
+
+def qasm2(n: int, ops: list, definitions: str = "") -> str:
+    """OpenQASM 2 text of `ops` on a register of n qubits (angles written
+    with repr, which reads back to the same double)."""
+    lines = ["OPENQASM 2.0;", 'include "qelib1.inc";', definitions, f"qreg q[{n}];"]
+    for g, qs, ps in ops:
+        args = f"({', '.join(repr(float(p)) for p in ps)})" if ps else ""
+        lines.append(f"{g}{args} " + ", ".join(f"q[{q}]" for q in qs) + ";")
+    return "\n".join(lines) + "\n"
+
+
+def qiskit_slices(n: int, layers: list) -> list:
+    """One QuantumCircuit on all n qubits per layer (the slices of
+    qiskit-addon-obp, which applies them last to first)."""
+    return [qiskit_circuit(n, ops, save=False) for ops in layers]
+
+
+def reduce_to_light_cone(ops: list, observable_qubit: int) -> tuple[list, list]:
+    """Drop every RX or RZZ gate that commutes with the Heisenberg-evolved
+    Z on `observable_qubit` at its position, decided from the Pauli letters
+    each qubit may carry (an over-approximation, so exact). Returns the
+    indices of the kept gates in `ops` (ascending) and the sorted qubits
+    they act on (with the observable's qubit)."""
+    types = {observable_qubit: {"Z"}}
+    kept = []
+    for i in range(len(ops) - 1, -1, -1):
+        name, qs, _ = ops[i]
+        if name == "rx":
+            (q,) = qs
+            t = types.get(q, set())
+            if t & {"Y", "Z"}:
+                types[q] = t | {"Y", "Z"}
+                kept.append(i)
+        elif name == "rzz":
+            a, b = qs
+            ta, tb = types.get(a, set()), types.get(b, set())
+            if (ta | tb) & {"X", "Y"}:
+                na, nb = set(ta), set(tb)
+                if ta & {"X", "Y"}:
+                    na |= {"X", "Y"}
+                    nb |= {"Z"}
+                if tb & {"X", "Y"}:
+                    nb |= {"X", "Y"}
+                    na |= {"Z"}
+                types[a], types[b] = na, nb
+                kept.append(i)
+        else:
+            raise ValueError(name)
+    kept.reverse()
+    support = sorted({q for i in kept for q in ops[i][1]} | {observable_qubit})
+    return kept, support
+
+
+def pauli_label(factors) -> str:
+    """QSO's PauliSum term syntax ("X0 Z3", qubits ascending, "" for the
+    identity) of (qubit, letter) pairs; identity letters are skipped."""
+    return " ".join(f"{p}{q}" for q, p in sorted(factors) if p != "I")
+
+
+def qso_operator_dict(terms: list) -> dict:
+    """QSO's (coefficient, Pauli string) pairs as {label: coefficient}."""
+    out = {}
+    for c, s in terms:
+        factors = [(int(t[1:]), t[0].upper()) for t in s.split() if t.upper() != "I"]
+        k = pauli_label(factors)
+        out[k] = out.get(k, 0.0) + float(c)
+    return out
+
+
+def qiskit_operator_dict(op) -> dict:
+    """A SparsePauliOp (as qiskit-addon-obp returns it) as {label: real
+    coefficient}, read from paulis.x and .z (indexed by qubit)."""
+    assert not np.any(op.paulis.phase), "unexpected phase in SparsePauliOp"
+    assert np.max(np.abs(op.coeffs.imag), initial=0.0) < 1e-12
+    out = {}
+    for x, z, c in zip(op.paulis.x, op.paulis.z, op.coeffs.real):
+        k = pauli_label((int(q), "IXZY"[int(x[q]) + 2 * int(z[q])]) for q in np.flatnonzero(x | z))
+        out[k] = out.get(k, 0.0) + float(c)
+    return out
+
+
+def stim_operator_dict(p) -> dict:
+    """A stim.PauliString of sign ±1 as {label: ±1.0}."""
+    x, z = p.to_numpy()
+    s = complex(p.sign)
+    assert s.imag == 0
+    k = pauli_label((int(q), "IXZY"[int(x[q]) + 2 * int(z[q])]) for q in np.flatnonzero(x | z))
+    return {k: s.real}
+
+
+def compare_operators(a: dict, b: dict, atol: float) -> dict:
+    """The largest |a − b| over the union of labels (a missing label counts
+    as 0) and the labels with |c| > atol present on one side only."""
+    worst = 0.0
+    only_a = only_b = 0
+    for k in set(a) | set(b):
+        ca, cb = a.get(k, 0.0), b.get(k, 0.0)
+        worst = max(worst, abs(ca - cb))
+        if k not in b and abs(ca) > atol:
+            only_a += 1
+        if k not in a and abs(cb) > atol:
+            only_b += 1
+    return {"max_coefficient_difference": worst, "only_qso": only_a, "only_reference": only_b,
+            "terms_qso": len(a), "terms_reference": len(b)}

@@ -26,6 +26,10 @@ use metatron_qso::mitigation::pec::pec_expectation;
 use metatron_qso::mitigation::zne::{Extrapolation, Folding, zne};
 use metatron_qso::noise::{DeviceModel, NoiseModel};
 use metatron_qso::optimize::{Method, Options};
+use metatron_qso::propagation::{
+    Layer, PauliOperator, PropagationOptions, device_from_json, device_layers, program_circuit,
+    propagate,
+};
 use metatron_qso::qec;
 use metatron_qso::quantum::{
     Circuit, PauliSum, Precision, Program, bitstring, from_qasm2, record_bitstring, to_qasm2,
@@ -406,6 +410,41 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         seed: u64,
     },
+    /// ⟨O⟩ of an OpenQASM circuit on up to 16384 qubits by Pauli
+    /// propagation: the observable is carried backwards through the gates
+    /// (at most four qubits each) and the device's channels, exactly or
+    /// truncated with a rigorous bound on the error. Final measurements
+    /// are left out (the value is that of the state before them); other
+    /// measurements, resets and conditions are refused.
+    Propagate {
+        file: std::path::PathBuf,
+        /// Observable on the circuit's qubits, e.g. "Z57" or "X0 X69 + 0.5 Z3".
+        #[arg(long)]
+        observable: String,
+        /// Device description (JSON, up to 16384 per-qubit entries): its
+        /// gate rules, idle relaxation and spectators become channels;
+        /// readout errors are not applied.
+        #[arg(long)]
+        device: Option<std::path::PathBuf>,
+        /// Initial computational basis state as a bit string, qubit 0 on
+        /// the right (default all zeros).
+        #[arg(long)]
+        state: Option<String>,
+        /// Drop strings whose coefficient is smaller in magnitude
+        /// (counted in the truncation bound).
+        #[arg(long, default_value_t = 0.0)]
+        min_coefficient: f64,
+        /// Drop strings with more non-identity factors (counted in the
+        /// truncation bound).
+        #[arg(long)]
+        max_weight: Option<usize>,
+        /// Most strings held at once; more is an error.
+        #[arg(long, default_value_t = metatron_qso::propagation::DEFAULT_MAX_TERMS)]
+        max_terms: usize,
+        /// Also print the observable carried back to the start of the circuit.
+        #[arg(long)]
+        operator: bool,
+    },
     /// Hartree–Fock of a molecule from its geometry (STO-3G, 6-31G, 6-31G* or cc-pVDZ;
     /// H to Ar), optionally MP2, CCSD or CCSD(T), full CI in an active space and an
     /// FCIDUMP file.
@@ -733,6 +772,48 @@ fn device_backend(
 fn estimate_json(e: &Estimate) -> Value {
     let (lo, hi) = e.confidence_interval(0.95);
     json!({"value": e.value, "std_error": e.std_error, "samples": e.samples, "ci95": [lo, hi]})
+}
+
+/// The Bloch vectors of the basis state `bits` (qubit 0 on the right) on
+/// `n` qubits.
+fn basis_state(bits: &str, n: usize) -> Result<Vec<[f64; 3]>> {
+    let bits: Vec<char> = bits.chars().collect();
+    if bits.len() != n {
+        return Err(QsoError::DimensionMismatch {
+            expected: n,
+            actual: bits.len(),
+        });
+    }
+    bits.iter()
+        .rev()
+        .map(|b| match b {
+            '0' => Ok([0.0, 0.0, 1.0]),
+            '1' => Ok([0.0, 0.0, -1.0]),
+            _ => Err(QsoError::invalid(
+                "state",
+                format!("expected a bit string of 0 and 1, found '{b}'"),
+            )),
+        })
+        .collect()
+}
+
+/// The terms of a Pauli operator as `[coefficient, "X0 Z5"]` pairs ("I"
+/// for the identity), in its canonical order.
+fn operator_terms(op: &PauliOperator) -> Vec<(f64, String)> {
+    op.terms()
+        .map(|(c, factors)| {
+            let label = if factors.is_empty() {
+                "I".to_string()
+            } else {
+                factors
+                    .iter()
+                    .map(|(q, p)| format!("{p:?}{q}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            };
+            (c, label)
+        })
+        .collect()
 }
 
 fn estimate_text(e: &Estimate) -> String {
@@ -2573,6 +2654,61 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 ));
             }
             Ok((value, text))
+        }
+        Command::Propagate {
+            file,
+            observable,
+            device,
+            state,
+            min_coefficient,
+            max_weight,
+            max_terms,
+            operator,
+        } => {
+            let circuit = program_circuit(&Program::from_qasm(&read_text(file)?)?)?;
+            let n = circuit.n_qubits();
+            let obs = PauliOperator::parse(n, observable)?;
+            let layers = match device {
+                Some(path) => device_layers(&circuit, &[], &device_from_json(&read_text(path)?)?)?,
+                None => vec![Layer::gates(circuit)],
+            };
+            let bloch = state.as_deref().map(|s| basis_state(s, n)).transpose()?;
+            let mut options = PropagationOptions::default()
+                .with_min_coefficient(*min_coefficient)
+                .with_max_terms(*max_terms)
+                .with_operator(*operator);
+            if let Some(w) = max_weight {
+                options = options.with_max_weight(*w);
+            }
+            let r = propagate(&layers, &obs, bloch.as_deref(), &options)?;
+            let terms = r.operator.as_ref().map(operator_terms);
+            let mut text = format!(
+                "<O> = {:.12} (truncation bound {:.3e})\n{n} qubits, {} layer{}; {} strings at \
+                 the start, at most {} held, {} dropped",
+                r.value,
+                r.truncation_bound,
+                layers.len(),
+                if layers.len() == 1 { "" } else { "s" },
+                r.terms,
+                r.peak_terms,
+                r.dropped_terms
+            );
+            if let Some(terms) = &terms {
+                text.push_str("\noperator at the start:");
+                for (c, label) in terms.iter().take(16) {
+                    text.push_str(&format!("\n  {c:+.12}  {label}"));
+                }
+                if terms.len() > 16 {
+                    text.push_str(&format!("\n  … {} more", terms.len() - 16));
+                }
+            }
+            Ok((
+                json!({"qubits": n, "layers": layers.len(), "value": r.value,
+                       "truncation_bound": r.truncation_bound, "terms": r.terms,
+                       "peak_terms": r.peak_terms, "dropped_terms": r.dropped_terms,
+                       "operator": terms}),
+                text,
+            ))
         }
     }
 }

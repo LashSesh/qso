@@ -6,12 +6,13 @@ same workloads. The results enter the technical note
 
 | Framework | Used for |
 |---|---|
-| Qiskit Aer 0.18 | state vectors, timing |
+| Qiskit Aer 0.18 | state vectors, timing; light cones of the kicked Ising circuits (state vectors, and density matrices with Pauli–Lindblad noise) |
 | Qulacs 0.6 | state vectors, gradients (`backprop`), timing |
 | Cirq 1.7 (built-in simulator) | state vectors, timing up to 20 qubits |
 | PennyLane Lightning 0.45 | state vectors, adjoint gradients, timing |
 | The Walrus 0.22 | permanents, hafnians, torontonians, Gaussian boson sampling |
-| Stim 1.16 | detector error models, detection-event rates |
+| Stim 1.16 | detector error models, detection-event rates; Heisenberg operators of Clifford circuits (`PauliString.before`) |
+| qiskit-addon-obp 0.3 | Heisenberg operators of the kicked Ising circuits, string for string, with and without Pauli–Lindblad noise |
 | PyMatching 2.4 | logical error rates (minimum-weight matching, for reference) |
 | PySCF 2.14 | Gaussian integrals, Hartree–Fock and CASCI energies |
 | QuTiP 5.3 | nuclear spin dynamics with relaxation (`liouvillian`, `mesolve`, `bloch_redfield_tensor`); transport to a trap (`liouvillian`, `mesolve`) |
@@ -71,6 +72,21 @@ ProjectQ, which the 2025 note listed, is not included: its last release
   1.3·10⁻⁷. This check runs in a child process pinned to one thread
   (QuTiP's OpenMP threads on tiny matrices) and takes 6 s (`--quick`)
   or 28 s.
+- Pauli propagation (`propagate`) of ⟨Z₅₇⟩ on the 115-qubit kicked Ising
+  circuits of Kim et al. on `CouplingMap.from_heavy_hex(7)` (RX(θ_h) on
+  every qubit, then RZZ(−π/2) on three colour classes of edges), each
+  layer passed as OpenQASM: Heisenberg operators of seeded Clifford
+  circuits on 10³ and 10⁴ qubits (3·10⁴ and 1.5·10⁵ gates) and of the
+  Clifford points θ_h = 0 and π/2 (1–20 steps) against Stim's
+  `PauliString.before`, string and sign exactly; θ_h ∈ {0.3, π/4, 1} at
+  1–5 steps against Aer's state vector of the light cone (7.7·10⁻¹⁵) and
+  string for string against qiskit-addon-obp (134 744 strings at 5
+  steps, 6.3·10⁻¹⁵; obp with its gate tolerance lowered to 10⁻¹⁶ and
+  trimming at 10⁻¹⁵); truncated runs at 6 and 7 steps against Aer within
+  the reported bound; and scaled sparse Pauli–Lindblad noise after every
+  RZZ layer (factors 0, 1, 1.5, 2, −1 and 1 then −1, a uniform and a
+  seeded model) against obp and Aer's density matrix (2.1·10⁻¹⁵). It
+  takes 12 s (`--quick`) or 62 s, mostly in the references.
 
 **Speed** (interleaved rounds, fresh process per measurement)
 - one layer (H and RZ on every qubit, CX chain) at 16–24 qubits;

@@ -260,6 +260,16 @@ matrix-product states, for an exact value of 0.197 (raw 0.179). On four
 qubits, frames and density matrices learn the same rates within their
 standard errors.
 
+For the values these methods converge to, without sampling and beyond
+64 qubits, [Pauli propagation](propagation.md) takes a learned model as a
+layer, `(model, qubits, G)`, after every layer it describes: `G > 1`
+amplifies it as PEA does, and `G = −1` after the device's noise gives the
+value PEC converges to with the model. The device's own noise may
+include damping and T₁ there, and two-dimensional couplings need no
+swaps. The value is exact where the observable stays sparse in the
+Heisenberg picture, and otherwise comes with a rigorous bound on its
+error.
+
 ## Virtual distillation
 
 Virtual distillation needs no noise model (Huggins et al., Phys. Rev. X 11,
@@ -347,7 +357,10 @@ for label in ["Z0 Z1", "Z1 Z2", "X0 X1 X2"]:
 ## In Rust
 
 The same functionality lives in `metatron_qso::estimation`,
-`metatron_qso::mitigation` and `metatron_qso::noise`. The example
+`metatron_qso::mitigation` and `metatron_qso::noise`; noise-scaled values
+of large circuits by Pauli propagation in `metatron_qso::propagation`
+(`Layer::PauliLindblad`, with `zne::extrapolate` on
+`PropagationResult::estimate()`). The example
 `noise_mitigation` runs everything on a five-qubit toy device and prints a
 table: readout mitigation plus ZNE recovers ⟨H⟩ = 4.003 ± 0.008 for a GHZ
 state (noiseless 4, raw 3.38).

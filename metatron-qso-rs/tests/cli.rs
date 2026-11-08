@@ -835,3 +835,182 @@ fn error_correction() {
         .contains("schedule")
     );
 }
+
+#[test]
+fn pauli_propagation() {
+    // GHZ on 70 qubits, beyond every state-vector and density-matrix
+    // simulator: ⟨Z0 Z69⟩ = 1, ⟨X0 X69⟩ = 0 and ⟨X⊗70⟩ = 1.
+    let n = 70;
+    let mut src = format!("OPENQASM 2.0;\ninclude \"qelib1.inc\";\nqreg q[{n}];\nh q[0];\n");
+    for i in 0..n - 1 {
+        src.push_str(&format!("cx q[{i}],q[{}];\n", i + 1));
+    }
+    let ghz = Scratch::new("ghz70.qasm");
+    std::fs::write(&ghz.0, &src).unwrap();
+    let all_x: String = (0..n)
+        .map(|q| format!("X{q}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let zz = qso(&[
+        "propagate",
+        ghz.path(),
+        "--observable",
+        "Z0 Z69",
+        "--operator",
+    ]);
+    assert_eq!(zz["qubits"], n);
+    assert_eq!(f(&zz["value"]), 1.0);
+    assert_eq!(f(&zz["truncation_bound"]), 0.0);
+    assert_eq!(zz["terms"], 1);
+    assert_eq!(zz["dropped_terms"], 0);
+    // C† Z0 Z69 C of the CX chain is Z1 … Z69 (H on qubit 0 leaves it).
+    let z_tail: String = (1..n)
+        .map(|q| format!("Z{q}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert_eq!(zz["operator"], json!([[1.0, z_tail]]));
+    let xx = qso(&["propagate", ghz.path(), "--observable", "X0 X69"]);
+    assert_eq!(f(&xx["value"]), 0.0);
+    assert_eq!(xx["operator"], Value::Null);
+    let x = qso(&["propagate", ghz.path(), "--observable", &all_x]);
+    assert_eq!(f(&x["value"]), 1.0);
+    // From |0…01⟩ (qubit 0 on the right) the state is (|0…0⟩ − |1…1⟩)/√2.
+    let one = format!("{}1", "0".repeat(n - 1));
+    let flipped = qso(&[
+        "propagate",
+        ghz.path(),
+        "--observable",
+        &all_x,
+        "--state",
+        &one,
+    ]);
+    assert_eq!(f(&flipped["value"]), -1.0);
+    let text = qso_text(&["propagate", ghz.path(), "--observable", "Z0 Z69"]);
+    assert!(text.starts_with("<O> = 1.000000000000"), "{text}");
+
+    // Truncation: RY(0.7) twice on qubit 0, ⟨Z0⟩ = cos 1.4 exactly. Dropping
+    // the string sin 0.7·X0 between the two rotations leaves cos² 0.7; the
+    // reported bound must cover the error.
+    let ry = Scratch::new("ry.qasm");
+    std::fs::write(
+        &ry.0,
+        "OPENQASM 2.0;\ninclude \"qelib1.inc\";\nqreg q[2];\nry(0.7) q[0];\nry(0.7) q[0];\ncx q[0],q[1];\n",
+    )
+    .unwrap();
+    let exact = qso(&["propagate", ry.path(), "--observable", "Z0"]);
+    close(f(&exact["value"]), 1.4f64.cos(), 1e-15);
+    assert_eq!(f(&exact["truncation_bound"]), 0.0);
+    let truncated = qso(&[
+        "propagate",
+        ry.path(),
+        "--observable",
+        "Z0",
+        "--min-coefficient",
+        "0.7",
+    ]);
+    let bound = f(&truncated["truncation_bound"]);
+    assert!(bound > 0.0);
+    assert!(truncated["dropped_terms"].as_u64().unwrap() >= 1);
+    assert!((f(&truncated["value"]) - 1.4f64.cos()).abs() <= bound + 1e-15);
+    let weight = qso(&[
+        "propagate",
+        ry.path(),
+        "--observable",
+        "Z1",
+        "--max-weight",
+        "1",
+    ]);
+    assert!(weight["dropped_terms"].as_u64().unwrap() >= 1);
+    assert!((f(&weight["value"]) - 1.4f64.cos()).abs() <= f(&weight["truncation_bound"]) + 1e-15);
+
+    // Device noise: a three-qubit GHZ on the example device, against its
+    // density matrix (readout errors are not applied by either).
+    let ghz3 = Scratch::new("ghz3.qasm");
+    let src3 = "OPENQASM 2.0;\ninclude \"qelib1.inc\";\nqreg q[3];\nh q[0];\ncx q[0],q[1];\ncx q[1],q[2];\n";
+    std::fs::write(&ghz3.0, src3).unwrap();
+    let device = "examples/devices/toy_device.json";
+    let noisy = qso(&[
+        "propagate",
+        ghz3.path(),
+        "--observable",
+        "Z0 Z1 + Z1 Z2 + X0 X1 X2",
+        "--device",
+        device,
+    ]);
+    let circuit = metatron_qso::quantum::from_qasm2(src3).unwrap();
+    let model =
+        metatron_qso::noise::DeviceModel::from_json(&std::fs::read_to_string(device).unwrap())
+            .unwrap();
+    let mut rho = metatron_qso::noise::DensityMatrix::zero(3).unwrap();
+    rho.apply_device(&circuit, &[], &model).unwrap();
+    let h: metatron_qso::quantum::PauliSum = "Z0 Z1 + Z1 Z2 + X0 X1 X2".parse().unwrap();
+    let reference = rho.expectation(&h).unwrap();
+    assert!(reference < 2.99);
+    close(f(&noisy["value"]), reference, 1e-12);
+    assert!(noisy["layers"].as_u64().unwrap() > 1);
+
+    assert!(
+        qso_fails(&["propagate", ghz.path(), "--observable", "Z70"]).contains("70"),
+        "a qubit beyond the circuit"
+    );
+    assert!(
+        qso_fails(&[
+            "propagate",
+            ghz3.path(),
+            "--observable",
+            "Z0",
+            "--state",
+            "01"
+        ])
+        .contains("3")
+    );
+    assert!(
+        qso_fails(&[
+            "propagate",
+            ghz3.path(),
+            "--observable",
+            "Z0",
+            "--state",
+            "0+1"
+        ])
+        .contains("state")
+    );
+    assert!(
+        qso_fails(&[
+            "propagate",
+            ghz3.path(),
+            "--observable",
+            "Z0",
+            "--max-terms",
+            "0"
+        ])
+        .contains("max_terms")
+    );
+
+    // Review regression: a final measurement is left out (as the Python
+    // `propagate` does), a measurement followed by a gate on its qubit
+    // dephases it and is refused instead of ignored (it printed 1, the
+    // exact value is 0), and so are resets.
+    let header = "OPENQASM 2.0;\ninclude \"qelib1.inc\";\nqreg q[2];\ncreg c[2];\n";
+    let fin = Scratch::new("final_measure.qasm");
+    std::fs::write(
+        &fin.0,
+        format!("{header}h q[0];\ncx q[0],q[1];\nmeasure q -> c;\n"),
+    )
+    .unwrap();
+    assert_eq!(
+        f(&qso(&["propagate", fin.path(), "--observable", "Z0 Z1"])["value"]),
+        1.0
+    );
+    let mid = Scratch::new("mid_measure.qasm");
+    std::fs::write(
+        &mid.0,
+        format!("{header}h q[0];\nmeasure q[0] -> c[0];\nh q[0];\n"),
+    )
+    .unwrap();
+    assert!(qso_fails(&["propagate", mid.path(), "--observable", "Z0"]).contains("measured"));
+    let reset = Scratch::new("reset.qasm");
+    std::fs::write(&reset.0, format!("{header}x q[0];\nreset q[0];\n")).unwrap();
+    assert!(qso_fails(&["propagate", reset.path(), "--observable", "Z0"]).contains("reset"));
+}

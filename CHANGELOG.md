@@ -8,6 +8,36 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Expectation values of large noisy circuits by Pauli propagation**
+  (1.64, `propagation`: `propagate`, `PauliOperator`, `Layer`,
+  `PropagationOptions`, `PropagationResult`, `device_layers`,
+  `device_from_json`, `program_circuit`, `MAX_PROPAGATION_QUBITS`, `MAX_PROPAGATION_TERMS`,
+  `DEFAULT_MAX_TERMS`, `MAX_TRANSFER_QUBITS`; Python `propagate`;
+  `qso propagate`; the example `pauli_propagation`): `⟨O⟩` of circuits on
+  up to 16 384 qubits in the Heisenberg picture, the observable held as
+  Pauli strings on its light cone (two masks of `⌈m/64⌉` words) with real
+  coefficients, read in `|0…0⟩`, a basis state or any product state of
+  Bloch vectors. Clifford gates map strings by the tableau's rules
+  (shared with `StabilizerState`), rotations split anticommuting strings,
+  other gates on up to four qubits and the adjoints of channels act by
+  transfer matrices; sparse Pauli–Lindblad layers multiply strings by
+  `exp(−2G Σλ_k)` at any factor `G` (amplified for PEA, `−1` for the value
+  PEC converges to); device models compile to gates and channels, with up
+  to 16 384 per-qubit entries on this path only (slow noise refused,
+  readout not applied). Levels of bijections rewrite the table in place,
+  other levels split and merge strings in 64 shards; results are
+  bit-identical on any number of threads. Strings are dropped by
+  coefficient and weight, and `truncation_bound` bounds the error
+  rigorously (dropped, snapped and cancelled magnitudes times the
+  overhead of inverted layers on the light cone). Equal to state vectors
+  and density matrices to 10⁻¹² on random circuits and channels, to
+  Stim's `PauliString.before` on Clifford circuits of 10³ and 10⁴ qubits,
+  and on the 115-qubit kicked-Ising circuits of Kim et al. to Aer's light
+  cone (7.7·10⁻¹⁵ through five steps, 134 744 strings in 30 ms on one
+  thread) and to qiskit-addon-obp string for string, with and without
+  scaled Pauli–Lindblad noise (2.1·10⁻¹⁵); qiskit-addon-obp joins the
+  cross-validation.
+
 - **Transport to a trap** (1.63, `walks::transport`: `TransportOptions`,
   `TransportResult`, `SolveReport`, `DephasingOptimum`,
   `TransportState`, `MAX_TRANSPORT_WORK`, `MAX_TRANSPORT_FACTOR_ENTRIES`;

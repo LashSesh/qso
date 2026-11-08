@@ -18,7 +18,8 @@ circuits, Pauli-frame sampling, detector error models, union-find and
 minimum-weight matching and BP+OSD decoding, repetition, surface,
 colour and bivariate bicycle code memory experiments, exact circuit
 distances); matrix-product
-states for circuits with little entanglement on many qubits; and nuclear
+states for circuits with little entanglement on many qubits; expectation
+values of large noisy circuits by Pauli propagation; and nuclear
 spin dynamics for magnetic resonance (``metatron_qso.spin``).
 
 Conventions: qubit 0 is the least significant bit of a basis index; bit
@@ -166,6 +167,7 @@ from ._core import (
     pec_expectation,
     pec_layered,
     permanent,
+    propagate,
     qaoa_maxcut_circuit,
     qdrift_circuit,
     qdrift_error_bound,
@@ -338,6 +340,7 @@ __all__ = [
     "pec_expectation",
     "pec_layered",
     "permanent",
+    "propagate",
     "qaoa_maxcut_circuit",
     "qdrift_circuit",
     "qdrift_error_bound",

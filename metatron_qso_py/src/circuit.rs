@@ -565,7 +565,7 @@ impl PyCircuit {
 /// Bit strings put bit 0 on the right, like `Circuit` puts qubit 0.
 #[pyclass(name = "Program", module = "metatron_qso", frozen)]
 pub struct PyProgram {
-    inner: Program,
+    pub(crate) inner: Program,
 }
 
 fn registers<'py>(py: Python<'py>, regs: &[Register]) -> PyResult<Vec<Bound<'py, PyDict>>> {

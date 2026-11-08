@@ -1889,6 +1889,49 @@ def pea_layered(
 ) -> ZneResult: ...
 
 # ---------------------------------------------------------------------------
+# Pauli propagation
+
+@type_check_only
+class PropagationResult(TypedDict):
+    value: float
+    truncation_bound: float
+    terms: int
+    peak_terms: int
+    dropped_terms: int
+    operator: Optional[list[Tuple[float, str]]]
+
+def propagate(
+    layers: Union[
+        Circuit,
+        Program,
+        str,
+        Tuple[Channel, Sequence[int]],
+        Tuple[SparsePauliLindblad, Sequence[int], float],
+        Tuple[Union[str, Sequence[Tuple[float, str]]], float],
+        list[
+            Union[
+                Circuit,
+                Program,
+                str,
+                Tuple[Channel, Sequence[int]],
+                Tuple[SparsePauliLindblad, Sequence[int], float],
+                Tuple[Union[str, Sequence[Tuple[float, str]]], float],
+            ]
+        ],
+    ],
+    observable: Union[str, PauliSum, Sequence[Tuple[float, str]]],
+    *,
+    n_qubits: Optional[int] = None,
+    device: Optional[Union[DeviceModel, str]] = None,
+    theta: Optional[ArrayLike] = None,
+    state: Optional[Union[str, ArrayLike]] = None,
+    min_coefficient: float = 0.0,
+    max_weight: Optional[int] = None,
+    max_terms: int = 16777216,
+    return_operator: bool = False,
+) -> PropagationResult: ...
+
+# ---------------------------------------------------------------------------
 # Classifier
 
 @type_check_only

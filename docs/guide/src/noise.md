@@ -153,6 +153,16 @@ description uses consistently):
 `DeviceModel.from_noise_model` turns a `NoiseModel` into the equivalent
 device.
 
+A description holds per-qubit entries (`qubits`) for at most 34 qubits,
+as many as the largest simulator holds; `default_qubit` covers the rest.
+[Pauli propagation](propagation.md) runs circuits on up to 16384 qubits
+with a device's gate rules, idle relaxation, spectators and fixed
+over-rotations as channels; there, and only there, a description may
+hold up to 16384 per-qubit entries (pass it as JSON text to
+`propagate(…, device=text)` or `qso propagate --device FILE`; in Rust
+`propagation::device_from_json`). Readout errors are not applied on that
+path, and slow noise is refused.
+
 ## Quantum trajectories
 
 Density matrices need 4ⁿ numbers and stop at 14 qubits. Quantum

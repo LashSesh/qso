@@ -15,8 +15,8 @@ Every algorithm is checked against an independent reference:
 | A second method | adjoint, parameter-shift and finite-difference gradients; statevector against density matrix; quantum trajectories against density matrices (χ² tests); the quantum Fisher information against finite differences of the fidelity; four fermion encodings against each other |
 | Exact sums | PEC summed over all corrections, Pauli twirls over all 16 frames, the variance 3ᵏ of classical shadows |
 | Statistics | coverage of confidence intervals over repeated runs; unbiased adaptive shot allocation over 2000 seeds; the 1/N error scaling of amplitude estimation over 200 seeds; learned noise rates of a known device within their bootstrap standard errors |
-| Rigorous bounds | product-formula errors below their bounds; qDRIFT channels below Campbell's bound; canonical amplitude estimation within its error bound with probability ≥ 8/π² |
-| Other codes | Qiskit Aer, Qulacs, Cirq, PennyLane Lightning and The Walrus (permanents, hafnians, Gaussian boson sampling); PySCF's integrals and its Hartree–Fock, full-CI and CASCI energies for H₂, LiH, BeH₂, H₂O, NH₃, OH and CH₂ |
+| Rigorous bounds | product-formula errors below their bounds; qDRIFT channels below Campbell's bound; canonical amplitude estimation within its error bound with probability ≥ 8/π²; truncated Pauli propagation within its truncation bound (24 random noisy circuits with 216 truncated runs, kicked Ising at six and seven steps) |
+| Other codes | Qiskit Aer, Qulacs, Cirq, PennyLane Lightning and The Walrus (permanents, hafnians, Gaussian boson sampling); Stim's `PauliString.before` and qiskit-addon-obp for Pauli propagation; PySCF's integrals and its Hartree–Fock, full-CI and CASCI energies for H₂, LiH, BeH₂, H₂O, NH₃, OH and CH₂ |
 
 These checks live in the test suites, which run on every change on Linux
 (x86_64 and arm64), macOS and Windows:
@@ -41,7 +41,11 @@ blossom algorithm agrees with dynamic programming on random graphs
 Matrix-product states are checked against the state vector on random
 circuits (within their fidelity bound), and on 100 qubits against the
 exact free-fermion evolution of a Trotterized XX chain and the QAOA ring
-optimum ([Matrix-product states](mps.md)).
+optimum ([Matrix-product states](mps.md)). Pauli propagation is checked
+against the state vector and the density matrix on random circuits and
+channels of up to 12 qubits, and against a seeded Clifford circuit of
+10³ qubits whose Heisenberg operators Stim computed
+([Pauli propagation](propagation.md)).
 
 ## Cross-validation with other frameworks
 
@@ -57,6 +61,9 @@ deviation above rounding level fails the run.
 | Permanents (The Walrus) | 2.8·10⁻¹⁴ relative |
 | Detector error models of repetition and surface-code memory experiments (Stim), and of Stim's generated circuits imported | 1.0·10⁻¹⁵ relative; detection-event rates agree to sampling precision |
 | Matching decoder against PyMatching, same error model and syndromes | 1 differing prediction in 800 000 (8 circuits × 10⁵ shots) |
+| Pauli propagation on 10³ and 10⁴ qubits (Clifford circuits of 3·10⁴ and 1.5·10⁵ gates, 50 strings each) and of the kicked-Ising circuits of Kim et al. at θ_h = 0 and π/2 (1–20 steps), against Stim 1.16's `PauliString.before` | identical strings and signs |
+| Kicked Ising on the 115-qubit heavy-hex lattice, ⟨Z₅₇⟩ at θ_h = 0.3, π/4 and 1, 1–5 steps without truncation: Qiskit Aer's state vector of the light cone; the Heisenberg operator against qiskit-addon-obp 0.3 (134 744 strings at five steps); at six and seven steps truncated | 7.7·10⁻¹⁵; coefficients 6.3·10⁻¹⁵, no string missing; errors within the reported bound |
+| The same with sparse Pauli–Lindblad noise after every ZZ layer, scaled by 0, 1, 1.5, 2, −1 and 1 then −1 (a uniform and a seeded model): qiskit-addon-obp's `PauliLindbladErrorInstruction` and, for non-negative factors, Aer's density matrix | 2.1·10⁻¹⁵ (obp), 8.3·10⁻¹⁶ (Aer) |
 | Transport to a trap, efficiency and mean arrival time (SymPy 1.14 exact rationals: the detuned dimer, K_N for N = 4–9 and 64 dense, and on ten orbitals at N = 64 and 1024) | 2.0·10⁻¹⁴ in the efficiency, 4.3·10⁻¹⁴ relative in the arrival time |
 | Transport to a trap against QuTiP 5.3's `liouvillian` solved directly (the dimer, K₅, random weighted graphs of 5–8 nodes, FMO, hypercubes Q₃–Q₅ on the full cube) and `mesolve` integrated until less than 10⁻¹² is left | `liouvillian`: 1.7·10⁻¹³ (FMO without dephasing, condition 9·10⁴), 3.5·10⁻¹⁴ relative; `mesolve`: 6.7·10⁻¹³, 6.8·10⁻¹¹ relative; the dimer's best dephasing rate, 39/20, to 1.3·10⁻⁷ |
 
@@ -64,7 +71,7 @@ deviation above rounding level fails the run.
 
 | Check | What it covers |
 |---|---|
-| Fuzzing | Each parser and deserialiser runs under cargo-fuzz for one minute on every pull request and ten minutes every week. The parsers are OpenQASM 2 and 3, Pauli sums, graph specifications and Stim circuits; the JSON forms are those of circuits, states, graphs, Pauli sums and device models; fermion operators and FCIDUMP files are fuzzed as well, and so are detector circuits built from random bytes. Beyond "no crash", the targets check that exported QASM re-imports to an equivalent circuit that prepares the same state on a matrix-product state, that the OpenQASM 2 and 3 exports of a program reproduce its outcome distribution, that accepted data are well-formed, that the union-find and matching decoders explain every syndrome that some set of matching-graph edges produces, and that Stim circuits (imported, or exported and read back) reproduce their text. Every input that ever failed is replayed on each run. |
+| Fuzzing | Each parser and deserialiser runs under cargo-fuzz for one minute on every pull request and ten minutes every week. The parsers are OpenQASM 2 and 3, Pauli sums (and the Pauli operators of Pauli propagation on 16384 qubits, which must agree with them), graph specifications and Stim circuits; the JSON forms are those of circuits, states, graphs, Pauli sums and device models; fermion operators and FCIDUMP files are fuzzed as well, and so are detector circuits built from random bytes. Beyond "no crash", the targets check that exported QASM re-imports to an equivalent circuit that prepares the same state on a matrix-product state, that the OpenQASM 2 and 3 exports of a program reproduce its outcome distribution, that accepted data are well-formed, that the union-find and matching decoders explain every syndrome that some set of matching-graph edges produces, and that Stim circuits (imported, or exported and read back) reproduce their text. Every input that ever failed is replayed on each run. |
 | Differential testing | `differential::compare` (Rust) runs one circuit on every simulator that takes it: the single-precision state vector, the noiseless density matrix, a noiseless trajectory, a matrix-product state of unlimited bond dimension, the stabilizer tableau (its generators and every Pauli expectation value, for Clifford circuits) and the OpenQASM 2 and 3 round trips. States are compared amplitude by amplitude after aligning the global phase, so an angle off by 10⁻⁸ shows as 10⁻⁸; norms and traces separately. The tolerance is 10⁻¹⁰ (single precision 10⁻⁷ per gate; the MPS within its own truncation bound, since even an unlimited bond drops singular values below about 10⁻⁸ of the largest). Property tests feed it random circuits of every gate kind, under up to three controls, dense unitaries on up to three qubits, symbolic and special angles, on 1 to 10 qubits: 256 per test on every change and 20 000 every week. A fuzz target decodes circuits from random bytes, for one minute on every pull request and ten minutes every week. The first runs and an independent review found three faults, now regression tests: the MPS turned to NaN when asked to keep everything, the tableau accepted rotations by huge angles as Clifford gates, and a test compared NaN bit patterns. |
 | Miri | The `unsafe` statevector kernels run under Miri on multi-threaded paths, which checks them for undefined behaviour and data races; so do the buffer exports of the WebAssembly module. |
 | Hostile input | Tests feed oversized, non-finite and inconsistent input to every public entry point and expect an error. |
