@@ -59,7 +59,7 @@ which withdraws the results of version 1.
 | Boson sampling | exact probabilities and exact sampling (1.1); partial distinguishability, loss and Gaussian boson sampling with hafnians and torontonians (1.14) | mixed Gaussian states with many photons spread over many modes are impractical (10¹² operations at 20 photons in 10 modes) |
 | Noise and mitigation | device models (per-qubit T₁/T₂ and readout, per-gate durations, errors and over-rotations, JSON), density matrices up to 14 qubits, quantum trajectories beyond; readout mitigation, ZNE, PEC, Pauli twirling, classical shadows, standard errors on every estimate (1.4); slow noise from Markov processes (telegraph, Ornstein–Uhlenbeck, quasi-static, 1/f) averaged exactly on density matrices (1.44); expectation values of noisy circuits on up to 16 384 qubits by Pauli propagation, with sparse Pauli–Lindblad noise amplified for PEA or inverted for PEC's limit and device models beyond 34 qubits (1.64) | noise learning for layers of two-qubit Clifford gates only, on density matrices up to 10 qubits and Pauli frames up to 64 (1.12, 1.31), with non-Pauli channels twirled one at a time; sampled mitigation with the learned model above 24 qubits only on matrix-product states, for channels that are mixtures of unitaries (1.31); the values it converges to by Pauli propagation exact only while the observable stays sparse in the Heisenberg picture, beyond that with a rigorous bound that can lie far above the error, and with gates and channels on at most four qubits, product input states and no readout errors (1.64); no leakage; channels on at most four qubits (1.30); slow noise averaged exactly up to 12 qubits and processes with finitely many states (1.44), sampled on trajectories beyond (1.30); virtual distillation (1.17) mitigates only its measured copies' preparation |
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18); interacting bosons, fermions and distinguishable particles with certificates for graph isomorphism (1.29); symmetry for driven walks, open walks on orbitals, coined walks with dephasing, hypercubes with dephasing up to d = 230 (1.38); interacting walkers on the orbits of automorphisms (three bosons on Q₉: 2284 orbits of 22.5 million configurations) and up to four particles on hypercubes (1.43); open walks on large symmetric graphs from point stabilisers (Q₁₈, H(4, 10), J(24, 4); 1.48); interacting walkers on Hamming, Johnson and Kneser graphs from canonical forms (1.53) and on any graph from minimal images under a group (three fermions on Paley(3209): 1068 orbits of 5.5·10⁹ configurations; 1.58); transport to a trap with traps, losses, site energies and dephasing per node, its efficiency and mean arrival time by linear solves, dark states and the best dephasing rate, dense to 2048 nodes, on orbitals (K₈₁₉₂ on ten orbitals) and on hypercubes to d = 61 (1.63) | interacting walkers without symmetry stop at 2²² configurations, and dense graphs with small groups stay dense on their orbits (three bosons from one node of Paley(809) exceed 2²⁶ entries; 1.58); open walks beyond 8192 nodes need a start whose stabiliser leaves few orbitals (dense graphs and circulants stay at 8192 nodes; 1.48); pretty good transfer on other graphs has no exact reference; the arrival time of transport has no error estimate and on large coherent hypercubes is limited by the conditioning (Q₄₀: 1.2·10⁻⁴ relative), and the orbital solves refactorise a banded LU at every dephasing rate (1.63) |
-| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); MP2, CCSD and CCSD(T) with frozen cores, closed shells in spatial orbitals and UHF and ROHF in spin orbitals, equal to PySCF's to 2.1·10⁻¹⁰ Ha (1.62); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37); the ¹³C bath of an NV centre by the cluster-correlation expansion (1.39); the optical cycle, ODMR, pulsed readout and magnetometer sensitivity in fields of any direction, and ensembles (1.40); sparse relaxation blocks propagated by Krylov steps, Redfield relaxation from sparse terms and equivalent spins: seven and eight relaxing protons for seconds (1.41); optimal control with relaxation on sparse blocks and on the orbits of equivalent spins, seven and eight spins (1.46); Redfield relaxation with anisotropic diffusion and model-free internal motion (1.49); reaction kinetics with spins: PASADENA, ALTADENA and SABRE as they run (1.50); field profiles with relaxation beyond six spins, the relaxation interpolated over the field (1.51); exchange and reactions on sparse blocks with iterative steady states and field profiles: SABRE with nine spins in the complex beside seven in the substrate (1.54); reactions of two spin-carrying reactants, the product formed in the product of their states: SABRE whose complex keeps its hydrides and swaps them with a hydrogen pool, PHIP from a pool whose singlet decays (1.59); the optical cycle with the nitrogen and one ¹³C at the level anticrossings, ¹⁵N polarised to 0.95 at 51 mT, the fluorescence dip at 102.4 mT, a microwave in the laboratory frame by Floquet harmonics (1.60); Redfield relaxation applied without storing it, with its analytic field derivative: nine and ten relaxing spins whose superoperator would need 6 to 74 GB (1.55); product-formula bounds whose remainder runs over the terms that do not commute, the error averaged over states, and step counts for a target error: half the steps of the bounds of Childs et al. for Heisenberg chains of 10 to 64 spins (1.56) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); coupled cluster holds every integral (64 basis functions, 100 correlated spin orbitals: 1.55 GB at 96) and runs on one thread, 1.6 to 2 times PySCF's time per closed-shell iteration and 6 to 12 times per open-shell one; no (T) for ROHF (1.62); the commutator bound of product formulas (1.56) still sums its remainder by the triangle inequality, about 2.3 times the empirical step counts of Heisenberg chains and loose at few steps and order 6, where its budget stops the degree early; Redfield relaxation takes rigid-body diffusion and model-free internal motion, not correlated motions of groups (1.49), and propagations beyond 1.5·10¹² operations or 2 GiB are refused (eleven protons with dipolar relaxation, nine for 100 s; 1.41); chemical exchange and reaction kinetics take Krylov steps beyond 2048 elements per block (1.54), unaffordable in the laboratory frame at millitesla fields and more; reactants meet uncorrelated (no cage effects), and a reaction whose partner's amount changes takes steps that resolve the frequencies of the blocks it feeds (PHIP at 1 µT with a three-spin product: 2 s of reaction in 2 s, 9 s with the hydrogen a pool with spins; a four-spin product at 5 µT over 3 s exceeds the work limit; 1.50, 1.59); field profiles with relaxation hold the relaxation at up to 33 fields (1.51), or apply Redfield relaxation without storing it where those would not fit (1.55), where work bounds them (eight spins with dipolar relaxation: two steps over 0.02 s per evaluation within the limit), and have many local optima; an evaluation of eight relaxing spins takes tens of seconds (1.46); the NV bath of 1.39 takes ideal pulses only (finite ones: the generalised expansion, 1.45), its expansion can diverge (results beyond `|L| = 1` are refused), and the nuclei next to the vacancy need given contact couplings (1.39); the optical cycle with nuclei is dense in Liouville space: 42 levels (¹⁴N and ¹³C) take 9 s for a steady state and 230 s with a microwave, and more nuclei do not fit (1.60) |
+| Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); MP2, CCSD and CCSD(T) with frozen cores, closed shells in spatial orbitals and UHF and ROHF in spin orbitals, equal to PySCF's to 2.1·10⁻¹⁰ Ha (1.62); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37); the ¹³C bath of an NV centre by the cluster-correlation expansion (1.39); the optical cycle, ODMR, pulsed readout and magnetometer sensitivity in fields of any direction, and ensembles (1.40); sparse relaxation blocks propagated by Krylov steps, Redfield relaxation from sparse terms and equivalent spins: seven and eight relaxing protons for seconds (1.41); optimal control with relaxation on sparse blocks and on the orbits of equivalent spins, seven and eight spins (1.46); Redfield relaxation with anisotropic diffusion and model-free internal motion (1.49); reaction kinetics with spins: PASADENA, ALTADENA and SABRE as they run (1.50); field profiles with relaxation beyond six spins, the relaxation interpolated over the field (1.51); exchange and reactions on sparse blocks with iterative steady states and field profiles: SABRE with nine spins in the complex beside seven in the substrate (1.54); reactions of two spin-carrying reactants, the product formed in the product of their states: SABRE whose complex keeps its hydrides and swaps them with a hydrogen pool, PHIP from a pool whose singlet decays (1.59); the optical cycle with the nitrogen and one ¹³C at the level anticrossings, ¹⁵N polarised to 0.95 at 51 mT, the fluorescence dip at 102.4 mT, a microwave in the laboratory frame by Floquet harmonics (1.60); Redfield relaxation applied without storing it, with its analytic field derivative: nine and ten relaxing spins whose superoperator would need 6 to 74 GB (1.55); product-formula bounds whose remainder runs over the terms that do not commute, the error averaged over states, and step counts for a target error: half the steps of the bounds of Childs et al. for Heisenberg chains of 10 to 64 spins (1.56); radical pairs with electrons and ¹⁴N in the spin system: spin-selective recombination (Haberkorn, Jones–Maeda–Hore), singlet, triplet and escape yields against the field and the CIDNP of every nucleus in each product, by Sylvester solves per block of labels or GMRES with electron relaxation, the products handed to spin systems and formed in reactions (1.65) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); coupled cluster holds every integral (64 basis functions, 100 correlated spin orbitals: 1.55 GB at 96) and runs on one thread, 1.6 to 2 times PySCF's time per closed-shell iteration and 6 to 12 times per open-shell one; no (T) for ROHF (1.62); the commutator bound of product formulas (1.56) still sums its remainder by the triangle inequality, about 2.3 times the empirical step counts of Heisenberg chains and loose at few steps and order 6, where its budget stops the degree early; Redfield relaxation takes rigid-body diffusion and model-free internal motion, not correlated motions of groups (1.49), and propagations beyond 1.5·10¹² operations or 2 GiB are refused (eleven protons with dipolar relaxation, nine for 100 s; 1.41); chemical exchange and reaction kinetics take Krylov steps beyond 2048 elements per block (1.54), unaffordable in the laboratory frame at millitesla fields and more; reactants meet uncorrelated, except radical pairs born correlated in their cage (1.65), and a reaction whose partner's amount changes takes steps that resolve the frequencies of the blocks it feeds (PHIP at 1 µT with a three-spin product: 2 s of reaction in 2 s, 9 s with the hydrogen a pool with spins; a four-spin product at 5 µT over 3 s exceeds the work limit; 1.50, 1.59); field profiles with relaxation hold the relaxation at up to 33 fields (1.51), or apply Redfield relaxation without storing it where those would not fit (1.55), where work bounds them (eight spins with dipolar relaxation: two steps over 0.02 s per evaluation within the limit), and have many local optima; an evaluation of eight relaxing spins takes tens of seconds (1.46); the NV bath of 1.39 takes ideal pulses only (finite ones: the generalised expansion, 1.45), its expansion can diverge (results beyond `|L| = 1` are refused), and the nuclei next to the vacancy need given contact couplings (1.39); the optical cycle with nuclei is dense in Liouville space: 42 levels (¹⁴N and ¹³C) take 9 s for a steady state and 230 s with a microwave, and more nuclei do not fit (1.60); radical pairs take isotropic hyperfine couplings, two electrons without paramagnetic (Redfield) relaxation, exponential recombination without re-encounters and up to 2048 dimensions, about a second per field at 1536 in the laboratory frame on four cores (a start with coherences between labels: 101 s; 1.65) |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
 | Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22); exact circuit distances of any model by a parallel search or the Brouwer–Zimmermann enumeration, with the lightest logical error as circuit locations (1.42); the search on the orbits of an error model's symmetries: [[144, 12, 12]] over three rounds of the depth-8 cycle has circuit distance 10 (1.47); logical failure rates far below sampling by splitting, with their leading term (surface codes to 10⁻⁹, [[72, 12, 6]] to 10⁻¹³; 1.52); decoding in sliding windows of rounds by matching or BP+OSD, round by round, at constant time per round up to 4000 rounds (1.57); error models in one pass backwards, linear in the rounds; circuits that keep their repeated blocks, sampled as they run, their models folded: 10⁵ rounds of distance 5 in 1.4 s, equal to Stim's at 10⁴; windows decoded in parallel, 2 to 2.4 times as fast on four cores (1.61) | exact circuit distances need time exponential in the distance (each weight about 17 times the last on bicycle circuits); symmetries divide it by a factor that grows with their number (41 to 43 for 72); splitting needs a burn-in long enough, which its error does not show (1.52); the folded model is still expanded into all its errors (5.6 million, about 350 MB, for 10⁵ rounds of distance 5), and parallel windows gain 2 to 2.4 on four cores, as a shot's syndrome and commits stay on one thread (1.61) |
 | Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9), in the browser build too (1.25); expectation values by Pauli propagation on up to 16 384 qubits, exact or with a rigorous truncation bound (1.64) | — |
@@ -7668,7 +7668,7 @@ corrected number:
 After the fixes: propagation unit tests 37 (and 2 ignored measurements),
 validation 5, command line 1 (with the measurement cases), Python 13.
 
-### 1.65 — Radical pairs: spin-selective recombination, field effects and CIDNP (M)
+### 1.65 — Radical pairs: spin-selective recombination, field effects and CIDNP (M, delivered)
 
 Use case: photo-CIDNP of tryptophan, tyrosine and flavins,
 magnetic-field effects on reaction yields (MARY curves, the low-field
@@ -7708,6 +7708,324 @@ independently built Haberkorn Liouvillian with electron T₁ and T₂; the
 Sylvester solves equal to solves in Liouville space (3·10⁻¹⁶ for two
 protons in a field with unequal singlet and triplet rates); with all
 rates zero, the pair evolves as `SpinSystem.evolve`.
+
+Delivered in `spin/radical_pair.rs` and `spin/radical_pair/solve.rs`
+(`RadicalPair`, `PairSolution`, `PairYields`, `Birth`, `Recombination`,
+`Product`), `spin/mod.rs` (`Isotope::N14`, `Isotope::Electron`,
+`FREE_ELECTRON_G`, `SpinSystem::add_electron`, `hyperfine`,
+`exchange_coupling`), `spin/exchange.rs` and `spin/exchange/kinetics.rs`
+(`Reactions::add_source`, `sources`); Python `RadicalPair`,
+`PairSolution` and the new methods; `qso radical-pair` with the input
+`examples/spins/flavin_tryptophan.json`:
+
+- **Electrons and ¹⁴N.** Two variants appended to the non-exhaustive
+  `Isotope` after ³¹P (`"e"` and `"14N"` in names and JSON), so the
+  derived order and existing JSON are unchanged; `Isotope::ALL` keeps its
+  six nuclei, and the three crate-internal walks over the kinds present
+  (the labels of `blocks.rs`, the carriers and isotopes of exchange) take
+  the crate-private `Isotope::EVERY`. The electron's g-value is its shift
+  in ppm of `g_e` (CODATA 2018), so the Zeeman terms, frames, labels,
+  `T₁`/`T₂` jumps and thermal states of 1.33 serve it unchanged;
+  `add_electron(g)`, `hyperfine(e, n, a)` and `exchange_coupling(e1, e2,
+  J)` convert g-values and millitesla (28.024951 MHz per mT,
+  `|γ_e|·10⁻³/2π`; exchange `−2J S₁·S₂`, RadicalPy's convention without
+  its constant). ¹⁴N is spin 1
+  with γ = 1.9337792·10⁷ rad s⁻¹ T⁻¹, RadicalPy's value too. Electrons are
+  refused in `Exchange` and `Reactions` sites and with Redfield
+  relaxation, which leaves both open for later.
+- **The pair.** `RadicalPair::new` takes a system with exactly two
+  electrons (Redfield motion refused), `with_rates(k_S, k_T, k_E)`,
+  `with_recombination` (Haberkorn's term, or that of Jones, Maeda and
+  Hore) and `with_field`; `projector` and `birth_state` give `P_S`,
+  `P_T₀`, `P_T₊`, `P_T₋`, `P_T` and the identity from the permutation `π`
+  that swaps the electrons' digits (`W = P_T − P_S`, never stored).
+  `solve(birth)`, `solve_from(ρ₀)` (any Hermitian start of positive
+  trace) and `field_effect(birth, fields)` give `PairYields` (field,
+  `Φ_S`, `Φ_T`, `Φ_E`, `⟨I_z⟩` of every nucleus in each product, the
+  backward error and the GMRES iterations); `evolve` gives `ρ(t)`.
+- **Solves.** The generator splits as `−i(AX − XA† − σX) + 𝓕(X)`, `A` the
+  non-Hermitian Hamiltonian with the recombination and the jumps' decay,
+  shifted per block by its mean diagonal, `σ` a scalar and `𝓕` the jump
+  sandwiches and the term `(c/2)WXW` of Jones, Maeda and Hore. Blocks of
+  the system's labels are solved apart (those the start occupies, and with
+  jumps those they reach), each on its complex Schur form from 1.63's
+  `linalg/sylvester.rs`, in parallel. Haberkorn without jumps: one
+  Sylvester solve per block, refined at most twice; otherwise 1.63's
+  GMRES (restart 30, backward error 10⁻¹³) preconditioned on the right by
+  the Schur solves. Work and memory are estimated per field before any
+  factorisation, against `MAX_RELAXATION_WORK` and `MAX_RELAXATION_MEMORY`.
+- **States that never decay.** Refused with the remedy (an escape rate):
+  without jumps exactly, by the slowest decay of `A` on an occupied block
+  (a zero-field pair with `k_S` alone is refused for every birth, a
+  singlet-born pair at high field with `k_S` alone is accepted, as its T±
+  blocks are empty); with jumps by the preconditioner's gap and the
+  residual of the result.
+- **Products.** `product(which)` is `k_P Tr_e(P_P X)` over the nuclei,
+  of trace the yield; `product_on(which, target, spins, fresh)` places it,
+  normalised, into another `SpinSystem` through the routes of 1.59
+  (`carry_state` in `exchange.rs` checks a 1.59 channel and runs its
+  transfer), with the target's other spins thermal or parahydrogen.
+  `Reactions::add_source(site, rate, state)` forms a site at a constant
+  rate in such a state beside the reactions (a private field that JSON
+  omits when empty, so earlier JSON reads and writes unchanged): the
+  amount gains `rate`, the deviation `rate·(ρ − 1/d)` through the drift of
+  fresh states; in the rotating frame a source's coherences of non-zero
+  order are dropped (formed at random times, they average out), in the
+  laboratory frame refused.
+- **Python, command line and cross-validation.** `spin.RadicalPair`
+  (rates and term as keyword arguments, births by name) and
+  `PairSolution` release the GIL in solves; `SpinSystem.add_electron`,
+  `hyperfine`, `exchange_coupling`, `Reactions.add_source`, `sources`.
+  `qso radical-pair SYSTEM.json --rates KS,KT,KE` prints the yields at one
+  field or a sweep, the fields of the lowest and highest `Φ_S`, the
+  half-effect field and, with `--cidnp`, `⟨I_z⟩` per nucleus and product;
+  CI runs it on the flavin–tryptophan input. RadicalPy 1.0.9 joins the
+  cross-validation (`radical_pairs_vs_references`, `run.py
+  --radical-pairs-only`), installed for it alone: it pulls in RDKit and
+  MDAnalysis, about 900 MB.
+
+Changes to the plan:
+
+- **Births and units beyond the plan.** Uncorrelated pairs (F-pairs, `1/d`)
+  and any Hermitian start join S, T₀, T± and the triplet mixture; g-values,
+  hyperfine couplings and exchange can be given in g and mT, since
+  couplings in Hz written by hand were judged the likeliest error.
+- **Sylvester solves without any relaxation.** The plan named electron
+  relaxation; nuclear `T₁` and `T₂` add jumps too, so any relaxation takes
+  GMRES. GMRES is preconditioned by the Sylvester solves of the same
+  blocks, and needed 10 to 27 iterations in every case measured, against
+  25 to 60 expected from the spectral radii of small pairs.
+- **A residual check.** With electron dephasing alone, `k_S` alone and a
+  triplet birth at zero field, the stretched state `|ααα⟩` never reacts
+  although the preconditioner's gap is not zero; GMRES then returned an
+  `X` grown without bound with a backward error of 4·10⁻¹⁷ (`Φ_S` = −1.19),
+  and rates of 10³⁰⁰ left `X = 0`. Every result must now leave a residual
+  `‖𝓛X + ρ₀‖/‖ρ₀‖` of at most 10⁻⁶, which refuses both.
+- **`evolve` is public**, by blocks of `H` in Hilbert space with Haberkorn's
+  term and no relaxation (2048 dimensions), otherwise in a Liouville
+  space of at most `MAX_LIOUVILLE_BLOCK` elements; it covers the
+  validation's zero rates literally and gives the singlet probability in
+  time. No new limit constants: the solves use those of relaxation.
+- **The quoted RadicalPy yields are quadrature artefacts.** Its
+  `HilbertSimulation` integrates by the trapezoid rule, which errs by
+  `(k·dt)²/12`; the 0.7000000008 and 0.6000000008 of the plan are that
+  error. The cross-validation extrapolates two time steps (Richardson) and
+  compares `mary` with the exact yield of RadicalPy's own Hamiltonian,
+  and its sums with an exact replica of its quadrature. QSO's ¹H is given
+  the shift 0.222 ppm there that turns its IUPAC γ into RadicalPy's
+  CODATA γ.
+- **QuTiP's `mesolve` runs on a model with product shelves**, the yields
+  read from shelf populations, built independently of QSO; Haberkorn's
+  and Jones, Maeda and Hore's terms, with and without electron relaxation
+  at infinite temperature and 1 K, and a T± birth.
+- **No example program**: the guide's examples, the CLI and the
+  flavin–tryptophan input (run in CI) take its place.
+
+Not done, and why:
+
+- **A closure of states that never decay** (as transport to a trap has
+  for its dark states) for `k_E = 0` with `k_S` or `k_T` zero: it depends
+  on a tolerance near degeneracy and needs a public one; in that case an
+  escape rate, however small, is a physical remedy, so such starts are
+  refused with it.
+- **Anisotropic hyperfine tensors and the electrons' dipolar coupling.**
+  They need a tensor per coupling, which `Spin` and the couplings cannot
+  hold; a private serde-defaulted field of `SpinSystem` is the way later.
+- **Redfield relaxation of electrons** (paramagnetic relaxation), refused
+  now; the electron as an `Isotope` leaves room for it.
+- **More than two electrons** (triads), radicals of higher spin, and
+  spin-correlated radical-pair EPR.
+- **Diffusive re-encounters** and recombination other than exponential.
+- **Starts with coherences between labels** go through one block of all
+  states (101 s at 1536 dimensions); a solve per pair of blocks
+  (two-sided Bartels–Stewart) would remove this.
+- **Time evolution with relaxation or the Jones–Maeda–Hore term** beyond
+  2048 Liouville elements (1836 elements take 15 s).
+- **Source states that follow the field** in `Reactions` (a source is
+  fixed when added), symmetry reduction of equivalent nuclei, JSON for
+  `RadicalPair` (the command line reads the spin system and flags) and
+  WebAssembly bindings.
+
+Measured (release build, this four-core machine; `measure_radical_pairs`
+in the unit tests on 1 and 4 threads, once each; peak memory the resident
+peak of a fresh Python process per row, Python included, on four threads).
+The pairs have two electrons (g differing by 10⁻³; equal in the
+flavin–tryptophan pair and with nine protons), ¹⁴N and 3, 5 or 7
+protons (96, 384, 1536 dimensions; laboratory frame at 0, 1 and 50 mT,
+rotating frame at 0.35 T), or nine protons (2048), `k_S = k_T = 2·10⁷`,
+singlet birth:
+
+| Pair | Path | Largest block | 1 / 4 threads | Peak memory | Backward error |
+|---|---|---|---|---|---|
+| flavin–tryptophan (384, 0 T) | Sylvester | 91 | 47.9 / 26.2 ms; a sweep of 100 fields 49.0 / 23.6 ms per field | — | 1.4·10⁻¹⁵ |
+| 96, laboratory / rotating | Sylvester | 25 / 6 | 2 / 1–2 ms; 1 / <1 ms | — | 3·10⁻¹⁶–1.2·10⁻¹⁵ / 3·10⁻¹⁷ |
+| 384, laboratory / rotating | Sylvester | 91 / 20 | 40–55 / 23–31 ms; 7 / 5 ms | — | 6·10⁻¹⁶–1.0·10⁻¹⁵ / 6·10⁻¹⁷ |
+| 1536, laboratory / rotating | Sylvester | 336 / 70 | 2.0–2.5 / 0.86–1.08 s; 0.16 / 0.16 s | 132 MB / 93 MB | 1.2–2.0·10⁻¹⁵ / 5·10⁻¹⁷ |
+| 2048 (nine protons, 1 mT) | Sylvester | — | 5.6 / 2.6 s | 231 MB | 1.7·10⁻¹⁵ |
+| 384, Jones–Maeda–Hore | GMRES, 17 iterations | 91 | 0.17 / 0.12 s | — | 3.3·10⁻¹⁵ |
+| 1536, Jones–Maeda–Hore | GMRES, 19 iterations | 336 | 8.6 / 4.2 s | 279 MB | 5.8·10⁻¹⁶ |
+| 384, electron `T₁` 1 µs, `T₂` 0.5 µs, `k_E` 0 and 10⁶ | GMRES, 10 iterations | 91 | 0.14 / 0.08 s | — | 2–3·10⁻¹⁶ |
+| 1536, the same | GMRES, 10 iterations | 336 | 5.7–6.1 / 2.5–2.6 s | 232 MB | 5·10⁻¹⁶ |
+| 384 / 1536, a start with nuclear coherence | one block | 384 / 1536 | 1.4 / 1.1 s; 109 / 101 s | 658 MB (1536) | 2.0 / 6.1·10⁻¹⁵ |
+
+`product_on` from 1536 dimensions onto the seven nuclei and a fresh ¹³C
+(512) takes 0.37 / 0.28 s; `evolve` at 1536 by blocks of `H` 0.46 /
+0.27 s, and with electron relaxation in a Liouville space of 1836
+elements (96 dimensions, dense exponential) 14.9 / 14.8 s at 548 MB.
+`Reactions` with four relaxing protons over 10 s take 1.33 s without a
+source and 1.24 s with one on one thread (1.37 and 1.46 s on four): no
+measurable cost. The whole measurement peaks at 732 MB. In the
+cross-validation QSO takes 0.29 s of 60 s (22 s with `--quick`); the
+rest is RadicalPy's quadratures and QuTiP's `mesolve`. The design
+expected under 0.1 s for 1536 dimensions in the rotating frame (0.16 s
+measured) and 25 to 60 GMRES iterations (10 to 27 measured); the other
+expectations held.
+
+Validation: the radical-pair tests (22 unit and 2 reference tests, and
+the ignored measurement; release build, 0.8 s on four threads) check the
+births against `parahydrogen_state` and as projectors; the closed forms
+of the exponential model to 10⁻¹³ (Δg at high field `½ + ½k²/(k² +
+Δω²)`, 0.75 at `k = Δω` and 0.9449436066201631 at 3·10⁷ s⁻¹ with Δω from
+the Hamiltonian, 1.0552920064610826·10⁷ rad/s for g = 2.0031 and 2.0027
+at 0.3 T and `Δg μ_B B/ħ` to 10⁻⁹, both frames and a grid of Δg, fields
+and rates; one ¹H at zero field 0.7 and 0.6625, one ¹⁴N or ²H 0.6 and
+49/85, and `1 − c + c·k²/(k² + (I + ½)²a²)` for both spins; every
+nuclear state at high field with exchange and unequal rates for S, T₀
+and T± births, T± exactly 0, 5/6, 1/6); Sylvester solves against a
+Liouvillian built in the test from the public Hamiltonian and projectors
+and solved by LU, five births, `X` to 10⁻¹³ of its largest entry, yields
+to 10⁻¹³, CIDNP to 10⁻¹⁴ and its sum to `−i Tr(X[I_z, H])` to 10⁻¹⁵; the
+GMRES path (Jones–Maeda–Hore, electron and nuclear relaxation) against
+the dense generator by LU to 10⁻¹² with a backward error below 10⁻¹²;
+yields that sum to one to 10⁻¹³ (Sylvester) and 10⁻¹² (GMRES) for six
+births, both terms, three relaxation cases and both frames, Haberkorn
+through GMRES equal to Sylvester to 10⁻¹²; zero rates equal to
+`SpinSystem::evolve` to 10⁻¹³ (10⁻¹¹ with electron relaxation); `evolve`
+against the dense exponential to 10⁻¹³ and its integral (Simpson)
+against `Φ_S` to 10⁻⁷; the frames at 3 T within 3.9·10⁻⁶, the size of
+the dropped flip-flop terms, each against an independent NumPy build to
+10⁻¹²; starts with coherences between labels against Liouville space to
+10⁻¹³; bit-identical field effects on 1 and 4 threads on both paths;
+CIDNP that cancels nucleus by nucleus in the rotating frame (four
+births, both terms, 10⁻¹⁵ and 10⁻¹⁴) and Kaptein's signs in all 24 cases
+of birth, Δg, `a` and product (each `|⟨I_z⟩|` at least 6·10⁻³; with `k_S
+= k_T` the escape product carries none, to 10⁻¹⁷); products of the
+yields as traces, positive semidefinite, routed onto copies, extra
+thermal spins and parahydrogen to 10⁻¹⁵, and onto a ¹H/¹⁴N system at 9.4
+T whose lines after a 90° pulse have Kaptein's signs; the order of the
+spins; every refusal. The reference tests pin the flavin–tryptophan MARY
+curve (six fields, two rates, the triplet birth, the low-field dip;
+10⁻¹²) and three nuclei with both terms and relaxation at 10⁹ K and
+298.15 K (10⁻¹² to 10⁻¹⁴; the thermal bias 1.607·10⁻¹¹ resolved), values
+recomputed independently in Liouville space. Five isotope tests (names,
+constants, the helpers' units to 10⁻¹⁵, the labels of the new kinds, ¹⁴N
+relaxing with its `T₁`, Δω) and six source tests (a source equal to a
+reaction that forms the same state, the closed form of formation, decay
+and `T₁` to 10⁻¹², coherences kept or dropped by frame, JSON, dense
+against Krylov propagation, a pair's product formed at its yield) pass,
+with the whole spin suite (235 tests, 285 s); the module's doc test, the
+command-line test and 12 Python tests pass. In the cross-validation (60
+s, no failure): the closed forms to 1.1·10⁻¹⁶; QSO's Hamiltonians
+against RadicalPy's to 5.1·10⁻¹⁶ relative; `HilbertSimulation` at zero
+field 0.6999999999988 and 0.6000000000001 after Richardson extrapolation
+(its own steps 0.7000000008 and 0.6000000008), 1.2·10⁻¹² from 0.7 and
+0.6; `experiments.mary` of the flavin–tryptophan pair from 0 to 20 mT,
+its sums equal to an exact replica to 6.7·10⁻¹⁶ and QSO equal to the
+exact yield of its Hamiltonian to 6·10⁻¹⁵; `LiouvilleSimulation` with
+`Haberkorn`, `HaberkornFree` and `JonesHore` (three nuclei) to
+1.9·10⁻¹⁵; `experiments.cidnp` at 0.05, 1 and 9.4 T to 4.2·10⁻¹⁷;
+QuTiP's `mesolve` to 1.5·10⁻¹³ in yields and products' `⟨I_z⟩`; sums to
+one to 2.7·10⁻¹⁵.
+
+Review (independent, after delivery): three reviewers (the numerics, the
+API with bindings and command line, and the documentation's claims)
+checked against their own NumPy Liouville and Sylvester solves, SciPy's
+`solve_sylvester`, 40-digit mpmath solutions, RadicalPy 1.0.9 and QuTiP
+5.3.1, and reran the guide's examples, the cross-validation and the
+builds (SemVer, serial, wasm32, MSRV). Yields, CIDNP, products, `X`,
+`evolve`, the pinned references and the closed forms held to 10⁻¹⁵ to
+10⁻¹³ in every case tried; each finding was reproduced before it was
+fixed (16 reported, 14 distinct: the CIDNP claims and the half-effect
+field were each reported twice). Findings, all fixed, each with a
+regression test or a corrected number:
+
+- **The CIDNP claims were wrong in the laboratory frame.** The docs said
+  the products' polarisations cancel in total over the nuclei at low
+  field and that the escape product carries none with `k_S = k_T`. S–T±
+  mixing passes polarisation between the electrons and the nuclei: two
+  protons at 1 mT with rates 3·10⁷, 8·10⁶, 2·10⁶ have a nuclear total of
+  +9.5·10⁻³ over the products, the electrons −9.5·10⁻³; with exchange or a
+  T₊ birth the escape product is polarised with `k_S = k_T` (6.3·10⁻⁴ and
+  0.029). The rustdoc and the guide now limit nucleus-by-nucleus
+  cancellation, the unpolarised escape product and Kaptein's rule to the
+  rotating frame without nuclear relaxation (a proton `T₁` of 1 µs leaves
+  5·10⁻⁴), and state what is kept: `⟨S_z + Σ I_z⟩` summed over the
+  products equals its value at birth, a new test for both terms and six
+  births (10⁻¹⁴, GMRES 10⁻¹³) that also asserts the nuclear share does
+  not cancel and the escape product is polarised.
+- **A fixed residual bound refused accurate laboratory-frame solves.**
+  `‖𝓛X + ρ₀‖/‖ρ₀‖ ≤ 10⁻⁶` refused the flavin–tryptophan pair with rates
+  (10⁴, 10, 10) at every field from 0.05 to 3 T (residual 1.7·10⁻⁶ to
+  9.8·10⁻⁵), and 9.4 T with (3·10⁶, 10³, 10³), though such solves are
+  accurate; the message asked for an escape rate that was given. A
+  larger residual is now accepted with a backward error of at most 10⁻¹²
+  and `‖X‖_F` within 10³ times `‖ρ₀‖_F` over the slowest decay of `A`
+  (`(1 + 2 ln κ)/g` bounds it without jumps), which still refuses an `X`
+  grown without bound and rates of 10³⁰⁰; decays below 10⁻¹⁴ of the
+  largest frequency stay refused, and both messages name the ratio of
+  frequency to decay and the rotating frame. A new test solves ¹H and ¹⁴N
+  in the laboratory frame at 0.05, 1 and 3 T with rates of 0.1 to 10⁴
+  s⁻¹, all refused before, against the eigenvectors of `H` (which agree
+  with 50-digit solutions to 4·10⁻¹⁶): the yields err by 1.7·10⁻⁹ at
+  most for rates of 10 and 100 s⁻¹ and 2·10⁻⁸ at 0.1 s⁻¹ (residual
+  10⁻³; 6·10⁻⁸ at 0.01 s⁻¹, residual 10⁻²), and rates of 10⁻³ s⁻¹ at 3 T
+  are refused with the frame as the remedy.
+- **Blocks the start never reaches were solved, and refused.** With
+  jumps every block was solved; dephasing of ¹⁴N (`T₂` alone) leaves
+  `T±|m = 0⟩` undamped, so a singlet start at 0.3 T with `k_S` alone was
+  refused as never decaying although it never meets those states
+  (accepted with `T₁`, with both, or without). Only the blocks the start
+  occupies and those the jumps reach from them are now solved: `Φ_S = 1`
+  to 10⁻¹² for the three relaxation cases, and a T₊ start is still
+  refused.
+- **`Reactions::add_source` panicked on a state of d² entries that was
+  not square** (1 × 16 or 2 × 8 for d = 4: nalgebra's trace); the shape
+  is now checked first, a `"source"` error.
+- **The stub of `RadicalPair.field_effect`** took `Sequence[float]`, so
+  the guide's own `np.linspace` example failed mypy; it is `ArrayLike`,
+  and a test passes a NumPy array.
+- **The command line's half-effect field** was labelled B½ although it is
+  relative to the end of the sweep (1.588685 mT against 4 mT in CI, the
+  guide's 1.68 mT against 50 mT), was printed for a sweep inside the
+  low-field dip, and said "the sweep must start at 0 T" for `0:0:3`. It
+  now prints "half the change of Φ_S from 0 to … mT", gives the real
+  reason when there is none (fewer than three fields, not from 0 T, no
+  change), the guide says the sweep must reach saturation, and `--json`
+  carries `sweep` (the lowest and highest `Φ_S`, B½ and its reference).
+- **`PairSolution.product_on` held the GIL** (0.28–0.37 s at 1536
+  dimensions); it now clones the target and runs detached.
+- **Birth names did not round-trip**: the JSON writes `triplet-zero`,
+  which `--birth` refused; the command line and Python now also take
+  `triplet-zero`, `triplet-plus` and `triplet-minus` (tested by feeding
+  the JSON's name back).
+- **`RadicalPair` and `PairSolution` were exported at the top level**,
+  unlike every other spin class but `SpinSystem`; they are now in
+  `metatron_qso.spin` only (the cross-validation imports them there).
+- **"CIDNP cancels nucleus by nucleus to 10⁻¹⁵"** holds for Haberkorn's
+  term; with that of Jones, Maeda and Hore it is 9.3·10⁻¹⁵ (tested to
+  10⁻¹⁴); the guide and README now say so.
+- **The RadicalPy exchange mapping was checked by nothing**, and run.py
+  called `+J(2S₁·S₂ + ½)` RadicalPy's form (it is `−J|γ_e|(2S₁·S₂ + ½)`).
+  The cross-validation now compares `exchange_coupling(J)` with
+  `exchange_hamiltonian(J)` at J = 0.3 and −1.1 mT (9·10⁻¹⁷ relative,
+  the constant `−J|γ_e|/2` added), and the comments are corrected; the
+  whole run passes (86 s, QSO 0.46 s, on a shared machine), its maxima
+  unchanged.
+- **Numbers**: "25 to 60 GMRES iterations (10 to 19 measured)" now reads
+  10 to 27, as measured in the guide's examples; the README's one-thread
+  time at 1536 dimensions is 2.0–2.5 s, as `measure1.log` shows.
+- **The laboratory-frame Δg assertion** used 10⁻¹² against the documented
+  10⁻¹³ (measured 1.1·10⁻¹⁶); it is 10⁻¹³.
 
 ### 1.66 — Erasures with heralds, and decoders that use them (M)
 

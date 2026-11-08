@@ -1,7 +1,7 @@
 //! Reaction kinetics with spins against closed forms.
 
 use super::*;
-use crate::spin::{Exchange, Isotope};
+use crate::spin::{BOLTZMANN, Exchange, Frame, HBAR, Isotope};
 
 fn proton() -> SpinSystem {
     let mut sys = SpinSystem::new(14.1);
@@ -721,4 +721,310 @@ fn r_step(r: &Reactions, sigma: &[CMatrix], t: f64, dt: f64) -> Vec<CMatrix> {
         .unwrap()
         .evolve(sigma, &[Event::Delay(dt)])
         .unwrap()
+}
+
+/// `Tr(σ I_z)` of spin `i`.
+fn iz_of(sys: &SpinSystem, sigma: &CMatrix, i: usize) -> f64 {
+    (sigma * sys.iz(i).unwrap()).trace().re
+}
+
+fn worst(a: &CMatrix, b: &CMatrix) -> f64 {
+    (a - b).iter().fold(0.0f64, |m, z| m.max(z.norm()))
+}
+
+#[test]
+fn a_source_is_a_reaction_of_a_catalyst() {
+    // A → P + A at k forms P at k·c_A with fresh spins: a source of that
+    // rate in the fresh state, thermal or parahydrogen. (P starts with an
+    // amount: from none the reaction's steps would not follow P's
+    // consumption, while a source's do.)
+    let (k, ca, kd, c0) = (0.8, 1.5, 0.3, 0.4);
+    let mut product = pair();
+    for i in 0..2 {
+        product.set_relaxation(i, Some(2.0), Some(1.0)).unwrap();
+    }
+    for (fresh, state) in [
+        (Fresh::Thermal, product.thermal_state().unwrap()),
+        (singlet(), product.parahydrogen_state(0, 1, 1.0).unwrap()),
+    ] {
+        let mut by_reaction = Reactions::new();
+        let p = by_reaction.add_site(product.clone(), c0).unwrap();
+        let a = by_reaction.add_species("A", ca).unwrap();
+        let d = by_reaction.add_species("D", 0.0).unwrap();
+        let mut rx = reaction(&[P(a)], &[S(p), P(a)], k);
+        rx.fresh = fresh;
+        by_reaction.add_reaction(rx).unwrap();
+        by_reaction
+            .add_reaction(reaction(&[S(p)], &[P(d)], kd))
+            .unwrap();
+        let mut by_source = Reactions::new();
+        let p2 = by_source.add_site(product.clone(), c0).unwrap();
+        by_source.add_species("A", ca).unwrap();
+        let d2 = by_source.add_species("D", 0.0).unwrap();
+        assert_eq!(by_source.add_source(p2, k * ca, &state).unwrap(), 0);
+        by_source
+            .add_reaction(reaction(&[S(p2)], &[P(d2)], kd))
+            .unwrap();
+        let start = vec![product.thermal_state().unwrap() * C64::new(c0, 0.0)];
+        for t in [0.2, 1.5] {
+            let x = by_reaction.evolve(&start, &[Event::Delay(t)]).unwrap();
+            let y = by_source.evolve(&start, &[Event::Delay(t)]).unwrap();
+            assert!(
+                worst(&x[0], &y[0]) <= 1e-12,
+                "{fresh:?} {t}: {:e}",
+                worst(&x[0], &y[0])
+            );
+            let (ax, ay) = (
+                by_reaction.amounts(t).unwrap(),
+                by_source.amounts(t).unwrap(),
+            );
+            for (u, v) in ax.iter().zip(&ay) {
+                assert!((u - v).abs() <= 1e-12, "{fresh:?} {t}: {u} vs {v}");
+            }
+        }
+    }
+}
+
+#[test]
+fn formation_decay_and_relaxation_follow_their_closed_form() {
+    // P formed at F with ⟨I_z⟩ = p_s per molecule, consumed at k_d, T₁:
+    // c = (F/k_d)(1 − e^{−k_d t}) and
+    // m = c·m_eq + F(p_s − m_eq)/(k_d + R₁)·(1 − e^{−(k_d + R₁)t}).
+    let (f, ps, kd, t1) = (2e-3, 0.15, 0.5, 2.0);
+    let mut sys = SpinSystem::new(9.4).with_temperature(300.0).unwrap();
+    let h = sys.add_spin(Isotope::H1, 0.0).unwrap();
+    sys.set_relaxation(h, Some(t1), None).unwrap();
+    let state =
+        CMatrix::identity(2, 2) * C64::new(0.5, 0.0) + sys.iz(h).unwrap() * C64::new(2.0 * ps, 0.0);
+    let mut r = Reactions::new();
+    let p = r.add_site(sys.clone(), 0.0).unwrap();
+    let d = r.add_species("D", 0.0).unwrap();
+    r.add_source(p, f, &state).unwrap();
+    r.add_reaction(reaction(&[S(p)], &[P(d)], kd)).unwrap();
+    let x = HBAR * Isotope::H1.gamma() * 9.4 / (BOLTZMANN * 300.0);
+    let meq = 0.5 * (x / 2.0).tanh();
+    let r1 = 1.0 / t1;
+    for t in [0.5, 2.0, 8.0] {
+        let sigma = r
+            .evolve(&[CMatrix::zeros(2, 2)], &[Event::Delay(t)])
+            .unwrap();
+        let c = f / kd * (1.0 - (-kd * t).exp());
+        let m = c * meq + f * (ps - meq) / (kd + r1) * (1.0 - (-(kd + r1) * t).exp());
+        let amount = sigma[0].trace().re;
+        assert!((amount / c - 1.0).abs() <= 1e-12, "{t}: {amount} vs {c}");
+        assert!((r.amounts(t).unwrap()[0] / c - 1.0).abs() <= 1e-12);
+        let got = iz_of(&sys, &sigma[0], h);
+        assert!((got / m - 1.0).abs() <= 1e-12, "{t}: {got} vs {m}");
+    }
+}
+
+#[test]
+fn sources_keep_or_drop_coherences_by_frame() {
+    // ¹H–¹³C with a zero-quantum coherence in the source: total order 0.
+    let make = |frame: Frame| {
+        let mut sys = SpinSystem::new(1e-3).with_frame(frame);
+        let a = sys.add_spin(Isotope::H1, 2.0).unwrap();
+        let b = sys.add_spin(Isotope::C13, 30.0).unwrap();
+        sys.couple(a, b, 140.0).unwrap();
+        sys
+    };
+    let mut state = CMatrix::identity(4, 4) * C64::new(0.25, 0.0);
+    // |αβ⟩ = 1, |βα⟩ = 2.
+    state[(1, 2)] = C64::new(0.05, 0.02);
+    state[(2, 1)] = C64::new(0.05, -0.02);
+    let f = 3.0;
+    // Laboratory frame: F∫₀ᵗ e^{𝓛s}(ρ − 1/4) ds + (Ft/4)·1 in the
+    // eigenbasis of H.
+    let lab = make(Frame::Laboratory);
+    let h = lab.hamiltonian().unwrap();
+    let eigen = h.clone().symmetric_eigen();
+    let v = &eigen.eigenvectors;
+    let dev = &state - CMatrix::identity(4, 4) * C64::new(0.25, 0.0);
+    let in_eigen = v.adjoint() * &dev * v;
+    let mut r = Reactions::new();
+    let p = r.add_site(lab.clone(), 0.0).unwrap();
+    r.add_source(p, f, &state).unwrap();
+    for t in [1e-4, 1e-3] {
+        let got = r
+            .evolve(&[CMatrix::zeros(4, 4)], &[Event::Delay(t)])
+            .unwrap();
+        let mut want = CMatrix::zeros(4, 4);
+        for m in 0..4 {
+            for n in 0..4 {
+                let w = eigen.eigenvalues[m] - eigen.eigenvalues[n];
+                let integral = if w == 0.0 {
+                    C64::new(t, 0.0)
+                } else {
+                    (C64::new(1.0, 0.0) - C64::new(0.0, -w * t).exp()) / C64::new(0.0, w)
+                };
+                want[(m, n)] = in_eigen[(m, n)] * integral * f;
+            }
+        }
+        let want = v * want * v.adjoint() + CMatrix::identity(4, 4) * C64::new(f * t / 4.0, 0.0);
+        assert!(
+            worst(&got[0], &want) <= 1e-12,
+            "{t}: {:e}",
+            worst(&got[0], &want)
+        );
+    }
+    // Rotating frame: the coherence (orders ±1 of each isotope) is dropped,
+    // bit for bit.
+    let rot = make(Frame::Rotating);
+    let mut plain = state.clone();
+    plain[(1, 2)] = ZERO;
+    plain[(2, 1)] = ZERO;
+    let run = |rho: &CMatrix| {
+        let mut r = Reactions::new();
+        let p = r.add_site(rot.clone(), 0.0).unwrap();
+        r.add_source(p, f, rho).unwrap();
+        r.evolve(&[CMatrix::zeros(4, 4)], &[Event::Delay(1e-3)])
+            .unwrap()
+    };
+    assert_eq!(run(&state), run(&plain));
+    // Laboratory frame: a single-quantum element is refused.
+    let mut single = CMatrix::identity(4, 4) * C64::new(0.25, 0.0);
+    single[(0, 1)] = C64::new(0.05, 0.0);
+    single[(1, 0)] = C64::new(0.05, 0.0);
+    let mut r = Reactions::new();
+    let p = r.add_site(lab, 0.0).unwrap();
+    assert!(r.add_source(p, f, &single).is_err());
+}
+
+#[test]
+fn sources_are_checked_stored_and_survive_json() {
+    let mut r = Reactions::new();
+    let p = r.add_site(pair(), 1.0).unwrap();
+    let a = r.add_species("A", 1.0).unwrap();
+    r.add_reaction(reaction(&[S(p)], &[P(a)], 0.7)).unwrap();
+    let before = r.to_json();
+    assert!(!before.contains("sources"));
+    let thermal = pair().thermal_state().unwrap();
+    let start = vec![thermal.clone()];
+    // A source of rate zero changes nothing, bit for bit.
+    let plain = r.evolve(&start, &[Event::Delay(0.4)]).unwrap();
+    let mut zero = r.clone();
+    zero.add_source(p, 0.0, &pair().parahydrogen_state(0, 1, 1.0).unwrap())
+        .unwrap();
+    assert_eq!(zero.evolve(&start, &[Event::Delay(0.4)]).unwrap(), plain);
+    assert_eq!(zero.amounts(0.4).unwrap(), r.amounts(0.4).unwrap());
+    // Pre-1.65 JSON parses; a source survives JSON, stored normalised.
+    assert_eq!(Reactions::from_json(&before).unwrap(), r);
+    let unnormalised = thermal.clone() * C64::new(1.0 + 1e-10, 0.0);
+    assert!(r.add_source(p, 0.5, &unnormalised).is_ok());
+    let sources = r.sources();
+    assert_eq!(sources.len(), 1);
+    assert_eq!((sources[0].0, sources[0].1), (p, 0.5));
+    assert!(worst(&sources[0].2, &thermal) <= 1e-15);
+    assert!((sources[0].2.trace().re - 1.0).abs() <= 1e-15);
+    let back = Reactions::from_json(&r.to_json()).unwrap();
+    assert_eq!(back, r);
+    assert!(r.to_json().contains("\"sources\""));
+    // The checks.
+    let invalid = |r: Result<usize>| match r {
+        Err(QsoError::InvalidArgument { name, .. }) => assert_eq!(name, "source"),
+        other => panic!("expected an invalid source, got {other:?}"),
+    };
+    let mut x = r.clone();
+    invalid(x.add_source(5, 1.0, &thermal));
+    invalid(x.add_source(p, -1.0, &thermal));
+    invalid(x.add_source(p, f64::NAN, &thermal));
+    invalid(x.add_source(p, 1.0, &CMatrix::identity(2, 2)));
+    // A valid state flattened to 1 × 16 or 2 × 8 (the right number of
+    // entries) is refused, not a panic in the trace.
+    let rows: Vec<C64> = thermal.transpose().iter().copied().collect();
+    invalid(x.add_source(p, 1.0, &CMatrix::from_row_slice(1, 16, &rows)));
+    invalid(x.add_source(p, 1.0, &CMatrix::from_row_slice(2, 8, &rows)));
+    invalid(x.add_source(5, 1.0, &CMatrix::from_row_slice(1, 16, &rows)));
+    invalid(x.add_source(p, 1.0, &(thermal.clone() * C64::new(2.0, 0.0))));
+    let mut nan = thermal.clone();
+    nan[(1, 1)] = C64::new(f64::NAN, 0.0);
+    invalid(x.add_source(p, 1.0, &nan));
+    let mut skew = thermal.clone();
+    skew[(0, 1)] = C64::new(0.1, 0.0);
+    invalid(x.add_source(p, 1.0, &skew));
+    let mut negative = CMatrix::zeros(4, 4);
+    negative[(0, 0)] = C64::new(1.5, 0.0);
+    negative[(1, 1)] = C64::new(-0.5, 0.0);
+    invalid(x.add_source(p, 1.0, &negative));
+    // A source edited into JSON is checked too.
+    let json = r.to_json().replace("\"rate\": 0.5", "\"rate\": -0.5");
+    assert_ne!(json, r.to_json());
+    assert!(Reactions::from_json(&json).is_err());
+}
+
+#[test]
+fn dense_and_krylov_propagation_agree_with_sources() {
+    let mut product = pair();
+    product.set_relaxation(0, Some(1.0), Some(0.3)).unwrap();
+    let mut r = Reactions::new();
+    let p = r.add_site(product.clone(), 0.2).unwrap();
+    let d = r.add_species("D", 0.0).unwrap();
+    r.add_source(p, 0.4, &product.parahydrogen_state(0, 1, 1.0).unwrap())
+        .unwrap();
+    r.add_reaction(reaction(&[S(p)], &[P(d)], 0.9)).unwrap();
+    let start = vec![product.thermal_state().unwrap() * C64::new(0.2, 0.0)];
+    let events = [
+        Event::Delay(0.3),
+        Event::pulse(crate::spin::Target::Isotope(Isotope::H1), 90.0, 0.0),
+        Event::Delay(0.2),
+    ];
+    let dense = r.evolve_with(&start, &events, Propagation::Dense).unwrap();
+    let krylov = r.evolve_with(&start, &events, Propagation::Krylov).unwrap();
+    assert!(worst(&dense[0], &krylov[0]) <= 1e-11);
+}
+
+#[test]
+fn a_radical_pair_product_forms_at_its_yield() {
+    use crate::spin::{Birth, FREE_ELECTRON_G, Product, RadicalPair};
+    // The singlet product of a two-proton pair (laboratory frame, 1 mT)
+    // onto a two-proton site at 9.4 T, formed at G·Φ_S and consumed at k_d.
+    let mut sys = SpinSystem::new(1e-3).with_frame(Frame::Laboratory);
+    let e1 = sys
+        .add_spin(Isotope::Electron, 1e-3 / FREE_ELECTRON_G * 1e6)
+        .unwrap();
+    let e2 = sys.add_electron(FREE_ELECTRON_G).unwrap();
+    let h1 = sys.add_spin(Isotope::H1, 0.0).unwrap();
+    let h2 = sys.add_spin(Isotope::H1, 0.0).unwrap();
+    sys.hyperfine(e1, h1, 0.8).unwrap();
+    sys.hyperfine(e2, h2, -0.35).unwrap();
+    sys.exchange_coupling(e1, e2, -0.05).unwrap();
+    let pair = RadicalPair::new(sys)
+        .unwrap()
+        .with_rates(3e7, 8e6, 2e6)
+        .unwrap();
+    let solution = pair.solve(Birth::Singlet).unwrap();
+    let phi = solution.yields().singlet;
+    let mut site = SpinSystem::new(9.4).with_temperature(300.0).unwrap();
+    site.add_spin(Isotope::H1, 1.0).unwrap();
+    site.add_spin(Isotope::H1, 3.0).unwrap();
+    let t1 = 2.0;
+    for i in 0..2 {
+        site.set_relaxation(i, Some(t1), None).unwrap();
+    }
+    let state = solution
+        .product_on(Product::Singlet, &site, &[(h1, 0), (h2, 1)], Fresh::Thermal)
+        .unwrap();
+    let (g, kd) = (1e-3, 0.5);
+    let mut r = Reactions::new();
+    let p = r.add_site(site.clone(), 0.0).unwrap();
+    let d = r.add_species("D", 0.0).unwrap();
+    r.add_source(p, g * phi, &state).unwrap();
+    r.add_reaction(reaction(&[S(p)], &[P(d)], kd)).unwrap();
+    let x = HBAR * Isotope::H1.gamma() * 9.4 / (BOLTZMANN * 300.0);
+    let r1 = 1.0 / t1;
+    for t in [0.5, 4.0] {
+        let sigma = r
+            .evolve(&[CMatrix::zeros(4, 4)], &[Event::Delay(t)])
+            .unwrap();
+        let f = g * phi;
+        let c = f / kd * (1.0 - (-kd * t).exp());
+        assert!((sigma[0].trace().re / c - 1.0).abs() <= 1e-12);
+        for (j, shift) in [(0, 1.0), (1, 3.0)] {
+            let meq = 0.5 * (x * (1.0 + shift * 1e-6) / 2.0).tanh();
+            let ps = iz_of(&site, &state, j);
+            let m = c * meq + f * (ps - meq) / (kd + r1) * (1.0 - (-(kd + r1) * t).exp());
+            let got = iz_of(&site, &sigma[0], j);
+            assert!((got / m - 1.0).abs() <= 1e-11, "{t} {j}: {got} vs {m}");
+        }
+    }
 }

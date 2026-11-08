@@ -4,10 +4,10 @@ use metatron_qso::C64;
 use metatron_qso::linalg::CMatrix;
 use metatron_qso::optimize::Options;
 use metatron_qso::spin::{
-    Channel, Control, Drive, Event, Exchange, FIELD_TOLERANCE, Frame, Fresh, Interaction, Isotope,
-    MAX_FIELD_ERROR, Member, ModelFree, Optimized, Participant, Profile, Reaction, Reactions,
-    Route, Segment, Spectrum, SpinSystem, Target, axial_csa, axial_diffusion, inept, inept_cycle,
-    inversion_recovery, m2s, s2m, spin_echo, spin_lock, unitary_bound,
+    Channel, Control, Drive, Event, Exchange, FIELD_TOLERANCE, FREE_ELECTRON_G, Frame, Fresh,
+    Interaction, Isotope, MAX_FIELD_ERROR, Member, ModelFree, Optimized, Participant, Profile,
+    Reaction, Reactions, Route, Segment, Spectrum, SpinSystem, Target, axial_csa, axial_diffusion,
+    inept, inept_cycle, inversion_recovery, m2s, s2m, spin_echo, spin_lock, unitary_bound,
 };
 use numpy::{IntoPyArray, PyArray1, PyArray2};
 use pyo3::exceptions::PyValueError;
@@ -326,7 +326,8 @@ impl PyModelFree {
     }
 }
 
-/// Gyromagnetic ratio (rad s⁻¹ T⁻¹) of an isotope.
+/// Gyromagnetic ratio (rad s⁻¹ T⁻¹) of an isotope or of the electron
+/// (`"e"`, negative).
 #[pyfunction]
 fn gyromagnetic_ratio(isotope_name: &str) -> PyResult<f64> {
     Ok(isotope(isotope_name)?.gamma())
@@ -569,13 +570,14 @@ fn options(max_iterations: usize) -> Options {
     }
 }
 
-/// A molecule's nuclear spins: isotopes, shifts (ppm), couplings (Hz),
+/// A molecule's nuclear spins, and the electrons of a radical pair:
+/// isotopes, shifts (ppm; for an electron the g-shift), couplings (Hz),
 /// the field (T), the temperature (K) and the frame (`"rotating"` or
 /// `"laboratory"`). States are density matrices (NumPy, complex).
 #[pyclass(name = "SpinSystem", module = "metatron_qso")]
 #[derive(Clone)]
 pub struct PySpinSystem {
-    inner: SpinSystem,
+    pub(crate) inner: SpinSystem,
 }
 
 impl PySpinSystem {
@@ -620,9 +622,10 @@ impl PySpinSystem {
         Ok(Self { inner })
     }
 
-    /// Add a nucleus (`"1H"`, `"2H"`, `"13C"`, `"15N"`, `"19F"`, `"31P"`)
-    /// with a chemical shift (ppm) and optional `T₁`, `T₂` (s); returns its
-    /// index.
+    /// Add a spin of one of eight kinds (`"1H"`, `"2H"`, `"13C"`, `"15N"`,
+    /// `"19F"`, `"31P"`, `"14N"` or the electron `"e"`) with a chemical
+    /// shift (ppm; for an electron the g-shift `(g/g_e − 1)·10⁶`, see
+    /// `add_electron`) and optional `T₁`, `T₂` (s); returns its index.
     #[pyo3(signature = (isotope, shift = 0.0, t1 = None, t2 = None))]
     fn add_spin(
         &mut self,
@@ -642,6 +645,37 @@ impl PySpinSystem {
     /// Set the coupling `J` (Hz) between spins `i` and `j` (0 removes it).
     fn couple(&mut self, i: usize, j: usize, coupling: f64) -> PyResult<()> {
         self.inner.couple(i, j, coupling).raise()?;
+        Ok(())
+    }
+
+    /// Add an electron of g-factor `g` (its shift `(g/g_e − 1)·10⁶` ppm)
+    /// with optional `T₁`, `T₂` (s); returns its index. Its Zeeman term is
+    /// `+|γ_e|B(g/g_e)S_z` in the laboratory frame and `|γ_e|B(δ − c_e)·10⁻⁶
+    /// S_z` in the rotating frame (carrier `c_e`, default 0 ppm).
+    #[pyo3(signature = (g = FREE_ELECTRON_G, t1 = None, t2 = None))]
+    fn add_electron(&mut self, g: f64, t1: Option<f64>, t2: Option<f64>) -> PyResult<usize> {
+        // On an error the system stays as it was.
+        let mut next = self.inner.clone();
+        let i = next.add_electron(g).raise()?;
+        next.set_relaxation(i, t1, t2).raise()?;
+        self.inner = next;
+        Ok(i)
+    }
+
+    /// Set the isotropic hyperfine coupling `a` (mT) of an electron and a
+    /// nucleus, `|γ_e|·a·10⁻³ S·I` (rad/s): a coupling of `a·28.024 951 424
+    /// MHz`. It is full in the laboratory frame and secular (`a S_z I_z`)
+    /// in the rotating frame.
+    fn hyperfine(&mut self, electron: usize, nucleus: usize, a: f64) -> PyResult<()> {
+        self.inner.hyperfine(electron, nucleus, a).raise()?;
+        Ok(())
+    }
+
+    /// Set the exchange `J` (mT) of two electrons, `−2|γ_e|J·10⁻³ S₁·S₂`
+    /// (rad/s): a coupling of `−2J·28.024 951 424 MHz` (RadicalPy's
+    /// `−J|γ_e|(2S₁·S₂ + ½)` without its constant).
+    fn exchange_coupling(&mut self, e1: usize, e2: usize, j: f64) -> PyResult<()> {
+        self.inner.exchange_coupling(e1, e2, j).raise()?;
         Ok(())
     }
 
@@ -1238,6 +1272,8 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_unitary_bound, m)?)?;
     m.add("FIELD_TOLERANCE", FIELD_TOLERANCE)?;
     m.add("MAX_FIELD_ERROR", MAX_FIELD_ERROR)?;
+    m.add("FREE_ELECTRON_G", FREE_ELECTRON_G)?;
+    crate::radical_pair::register(m)?;
     Ok(())
 }
 
@@ -1409,6 +1445,35 @@ impl PyReactions {
             .iter()
             .map(|r| (r.reactant, r.product, r.spins.clone()))
             .collect())
+    }
+
+    /// Form site `site` at a constant `rate` (amount per second) in the
+    /// state `state` (trace 1, Hermitian, positive semidefinite), beside the
+    /// reactions; returns the source's index. A product of a radical pair
+    /// formed at `G` pairs per second is `add_source(site, G·Φ_P,
+    /// solution.product_on(P, …))`. The state is fixed (not recomputed on
+    /// field events). In the rotating frame its elements of non-zero
+    /// coherence order of some isotope are dropped; in the laboratory frame
+    /// a state with elements between different total `M` is refused.
+    fn add_source(
+        &mut self,
+        site: usize,
+        rate: f64,
+        state: ComplexMatrixArg<'_>,
+    ) -> PyResult<usize> {
+        let (d, data) = square_complex("state", &state)?;
+        let state = CMatrix::from_row_slice(d, d, &data);
+        self.inner.add_source(site, rate, &state).raise()
+    }
+
+    /// `[(site, rate, state)]` of each source, the states as stored
+    /// (normalised).
+    fn sources<'py>(&self, py: Python<'py>) -> Vec<(usize, f64, Bound<'py, PyArray2<C64>>)> {
+        self.inner
+            .sources()
+            .iter()
+            .map(|(site, rate, state)| (*site, *rate, cmatrix(py, state)))
+            .collect()
     }
 
     /// The amounts after `t` (s): the sites', then the species'.

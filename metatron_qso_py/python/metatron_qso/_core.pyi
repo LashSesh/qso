@@ -3032,6 +3032,14 @@ class SpinSystem:
         t2: Optional[float] = None,
     ) -> int: ...
     def couple(self, i: int, j: int, coupling: float) -> None: ...
+    def add_electron(
+        self,
+        g: float = ...,
+        t1: Optional[float] = None,
+        t2: Optional[float] = None,
+    ) -> int: ...
+    def hyperfine(self, electron: int, nucleus: int, a: float) -> None: ...
+    def exchange_coupling(self, e1: int, e2: int, j: float) -> None: ...
     def set_relaxation(
         self, i: int, t1: Optional[float] = None, t2: Optional[float] = None
     ) -> None: ...
@@ -3269,6 +3277,72 @@ NV_GYROMAGNETIC_RATIO: float
 MAX_NV_DIMENSION: int
 FIELD_TOLERANCE: float
 MAX_FIELD_ERROR: float
+FREE_ELECTRON_G: float
+
+@type_check_only
+class PairYields(TypedDict):
+    field: float
+    singlet: float
+    triplet: float
+    escape: float
+    cidnp: RealArray
+    nuclei: list[int]
+    backward_error: float
+    iterations: int
+
+@type_check_only
+class FieldEffect(TypedDict):
+    field: RealArray
+    singlet: RealArray
+    triplet: RealArray
+    escape: RealArray
+    cidnp: RealArray
+    nuclei: list[int]
+    backward_error: RealArray
+    iterations: IntArray
+
+@final
+class RadicalPair:
+    def __new__(
+        cls,
+        system: SpinSystem,
+        singlet: float = 0.0,
+        triplet: float = 0.0,
+        escape: float = 0.0,
+        recombination: str = "haberkorn",
+    ) -> RadicalPair: ...
+    @property
+    def system(self) -> SpinSystem: ...
+    @property
+    def electrons(self) -> Tuple[int, int]: ...
+    @property
+    def nuclei(self) -> list[int]: ...
+    @property
+    def rates(self) -> Tuple[float, float, float]: ...
+    @property
+    def recombination(self) -> str: ...
+    def with_field(self, field: float) -> RadicalPair: ...
+    def projector(self, which: str) -> ComplexArray: ...
+    def birth_state(self, birth: str = "singlet") -> ComplexArray: ...
+    def solve(
+        self, birth: Optional[str] = None, rho0: Optional[ArrayLike] = None
+    ) -> PairSolution: ...
+    def field_effect(self, fields: ArrayLike, birth: str = "singlet") -> FieldEffect: ...
+    def evolve(self, rho: ArrayLike, time: float) -> ComplexArray: ...
+
+@final
+class PairSolution:
+    @property
+    def yields(self) -> PairYields: ...
+    def integral(self) -> ComplexArray: ...
+    def product(self, which: str) -> ComplexArray: ...
+    def product_on(
+        self,
+        which: str,
+        system: SpinSystem,
+        spins: Sequence[Tuple[int, int]] = ...,
+        parahydrogen: Optional[Tuple[int, int, float]] = None,
+    ) -> ComplexArray: ...
 
 @type_check_only
 class CwLine(TypedDict):
@@ -3660,6 +3734,8 @@ class Reactions:
         routes: Optional[Sequence[Tuple[int, int, Sequence[Tuple[int, int]]]]] = None,
     ) -> None: ...
     def routes(self, reaction: int) -> list[Tuple[int, int, list[Tuple[int, int]]]]: ...
+    def add_source(self, site: int, rate: float, state: ArrayLike) -> int: ...
+    def sources(self) -> list[Tuple[int, float, ComplexArray]]: ...
     def amounts(self, t: float) -> RealArray: ...
     def advanced(self, t: float) -> Reactions: ...
     @property

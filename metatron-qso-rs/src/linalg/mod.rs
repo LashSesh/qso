@@ -7,8 +7,8 @@
 //!   `exp(−iHt)|v⟩` and cyclic-subspace spectra for operators far too large
 //!   to store densely.
 //!
-//! Crate-internal solvers (used by the steady states of exchange and by the
-//! transport to a trap):
+//! Crate-internal solvers (used by the steady states of exchange, by the
+//! transport to a trap and by radical pairs):
 //!
 //! * `gmres` — restarted GMRES with right preconditioning, the iteration of
 //!   the exchange steady states (1.54) with a backward-error stopping rule,
@@ -27,10 +27,11 @@ pub mod sparse;
 // Used from 1.63's transport code.
 #[allow(dead_code)]
 pub(crate) mod banded;
-// Used from 1.63's transport code (and by the exchange steady states).
+// Used from 1.63's transport code and 1.65's radical pairs (and by the
+// exchange steady states).
 #[allow(dead_code)]
 pub(crate) mod gmres;
-// Used from 1.63's transport code.
+// Used from 1.63's transport code and 1.65's radical pairs.
 #[allow(dead_code)]
 pub(crate) mod sylvester;
 

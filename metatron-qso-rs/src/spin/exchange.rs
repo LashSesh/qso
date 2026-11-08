@@ -90,6 +90,71 @@ pub struct Exchange {
     channels: Vec<Channel>,
 }
 
+/// Sites of exchange and reactions are nuclear: electron spins belong to a
+/// [`super::RadicalPair`] (whose products reach sites through
+/// [`super::PairSolution::product_on`]).
+pub(super) fn check_no_electrons(system: &SpinSystem) -> Result<()> {
+    if system
+        .spins()
+        .iter()
+        .any(|s| s.isotope == Isotope::Electron)
+    {
+        return Err(QsoError::invalid(
+            "sites",
+            "electron spins belong to a RadicalPair, not to exchange or reaction sites",
+        ));
+    }
+    Ok(())
+}
+
+/// The state `sigma` of `from` carried into `to`: spin `i` of `from` becomes
+/// spin `j` of `to` for each `(i, j)` of `carried`, the other spins of `from`
+/// are traced out and the other spins of `to` are `fresh` at `to`'s field
+/// and temperature; checked as a route of 1.59 (range, repeats, one isotope
+/// per pair, fresh parahydrogen spins). Not normalised. It costs about
+/// `d_from²·d_fresh²` operations.
+pub(in crate::spin) fn carry_state(
+    from: &SpinSystem,
+    to: &SpinSystem,
+    carried: &[(usize, usize)],
+    fresh: Fresh,
+    sigma: &CMatrix,
+) -> Result<CMatrix> {
+    let d = from.dimension();
+    if sigma.shape() != (d, d) {
+        return Err(QsoError::DimensionMismatch {
+            expected: d,
+            actual: sigma.nrows(),
+        });
+    }
+    // Not validated as an exchange: `from` may hold electrons, and the
+    // sites need not share their carriers.
+    let pair = Exchange {
+        sites: [from, to]
+            .into_iter()
+            .map(|system| Site {
+                system: system.clone(),
+                concentration: 1.0,
+            })
+            .collect(),
+        channels: Vec::new(),
+    };
+    let channel = Channel {
+        from: 0,
+        to: 1,
+        rate: 0.0,
+        carried: carried.to_vec(),
+        fresh,
+    };
+    pair.check_channel(&channel)?;
+    let dt = to.dimension();
+    let mut out = CMatrix::zeros(dt, dt);
+    pair.transfer(&channel, to.field(), |a, a2, t1, t2, w| {
+        out[(t1, t2)] += w * sigma[(a, a2)];
+    });
+    Ok(out)
+}
+
 /// One block of coherence order over all sites: `(site, block of the
 /// site's Liouville, offset in the joint block)`.
 type JointPart = (usize, usize, usize);
@@ -111,6 +176,7 @@ impl Exchange {
     /// Add a site; returns its index.
     pub fn add_site(&mut self, system: SpinSystem, concentration: f64) -> Result<usize> {
         system.validate()?;
+        check_no_electrons(&system)?;
         if !(concentration.is_finite() && concentration > 0.0) {
             return Err(QsoError::invalid(
                 "concentration",
@@ -224,11 +290,12 @@ impl Exchange {
         };
         for site in &self.sites {
             site.system.validate()?;
+            check_no_electrons(&site.system)?;
             let s = &site.system;
             let same = s.field() == first.system.field()
                 && s.temperature() == first.system.temperature()
                 && s.frame() == first.system.frame()
-                && Isotope::ALL
+                && Isotope::EVERY
                     .iter()
                     .all(|&x| s.carrier(x) == first.system.carrier(x));
             if !same {
@@ -312,9 +379,9 @@ impl Exchange {
         s.system.polarization(&states[site], spin)
     }
 
-    /// The isotopes of all sites, in the order of [`Isotope::ALL`].
+    /// The kinds of spin of all sites, in the order of `Isotope::EVERY`.
     fn isotopes(&self) -> Vec<Isotope> {
-        Isotope::ALL
+        Isotope::EVERY
             .into_iter()
             .filter(|x| {
                 self.sites

@@ -23,7 +23,8 @@ sys.couple(h, c, 140.0)                    # J in Hz
 ```
 
 - **Isotopes.** ¹H, ²H (spin 1), ¹³C, ¹⁵N (negative γ), ¹⁹F and ³¹P, with
-  the IUPAC gyromagnetic ratios.
+  the IUPAC gyromagnetic ratios; ¹⁴N (spin 1) and electrons for
+  [radical pairs](#radical-pairs).
 - **Hamiltonian.** In the laboratory frame (`frame="laboratory"`) it is
   `Σ −γ_i B (1 + δ_i·10⁻⁶) I_zi + Σ 2πJ_ij I_i·I_j` in rad/s. In the rotating
   frame (the default) each isotope rotates at its carrier
@@ -561,6 +562,383 @@ a partner held in its state (the example: 9 s against 2 s), more when the
 partner's amount changes, and steps that resolve the Larmor frequencies
 when both reactants carry transverse coherences in the laboratory frame
 (two spins ½ meeting at 10 mT: 20 ms in about 200 s).
+
+## Radical pairs
+
+A radical pair is two radicals, each with an unpaired electron, born
+together in a solvent cage: by electron transfer from an excited singlet
+or triplet, or by bond cleavage. Its electrons start correlated, in the
+singlet or a triplet state, and only a singlet (or only a triplet) pair
+can recombine; the hyperfine couplings to the nuclei of each radical and
+the difference of their g-values turn singlets into triplets and back
+while the pair lives (nanoseconds to microseconds). So the yields of the
+reaction depend on the magnetic field (magnetic-field effects, MARY
+curves) and the products carry nuclear polarisation whose sign the
+hyperfine couplings decide (chemically induced dynamic nuclear
+polarisation, CIDNP; Steiner and Ulrich, Chem. Rev. 89, 51 (1989)).
+Photo-CIDNP of tryptophan, tyrosine and flavins, and the field effects
+on reactions of flavoproteins, are its uses.
+
+`spin.RadicalPair` takes a `SpinSystem` with exactly two electrons and
+any nuclei, rates of recombination from the singlet (`k_S`, the cage
+product), from the triplet (`k_T`) and of escape from the cage (`k_E`),
+in s⁻¹. The flavin–tryptophan pair of cryptochromes, with six of its
+nuclei:
+
+```python
+import numpy as np
+import metatron_qso as q
+from metatron_qso import spin
+
+# Flavin–tryptophan: N5, H24 and H25 on the flavin, Hβ1, H1 and H4 on
+# the tryptophan (isotropic hyperfine couplings in mT), at zero field.
+sys = q.SpinSystem(0.0, frame="laboratory")
+fad = sys.add_electron()                   # g = g_e by default
+trp = sys.add_electron()
+for e, isotope, a in [(fad, "14N", 0.5141), (fad, "1H", -0.4403),
+                      (fad, "1H", 0.4546), (trp, "1H", 1.6045),
+                      (trp, "1H", -0.5983), (trp, "1H", -0.4879)]:
+    sys.hyperfine(e, sys.add_spin(isotope), a)
+print(sys.dimension)                       # 384 = 2·2·3·2⁵
+
+pair = spin.RadicalPair(sys, singlet=2e7, triplet=2e7)   # k_S = k_T (1/s)
+y = pair.solve("singlet").yields
+print(round(y["singlet"], 4), round(y["triplet"], 4), y["iterations"])
+# 0.3443 0.6557 0
+
+fields = np.linspace(0.0, 5e-3, 51)        # tesla
+phi = pair.field_effect(fields, birth="singlet")["singlet"]
+high = pair.with_field(0.05).solve("singlet").yields["singlet"]
+print(round(phi[1] - phi[0], 5), round(high, 4))
+# -0.0002 0.5345: the low-field effect at 0.1 mT, and 50 mT
+half = 0.5 * (phi[0] + high)               # the half-effect field B½
+k = np.argmax(phi >= half)
+b_half = np.interp(half, phi[k - 1 : k + 1], fields[k - 1 : k + 1])
+print(round(b_half * 1e3, 2), "mT")        # 1.68 mT
+```
+
+- **Electrons.** `add_electron(g, t1, t2)` adds an electron (spin ½,
+  `"e"` in `add_spin` and in JSON) and stores its g-value as its shift,
+  `δ = (g/g_e − 1)·10⁶` ppm, with `spin.FREE_ELECTRON_G` = 2.00231930436256
+  (CODATA 2018) and `γ_e` = −1.76085963023·10¹¹ rad s⁻¹ T⁻¹. Its Zeeman
+  frequency `|γ_e|B(1 + δ·10⁻⁶)` is then `gμ_B B/ħ`, so two radicals
+  differ by `Δω = (g₁ − g₂)μ_B B/ħ`. `hyperfine(e, n, a)` couples an
+  electron and a nucleus by `|γ_e| a·10⁻³ S·I` (rad/s, `a` in mT: a
+  coupling of `a`·28.024951 MHz), and `exchange_coupling(e1, e2, J)` the
+  two electrons by `−2|γ_e| J·10⁻³ S₁·S₂` (`J` in mT; RadicalPy's
+  `−J|γ_e|(2S₁·S₂ + ½)` without its constant). Both are ordinary
+  couplings in Hz, which `couple` can also set. Electron `T₁` and `T₂`
+  relax as every spin does, towards the thermal state at the full Larmor
+  frequency.
+- **¹⁴N** (`"14N"`) is a spin-1 nucleus with γ = 1.9337792·10⁷
+  rad s⁻¹ T⁻¹, for the nitrogen couplings of flavin and tryptophan
+  radicals. It has no quadrupolar coupling and relaxes by the `T₁` and
+  `T₂` it is given, as ²H does.
+- **Frames.** The laboratory frame keeps the full hyperfine couplings and
+  serves every field, zero included. The rotating frame keeps only their
+  secular part `a S_z I_z` (an electron and a nucleus are different
+  isotopes) and the exchange in full, so it needs `|γ_e|B` far above the
+  couplings: use it above about ten times the largest coupling in mT. At
+  3 T, with ¹⁴N and two protons, the two frames' singlet yields differ by
+  3.9·10⁻⁶, the size of the flip-flop terms the rotating frame drops
+  (`Σ(a/ω_e)²` times about 11).
+- **Births.** `"singlet"`, `"t0"`, `"t+"`, `"t-"`, `"triplet"` (a triplet
+  precursor: the three states equally) and `"uncorrelated"` (radicals
+  that met at random, F-pairs), with the nuclei maximally mixed
+  (`birth_state`); or any start `rho0`, Hermitian with a positive trace,
+  normalised to one pair.
+- **Recombination.** The pair's density matrix follows
+  `dρ/dt = −i[H, ρ] − (k_S/2){P_S, ρ} − (k_T/2){P_T, ρ} − k_E ρ` with the
+  system's Hamiltonian and relaxation: Haberkorn's term (Mol. Phys. 32,
+  1491 (1976)), the default. `recombination="jones-maeda-hore"` adds the
+  extra decay `−((k_S + k_T)/2)(P_S ρ P_T + P_T ρ P_S)` of the
+  singlet–triplet coherences (Jones, Maeda and Hore, Chem. Phys. Lett.
+  507, 269 (2011)). The trace falls as the pair reacts.
+- **Yields.** `X = ∫₀^∞ ρ dt` gives the yields of the singlet, triplet
+  and escape products per pair born, `Φ_S = k_S Tr(P_S X)`,
+  `Φ_T = k_T Tr(P_T X)` and `Φ_E = k_E Tr X`, which sum to one.
+  `field_effect(fields, birth)` solves at each field (the MARY curve);
+  `with_field` moves the pair to another field. With equal rates the
+  flavin–tryptophan pair loses 2·10⁻⁴ of its singlet yield at 0.1 mT
+  before it rises to 0.534 at 50 mT: the low-field effect (Timmel, Till,
+  Brocklehurst, McLauchlan and Hore, Mol. Phys. 95, 71 (1998)).
+
+### How the yields are solved
+
+`H`, the projectors and the relaxation keep the labels of the spin
+system (`M` of each isotope in the rotating frame, the total `M` in the
+laboratory frame), so a start without coherences between labels, as
+every birth is, gives an `X` that is block-diagonal, and the blocks are
+solved apart. With Haberkorn's term and no electron or nuclear
+relaxation, each block is one Sylvester equation
+`H_eff X − X H_eff† = −iρ(0)` with `H_eff = H − (i/2)(k_S P_S + k_T P_T +
+k_E)`, solved on the Schur form of `H_eff` (the solver of
+[transport to a trap](walks.md#transport-to-a-trap)); `iterations` is 0.
+The term of Jones, Maeda and Hore and relaxation are not of that form:
+the same operator is then solved by GMRES, preconditioned by those
+Sylvester solves. `backward_error` reports `‖𝓛X + ρ₀‖` relative to the
+operator's and the solution's size (about 10⁻¹⁵):
+
+```python
+import numpy as np
+import metatron_qso as q
+from metatron_qso import spin
+
+# N5 on the flavin, Hβ1 and H1 on the tryptophan, at 1 mT, with electron
+# relaxation (T₁ = 200 ns, T₂ = 100 ns).
+sys = q.SpinSystem(1e-3, frame="laboratory")
+e1 = sys.add_electron(t1=200e-9, t2=100e-9)
+e2 = sys.add_electron(t1=200e-9, t2=100e-9)
+sys.hyperfine(e1, sys.add_spin("14N"), 0.5141)
+sys.hyperfine(e2, sys.add_spin("1H"), 1.6045)
+sys.hyperfine(e2, sys.add_spin("1H"), -0.5983)
+for model in ("haberkorn", "jones-maeda-hore"):
+    pair = spin.RadicalPair(sys, 2e7, 5e6, 1e6, recombination=model)
+    y = pair.solve("singlet").yields
+    print(model, round(y["singlet"], 4), y["iterations"], f"{y['backward_error']:.0e}")
+# haberkorn 0.5663 23 6e-16
+# jones-maeda-hore 0.564 27 1e-15
+
+# The singlet probability and the pairs left as they react.
+pair = spin.RadicalPair(sys, 2e7, 5e6, 1e6)
+p_s, rho = pair.projector("singlet"), pair.birth_state("singlet")
+for t in (0.0, 20e-9, 100e-9):
+    rho_t = pair.evolve(rho, t)
+    print(t, round(np.trace(p_s @ rho_t).real, 4), round(np.trace(rho_t).real, 4))
+# 0.0 1.0 1.0
+# 2e-08 0.2126 0.7769
+# 1e-07 0.101 0.3449
+```
+
+`evolve(rho, t)` gives `ρ(t)` under the same equation: with Haberkorn's
+term and no relaxation by exponentials of the blocks of `H_eff` (up to
+2048 dimensions), otherwise by the exponential of the generator in a
+Liouville space of at most 2048 elements. With all rates zero it is
+`SpinSystem.evolve` with a delay.
+
+### CIDNP and Kaptein's rule
+
+`cidnp` holds `⟨I_z⟩` of every nucleus (rows in the order of
+`pair.nuclei`) in the singlet, triplet and escape products, per pair
+born; for a proton the polarisation is `2⟨I_z⟩`. At high field only the
+difference of the electrons' frequencies and the secular hyperfine
+couplings mix `S` and `T₀`, and that difference depends on each
+nucleus's state, so the products sort the nuclear states. Photo-CIDNP of
+tryptophan with a flavin at 9.4 T, the pair born a triplet:
+
+```python
+import metatron_qso as q
+from metatron_qso import spin
+
+# Photo-CIDNP at 9.4 T (rotating frame): a triplet flavin takes an electron
+# from tryptophan, and the pair is born a triplet.
+sys = q.SpinSystem(9.4)
+fad = sys.add_electron(2.0034)
+trp = sys.add_electron(2.0027)
+for e, isotope, a in [(fad, "14N", 0.5141), (fad, "1H", -0.4403),
+                      (fad, "1H", 0.4546), (trp, "1H", 1.6045),
+                      (trp, "1H", -0.5983), (trp, "1H", -0.4879)]:
+    sys.hyperfine(e, sys.add_spin(isotope), a)
+pair = spin.RadicalPair(sys, singlet=1e8, triplet=0.0, escape=1e7)
+solution = pair.solve("triplet")
+y = solution.yields
+print(round(y["singlet"], 4), round(y["escape"], 4))    # 0.2764 0.7236
+for row, (cage, _, escape) in zip(pair.nuclei, y["cidnp"]):
+    print(row, f"{cage:+.2e} {escape:+.2e}")
+# 2 +3.84e-04 -3.84e-04      (14N of the flavin)
+# 3 -1.32e-04 +1.32e-04
+# 4 +1.36e-04 -1.36e-04
+# 5 -3.55e-04 +3.55e-04      (Hβ1 of the tryptophan)
+# 6 +1.73e-04 -1.73e-04
+# 7 +1.45e-04 -1.45e-04
+```
+
+The signs follow Kaptein's rule (J. Chem. Soc. D, 732 (1971)): the
+polarisation of a nucleus in a product has the sign `μ·ε·sgn(Δg)·sgn(a)`,
+with `μ = −1` for a singlet precursor and `+1` for a triplet one,
+`ε = +1` for the singlet (cage) product and `−1` for the triplet and
+escape products, `Δg` the g-value of the nucleus's radical less the
+other's and `a` its hyperfine coupling; positive is enhanced absorption
+for `γ > 0`. The rule is that of S–T₀ mixing at high field (the rotating
+frame), whose Hamiltonian keeps each nucleus's `I_z`: there, without
+nuclear relaxation, the products' polarisations cancel nucleus by
+nucleus, as above, and with `k_S = k_T` the escape product carries none.
+In the laboratory frame S–T± mixing passes polarisation between the
+electrons and the nuclei: the products' nuclear polarisations need not
+cancel, not even in total over the nuclei (only at zero field, where each
+nucleus cancels by isotropy), and with exchange or a T± birth the escape
+product is polarised with `k_S = k_T` too. What both frames keep, without
+relaxation and with either term, is the total angular momentum:
+`⟨S_z + Σ I_z⟩` summed over the products, the electrons included, equals
+its value at birth.
+
+### Products in spin systems and reactions
+
+`solution.product(which)` is the nuclear state of a product,
+`k_P Tr_e(P_P X)` over the pair's nuclei in their order, of trace its
+yield. `product_on(which, system, spins)` places it, normalised, into
+another `SpinSystem`, pair spin `i` becoming spin `j` for each `(i, j)`
+(the same isotope, each spin once, as the routes of reactions); the
+pair's other nuclei are traced out, the system's other spins arrive
+thermal, or two of them in parahydrogen (`parahydrogen=(i, j, fraction)`).
+That state goes on to `SpinSystem.evolve`, or to `Reactions.add_source`,
+which forms a site at a constant rate in that state beside its reactions
+(the pair's lifetime counts as instant on the time scale of NMR):
+
+```python
+import numpy as np
+import metatron_qso as q
+from metatron_qso import spin
+
+sys = q.SpinSystem(9.4)                    # the pair of the last example
+fad, trp = sys.add_electron(2.0034), sys.add_electron(2.0027)
+for e, isotope, a in [(fad, "14N", 0.5141), (fad, "1H", -0.4403),
+                      (fad, "1H", 0.4546), (trp, "1H", 1.6045),
+                      (trp, "1H", -0.5983), (trp, "1H", -0.4879)]:
+    sys.hyperfine(e, sys.add_spin(isotope), a)
+solution = spin.RadicalPair(sys, singlet=1e8, escape=1e7).solve("triplet")
+
+# The cage product's tryptophan protons (pair spins 5, 6, 7) in the NMR
+# of tryptophan: Hβ, H1 and H4 at 3.3, 10.1 and 7.6 ppm.
+trp_nmr = q.SpinSystem(9.4)
+for shift in (3.3, 10.1, 7.6):
+    trp_nmr.add_spin("1H", shift, t1=2.0, t2=1.0)
+state = solution.product_on("singlet", trp_nmr, [(5, 0), (6, 1), (7, 2)])
+thermal = trp_nmr.polarization(trp_nmr.thermal_state(), 0)
+print([round(trp_nmr.polarization(state, j) / thermal) for j in range(3)])
+# [-80, 39, 32]: times the thermal polarisation, Hβ in emission
+
+def spectrum(rho):                          # amplitude by shift after 90°
+    after = trp_nmr.evolve(rho, [spin.pulse("1H", 90)])
+    return {round(l["ppm"], 1): l["amplitude"] for l in trp_nmr.lines(after, "1H")}
+cidnp, reference = spectrum(state), spectrum(trp_nmr.thermal_state())
+print({ppm: round((cidnp[ppm] / reference[ppm]).real) for ppm in cidnp})
+# {10.1: 39, 7.6: 32, 3.3: -80}
+
+# Pairs born at G = 10⁻⁴ (amount per second) form the product at G·Φ_S;
+# it is lost at 0.5/s while its protons relax with T₁ = 2 s.
+r = spin.Reactions()
+p = r.add_site(trp_nmr, 0.0)
+r.add_species("lost", 0.0)
+r.add_source(p, 1e-4 * solution.yields["singlet"], state)
+r.add_reaction([p], ["lost"], 0.5)
+for t in (0.5, 2.0, 8.0):
+    (sigma,) = r.evolve([np.zeros((8, 8))], [spin.delay(t)])
+    amount = np.trace(sigma).real
+    print(t, f"{amount:.3e}", round(trp_nmr.polarization(sigma / amount, 0) / thermal))
+# 0.5 1.223e-05 -71
+# 2.0 3.495e-05 -54
+# 8.0 5.427e-05 -40
+```
+
+A source's state is fixed: it is not recomputed on field events. In the
+rotating frame its coherences between different `M` of an isotope are
+dropped (formed at random times, they average out at the Larmor
+frequencies); in the laboratory frame a state with coherences between
+different total `M` is refused.
+
+On the command line, `qso radical-pair` reads a spin system with two
+electrons (`metatron-qso-rs/examples/spins/flavin_tryptophan.json` is
+the pair above, with more digits in its couplings):
+
+```text
+$ qso radical-pair metatron-qso-rs/examples/spins/flavin_tryptophan.json --rates 2e7,2e7,0 --fields 0:0.005:6
+...
+        B (mT)           Φ_S           Φ_T           Φ_E
+      0.000000   0.344285672   0.655714328   0.000000000
+      1.000000   0.378262108   0.621737892   0.000000000
+      2.000000   0.464146501   0.535853499   0.000000000
+      3.000000   0.504966841   0.495033159   0.000000000
+      4.000000   0.517938572   0.482061428   0.000000000
+      5.000000   0.523848440   0.476151560   0.000000000
+Φ_S lowest 0.344285672 at 0.000000 mT, highest 0.523848440 at 5.000000 mT
+half-effect field B½ 1.649768 mT (half the change of Φ_S from 0 to 5.000000 mT)
+```
+
+B½ is half the change of `Φ_S` from 0 T to the end of the sweep, so the
+sweep should reach the saturated effect, well past the low-field effect:
+a sweep that ends inside the low-field dip gives the field of half the
+dip. Without a sweep from 0 T, or without a change of `Φ_S` across it,
+the command says why there is none. `--cidnp` adds `⟨I_z⟩` of every
+nucleus in each product, `--birth` and `--recombination` choose the
+start and the term (`--birth` also takes the JSON's names, such as
+`triplet-zero`), and `--json` gives the yields as data, with the
+extremes and B½ of a sweep under `sweep`.
+
+### Limits and refusals
+
+- **Size.** Two electrons and up to 2048 dimensions: ¹⁴N and seven
+  protons take 1536, nine protons 2048. Each field's solve is estimated
+  before anything is factorised and refused beyond 1.5·10¹² operations
+  or 2 GiB. Measured on four cores: the flavin–tryptophan pair
+  (384 dimensions) takes 26 ms per field in the laboratory frame, 1536
+  dimensions 0.9–1.1 s (0.16 s in the rotating frame), 2048 dimensions
+  2.6 s; with relaxation or the term of Jones, Maeda and Hore GMRES takes
+  10 to 27 iterations, 2.5–4.2 s at 1536 dimensions. A start with
+  coherences between labels is solved as one block of all states: 1.1 s
+  at 384 dimensions, 101 s at 1536.
+- **States that never decay.** Without escape (`k_E = 0`) and with
+  `k_S = 0` or `k_T = 0`, a state of the other manifold that `H` leaves
+  alone never reacts, and `X` does not exist in its block of the labels.
+  A start that occupies such a block is refused, even where it does not
+  occupy that state itself; an escape rate, however small, is the remedy
+  (below). With relaxation the blocks the jumps reach from the start are
+  solved too, and such states (those the jumps leave alone) are found by
+  the residual of the solution and refused in the same way.
+- **Slow rates at high field in the laboratory frame.** There `‖𝓛‖` is
+  about `2|γ_e|B`, 10⁹ to 10¹⁴ times rates of 10⁻² to 10³ s⁻¹; an accurate
+  solution then leaves a residual of 10⁻⁶ to 10⁻² of the start, which is
+  accepted when the backward error is at most 10⁻¹² and the solution
+  within its bound (10³ times the start over the slowest decay). The
+  yields are accurate to about 10⁻¹⁰ to 10⁻⁷ (2·10⁻⁸ for one ¹H and one
+  ¹⁴N at 3 T with `k = 0.1 s⁻¹`, 6·10⁻⁸ with `k = 0.01 s⁻¹`). Decays below 10⁻¹⁴ of the largest
+  frequency are refused like states that never decay; the rotating frame
+  serves such fields.
+- **Not modelled.** Anisotropic hyperfine tensors and the dipolar
+  coupling of the electrons; Redfield relaxation of electrons (refused,
+  as are electrons in `Exchange` and `Reactions` sites); more than two
+  electrons; diffusive re-encounters, as recombination and escape are
+  exponential (F-pairs enter only as the uncorrelated birth).
+
+One proton at zero field with `k_S` alone: its `F = 3/2` states share
+their blocks with the singlet and never react, so a singlet birth is
+refused; an escape rate of 1 % of `k_S` makes every pair react.
+
+```python
+import metatron_qso as q
+from metatron_qso import spin
+
+sys = q.SpinSystem(0.0, frame="laboratory")
+e1, e2 = sys.add_electron(), sys.add_electron()
+sys.hyperfine(e1, sys.add_spin("1H"), 1.0)
+try:
+    spin.RadicalPair(sys, singlet=1e7).solve("singlet")
+except ValueError as err:
+    print(err)                             # ... never recombine or escape ...
+y = spin.RadicalPair(sys, singlet=1e7, escape=1e5).solve("singlet").yields
+print(round(y["singlet"], 4), round(y["escape"], 4))    # 0.9805 0.0195
+```
+
+### RadicalPy's conventions
+
+RadicalPy 1.0.9 is part of the cross-validation; its models map to QSO's
+as follows.
+
+| RadicalPy 1.0.9 | QSO |
+|---|---|
+| `Exponential(k)` (`HilbertSimulation`) | rates `k, k, 0`, Haberkorn's term |
+| `Haberkorn(k, S)`, `Haberkorn(k, T)`, `HaberkornFree(k)` | `k_S`, `k_T`, `k_E` |
+| `JonesHore(kS, kT)` | `recombination="jones-maeda-hore"` (the same operator) |
+| `experiments.cidnp` (model `"a"`, rate `ks`) | `2·cidnp[j][1]` of rates `ks/2, ks/2, 0`, singlet birth, rotating frame, radical 1 the donor |
+| `exchange_hamiltonian(J)`, hyperfine of a `Nucleus` (mT) | `exchange_coupling(e1, e2, J)`, `hyperfine(e, n, a)` |
+
+RadicalPy's Liouvillian runs time backwards (its `ρ(t)` is the complex
+conjugate, so yields agree for a real `H`); `mary` multiplies every
+yield by the first kinetic rate (for `JonesHore` `(kS + kT)/2`); its
+trapezoid quadrature errs by `(k·dt)²/12`, which is why its zero-field
+yields of one proton and one ¹⁴N at `k = a/2` are 0.7000000008 and
+0.6000000008, not 0.7 and 0.6; and its ¹H gyromagnetic ratio is
+CODATA's, 2.2·10⁻⁷ above QSO's IUPAC value.
 
 ## Long-lived states and transfer
 
@@ -1421,6 +1799,39 @@ converge for finite pulses).
   parahydrogen on spins that are not neighbours, ²H, and the laboratory
   frame. SABRE's steady state in the laboratory frame from
   1 mT to 9.4 T agrees with a 40-digit solution to 10⁻¹⁴.
+- **Radical pairs** (1.65). The exponential model gives its closed forms
+  to 10⁻¹³: with Δg alone at high field `Φ_S = ½ + ½k²/(k² + Δω²)` (0.75
+  at `k = Δω`; Δω read from the Hamiltonian, 1.0552920064610826·10⁷ rad/s
+  for g = 2.0031 and 2.0027 at 0.3 T, equal to `Δg μ_B B/ħ` to 10⁻⁹), in
+  both frames and on a grid of Δg, fields and rates; one proton at zero
+  field `5/8 + (3/8)k²/(k² + a²)` (0.7 at `k = a/2`), one ¹⁴N or ²H
+  `5/9 + (4/9)k²/(k² + 9a²/4)` (0.6, and 49/85 at `k = a/3`); and every
+  nuclear state at high field with exchange and unequal singlet, triplet
+  and escape rates (S, T₀ and T± births). Sylvester solves equal solves
+  of the Liouvillian built from the public Hamiltonian and projectors
+  (two protons at 1 mT, unequal rates, every birth) to 10⁻¹³, their CIDNP
+  to 10⁻¹⁴; the term of Jones, Maeda and Hore and electron and nuclear
+  relaxation (GMRES) equal the dense generator solved by LU to 10⁻¹²,
+  and pinned references of three and six nuclei (recomputed
+  independently in Liouville space) hold to 10⁻¹² to 10⁻¹⁴, the thermal
+  bias of the electrons at 298.15 K (1.6·10⁻¹¹ in `Φ_S`) included.
+  Yields sum to one on both paths, in both frames, with and without
+  relaxation, to 10⁻¹² (every birth, both terms); in the rotating frame
+  the products' CIDNP cancels nucleus by nucleus to 10⁻¹⁵ (10⁻¹⁴ with the
+  term of Jones, Maeda and Hore, through GMRES); in the laboratory frame
+  the products' total `⟨S_z + Σ I_z⟩` equals its value at birth to 10⁻¹⁴
+  (10⁻¹³), while their nuclear share does not cancel; and its signs
+  follow Kaptein's rule in all 24 cases of births, Δg, `a` and products
+  (each at least 6·10⁻³ in `⟨I_z⟩`). With all rates zero the pair evolves
+  as `SpinSystem.evolve` to 10⁻¹³ (10⁻¹¹ with electron relaxation), and
+  the evolution integrates to the yields (Simpson, 10⁻⁷). Products have
+  the yields as traces, are positive semidefinite and, routed onto other
+  systems, keep their polarisations; a product formed at a constant rate,
+  consumed and relaxing follows the closed form of formation, decay and
+  `T₁` to 10⁻¹²; a source equals a reaction that forms the same state.
+  Results are bit-identical on one and four threads. RadicalPy 1.0.9 and
+  QuTiP's `mesolve` agree in the cross-validation
+  ([validation](validation.md)).
 - **Transfer and storage.** M2S followed by S2M through stored singlet
   order returns 97–99.9 % of the 2/3 bound (inverted) for three pairs,
   among them the J and Δν of Pileio's ¹⁵N₂O. Parahydrogen order carried

@@ -839,6 +839,68 @@ its source's trace off the product's first population: the deviations'
 traces are zero, but `C → A + B` would feed them into two products and
 let rounding grow.
 
+Electrons and ¹⁴N (1.65) are two more variants of `Isotope`, appended
+after ³¹P so that the derived order, the carriers' map and existing JSON
+are unchanged. `Isotope::ALL` keeps the six nuclei of 1.33, since its
+length is public; code that walks the kinds of spin present (the labels
+of `blocks.rs`, the isotopes of exchange and its carriers) walks the
+crate-private `Isotope::EVERY`, never `ALL`, or it would silently drop
+the new kinds from the labels. An electron's g-value is its `shift` in
+ppm of `g_e`, so the Zeeman terms, frames, labels, jumps and thermal
+states of 1.33 serve it unchanged; hyperfine couplings and exchange are
+couplings in Hz (secular between an electron and a nucleus in the
+rotating frame, as between any two isotopes).
+
+Radical pairs (`spin/radical_pair.rs`, `spin/radical_pair/solve.rs`)
+solve `𝓛(X) = −ρ₀` for `X = ∫₀^∞ ρ dt`, the generator split as
+`𝓛(X) = −i(AX − XA† − σX) + 𝓕(X)` with `A = H − μ − (i/2)(K + Γ)`
+(`K = k_S P_S + k_T P_T`, `Γ = Σ L_j†L_j`, `μ` the block's mean diagonal of
+`H`, a real scalar that cancels exactly and keeps the laboratory frame's
+Zeeman energies out of the arithmetic), the scalar `σ = i(k_E + c/2)` and
+the feed `𝓕(X) = Σ L_j X L_j† + (c/2)WXW` (`c = (k_S + k_T)/2` for the
+term of Jones, Maeda and Hore, which is a Lindblad term with jump
+`√(c/2)W`; 0 for Haberkorn's). `W = P_T − P_S` is the permutation that
+swaps the two electrons' digits, so `P_S`, `P_T` and `W` are never stored:
+`(WX)[r, c] = X[π(r), c]`. `H`, `W` and the jumps (each `I₊`, `I₋` or
+`I_z`, at most one entry per column) keep the labels of `blocks.rs`, so a
+start without coherences between labels (every birth; entries below
+10⁻¹⁴ of the largest count as zero) gives a block-diagonal `X`, and each
+jump maps a diagonal block into another; a start with such coherences is
+solved as one block of all states. Without jumps only the blocks the
+start occupies are solved; with them, all. Each solved block gets the
+complex Schur form of `A_b` (`linalg/sylvester.rs`), in parallel through
+`parallel::map_tasks`. With Haberkorn's term and no jumps `𝓕 = 0` and each
+block is one Sylvester solve on that form, Hermitised and refined at most
+twice while its backward error exceeds `10³ε`. Otherwise the blocks'
+vectorised `X_b` form one system for the restarted GMRES of
+`linalg/gmres.rs` (restart 30, at most 3000 iterations, the
+backward-error stop at 10⁻¹³ with `‖𝓛‖` bounded by
+`2 max ‖A_b‖₁ + |σ| + c/2 + Σ max|κ_j|²`), applied by block products,
+precomputed jump maps and the permutation, and preconditioned on the
+right by the Schur solves. A state that never decays makes `𝓛` singular:
+without jumps exactly when `A_b` has a real eigenvalue on an occupied
+block (then `2·slowest_decay + k_E ≈ 0`, tested at 10⁻¹⁴ of `‖A_b‖₁` before
+any solve, for both terms); with jumps the preconditioner's gap is
+tested the same way, and states the jumps leave alone are caught by the
+residual `‖𝓛X + ρ₀‖/‖ρ₀‖ ≤ 10⁻⁶` of the result, since GMRES on a singular
+system can return an `X` grown without bound with a tiny backward error.
+Work (Schur forms `200n³`, Sylvester solves `250n³`, GMRES iterations
+`72Σn³`) and memory are estimated before anything is factorised and
+checked against `MAX_RELAXATION_WORK` and `MAX_RELAXATION_MEMORY`. Yields
+and CIDNP are traces of `X` against the permutation and the nuclei's
+`m`; the products' nuclear states are partial traces of `k_P P_P X`, and
+`product_on` places them through the routes of exchange (`carry_state`
+in `exchange.rs`, which checks a 1.59 channel and runs its `transfer`).
+`evolve` exponentiates the blocks of `A + μ` in Hilbert space (Haberkorn,
+no jumps) or the generator, assembled densely over the blocks
+(`generator_dense`, also the tests' oracle), in a Liouville space of at
+most `MAX_LIOUVILLE_BLOCK` elements. A source of `Reactions` (`Source`,
+a private field that JSON omits when empty) adds `rate` to the site's
+amount equation and `rate·(ρ − 1/d)` to its drift, through the same
+`push` as fresh states, which keeps order-zero blocks only: in the
+rotating frame a source's coherences of non-zero order are dropped,
+and in the laboratory frame they are refused when added.
+
 Optimal control (`spin/control.rs`) evaluates the transfer `Re Tr(C†
 ρ(T))` of piecewise-constant controls and its gradient in one forward and
 one backward pass. Without relaxation each step's `H_k` is diagonalised:
@@ -1174,6 +1236,10 @@ VQD reuses the adjoint method with the observable `H + Σ β_j |ψ_j⟩⟨ψ_j|`
   hash, each summed in a fixed order of chunks, rows and images, so its
   values, bounds and operators are bit-identical for any number of
   threads.
+* Radical pairs solve their blocks of labels as independent tasks,
+  collected in block order, and sum every trace sequentially; the Schur
+  solves and GMRES are bit-identical by design, so yields, CIDNP and
+  products are bit-identical for any number of threads.
 
 ## Gradients (`algorithms/gradients.rs`)
 
@@ -1246,8 +1312,8 @@ Hamiltonians and Pauli sums on 2ⁿ amplitudes.
 ## Sylvester, GMRES and banded solvers (`linalg/sylvester.rs`, `gmres.rs`, `banded.rs`)
 
 Three crate-internal tools, added for the transport to a trap (1.63);
-the GMRES also serves the exchange steady states (1.54), and the radical
-pairs of 1.65 are to use the Sylvester solver.
+the GMRES also serves the exchange steady states (1.54), and both
+serve the radical pairs of 1.65.
 
 * **Schur form and Sylvester equations.** `SchurForm` holds nalgebra's
   complex Schur form `A = QTQ†` (from `unpack()`; nalgebra's documentation

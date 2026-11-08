@@ -44,11 +44,31 @@ shaped pulses::
 
     bath = spin.GeneralisedBath.diamond((0.01, 0, 0.03), radius=2e-9, seed=1, min_radius=5e-10)
     print(bath.signal([spin.hahn(100e-6)], rabi=20e6, bath_states=100))
+
+``RadicalPair`` is a pair of radicals in a ``SpinSystem`` with exactly two
+electrons (``add_electron`` with a g-factor, ``hyperfine`` and
+``exchange_coupling`` in mT, electron T1 and T2), recombining from the
+singlet and the triplet and escaping (rates in 1/s) with Haberkorn's term
+or that of Jones, Maeda and Hore. ``solve`` gives the yields, the CIDNP of
+each nucleus in each product and the products' nuclear states, which
+``PairSolution.product_on`` hands to another ``SpinSystem`` or to
+``Reactions.add_source``; ``field_effect`` gives the yields against the
+field. One proton of 1 mT at zero field, k = |gamma_e| a / 2::
+
+    sys = q.SpinSystem(0.0, frame="laboratory")
+    e1 = sys.add_electron()
+    sys.add_electron()
+    h = sys.add_spin("1H")
+    sys.hyperfine(e1, h, 1.0)
+    k = 0.5 * abs(spin.gyromagnetic_ratio("e")) * 1e-3
+    pair = spin.RadicalPair(sys, singlet=k, triplet=k)
+    print(pair.solve("singlet").yields["singlet"])  # 0.7
 """
 
 from ._core import (
     DIAMOND_LATTICE_CONSTANT,
     FIELD_TOLERANCE,
+    FREE_ELECTRON_G,
     MAX_BATH_SPINS,
     MAX_BATH_STATES,
     MAX_BATH_TRAJECTORIES,
@@ -72,7 +92,9 @@ from ._core import (
     NvCenter,
     NvEvent,
     OpticalNv,
+    PairSolution,
     Profile,
+    RadicalPair,
     Reactions,
     SpinBath,
     SpinEvent,
@@ -122,6 +144,7 @@ from ._core import spin_sweep as sweep
 __all__ = [
     "DIAMOND_LATTICE_CONSTANT",
     "FIELD_TOLERANCE",
+    "FREE_ELECTRON_G",
     "MAX_BATH_SPINS",
     "MAX_BATH_STATES",
     "MAX_BATH_TRAJECTORIES",
@@ -145,7 +168,9 @@ __all__ = [
     "NvCenter",
     "NvEvent",
     "OpticalNv",
+    "PairSolution",
     "Profile",
+    "RadicalPair",
     "Reactions",
     "SpinBath",
     "SpinEvent",

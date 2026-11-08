@@ -4,9 +4,10 @@
 //! parahydrogen.
 //!
 //! A [`SpinSystem`] lists nuclei by [`Isotope`] (spin ½, or spin 1 for
-//! ²H), their chemical shifts in ppm, scalar couplings `J` in Hz, the
-//! field in tesla and the temperature. Its Hamiltonian (angular
-//! frequency, rad/s) is, in the laboratory frame,
+//! ²H and ¹⁴N), and electrons (spin ½) for radical pairs
+//! ([`RadicalPair`]), their chemical shifts in ppm, scalar couplings `J`
+//! in Hz, the field in tesla and the temperature. Its Hamiltonian
+//! (angular frequency, rad/s) is, in the laboratory frame,
 //!
 //! ```text
 //! H = Σ_i −γ_i B (1 + δ_i·10⁻⁶) I_zi + Σ_{i<j} 2π J_ij I_i·I_j
@@ -73,6 +74,17 @@
 //! spectrum of a state, [`SpinSystem::fid`] the free induction decay and
 //! [`Spectrum::from_fid`] its Fourier transform.
 //!
+//! Radical pairs, two electrons with their nuclei that recombine
+//! spin-selectively or escape, are modelled by [`RadicalPair`]: reaction
+//! yields against the field and the nuclear polarisation of the products
+//! (CIDNP). An electron's g-value is its shift in ppm of
+//! [`FREE_ELECTRON_G`] ([`SpinSystem::add_electron`]), and its hyperfine
+//! couplings and exchange are couplings in Hz, set in mT by
+//! [`SpinSystem::hyperfine`] and [`SpinSystem::exchange_coupling`]. The
+//! products' nuclear states go on to other spin systems
+//! ([`PairSolution::product_on`]) or form a site of [`Reactions`] at a
+//! constant rate ([`Reactions::add_source`]).
+//!
 //! Chemical exchange between spin systems is modelled by [`Exchange`];
 //! optimal control (GRAPE) of rf pulses and field profiles, with exact
 //! gradients, by [`Control`] and [`SpinSystem::optimize_control`], and
@@ -117,6 +129,7 @@ mod large_tests;
 #[cfg(test)]
 mod matrix_free_tests;
 mod nv;
+mod radical_pair;
 mod redfield;
 mod symmetry;
 #[cfg(test)]
@@ -134,6 +147,7 @@ pub use nv::{
     NV_ZERO_FIELD_SPLITTING, Nitrogen, NitrogenIsotope, NvCenter, NvEvent, cpmg, decay_exponent,
     filter_function, hahn, ramsey, xy8,
 };
+pub use radical_pair::{Birth, PairSolution, PairYields, Product, RadicalPair, Recombination};
 pub use redfield::{Interaction, MU0_OVER_4PI, ModelFree, axial_csa, axial_diffusion};
 
 /// An NV centre with its nuclei at the level anticrossings.
@@ -174,12 +188,16 @@ pub const MAX_RELAXATION_MEMORY: f64 = 2.0 * (1u64 << 30) as f64;
 pub const MAX_FID_POINTS: usize = 1 << 20;
 /// Most segments of a shaped pulse or a field sweep.
 pub const MAX_SEGMENTS: usize = 1 << 20;
+/// g-factor of the free electron, `g_e` (CODATA 2018).
+pub const FREE_ELECTRON_G: f64 = 2.002_319_304_362_56;
+/// Hz of coupling per mT of hyperfine coupling, `|γ_e|·10⁻³/2π`.
+const MILLITESLA_HZ: f64 = 1.760_859_630_23e8 / TWO_PI;
 
 const ZERO: C64 = C64::new(0.0, 0.0);
 const ONE: C64 = C64::new(1.0, 0.0);
 const TWO_PI: f64 = 2.0 * std::f64::consts::PI;
 
-/// A magnetic nucleus.
+/// A magnetic nucleus, or the electron.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Isotope {
@@ -195,10 +213,23 @@ pub enum Isotope {
     F19,
     #[serde(rename = "31P")]
     P31,
+    /// Nitrogen-14, spin 1 (for the nitrogen couplings of flavin and
+    /// tryptophan radicals). Its quadrupolar coupling is not modelled: it
+    /// relaxes by its given `T₁` and `T₂` only.
+    #[serde(rename = "14N")]
+    N14,
+    /// The electron, spin ½. Its `shift` is the g-shift in ppm of the free
+    /// electron's g, `δ = (g/g_e − 1)·10⁶` (see
+    /// [`SpinSystem::add_electron`]); electrons belong to radical pairs
+    /// ([`RadicalPair`]).
+    #[serde(rename = "e")]
+    Electron,
 }
 
 impl Isotope {
-    /// Every isotope.
+    /// The six nuclei of 1.33. ¹⁴N and the electron (1.65) are not listed,
+    /// as the array's length is public API; [`Isotope::N14`] and
+    /// [`Isotope::Electron`] are the other kinds of spin.
     pub const ALL: [Isotope; 6] = [
         Isotope::H1,
         Isotope::H2,
@@ -208,9 +239,28 @@ impl Isotope {
         Isotope::P31,
     ];
 
-    /// Gyromagnetic ratio γ in rad s⁻¹ T⁻¹ (IUPAC, Harris et al., Pure
-    /// Appl. Chem. 73, 1795 (2001)).
+    /// Every kind of spin, [`Isotope::ALL`] first: the order of the labels,
+    /// carriers and exchange sites. Code that walks the kinds present in a
+    /// system walks this list, never `ALL`.
+    pub(crate) const EVERY: [Isotope; 8] = [
+        Isotope::H1,
+        Isotope::H2,
+        Isotope::C13,
+        Isotope::N15,
+        Isotope::F19,
+        Isotope::P31,
+        Isotope::N14,
+        Isotope::Electron,
+    ];
+
+    /// Gyromagnetic ratio γ in rad s⁻¹ T⁻¹: of the nuclei IUPAC's (Harris
+    /// et al., Pure Appl. Chem. 73, 1795 (2001); ¹⁴N 1.933 779 2·10⁷, also
+    /// RadicalPy's), of the electron CODATA 2018's tabulated
+    /// `−1.760 859 630 23·10¹¹` (also RadicalPy's).
     pub fn gamma(self) -> f64 {
+        if self == Isotope::Electron {
+            return -1.760_859_630_23e11;
+        }
         1e7 * match self {
             Isotope::H1 => 26.752_212_8,
             Isotope::H2 => 4.106_627_91,
@@ -218,20 +268,30 @@ impl Isotope {
             Isotope::N15 => -2.712_618_04,
             Isotope::F19 => 25.181_48,
             Isotope::P31 => 10.839_4,
+            Isotope::N14 => 1.933_779_2,
+            Isotope::Electron => unreachable!("returned above"),
         }
     }
 
-    /// Spin quantum number: ½, or 1 for ²H.
+    /// Spin quantum number: ½, or 1 for ²H and ¹⁴N.
     pub fn spin(self) -> f64 {
-        if self == Isotope::H2 { 1.0 } else { 0.5 }
+        if matches!(self, Isotope::H2 | Isotope::N14) {
+            1.0
+        } else {
+            0.5
+        }
     }
 
     /// Number of levels, `2I + 1`.
     pub fn levels(self) -> usize {
-        if self == Isotope::H2 { 3 } else { 2 }
+        if matches!(self, Isotope::H2 | Isotope::N14) {
+            3
+        } else {
+            2
+        }
     }
 
-    /// `"1H"`, `"13C"`, …
+    /// `"1H"`, `"13C"`, …, `"14N"`, `"e"`.
     pub fn name(self) -> &'static str {
         match self {
             Isotope::H1 => "1H",
@@ -240,11 +300,13 @@ impl Isotope {
             Isotope::N15 => "15N",
             Isotope::F19 => "19F",
             Isotope::P31 => "31P",
+            Isotope::N14 => "14N",
+            Isotope::Electron => "e",
         }
     }
 
-    /// From `"1H"`, `"H1"`, `"H"`, `"13C"`, `"C13"`, `"D"`, … (case
-    /// ignored).
+    /// From `"1H"`, `"H1"`, `"H"`, `"13C"`, `"C13"`, `"D"`, `"14N"`, `"N14"`,
+    /// `"e"`, `"e-"`, `"electron"`, … (case ignored; `"N"` is ¹⁵N).
     pub fn from_name(name: &str) -> Result<Self> {
         let n = name.trim().to_ascii_uppercase();
         Ok(match n.as_str() {
@@ -254,10 +316,12 @@ impl Isotope {
             "15N" | "N15" | "N" => Isotope::N15,
             "19F" | "F19" | "F" => Isotope::F19,
             "31P" | "P31" | "P" => Isotope::P31,
+            "14N" | "N14" => Isotope::N14,
+            "E" | "E-" | "ELECTRON" => Isotope::Electron,
             _ => {
                 return Err(QsoError::invalid(
                     "isotope",
-                    format!("unknown isotope '{name}' (1H, 2H, 13C, 15N, 19F or 31P)"),
+                    format!("unknown isotope '{name}' (1H, 2H, 13C, 15N, 19F, 31P, 14N or e)"),
                 ));
             }
         })
@@ -269,13 +333,16 @@ impl Isotope {
     }
 }
 
-/// One nucleus of a spin system.
+/// One spin of a spin system: a nucleus, or an electron.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct Spin {
     pub isotope: Isotope,
-    /// Chemical shift δ in ppm.
+    /// Chemical shift δ in ppm; for an electron the g-shift
+    /// `(g/g_e − 1)·10⁶`, so that its laboratory Zeeman frequency
+    /// `|γ_e|B(1 + δ·10⁻⁶)` is `gμ_B B/ħ` (to the 6·10⁻¹⁰ rounding of
+    /// CODATA's tabulated `γ_e`).
     pub shift: f64,
     /// Longitudinal relaxation time `T₁` in s (`None`: none).
     #[serde(default)]
@@ -513,7 +580,13 @@ impl SpinSystem {
         }
     }
 
-    /// Add a nucleus with chemical shift `shift` (ppm); returns its index.
+    /// Add a spin with chemical shift `shift` (ppm); returns its index.
+    ///
+    /// | Quantity | `shift` or coupling | Helper |
+    /// |---|---|---|
+    /// | g-value of an electron | `shift = (g/g_e − 1)·10⁶` | [`SpinSystem::add_electron`] |
+    /// | hyperfine coupling `a` (mT) | `J = a·28 024 951.424 207 15` Hz | [`SpinSystem::hyperfine`] |
+    /// | exchange `H = −2J S₁·S₂`, `J` in mT | `J = −2J·28 024 951.424 207 15` Hz | [`SpinSystem::exchange_coupling`] |
     pub fn add_spin(&mut self, isotope: Isotope, shift: f64) -> Result<usize> {
         if !shift.is_finite() {
             return Err(QsoError::invalid("shift", "the shift must be finite"));
@@ -543,7 +616,10 @@ impl SpinSystem {
     }
 
     /// Set the scalar coupling `J` (Hz) between spins `i` and `j`
-    /// (replacing an earlier one; 0 removes it).
+    /// (replacing an earlier one; 0 removes it): `2πJ I_i·I_j` (rad/s).
+    /// Between an electron and a nucleus it is an isotropic hyperfine
+    /// coupling, between two electrons the exchange (see the table of
+    /// [`SpinSystem::add_spin`] for the units of radical pairs).
     pub fn couple(&mut self, i: usize, j: usize, j_hz: f64) -> Result<&mut Self> {
         self.check_spin(i)?;
         self.check_spin(j)?;
@@ -560,6 +636,79 @@ impl SpinSystem {
             self.couplings.sort_by_key(|&(x, y, _)| (x, y));
         }
         Ok(self)
+    }
+
+    /// Add an electron of g-factor `g` (its shift `(g/g_e − 1)·10⁶` ppm);
+    /// returns its index. Its Zeeman term is `+|γ_e|B(g/g_e)S_z` in the
+    /// laboratory frame and `|γ_e|B(δ − c_e)·10⁻⁶ S_z` in the rotating frame
+    /// (carrier `c_e`, 0 ppm by default).
+    ///
+    /// Errors: `g` not finite or not positive; the dimension limit of
+    /// [`SpinSystem::add_spin`].
+    pub fn add_electron(&mut self, g: f64) -> Result<usize> {
+        if !(g.is_finite() && g > 0.0) {
+            return Err(QsoError::invalid(
+                "g",
+                format!("the g-factor must be finite and positive, not {g}"),
+            ));
+        }
+        self.add_spin(Isotope::Electron, (g / FREE_ELECTRON_G - 1.0) * 1e6)
+    }
+
+    /// Set the isotropic hyperfine coupling `a` (mT) of an electron and a
+    /// nucleus: `|γ_e|·a·10⁻³ S·I` (rad/s), a coupling of
+    /// `a·28.024 951 424 MHz`. It is full in the laboratory frame and
+    /// secular (`a S_z I_z`) in the rotating frame.
+    ///
+    /// Errors: not exactly one of the two spins an electron; `a` not finite;
+    /// those of [`SpinSystem::couple`].
+    pub fn hyperfine(&mut self, electron: usize, nucleus: usize, a_mt: f64) -> Result<&mut Self> {
+        self.check_spin(electron)?;
+        self.check_spin(nucleus)?;
+        let electrons = [electron, nucleus]
+            .iter()
+            .filter(|&&i| self.spins[i].isotope == Isotope::Electron)
+            .count();
+        if electrons != 1 {
+            return Err(QsoError::invalid(
+                "spins",
+                "a hyperfine coupling joins an electron and a nucleus",
+            ));
+        }
+        if !a_mt.is_finite() {
+            return Err(QsoError::invalid(
+                "a",
+                format!("the hyperfine coupling must be finite, not {a_mt}"),
+            ));
+        }
+        self.couple(electron, nucleus, a_mt * MILLITESLA_HZ)
+    }
+
+    /// Set the exchange `J` (mT) of two electrons, `−2|γ_e|J·10⁻³ S₁·S₂`
+    /// (rad/s): a coupling of `−2J·28.024 951 424 MHz`. This is RadicalPy's
+    /// `−J|γ_e|(2S₁·S₂ + ½)` without its constant. It is full in both
+    /// frames.
+    ///
+    /// Errors: not two electrons; `J` not finite; those of
+    /// [`SpinSystem::couple`].
+    pub fn exchange_coupling(&mut self, e1: usize, e2: usize, j_mt: f64) -> Result<&mut Self> {
+        self.check_spin(e1)?;
+        self.check_spin(e2)?;
+        if self.spins[e1].isotope != Isotope::Electron
+            || self.spins[e2].isotope != Isotope::Electron
+        {
+            return Err(QsoError::invalid(
+                "spins",
+                "an exchange coupling joins two electrons",
+            ));
+        }
+        if !j_mt.is_finite() {
+            return Err(QsoError::invalid(
+                "j",
+                format!("the exchange coupling must be finite, not {j_mt}"),
+            ));
+        }
+        self.couple(e1, e2, -2.0 * j_mt * MILLITESLA_HZ)
     }
 
     /// Set `T₁` and `T₂` (s) of spin `i`; `None` for none (`T₂` then

@@ -42,6 +42,7 @@ reports them in full.
 | [Symmetry and state transfer](symmetry.md) | Quotients by equitable partitions, perfect state transfer |
 | [Discrete-time walks and circuits](discrete.md) | Coined, line and Szegedy walks; walks as circuits |
 | [Boson sampling](photonics.md) | Permanents, interferometers, exact sampling |
+| [Spin dynamics and magnetic resonance](spins.md) | Spin systems, pulse sequences, relaxation, exchange and reactions, radical pairs (field effects and CIDNP), NV centres |
 | [WebAssembly and JavaScript](webassembly.md) | The npm package and the browser playground |
 | [Command line](cli.md) | The `qso` tool |
 

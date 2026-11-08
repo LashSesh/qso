@@ -660,6 +660,157 @@ fn spin_dynamics() {
 }
 
 #[test]
+fn radical_pairs() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let pair = format!("{root}/examples/spins/flavin_tryptophan.json");
+    // Flavin–tryptophan at zero field from the singlet, k_S = k_T = 2·10⁷ s⁻¹.
+    let r = qso(&[
+        "radical-pair",
+        &pair,
+        "--rates",
+        "2e7,2e7,0",
+        "--fields",
+        "0",
+    ]);
+    let y = &r["yields"][0];
+    close(f(&y["singlet"]), 0.344_285_671_543_554, 1e-12);
+    close(
+        f(&y["singlet"]) + f(&y["triplet"]) + f(&y["escape"]),
+        1.0,
+        1e-12,
+    );
+    assert_eq!(f(&y["field"]), 0.0);
+    assert_eq!(r["electrons"].as_array().unwrap().len(), 2);
+    assert_eq!(r["nuclei"].as_array().unwrap().len(), 6);
+    assert_eq!(r["nuclei"][0]["isotope"], "14N");
+    assert_eq!(r["rates"], json!([2e7, 2e7, 0.0]));
+    assert_eq!(r["recombination"], "haberkorn");
+    assert_eq!(r["birth"], "singlet");
+    assert_eq!(y["cidnp"].as_array().unwrap().len(), 6);
+    // A sweep of three fields with the CIDNP of each.
+    let text = qso_text(&[
+        "radical-pair",
+        &pair,
+        "--rates",
+        "2e7,2e7,0",
+        "--fields",
+        "0:0.002:3",
+        "--cidnp",
+    ]);
+    let rows: Vec<&str> = text
+        .lines()
+        .skip_while(|l| !l.contains("B (mT)"))
+        .skip(1)
+        .take_while(|l| l.starts_with("  "))
+        .collect();
+    assert_eq!(rows.len(), 3, "{text}");
+    for (row, b) in rows.iter().zip(["0.000000", "1.000000", "2.000000"]) {
+        assert_eq!(row.split_whitespace().next(), Some(b), "{text}");
+    }
+    assert!(
+        text.contains("(half the change of Φ_S from 0 to 2.000000 mT)"),
+        "{text}"
+    );
+    let cidnp: Vec<&str> = text
+        .lines()
+        .skip_while(|l| !l.starts_with("CIDNP"))
+        .collect();
+    assert_eq!(cidnp.len(), 1 + 3 * (1 + 6), "{text}");
+    // The same sweep in JSON, from T₀ with Jones, Maeda and Hore's term.
+    let s = qso(&[
+        "radical-pair",
+        &pair,
+        "--rates",
+        "2e7,1e7,1e6",
+        "--fields",
+        "0:0.002:3",
+        "--birth",
+        "t0",
+        "--recombination",
+        "jones-maeda-hore",
+    ]);
+    assert_eq!(s["birth"], "triplet-zero");
+    assert_eq!(s["recombination"], "jones-maeda-hore");
+    // The JSON's names of the birth are read back as the same birth.
+    let back = qso(&[
+        "radical-pair",
+        &pair,
+        "--rates",
+        "2e7,1e7,1e6",
+        "--fields",
+        "0:0.002:3",
+        "--birth",
+        s["birth"].as_str().unwrap(),
+        "--recombination",
+        "jones-maeda-hore",
+    ]);
+    assert_eq!(back, s);
+    // The sweep's extremes and half-effect field, relative to its end.
+    let sweep = &s["sweep"];
+    close(f(&sweep["half_effect_reference"]), 0.002, 1e-18);
+    let ys: Vec<f64> = s["yields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|y| f(&y["singlet"]))
+        .collect();
+    let lowest = ys.iter().copied().fold(f64::INFINITY, f64::min);
+    let highest = ys.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    assert_eq!(f(&sweep["singlet_lowest"]["singlet"]), lowest);
+    assert_eq!(f(&sweep["singlet_highest"]["singlet"]), highest);
+    let half = f(&sweep["half_effect_field"]);
+    assert!(half > 0.0 && half < 0.002, "{sweep}");
+    // A single field has no sweep; the reasons for no half-effect field.
+    assert!(r["sweep"].is_null());
+    for (fields, why) in [
+        ("0:0:3", "equals its value at 0 T"),
+        (
+            "0.001:0.002:3",
+            "the sweep starts at 1.000000 mT, not at 0 T",
+        ),
+        ("0,0.002", "a sweep of three fields or more is needed"),
+    ] {
+        let text = qso_text(&[
+            "radical-pair",
+            &pair,
+            "--rates",
+            "2e7,2e7,0",
+            "--fields",
+            fields,
+        ]);
+        assert!(text.contains(why), "{text}");
+        assert!(text.contains("half-effect field B½: none"), "{text}");
+    }
+    let yields = s["yields"].as_array().unwrap();
+    assert_eq!(yields.len(), 3);
+    for (y, b) in yields.iter().zip([0.0, 0.001, 0.002]) {
+        close(f(&y["field"]), b, 1e-18);
+        close(
+            f(&y["singlet"]) + f(&y["triplet"]) + f(&y["escape"]),
+            1.0,
+            1e-12,
+        );
+    }
+    // A system with one electron is not a radical pair.
+    let one = Scratch::new("one_electron.json");
+    std::fs::write(
+        one.path(),
+        r#"{"spins": [{"isotope": "e", "shift": 0.0}, {"isotope": "1H", "shift": 0.0}],
+            "couplings": [[0, 1, 28024951.42420715]], "field": 0.0, "frame": "laboratory"}"#,
+    )
+    .unwrap();
+    let err = qso_fails(&["radical-pair", one.path(), "--rates", "1e7,1e7,0"]);
+    assert!(err.contains("exactly two electrons"), "{err}");
+    // The rates have no default: leaving them out is a usage error.
+    let out = run(&["radical-pair", &pair]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--rates"));
+    // Two rates are not three.
+    let err = qso_fails(&["radical-pair", &pair, "--rates", "1e7,1e7"]);
+    assert!(err.contains("three rates"), "{err}");
+}
+
+#[test]
 fn error_correction() {
     let stim = Scratch::new("surface.stim");
     let r = qso(&[

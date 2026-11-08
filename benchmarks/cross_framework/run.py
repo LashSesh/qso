@@ -35,7 +35,7 @@ import frameworks as fw  # noqa: E402
 PACKAGES = [
     "metatron-qso", "qiskit", "qiskit-aer", "qulacs", "cirq-core", "pennylane",
     "pennylane-lightning", "thewalrus", "numpy", "projectq", "stim", "pymatching", "pyscf",
-    "ldpc", "qutip", "pycce", "sympy", "qiskit-addon-obp", "qiskit-ibm-runtime",
+    "ldpc", "qutip", "pycce", "sympy", "qiskit-addon-obp", "qiskit-ibm-runtime", "radicalpy",
 ]
 
 # ----------------------------------------------------------------------------
@@ -234,6 +234,7 @@ def correctness(quick: bool) -> dict:
         "generalised_bath_vs_pycce": generalised_bath_vs_pycce(),
         "transport_vs_qutip": transport_in_child(quick),
         "pauli_propagation": pauli_propagation_vs_references(quick),
+        "radical_pairs": radical_pairs_vs_references(quick),
     }
 
 
@@ -1118,6 +1119,24 @@ TOLERANCES = {
     "propagation_value": 1e-10,
     "propagation_coefficient": 1e-13,
     "propagation_noisy": 1e-12,
+    # Radical pairs (1.65): yields, absolute. Closed forms of the
+    # exponential model; QSO's Hamiltonian against RadicalPy's matrices
+    # (relative); RadicalPy's HilbertSimulation trapezoid, Richardson-
+    # extrapolated from dt = 1/(2000k) and 1/(10000k) (its error
+    # (k·dt)²/12 leaves 1.2·10⁻¹² of fourth order); its quadrature sums
+    # against their exact geometric sums; exact solves of RadicalPy's own
+    # Liouvillian; CIDNP (P_α − P_β ≈ 0.1, absolute) against
+    # experiments.cidnp and the cancellation of the singlet and escape
+    # products; QuTiP's mesolve at atol 10⁻¹⁴, rtol 10⁻¹² (yields and
+    # products' ⟨I_z⟩); Φ_S + Φ_T + Φ_E = 1.
+    "radical_pair_closed_form": 1e-13,
+    "radical_pair_hamiltonian": 1e-12,
+    "radical_pair_radicalpy_yield": 5e-12,
+    "radical_pair_radicalpy_quadrature": 1e-12,
+    "radical_pair_liouville_yield": 1e-12,
+    "radical_pair_cidnp": 1e-14,
+    "radical_pair_mesolve": 1e-12,
+    "radical_pair_sum": 1e-13,
 }
 
 
@@ -2360,6 +2379,422 @@ def pauli_propagation_failures(p: dict) -> list[str]:
     return failures
 
 
+# ----------------------------------------------------------------------------
+# Radical pairs (1.65): yields, MARY and CIDNP against closed forms,
+# RadicalPy 1.0.9 and QuTiP 5.3.1's mesolve. The references below are an
+# independent NumPy model of the pair (electron 1, electron 2, then the
+# nuclei; each factor in the order m = s, …, −s, as QSO's product basis);
+# angular frequencies in rad/s, times in s.
+
+# CODATA 2018 (RadicalPy's constants.json has older ħ and μ_B, but its
+# electron γ is CODATA 2018's, as QSO's).
+RP_HBAR = 1.054_571_817e-34
+RP_MU_B = 9.274_010_0783e-24
+RP_G_E = 2.002_319_304_362_56
+RP_GAMMA_E = 1.760_859_630_23e11  # |γ_e|
+# RadicalPy's nuclear γ: ¹H CODATA's 2.675 221 874 4·10⁸ (QSO: IUPAC's
+# 2.675 221 28·10⁸, 2.2·10⁻⁷ relative), ¹⁴N the same as QSO's.
+RP_GAMMA = {"1H": 2.675_221_874_4e8, "14N": 1.933_779_2e7}
+RP_MULT = {"1H": 2, "14N": 3}
+# The ¹H shift (ppm) with which QSO's γ_H(1 + δ·10⁻⁶) is RadicalPy's.
+RP_PROTON_SHIFT = 0.222_187_227_727_488_33
+
+
+def rp_spin_ops(mult: int):
+    s = (mult - 1) / 2
+    m = s - np.arange(mult)
+    ip = np.zeros((mult, mult), complex)
+    for k in range(1, mult):
+        ip[k - 1, k] = np.sqrt(s * (s + 1) - m[k] * (m[k] + 1))
+    im = ip.conj().T
+    return (ip + im) / 2, (ip - im) / 2j, np.diag(m).astype(complex)
+
+
+class RpPair:
+    """Two electrons and nuclei [(radical 0 or 1, "1H" or "14N", a in rad/s)]."""
+
+    def __init__(self, nuclei):
+        self.nuclei = list(nuclei)
+        self.mults = [2, 2] + [RP_MULT[iso] for _, iso, _ in self.nuclei]
+        self.dim = int(np.prod(self.mults))
+        self.nd = self.dim // 4
+
+    def op(self, idx: int, axis: str):
+        o = dict(zip("xyz", rp_spin_ops(self.mults[idx])))[axis]
+        before, after = int(np.prod(self.mults[:idx])), int(np.prod(self.mults[idx + 1:]))
+        return np.kron(np.kron(np.eye(before), o), np.eye(after))
+
+    def dot(self, i: int, j: int):
+        return sum(self.op(i, a) @ self.op(j, a) for a in "xyz")
+
+    def hamiltonian(self, w1=0.0, w2=0.0, B=0.0, J=0.0):
+        """w1 S1z + w2 S2z + Σ a S·I − Σ γ_n B I_z + J(2 S1·S2 + ½),
+        laboratory frame; RadicalPy's exchange −J_mT|γ_e|(2 S1·S2 + ½) is
+        J = −J_mT|γ_e| here."""
+        H = w1 * self.op(0, "z") + w2 * self.op(1, "z")
+        for j, (r, iso, a) in enumerate(self.nuclei):
+            H = H + a * self.dot(r, 2 + j) - RP_GAMMA[iso] * B * self.op(2 + j, "z")
+        if J:
+            H = H + J * (2 * self.dot(0, 1) + 0.5 * np.eye(self.dim))
+        return H
+
+    def projectors(self):
+        one = np.eye(self.dim)
+        ps = 0.25 * one - self.dot(0, 1)
+        s1z, s2z = self.op(0, "z"), self.op(1, "z")
+        return {"S": ps, "T": one - ps, "T+": (0.5 * one + s1z) @ (0.5 * one + s2z),
+                "T-": (0.5 * one - s1z) @ (0.5 * one - s2z)}
+
+    def initial(self, which: str):
+        P = self.projectors()
+        Q = P["T+"] + P["T-"] if which == "T+-" else P[which]
+        return Q / np.trace(Q).real
+
+    def nuclear_iz(self, j: int):
+        """I_z of nucleus j on the nuclear space alone."""
+        mults = self.mults[2:]
+        before, after = int(np.prod(mults[:j])), int(np.prod(mults[j + 1:]))
+        return np.kron(np.kron(np.eye(before), rp_spin_ops(mults[j])[2]), np.eye(after))
+
+    def electron_relaxation(self, t1, t2, w, temperature):
+        """QSO's T₁/T₂ of each electron as Lindblad jumps: √k↓ S₋, √k↑ S₊
+        with k↑ + k↓ = 1/T₁ and k↑/k↓ = exp(−ħw/k_B T) (w the electron's
+        Larmor frequency), and √(2γ_φ) S_z with γ_φ = 1/T₂ − 1/(2T₁);
+        temperature None: infinite."""
+        ops = []
+        for e in (0, 1):
+            sx, sy, sz = (self.op(e, a) for a in "xyz")
+            ratio = 1.0 if temperature is None else np.exp(-RP_HBAR * w[e] / (1.380_649e-23 * temperature))
+            kdn = (1 / t1) / (1 + ratio)
+            ops += [np.sqrt(kdn) * (sx - 1j * sy), np.sqrt(1 / t1 - kdn) * (sx + 1j * sy),
+                    np.sqrt(2 * (1 / t2 - 1 / (2 * t1))) * sz]
+        return ops
+
+    def liouvillian(self, H, kS, kT, kE, jmh=False, lindblad=()):
+        """Haberkorn's (or Jones–Maeda–Hore's) generator, column stacking."""
+        P = self.projectors()
+        one = np.eye(self.dim)
+        heff = H - 0.5j * (kS * P["S"] + kT * P["T"] + kE * one)
+        L = -1j * (np.kron(one, heff) - np.kron(heff.conj(), one))
+        if jmh:
+            L -= 0.5 * (kS + kT) * (np.kron(P["T"].T, P["S"]) + np.kron(P["S"].T, P["T"]))
+        for c in lindblad:
+            cdc = c.conj().T @ c
+            L += np.kron(c.conj(), c) - 0.5 * (np.kron(one, cdc) + np.kron(cdc.T, one))
+        return L
+
+
+def rp_exponential_yield(H, rho0, P, k, dt=None, steps=None, rule="trapezoid"):
+    """k ∫ e^{−kt} Tr(P ρ(t)) dt with ρ unitary (the exponential model),
+    exactly by eigendecomposition; with dt and steps instead RadicalPy's
+    quadrature k·dt·Σ c_n e^{−k t_n} Tr(P ρ(t_n)), t_n = n·dt, summed exactly
+    (trapezoid weights, or all 1 for experiments.mary's sum)."""
+    e, V = np.linalg.eigh(H)
+    r, p = V.conj().T @ rho0 @ V, V.conj().T @ P @ V
+    w = e[:, None] - e[None, :]
+    if dt is None:
+        return float(np.real(np.sum(p.T * r * (k / (k + 1j * w)))))
+    z = np.exp((-k - 1j * w) * dt)
+    geo = np.where(np.abs(1 - z) > 0, (1 - z**steps) / (1 - z), steps)
+    if rule == "trapezoid":
+        geo = geo - 0.5 - 0.5 * z ** (steps - 1)
+    return float(np.real(np.sum(p.T * r * geo)) * k * dt)
+
+
+def qso_radical_pair(nuclei, w1, w2, B, J, kS, kT, kE, birth, jmh=False, t1=None, t2=None,
+                     temperature=None, secular=False) -> dict:
+    """The pair of RpPair's conventions through QSO's bindings: yields
+    {'S', 'T', 'E'}, each product's ⟨I_z⟩ per nucleus and pair born, and the
+    Hamiltonian (rad/s). secular: the rotating frame at 1 T (hyperfine
+    a S_z I_z, electron offsets w1, w2); otherwise the laboratory frame at
+    B (T). J in rad/s in J(2S₁·S₂ + ½) (RadicalPy's −J_mT|γ_e|(2S₁·S₂ + ½)
+    with J = −J_mT|γ_e|), of which QSO keeps 2J S₁·S₂; temperature None:
+    10¹² K (infinite for the relaxation's bias)."""
+    import metatron_qso as q
+    from metatron_qso.spin import gyromagnetic_ratio
+
+    ge = abs(gyromagnetic_ratio("e"))
+    temp = 1e12 if temperature is None else temperature
+    if secular:
+        system = q.SpinSystem(1.0, temp, "rotating")
+        shifts = [w / ge * 1e6 for w in (w1, w2)]
+    else:
+        system = q.SpinSystem(B, temp, "laboratory")
+        if B > 0:
+            shifts = [(w / (ge * B) - 1) * 1e6 for w in (w1, w2)]
+        else:
+            assert w1 == 0 and w2 == 0, "no electron Zeeman term at zero field"
+            shifts = [0.0, 0.0]
+    electrons = [system.add_spin("e", s) for s in shifts]
+    for r, iso, a in nuclei:
+        assert iso in RP_MULT, iso
+        n = system.add_spin(iso, RP_PROTON_SHIFT if iso == "1H" and not secular else 0.0)
+        system.couple(electrons[r], n, a / (2 * math.pi))
+    if J:
+        system.couple(electrons[0], electrons[1], J / math.pi)
+    if t1 is not None:
+        for e in electrons:
+            system.set_relaxation(e, t1, t2)
+    pair = q.spin.RadicalPair(system, kS, kT, kE, "jones-maeda-hore" if jmh else "haberkorn")
+    if birth == "T+-":
+        sol = pair.solve(rho0=0.5 * (pair.birth_state("t+") + pair.birth_state("t-")))
+    else:
+        sol = pair.solve(birth={"S": "singlet", "T": "triplet"}[birth])
+    y = sol.yields
+    cidnp = np.asarray(y["cidnp"], dtype=float).reshape(len(nuclei), 3)
+    return {
+        "yields": {"S": float(y["singlet"]), "T": float(y["triplet"]), "E": float(y["escape"])},
+        "Iz": {c: [float(v) for v in cidnp[:, i]] for i, c in enumerate("STE")},
+        "H": np.asarray(system.hamiltonian()),
+        "backward_error": float(y["backward_error"]),
+        "iterations": int(y["iterations"]),
+    }
+
+
+def radical_pairs_vs_references(quick: bool) -> dict:
+    """Radical-pair yields, MARY and CIDNP (1.65) against closed forms,
+    RadicalPy 1.0.9 and QuTiP 5.3.1's mesolve.
+
+    * Closed forms of the exponential model, Haberkorn's equation with
+      k_S = k_T = k and no escape: one ¹H or ¹⁴N at zero field, and Δg at
+      high field (rotating frame).
+    * RadicalPy: its Hamiltonians (Basis.ZEEMAN, the same order: electrons,
+      then nuclei) against QSO's, with exchange too; its HilbertSimulation
+      yields on two grids, Richardson-extrapolated (its trapezoid errs by (k·dt)²/12 for a
+      singlet birth); experiments.mary (coarse grid: it stores every density
+      matrix) against the exact sum of its own quadrature, and QSO against
+      the exact yield of RadicalPy's own Hamiltonian; LiouvilleSimulation
+      with Haberkorn, HaberkornFree and JonesHore by an exact solve of
+      RadicalPy's own generator (it runs backwards in time, +i[H, ·], which
+      leaves these yields unchanged as H and the projectors are real); and
+      experiments.cidnp model 'a', whose polarisation at its rate ks is
+      P_α − P_β = 2⟨I_z⟩ of the escape (triplet) product of the exponential
+      model at ks/2 (hyperfines converted with its 2π·2.8·10¹⁰ rad s⁻¹ T⁻¹,
+      Δg with its μ_B/ħ).
+    * QuTiP: mesolve on a Lindblad model with product shelves, which is
+      Haberkorn's (or Jones–Maeda–Hore's) equation on the pair, with
+      electron T₁/T₂, in microseconds and CSR.
+    """
+    import qutip as qt
+    from radicalpy import experiments as ex
+    from radicalpy.data import Molecule
+    from radicalpy.kinetics import Exponential, Haberkorn, HaberkornFree, JonesHore
+    from radicalpy.shared import constants as C
+    from radicalpy.simulation import Basis, HilbertSimulation, LiouvilleSimulation, State
+
+    started = time.perf_counter()
+    ge = abs(Molecule().radical.gamma_mT)  # |γ_e| in rad s⁻¹ mT⁻¹
+    rec: dict = {}
+    qso_seconds = 0.0
+
+    def worst(key, v):
+        rec[key] = max(rec.get(key, 0.0), float(v))
+
+    def qso(*args, **kw):
+        nonlocal qso_seconds
+        t0 = time.perf_counter()
+        out = qso_radical_pair(*args, **kw)
+        qso_seconds += time.perf_counter() - t0
+        return out
+
+    # Closed forms.
+    for a_mt in (0.5, 1.7):
+        a = a_mt * ge
+        for kf in (0.5, 0.2, 3.0):
+            k = kf * a
+            for iso, r, exact in (("1H", 0, 5 / 8 + 3 / 8 * k * k / (k * k + a * a)),
+                                  ("14N", 1, 5 / 9 + 4 / 9 * k * k / (k * k + 9 * a * a / 4))):
+                worst("closed_form", abs(qso([(r, iso, a)], 0, 0, 0, 0, k, k, 0, "S")["yields"]["S"] - exact))
+    for dg, B, k in ((1e-3, 1.0, 1e8), (3e-3, 9.4, 1e9), (2e-4, 0.3, 1e7)):
+        dw = dg * RP_MU_B * B / RP_HBAR
+        y = qso([], dw, 0, 0, 0, k, k, 0, "S", secular=True)["yields"]
+        worst("closed_form", abs(y["S"] - (0.5 + 0.5 * k * k / (k * k + dw * dw))))
+
+    # HilbertSimulation at zero field, a = 1 mT, k = a/2: 0.7 (¹H), 0.6 (¹⁴N).
+    zero = {}
+    for iso, exact in (("1H", 0.7), ("14N", 0.6)):
+        sim = HilbertSimulation([Molecule.fromisotopes([iso], [1.0]), Molecule("Z")], basis=Basis.ZEEMAN)
+        H = sim.total_hamiltonian(B0=0, J=0, D=0)
+        k = ge / 2
+        q = qso([(0, iso, ge)], 0, 0, 0, 0, k, k, 0, "S")
+        worst("hamiltonian", np.max(np.abs(q["H"] - H)) / np.max(np.abs(H)))
+        vals = []
+        for per in (2000, 10000):
+            dt, n = 1 / (k * per), 40 * per
+            t = np.arange(n) * dt
+            pp = sim.product_probability(State.SINGLET, sim.time_evolution(State.SINGLET, t, H))
+            sim.apply_hilbert_kinetics(t, pp, [Exponential(k)])
+            vals.append(float(sim.product_yield(pp, t, k)[1]))
+            del pp
+        rich = (25 * vals[1] - vals[0]) / 24
+        zero[iso] = {"radicalpy_dt_1_over_10000k": vals[1], "richardson": rich, "qso": q["yields"]["S"], "exact": exact}
+        worst("radicalpy_yield", abs(rich - q["yields"]["S"]))
+        worst("closed_form", abs(q["yields"]["S"] - exact))
+
+    # The exchange of the conventions table: RadicalPy's
+    # exchange_hamiltonian(J) = −J|γ_e|(2S₁·S₂ + ½) (J in mT) is
+    # SpinSystem.exchange_coupling(e1, e2, J) and the constant −J|γ_e|/2.
+    import metatron_qso as mq
+
+    sim = HilbertSimulation([Molecule.fromisotopes(["1H"], [0.7]), Molecule("Z")], basis=Basis.ZEEMAN)
+    for j_mt in (0.3, -1.1):
+        HJ = sim.total_hamiltonian(B0=0, J=j_mt, D=0)
+        system = mq.SpinSystem(0.0, frame="laboratory")
+        e1, e2 = system.add_electron(), system.add_electron()
+        system.hyperfine(e1, system.add_spin("1H"), 0.7)
+        system.exchange_coupling(e1, e2, j_mt)
+        Hq = np.asarray(system.hamiltonian()) - 0.5 * j_mt * ge * np.eye(len(HJ))
+        worst("hamiltonian", np.max(np.abs(Hq - HJ)) / np.max(np.abs(HJ)))
+
+    # experiments.mary, flavin anion and tryptophan cation, up to six nuclei.
+    fl, tr = (["N5", "H24"], ["Hbeta1", "H1"]) if quick else (["N5", "H24", "H25"], ["Hbeta1", "H1", "H4"])
+    mols = [Molecule.fromdb("flavin_anion", fl), Molecule.fromdb("tryptophan_cation", tr)]
+    nuc = [(r, n.name, n.hfc.isotropic * ge) for r, m in enumerate(mols) for n in m.nuclei]
+    sim = HilbertSimulation(mols, basis=Basis.ZEEMAN)
+    k = 2e7
+    fields = np.array([0.0, 0.1, 0.5, 1.0, 2.0, 5.0, 20.0])
+    dt, n = 2.5e-10, 100
+    t = np.arange(n) * dt
+    res = ex.mary(sim, State.SINGLET, State.SINGLET, t, fields, D=0, J=0, kinetics=[Exponential(k)])
+    P = sim.projection_operator(State.SINGLET)
+    rho0 = P / np.trace(P)
+    mary = []
+    for i, b in enumerate(fields):
+        H = sim.total_hamiltonian(B0=b, J=0, D=0)
+        q = qso(nuc, ge * b, ge * b, b * 1e-3, 0, k, k, 0, "S")
+        worst("hamiltonian", np.max(np.abs(q["H"] - H)) / np.max(np.abs(H)))
+        exact = rp_exponential_yield(H, rho0, P, k)
+        trap = rp_exponential_yield(H, rho0, P, k, dt, n)
+        rect = rp_exponential_yield(H, rho0, P, k, dt, n, rule="rectangle")
+        rp_rect = float(np.sum(res["time_evolutions"][i]) * dt * k)
+        worst("radicalpy_quadrature", abs(float(res["product_yield_sums"][i]) - trap))
+        worst("radicalpy_quadrature", abs(rp_rect - rect))
+        worst("radicalpy_yield", abs(q["yields"]["S"] - exact))
+        mary.append({"field_mT": float(b), "qso": q["yields"]["S"], "radicalpy_hamiltonian_exact": exact,
+                     "radicalpy_rectangle": rp_rect, "backward_error": q["backward_error"]})
+    del res
+
+    # LiouvilleSimulation: Haberkorn S/T with escape, and Jones–Hore (three nuclei).
+    mols = [Molecule.fromdb("flavin_anion", ["N5"]), Molecule.fromdb("tryptophan_cation", ["Hbeta1", "H1"])]
+    nuc = [(r, n.name, n.hfc.isotropic * ge) for r, m in enumerate(mols) for n in m.nuclei]
+    kS, kT, kE, b = 2e7, 5e6, 1e6, 1.0
+    liou = {}
+    for name, kin, jmh in (
+        ("haberkorn", [Haberkorn(kS, State.SINGLET), Haberkorn(kT, State.TRIPLET), HaberkornFree(kE)], False),
+        ("jones_hore", [JonesHore(kS, kT), HaberkornFree(kE)], True),
+    ):
+        sim = LiouvilleSimulation(mols, basis=Basis.ZEEMAN)
+        L = sim.total_hamiltonian(B0=b, J=0, D=0)
+        sim.apply_liouville_hamiltonian_modifiers(L, kin)
+        v0 = sim.initial_density_matrix(State.SINGLET, None)
+        x = np.linalg.solve(L, -v0)[:, 0]  # X, row-stacked
+        ref = {"S": float(kS * (sim.liouville_projection_operator(State.SINGLET)[:, 0] @ x).real),
+               "T": float(kT * (sim.liouville_projection_operator(State.TRIPLET)[:, 0] @ x).real)}
+        q = qso(nuc, ge * b, ge * b, b * 1e-3, 0, kS, kT, kE, "S", jmh=jmh)
+        for c in ref:
+            worst("liouville_yield", abs(ref[c] - q["yields"][c]))
+        worst("sum", abs(sum(q["yields"].values()) - 1))
+        liou[name] = {"radicalpy_exact": ref, "qso": q["yields"], "iterations": q["iterations"]}
+
+    # experiments.cidnp, model 'a': three polarised nuclei of five.
+    rp_w = 2 * math.pi * 2.8e10 * 1e-3  # its mT → rad/s
+    donor, acceptor, donor1, acceptor1, dg, ks = [1.2, -0.45], [0.8], [0.5], [0.3], 1.5e-3, 3e8
+    nuc = [(0, "1H", a * rp_w) for a in donor] + [(1, "1H", a * rp_w) for a in acceptor] + [
+        (0, "14N", a * rp_w) for a in donor1] + [(1, "14N", a * rp_w) for a in acceptor1]
+    cidnp = []
+    for B in (0.05, 1.0, 9.4):
+        q = qso(nuc, dg * C.mu_B / C.hbar * B, 0, B, 0, ks / 2, ks / 2, 0, "S", secular=True)
+        for j in range(3):
+            _, p = ex.cidnp(np.array([B]), dg, "a", j + 1, donor, acceptor, donor1, acceptor1, ks=ks)
+            worst("cidnp", abs(float(p[0]) - 2 * q["Iz"]["T"][j]))
+            worst("cidnp", abs(q["Iz"]["S"][j] + q["Iz"]["T"][j]))  # cancellation (rotating frame)
+            cidnp.append({"field_T": B, "nucleus": j + 1, "radicalpy": float(p[0]), "qso_escape_2Iz": 2 * q["Iz"]["T"][j]})
+
+    # QuTiP mesolve: product shelves, electron T₁/T₂, Haberkorn and JMH.
+    def mesolve(nuclei, w1, w2, B, J, kS, kT, kE, birth, jmh, t1, t2, temperature):
+        pair = RpPair(nuclei)
+        nd, us = pair.nd, 1e-6
+        H = pair.hamiltonian(w1=w1, w2=w2, B=B, J=J)
+        relax = pair.electron_relaxation(t1, t2, (w1, w2), temperature) if t1 else []
+
+        def embed(A):
+            M = np.zeros((7 * nd, 7 * nd), complex)
+            M[: 4 * nd, : 4 * nd] = A
+            return M
+
+        singlet = np.array([0, 1, -1, 0]) / np.sqrt(2)
+        triplets = [np.eye(4)[0], np.array([0, 1, 1, 0]) / np.sqrt(2), np.eye(4)[3]]
+
+        def jump(rate, shelf, frm):
+            e = np.zeros((7, 7), complex)
+            e[4 + shelf, :4] = frm
+            return np.sqrt(rate * us) * np.kron(e, np.eye(nd))
+
+        dims = [[7 * nd], [7 * nd]]
+        c = [jump(kS, 0, singlet)] + [jump(kT, 1, x) for x in triplets] + [jump(kE, 2, np.eye(4)[x]) for x in range(4)]
+        c += [embed(R) * np.sqrt(us) for R in relax]
+        if jmh:
+            c.append(embed(np.sqrt((kS + kT) * us) * pair.projectors()["S"]))
+        L = pair.liouvillian(H, kS, kT, kE, jmh=jmh, lindblad=relax)
+        slowest = float(np.min(-np.linalg.eigvals(L).real))
+        r = qt.mesolve(qt.Qobj(embed(H) * us, dims=dims).to("csr"), qt.Qobj(embed(pair.initial(birth)), dims=dims),
+                       [0.0, 32.0 / (slowest * us)], c_ops=[qt.Qobj(x, dims=dims).to("csr") for x in c],
+                       options={"atol": 1e-14, "rtol": 1e-12, "nsteps": 10**8, "method": "adams",
+                                "normalize_output": False, "progress_bar": False})
+        f = r.states[-1].full()
+        out = {}
+        for name, s in (("S", 0), ("T", 1), ("E", 2)):
+            blk = f[(4 + s) * nd:(5 + s) * nd, (4 + s) * nd:(5 + s) * nd]
+            out[name] = (float(np.trace(blk).real),
+                         [float(np.trace(pair.nuclear_iz(j) @ blk).real) for j in range(len(nuclei))])
+        return out
+
+    nuc = [(0, "1H", 1.1e-3 * RP_GAMMA_E), (1, "14N", 0.52e-3 * RP_GAMMA_E)]
+    mes = []
+    runs = [("S", False, 2e-7, 1e-7, None, 1e-3), ("T", True, 2e-7, 1e-7, None, 1e-3)]
+    if not quick:
+        runs += [("S", False, 1e-6, 3e-7, 1.0, 5e-3), ("T+-", False, None, None, None, 1e-3)]
+    for birth, jmh, t1, t2, temp, B in runs:
+        w1 = (RP_G_E + 2e-3) * RP_MU_B * B / RP_HBAR
+        w2 = RP_G_E * RP_MU_B * B / RP_HBAR
+        args = (nuc, w1, w2, B, 0.02e-3 * RP_GAMMA_E, 2e7, 5e6, 2e6, birth)
+        ref = mesolve(*args, jmh, t1, t2, temp)
+        q = qso(*args, jmh=jmh, t1=t1, t2=t2, temperature=temp)
+        for c in ("S", "T", "E"):
+            worst("mesolve", abs(ref[c][0] - q["yields"][c]))
+            for j in range(2):
+                worst("mesolve", abs(ref[c][1][j] - q["Iz"][c][j]))
+        worst("sum", abs(sum(q["yields"].values()) - 1))
+        mes.append({"birth": birth, "jones_maeda_hore": jmh, "T1": t1, "T2": t2, "temperature": temp, "field_T": B,
+                    "mesolve": {c: ref[c][0] for c in ref}, "qso": q["yields"], "iterations": q["iterations"]})
+
+    return {"max_differences": rec, "zero_field": zero, "mary": mary, "liouville": liou, "cidnp": cidnp,
+            "mesolve": mes, "seconds_qso": qso_seconds, "seconds": time.perf_counter() - started}
+
+
+RADICAL_PAIR_KEYS = {
+    "closed_form": "radical_pair_closed_form",
+    "hamiltonian": "radical_pair_hamiltonian",
+    "radicalpy_yield": "radical_pair_radicalpy_yield",
+    "radicalpy_quadrature": "radical_pair_radicalpy_quadrature",
+    "liouville_yield": "radical_pair_liouville_yield",
+    "cidnp": "radical_pair_cidnp",
+    "mesolve": "radical_pair_mesolve",
+    "sum": "radical_pair_sum",
+}
+
+
+def radical_pair_failures(r: dict) -> list[str]:
+    """The deviations of radical_pairs_vs_references beyond TOLERANCES (a
+    missing comparison is a failure)."""
+    failures = []
+    for key, tol in RADICAL_PAIR_KEYS.items():
+        v = r["max_differences"].get(key)
+        if v is None or not v <= TOLERANCES[tol]:
+            failures.append(f"radical pairs: {key} differs by {v} (tolerance {TOLERANCES[tol]:g})")
+    return failures
+
+
 def check(c: dict) -> list[str]:
     """Deviations in the correctness section that exceed TOLERANCES."""
     failures = []
@@ -2486,6 +2921,7 @@ def check(c: dict) -> list[str]:
             f"the dimer's rate of highest efficiency differs from 39/20 by {tp['best_rate_relative_difference']:.3g} (relative)"
         )
     failures += pauli_propagation_failures(c["pauli_propagation"])
+    failures += radical_pair_failures(c["radical_pairs"])
     return failures
 
 
@@ -2671,11 +3107,23 @@ def main() -> None:
     ap.add_argument("--transport-only", action="store_true",
                     help="print only the transport cross-validation as JSON (correctness() runs it so, "
                     "in a child process pinned to one thread)")
+    ap.add_argument("--radical-pairs-only", action="store_true",
+                    help="run only the radical-pair cross-validation (RadicalPy, QuTiP) and print it as JSON "
+                    "with its failures")
     ap.add_argument("--qaoa", default="22,24",
                     help="qubit counts of the QAOA p = 10 comparison (comma-separated; empty: none)")
     args = ap.parse_args()
     if args.transport_only:
         print(json.dumps(transport_vs_qutip(args.quick)))
+        return
+    if args.radical_pairs_only:
+        r = radical_pairs_vs_references(args.quick)
+        r["failures"] = radical_pair_failures(r)
+        print(json.dumps(r, indent=1))
+        for f in r["failures"]:
+            print(f"::error title=Cross-validation::{f}", file=sys.stderr)
+        if args.check and r["failures"]:
+            sys.exit(1)
         return
     started = time.time()
     report = {"environment": environment()}

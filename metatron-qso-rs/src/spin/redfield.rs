@@ -54,7 +54,7 @@ pub use motion::{Interaction, ModelFree, axial_diffusion};
 
 use super::blocks::{Eigenblock, Liouville, distinct};
 use super::krylov::{Accumulator, SparseBlock, column_ranges};
-use super::{Frame, HBAR, ONE, SpinSystem, ZERO, spin_ops};
+use super::{Frame, HBAR, Isotope, ONE, SpinSystem, ZERO, spin_ops};
 use crate::error::{QsoError, Result};
 use crate::linalg::dense::cmul;
 use crate::linalg::{CMatrix, RMatrix};
@@ -994,6 +994,12 @@ impl SpinSystem {
             return Err(QsoError::invalid(
                 "correlation_time",
                 "the correlation time must be finite and positive",
+            ));
+        }
+        if self.has_motion() && self.spins.iter().any(|s| s.isotope == Isotope::Electron) {
+            return Err(QsoError::invalid(
+                "correlation_time",
+                "Redfield relaxation of electron spins is not modelled; give their T₁ and T₂",
             ));
         }
         for (i, s) in self.spins.iter().enumerate() {

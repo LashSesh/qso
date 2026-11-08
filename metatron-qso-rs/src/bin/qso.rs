@@ -35,7 +35,10 @@ use metatron_qso::quantum::{
     Circuit, PauliSum, Precision, Program, bitstring, from_qasm2, record_bitstring, to_qasm2,
 };
 use metatron_qso::rng::Rng;
-use metatron_qso::spin::{Event as SpinEvent, Isotope, SpinSystem, Target as SpinTarget};
+use metatron_qso::spin::{
+    Birth, Event as SpinEvent, FREE_ELECTRON_G, Isotope, RadicalPair, Recombination, SpinSystem,
+    Target as SpinTarget,
+};
 use metatron_qso::stabilizer::StabilizerState;
 use metatron_qso::stabilizer::program::{is_clifford_program, sample_program};
 use metatron_qso::walks::{
@@ -541,6 +544,32 @@ enum Command {
         #[arg(long)]
         rates: bool,
     },
+    /// Radical pairs: singlet, triplet and escape yields of a pair of
+    /// electrons with their nuclei (a spin system with exactly two
+    /// electrons), against the field, and the nuclear polarisation (CIDNP)
+    /// of the products.
+    RadicalPair {
+        /// JSON file with the spin system (two electrons and their nuclei).
+        system: std::path::PathBuf,
+        /// Recombination from the singlet and the triplet, and escape
+        /// (s⁻¹), e.g. 2e7,2e7,0.
+        #[arg(long, value_delimiter = ',', required = true)]
+        rates: Vec<f64>,
+        /// Recombination term: Haberkorn's, or with Jones, Maeda and Hore's
+        /// extra decay of singlet–triplet coherences.
+        #[arg(long, value_enum, default_value_t = RecombinationArg::Haberkorn)]
+        recombination: RecombinationArg,
+        /// Electron state the pair is born in (the nuclei maximally mixed).
+        #[arg(long, value_enum, default_value_t = BirthArg::Singlet)]
+        birth: BirthArg,
+        /// Fields (T): a list B1,B2,… or a sweep FROM:TO:POINTS (default:
+        /// the system's field).
+        #[arg(long)]
+        fields: Option<String>,
+        /// Also print ⟨I_z⟩ of every nucleus in each product (CIDNP).
+        #[arg(long)]
+        cidnp: bool,
+    },
     /// Trotter–Suzuki circuit for exp(−iHt) with its error bound.
     Trotter {
         /// Hamiltonian, e.g. "Z0 Z1 + 0.5 X0 + 0.5 X1".
@@ -734,6 +763,125 @@ enum ChemMethodArg {
     Uccsd,
     Upccgsd,
     Adapt,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum RecombinationArg {
+    Haberkorn,
+    JonesMaedaHore,
+}
+
+impl From<RecombinationArg> for Recombination {
+    fn from(r: RecombinationArg) -> Self {
+        match r {
+            RecombinationArg::Haberkorn => Recombination::Haberkorn,
+            RecombinationArg::JonesMaedaHore => Recombination::JonesMaedaHore,
+        }
+    }
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum BirthArg {
+    Singlet,
+    #[value(name = "t0", alias = "triplet-zero")]
+    TripletZero,
+    #[value(name = "t+", alias = "triplet-plus")]
+    TripletPlus,
+    #[value(name = "t-", alias = "triplet-minus")]
+    TripletMinus,
+    Triplet,
+    Uncorrelated,
+}
+
+impl From<BirthArg> for Birth {
+    fn from(b: BirthArg) -> Self {
+        match b {
+            BirthArg::Singlet => Birth::Singlet,
+            BirthArg::TripletZero => Birth::TripletZero,
+            BirthArg::TripletPlus => Birth::TripletPlus,
+            BirthArg::TripletMinus => Birth::TripletMinus,
+            BirthArg::Triplet => Birth::Triplet,
+            BirthArg::Uncorrelated => Birth::Uncorrelated,
+        }
+    }
+}
+
+/// The fields (T) of the radical-pair command: a list `B1,B2,…` or a
+/// sweep `FROM:TO:POINTS` of evenly spaced fields.
+fn pair_fields(spec: &str) -> Result<Vec<f64>> {
+    let number = |s: &str| -> Result<f64> {
+        s.trim()
+            .parse::<f64>()
+            .map_err(|_| QsoError::Parse(format!("field '{}'", s.trim())))
+    };
+    let parts: Vec<&str> = spec.split(':').collect();
+    match parts.as_slice() {
+        [list] => list.split(',').map(number).collect(),
+        [from, to, points] => {
+            let (from, to) = (number(from)?, number(to)?);
+            let points: usize = points
+                .trim()
+                .parse()
+                .map_err(|_| QsoError::Parse(format!("points '{}'", points.trim())))?;
+            match points {
+                0 => Err(QsoError::invalid(
+                    "fields",
+                    "a sweep needs at least one point",
+                )),
+                1 => Ok(vec![from]),
+                n => Ok((0..n)
+                    .map(|i| from + (to - from) * i as f64 / (n - 1) as f64)
+                    .collect()),
+            }
+        }
+        _ => Err(QsoError::Parse(format!(
+            "'{spec}' is neither B1,B2,… nor FROM:TO:POINTS"
+        ))),
+    }
+}
+
+/// The half-effect field of a sweep `(field, Φ_S)` in increasing field
+/// that starts at zero field: the first field at which `Φ_S − Φ_S(0)`
+/// reaches half its value at the highest field of the sweep (not
+/// necessarily the saturated effect), interpolated linearly between the two
+/// fields around it; otherwise why there is none.
+fn half_effect_field(curve: &[(f64, f64)]) -> std::result::Result<f64, String> {
+    let (Some(&(b0, y0)), Some(&(b_end, y_end))) = (curve.first(), curve.last()) else {
+        return Err(String::from("no fields"));
+    };
+    if curve.len() < 3 {
+        return Err(String::from("a sweep of three fields or more is needed"));
+    }
+    if b0 != 0.0 {
+        return Err(format!(
+            "the sweep starts at {:.6} mT, not at 0 T",
+            b0 * 1e3
+        ));
+    }
+    if y_end == y0 {
+        return Err(format!(
+            "Φ_S at {:.6} mT equals its value at 0 T",
+            b_end * 1e3
+        ));
+    }
+    let half = 0.5 * (y0 + y_end);
+    let side = |y: f64| (y - half) * (y_end - y0);
+    // side(y0) < 0 ≤ side(y_end): a crossing exists.
+    curve
+        .windows(2)
+        .find_map(|w| {
+            let ((b1, y1), (b2, y2)) = (w[0], w[1]);
+            (side(y1) < 0.0 && side(y2) >= 0.0).then(|| b1 + (b2 - b1) * (half - y1) / (y2 - y1))
+        })
+        .ok_or_else(|| String::from("Φ_S does not cross half its change"))
+}
+
+/// The serialised name of a unit variant, such as `triplet-zero`.
+fn serde_name<T: serde::Serialize>(value: &T) -> String {
+    match serde_json::to_value(value) {
+        Ok(Value::String(name)) => name,
+        _ => String::from("?"),
+    }
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -2472,6 +2620,132 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             Ok((
                 json!({"lines": rows, "polarizations": polarizations, "events": events.len(),
                        "field": end.field(), "relaxation_times": times}),
+                text,
+            ))
+        }
+        Command::RadicalPair {
+            system,
+            rates,
+            recombination,
+            birth,
+            fields,
+            cidnp,
+        } => {
+            let sys = SpinSystem::from_json(&read_text(system)?)?;
+            let [ks, kt, ke] = rates[..] else {
+                return Err(QsoError::invalid(
+                    "rates",
+                    format!("expected three rates KS,KT,KE, found {}", rates.len()),
+                ));
+            };
+            let pair = RadicalPair::new(sys)?
+                .with_rates(ks, kt, ke)?
+                .with_recombination((*recombination).into());
+            let fields = match fields {
+                Some(spec) => pair_fields(spec)?,
+                None => vec![pair.system().field()],
+            };
+            let birth: Birth = (*birth).into();
+            let yields = pair.field_effect(birth, &fields)?;
+            let spins = pair.system().spins();
+            let electrons: Vec<Value> = pair
+                .electrons()
+                .iter()
+                .map(|&e| json!({"spin": e, "g": FREE_ELECTRON_G * (1.0 + spins[e].shift * 1e-6)}))
+                .collect();
+            let nuclei = pair.nuclei();
+            let mut text = format!(
+                "radical pair: electrons {} and {} ({:?} frame), {} nuclei",
+                pair.electrons()[0],
+                pair.electrons()[1],
+                pair.system().frame(),
+                nuclei.len()
+            );
+            for &e in &pair.electrons() {
+                text.push_str(&format!(
+                    "\n  spin {e}: electron, g {:.6}",
+                    FREE_ELECTRON_G * (1.0 + spins[e].shift * 1e-6)
+                ));
+            }
+            for &n in &nuclei {
+                text.push_str(&format!("\n  spin {n}: {}", spins[n].isotope.name()));
+            }
+            text.push_str(&format!(
+                "\nrates (s⁻¹): k_S {ks:.4e}, k_T {kt:.4e}, k_E {ke:.4e}; {} recombination; born {}",
+                serde_name(&pair.recombination()),
+                serde_name(&birth)
+            ));
+            text.push_str(&format!(
+                "\n  {:>12}  {:>12}  {:>12}  {:>12}",
+                "B (mT)", "Φ_S", "Φ_T", "Φ_E"
+            ));
+            for y in &yields {
+                text.push_str(&format!(
+                    "\n  {:>12.6}  {:>12.9}  {:>12.9}  {:>12.9}",
+                    y.field * 1e3,
+                    y.singlet,
+                    y.triplet,
+                    y.escape
+                ));
+            }
+            let mut sweep = Value::Null;
+            if yields.len() > 1 {
+                let mut curve: Vec<(f64, f64)> =
+                    yields.iter().map(|y| (y.field, y.singlet)).collect();
+                curve.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let lowest = curve.iter().min_by(|a, b| a.1.total_cmp(&b.1));
+                let highest = curve.iter().max_by(|a, b| a.1.total_cmp(&b.1));
+                if let (Some(lo), Some(hi)) = (lowest, highest) {
+                    text.push_str(&format!(
+                        "\nΦ_S lowest {:.9} at {:.6} mT, highest {:.9} at {:.6} mT",
+                        lo.1,
+                        lo.0 * 1e3,
+                        hi.1,
+                        hi.0 * 1e3
+                    ));
+                }
+                let b_end = curve.last().map_or(0.0, |c| c.0);
+                let half = half_effect_field(&curve);
+                match &half {
+                    Ok(b) => text.push_str(&format!(
+                        "\nhalf-effect field B½ {:.6} mT (half the change of Φ_S from 0 to {:.6} mT)",
+                        b * 1e3,
+                        b_end * 1e3
+                    )),
+                    Err(why) => text.push_str(&format!("\nhalf-effect field B½: none ({why})")),
+                }
+                sweep = json!({
+                    "singlet_lowest": lowest.map(|lo| json!({"field": lo.0, "singlet": lo.1})),
+                    "singlet_highest": highest.map(|hi| json!({"field": hi.0, "singlet": hi.1})),
+                    "half_effect_field": half.ok(),
+                    "half_effect_reference": b_end,
+                });
+            }
+            if *cidnp {
+                text.push_str(
+                    "\nCIDNP: ⟨I_z⟩ per pair born in the singlet, triplet and escape products",
+                );
+                for y in &yields {
+                    text.push_str(&format!("\n  B {:.6} mT", y.field * 1e3));
+                    for (&n, p) in nuclei.iter().zip(&y.cidnp) {
+                        text.push_str(&format!(
+                            "\n    spin {n} ({}): {:+.6e} {:+.6e} {:+.6e}",
+                            spins[n].isotope.name(),
+                            p[0],
+                            p[1],
+                            p[2]
+                        ));
+                    }
+                }
+            }
+            let nuclei_json: Vec<Value> = nuclei
+                .iter()
+                .map(|&n| json!({"spin": n, "isotope": spins[n].isotope.name()}))
+                .collect();
+            Ok((
+                json!({"electrons": electrons, "nuclei": nuclei_json,
+                       "rates": [ks, kt, ke], "recombination": pair.recombination(),
+                       "birth": birth, "yields": yields, "sweep": sweep}),
                 text,
             ))
         }

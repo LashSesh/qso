@@ -720,9 +720,9 @@ impl Operator for MatrixFree<'_> {
 }
 
 impl SpinSystem {
-    /// The distinct isotopes, in the order of [`Isotope::ALL`].
+    /// The distinct kinds of spin, in the order of `Isotope::EVERY`.
     pub(super) fn isotope_list(&self) -> Vec<Isotope> {
-        Isotope::ALL
+        Isotope::EVERY
             .into_iter()
             .filter(|x| self.spins.iter().any(|s| s.isotope == *x))
             .collect()

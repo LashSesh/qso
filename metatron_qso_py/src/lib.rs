@@ -26,6 +26,7 @@ mod optimization;
 mod photonics;
 mod propagation;
 mod qec;
+mod radical_pair;
 mod reduced;
 mod simulation;
 mod slow;

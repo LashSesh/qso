@@ -20,7 +20,8 @@ colour and bivariate bicycle code memory experiments, exact circuit
 distances); matrix-product
 states for circuits with little entanglement on many qubits; expectation
 values of large noisy circuits by Pauli propagation; and nuclear
-spin dynamics for magnetic resonance (``metatron_qso.spin``).
+spin dynamics for magnetic resonance, with radical pairs and their field
+effects and CIDNP (``metatron_qso.spin``).
 
 Conventions: qubit 0 is the least significant bit of a basis index; bit
 strings print qubit n-1 first; time evolution is exp(-iHt); rotations are

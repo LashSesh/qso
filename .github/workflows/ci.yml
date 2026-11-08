@@ -109,6 +109,8 @@ jobs:
           ./target/release/qso scf --atoms "H 0 0 0; Cl 0 0 1.2746" --basis 6-31g* --cartesian
           ./target/release/qso trotter --hamiltonian "Z0 Z1 + 0.5 X0 + 0.5 X1" --steps 20 --order 4 --output /tmp/trotter.qasm
           ./target/release/qso qasm /tmp/trotter.qasm --shots 100
+          ./target/release/qso radical-pair metatron-qso-rs/examples/spins/flavin_tryptophan.json --rates 2e7,2e7,0 --fields 0:0.004:9 --cidnp
+          ./target/release/qso radical-pair metatron-qso-rs/examples/spins/flavin_tryptophan.json --rates 2e7,1e7,1e6 --birth triplet --recombination jones-maeda-hore --json
       - name: Benchmarks compile
         run: cargo bench -p metatron-qso-rs --no-run
 

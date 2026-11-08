@@ -36,6 +36,11 @@
 //! corrected until it settles; steps whose remainder matters are checked
 //! against their halves to [`BILINEAR_TOLERANCE`].
 //!
+//! [`Reactions::add_source`] forms a site at a constant rate `F` in a fixed
+//! state, beside the reactions: `dσ_s/dt ∋ F ρ_src` and `dc_s/dt ∋ F`
+//! (the products of a radical pair, formed far faster than the spins of
+//! the product evolve).
+//!
 //! The spin equations are linear with coefficients that follow the
 //! amounts. They are propagated as the deviation `σ_s − c_s(t)/d_s` (its
 //! trace stays zero, so `Tr σ_s = c_s` exactly) by exponentials of the
@@ -173,6 +178,32 @@ pub struct Reactions {
     /// when no reaction has routes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     routes: Vec<Vec<Route>>,
+    /// Formation of sites at constant rates (see
+    /// [`Reactions::add_source`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    sources: Vec<Source>,
+}
+
+/// A site formed at a constant rate in a fixed, normalised state.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Source {
+    site: usize,
+    /// Amount per second.
+    rate: f64,
+    /// The state, row by row.
+    state: Vec<C64>,
+}
+
+impl Source {
+    /// The state as a matrix of `d × d` (an empty one if its length is not
+    /// `d²`).
+    fn matrix(&self, d: usize) -> CMatrix {
+        if self.state.len() != d * d {
+            return CMatrix::zeros(0, 0);
+        }
+        CMatrix::from_row_slice(d, d, &self.state)
+    }
 }
 
 /// Spins carried into a product site from one reactant: `(position among
@@ -302,6 +333,8 @@ struct Base {
     /// Per reaction and product site without carried spins: the fresh
     /// state's entries per unit rate `(reaction, [(block, row, w)])`.
     fresh: Vec<(usize, DriftEntries)>,
+    /// Per source, its state's entries per unit rate.
+    sources: Vec<DriftEntries>,
     /// The product sites with spins from both reactants.
     bilinear: Vec<Bilinear>,
     /// Per site that is a reactant of a bilinear source: its Hamiltonian's
@@ -519,6 +552,7 @@ impl Reactions {
     /// Add a spin site with its initial amount (≥ 0); returns its index.
     pub fn add_site(&mut self, system: SpinSystem, amount: f64) -> Result<usize> {
         system.validate()?;
+        super::check_no_electrons(&system)?;
         check_amount(amount)?;
         self.sites.push(Site {
             system,
@@ -580,6 +614,138 @@ impl Reactions {
     /// The routes of reaction `reaction` (empty for one added without).
     pub fn routes(&self, reaction: usize) -> &[Route] {
         self.routes.get(reaction).map_or(&[], Vec::as_slice)
+    }
+
+    /// Formation of `site` at a constant `rate` (amount per second) in the
+    /// normalised `state`, beside the reactions; returns the source's
+    /// index. A product of a radical pair formed at `G` pairs per second is
+    /// `add_source(site, G·Φ_P, &solution.product_on(P, …)?)` (see
+    /// [`super::super::PairSolution::product_on`]): the pair's lifetime (ns
+    /// to µs) counts as instant on the timescale of NMR.
+    ///
+    /// The state is fixed: it is not recomputed on `Field` or `Sweep`
+    /// events. In the rotating frame its elements of non-zero coherence
+    /// order of some isotope are dropped (formed at random times, they
+    /// average out at the carrier frequencies); in the laboratory frame a
+    /// state with elements between different total `M` is refused.
+    ///
+    /// Errors (`"source"`): a site out of range; a rate not finite or
+    /// negative; a state not `d × d` for the site's dimension `d`, not finite, not of
+    /// trace 1 (to 10⁻⁹), not Hermitian (to 10⁻⁹ of its largest entry), with
+    /// an eigenvalue below −10⁻⁹, or (laboratory frame) with an element of
+    /// non-zero total order above 10⁻¹² of its largest.
+    pub fn add_source(&mut self, site: usize, rate: f64, state: &CMatrix) -> Result<usize> {
+        // The shape first: a flattened 1 × d² or 2 × d²/2 state has d²
+        // entries too, and the trace below needs a square one.
+        if let Some(s) = self.sites.get(site) {
+            let d = s.system.dimension();
+            if state.shape() != (d, d) {
+                return Err(QsoError::invalid(
+                    "source",
+                    format!(
+                        "the state is {} × {}, not {d} × {d} of the site's dimension",
+                        state.nrows(),
+                        state.ncols()
+                    ),
+                ));
+            }
+        }
+        let source = Source {
+            site,
+            rate,
+            state: state.transpose().iter().copied().collect(),
+        };
+        self.check_source(&source)?;
+        let d = self.sites[site].system.dimension();
+        let trace = state.trace().re;
+        let stored = (state + state.adjoint()).unscale(2.0 * trace);
+        self.sources.push(Source {
+            site,
+            rate,
+            state: stored.transpose().iter().copied().collect(),
+        });
+        debug_assert_eq!(self.sources.last().map(|s| s.state.len()), Some(d * d));
+        Ok(self.sources.len() - 1)
+    }
+
+    /// `(site, rate, state)` of each source, the states as stored
+    /// (normalised).
+    pub fn sources(&self) -> Vec<(usize, f64, CMatrix)> {
+        self.sources
+            .iter()
+            .map(|s| {
+                let d = self.sites[s.site].system.dimension();
+                (s.site, s.rate, s.matrix(d))
+            })
+            .collect()
+    }
+
+    fn check_source(&self, source: &Source) -> Result<()> {
+        let bad = |why: String| Err(QsoError::invalid("source", why));
+        let Some(site) = self.sites.get(source.site) else {
+            return bad(format!(
+                "site {} out of range ({} sites)",
+                source.site,
+                self.sites.len()
+            ));
+        };
+        if !(source.rate.is_finite() && source.rate >= 0.0) {
+            return bad(format!(
+                "the rate must be finite and non-negative, not {}",
+                source.rate
+            ));
+        }
+        let sys = &site.system;
+        let d = sys.dimension();
+        if source.state.len() != d * d {
+            return bad(format!(
+                "the state has {} entries, not {} of the site's dimension {d}",
+                source.state.len(),
+                d * d
+            ));
+        }
+        if source
+            .state
+            .iter()
+            .any(|z| !(z.re.is_finite() && z.im.is_finite()))
+        {
+            return bad("the state must be finite".to_string());
+        }
+        let rho = source.matrix(d);
+        let trace = rho.trace();
+        if (trace.re - 1.0).abs() > 1e-9 || trace.im.abs() > 1e-9 {
+            return bad(format!("the state's trace is {trace}, not 1"));
+        }
+        let largest = rho.iter().map(|z| z.norm()).fold(0.0, f64::max);
+        let skew = (&rho - rho.adjoint())
+            .iter()
+            .map(|z| z.norm())
+            .fold(0.0, f64::max);
+        if skew > 1e-9 * largest {
+            return bad("the state must be Hermitian".to_string());
+        }
+        let hermitian = (&rho + rho.adjoint()) * C64::new(0.5, 0.0);
+        let (values, _) = eigh(&hermitian);
+        if values.first().is_some_and(|&v| v < -1e-9) {
+            return bad(format!(
+                "the state must be positive semidefinite (an eigenvalue {})",
+                values[0]
+            ));
+        }
+        if sys.frame() == super::super::Frame::Laboratory {
+            let labels = sys.labels();
+            let mixed = (0..d).any(|r| {
+                (0..d).any(|c| labels[r] != labels[c] && rho[(r, c)].norm() > 1e-12 * largest)
+            });
+            if mixed {
+                return bad(
+                    "in the laboratory frame a source keeps the total M (its coherences of \
+                     non-zero total order would not average out)"
+                        .to_string(),
+                );
+            }
+        }
+        Ok(())
     }
 
     pub fn sites(&self) -> &[Site] {
@@ -817,6 +983,9 @@ impl Reactions {
         for (k, r) in self.reactions.iter().enumerate() {
             self.check_reaction(r, self.routes(k))?;
         }
+        for source in &self.sources {
+            self.check_source(source)?;
+        }
         Ok(())
     }
 
@@ -863,6 +1032,9 @@ impl Reactions {
             for p in &r.products {
                 out[self.index(p)] += v;
             }
+        }
+        for source in &self.sources {
+            out[source.site] += source.rate;
         }
         out
     }
@@ -1183,6 +1355,28 @@ impl Reactions {
                 }
             }
         }
+        // The sources' states per unit rate (in the rotating frame `push`
+        // keeps their elements of order zero).
+        let sources: Vec<DriftEntries> = self
+            .sources
+            .iter()
+            .map(|source| {
+                let d = self.sites[source.site].system.dimension();
+                let rho = source.matrix(d);
+                let mut entries = Vec::new();
+                for a in 0..d {
+                    for a2 in 0..d {
+                        let v = rho[(a, a2)];
+                        if v != ZERO
+                            && let Some((j, row)) = at(source.site, a, a2)
+                        {
+                            entries.push((j, row, v));
+                        }
+                    }
+                }
+                entries
+            })
+            .collect();
         // The members: losses of every site reactant, the transfers, and
         // the patterns of the bilinear sources' transfers; each block on
         // the union of the patterns.
@@ -1286,6 +1480,7 @@ impl Reactions {
             elements,
             linear,
             fresh,
+            sources,
             bilinear,
             eigen,
         })
@@ -1603,6 +1798,11 @@ impl Reactions {
         for (r, drifts) in &base.fresh {
             for &(j, row, w) in drifts {
                 push(j, row, w * velocities[*r]);
+            }
+        }
+        for (source, entries) in self.sources.iter().zip(&base.sources) {
+            for &(j, row, w) in entries {
+                push(j, row, w * source.rate);
             }
         }
         for (feed, refs) in base.bilinear.iter().zip(refs) {
@@ -1964,10 +2164,34 @@ impl Reactions {
     fn step_size(&self, c: &[f64], left: f64, coherence: &Coherence) -> f64 {
         let total: f64 = c.iter().map(|x| x.abs()).sum();
         let velocities = self.velocities(c);
-        if total <= 0.0 {
+        if total <= 0.0 && self.sources.is_empty() {
             return left;
         }
         let mut h = left;
+        // A site formed by a source changes over the time its reactions
+        // take to consume it (from an amount of zero, which the rule
+        // below cannot see).
+        for source in self.sources.iter().filter(|s| s.rate > 0.0) {
+            let consumed: f64 = self
+                .reactions
+                .iter()
+                .map(|reaction| {
+                    reaction
+                        .reactants
+                        .iter()
+                        .enumerate()
+                        .filter(|&(_, p)| *p == Participant::Site(source.site))
+                        .map(|(pos, _)| self.pseudo_rate(reaction, pos, c))
+                        .sum::<f64>()
+                })
+                .sum();
+            if consumed > 0.0 {
+                h = h.min(STEP_FRACTION / consumed);
+            }
+        }
+        if total <= 0.0 {
+            return h;
+        }
         let rate = self.derivative(c);
         let relative = |p: &Participant| {
             let i = self.index(p);

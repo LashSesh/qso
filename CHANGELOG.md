@@ -8,6 +8,41 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Radical pairs: spin-selective recombination, field effects and
+  CIDNP** (1.65, `spin`: `RadicalPair`, `PairSolution`, `PairYields`,
+  `Birth`, `Recombination`, `Product`, `FREE_ELECTRON_G`,
+  `Isotope::N14`, `Isotope::Electron`, `SpinSystem::add_electron`,
+  `SpinSystem::hyperfine`, `SpinSystem::exchange_coupling`,
+  `Reactions::add_source`, `Reactions::sources`; Python `RadicalPair`,
+  `PairSolution`, `spin.FREE_ELECTRON_G`, `SpinSystem.add_electron`,
+  `hyperfine`, `exchange_coupling`, `Reactions.add_source`, `sources`;
+  `qso radical-pair`; the input `examples/spins/flavin_tryptophan.json`):
+  electrons as a new kind of spin (`"e"`, g-values as shifts from the
+  free electron's, hyperfine couplings and exchange in mT, `T₁` and `T₂`)
+  and ¹⁴N as a spin-1 nucleus (`"14N"`), in both frames; `Isotope::ALL`
+  keeps its six nuclei. A pair of two radicals and their nuclei (up to
+  2048 dimensions: two electrons, ¹⁴N and seven protons take 1536) is
+  born in S, T₀, T₊, T₋, the triplet mixture, uncorrelated or any state,
+  recombines from the singlet and the triplet by Haberkorn's term or that
+  of Jones, Maeda and Hore and escapes; `solve` gives the singlet,
+  triplet and escape yields, the CIDNP of every nucleus in each product
+  and `X = ∫ρ dt`, `field_effect` the yields against the field (MARY
+  curves), `evolve` the pair as it reacts. With Haberkorn's term and no
+  relaxation each block of conserved labels is one Sylvester equation
+  `H_eff X − X H_eff† = −iρ(0)` (the solver of 1.63), otherwise GMRES
+  preconditioned by those solves; starts that never decay are refused.
+  The products' nuclear states go to other spin systems by the routes of
+  1.59 (`product_on`), and `Reactions::add_source` forms a site at a
+  constant rate in such a state. Equal to the closed forms of the
+  exponential model to 10⁻¹³ (Δg at high field, one ¹H or ¹⁴N at zero
+  field, every nuclear state at high field), to Liouville-space solves to
+  10⁻¹³ (GMRES 10⁻¹²), with Kaptein's signs and CIDNP that cancels
+  nucleus by nucleus in the rotating frame; RadicalPy 1.0.9 joins the cross-validation
+  (`HilbertSimulation`, `LiouvilleSimulation`, `experiments.mary`,
+  `experiments.cidnp`, to 1.2·10⁻¹² and below), with QuTiP's `mesolve`
+  under electron relaxation (1.5·10⁻¹³). Electrons are refused in
+  `Exchange` and `Reactions` sites and with Redfield relaxation.
+
 - **Expectation values of large noisy circuits by Pauli propagation**
   (1.64, `propagation`: `propagate`, `PauliOperator`, `Layer`,
   `PropagationOptions`, `PropagationResult`, `device_layers`,

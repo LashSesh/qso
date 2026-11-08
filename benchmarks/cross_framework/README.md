@@ -15,7 +15,8 @@ same workloads. The results enter the technical note
 | qiskit-addon-obp 0.3 | Heisenberg operators of the kicked Ising circuits, string for string, with and without Pauli–Lindblad noise |
 | PyMatching 2.4 | logical error rates (minimum-weight matching, for reference) |
 | PySCF 2.14 | Gaussian integrals, Hartree–Fock and CASCI energies |
-| QuTiP 5.3 | nuclear spin dynamics with relaxation (`liouvillian`, `mesolve`, `bloch_redfield_tensor`); transport to a trap (`liouvillian`, `mesolve`) |
+| QuTiP 5.3 | nuclear spin dynamics with relaxation (`liouvillian`, `mesolve`, `bloch_redfield_tensor`); transport to a trap (`liouvillian`, `mesolve`); radical-pair yields with electron T₁/T₂ (`mesolve`) |
+| RadicalPy 1.0.9 | radical-pair Hamiltonians, yields, MARY curves and CIDNP (`HilbertSimulation`, `LiouvilleSimulation`, `experiments.mary`, `experiments.cidnp`) |
 | SymPy 1.14 | transport to a trap in exact rationals (the detuned dimer, K_N on ten orbitals) |
 | PyCCE 1.1 | the ¹³C bath of an NV centre by the cluster-correlation expansion (reference only; its last release, imported with aliases for names NumPy, SciPy and pandas removed) |
 
@@ -87,6 +88,29 @@ ProjectQ, which the 2025 note listed, is not included: its last release
   RZZ layer (factors 0, 1, 1.5, 2, −1 and 1 then −1, a uniform and a
   seeded model) against obp and Aer's density matrix (2.1·10⁻¹⁵). It
   takes 12 s (`--quick`) or 62 s, mostly in the references.
+- radical pairs (`RadicalPair`): the closed forms of the exponential
+  model (one ¹H or ¹⁴N at zero field, Δg at high field; 1.1·10⁻¹⁶);
+  QSO's Hamiltonians against RadicalPy's in the Zeeman basis, with
+  exchange (`exchange_coupling(J)` and the constant `−J|γ_e|/2`) too
+  (5·10⁻¹⁶ relative; QSO's ¹H given the shift 0.222 ppm that makes its IUPAC γ
+  RadicalPy's CODATA γ); `HilbertSimulation` yields at zero field (0.7
+  and 0.6), Richardson-extrapolated from two time steps, as its
+  trapezoid errs by (k·dt)²/12 (1.2·10⁻¹²); `experiments.mary` of the
+  flavin–tryptophan pair with up to six nuclei, its sums against their
+  exact geometric sums (7·10⁻¹⁶) and QSO against the exact yield of
+  RadicalPy's own Hamiltonian (6·10⁻¹⁵); `LiouvilleSimulation` with
+  `Haberkorn`, `HaberkornFree` and `JonesHore` (three nuclei) by exact
+  solves of its generator (1.9·10⁻¹⁵); `experiments.cidnp` (model `a`,
+  whose rate `ks` is the exponential model's 2k) and the cancellation
+  of the singlet and escape products (4·10⁻¹⁷); and QuTiP's `mesolve`
+  on a model with product shelves, Haberkorn and Jones–Maeda–Hore, with
+  electron T₁/T₂ at infinite temperature and at 1 K, and a T± birth
+  (1.5·10⁻¹³ in yields and the products' ⟨I_z⟩). It takes 20 s
+  (`--quick`) or 60 s, of which QSO 0.3 s. RadicalPy pulls in RDKit and
+  MDAnalysis (about 900 MB, 21 packages; no pinned version changes), so
+  it is installed only for this comparison, not in CI;
+  `run.py --radical-pairs-only` runs this check alone (it needs only
+  metatron-qso, RadicalPy and QuTiP).
 
 **Speed** (interleaved rounds, fresh process per measurement)
 - one layer (H and RZ on every qubit, CX chain) at 16–24 qubits;

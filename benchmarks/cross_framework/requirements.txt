@@ -19,3 +19,4 @@ pycce==1.1.1
 pandas==3.1.0
 qiskit-addon-obp==0.3.0
 qiskit-ibm-runtime==0.51.0
+radicalpy==1.0.9

@@ -945,3 +945,258 @@ fn spin_one_relaxes_with_t1_and_t2_at_high_temperature() {
         }
     }
 }
+
+#[test]
+fn nitrogen_14_and_the_electron_join_the_isotopes() {
+    // ALL keeps its six nuclei in order; EVERY appends the new kinds.
+    assert_eq!(
+        Isotope::ALL,
+        [
+            Isotope::H1,
+            Isotope::H2,
+            Isotope::C13,
+            Isotope::N15,
+            Isotope::F19,
+            Isotope::P31
+        ]
+    );
+    assert_eq!(Isotope::EVERY[..6], Isotope::ALL);
+    assert_eq!(Isotope::EVERY[6..], [Isotope::N14, Isotope::Electron]);
+    assert_eq!(Isotope::N14.gamma(), 1.933_779_2e7);
+    assert_eq!(Isotope::N14.spin(), 1.0);
+    assert_eq!(Isotope::N14.levels(), 3);
+    assert_eq!(Isotope::N14.name(), "14N");
+    assert_eq!(Isotope::Electron.gamma(), -1.760_859_630_23e11);
+    assert_eq!(Isotope::Electron.spin(), 0.5);
+    assert_eq!(Isotope::Electron.levels(), 2);
+    assert_eq!(Isotope::Electron.name(), "e");
+    // |γ_e| = g_e μ_B/ħ to the rounding of CODATA's tabulated value.
+    let bohr = 9.274_010_078_3e-24;
+    let r = 1.760_859_630_23e11 / (FREE_ELECTRON_G * bohr / HBAR) - 1.0;
+    assert!((-1e-9..=0.0).contains(&r), "{r:e}");
+    for (name, want) in [
+        ("14N", Isotope::N14),
+        ("n14", Isotope::N14),
+        ("e", Isotope::Electron),
+        ("electron", Isotope::Electron),
+        ("E-", Isotope::Electron),
+        ("N", Isotope::N15),
+    ] {
+        assert_eq!(Isotope::from_name(name).unwrap(), want, "{name}");
+    }
+    assert!(Isotope::from_name("14C").is_err());
+    for (x, text) in [(Isotope::N14, "\"14N\""), (Isotope::Electron, "\"e\"")] {
+        assert_eq!(serde_json::to_string(&x).unwrap(), text);
+        assert_eq!(serde_json::from_str::<Isotope>(text).unwrap(), x);
+    }
+    // A system without the new kinds serialises as before 1.65.
+    let mut sys = SpinSystem::new(9.4);
+    let h = sys.add_spin(Isotope::H1, 4.0).unwrap();
+    let c = sys.add_spin(Isotope::C13, 60.0).unwrap();
+    sys.couple(h, c, 140.0).unwrap();
+    let golden = r#"{
+  "spins": [
+    {
+      "isotope": "1H",
+      "shift": 4.0,
+      "t1": null,
+      "t2": null
+    },
+    {
+      "isotope": "13C",
+      "shift": 60.0,
+      "t1": null,
+      "t2": null
+    }
+  ],
+  "couplings": [
+    [
+      0,
+      1,
+      140.0
+    ]
+  ],
+  "field": 9.4,
+  "temperature": 298.15,
+  "frame": "rotating",
+  "carriers": {}
+}"#;
+    assert_eq!(sys.to_json(), golden);
+}
+
+#[test]
+fn electron_helpers_convert_g_values_and_millitesla() {
+    let mut sys = SpinSystem::new(0.0).with_frame(Frame::Laboratory);
+    let e1 = sys.add_electron(2.0031).unwrap();
+    let e2 = sys.add_electron(FREE_ELECTRON_G).unwrap();
+    let h = sys.add_spin(Isotope::H1, 0.0).unwrap();
+    let n = sys.add_spin(Isotope::N14, 0.0).unwrap();
+    assert!((sys.spins()[e1].shift / 389.895_675_349_638_5 - 1.0).abs() <= 1e-13);
+    assert_eq!(sys.spins()[e2].shift, 0.0);
+    sys.hyperfine(e1, h, 1.0).unwrap();
+    sys.exchange_coupling(e1, e2, 0.1).unwrap();
+    let coupling = |i: usize, j: usize| {
+        sys.couplings()
+            .iter()
+            .find(|c| (c.0, c.1) == (i, j))
+            .unwrap()
+            .2
+    };
+    assert!((coupling(e1, h) / 28_024_951.424_207_15 - 1.0).abs() <= 1e-15);
+    assert!((coupling(e1, e2) / -5_604_990.284_841_43 - 1.0).abs() <= 1e-15);
+    // Refusals.
+    for bad in [0.0, -2.0, f64::NAN, f64::INFINITY] {
+        assert!(sys.clone().add_electron(bad).is_err(), "{bad}");
+    }
+    let invalid = |r: Result<&mut SpinSystem>, name: &str| match r {
+        Err(QsoError::InvalidArgument { name: got, .. }) => assert_eq!(got, name),
+        other => panic!("expected {name}, got {other:?}"),
+    };
+    invalid(sys.clone().hyperfine(h, n, 1.0), "spins");
+    invalid(sys.clone().hyperfine(e1, e2, 1.0), "spins");
+    invalid(sys.clone().hyperfine(e1, n, f64::NAN), "a");
+    invalid(sys.clone().exchange_coupling(e1, h, 1.0), "spins");
+    invalid(sys.clone().exchange_coupling(e1, e2, f64::NAN), "j");
+    invalid(sys.clone().exchange_coupling(e1, e1, 1.0), "coupling");
+    invalid(sys.clone().hyperfine(e1, 9, 1.0), "spin");
+    // Redfield relaxation of electrons, and electrons in exchange or
+    // reaction sites.
+    let mut redfield = sys.clone().with_correlation_time(Some(1e-10)).unwrap();
+    assert!(redfield.set_position(e1, [0.0, 0.0, 0.0]).is_err());
+    assert!(redfield.validate().is_err());
+    assert!(redfield.hamiltonian().is_err());
+    let mut x = Exchange::new();
+    assert!(x.add_site(sys.clone(), 1.0).is_err());
+    let mut r = Reactions::new();
+    assert!(r.add_site(sys.clone(), 1.0).is_err());
+    let json = format!(
+        r#"{{"sites": [{{"system": {}, "concentration": 1.0}}], "channels": []}}"#,
+        sys.to_json()
+    );
+    assert!(Exchange::from_json(&json).is_err());
+    let json = format!(
+        r#"{{"sites": [{{"system": {}, "concentration": 1.0}}]}}"#,
+        sys.to_json()
+    );
+    assert!(Reactions::from_json(&json).is_err());
+    // Electrons serialise and come back.
+    assert_eq!(SpinSystem::from_json(&sys.to_json()).unwrap(), sys);
+}
+
+#[test]
+fn the_new_kinds_carry_their_own_labels() {
+    // {¹H, ¹⁴N, e, e} in the rotating frame: three labels per state, kept
+    // by H.
+    let mut sys = SpinSystem::new(0.35);
+    let h = sys.add_spin(Isotope::H1, 2.0).unwrap();
+    let n = sys.add_spin(Isotope::N14, 0.0).unwrap();
+    let e1 = sys.add_electron(2.0031).unwrap();
+    let e2 = sys.add_electron(2.0027).unwrap();
+    sys.hyperfine(e1, h, 1.0).unwrap();
+    sys.hyperfine(e2, n, 0.5).unwrap();
+    sys.exchange_coupling(e1, e2, 0.1).unwrap();
+    assert_eq!(
+        sys.isotope_list(),
+        vec![Isotope::H1, Isotope::N14, Isotope::Electron]
+    );
+    let labels = sys.labels();
+    assert!(labels.iter().all(|l| l.len() == 3));
+    assert_eq!(labels[0], vec![1, 2, 2]);
+    let h0 = sys.hamiltonian().unwrap();
+    let blocks = sys.eigenblocks(&h0);
+    assert!(blocks.len() > 1);
+    let d = sys.dimension();
+    for r in 0..d {
+        for c in 0..d {
+            if h0[(r, c)] != ZERO {
+                assert_eq!(labels[r], labels[c]);
+            }
+        }
+    }
+    // No hyperfine flip-flop between an electron and a nucleus.
+    let flips = (0..d)
+        .flat_map(|r| (0..d).map(move |c| (r, c)))
+        .filter(|&(r, c)| r != c && h0[(r, c)] != ZERO)
+        .count();
+    // Only the exchange's flip-flops of the electrons (two per nuclear state).
+    assert_eq!(flips, 2 * 6);
+    // An exchange with ¹⁴N sites: the dense and Krylov steady states agree.
+    let site = |shift: f64| {
+        let mut s = SpinSystem::new(9.4);
+        let a = s.add_spin(Isotope::H1, shift).unwrap();
+        let b = s.add_spin(Isotope::N14, 0.0).unwrap();
+        s.couple(a, b, 50.0).unwrap();
+        s.set_relaxation(a, Some(1.0), Some(0.5)).unwrap();
+        s.set_relaxation(b, Some(0.2), Some(0.1)).unwrap();
+        s
+    };
+    let mut x = Exchange::new();
+    let a = x.add_site(site(1.0), 1.0).unwrap();
+    let b = x.add_site(site(3.0), 1.0).unwrap();
+    for (from, to) in [(a, b), (b, a)] {
+        x.add_channel(Channel {
+            from,
+            to,
+            rate: 20.0,
+            carried: vec![(0, 0)],
+            fresh: Fresh::Thermal,
+        })
+        .unwrap();
+    }
+    let dense = x.steady_state_with(exchange::Propagation::Dense).unwrap();
+    let krylov = x.steady_state_with(exchange::Propagation::Krylov).unwrap();
+    for (p, q) in dense.iter().zip(&krylov) {
+        assert!(largest(&(p - q)) <= 1e-12, "{:e}", largest(&(p - q)));
+    }
+}
+
+#[test]
+fn nitrogen_14_relaxes_with_its_t1() {
+    // At zero field k↑ = k↓, and ⟨I_z⟩ of spin 1 decays as e^{−t/T₁}.
+    let mut sys = SpinSystem::new(0.0).with_frame(Frame::Laboratory);
+    let n = sys.add_spin(Isotope::N14, 0.0).unwrap();
+    sys.set_relaxation(n, Some(1.0), Some(0.5)).unwrap();
+    let iz = sys.iz(n).unwrap();
+    let rho = (CMatrix::identity(3, 3) + &iz * C64::new(0.3, 0.0)) * C64::new(1.0 / 3.0, 0.0);
+    let start = sys.expectation(&rho, &iz).unwrap().re;
+    assert!((start - 0.2).abs() <= 1e-15);
+    for t in [0.3, 2.0] {
+        let late = sys.evolve(&rho, &[Event::Delay(t)]).unwrap();
+        let got = sys.expectation(&late, &iz).unwrap().re;
+        assert!((got - start * (-t).exp()).abs() <= 1e-12, "{t}: {got}");
+    }
+}
+
+#[test]
+fn the_electron_zeeman_difference_is_the_g_difference() {
+    let mut sys = SpinSystem::new(0.3);
+    let e1 = sys.add_electron(2.0031).unwrap();
+    let e2 = sys.add_electron(2.0027).unwrap();
+    let h0 = sys.hamiltonian().unwrap();
+    // |αβ⟩ = 1, |βα⟩ = 2.
+    let dw = h0[(1, 1)].re - h0[(2, 2)].re;
+    assert!(
+        (dw / 1.055_292_006_461_082_6e7 - 1.0).abs() <= 1e-12,
+        "{dw}"
+    );
+    let bohr = 9.274_010_078_3e-24;
+    assert!((dw / ((2.0031 - 2.0027) * bohr * 0.3 / HBAR) - 1.0).abs() <= 1e-9);
+    // With a proton the rotating frame keeps only a S_z I_z.
+    let h = sys.add_spin(Isotope::H1, 0.0).unwrap();
+    sys.hyperfine(e1, h, 2.0).unwrap();
+    let h1 = sys.hamiltonian().unwrap();
+    let d = sys.dimension();
+    let off = (0..d)
+        .flat_map(|r| (0..d).map(move |c| (r, c)))
+        .filter(|&(r, c)| r != c && h1[(r, c)] != ZERO)
+        .count();
+    assert_eq!(off, 0);
+    let lab = sys.clone().with_frame(Frame::Laboratory);
+    let hl = lab.hamiltonian().unwrap();
+    assert!(
+        (0..d)
+            .flat_map(|r| (0..d).map(move |c| (r, c)))
+            .any(|(r, c)| r != c && hl[(r, c)] != ZERO)
+    );
+    let _ = e2;
+}

@@ -9,14 +9,14 @@ Every algorithm is checked against an independent reference:
 
 | Kind of reference | Examples |
 |---|---|
-| Closed forms | Grover's sin²((2k+1)θ); QAOA on rings, (2p+1)/(2p+2); the one-layer QAOA formula of Wang et al.; walk limits such as 145/169; T₁/T₂ decay; n! bunching; the running time of local adiabatic search; the classical random walk as the limit of fully dephased coined walks; the efficiency of transport to a trap on complete graphs, 1/(N − 1), 1/(N − 2) and 1 (Caruso et al.), and its mean arrival times; the detuned dimer with trap, losses and dephasing in exact rationals (SymPy) |
+| Closed forms | Grover's sin²((2k+1)θ); QAOA on rings, (2p+1)/(2p+2); the one-layer QAOA formula of Wang et al.; walk limits such as 145/169; T₁/T₂ decay; n! bunching; the running time of local adiabatic search; the classical random walk as the limit of fully dephased coined walks; the efficiency of transport to a trap on complete graphs, 1/(N − 1), 1/(N − 2) and 1 (Caruso et al.), and its mean arrival times; the detuned dimer with trap, losses and dephasing in exact rationals (SymPy); radical-pair yields of the exponential model (Δg at high field `½ + ½k²/(k² + Δω²)`, one proton at zero field `5/8 + (3/8)k²/(k² + a²)`, one ¹⁴N `5/9 + (4/9)k²/(k² + 9a²/4)`, and every nuclear state at high field with exchange and unequal rates), Kaptein's signs of CIDNP in 24 cases, and products formed at a constant rate against the closed-form kinetics of formation, decay and T₁ |
 | Published values | 0.6925 and 0.7559 for QAOA on large-girth cubic graphs; the full-CI energy of H₂/STO-3G; automorphism group orders |
 | Dense matrices | every gate, the QFT against the DFT matrix, Lanczos and Krylov against full diagonalisation |
-| A second method | adjoint, parameter-shift and finite-difference gradients; statevector against density matrix; quantum trajectories against density matrices (χ² tests); the quantum Fisher information against finite differences of the fidelity; four fermion encodings against each other |
+| A second method | radical pairs solved by Sylvester equations against solves in Liouville space (to 10⁻¹³), and their GMRES path against both; adjoint, parameter-shift and finite-difference gradients; statevector against density matrix; quantum trajectories against density matrices (χ² tests); the quantum Fisher information against finite differences of the fidelity; four fermion encodings against each other |
 | Exact sums | PEC summed over all corrections, Pauli twirls over all 16 frames, the variance 3ᵏ of classical shadows |
 | Statistics | coverage of confidence intervals over repeated runs; unbiased adaptive shot allocation over 2000 seeds; the 1/N error scaling of amplitude estimation over 200 seeds; learned noise rates of a known device within their bootstrap standard errors |
 | Rigorous bounds | product-formula errors below their bounds; qDRIFT channels below Campbell's bound; canonical amplitude estimation within its error bound with probability ≥ 8/π²; truncated Pauli propagation within its truncation bound (24 random noisy circuits with 216 truncated runs, kicked Ising at six and seven steps) |
-| Other codes | Qiskit Aer, Qulacs, Cirq, PennyLane Lightning and The Walrus (permanents, hafnians, Gaussian boson sampling); Stim's `PauliString.before` and qiskit-addon-obp for Pauli propagation; PySCF's integrals and its Hartree–Fock, full-CI and CASCI energies for H₂, LiH, BeH₂, H₂O, NH₃, OH and CH₂ |
+| Other codes | Qiskit Aer, Qulacs, Cirq, PennyLane Lightning and The Walrus (permanents, hafnians, Gaussian boson sampling); Stim's `PauliString.before` and qiskit-addon-obp for Pauli propagation; RadicalPy and QuTiP for radical pairs; PySCF's integrals and its Hartree–Fock, full-CI and CASCI energies for H₂, LiH, BeH₂, H₂O, NH₃, OH and CH₂ |
 
 These checks live in the test suites, which run on every change on Linux
 (x86_64 and arm64), macOS and Windows:
@@ -45,7 +45,13 @@ optimum ([Matrix-product states](mps.md)). Pauli propagation is checked
 against the state vector and the density matrix on random circuits and
 channels of up to 12 qubits, and against a seeded Clifford circuit of
 10³ qubits whose Heisenberg operators Stim computed
-([Pauli propagation](propagation.md)).
+([Pauli propagation](propagation.md)). Radical pairs are checked against
+closed forms, against their generator solved in Liouville space with and
+without relaxation, and, with all rates zero, against the free evolution
+of the spin system; their yields sum to one, the CIDNP of the products
+cancels nucleus by nucleus in the rotating frame, and in the laboratory
+frame the products keep the total angular momentum, electrons included
+([Spin dynamics](spins.md#radical-pairs)).
 
 ## Cross-validation with other frameworks
 
@@ -64,6 +70,8 @@ deviation above rounding level fails the run.
 | Pauli propagation on 10³ and 10⁴ qubits (Clifford circuits of 3·10⁴ and 1.5·10⁵ gates, 50 strings each) and of the kicked-Ising circuits of Kim et al. at θ_h = 0 and π/2 (1–20 steps), against Stim 1.16's `PauliString.before` | identical strings and signs |
 | Kicked Ising on the 115-qubit heavy-hex lattice, ⟨Z₅₇⟩ at θ_h = 0.3, π/4 and 1, 1–5 steps without truncation: Qiskit Aer's state vector of the light cone; the Heisenberg operator against qiskit-addon-obp 0.3 (134 744 strings at five steps); at six and seven steps truncated | 7.7·10⁻¹⁵; coefficients 6.3·10⁻¹⁵, no string missing; errors within the reported bound |
 | The same with sparse Pauli–Lindblad noise after every ZZ layer, scaled by 0, 1, 1.5, 2, −1 and 1 then −1 (a uniform and a seeded model): qiskit-addon-obp's `PauliLindbladErrorInstruction` and, for non-negative factors, Aer's density matrix | 2.1·10⁻¹⁵ (obp), 8.3·10⁻¹⁶ (Aer) |
+| Radical pairs against RadicalPy 1.0.9: Hamiltonians in its Zeeman basis; `HilbertSimulation` yields at zero field (one ¹H and one ¹⁴N at `k = a/2`), Richardson-extrapolated from two time steps; `experiments.mary` of the flavin–tryptophan pair with six nuclei against the exact yield of its own Hamiltonian; `LiouvilleSimulation` with `Haberkorn`, `HaberkornFree` and `JonesHore` (three nuclei) by exact solves of its generator; `experiments.cidnp` at 0.05, 1 and 9.4 T | Hamiltonians 5.1·10⁻¹⁶ relative; yields 1.2·10⁻¹² (Richardson; its own steps give 0.7000000008 and 0.6000000008), 6·10⁻¹⁵ (MARY), 1.9·10⁻¹⁵ (Liouville); CIDNP 4.2·10⁻¹⁷ |
+| Radical pairs against QuTiP 5.3's `mesolve` on an independently built model with product shelves: Haberkorn's and Jones, Maeda and Hore's terms, electron T₁ and T₂ at infinite temperature and at 1 K, a T± birth | 1.5·10⁻¹³ in yields and the products' ⟨I_z⟩ |
 | Transport to a trap, efficiency and mean arrival time (SymPy 1.14 exact rationals: the detuned dimer, K_N for N = 4–9 and 64 dense, and on ten orbitals at N = 64 and 1024) | 2.0·10⁻¹⁴ in the efficiency, 4.3·10⁻¹⁴ relative in the arrival time |
 | Transport to a trap against QuTiP 5.3's `liouvillian` solved directly (the dimer, K₅, random weighted graphs of 5–8 nodes, FMO, hypercubes Q₃–Q₅ on the full cube) and `mesolve` integrated until less than 10⁻¹² is left | `liouvillian`: 1.7·10⁻¹³ (FMO without dephasing, condition 9·10⁴), 3.5·10⁻¹⁴ relative; `mesolve`: 6.7·10⁻¹³, 6.8·10⁻¹¹ relative; the dimer's best dephasing rate, 39/20, to 1.3·10⁻⁷ |
 
