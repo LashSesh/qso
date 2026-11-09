@@ -2811,3 +2811,113 @@ mod pauli_propagation {
         }
     }
 }
+
+/// The rotated surface code at code capacity with heralded erasures of
+/// probability ½ on every data qubit, decoded with its heralds, fails with
+/// probability exactly ¼ at every odd distance: a quarter turn maps the
+/// code onto itself with X and Z exchanged and, by the cleaning lemma, an
+/// erased set supports the X logical exactly when its complement does not
+/// support the Z logical; a decoder that knows the erased set fails on
+/// half of the sets that support it and on no other. Sampled at d = 7.
+#[test]
+fn surface_code_with_heralded_erasures_at_one_half_fails_a_quarter() {
+    use metatron_qso::qec::{
+        ConditionedDecoder, DetectorCircuit, HeraldedMethod, heralded_error_model, sample_detectors,
+    };
+    let d: i64 = 7;
+    let n = (d * d) as usize;
+    // Z checks as `build_surface` lays them out.
+    let mut z_checks: Vec<u64> = Vec::new();
+    for i in -1..d {
+        for j in -1..d {
+            let is_x = (i + j).rem_euclid(2) == 0;
+            let interior = (0..d - 1).contains(&i) && (0..d - 1).contains(&j);
+            let left_right = (j == -1 || j == d - 1) && (0..d - 1).contains(&i) && !is_x;
+            if !is_x && (interior || left_right) {
+                let mut m = 0u64;
+                for (dr, dc) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+                    let (r, c) = (i + dr, j + dc);
+                    if (0..d).contains(&r) && (0..d).contains(&c) {
+                        m |= 1 << (r * d + c);
+                    }
+                }
+                z_checks.push(m);
+            }
+        }
+    }
+    let z_logical: u64 = (0..d).fold(0, |m, c| m | 1 << c);
+    let mut circuit = DetectorCircuit::new(n).unwrap();
+    let data: Vec<usize> = (0..n).collect();
+    for r in circuit.heralded_erase(0.5, &data).unwrap() {
+        circuit.detector(&[r]).unwrap();
+    }
+    let m: Vec<usize> = data
+        .iter()
+        .map(|&q| circuit.measure(q, 0.0).unwrap())
+        .collect();
+    for &check in &z_checks {
+        let records: Vec<usize> = (0..n)
+            .filter(|&q| check >> q & 1 == 1)
+            .map(|q| m[q])
+            .collect();
+        circuit.detector(&records).unwrap();
+    }
+    circuit
+        .observable(0, &(0..d as usize).map(|c| m[c]).collect::<Vec<_>>())
+        .unwrap();
+    // Whether an erased set supports X_L: Z_L restricted to it is not a sum
+    // of the Z checks restricted to it.
+    let supports = |set: u64| {
+        let mut basis: Vec<u64> = Vec::new();
+        let reduce = |basis: &[u64], mut x: u64| {
+            for &b in basis {
+                x = x.min(x ^ b);
+            }
+            x
+        };
+        for &c in &z_checks {
+            let x = reduce(&basis, c & set);
+            if x != 0 {
+                basis.push(x);
+                basis.sort_unstable_by(|a, b| b.cmp(a));
+            }
+        }
+        reduce(&basis, z_logical & set) != 0
+    };
+    let model = heralded_error_model(&circuit, true).unwrap();
+    assert_eq!(model.herald_detectors().len(), n);
+    let shots = 20_000;
+    let samples = sample_detectors(&circuit, shots, 166).unwrap();
+    for method in [HeraldedMethod::UnionFind, HeraldedMethod::Matching] {
+        let mut decoder = ConditionedDecoder::new(&model, method).unwrap();
+        let (mut failures, mut supporting, mut failing_supporting) = (0usize, 0usize, 0usize);
+        for (s, fired) in samples.fired_by_shot().into_iter().enumerate() {
+            let (heralds, ordinary): (Vec<usize>, Vec<usize>) =
+                fired.iter().copied().partition(|&k| k < n);
+            let set = heralds.iter().fold(0u64, |m, &q| m | 1 << q);
+            let predicted = if method == HeraldedMethod::Matching {
+                let (p, weight) = decoder.decode_with_weight(&ordinary, &heralds).unwrap();
+                assert_eq!(weight, 0.0);
+                p
+            } else {
+                decoder.decode_heralded(&ordinary, &heralds).unwrap()
+            };
+            let fail = predicted != samples.observable_flips(s);
+            failures += fail as usize;
+            if supports(set) {
+                supporting += 1;
+                failing_supporting += fail as usize;
+            } else {
+                assert!(
+                    !fail,
+                    "{method:?}: shot {s} failed on a set without a logical"
+                );
+            }
+        }
+        let z = |count: usize, total: usize, p: f64| {
+            (count as f64 / total as f64 - p).abs() / (p * (1.0 - p) / total as f64).sqrt()
+        };
+        assert!(z(failures, shots, 0.25) <= 5.0, "{method:?}: {failures}");
+        assert!(z(failing_supporting, supporting, 0.5) <= 5.0, "{method:?}");
+    }
+}

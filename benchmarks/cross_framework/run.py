@@ -226,6 +226,7 @@ def correctness(quick: bool) -> dict:
         "qec_vs_stim": qec_vs_stim(quick),
         "repeated_vs_stim": repeated_vs_stim(quick),
         "bposd_vs_ldpc": bposd_vs_ldpc(quick),
+        "heralds": heralds_vs_references(quick),
         "correlated_and_distance_vs_stim": correlated_and_distance_vs_stim(quick),
         "chemistry_vs_pyscf": chemistry_vs_pyscf(),
         "spins_vs_qutip": spins_vs_qutip(),
@@ -630,6 +631,827 @@ def bposd_vs_ldpc(quick: bool) -> dict:
             "logical_error_rate_qso_pipeline": q.logical_error_rate(c, cshots, seed=6, decoder="bposd").rate,
         }
     return out
+
+
+HERALDED_CHANNELS = ("HERALDED_ERASE", "HERALDED_PAULI_CHANNEL_1")
+
+# A Stim-format circuit with both heralded channels, unread and doubly read
+# heralds and a REPEAT block (the repeat test of 1.66).
+HERALDS_REPEATED = """R 0 1 2 3 4
+M 1 3
+REPEAT 6 {
+    HERALDED_ERASE(0.1) 0 2
+    DETECTOR rec[-2]
+    DETECTOR rec[-1]
+    HERALDED_PAULI_CHANNEL_1(0.01, 0.02, 0.03, 0.04) 4
+    DETECTOR rec[-1]
+    DEPOLARIZE1(0.01) 0 2 4
+    CX 0 1 2 1 2 3 4 3
+    HERALDED_ERASE(0.05) 1 3
+    DETECTOR rec[-1]
+    MR 1 3
+    DETECTOR rec[-1] rec[-8]
+    DETECTOR rec[-2] rec[-9]
+}
+M 0 2 4
+DETECTOR rec[-2] rec[-3] rec[-5]
+DETECTOR rec[-1] rec[-2] rec[-4]
+OBSERVABLE_INCLUDE(0) rec[-1]
+"""
+
+
+def xor_merge(model: dict, key: tuple, p: float) -> None:
+    """Merge an independent error of probability p into model[key]."""
+    e = model.get(key, 0.0)
+    model[key] = e * (1 - p) + p * (1 - e)
+
+
+def stim_model(dem) -> dict:
+    """An undecomposed Stim model as {(sorted detectors, observable mask):
+    probability}, a detector named twice cancelling and errors of equal
+    effect merged."""
+    out: dict = {}
+    for inst in dem.flattened():
+        if inst.type != "error":
+            continue
+        dets: set = set()
+        obs = 0
+        for t in inst.targets_copy():
+            if t.is_relative_detector_id():
+                dets ^= {t.val}
+            elif t.is_logical_observable_id():
+                obs ^= 1 << t.val
+        xor_merge(out, (tuple(sorted(dets)), obs), inst.args_copy()[0])
+    return out
+
+
+def qso_model(errors) -> dict:
+    """QSO's (probability, detectors, observables) list as a dictionary
+    like stim_model's."""
+    out: dict = {}
+    for p, dets, obs in errors:
+        xor_merge(out, (tuple(dets), obs), p)
+    return out
+
+
+def compare_models(ours: dict, theirs: dict) -> tuple[int, float]:
+    """Mechanisms of positive probability on only one side, and the largest
+    relative difference of probabilities (1 for a one-sided mechanism)."""
+    ours = {k: v for k, v in ours.items() if v > 0}
+    theirs = {k: v for k, v in theirs.items() if v > 0}
+    keys = set(ours) | set(theirs)
+    only = sum(1 for k in keys if k not in ours or k not in theirs)
+    diff = max((abs(ours.get(k, 0.0) - theirs.get(k, 0.0)) / max(ours.get(k, 0.0), theirs.get(k, 0.0)) for k in keys), default=0.0)
+    return only, diff
+
+
+def herald_reference(sc) -> dict:
+    """Stim-only reference of QSO's heralded split of a circuit. A herald is
+    owned when exactly one reader reads its record (an odd number of
+    times), a detector that reads no other record (pairs cancel); its
+    detector is a herald detector. `base`: Stim's undecomposed model of the
+    circuit with owned heralds replaced by MPAD 0 (every other heralded
+    target kept), `base_circuit` that circuit; `heralds`: herald detector →
+    (probability that it fires, its parts given that it fired), the X part
+    with (hX + hY)/h and the Z part with (hZ + hY)/h (½ each for an
+    erasure); where X and Z have the same effect, one part with
+    (hX + hZ)/h, the probability that exactly one of them happened (Y has
+    none). The parts are read off two Stim models in
+    which every heralded channel is HERALDED_PAULI_CHANNEL_1 with only X
+    (resp. only Z) and every other noise is removed: each mechanism with
+    an owned herald detector is that detector and the part."""
+    import stim
+
+    flat = sc.flattened()
+    m = 0
+    herald_args: dict = {}
+    det_records: list = []
+    readers: dict = {}
+    for inst in flat:
+        if inst.name in HERALDED_CHANNELS:
+            for _ in inst.targets_copy():
+                herald_args[m] = (inst.name, inst.gate_args_copy())
+                m += 1
+        elif stim.gate_data(inst.name).produces_measurements:
+            m += len(inst.targets_copy())
+        elif inst.name == "DETECTOR":
+            recs: dict = {}
+            for t in inst.targets_copy():
+                recs[m + t.value] = recs.get(m + t.value, 0) ^ 1
+            odd = sorted(r for r, n in recs.items() if n)
+            for r in odd:
+                key = ("D", len(det_records))
+                readers.setdefault(r, {})[key] = readers.get(r, {}).get(key, 0) ^ 1
+            det_records.append(odd)
+        elif inst.name == "OBSERVABLE_INCLUDE":
+            key = ("L", int(inst.gate_args_copy()[0]))
+            for t in inst.targets_copy():
+                r = m + t.value
+                readers.setdefault(r, {})[key] = readers.get(r, {}).get(key, 0) ^ 1
+    owned: dict = {}
+    for r in herald_args:
+        rd = [x for x, n in readers.get(r, {}).items() if n]
+        if len(rd) == 1 and rd[0][0] == "D" and det_records[rd[0][1]] == [r]:
+            owned[r] = rd[0][1]
+    base_c = stim.Circuit()
+    m = 0
+    for inst in flat:
+        if inst.name in HERALDED_CHANNELS:
+            for t in inst.targets_copy():
+                if m in owned:
+                    base_c.append("MPAD", [0])
+                else:
+                    base_c.append(inst.name, [t], inst.gate_args_copy())
+                m += 1
+        else:
+            base_c.append(inst)
+            if stim.gate_data(inst.name).produces_measurements:
+                m += len(inst.targets_copy())
+    base = stim_model(base_c.detector_error_model(approximate_disjoint_errors=True))
+    owned_dets = set(owned.values())
+    effects: dict = {}
+    for which, args in (("x", [0, 0.5, 0, 0]), ("z", [0, 0, 0, 0.5])):
+        c = stim.Circuit()
+        for inst in flat:
+            g = stim.gate_data(inst.name)
+            if inst.name in HERALDED_CHANNELS:
+                c.append("HERALDED_PAULI_CHANNEL_1", inst.targets_copy(), args)
+            elif g.produces_measurements:
+                c.append(inst.name, inst.targets_copy())
+            elif not g.is_noisy_gate:
+                c.append(inst)
+        for dets, obs in stim_model(c.detector_error_model(approximate_disjoint_errors=True)):
+            hs = [d for d in dets if d in owned_dets]
+            if len(hs) == 1:
+                effects[(hs[0], which)] = (tuple(d for d in dets if d != hs[0]), obs)
+    heralds = {}
+    for r, k in owned.items():
+        name, a = herald_args[r]
+        if name == "HERALDED_ERASE":
+            h, qx, qz, qxz = a[0], 0.5, 0.5, 0.5
+        else:
+            h = a[0] + a[1] + a[2] + a[3]
+            qx, qz, qxz = ((a[1] + a[2]) / h, (a[3] + a[2]) / h, (a[1] + a[3]) / h) if h > 0 else (0.0, 0.0, 0.0)
+        parts: dict = {}
+        ex, ez = effects.get((k, "x"), ((), 0)), effects.get((k, "z"), ((), 0))
+        if ex == ez:
+            if (ex[0] or ex[1]) and qxz > 0:
+                parts[ex] = qxz
+        else:
+            for eff, qq in ((ex, qx), (ez, qz)):
+                if (eff[0] or eff[1]) and qq > 0:
+                    xor_merge(parts, eff, qq)
+        heralds[k] = (h, parts)
+    return {"heralds": dict(sorted(heralds.items())), "base": base, "base_circuit": base_c}
+
+
+def random_heralded_circuit(seed: int) -> str:
+    """A random Stim-format circuit (exact probabilities, deterministic
+    detectors) with both heralded channels: repeated and duplicate targets,
+    probabilities 0 and 1, heralds read by detectors (also twice, three
+    times and two at once), by observables or not at all, other noise and
+    measurement flips; a third of them partly in a REPEAT block."""
+    import random
+
+    rng = random.Random(1000 + seed)
+    n = 2 + seed % 6
+    erase_ps = [0.0, 0.1, 0.03, 0.2, 1.0, 0.25, 0.0123456789]
+    pauli_ps = [0.0, 0.01, 0.02, 0.05, 0.1, 0.2, 0.25]
+
+    def item(lines: list) -> None:
+        a = rng.randrange(n)
+        b = (a + 1 + rng.randrange(n - 1)) % n
+        k = rng.randrange(13)
+        if k == 0:
+            lines.append(f"H {a}")
+        elif k == 1:
+            lines.append(f"S {a}")
+        elif k == 2:
+            lines.append(f"CX {a} {b}")
+        elif k == 3:
+            lines.append(f"CZ {a} {b}")
+        elif k == 4:
+            lines.append(rng.choice([f"X_ERROR(0.01) {a}", f"Y_ERROR(0.02) {a}", f"Z_ERROR(0.03) {a}",
+                                     f"DEPOLARIZE1(0.01) {a}", f"DEPOLARIZE2(0.02) {a} {b}"]))
+        elif k == 5:
+            lines.append(f"R {a}")
+        elif k in (6, 7, 8):
+            targets = [a] if rng.random() < 0.5 else [a, rng.choice([a, b])]
+            if k in (6, 8):
+                lines.append(f"HERALDED_ERASE({rng.choice(erase_ps)!r}) " + " ".join(map(str, targets)))
+            else:
+                while True:
+                    ps = [rng.choice(pauli_ps) for _ in range(4)]
+                    if sum(ps) <= 1:
+                        break
+                lines.append("HERALDED_PAULI_CHANNEL_1(" + ", ".join(repr(p) for p in ps) + ") " + " ".join(map(str, targets)))
+            t = len(targets)
+            for i in range(t):
+                lb = t - i
+                r = rng.randrange(9)
+                if r in (0, 1, 2):
+                    lines.append(f"DETECTOR rec[-{lb}]")
+                elif r == 4:
+                    lines.append(f"OBSERVABLE_INCLUDE({rng.randrange(2)}) rec[-{lb}]")
+                elif r == 5:
+                    lines.append(f"DETECTOR rec[-{lb}]")
+                    lines.append(f"OBSERVABLE_INCLUDE(0) rec[-{lb}]")
+                elif r == 6 and i == 1:
+                    lines.append("DETECTOR rec[-2] rec[-1]")
+                elif r == 7:
+                    lines.append(f"DETECTOR rec[-{lb}] rec[-{lb}] rec[-{lb}]")
+                elif r != 3:
+                    lines.append(f"DETECTOR rec[-{lb}]")
+                    lines.append(f"DETECTOR rec[-{lb}]")
+        else:
+            lines.append(f"M(0.01) {a}")
+            lines.append(f"DEPOLARIZE1(0.01) {a}")
+            lines.append(f"M {a}")
+            if rng.random() < 0.25:
+                lines.append(f"OBSERVABLE_INCLUDE({rng.randrange(3)}) rec[-2] rec[-1]")
+            else:
+                lines.append("DETECTOR rec[-2] rec[-1]")
+
+    lines: list = []
+    for _ in range(10 + rng.randrange(30)):
+        item(lines)
+    if seed % 3 == 0:
+        body: list = []
+        for _ in range(3 + rng.randrange(10)):
+            item(body)
+        lines.append(f"REPEAT {2 + rng.randrange(4)} {{")
+        lines += ["    " + line for line in body]
+        lines.append("}")
+        for _ in range(rng.randrange(8)):
+            item(lines)
+    return "\n".join(lines) + "\n"
+
+
+def surface_capacity_circuit(d: int, p: str) -> str:
+    """The rotated surface code of distance d at code capacity with heralds
+    (Z memory), in Stim's format: data in |0⟩, each erased with p (a herald
+    detector after each), the Z checks of the readout as detectors and a Z
+    logical as observable 0."""
+    hx, hz = [], []
+    for i in range(-1, d):
+        for j in range(-1, d):
+            cells = [a * d + b for a in (i, i + 1) for b in (j, j + 1) if 0 <= a < d and 0 <= b < d]
+            x = (i + j) % 2 == 0
+            if len(cells) == 4 or (len(cells) == 2 and ((x and i in (-1, d - 1)) or (not x and j in (-1, d - 1)))):
+                (hx if x else hz).append(cells)
+    zl = next(row for row in ([i * d + j for j in range(d)] for i in range(d))
+              if all(len(set(row) & set(c)) % 2 == 0 for c in hx))
+    n = d * d
+    lines = ["R " + " ".join(map(str, range(n))), f"HERALDED_ERASE({p}) " + " ".join(map(str, range(n)))]
+    lines += [f"DETECTOR rec[-{n - k}]" for k in range(n)]
+    lines.append("M " + " ".join(map(str, range(n))))
+    lines += ["DETECTOR " + " ".join(f"rec[-{n - j}]" for j in z) for z in hz]
+    lines.append("OBSERVABLE_INCLUDE(0) " + " ".join(f"rec[-{n - j}]" for j in zl))
+    return "\n".join(lines) + "\n"
+
+
+def supports_flip(parts) -> bool:
+    """Whether some combination of the parts (detectors, observable mask)
+    fires no detector and flips an observable (rank over GF(2))."""
+
+    def rank(rows):
+        piv: dict = {}
+        r = 0
+        for v in rows:
+            while v:
+                h = v.bit_length() - 1
+                if h in piv:
+                    v ^= piv[h]
+                else:
+                    piv[h] = v
+                    r += 1
+                    break
+        return r
+
+    rows = [o | sum(1 << (64 + d) for d in dets) for dets, o in parts]
+    full = rank(rows)
+    flipped = 0
+    for _, o in parts:
+        flipped |= o
+    return any(rank(rows + [1 << k]) == full for k in range(64) if flipped >> k & 1)
+
+
+def two_proportion_z(a: int, b: int, n: int) -> float:
+    """|z| of two rates a/n and b/n (0 when both are 0 or 1)."""
+    pa, pb = a / n, b / n
+    s = math.sqrt((pa * (1 - pa) + pb * (1 - pb)) / n)
+    return abs(pa - pb) / s if s > 0 else 0.0
+
+
+def heralds_vs_references(quick: bool) -> dict:
+    """Erasures with heralds (1.66) against Stim 1.16, PyMatching 2.4 and
+    ldpc 2.4.1. Models: QSO's undecomposed models of its erasure memory
+    experiments (through their export), of random Stim-format circuits with
+    both heralded channels (a third with REPEAT blocks) and of a repeated
+    circuit (folded) against Stim's
+    detector_error_model(approximate_disjoint_errors=True) term by term;
+    decomposed models against Stim's decompose_errors=True part by part;
+    QSO's heralded split (herald detectors, base, parts) against a
+    Stim-only reference. Rates: detection-event and herald rates of QSO's
+    sampler against Stim's. Decoders conditioned on the fired heralds shot
+    by shot: sparse matching against PyMatching rebuilt per shot (weights
+    and predictions), BP+OSD against ldpc's BpOsdDecoder with
+    update_channel_probs (OSD-0 shot by shot, OSD-CS by rates), pure
+    erasure (failures only where the erased set supports a logical, and
+    there half), and Pauli parts above ½ against PyMatching's negative
+    weights and ldpc given the same applied errors. Closed forms: the repetition code fails with p^d/2
+    (enumerated exactly), the rotated surface code at p = ½ code capacity
+    with ¼ at every odd distance."""
+    import pymatching
+    import stim
+    from ldpc import BpOsdDecoder as LdpcBpOsd
+
+    import metatron_qso as q
+
+    out: dict = {"models": {}, "decomposed": {}, "rates": {}, "decoders": {}, "pure_erasure": {}, "closed_forms": {}, "seconds": {}}
+    started = time.perf_counter()
+
+    # Models.
+    cases: dict = {}
+    for p, share in ((0.01, 0.98), (0.005, 0.5)):
+        noise = q.ErasureNoise(p, erasure_share=share)
+        tag = f"p={p}, erasure share {share}"
+        for d in (3, 5):
+            cases[f"repetition d={d}, {d} rounds, {tag}"] = q.repetition_code_memory(d, d, noise)
+        cases[f"surface d=3, 3 rounds, {tag}"] = q.surface_code_memory(3, 3, noise)
+        cases[f"surface X d=3, 3 rounds, {tag}"] = q.surface_code_memory(3, 3, noise, basis="x")
+        cases[f"surface d=5, 5 rounds, {tag}"] = q.surface_code_memory(5, 5, noise)
+        cases[f"colour d=5, 5 rounds, {tag}"] = q.css_code_memory(q.CssCode.color_code(5), 5, noise)
+    texts = {f"random circuit {s}": random_heralded_circuit(s) for s in range(20 if quick else 60)}
+    texts["repeated circuit (folded)"] = HERALDS_REPEATED
+    for name, text in texts.items():
+        cases[name] = q.RepeatedCircuit.from_stim(text)
+    for name, c in cases.items():
+        sc = stim.Circuit(texts[name] if name in texts else c.to_stim())
+        only, diff = compare_models(qso_model(c.detector_error_model().errors),
+                                    stim_model(sc.detector_error_model(approximate_disjoint_errors=True)))
+        ref = herald_reference(sc)
+        hm = c.heralded_error_model(decompose=False)
+        hd = hm.herald_detectors
+        base_only, base_diff = compare_models(qso_model(hm.base.errors), ref["base"])
+        prob_diff = parts_diff = 0.0
+        parts_only = 0
+        if hd == list(ref["heralds"]):
+            for i, k in enumerate(hd):
+                h, parts = ref["heralds"][k]
+                ours_h = hm.herald_probability(i)
+                prob_diff = max(prob_diff, abs(ours_h - h) / max(h, 1e-300) if ours_h != h else 0.0)
+                if h > 0:
+                    po, pd = compare_models(qso_model(hm.outcomes(i)), parts)
+                    parts_only += po
+                    parts_diff = max(parts_diff, pd)
+        out["models"][name] = {
+            "detectors": sc.num_detectors,
+            "herald_detectors": len(hd),
+            "error_mechanisms": len(c.detector_error_model().errors),
+            "error_mechanisms_only_one_side": only,
+            "max_relative_probability_difference": diff,
+            "herald_detectors_equal": hd == list(ref["heralds"]),
+            "base_errors": len(ref["base"]),
+            "base_errors_only_one_side": base_only,
+            "base_max_relative_probability_difference": base_diff,
+            "herald_probability_max_relative_difference": prob_diff,
+            "herald_parts_only_one_side": parts_only,
+            "herald_parts_max_relative_probability_difference": parts_diff,
+        }
+        if not name.startswith(("colour", "random", "repeated")):
+            theirs = stim_parts(sc.detector_error_model(decompose_errors=True, approximate_disjoint_errors=True))
+            ours: dict = {}
+            for p, parts in c.correlated_error_model().errors:
+                xor_merge(ours, tuple(sorted((tuple(d), o) for d, o in parts)), p)
+            only, diff = compare_models(ours, theirs)
+            out["decomposed"][name] = {
+                "error_mechanisms": len(theirs),
+                "decomposed_errors_only_one_side": only,
+                "decomposed_max_relative_probability_difference": diff,
+            }
+    out["seconds"]["models"] = time.perf_counter() - started
+
+    # Detection-event and herald rates against Stim's sampler.
+    started = time.perf_counter()
+    shots = 100_000 if quick else 1_000_000
+    chunk = 100_000
+    for name, c in {
+        "surface d=3, 3 rounds, p=0.01, erasure share 0.9": q.surface_code_memory(3, 3, q.ErasureNoise(0.01, erasure_share=0.9)),
+        "repetition d=5, 5 rounds, p=0.01, erasure share 0.98": q.repetition_code_memory(5, 5, q.ErasureNoise(0.01, erasure_share=0.98)),
+    }.items():
+        sc = stim.Circuit(c.to_stim())
+        sampler = sc.compile_detector_sampler(seed=2)
+        a = np.zeros(sc.num_detectors)
+        b = np.zeros(sc.num_detectors)
+        for k in range(shots // chunk):
+            det, _ = c.sample(chunk, seed=1 + k)
+            a += det.sum(axis=0)
+            b += sampler.sample(chunk).sum(axis=0)
+        a, b = a / shots, b / shots
+        sigma = np.sqrt(np.maximum(a * (1 - a) + b * (1 - b), 1e-300) / shots)
+        z = np.abs(a - b) / sigma
+        hd = list(herald_reference(sc)["heralds"])
+        is_h = np.zeros(sc.num_detectors, dtype=bool)
+        is_h[hd] = True
+        out["rates"][name] = {
+            "shots": shots,
+            "detectors": sc.num_detectors,
+            "herald_detectors": len(hd),
+            "max_detector_rate_z_score": float(np.max(z[~is_h])),
+            "max_herald_rate_z_score": float(np.max(z[is_h])),
+        }
+    out["seconds"]["rates"] = time.perf_counter() - started
+
+    # Decoders conditioned on the fired heralds, mixed noise.
+    started = time.perf_counter()
+    dshots = 1000 if quick else 5000
+    for d in (3, 5):
+        for share in (0.5, 0.9):
+            name = f"surface d={d}, {d} rounds, p=0.01, erasure share {share}"
+            c = q.surface_code_memory(d, d, q.ErasureNoise(0.01, erasure_share=share))
+            sc = stim.Circuit(c.to_stim())
+            ref = herald_reference(sc)
+            heralds = ref["heralds"]
+            hd = np.array(list(heralds), dtype=int)
+            is_h = np.zeros(sc.num_detectors, dtype=bool)
+            is_h[hd] = True
+            ordinary = np.flatnonzero(~is_h)
+            base_parts: dict = {}
+            for parts, p in stim_parts(ref["base_circuit"].detector_error_model(
+                    decompose_errors=True, approximate_disjoint_errors=True)).items():
+                for part in parts:
+                    xor_merge(base_parts, part, p)
+
+            def matching(edges: dict):
+                m = pymatching.Matching()
+                for (dets, obs), p in edges.items():
+                    if p <= 0 or not dets:
+                        continue
+                    faults = {k for k in range(64) if obs >> k & 1}
+                    w = math.log((1 - p) / p) if p < 0.5 else 0.0
+                    if len(dets) == 1:
+                        m.add_boundary_edge(dets[0], fault_ids=faults, weight=w, error_probability=min(p, 0.5),
+                                            merge_strategy="smallest-weight")
+                    else:
+                        m.add_edge(dets[0], dets[1], fault_ids=faults, weight=w, error_probability=min(p, 0.5),
+                                   merge_strategy="smallest-weight")
+                return m
+
+            def bits_to_mask(bits) -> int:
+                return int(sum(int(x) << k for k, x in enumerate(bits)))
+
+            # PyMatching ignoring heralds: owned heralds' parts at their
+            # unconditional probabilities (h times the conditioned one).
+            blind = dict(base_parts)
+            for h, parts in heralds.values():
+                for eff, qq in parts.items():
+                    xor_merge(blind, eff, h * qq)
+            blind_m = matching(blind)
+            sparse = q.ConditionedDecoder(c.heralded_error_model(decompose=True), "matching")
+            uf = q.ConditionedDecoder(c.heralded_error_model(decompose=True), "union_find")
+            full = c.heralded_error_model(decompose=False)
+            osd0 = q.ConditionedDecoder(full, "bposd", osd="osd0", osd_order=0)
+            osdcs = q.ConditionedDecoder(full, "bposd", osd="cs", osd_order=7)
+            slots = osd0.slots()
+            col = {(tuple(dets), obs): j for j, (_, dets, obs) in enumerate(slots)}
+            wanted = {k for k, p in ref["base"].items() if p > 0 and k[0]}
+            for _, parts in heralds.values():
+                wanted |= {k for k in parts if k[0]}
+            columns_only_one_side = len(wanted ^ set(col))
+            row_of = {int(dd): i for i, dd in enumerate(ordinary)}
+            H = np.zeros((len(ordinary), len(slots)), dtype=np.uint8)
+            for j, (_, dets, _) in enumerate(slots):
+                for dd in dets:
+                    H[row_of[dd], j] = 1
+            col_obs = np.array([o for _, _, o in slots], dtype=np.uint64)
+            prior0 = np.array([ref["base"].get((tuple(dets), obs), 0.0) for _, dets, obs in slots])
+            kw = dict(max_iter=50, bp_method="minimum_sum", ms_scaling_factor=0.625)
+            ldpc0 = LdpcBpOsd(H, channel_probs=list(prior0), osd_method="osd0", osd_order=0, **kw)
+            ldpccs = LdpcBpOsd(H, channel_probs=list(prior0), osd_method="osd_cs", osd_order=7, **kw)
+            det, flips = c.sample(dshots, seed=3)
+            actual = (flips.astype(np.uint64) << np.arange(flips.shape[1], dtype=np.uint64)).sum(axis=1)
+            fails = dict.fromkeys(("sparse_matching", "pymatching", "union_find", "pymatching_ignoring_heralds",
+                                   "bposd_osd0", "ldpc_osd0", "bposd_osd_cs", "ldpc_osd_cs"), 0)
+            weight_diff = 0.0
+            match_disagree = match_ties = osd0_disagree = cs_disagree = missing_parts = beyond = 0
+            t_ref = 0.0
+            for s in range(dshots):
+                row = det[s]
+                fired_h = [int(k) for k in hd[row[hd]]]
+                fired = [int(k) for k in ordinary[row[ordinary]]]
+                syn = row.copy()
+                syn[hd] = False
+                preds = dict.fromkeys(fails, 0)
+                if fired:
+                    t0 = time.perf_counter()
+                    edges = dict(base_parts)
+                    for k in fired_h:
+                        for eff, qq in heralds[k][1].items():
+                            xor_merge(edges, eff, qq)
+                    m = matching(edges)
+                    nd = m.num_detectors
+                    beyond += bool(syn[nd:].any())
+                    bits, w = m.decode(syn[:nd], return_weight=True)
+                    t_ref += time.perf_counter() - t0
+                    preds["pymatching"] = bits_to_mask(bits)
+                    preds["sparse_matching"], ours_w = sparse.decode_with_weight(fired, fired_h)
+                    shot_diff = abs(ours_w - w) / max(1.0, w)
+                    weight_diff = max(weight_diff, shot_diff)
+                    # Erased parts weigh 0, so corrections of equal weight in
+                    # different classes are common: such a tie is not a
+                    # disagreement (both are minimum-weight).
+                    match_ties += preds["sparse_matching"] != bits_to_mask(bits) and shot_diff <= TOLERANCES["matching_weight"]
+                    preds["pymatching_ignoring_heralds"] = bits_to_mask(blind_m.decode(syn[:blind_m.num_detectors]))
+                    preds["union_find"] = uf.decode(fired, fired_h)
+                    pri = prior0.copy()
+                    for k in fired_h:
+                        for eff, qq in heralds[k][1].items():
+                            j = col.get(eff)
+                            if j is None:
+                                missing_parts += 1
+                                continue
+                            pri[j] = pri[j] * (1 - qq) + qq * (1 - pri[j])
+                    srow = syn[ordinary].astype(np.uint8)
+                    for dec, key in ((ldpc0, "ldpc_osd0"), (ldpccs, "ldpc_osd_cs")):
+                        dec.update_channel_probs(pri)
+                        x = dec.decode(srow)
+                        preds[key] = int(np.bitwise_xor.reduce(col_obs[x.astype(bool)], initial=np.uint64(0)))
+                    preds["bposd_osd0"] = osd0.decode(fired, fired_h)
+                    preds["bposd_osd_cs"] = osdcs.decode(fired, fired_h)
+                else:
+                    # No ordinary detector fired: every decoder predicts no
+                    # flip; QSO's are asked all the same.
+                    for dec, key in ((sparse, "sparse_matching"), (uf, "union_find"), (osd0, "bposd_osd0"), (osdcs, "bposd_osd_cs")):
+                        preds[key] = dec.decode(fired, fired_h)
+                match_disagree += preds["sparse_matching"] != preds["pymatching"]
+                osd0_disagree += preds["bposd_osd0"] != preds["ldpc_osd0"]
+                cs_disagree += preds["bposd_osd_cs"] != preds["ldpc_osd_cs"]
+                for key, v in preds.items():
+                    fails[key] += v != int(actual[s])
+            out["decoders"][name] = {
+                "shots": dshots,
+                "detectors": sc.num_detectors,
+                "herald_detectors": len(hd),
+                "bposd_columns": len(slots),
+                "bposd_columns_only_one_side": columns_only_one_side,
+                "herald_parts_not_among_columns": missing_parts,
+                "fired_detectors_without_edges": beyond,
+                "sparse_matching_max_relative_weight_difference": weight_diff,
+                "sparse_matching_disagreement_with_pymatching": match_disagree / dshots,
+                "sparse_matching_ties_with_pymatching": match_ties / dshots,
+                "sparse_matching_disagreement_with_pymatching_not_tied": (match_disagree - match_ties) / dshots,
+                "bposd_osd0_disagreement_with_ldpc": osd0_disagree / dshots,
+                "bposd_osd_cs_disagreement_with_ldpc": cs_disagree / dshots,
+                "bposd_osd_cs_logical_error_rate_z_score": two_proportion_z(fails["bposd_osd_cs"], fails["ldpc_osd_cs"], dshots),
+                "logical_error_rates": {k: v / dshots for k, v in fails.items()},
+                "pymatching_rebuilt_us_per_shot": 1e6 * t_ref / dshots,
+            }
+    out["seconds"]["decoders"] = time.perf_counter() - started
+
+    # Pure erasure: a decoder fails only where the fired parts support a
+    # logical that flips an observable, and there on half the shots.
+    started = time.perf_counter()
+    pshots = 20_000 if quick else 100_000
+    for name, c in {
+        "surface d=3, 3 rounds, p=0.04, pure erasure": q.surface_code_memory(3, 3, q.ErasureNoise(0.04, erasure_share=1.0)),
+        "repetition d=5, 5 rounds, p=0.05, pure erasure": q.repetition_code_memory(5, 5, q.ErasureNoise(0.05, erasure_share=1.0)),
+    }.items():
+        sc = stim.Circuit(c.to_stim())
+        heralds = herald_reference(sc)["heralds"]
+        hd = np.array(list(heralds), dtype=int)
+        det, flips = c.sample(pshots, seed=4)
+        actual = (flips.astype(np.uint64) << np.arange(flips.shape[1], dtype=np.uint64)).sum(axis=1)
+        decoders = {
+            "union_find": q.ConditionedDecoder(c.heralded_error_model(decompose=True), "union_find"),
+            "matching": q.ConditionedDecoder(c.heralded_error_model(decompose=True), "matching"),
+            "bposd": q.ConditionedDecoder(c.heralded_error_model(decompose=False), "bposd"),
+        }
+        failed = {k: dec.decode_batch(det) != actual for k, dec in decoders.items()}
+        supporting = np.array([supports_flip([e for k in hd[row[hd]] for e in heralds[int(k)][1]]) for row in det], dtype=bool)
+        sup = int(supporting.sum())
+        r = {"shots": pshots, "herald_detectors": len(hd), "base_errors": len(c.heralded_error_model().base),
+             "supporting_shots": sup}
+        for k, f in failed.items():
+            half = float(f[supporting].sum()) / max(sup, 1)
+            r[k] = {
+                "failures_elsewhere": int(f[~supporting].sum()),
+                "failure_fraction_on_supporting_shots": half,
+                "half_z_score": (half - 0.5) / math.sqrt(0.25 / sup) if sup else 0.0,
+                "logical_error_rate": float(f.mean()),
+            }
+        out["pure_erasure"][name] = r
+    out["seconds"]["pure_erasure"] = time.perf_counter() - started
+
+    # Parts above ½: a heralded Pauli channel's X part given its herald,
+    # (pX + pY)/t, beside X_ERROR at code capacity. PyMatching takes the
+    # negative weight ln((1 − p)/p) and applies the edge first; QSO applies
+    # such a part and decodes the rest with 1 − p, and its BP+OSD (OSD-0)
+    # equals ldpc given the same applied errors and probabilities.
+    started = time.perf_counter()
+    out["above_half"] = {}
+    ashots = 20_000 if quick else 50_000
+    for d, base, pauli in ((7, 0.08, (0.02, 0.18, 0.0, 0.0)), (5, 0.0, (0.0, 0.5, 0.0, 0.0))):
+        qs = " ".join(map(str, range(d)))
+        text = "\n".join(
+            [f"R {qs}", f"X_ERROR({base!r}) {qs}", "HERALDED_PAULI_CHANNEL_1(" + ", ".join(map(repr, pauli)) + f") {qs}"]
+            + [f"DETECTOR rec[-{d - k}]" for k in range(d)]
+            + [f"M {qs}"]
+            + [f"DETECTOR rec[-{d - k}] rec[-{d - k - 1}]" for k in range(d - 1)]
+            + [f"OBSERVABLE_INCLUDE(0) rec[-{d}]"]
+        ) + "\n"
+        name = f"repetition d={d}, code capacity, X_ERROR({base}), HERALDED_PAULI_CHANNEL_1{pauli}"
+        sc = stim.Circuit(text)
+        c = q.DetectorCircuit.from_stim(text)
+        ref = herald_reference(sc)
+        heralds = ref["heralds"]
+        hd = np.array(list(heralds), dtype=int)
+        ordinary = np.array([k for k in range(sc.num_detectors) if k not in heralds], dtype=int)
+        row_of = {int(k): i for i, k in enumerate(ordinary)}
+        det, obs = sc.compile_detector_sampler(seed=8).sample(ashots, separate_observables=True)
+        actual = obs[:, 0].astype(np.uint64)
+        sparse = q.ConditionedDecoder(c.heralded_error_model(decompose=True), "matching")
+        uf = q.ConditionedDecoder(c.heralded_error_model(decompose=True), "union_find")
+        osd0 = q.ConditionedDecoder(c.heralded_error_model(decompose=False), "bposd", osd="osd0", osd_order=0)
+        slots = osd0.slots()
+        H = np.zeros((len(ordinary), len(slots)), dtype=np.uint8)
+        for j, (_, dets, _) in enumerate(slots):
+            for k in dets:
+                H[row_of[k], j] = 1
+        col_obs = np.array([o for _, _, o in slots], dtype=np.uint64)
+        ldpc0 = LdpcBpOsd(H, error_rate=0.1, max_iter=50, bp_method="minimum_sum", ms_scaling_factor=0.625,
+                          osd_method="osd0", osd_order=0)
+        cache: dict = {}
+        fails = dict.fromkeys(("sparse_matching", "pymatching", "union_find", "bposd_osd0", "ldpc_osd0"), 0)
+        match_disagree = match_ties = osd0_disagree = 0
+        weight_diff = 0.0
+        for s in range(ashots):
+            row = det[s]
+            fired_h = tuple(int(k) for k in hd[row[hd]])
+            fired = [int(k) for k in ordinary[row[ordinary]]]
+            if fired_h not in cache:
+                edges = dict(ref["base"])
+                for k in fired_h:
+                    for eff, qq in heralds[k][1].items():
+                        xor_merge(edges, eff, qq)
+                m = pymatching.Matching()
+                certain = False
+                for (dets, o), p in edges.items():
+                    if p <= 0 or not dets:
+                        continue
+                    # A certain error (p = 1) gets a weight far below any
+                    # other path (its own weight would be −∞).
+                    certain |= p >= 1
+                    w = math.log((1 - p) / p) if p < 1 else -50.0
+                    faults = {k for k in range(64) if o >> k & 1}
+                    nodes = [row_of[k] for k in dets]
+                    if len(nodes) == 1:
+                        m.add_boundary_edge(nodes[0], fault_ids=faults, weight=w)
+                    else:
+                        m.add_edge(nodes[0], nodes[1], fault_ids=faults, weight=w)
+                m.ensure_num_fault_ids(1)
+                pri = np.array([edges.get((tuple(dets), o), 0.0) for _, dets, o in slots])
+                cache[fired_h] = (m, pri, certain)
+            m, pri, certain = cache[fired_h]
+            syn = np.zeros(len(ordinary), dtype=np.uint8)
+            syn[[row_of[k] for k in fired]] = 1
+            nd = m.num_detectors
+            assert not syn[nd:].any()
+            bits, w = m.decode(syn[:nd], return_weight=True) if m.num_edges else (np.zeros(1, dtype=np.uint8), 0.0)
+            preds = {"pymatching": int(bits[0]) if len(bits) else 0}
+            preds["sparse_matching"], ours_w = sparse.decode_with_weight(fired, list(fired_h))
+            # Weights compare only without certain errors (QSO's is then −∞).
+            shot_diff = abs(ours_w - w) / max(1.0, abs(w)) if not certain else 0.0
+            weight_diff = max(weight_diff, shot_diff)
+            match_disagree += preds["sparse_matching"] != preds["pymatching"]
+            match_ties += (preds["sparse_matching"] != preds["pymatching"] and not certain
+                           and shot_diff <= TOLERANCES["matching_weight"])
+            preds["union_find"] = uf.decode(fired, list(fired_h))
+            preds["bposd_osd0"] = osd0.decode(fired, list(fired_h))
+            # ldpc given PyMatching's rule: errors above ½ applied, the
+            # rest decoded with 1 − p.
+            applied = pri > 0.5
+            srow = (syn + H[:, applied].sum(axis=1)) % 2
+            flipped_obs = int(np.bitwise_xor.reduce(col_obs[applied], initial=np.uint64(0)))
+            if srow.any():
+                ldpc0.update_channel_probs(np.where(applied, 1 - pri, pri))
+                x = ldpc0.decode(srow.astype(np.uint8))
+                flipped_obs ^= int(np.bitwise_xor.reduce(col_obs[x.astype(bool)], initial=np.uint64(0)))
+            preds["ldpc_osd0"] = flipped_obs
+            osd0_disagree += preds["bposd_osd0"] != preds["ldpc_osd0"]
+            for key, v in preds.items():
+                fails[key] += v != int(actual[s])
+        out["above_half"][name] = {
+            "shots": ashots,
+            "herald_parts": [p for k in heralds for p in heralds[k][1].values()][:1],
+            "sparse_matching_max_relative_weight_difference": weight_diff,
+            "sparse_matching_disagreement_with_pymatching_not_tied": (match_disagree - match_ties) / ashots,
+            "sparse_matching_ties_with_pymatching": match_ties / ashots,
+            "bposd_osd0_disagreement_with_ldpc": osd0_disagree / ashots,
+            "logical_error_rates": {k: v / ashots for k, v in fails.items()},
+        }
+    out["seconds"]["above_half"] = time.perf_counter() - started
+
+    # Closed forms.
+    started = time.perf_counter()
+    for d in (3, 5, 7):
+        for p in (0.1, 0.5):
+            n_det = 2 * d - 1
+            text = "\n".join(
+                ["R " + " ".join(map(str, range(d))), f"HERALDED_ERASE({p!r}) " + " ".join(map(str, range(d)))]
+                + [f"DETECTOR rec[-{d - k}]" for k in range(d)]
+                + ["M " + " ".join(map(str, range(d)))]
+                + [f"DETECTOR rec[-{d - k}] rec[-{d - k - 1}]" for k in range(d - 1)]
+                + [f"OBSERVABLE_INCLUDE(0) rec[-{d}]"]
+            ) + "\n"
+            c = q.DetectorCircuit.from_stim(text)
+            assert c.n_detectors == n_det
+            expected = p**d / 2
+            r = {"expected": expected}
+            for method, decompose in (("union_find", True), ("matching", True), ("bposd", False)):
+                dec = q.ConditionedDecoder(c.heralded_error_model(decompose=decompose), method)
+                fail = 0.0
+                for erased in range(1 << d):
+                    e = [k for k in range(d) if erased >> k & 1]
+                    pe = p ** len(e) * (1 - p) ** (d - len(e))
+                    for pattern in range(1 << len(e)):
+                        x = [0] * d
+                        for i, k in enumerate(e):
+                            x[k] = pattern >> i & 1
+                        fired = [d + k for k in range(d - 1) if x[k] ^ x[k + 1]]
+                        if dec.decode(fired, e) != x[0]:
+                            fail += pe * 2.0 ** -len(e)
+                r[method] = fail
+                r[f"{method}_relative_difference"] = abs(fail - expected) / expected
+            out["closed_forms"][f"repetition d={d}, p={p}, heralded erasure, perfect readout"] = r
+    cshots = 20_000
+    for d in ((3, 5) if quick else (3, 5, 7, 9)):
+        text = surface_capacity_circuit(d, "0.5")
+        sc = stim.Circuit(text)
+        c = q.DetectorCircuit.from_stim(text)
+        det, obs = sc.compile_detector_sampler(seed=6 + d).sample(cshots, separate_observables=True)
+        r = {"expected": 0.25, "shots": cshots}
+        for method in ("union_find", "matching"):
+            rate = float(np.mean(q.ConditionedDecoder(c.heralded_error_model(), method).decode_batch(det) != obs[:, 0]))
+            r[method] = rate
+            r[f"{method}_z_score"] = (rate - 0.25) / math.sqrt(0.1875 / cshots)
+        out["closed_forms"][f"rotated surface d={d}, code capacity, p=1/2 erasure"] = r
+    out["seconds"]["closed_forms"] = time.perf_counter() - started
+    return out
+
+
+def herald_failures(r: dict) -> list[str]:
+    """Deviations of the heralded-erasure cross-validation (1.66) that
+    exceed TOLERANCES."""
+    failures = []
+    tol = TOLERANCES["error_model"]
+    for name, m in r["models"].items():
+        if m["error_mechanisms_only_one_side"] or not m["max_relative_probability_difference"] <= tol:
+            failures.append(f"heralded detector error model of {name} differs from Stim's: {m}")
+        if (not m["herald_detectors_equal"] or m["base_errors_only_one_side"] or m["herald_parts_only_one_side"]
+                or not max(m["base_max_relative_probability_difference"], m["herald_probability_max_relative_difference"],
+                           m["herald_parts_max_relative_probability_difference"]) <= tol):
+            failures.append(f"heralded split of {name} differs from the Stim reference: {m}")
+    for name, m in r["decomposed"].items():
+        if m["decomposed_errors_only_one_side"] or not m["decomposed_max_relative_probability_difference"] <= tol:
+            failures.append(f"decomposed heralded model of {name} differs from Stim's: {m}")
+    for name, m in r["rates"].items():
+        if not max(m["max_detector_rate_z_score"], m["max_herald_rate_z_score"]) <= TOLERANCES["detector_rate_z"]:
+            failures.append(f"detection-event or herald rates of {name} differ from Stim's: {m}")
+    for name, m in r["decoders"].items():
+        if m["bposd_columns_only_one_side"] or m["herald_parts_not_among_columns"] or m["fired_detectors_without_edges"]:
+            failures.append(f"conditioned decoders of {name} do not see the reference's errors: {m}")
+        if not m["sparse_matching_max_relative_weight_difference"] <= TOLERANCES["matching_weight"]:
+            failures.append(f"conditioned matching weights on {name} differ from PyMatching's: {m}")
+        if not m["sparse_matching_disagreement_with_pymatching_not_tied"] <= TOLERANCES["matching_disagreement"]:
+            failures.append(f"conditioned matching predictions on {name} differ from PyMatching's: {m}")
+        if not m["bposd_osd0_disagreement_with_ldpc"] <= TOLERANCES["bposd_min_sum_disagreement"]:
+            failures.append(f"conditioned BP+OSD (OSD-0) predictions on {name} differ from ldpc's: {m}")
+        if not m["bposd_osd_cs_logical_error_rate_z_score"] <= TOLERANCES["herald_rate_z"]:
+            failures.append(f"conditioned BP+OSD (OSD-CS) logical error rate on {name} differs from ldpc's: {m}")
+    for name, m in r.get("above_half", {}).items():
+        if not m["sparse_matching_max_relative_weight_difference"] <= TOLERANCES["matching_weight"]:
+            failures.append(f"conditioned matching weights on {name} differ from PyMatching's: {m}")
+        if not m["sparse_matching_disagreement_with_pymatching_not_tied"] <= TOLERANCES["matching_disagreement"]:
+            failures.append(f"conditioned matching predictions on {name} differ from PyMatching's: {m}")
+        if not m["bposd_osd0_disagreement_with_ldpc"] <= TOLERANCES["bposd_min_sum_disagreement"]:
+            failures.append(f"conditioned BP+OSD (OSD-0) predictions on {name} differ from ldpc's: {m}")
+        if m["herald_parts"][0] == 1.0 and any(m["logical_error_rates"].values()):
+            failures.append(f"a certain heralded X was not corrected on {name}: {m}")
+    for name, m in r["pure_erasure"].items():
+        for method in ("union_find", "matching", "bposd"):
+            v = m[method]
+            if v["failures_elsewhere"]:
+                failures.append(f"{method} failed on {name} where the erased set supports no logical: {v}")
+            if not abs(v["half_z_score"]) <= TOLERANCES["herald_rate_z"]:
+                failures.append(f"{method} on {name} does not fail on half the supporting shots: {v}")
+    for name, m in r["closed_forms"].items():
+        for method in ("union_find", "matching", "bposd"):
+            if f"{method}_relative_difference" in m and not m[f"{method}_relative_difference"] <= TOLERANCES["herald_closed_form"]:
+                failures.append(f"{method} on {name} misses the closed form p^d/2: {m}")
+            if f"{method}_z_score" in m and not abs(m[f"{method}_z_score"]) <= TOLERANCES["herald_rate_z"]:
+                failures.append(f"{method} on {name} misses the closed form 1/4: {m}")
+    return failures
 
 
 def stim_parts(dem) -> dict:
@@ -1068,6 +1890,11 @@ TOLERANCES = {
     # Two-pass matching: the first pass's shortest paths may break ties
     # differently from PyMatching's, so a few shots reweight other edges.
     "correlated_disagreement": 1e-3,
+    # Heralded erasure (1.66): exact enumerations against p^d/2 (sums of
+    # a few hundred products of powers of p), and |z| of sampled rates
+    # against ¼, ½ and between two OSD-CS decoders.
+    "herald_closed_form": 1e-12,
+    "herald_rate_z": 5.0,
     # Same geometries in bohr: integrals to rounding, energies to the
     # convergence of both SCF codes.
     "integral": 1e-12,
@@ -2922,6 +3749,7 @@ def check(c: dict) -> list[str]:
         )
     failures += pauli_propagation_failures(c["pauli_propagation"])
     failures += radical_pair_failures(c["radical_pairs"])
+    failures += herald_failures(c["heralds"])
     return failures
 
 
@@ -3110,6 +3938,9 @@ def main() -> None:
     ap.add_argument("--radical-pairs-only", action="store_true",
                     help="run only the radical-pair cross-validation (RadicalPy, QuTiP) and print it as JSON "
                     "with its failures")
+    ap.add_argument("--heralds-only", action="store_true",
+                    help="run only the heralded-erasure cross-validation (Stim, PyMatching, ldpc) and print it "
+                    "as JSON with its failures")
     ap.add_argument("--qaoa", default="22,24",
                     help="qubit counts of the QAOA p = 10 comparison (comma-separated; empty: none)")
     args = ap.parse_args()
@@ -3119,6 +3950,15 @@ def main() -> None:
     if args.radical_pairs_only:
         r = radical_pairs_vs_references(args.quick)
         r["failures"] = radical_pair_failures(r)
+        print(json.dumps(r, indent=1))
+        for f in r["failures"]:
+            print(f"::error title=Cross-validation::{f}", file=sys.stderr)
+        if args.check and r["failures"]:
+            sys.exit(1)
+        return
+    if args.heralds_only:
+        r = heralds_vs_references(args.quick)
+        r["failures"] = herald_failures(r)
         print(json.dumps(r, indent=1))
         for f in r["failures"]:
             print(f"::error title=Cross-validation::{f}", file=sys.stderr)

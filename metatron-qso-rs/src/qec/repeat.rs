@@ -21,11 +21,12 @@
 use std::fmt::Write;
 
 use super::circuit::{
-    DetectorCircuit, MAX_QEC_OPERATIONS, Noise, QecOp, check_gate, check_noise, check_observable,
-    check_probability, check_qubit,
+    CircuitStep, DetectorCircuit, ExtendedOp, MAX_QEC_OPERATIONS, Noise, QecOp, check_extended,
+    check_gate, check_noise, check_observable, check_probability, check_qubit,
 };
 use super::dem::{CorrelatedErrorModel, DetectorErrorModel};
 use super::frame::{self, DetectorSamples, MAX_SAMPLED_EVENTS, Walk};
+use super::herald::HeraldedErrorModel;
 use super::stim::{self, Sink};
 use crate::error::{QsoError, Result};
 use crate::quantum::Instruction;
@@ -35,12 +36,28 @@ use crate::rng::Rng;
 /// measurements and detectors).
 pub const MAX_REPEATED_OPERATIONS: u64 = 1 << 31;
 
+/// An operation of a block: a [`QecOp`] or an extended one.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum Item {
+    Qec(QecOp),
+    Ext(ExtendedOp),
+}
+
+impl Item {
+    pub(super) fn step(&self) -> CircuitStep<'_> {
+        match self {
+            Item::Qec(op) => CircuitStep::Qec(op),
+            Item::Ext(op) => CircuitStep::Extended(op),
+        }
+    }
+}
+
 /// A block of a [`RepeatedCircuit`].
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Block {
     /// Operations whose records count back from the operation (1: the
     /// last measurement before it).
-    Ops(Vec<QecOp>),
+    Ops(Vec<Item>),
     Repeat(Box<Repeat>),
 }
 
@@ -49,7 +66,8 @@ pub(super) enum Block {
 pub(super) struct Repeat {
     pub(super) count: usize,
     pub(super) body: Vec<Block>,
-    /// Measurements, detectors and operations of one iteration.
+    /// Measurements (heralds included), detectors and operations of one
+    /// iteration.
     pub(super) measurements: usize,
     pub(super) detectors: usize,
     pub(super) operations: u64,
@@ -121,7 +139,7 @@ impl Builder {
     }
 
     /// Append a checked operation (records as lookbacks).
-    fn push(&mut self, op: QecOp) -> Result<()> {
+    fn push(&mut self, item: Item) -> Result<()> {
         if self.stored >= MAX_QEC_OPERATIONS {
             return Err(QsoError::invalid(
                 "circuit",
@@ -134,28 +152,29 @@ impl Builder {
                 format!("more than {MAX_REPEATED_OPERATIONS} operations expanded"),
             ));
         }
-        match &op {
-            QecOp::Measure { .. } => self.measured += 1,
-            QecOp::Detector { records } => {
+        match &item {
+            Item::Ext(op) => self.measured += op.n_records(),
+            Item::Qec(QecOp::Measure { .. }) => self.measured += 1,
+            Item::Qec(QecOp::Detector { records }) => {
                 self.detectors += 1;
                 self.lookback = self
                     .lookback
                     .max(records.iter().copied().max().unwrap_or(0));
             }
-            QecOp::Observable { index, records } => {
+            Item::Qec(QecOp::Observable { index, records }) => {
                 self.observables = self.observables.max(index + 1);
                 self.lookback = self
                     .lookback
                     .max(records.iter().copied().max().unwrap_or(0));
             }
-            _ => {}
+            Item::Qec(_) => {}
         }
         self.stored += 1;
         self.operations += 1;
         let blocks = &mut self.stack.last_mut().expect("the whole circuit").0;
         match blocks.last_mut() {
-            Some(Block::Ops(ops)) => ops.push(op),
-            _ => blocks.push(Block::Ops(vec![op])),
+            Some(Block::Ops(ops)) => ops.push(item),
+            _ => blocks.push(Block::Ops(vec![item])),
         }
         Ok(())
     }
@@ -228,15 +247,18 @@ impl Builder {
         })
     }
 
-    /// Append `op` of a flat circuit, `measured` measurements before it,
+    /// Append `step` of a flat circuit, `measured` measurements before it,
     /// its records turned into lookbacks.
-    pub(super) fn push_flat(&mut self, op: &QecOp, measured: usize) -> Result<()> {
+    pub(super) fn push_flat(&mut self, step: CircuitStep<'_>, measured: usize) -> Result<()> {
         let back =
             |records: &[usize]| -> Vec<usize> { records.iter().map(|&r| measured - r).collect() };
-        match op {
-            QecOp::Detector { records } => self.detector(&back(records)),
-            QecOp::Observable { index, records } => self.observable(*index, &back(records)),
-            other => self.push(other.clone()),
+        match step {
+            CircuitStep::Qec(QecOp::Detector { records }) => self.detector(&back(records)),
+            CircuitStep::Qec(QecOp::Observable { index, records }) => {
+                self.observable(*index, &back(records))
+            }
+            CircuitStep::Qec(other) => self.push(Item::Qec(other.clone())),
+            CircuitStep::Extended(op) => self.push(Item::Ext(op.clone())),
         }
     }
 }
@@ -244,46 +266,56 @@ impl Builder {
 impl Sink for Builder {
     fn gate(&mut self, inst: Instruction) -> Result<()> {
         check_gate(self.n, &inst)?;
-        self.push(QecOp::Gate(inst))
+        self.push(Item::Qec(QecOp::Gate(inst)))
     }
 
     fn measure(&mut self, qubit: usize, flip: f64) -> Result<()> {
         check_qubit(self.n, qubit)?;
         check_probability(flip, 1.0)?;
-        self.push(QecOp::Measure { qubit, flip })
+        self.push(Item::Qec(QecOp::Measure { qubit, flip }))
     }
 
     fn reset(&mut self, qubit: usize) -> Result<()> {
         check_qubit(self.n, qubit)?;
-        self.push(QecOp::Reset { qubit })
+        self.push(Item::Qec(QecOp::Reset { qubit }))
     }
 
     fn noise(&mut self, noise: Noise, qubits: &[usize]) -> Result<()> {
         check_noise(self.n, &noise, qubits)?;
         // As DetectorCircuit::noise: noise that cannot happen is left out.
         if noise.probability() > 0.0 && !qubits.is_empty() {
-            self.push(QecOp::Noise {
+            self.push(Item::Qec(QecOp::Noise {
                 noise,
                 qubits: qubits.to_vec(),
-            })?;
+            }))?;
+        }
+        Ok(())
+    }
+
+    fn extended(&mut self, op: ExtendedOp) -> Result<()> {
+        check_extended(self.n, &op)?;
+        // As DetectorCircuit::push_extended: kept at probability 0 (its
+        // records exist), left out without targets.
+        if op.n_records() > 0 {
+            self.push(Item::Ext(op))?;
         }
         Ok(())
     }
 
     fn detector(&mut self, lookbacks: &[usize]) -> Result<()> {
         self.check_lookbacks(lookbacks)?;
-        self.push(QecOp::Detector {
+        self.push(Item::Qec(QecOp::Detector {
             records: lookbacks.to_vec(),
-        })
+        }))
     }
 
     fn observable(&mut self, index: usize, lookbacks: &[usize]) -> Result<()> {
         check_observable(index)?;
         self.check_lookbacks(lookbacks)?;
-        self.push(QecOp::Observable {
+        self.push(Item::Qec(QecOp::Observable {
             index,
             records: lookbacks.to_vec(),
-        })
+        }))
     }
 
     fn measured(&self) -> usize {
@@ -311,28 +343,31 @@ impl Sink for Builder {
     }
 }
 
-/// Calls `f(op, records)` for every operation of `blocks` in order, the
+/// Calls `f(step, records)` for every operation of `blocks` in order, the
 /// records of detectors and observables as indices into the whole record.
 fn walk_blocks(
     blocks: &[Block],
     measured: &mut usize,
     records: &mut Vec<usize>,
-    f: &mut dyn FnMut(&QecOp, &[usize]) -> Result<()>,
+    f: &mut dyn FnMut(CircuitStep<'_>, &[usize]) -> Result<()>,
 ) -> Result<()> {
     for block in blocks {
         match block {
-            Block::Ops(ops) => {
-                for op in ops {
+            Block::Ops(items) => {
+                for item in items {
                     records.clear();
-                    match op {
-                        QecOp::Detector { records: back }
-                        | QecOp::Observable { records: back, .. } => {
+                    match item {
+                        Item::Qec(
+                            QecOp::Detector { records: back }
+                            | QecOp::Observable { records: back, .. },
+                        ) => {
                             records.extend(back.iter().map(|&k| *measured - k));
                         }
-                        QecOp::Measure { .. } => *measured += 1,
-                        _ => {}
+                        Item::Qec(QecOp::Measure { .. }) => *measured += 1,
+                        Item::Ext(op) => *measured += op.n_records(),
+                        Item::Qec(_) => {}
                     }
-                    f(op, records)?;
+                    f(item.step(), records)?;
                 }
             }
             Block::Repeat(r) => {
@@ -362,7 +397,7 @@ impl Walk for RepeatedCircuit {
         self.lookback.max(1)
     }
 
-    fn walk(&self, f: &mut dyn FnMut(&QecOp, &[usize]) -> Result<()>) -> Result<()> {
+    fn walk(&self, f: &mut dyn FnMut(CircuitStep<'_>, &[usize]) -> Result<()>) -> Result<()> {
         walk_blocks(&self.blocks, &mut 0, &mut Vec::new(), f)
     }
 }
@@ -371,9 +406,12 @@ fn write_blocks(out: &mut String, blocks: &[Block], depth: usize) -> Result<()> 
     let indent = "    ".repeat(depth);
     for block in blocks {
         match block {
-            Block::Ops(ops) => {
-                for op in ops {
-                    stim::write_op(out, op, &indent, &|k| k)?;
+            Block::Ops(items) => {
+                for item in items {
+                    match item {
+                        Item::Qec(op) => stim::write_op(out, op, &indent, &|k| k)?,
+                        Item::Ext(op) => stim::write_extended(out, op, &indent),
+                    }
                 }
             }
             Block::Repeat(r) => {
@@ -400,41 +438,37 @@ impl RepeatedCircuit {
     pub fn from_circuit(circuit: &DetectorCircuit) -> Result<RepeatedCircuit> {
         let mut b = Builder::new(circuit.n_qubits())?;
         let mut measured = 0;
-        for op in circuit.operations() {
-            b.push_flat(op, measured)?;
-            if let QecOp::Measure { .. } = op {
-                measured += 1;
-            }
+        for step in circuit.steps() {
+            b.push_flat(step, measured)?;
+            measured += records_of(step);
         }
         b.finish()
     }
 
-    /// The operations `body` of a flat circuit repeated `count` times
-    /// between those before and after it; their records turned into
-    /// lookbacks, so that each iteration reads the records the body read
-    /// relative to it.
+    /// The operations `body` (indices into [`DetectorCircuit::steps`]) of
+    /// a flat circuit repeated `count` times between those before and after
+    /// it; their records turned into lookbacks, so that each iteration
+    /// reads the records the body read relative to it.
     pub(super) fn from_parts(
         circuit: &DetectorCircuit,
         body: std::ops::Range<usize>,
         count: usize,
     ) -> Result<RepeatedCircuit> {
-        let ops = circuit.operations();
-        if body.start >= body.end || body.end > ops.len() {
+        let n_steps = circuit.n_steps();
+        if body.start >= body.end || body.end > n_steps {
             return Err(QsoError::invalid(
                 "body",
-                format!("operations {body:?} of {}", ops.len()),
+                format!("operations {body:?} of {n_steps}"),
             ));
         }
         let mut b = Builder::new(circuit.n_qubits())?;
         let mut measured = 0;
-        for (i, op) in ops.iter().enumerate() {
+        for (i, step) in circuit.steps().enumerate() {
             if i == body.start {
                 b.begin(count)?;
             }
-            b.push_flat(op, measured)?;
-            if let QecOp::Measure { .. } = op {
-                measured += 1;
-            }
+            b.push_flat(step, measured)?;
+            measured += records_of(step);
             if i + 1 == body.end {
                 b.end()?;
             }
@@ -462,7 +496,14 @@ impl RepeatedCircuit {
             ));
         }
         let mut c = DetectorCircuit::new(self.n)?;
-        self.walk(&mut |op, records| {
+        self.walk(&mut |step, records| {
+            let op = match step {
+                CircuitStep::Qec(op) => op,
+                CircuitStep::Extended(op) => {
+                    c.push_extended(op.clone())?;
+                    return Ok(());
+                }
+            };
             match op {
                 QecOp::Gate(inst) => {
                     c.gate(inst.clone())?;
@@ -492,7 +533,7 @@ impl RepeatedCircuit {
         self.n
     }
 
-    /// Measurements, expanded.
+    /// Measurement records (heralds included), expanded.
     pub fn n_measurements(&self) -> usize {
         self.measurements
     }
@@ -506,12 +547,13 @@ impl RepeatedCircuit {
         self.observables
     }
 
-    /// Operations, expanded.
+    /// Operations (extended operations included), expanded.
     pub fn n_operations(&self) -> u64 {
         self.operations
     }
 
-    /// Operations stored (each block once).
+    /// Operations stored (each block once; extended operations
+    /// included).
     pub fn n_stored_operations(&self) -> usize {
         self.stored
     }
@@ -522,17 +564,17 @@ impl RepeatedCircuit {
         let mut layers = Vec::with_capacity(self.detectors);
         let mut layer = 0;
         let mut previous_was_detector = false;
-        let _ = self.walk(&mut |op, _| {
-            match op {
-                QecOp::Detector { .. } => {
+        let _ = self.walk(&mut |step, _| {
+            match step {
+                CircuitStep::Qec(QecOp::Detector { .. }) => {
                     if !previous_was_detector && !layers.is_empty() {
                         layer += 1;
                     }
                     layers.push(layer);
                     previous_was_detector = true;
                 }
-                QecOp::Observable { .. } => {}
-                _ => previous_was_detector = false,
+                CircuitStep::Qec(QecOp::Observable { .. }) => {}
+                CircuitStep::Qec(_) | CircuitStep::Extended(_) => previous_was_detector = false,
             }
             Ok(())
         });
@@ -545,6 +587,24 @@ impl RepeatedCircuit {
     /// (see the module docs).
     pub fn detector_error_model(&self, decompose: bool) -> Result<DetectorErrorModel> {
         super::dem::repeated_error_model(self, decompose)
+    }
+
+    /// [`super::heralded_error_model`] of the expanded circuit, by the same
+    /// folded pass.
+    pub fn heralded_error_model(&self, decompose: bool) -> Result<HeraldedErrorModel> {
+        super::herald::repeated_heralded_model(self, decompose)
+    }
+
+    /// Whether the circuit has extended operations ([`ExtendedOp`]: today
+    /// heralded noise), which some functions refuse.
+    pub fn has_extended(&self) -> bool {
+        fn any(blocks: &[Block]) -> bool {
+            blocks.iter().any(|b| match b {
+                Block::Ops(items) => items.iter().any(|i| matches!(i, Item::Ext(_))),
+                Block::Repeat(r) => any(&r.body),
+            })
+        }
+        any(&self.blocks)
     }
 
     /// The correlated model of the expanded circuit, as
@@ -566,6 +626,15 @@ impl RepeatedCircuit {
         }
         frame::check_deterministic(self)?;
         frame::sample_with(self, shots, &mut Rng::seed_from_u64(seed))
+    }
+}
+
+/// Measurement records a step of a flat circuit adds.
+pub(super) fn records_of(step: CircuitStep<'_>) -> usize {
+    match step {
+        CircuitStep::Qec(QecOp::Measure { .. }) => 1,
+        CircuitStep::Qec(_) => 0,
+        CircuitStep::Extended(op) => op.n_records(),
     }
 }
 

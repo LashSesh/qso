@@ -15,7 +15,8 @@ quantum Fisher information, natural gradient and imaginary-time evolution;
 QUBO/Ising problems with QAOA mixers; amplitude estimation; stabilizer
 simulation and graph states; and quantum error correction (detector
 circuits, Pauli-frame sampling, detector error models, union-find and
-minimum-weight matching and BP+OSD decoding, repetition, surface,
+minimum-weight matching and BP+OSD decoding, also conditioned on the
+heralds of erasures, repetition, surface,
 colour and bivariate bicycle code memory experiments, exact circuit
 distances); matrix-product
 states for circuits with little entanglement on many qubits; expectation
@@ -92,6 +93,9 @@ from ._core import (
     SparseMatchingDecoder,
     CorrelatedErrorModel,
     CorrelatedMatchingDecoder,
+    ConditionedDecoder,
+    ErasureNoise,
+    HeraldedErrorModel,
     CircuitDistance,
     SparsePauliLindblad,
     SpatialSearch,
@@ -265,6 +269,9 @@ __all__ = [
     "SparseMatchingDecoder",
     "CorrelatedErrorModel",
     "CorrelatedMatchingDecoder",
+    "ConditionedDecoder",
+    "ErasureNoise",
+    "HeraldedErrorModel",
     "CircuitDistance",
     "SparsePauliLindblad",
     "SpatialSearch",

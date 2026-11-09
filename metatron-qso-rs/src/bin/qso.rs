@@ -595,9 +595,9 @@ enum Command {
     },
     /// Memory experiment of a repetition, rotated surface, triangular
     /// colour or bivariate bicycle code under circuit-level depolarizing
-    /// noise: sampled with Pauli frames and decoded by union-find,
-    /// minimum-weight matching or BP+OSD (colour and bicycle codes need
-    /// BP+OSD).
+    /// noise (optionally with a share of heralded erasures): sampled with
+    /// Pauli frames and decoded by union-find, minimum-weight matching or
+    /// BP+OSD (colour and bicycle codes need BP+OSD).
     Qec {
         #[arg(long, value_enum, default_value_t = CodeArg::Surface)]
         code: CodeArg,
@@ -668,6 +668,15 @@ enum Command {
         /// --commit).
         #[arg(long, requires = "parallel")]
         buffer: Option<usize>,
+        /// Share of every noise probability that is a heralded erasure of
+        /// each qubit of the operation (Stim's HERALDED_ERASE, its herald
+        /// a detector of the round), in [0, 1]. Decoders condition on the
+        /// heralds that fired (union-find, matching, BP+OSD; not with
+        /// windows, correlated matching or the circuit distance). Circuit
+        /// files with HERALDED_ERASE or HERALDED_PAULI_CHANNEL_1 are decoded
+        /// in the same way without this option.
+        #[arg(long, default_value_t = 0.0, conflicts_with = "circuit")]
+        erasure_share: f64,
     },
 }
 
@@ -715,15 +724,60 @@ impl Experiment {
         }
     }
 
+    /// The logical error rate with `kind`, and the herald detectors its
+    /// decoder conditions on. A circuit with herald detectors is decoded,
+    /// as the library routes it, by a `ConditionedDecoder` built from the
+    /// heralded model that also counts them, so the model is built once.
     fn rate(
         &self,
         shots: usize,
         seed: u64,
         kind: qec::DecoderChoice,
-    ) -> Result<qec::LogicalErrorRate> {
+    ) -> Result<(qec::LogicalErrorRate, usize)> {
+        let method = match kind {
+            qec::DecoderChoice::UnionFind => Some(qec::HeraldedMethod::UnionFind),
+            qec::DecoderChoice::Matching => Some(qec::HeraldedMethod::Matching),
+            qec::DecoderChoice::BpOsd => {
+                Some(qec::HeraldedMethod::BpOsd(qec::BpOsdOptions::default()))
+            }
+            _ => None,
+        };
+        if let Some(method) = method.filter(|_| self.heralded()) {
+            // Matching graphs need the decomposed base, BP+OSD takes it
+            // whole (as `DecoderChoice::build_for`).
+            let decompose = !matches!(method, qec::HeraldedMethod::BpOsd(_));
+            let model = match self {
+                Experiment::Flat(c) => qec::heralded_error_model(c, decompose)?,
+                Experiment::Repeated(c) => c.heralded_error_model(decompose)?,
+            };
+            let heralds = model.herald_detectors().len();
+            if heralds > 0 {
+                let mut decoder = qec::ConditionedDecoder::new(&model, method)?;
+                let rate = match self {
+                    Experiment::Flat(c) => {
+                        qec::logical_error_rate_decoding(c, shots, seed, &mut decoder)?
+                    }
+                    Experiment::Repeated(c) => {
+                        qec::logical_error_rate_repeated_decoding(c, shots, seed, &mut decoder)?
+                    }
+                };
+                return Ok((rate, heralds));
+            }
+        }
+        // No herald detectors (or a decoder that refuses them).
+        let rate = match self {
+            Experiment::Flat(c) => qec::logical_error_rate_using(c, shots, seed, kind)?,
+            Experiment::Repeated(c) => qec::logical_error_rate_repeated(c, shots, seed, kind)?,
+        };
+        Ok((rate, 0))
+    }
+
+    /// Whether the circuit has heralded operations (HERALDED_ERASE or
+    /// HERALDED_PAULI_CHANNEL_1).
+    fn heralded(&self) -> bool {
         match self {
-            Experiment::Flat(c) => qec::logical_error_rate_using(c, shots, seed, kind),
-            Experiment::Repeated(c) => qec::logical_error_rate_repeated(c, shots, seed, kind),
+            Experiment::Flat(c) => c.has_extended(),
+            Experiment::Repeated(c) => c.has_extended(),
         }
     }
 }
@@ -2247,6 +2301,7 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
             commit,
             parallel,
             buffer,
+            erasure_share,
         } => {
             if commit.is_some() && window.is_none() && !*parallel {
                 return Err(QsoError::invalid(
@@ -2337,6 +2392,25 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                     "schedules are for the colour and bicycle codes",
                 ));
             }
+            // Refused before any shot: the circuit distance does not count
+            // heralded operations yet.
+            let refuse_heralded = |c: &Experiment| -> Result<()> {
+                if *circuit_distance && c.heralded() {
+                    return Err(QsoError::invalid(
+                        "circuit_distance",
+                        "the circuit distance does not take heralded operations yet",
+                    ));
+                }
+                Ok(())
+            };
+            // The decoder's name, and whether it conditions on heralds.
+            let named = |heralds: usize| -> String {
+                if heralds > 0 {
+                    format!("{decoder_name} with heralds")
+                } else {
+                    decoder_name.clone()
+                }
+            };
             // The circuit distance (or bounds on it), as JSON and text.
             let bound = |c: &Experiment| -> Result<(serde_json::Value, String)> {
                 if !*circuit_distance {
@@ -2378,10 +2452,11 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                         Err(_) => return Err(e),
                     },
                 };
-                let rate = circuit.rate(*shots, *seed, kind)?;
+                refuse_heralded(&circuit)?;
+                let (rate, heralds) = circuit.rate(*shots, *seed, kind)?;
                 let (distance_json, distance_text) = bound(&circuit)?;
                 let line = format!(
-                    "{}: {} qubits, {} detectors, {} observables; logical error rate {:.3e} ± {:.1e} ({} of {} shots, {decoder_name}){distance_text}",
+                    "{}: {} qubits, {} detectors, {} observables; logical error rate {:.3e} ± {:.1e} ({} of {} shots, {}){distance_text}",
                     path.display(),
                     circuit.n_qubits(),
                     circuit.n_detectors(),
@@ -2389,7 +2464,8 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                     rate.rate,
                     rate.standard_error,
                     rate.errors,
-                    rate.shots
+                    rate.shots,
+                    named(heralds)
                 );
                 return Ok((
                     json!({
@@ -2400,6 +2476,8 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                         "decoder": kind,
                         "logical_error_rate": rate,
                         "circuit_distance": distance_json,
+                        "erasure_share": serde_json::Value::Null,
+                        "herald_detectors": heralds,
                     }),
                     line,
                 ));
@@ -2412,7 +2490,8 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                 std::collections::HashMap::new();
             for &prob in p {
                 for &d in distance {
-                    let noise = qec::CircuitNoise::uniform(prob);
+                    let noise =
+                        qec::ErasureNoise::new(qec::CircuitNoise::uniform(prob), *erasure_share)?;
                     // The bicycle codes are named by their qubits.
                     let (bicycle, code_distance) = match code {
                         CodeArg::Bb => {
@@ -2427,17 +2506,19 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                     let circuit = if r <= qec::codes::MAX_ROUNDS {
                         Experiment::Flat(match code {
                             CodeArg::Surface => {
-                                qec::surface_code_memory_with(d, r, &noise, memory_basis)?
+                                qec::surface_code_memory_erasure(d, r, &noise, memory_basis)?
                             }
-                            CodeArg::Repetition => qec::repetition_code_memory(d, r, &noise)?,
-                            CodeArg::Color => qec::css_code_memory_with(
+                            CodeArg::Repetition => {
+                                qec::repetition_code_memory_erasure(d, r, &noise)?
+                            }
+                            CodeArg::Color => qec::css_code_memory_erasure(
                                 &qec::CssCode::color_code(d)?,
                                 r,
                                 &noise,
                                 memory_basis,
                                 css_schedule,
                             )?,
-                            CodeArg::Bb => qec::css_code_memory_with(
+                            CodeArg::Bb => qec::css_code_memory_erasure(
                                 bicycle.as_ref().expect("built above"),
                                 r,
                                 &noise,
@@ -2447,20 +2528,23 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                         })
                     } else {
                         Experiment::Repeated(match code {
-                            CodeArg::Surface => {
-                                qec::surface_code_memory_repeated(d, r, &noise, memory_basis)?
-                            }
+                            CodeArg::Surface => qec::surface_code_memory_erasure_repeated(
+                                d,
+                                r,
+                                &noise,
+                                memory_basis,
+                            )?,
                             CodeArg::Repetition => {
-                                qec::repetition_code_memory_repeated(d, r, &noise)?
+                                qec::repetition_code_memory_erasure_repeated(d, r, &noise)?
                             }
-                            CodeArg::Color => qec::css_code_memory_repeated(
+                            CodeArg::Color => qec::css_code_memory_erasure_repeated(
                                 &qec::CssCode::color_code(d)?,
                                 r,
                                 &noise,
                                 memory_basis,
                                 css_schedule,
                             )?,
-                            CodeArg::Bb => qec::css_code_memory_repeated(
+                            CodeArg::Bb => qec::css_code_memory_erasure_repeated(
                                 bicycle.as_ref().expect("built above"),
                                 r,
                                 &noise,
@@ -2478,7 +2562,8 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                             QsoError::invalid("stim", format!("{}: {e}", path.display()))
                         })?;
                     }
-                    let rate = circuit.rate(*shots, *seed, kind)?;
+                    refuse_heralded(&circuit)?;
+                    let (rate, heralds) = circuit.rate(*shots, *seed, kind)?;
                     let (distance_json, distance_text) = match distances.get(&d) {
                         Some(known) if prob > 0.0 => known.clone(),
                         _ => {
@@ -2489,15 +2574,21 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                             computed
                         }
                     };
+                    // The text names the share only when it is not 0.
+                    let share = if *erasure_share > 0.0 {
+                        format!(", erasure share {erasure_share}")
+                    } else {
+                        String::new()
+                    };
                     lines.push(format!(
-                        "p = {prob}, {label}, {r} rounds: {} qubits, {} detectors; logical error rate {:.3e} ± {:.1e} ({} of {} shots, {}){distance_text}",
+                        "p = {prob}, {label}, {r} rounds{share}: {} qubits, {} detectors; logical error rate {:.3e} ± {:.1e} ({} of {} shots, {}){distance_text}",
                         circuit.n_qubits(),
                         circuit.n_detectors(),
                         rate.rate,
                         rate.standard_error,
                         rate.errors,
                         rate.shots,
-                        decoder_name
+                        named(heralds)
                     ));
                     rows.push(json!({
                         "p": prob,
@@ -2510,6 +2601,8 @@ fn run(cli: &Cli) -> Result<(Value, String)> {
                         "schedule": css_schedule,
                         "logical_error_rate": rate,
                         "circuit_distance": distance_json,
+                        "erasure_share": erasure_share,
+                        "herald_detectors": heralds,
                     }));
                 }
             }

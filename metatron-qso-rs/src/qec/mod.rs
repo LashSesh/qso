@@ -36,7 +36,12 @@
 //!   Stim's `REPEAT` and [`surface_code_memory_repeated`] and its
 //!   siblings), sampled as they run, their error models folded
 //!   ([`logical_error_rate_repeated`]);
-//! * [`DetectorCircuit::to_stim`]: export in Stim's text format.
+//! * [`DetectorCircuit::to_stim`]: export in Stim's text format;
+//! * heralded errors ([`ExtendedOp`]: Stim's `HERALDED_ERASE` and
+//!   `HERALDED_PAULI_CHANNEL_1`), [`heralded_error_model`], and
+//!   [`ConditionedDecoder`], which conditions its model on the heralds
+//!   that fired, shot by shot ([`HeraldedDecoder`]); erasure-biased
+//!   memory experiments with [`ErasureNoise`].
 
 pub mod bposd;
 pub mod circuit;
@@ -48,6 +53,7 @@ pub mod dem;
 pub mod distance;
 pub mod frame;
 mod gf2;
+pub mod herald;
 pub mod matching;
 pub mod repeat;
 pub mod sparse;
@@ -58,16 +64,18 @@ pub mod window;
 pub use bposd::{
     BpMethod, BpOsdDecoder, BpOsdOptions, BpOsdOutcome, MAX_BPOSD_DETECTORS, OsdMethod,
 };
-pub use circuit::{DetectorCircuit, MAX_OBSERVABLES, Noise, QecOp};
+pub use circuit::{CircuitStep, DetectorCircuit, ExtendedOp, MAX_OBSERVABLES, Noise, QecOp, Steps};
 pub use codes::{
-    CircuitNoise, MAX_REPEATED_ROUNDS, MemoryBasis, repetition_code_memory,
-    repetition_code_memory_repeated, surface_code_memory, surface_code_memory_repeated,
-    surface_code_memory_with,
+    CircuitNoise, ErasureNoise, MAX_REPEATED_ROUNDS, MemoryBasis, repetition_code_memory,
+    repetition_code_memory_erasure, repetition_code_memory_erasure_repeated,
+    repetition_code_memory_repeated, surface_code_memory, surface_code_memory_erasure,
+    surface_code_memory_erasure_repeated, surface_code_memory_repeated, surface_code_memory_with,
 };
 pub use correlated::CorrelatedMatchingDecoder;
 pub use css::{
     COLOR_DIRECTIONS, CssCode, CssSchedule, MAX_CSS_QUBITS, css_code_memory,
-    css_code_memory_repeated, css_code_memory_with,
+    css_code_memory_erasure, css_code_memory_erasure_repeated, css_code_memory_repeated,
+    css_code_memory_with,
 };
 pub use decoder::{MatchingEdge, MatchingGraph, UnionFindDecoder};
 pub use dem::{
@@ -80,6 +88,7 @@ pub use distance::{
     exact_circuit_distance_with_symmetries, graphlike_distance,
 };
 pub use frame::{DetectorSamples, sample_detectors};
+pub use herald::{ConditionedDecoder, HeraldedErrorModel, HeraldedMethod, heralded_error_model};
 pub use matching::{MAX_MATCHING_PAIRS, MatchingDecoder};
 pub use repeat::{MAX_REPEATED_OPERATIONS, RepeatedCircuit};
 pub use sparse::SparseMatchingDecoder;
@@ -126,6 +135,29 @@ impl Decoder for CorrelatedMatchingDecoder {
     }
 }
 
+/// A decoder that conditions its model on the heralds that fired, shot by
+/// shot.
+pub trait HeraldedDecoder {
+    /// Predicted observable flips for the fired ordinary detectors
+    /// `fired`, given the fired herald detectors `heralds`.
+    fn decode_heralded(&mut self, fired: &[usize], heralds: &[usize]) -> Result<u64>;
+}
+
+impl HeraldedDecoder for ConditionedDecoder {
+    fn decode_heralded(&mut self, fired: &[usize], heralds: &[usize]) -> Result<u64> {
+        ConditionedDecoder::decode_heralded(self, fired, heralds)
+    }
+}
+
+/// `fired` holds every fired detector, herald detectors included; they are
+/// split into ordinary and herald detectors.
+impl Decoder for ConditionedDecoder {
+    fn decode(&mut self, fired: &[usize]) -> Result<u64> {
+        let (ordinary, heralds) = self.split(fired)?;
+        ConditionedDecoder::decode_heralded(self, &ordinary, &heralds)
+    }
+}
+
 /// The decoders of 1.0 (see [`DecoderChoice`] for all of them).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -159,6 +191,10 @@ impl From<DecoderKind> for DecoderChoice {
 }
 
 /// The decoders [`logical_error_rate_using`] can use (more may be added).
+///
+/// A circuit with herald detectors (see [`heralded_error_model`]) is
+/// decoded by a [`ConditionedDecoder`] (union-find, matching or BP+OSD);
+/// the other choices refuse it for now.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
@@ -197,11 +233,21 @@ trait Models {
     fn model(&self, decompose: bool) -> Result<DetectorErrorModel>;
     fn correlated(&self) -> Result<CorrelatedErrorModel>;
     fn layers(&self) -> Vec<usize>;
+    fn has_extended(&self) -> bool;
+    fn heralded(&self, decompose: bool) -> Result<HeraldedErrorModel>;
 }
 
 impl Models for DetectorCircuit {
     fn model(&self, decompose: bool) -> Result<DetectorErrorModel> {
         detector_error_model(self, decompose)
+    }
+
+    fn has_extended(&self) -> bool {
+        DetectorCircuit::has_extended(self)
+    }
+
+    fn heralded(&self, decompose: bool) -> Result<HeraldedErrorModel> {
+        heralded_error_model(self, decompose)
     }
 
     fn correlated(&self) -> Result<CorrelatedErrorModel> {
@@ -216,6 +262,14 @@ impl Models for DetectorCircuit {
 impl Models for RepeatedCircuit {
     fn model(&self, decompose: bool) -> Result<DetectorErrorModel> {
         self.detector_error_model(decompose)
+    }
+
+    fn has_extended(&self) -> bool {
+        RepeatedCircuit::has_extended(self)
+    }
+
+    fn heralded(&self, decompose: bool) -> Result<HeraldedErrorModel> {
+        self.heralded_error_model(decompose)
     }
 
     fn correlated(&self) -> Result<CorrelatedErrorModel> {
@@ -260,7 +314,10 @@ impl DecoderChoice {
     /// The decoder of a circuit's detector error model: decomposed into a
     /// matching graph for union-find and matching (also in windows), with
     /// the parts of each error for correlated matching, whole for BP+OSD
-    /// (also in windows).
+    /// (also in windows). A circuit with herald detectors is decoded by a
+    /// [`ConditionedDecoder`] (union-find, matching, BP+OSD with its
+    /// default options), which takes every fired detector and splits off
+    /// the heralds; the other choices refuse it.
     pub fn build_for(self, circuit: &DetectorCircuit) -> Result<Box<dyn Decoder + Send>> {
         self.build_from(circuit)
     }
@@ -272,6 +329,41 @@ impl DecoderChoice {
     }
 
     fn build_from(self, circuit: &dyn Models) -> Result<Box<dyn Decoder + Send>> {
+        if circuit.has_extended() {
+            // Matching graphs need the decomposed base; BP+OSD and the
+            // choices that refuse heralds take it whole.
+            let decompose = matches!(self, DecoderChoice::UnionFind | DecoderChoice::Matching);
+            let model = circuit.heralded(decompose)?;
+            if !model.herald_detectors().is_empty() {
+                let method = match self {
+                    DecoderChoice::UnionFind => HeraldedMethod::UnionFind,
+                    DecoderChoice::Matching => HeraldedMethod::Matching,
+                    DecoderChoice::BpOsd => HeraldedMethod::BpOsd(BpOsdOptions::default()),
+                    DecoderChoice::CorrelatedMatching
+                    | DecoderChoice::WindowMatching { .. }
+                    | DecoderChoice::WindowBpOsd { .. }
+                    | DecoderChoice::ParallelWindowMatching { .. }
+                    | DecoderChoice::ParallelWindowBpOsd { .. } => {
+                        let name = match self {
+                            DecoderChoice::CorrelatedMatching => "correlated matching",
+                            DecoderChoice::WindowMatching { .. } => "matching in windows",
+                            DecoderChoice::WindowBpOsd { .. } => "BP+OSD in windows",
+                            DecoderChoice::ParallelWindowMatching { .. } => {
+                                "matching in parallel windows"
+                            }
+                            _ => "BP+OSD in parallel windows",
+                        };
+                        return Err(QsoError::invalid(
+                            "decoder",
+                            format!(
+                                "{name} does not use heralds yet; use union-find, matching or BP+OSD"
+                            ),
+                        ));
+                    }
+                };
+                return Ok(Box::new(ConditionedDecoder::new(&model, method)?));
+            }
+        }
         let bposd = WindowMethod::BpOsd(BpOsdOptions::default());
         Ok(match self {
             DecoderChoice::BpOsd => Box::new(BpOsdDecoder::new(
@@ -352,7 +444,9 @@ pub fn logical_error_rate_with(
 
 /// [`logical_error_rate`] with any decoder (of the model
 /// [`DecoderChoice::build_for`] gives); the shots are the same for every
-/// decoder.
+/// decoder. A circuit with herald detectors is decoded by a
+/// [`ConditionedDecoder`] (union-find, matching or BP+OSD); the other
+/// choices refuse it.
 pub fn logical_error_rate_using(
     circuit: &DetectorCircuit,
     shots: usize,
@@ -379,10 +473,35 @@ pub fn logical_error_rate_repeated(
     count_failures(circuit, decoder.as_mut(), shots, seed)
 }
 
+/// [`logical_error_rate_using`] with a decoder already built for the
+/// circuit's detectors (all of them, herald detectors included), such as a
+/// [`ConditionedDecoder`] with options of its own or built from a
+/// [`HeraldedErrorModel`] that is also needed elsewhere; the shots are
+/// those every other decoder sees.
+pub fn logical_error_rate_decoding(
+    circuit: &DetectorCircuit,
+    shots: usize,
+    seed: u64,
+    decoder: &mut dyn Decoder,
+) -> Result<LogicalErrorRate> {
+    count_failures(circuit, decoder, shots, seed)
+}
+
+/// [`logical_error_rate_decoding`] for a circuit with repeated blocks,
+/// sampled as it runs (the shots of [`logical_error_rate_repeated`]).
+pub fn logical_error_rate_repeated_decoding(
+    circuit: &RepeatedCircuit,
+    shots: usize,
+    seed: u64,
+    decoder: &mut dyn Decoder,
+) -> Result<LogicalErrorRate> {
+    count_failures(circuit, decoder, shots, seed)
+}
+
 /// Sample `shots` shots in blocks, decode each, and count the failures.
 fn count_failures(
     circuit: &dyn frame::Walk,
-    decoder: &mut (dyn Decoder + Send),
+    decoder: &mut dyn Decoder,
     shots: usize,
     seed: u64,
 ) -> Result<LogicalErrorRate> {

@@ -36,8 +36,11 @@ the stabilizer simulator, and the decoders against exact majority-vote
 failure rates and against every single fault (and, at distance 5, every
 pair of faults) of the surface code. The matching decoder's corrections
 weigh as little as the lightest error sets found by enumeration, and its
-blossom algorithm agrees with dynamic programming on random graphs
-([Error correction](qec.md)).
+blossom algorithm agrees with dynamic programming on random graphs.
+With heralded erasures, the decoders reach the closed forms exactly: a
+repetition code fails with probability `p^d/2`, and all 3⁹ cases of the
+distance-3 surface code erased with probability ½ fail exactly a
+quarter of the time ([Error correction](qec.md#erasures-with-heralds)).
 Matrix-product states are checked against the state vector on random
 circuits (within their fidelity bound), and on 100 qubits against the
 exact free-fermion evolution of a Trotterized XX chain and the QAOA ring
@@ -67,6 +70,11 @@ deviation above rounding level fails the run.
 | Permanents (The Walrus) | 2.8·10⁻¹⁴ relative |
 | Detector error models of repetition and surface-code memory experiments (Stim), and of Stim's generated circuits imported | 1.0·10⁻¹⁵ relative; detection-event rates agree to sampling precision |
 | Matching decoder against PyMatching, same error model and syndromes | 1 differing prediction in 800 000 (8 circuits × 10⁵ shots) |
+| Heralded erasures (`HERALDED_ERASE`, `HERALDED_PAULI_CHANNEL_1`) against Stim 1.16's `detector_error_model(approximate_disjoint_errors=True)`: erasure memory experiments (repetition d = 3, 5; surface d = 3 in both bases and d = 5; colour d = 5; erasure shares 0.98 and 0.5), 60 random circuits with both channels (a third in `REPEAT` blocks) and a repeated circuit folded; decomposed models part by part; the split into herald detectors, base and parts against a Stim-only reference | identical terms (14 925), 3.6·10⁻¹⁶ relative; parts and split identical |
+| Detection and herald rates of the frame sampler against Stim's sampler (surface d = 3, share 0.9; repetition d = 5, share 0.98; 10⁶ shots) | within 3.1 standard errors |
+| Decoders conditioned on the fired heralds (surface d = 3 and 5, p = 0.01, shares 0.5 and 0.9, 5000 shots each): sparse matching against PyMatching 2.4 rebuilt per shot (`add_edge`, `add_boundary_edge`); BP+OSD against ldpc 2.4.1's `BpOsdDecoder` with `update_channel_probs` | correction weights 8·10⁻⁷ relative (PyMatching's integer weights); predictions differ only where both corrections weigh the same (at most 0.28 % of shots); OSD-0 identical; OSD-CS logical error rates within 0.9 standard errors |
+| Heralded Pauli parts above ½ at code capacity (repetition d = 7 with `X_ERROR(0.08)` and an X part of 0.9; d = 5 with a certain X; 50 000 shots each): sparse matching against PyMatching's negative weights; BP+OSD (OSD-0) against ldpc given the same applied errors | predictions identical on every shot, weights 4·10⁻⁶ relative; OSD-0 identical; with a certain X no decoder fails |
+| Pure erasure (surface d = 3 at p = 0.04, repetition d = 5 at 0.05, 10⁵ shots) and closed forms: repetition codes with heralded erasures at code capacity (d = 3, 5, 7), the rotated surface code at erasure probability ½ (d = 3 to 9, 20 000 shots) | no failure on a shot whose erased set supports no logical, half of the others within 2.0 standard errors; `p^d/2` to 9.3·10⁻¹⁶ relative; ¼ within 1.4 standard errors |
 | Pauli propagation on 10³ and 10⁴ qubits (Clifford circuits of 3·10⁴ and 1.5·10⁵ gates, 50 strings each) and of the kicked-Ising circuits of Kim et al. at θ_h = 0 and π/2 (1–20 steps), against Stim 1.16's `PauliString.before` | identical strings and signs |
 | Kicked Ising on the 115-qubit heavy-hex lattice, ⟨Z₅₇⟩ at θ_h = 0.3, π/4 and 1, 1–5 steps without truncation: Qiskit Aer's state vector of the light cone; the Heisenberg operator against qiskit-addon-obp 0.3 (134 744 strings at five steps); at six and seven steps truncated | 7.7·10⁻¹⁵; coefficients 6.3·10⁻¹⁵, no string missing; errors within the reported bound |
 | The same with sparse Pauli–Lindblad noise after every ZZ layer, scaled by 0, 1, 1.5, 2, −1 and 1 then −1 (a uniform and a seeded model): qiskit-addon-obp's `PauliLindbladErrorInstruction` and, for non-negative factors, Aer's density matrix | 2.1·10⁻¹⁵ (obp), 8.3·10⁻¹⁶ (Aer) |

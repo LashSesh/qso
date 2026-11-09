@@ -16,6 +16,10 @@ of Stim (Gidney, Quantum 5, 497 (2021)):
   ordered-statistics decoding (BP+OSD);
 - `logical_error_rate` combines all four.
 
+Erasures whose place a herald reveals (Stim's `HERALDED_ERASE`) join the
+noise, and the decoders then condition on the heralds that fired (see
+[Erasures with heralds](#erasures-with-heralds)).
+
 ## Detector circuits
 
 A detector is a parity of measurement results that is fixed when there is
@@ -935,14 +939,16 @@ understand the following instructions:
   MR, MRX, MRY), with an optional flip probability;
 - the noise channels X_ERROR, Y_ERROR, Z_ERROR, DEPOLARIZE1 and
   DEPOLARIZE2;
+- the heralded channels HERALDED_ERASE and HERALDED_PAULI_CHANNEL_1
+  (see [Erasures with heralds](#erasures-with-heralds));
 - DETECTOR, OBSERVABLE_INCLUDE and REPEAT blocks.
 
 TICK and coordinates are ignored. Inverted measurement targets (`!q`)
 read the same as plain ones, since detection events are relative to the
 noiseless circuit. As in Stim, noise needs its probability, gates take
 no arguments, and a REPEAT block repeats at least once. Any other instruction is an error that names it and
-its line: classical feedback, MPP, correlated, heralded and Pauli-channel
-noise.
+its line: classical feedback, MPP, correlated noise and the Pauli
+channels PAULI_CHANNEL_1 and PAULI_CHANNEL_2.
 
 ```python
 import metatron_qso as q
@@ -970,6 +976,7 @@ qso qec --code bb --distance 72 --rounds 3 --decoder bposd --schedule bicycle --
 qso qec --code bb --distance 144 --rounds 3 --decoder bposd --schedule bicycle --shots 1000 \
     --circuit-distance --symmetry --max-seconds 3600
 qso qec --circuit surface.stim --decoder correlated-matching
+qso qec --distance 3,5,7 --p 0.02 --erasure-share 0.98 --decoder matching
 qso qec --distance 5 --rounds 100000 --p 0.001 --shots 100 --decoder matching \
     --parallel --commit 5 --buffer 5
 ```
@@ -982,7 +989,245 @@ on the orbits of the circuit's symmetries. Beyond 10 000 rounds a
 memory experiment is built with its rounds as one repeated block, and a
 Stim file too long to expand is read with its REPEAT blocks kept.
 `--parallel` decodes in parallel windows committing `--commit` rounds
-with `--buffer` (default `--commit`) on each side.
+with `--buffer` (default `--commit`) on each side. `--erasure-share e` makes the share e of
+the noise heralded erasures (see [Erasures with
+heralds](#erasures-with-heralds)); the decoders then condition on the
+heralds, and each JSON row carries `erasure_share` and
+`herald_detectors`.
+
+## Erasures with heralds
+
+Neutral atoms with erasure conversion and dual-rail superconducting
+qubits turn most of their errors into *erasures* whose place is
+heralded: a separate measurement tells which qubit was struck, and a
+decoder told so tolerates several times more error. QSO takes Stim's
+model of them, in which nothing leaves the qubit space (leakage is not
+modelled):
+
+- `heralded_erase(p, qubits)` is Stim's `HERALDED_ERASE(p)`: for each
+  target in turn, with probability p the qubit is replaced by a maximally
+  mixed one (I, X, Y or Z, each with probability p/4) and its *herald*, a
+  new measurement record, reads 1; otherwise the herald reads 0;
+- `heralded_pauli_channel_1(p_i, p_x, p_y, p_z, qubits)` is Stim's
+  `HERALDED_PAULI_CHANNEL_1`: for each target, disjointly, the herald
+  fires with I, X, Y or Z with these probabilities (Stim's argument
+  order), and with 1 − Σ neither happens.
+
+Both return the herald's record of each target, which detectors and
+observables read like any other record; heralds are never flipped. They
+count in `n_measurements` (as in Stim's `num_measurements`) and in
+`len(c)`, `without_noise()` keeps them at probability 0, and both are
+read and written in Stim's format (an inverted target `!q` reads as `q`;
+the four probabilities may exceed 1 by at most 10⁻⁷, as in Stim). The
+frame sampler draws the herald and the Pauli together, so sampling is
+exact.
+
+A detector whose only record is a herald, and which is the only reader
+of that herald, is a *herald detector*: a decoder conditions on it.
+Heralds that nothing reads, that an observable reads, or that a detector
+reads together with other records are noise like any other.
+
+**The error model.** The outcomes of a heralded channel are disjoint,
+not independent. `detector_error_model` converts them by Stim's
+approximate rule (`approximate_disjoint_errors=True`): outcomes with
+equal effects are summed into one error, and the errors are then taken
+as independent. `HERALDED_ERASE(0.1)` before a measurement gives two
+errors of probability 0.05, one on the herald alone (I or Z) and one on
+the herald and the measurement (X or Y):
+
+```python
+import metatron_qso as q
+
+c = q.DetectorCircuit(1)
+herald = c.heralded_erase(0.1, [0])          # its record, [0]
+m = c.measure(0)
+c.detector(herald)                            # D0 reads the herald alone
+c.detector([m])                               # D1 the measurement
+print(c.to_stim())        # HERALDED_ERASE(0.1) 0, M 0, two DETECTORs
+print(c.detector_error_model(decompose=False).errors)
+# [(0.05, [0], 0), (0.05, [0, 1], 0)]
+
+model = c.heralded_error_model()
+print(model.herald_detectors, model.herald_probability(0), model.outcomes(0))
+# [0] 0.1 [(0.5, [1], 0)]: given its herald, D1 flips with probability ½
+print(model.conditioned([0]).errors, model.conditioned([]).errors)
+# [(0.5, [1], 0)] []
+```
+
+Taken as independent, those two errors fire the herald with probability
+0.095, not 0.1. Sampling is exact, but anything that reads the model's
+errors as independent configurations is not: `splitting_failure_rate`,
+`enumerated_failure_rate`, `leading_failures` and `explain_errors`
+refuse circuits with heralded operations ("does not take heralded
+operations yet"), and so does `qso qec --circuit-distance`.
+`circuit_distance` and `graphlike_distance` take a model, in which each
+outcome of a heralded channel counts as one error, as in Stim; one whose
+herald a detector reads is never undetectable.
+
+**The heralded model.** `heralded_error_model(decompose=True)` splits
+the model for decoding: its `base` holds the errors of every channel
+whose herald no herald detector owns (decomposed as by
+`detector_error_model`), and for each herald detector it holds the
+probability that it fires and the parts of its channel given that it
+fired: the X part with probability (p_x + p_y)/t and the Z part with
+(p_z + p_y)/t, t the sum of the four, each exactly ½ for an erasure, the
+herald left out. `conditioned(heralds)` gives the model of one shot: the
+base with the parts of the fired heralds merged in as independent
+errors (p ⊕ q = p(1 − q) + q(1 − p), and ½ ⊕ q = ½ exactly). For the
+heralded Pauli channel, treating its X and Z parts as independent and
+merging equal parts of different channels is an approximation; for an
+erasure both are exact. Where a channel's X and Z have the same effect
+(before a Y-basis readout), it has one part, with probability
+(p_x + p_z)/t, exactly. The decomposed model, the default, is for
+union-find and matching; BP+OSD takes `heralded_error_model(decompose=False)`,
+the only one a colour code has. Read from Stim's text:
+
+```python
+import metatron_qso as q
+
+text = """H 0
+HERALDED_PAULI_CHANNEL_1(0.01, 0.02, 0.03, 0.04) !0
+H 0
+M 0
+DETECTOR rec[-2]
+DETECTOR rec[-1]
+"""
+c = q.DetectorCircuit.from_stim(text)
+print(c.detector_error_model(decompose=False).errors)
+# [(0.03, [0], 0), (0.07, [0, 1], 0)], as Stim 1.16 gives it
+m = c.heralded_error_model()
+print(m.herald_probability(0), m.outcomes(0))   # 0.1 [(0.7…, [1], 0)]: (0.04 + 0.03)/0.1
+```
+
+**Decoding with heralds.** A `ConditionedDecoder(model, decoder=...)`
+merges the parts of the fired heralds into each shot's model and then
+decodes on the other detectors:
+
+- `"union_find"` joins the erased edges (probability ½) into clusters
+  before it grows them (Delfosse and Nickerson, Quantum 5, 595 (2021));
+- `"matching"` sets the weights ln((1 − p)/p) of the shot's edges (0 for
+  an erased one) in the sparse matching decoder and restores them after;
+- `"bposd"` sets the priors of BP+OSD (with its options as keyword
+  arguments).
+
+Edges that only a herald turns on stay in the graph, never used until it
+fires. A part can be more likely than not given its herald (the Z part
+above, 0.7): the decoder applies it first, adding its detectors to the
+shot's and its observables to the prediction, and decodes the rest with
+1 − p, as PyMatching does with a negative weight ln((1 − p)/p). `decode(fired, heralds)` takes the fired ordinary and herald
+detectors apart, `decode(fired)` and `decode_batch(detectors)` take them
+together. `logical_error_rate` and `qso qec` route a circuit with herald
+detectors to it for `union_find`, `matching` and `bposd`; correlated
+matching and the window decoders refuse such circuits ("does not use
+heralds yet"), and the exact `MatchingDecoder` is not conditioned. Union-find
+and matching need every base error and every herald part to flip at
+most two ordinary detectors: so it is in QSO's repetition and rotated
+surface-code memories, while in colour codes a single X flips three, and
+BP+OSD decodes them, on `heralded_error_model(decompose=False)` (the
+decomposed model refuses such errors).
+
+A repetition code whose d data qubits are each erased with probability
+p and read out perfectly fails exactly when all are erased and the
+flips leave the wrong majority, with probability p^d/2. Enumerating every
+erased set and every pattern of flips on it:
+
+```python
+import itertools
+import metatron_qso as q
+
+d, p = 5, 0.1
+c = q.DetectorCircuit(d)
+heralds = c.heralded_erase(p, list(range(d)))
+data = [c.measure(k) for k in range(d)]
+for h in heralds:
+    c.detector([h])                           # D0..D4: the heralds
+for k in range(d - 1):
+    c.detector([data[k], data[k + 1]])        # D5..D8: Z_k Z_k+1
+c.observable(0, [data[0]])
+for method in ["union_find", "matching", "bposd"]:
+    dec = q.ConditionedDecoder(c.heralded_error_model(), decoder=method)
+    fail = 0.0
+    for erased in itertools.product([0, 1], repeat=d):
+        E = [k for k in range(d) if erased[k]]
+        for flips in itertools.product([0, 1], repeat=len(E)):
+            x = dict(zip(E, flips))
+            fired = [d + k for k in range(d - 1) if x.get(k, 0) != x.get(k + 1, 0)]
+            if dec.decode(fired, heralds=E) != x.get(0, 0):
+                fail += p ** len(E) * (1 - p) ** (d - len(E)) / 2 ** len(E)
+    print(method, fail, p**d / 2)             # 5e-06 for each, p^d/2
+```
+
+At code capacity, the rotated surface code whose data qubits are erased
+with probability ½ fails with probability exactly ¼ at every odd
+distance: a quarter turn maps it onto itself with X and Z exchanged, and
+an erased set supports the X logical exactly when its complement does
+not support the Z logical, so half of all sets support it, and on those
+the decoder can only guess. The tests enumerate all 3⁹ cases of d = 3
+(exactly ¼ for union-find, matching and BP+OSD with OSD-0 and OSD-CS)
+and sample d = 5 and 7 with 20 000 shots each, the cross-validation
+d = 3, 5, 7 and 9.
+
+**Erasure-biased circuit noise.** `ErasureNoise(noise, erasure_share=e)`
+(`noise` a `CircuitNoise` or a probability) makes the share e of every
+noise probability p of a memory experiment a heralded erasure of each
+qubit of the operation, `HERALDED_ERASE(e·p)`, after resets and gates,
+before measurements and on the data before each round, and leaves
+(1 − e)·p to the circuit noise as before. Each round declares the
+heralds of its operations as herald detectors just before its own
+detectors (the final block those of the data measurement). With e = 0
+the circuit equals the plain one; with e = 1 no Pauli noise is left. A
+two-qubit gate erases each of its qubits with e·p independently, so its
+total error is about (1 + e)·p; the pair erasure of Wu et al. has no
+Stim instruction. `repetition_code_memory`, `surface_code_memory` and
+`css_code_memory` and their `_repeated` forms accept it, and so does
+`qso qec --erasure-share e`:
+
+```python
+import metatron_qso as q
+
+noise = q.ErasureNoise(0.01, erasure_share=0.9)
+c = q.surface_code_memory(5, 5, noise)
+model = c.heralded_error_model()
+print(c.n_detectors, len(model.herald_detectors))   # 1431 1359
+for decoder in ["union_find", "matching", "bposd"]:
+    r = q.logical_error_rate(c, 10_000, seed=1, decoder=decoder)
+    print(decoder, r.errors)                         # 27 each
+plain = q.surface_code_memory(5, 5, 0.01)
+print(q.logical_error_rate(plain, 10_000, seed=1, decoder="matching").errors)  # 879
+
+dec = q.ConditionedDecoder(model, decoder="matching")
+detectors, observables = c.sample(10_000, seed=2)
+predicted = dec.decode_batch(detectors)
+print((predicted != observables[:, 0]).mean())   # 0.0014
+```
+
+**Measured.** Rotated surface code in the Z basis, `d` rounds, uniform
+circuit noise p of which the share e is heralded erasure, 10⁵ shots per
+point at d = 3, 5 and 7 (`qso qec --code surface --distance 3,5,7 --p …
+--erasure-share e --shots 100000`, p from 0.4 % to 5 %); the threshold
+is read off where the rates of two distances cross (logarithmic
+interpolation between grid points):
+
+| Erasure share e | 0 | 0.5 | 0.9 | 0.98 | 1 |
+|---|---|---|---|---|---|
+| Matching: crossing d = 3/5, 5/7 | 0.65 %, 0.75 % | 1.21 %, 1.20 % | 2.72 %, 2.64 % | 3.51 %, 3.67 % | 3.84 %, 3.93 % |
+| Union-find: crossing d = 3/5, 5/7 | 0.62 %, 0.71 % | 1.14 %, 1.15 % | 2.67 %, 2.48 % | 3.51 %, 3.63 % | 3.83 %, 3.92 % |
+| BP+OSD: crossing d = 3/5 (10⁵ shots, 6 or 7 probabilities around each crossing; ±0.02–0.05 %) | 0.68 % | 1.21 % | 2.74 % | 3.52 % | 3.80 % |
+| Matching at p = 1 %, d = 3 / 5 / 7 | 6.0 / 8.3 / 10.3 % | 2.8 / 2.4 / 2.0 % | 0.59 / 0.17 / 0.04 % | 0.19 / 0.02 / 0.002 % | 0.09 / 0.007 % / none in 10⁵ |
+
+The threshold rises about five-fold from e = 0 to e = 0.98, as in Wu et
+al.'s model (0.937 % to 4.15 %, Nat. Commun. 13, 4657 (2022)); the
+numbers differ because the noise differs: here every qubit of a
+two-qubit gate is erased on its own, and the rest of the noise is
+QSO's circuit noise. With heralds the decoders get faster, as fewer
+edges are uncertain: at p = 1 % and d = 7, 6.2 µs per shot for
+union-find, 11.5 µs for matching and 230 µs for BP+OSD at e = 0.9,
+against 23, 18 and 557 µs at e = 0 (d = 9: 14.5 and 28 µs against 75
+and 48). The heralded model of d = 11 with 11 rounds (15 333 herald
+detectors) takes 19 ms. Herald detectors outnumber the others 17 to 21
+times (d = 3 to 11), so the sampler draws 1.4·10⁶ shots a second at d = 5 against
+3.1·10⁶ without heralds, and a folded model of 5·10⁴ rounds of d = 5
+holds 1.3·10⁷ herald detectors (6.1 s, 4 GB).
 
 ## Limits and costs
 
@@ -1002,6 +1247,8 @@ with `--buffer` (default `--commit`) on each side.
 | BP+OSD decoder | 16 384 detectors; OSD keeps a dense basis and its combinations, about 2 · (detectors)² bits (64 MiB at the limit), and takes time in proportion to errors × rank × detectors / 64 per shot that BP does not settle |
 | CSS codes | 8192 qubits (the logical operators cost about n³/64 word operations); bivariate bicycle codes l · m ≤ 4096 |
 | Detector error models built directly | 2²⁴ detectors, 64 observables |
+| Heralded operations | counted among the 2²⁴ operations, a record per target; the four probabilities of `HERALDED_PAULI_CHANNEL_1` add up to at most 1 + 10⁻⁷ (Stim's tolerance) |
+| Decoding with heralds | union-find and matching: every base error and herald part flips at most two ordinary detectors (colour codes need BP+OSD, on the model without decomposition); BP+OSD: 16 384 ordinary detectors, herald detectors not counted; correlated matching and windows refuse circuits with herald detectors; splitting, enumeration, explanations and `qso qec --circuit-distance` refuse any heralded operation |
 | Circuit distance | exact and polynomial for graph-like models (a breadth-first search per start node, bounded by the best cycle found); otherwise BP+OSD searches (each like one decoding) and an exhaustive search of at most `max_work` sets (2²⁴ by default; some 10⁷ a second per thread). `exact_circuit_distance` runs until `max_seconds` (its polynomial preliminaries aside, the check of symmetries included); symmetries are checked for up to 4096 detectors, by an elimination of about n² · m / 64 word operations for n detectors and m errors, and the automorphism search behind `symmetry` stops at `max_seconds`; the generator matrices of the Brouwer–Zimmermann enumeration take at most 2³¹ bits (256 MiB) together, on information sets whose rank falls at most 64 short of the dimension, and while the first is built the detectors' matrix takes up to as much again |
 
 - **Sampling.** Each operation costs one word operation per 64 shots.

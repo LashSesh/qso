@@ -12,8 +12,12 @@
 //! The Z part of the frame of a freshly reset or measured qubit is
 //! randomized, which turns random measurement outcomes of the reference
 //! into random flips.
+//!
+//! A heralded error draws the herald and the Pauli together: the herald
+//! record is set in the shots it hits and the frame takes the Pauli of
+//! each, never the other way round (a herald is not flipped by the frame).
 
-use super::circuit::{DetectorCircuit, Noise, QecOp};
+use super::circuit::{CircuitStep, DetectorCircuit, ExtendedOp, Noise, QecOp};
 use crate::error::{QsoError, Result};
 use crate::rng::Rng;
 use crate::stabilizer::{CliffordTarget, apply_clifford};
@@ -275,10 +279,10 @@ pub(crate) trait Walk {
     fn n_observables(&self) -> usize;
     /// Records kept: no detector or observable reaches further back.
     fn ring(&self) -> usize;
-    /// Calls `f(op, records)` for every operation in order, with the
+    /// Calls `f(step, records)` for every operation in order, with the
     /// records of a detector or observable as indices into the whole
     /// measurement record.
-    fn walk(&self, f: &mut dyn FnMut(&QecOp, &[usize]) -> Result<()>) -> Result<()>;
+    fn walk(&self, f: &mut dyn FnMut(CircuitStep<'_>, &[usize]) -> Result<()>) -> Result<()>;
 }
 
 impl Walk for DetectorCircuit {
@@ -298,13 +302,15 @@ impl Walk for DetectorCircuit {
         self.n_measurements().max(1)
     }
 
-    fn walk(&self, f: &mut dyn FnMut(&QecOp, &[usize]) -> Result<()>) -> Result<()> {
-        for op in self.operations() {
-            let records: &[usize] = match op {
-                QecOp::Detector { records } | QecOp::Observable { records, .. } => records,
-                _ => &[],
+    fn walk(&self, f: &mut dyn FnMut(CircuitStep<'_>, &[usize]) -> Result<()>) -> Result<()> {
+        for step in self.steps() {
+            let records: &[usize] = match step {
+                CircuitStep::Qec(
+                    QecOp::Detector { records } | QecOp::Observable { records, .. },
+                ) => records,
+                CircuitStep::Qec(_) | CircuitStep::Extended(_) => &[],
             };
-            f(op, records)?;
+            f(step, records)?;
         }
         Ok(())
     }
@@ -346,7 +352,23 @@ pub(crate) fn run_batch(
     let mut det = Vec::with_capacity(circuit.n_detectors() * w);
     let mut obs = vec![vec![0u64; w]; circuit.n_observables()];
     let flip = |bits: &mut [u64], s: usize| bits[s / 64] ^= 1 << (s % 64);
-    circuit.walk(&mut |op, recs| {
+    circuit.walk(&mut |step, recs| {
+        let op = match step {
+            CircuitStep::Qec(op) => op,
+            CircuitStep::Extended(op) => {
+                run_extended(
+                    op,
+                    &mut f,
+                    &mut records,
+                    &mut measured,
+                    ring,
+                    shots,
+                    rng,
+                    quiet,
+                );
+                return Ok(());
+            }
+        };
         match op {
             QecOp::Gate(inst) => apply_clifford(&mut f, inst, &[])?,
             QecOp::Measure { qubit, flip: p } => {
@@ -390,6 +412,77 @@ pub(crate) fn run_batch(
         Ok(())
     })?;
     Ok((det, obs))
+}
+
+/// Run an extended operation on a batch: for each target in order, its
+/// herald record is set in the shots it hits and the frame takes the
+/// Pauli each hit draws (with `quiet`, nothing hits).
+#[allow(clippy::too_many_arguments)]
+fn run_extended(
+    op: &ExtendedOp,
+    f: &mut Frames,
+    records: &mut [u64],
+    measured: &mut usize,
+    ring: usize,
+    shots: usize,
+    rng: &mut Rng,
+    quiet: bool,
+) {
+    let w = f.w;
+    let toggle = |v: &mut Vec<u64>, q: usize, s: usize| v[q * w + s / 64] ^= 1 << (s % 64);
+    // The probability of a hit, and the Pauli a hit draws (bit 0: X, bit
+    // 1: Z).
+    let (t, qubits) = match op {
+        ExtendedOp::HeraldedErase {
+            probability,
+            qubits,
+        } => (*probability, qubits),
+        ExtendedOp::HeraldedPauliChannel1 {
+            probabilities: [pi, px, py, pz],
+            qubits,
+        } => (((pi + px) + py) + pz, qubits),
+    };
+    let mut hits = Vec::new();
+    for &q in qubits {
+        let slot = (*measured % ring) * w;
+        let bits = &mut records[slot..slot + w];
+        bits.fill(0);
+        if !quiet {
+            hits.clear();
+            bernoulli_hits(shots, t, rng, |s| hits.push(s));
+            for &s in &hits {
+                bits[s / 64] |= 1 << (s % 64);
+            }
+            for &s in &hits {
+                let k = match op {
+                    ExtendedOp::HeraldedErase { .. } => rng.below(4),
+                    ExtendedOp::HeraldedPauliChannel1 {
+                        probabilities: [_, px, py, pz],
+                        ..
+                    } => {
+                        // Stim's order: X, Z, Y, then I.
+                        let u = rng.uniform() * t;
+                        if u < *px {
+                            1
+                        } else if u < px + pz {
+                            2
+                        } else if u < px + pz + py {
+                            3
+                        } else {
+                            0
+                        }
+                    }
+                };
+                if k & 1 == 1 {
+                    toggle(&mut f.x, q, s);
+                }
+                if k & 2 == 2 {
+                    toggle(&mut f.z, q, s);
+                }
+            }
+        }
+        *measured += 1;
+    }
 }
 
 fn apply_noise(f: &mut Frames, noise: Noise, qubits: &[usize], shots: usize, rng: &mut Rng) {

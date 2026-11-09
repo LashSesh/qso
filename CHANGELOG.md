@@ -8,6 +8,63 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Erasures with heralds, and decoders that use them** (1.66, `qec`:
+  `ExtendedOp`, `CircuitStep`, `Steps`, `DetectorCircuit::steps`,
+  `n_steps`, `heralded_erase`, `heralded_pauli_channel_1`,
+  `RepeatedCircuit::heralded_error_model`, the module `herald` with
+  `HeraldedErrorModel`, `heralded_error_model`, `ConditionedDecoder` and
+  `HeraldedMethod`, the trait `HeraldedDecoder`, `ErasureNoise`,
+  `repetition_code_memory_erasure`, `surface_code_memory_erasure`,
+  `css_code_memory_erasure` and their `_repeated` forms; Python
+  `DetectorCircuit.heralded_erase`, `heralded_pauli_channel_1`,
+  `heralded_error_model`, `RepeatedCircuit.heralded_error_model`,
+  `ErasureNoise`, `HeraldedErrorModel`, `ConditionedDecoder`, and
+  `ErasureNoise` accepted as `noise` by the memory experiments; `qso qec
+  --erasure-share`, with `erasure_share` and `herald_detectors` in the
+  JSON rows): Stim's `HERALDED_ERASE` and `HERALDED_PAULI_CHANNEL_1` in
+  detector and repeated circuits, as operations of the new
+  non-exhaustive `ExtendedOp` beside `QecOp` and `Noise` (which are
+  unchanged), sampled with the herald and the Pauli drawn together, read
+  and written in Stim's format. The pass backwards of 1.61 converts them
+  by Stim's approximate rule (outcomes of equal effect summed, folded in
+  `REPEAT` blocks), equal to Stim 1.16's
+  `detector_error_model(approximate_disjoint_errors=True)` term by term
+  on erasure memory experiments, 60 random circuits and a repeated
+  circuit (3.6·10⁻¹⁶ relative), decomposed part by part. A detector that
+  reads only a herald, its only reader, is a herald detector:
+  `heralded_error_model` splits off its probability and its channel's X
+  and Z parts given that it fired (½ each for an erasure), and
+  `ConditionedDecoder` merges the fired heralds' parts into each shot's
+  model: union-find joins erased edges before it grows (Delfosse and
+  Nickerson), sparse matching sets and restores the shot's edge weights,
+  BP+OSD sets its priors; a part more likely than not (a Pauli channel's
+  X part (pX + pY)/t can be) is applied first and the rest decoded with
+  1 − p, as PyMatching does with negative weights, and a channel whose X
+  and Z have the same effect gives one part at (pX + pZ)/t.
+  `logical_error_rate_decoding` and `logical_error_rate_repeated_decoding`
+  count failures on the same shots with a decoder already built (such
+  as a `ConditionedDecoder` with options of its own), and
+  `DetectorCircuit::has_extended` and `RepeatedCircuit::has_extended`
+  say whether a circuit holds such operations. The decoders reach the closed forms exactly (a
+  repetition code fails with `p^d/2`; the rotated surface code at
+  code capacity with erasures of probability ½ fails with exactly ¼, all
+  3⁹ cases at d = 3), fail under pure erasure only on shots whose erased
+  set supports a logical operator and on half of those, and give
+  PyMatching 2.4's correction weights (rebuilt per shot) and ldpc 2.4.1's
+  OSD-0 corrections (`update_channel_probs`) shot by shot. Erasure-biased
+  memory experiments erase each qubit of a noisy operation with the share
+  `e·p` of its probability (a herald detector per erasure, declared with
+  its round) and leave `(1 − e)·p` to `CircuitNoise`; at share 0 they
+  equal the plain experiments. Behaviour notes: `n_measurements` counts
+  heralds, as Stim does; `DecoderChoice::build_for`,
+  `logical_error_rate_using` and `logical_error_rate` route circuits with
+  herald detectors to `ConditionedDecoder` (union-find, matching,
+  BP+OSD) and refuse them for correlated matching and windows;
+  `explain_errors`, `splitting_failure_rate`, `enumerated_failure_rate`,
+  `leading_failures` and `qso qec --circuit-distance` refuse heralded
+  operations, as they read the model's errors as independent. Leakage is
+  not modelled.
+
 - **Radical pairs: spin-selective recombination, field effects and
   CIDNP** (1.65, `spin`: `RadicalPair`, `PairSolution`, `PairYields`,
   `Birth`, `Recombination`, `Product`, `FREE_ELECTRON_G`,

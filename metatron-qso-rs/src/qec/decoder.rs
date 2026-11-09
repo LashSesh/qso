@@ -34,6 +34,20 @@ pub struct MatchingEdge {
     pub(crate) length: f64,
 }
 
+/// The length of an edge of probability `p` in growth: ln((1 − p)/p), 0
+/// for p ≥ ½, and infinite for p = 0 (an edge that cannot be used).
+pub(crate) fn edge_length(p: f64) -> f64 {
+    if p >= 0.5 {
+        0.0
+    } else if p == 0.0 {
+        f64::INFINITY
+    } else {
+        // ln(1 − p) − ln p stays finite for subnormal p, where (1 − p)/p
+        // overflows.
+        (-p).ln_1p() - p.ln()
+    }
+}
+
 /// Detectors as nodes (plus a boundary node), errors as edges.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MatchingGraph {
@@ -49,6 +63,17 @@ impl MatchingGraph {
     /// 0 are left out); every error must flip at most two detectors (see the `decompose` option of
     /// [`detector_error_model`](super::dem::detector_error_model)).
     pub fn from_dem(dem: &DetectorErrorModel) -> Result<Self> {
+        Self::build(dem, false)
+    }
+
+    /// [`MatchingGraph::from_dem`], but errors of probability 0 are kept
+    /// as edges of infinite length (that growth and matching skip), so
+    /// that a decoder conditioned shot by shot can turn them on.
+    pub(crate) fn from_slots(dem: &DetectorErrorModel) -> Result<Self> {
+        Self::build(dem, true)
+    }
+
+    fn build(dem: &DetectorErrorModel, keep_zero: bool) -> Result<Self> {
         let n = dem.n_detectors;
         if n > MAX_MODEL_DETECTORS {
             return Err(QsoError::invalid(
@@ -89,13 +114,11 @@ impl MatchingGraph {
                     format!("{p} is not a probability"),
                 ));
             }
-            if p == 0.0 {
+            if p == 0.0 && !keep_zero {
                 // An error that never happens is no edge.
                 continue;
             }
-            // ln(1 − p) − ln p stays finite for subnormal p, where
-            // (1 − p)/p overflows.
-            let length = if p >= 0.5 { 0.0 } else { (-p).ln_1p() - p.ln() };
+            let length = edge_length(p);
             edges.push(MatchingEdge {
                 a,
                 b,
@@ -264,6 +287,20 @@ impl UnionFindDecoder {
 
     /// Predicted observable flips for the fired detectors.
     pub fn decode(&mut self, fired: &[usize]) -> Result<u64> {
+        self.decode_erased(fired, &[])
+    }
+
+    /// Set the length of edge `e` from probability `p` (see
+    /// [`edge_length`]); a decoder conditioned shot by shot restores it.
+    pub(crate) fn set_length(&mut self, e: usize, p: f64) {
+        self.graph.edges[e].length = edge_length(p);
+    }
+
+    /// [`UnionFindDecoder::decode`] with the edges `erased` (ascending)
+    /// joined before growth (Delfosse and Nickerson, Quantum 5, 595
+    /// (2021)): their clusters start grown, so that growth starts from the
+    /// odd clusters they form. Without erased edges it is `decode`.
+    pub(crate) fn decode_erased(&mut self, fired: &[usize], erased: &[usize]) -> Result<u64> {
         let n = self.graph.n_detectors;
         if let Some(&d) = fired.iter().find(|&&d| d >= n) {
             return Err(QsoError::invalid(
@@ -277,10 +314,29 @@ impl UnionFindDecoder {
             self.odd[d] ^= true;
             self.touched_nodes.push(d);
         }
+        for &e in erased {
+            self.grown[e] = true;
+            self.support[e] = 0.0;
+            self.touched_edges.push(e);
+            let (a, b) = (self.graph.edges[e].a, self.graph.edges[e].b);
+            self.touched_nodes.extend([a, b]);
+            self.grown_at[a].push(e);
+            self.grown_at[b].push(e);
+            self.union(a, b);
+        }
         let mut active = std::mem::take(&mut self.active);
         let mut newly = std::mem::take(&mut self.newly);
         active.clear();
-        active.extend(fired.iter().copied().filter(|&d| self.odd[d]));
+        if erased.is_empty() {
+            active.extend(fired.iter().copied().filter(|&d| self.odd[d]));
+        } else {
+            for &d in fired {
+                let r = self.find(d);
+                if self.odd[r] && !self.boundary[r] {
+                    active.push(r);
+                }
+            }
+        }
         active.sort_unstable();
         active.dedup();
         let mut frontier = std::mem::take(&mut self.frontier);
@@ -303,6 +359,11 @@ impl UnionFindDecoder {
                             continue;
                         }
                         let edge = &self.graph.edges[e];
+                        // An edge of probability 0 (turned on only by a
+                        // herald) is not there.
+                        if !edge.length.is_finite() {
+                            continue;
+                        }
                         let other = if edge.a == v { edge.b } else { edge.a };
                         if self.find(other) == root {
                             continue;

@@ -4,14 +4,16 @@
 
 use metatron_qso::qec::{
     self, BpMethod, BpOsdDecoder, BpOsdOptions, BpOsdOutcome, CircuitDistance, CircuitNoise,
-    CorrelatedError, CorrelatedErrorModel, CorrelatedMatchingDecoder, CssCode, CssSchedule,
-    Decoder, DecoderChoice, DetectorCircuit, DetectorErrorModel, DistanceMethod, DistanceOptions,
-    ErrorMechanism, ExactDistanceOptions, MatchingDecoder, MatchingGraph, MemoryBasis, Noise,
-    OsdMethod, ParallelWindowOptions, RepeatedCircuit, SparseMatchingDecoder, StreamState,
-    UnionFindDecoder, WindowDecoder, WindowMethod, WindowOptions,
+    ConditionedDecoder, CorrelatedError, CorrelatedErrorModel, CorrelatedMatchingDecoder, CssCode,
+    CssSchedule, Decoder, DecoderChoice, DetectorCircuit, DetectorErrorModel, DistanceMethod,
+    DistanceOptions, ErasureNoise, ErrorMechanism, ExactDistanceOptions, HeraldedErrorModel,
+    HeraldedMethod, MatchingDecoder, MatchingGraph, MemoryBasis, Noise, OsdMethod,
+    ParallelWindowOptions, RepeatedCircuit, SparseMatchingDecoder, StreamState, UnionFindDecoder,
+    WindowDecoder, WindowMethod, WindowOptions,
 };
 use numpy::ndarray::Array2;
 use numpy::{AllowTypeChange, IntoPyArray, PyArray1, PyArray2, PyArrayLike2};
+use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
@@ -36,11 +38,12 @@ pub struct PyDetectorCircuit {
 
 type Slf<'py> = PyRefMut<'py, PyDetectorCircuit>;
 
-/// Noise argument of the memory experiments: a `CircuitNoise` or a
-/// probability for every kind of noise.
+/// Noise argument of the memory experiments: a `CircuitNoise`, a
+/// probability for every kind of noise, or an `ErasureNoise`.
 enum NoiseArg {
     Model(CircuitNoise),
     Uniform(f64),
+    Erasure(ErasureNoise),
 }
 
 impl<'a, 'py> FromPyObject<'a, 'py> for NoiseArg {
@@ -50,15 +53,28 @@ impl<'a, 'py> FromPyObject<'a, 'py> for NoiseArg {
         if let Ok(n) = obj.cast::<PyCircuitNoise>() {
             return Ok(NoiseArg::Model(n.get().inner));
         }
+        if let Ok(n) = obj.cast::<PyErasureNoise>() {
+            return Ok(NoiseArg::Erasure(n.get().inner));
+        }
         Ok(NoiseArg::Uniform(obj.extract::<f64>()?))
     }
 }
 
-impl NoiseArg {
-    fn model(self) -> CircuitNoise {
-        match self {
-            NoiseArg::Model(m) => m,
-            NoiseArg::Uniform(p) => CircuitNoise::uniform(p),
+/// The noise of a memory experiment: circuit noise, or erasure-biased
+/// noise (built by the `*_erasure` generators).
+enum MemoryNoise {
+    Plain(CircuitNoise),
+    Erasure(ErasureNoise),
+}
+
+impl MemoryNoise {
+    /// No noise when `noise` is None.
+    fn of(noise: Option<NoiseArg>) -> Self {
+        match noise {
+            None => MemoryNoise::Plain(CircuitNoise::default()),
+            Some(NoiseArg::Model(m)) => MemoryNoise::Plain(m),
+            Some(NoiseArg::Uniform(p)) => MemoryNoise::Plain(CircuitNoise::uniform(p)),
+            Some(NoiseArg::Erasure(e)) => MemoryNoise::Erasure(e),
         }
     }
 }
@@ -107,8 +123,9 @@ impl PyDetectorCircuit {
         self.inner.detector_layers()
     }
 
+    /// Operations, heralded ones included.
     fn __len__(&self) -> usize {
-        self.inner.operations().len()
+        self.inner.n_steps()
     }
 
     fn h(mut slf: Slf<'_>, qubit: usize) -> PyResult<Slf<'_>> {
@@ -194,6 +211,32 @@ impl PyDetectorCircuit {
         Self::add_noise(slf, Noise::Depolarize2(p), qubits)
     }
 
+    /// Stim's `HERALDED_ERASE(p)`: for each qubit in order, with
+    /// probability `p` the qubit is replaced by a maximally mixed one (I, X,
+    /// Y or Z with p/4 each) and its herald, a new measurement record, reads
+    /// 1; otherwise the herald reads 0. Returns the herald's record of each
+    /// qubit (a qubit listed twice is erased twice).
+    fn heralded_erase(&mut self, p: f64, qubits: Vec<usize>) -> PyResult<Vec<usize>> {
+        self.inner.heralded_erase(p, &qubits).raise()
+    }
+
+    /// Stim's `HERALDED_PAULI_CHANNEL_1(p_i, p_x, p_y, p_z)`: for each
+    /// qubit, disjointly, the herald reads 1 with I, X, Y or Z with these
+    /// probabilities, and 0 with no error otherwise (the sum at most 1).
+    /// Returns the herald's record of each qubit.
+    fn heralded_pauli_channel_1(
+        &mut self,
+        p_i: f64,
+        p_x: f64,
+        p_y: f64,
+        p_z: f64,
+        qubits: Vec<usize>,
+    ) -> PyResult<Vec<usize>> {
+        self.inner
+            .heralded_pauli_channel_1([p_i, p_x, p_y, p_z], &qubits)
+            .raise()
+    }
+
     /// Declare a detector on these measurement records; returns its index.
     fn detector(&mut self, records: Vec<usize>) -> PyResult<usize> {
         self.inner.detector(&records).raise()
@@ -219,7 +262,9 @@ impl PyDetectorCircuit {
 
     /// A circuit in Stim's text format: Clifford gates, measurements and
     /// resets in the X, Y and Z bases, X/Y/Z errors, one- and two-qubit
-    /// depolarizing noise, detectors, observables and REPEAT blocks.
+    /// depolarising noise, heralded erasures and heralded Pauli channels
+    /// (`HERALDED_ERASE`, `HERALDED_PAULI_CHANNEL_1`), detectors,
+    /// observables and REPEAT blocks.
     #[staticmethod]
     fn from_stim(text: &str) -> PyResult<Self> {
         Ok(Self {
@@ -274,6 +319,29 @@ impl PyDetectorCircuit {
         })
     }
 
+    /// The model a `ConditionedDecoder` conditions on the heralds that
+    /// fired: its herald detectors (detectors whose only record is a herald
+    /// nothing else reads), for each the probability that it fires and its
+    /// channel's parts given that it fired, and the errors of every other
+    /// channel (the base, by Stim's approximate rule; decomposed with
+    /// `decompose`, the parts never). The decomposed model (the default) is
+    /// for union-find and matching; BP+OSD takes `decompose=False`, which
+    /// is also the only model of circuits whose errors flip three
+    /// detectors after splitting, such as colour codes.
+    #[pyo3(signature = (decompose = true))]
+    fn heralded_error_model(
+        &self,
+        py: Python<'_>,
+        decompose: bool,
+    ) -> PyResult<PyHeraldedErrorModel> {
+        let c = &self.inner;
+        Ok(PyHeraldedErrorModel {
+            inner: py
+                .detach(|| qec::heralded_error_model(c, decompose))
+                .raise()?,
+        })
+    }
+
     fn copy(&self) -> Self {
         self.clone()
     }
@@ -282,7 +350,7 @@ impl PyDetectorCircuit {
         format!(
             "DetectorCircuit(n_qubits={}, operations={}, detectors={}, observables={})",
             self.inner.n_qubits(),
-            self.inner.operations().len(),
+            self.inner.n_steps(),
             self.inner.n_detectors(),
             self.inner.n_observables()
         )
@@ -432,6 +500,20 @@ impl PyRepeatedCircuit {
         })
     }
 
+    /// The heralded model of the expanded circuit
+    /// (`DetectorCircuit.heralded_error_model`), folded.
+    #[pyo3(signature = (decompose = true))]
+    fn heralded_error_model(
+        &self,
+        py: Python<'_>,
+        decompose: bool,
+    ) -> PyResult<PyHeraldedErrorModel> {
+        let c = &self.inner;
+        Ok(PyHeraldedErrorModel {
+            inner: py.detach(|| c.heralded_error_model(decompose)).raise()?,
+        })
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "RepeatedCircuit(n_qubits={}, operations={}, stored={}, detectors={}, observables={})",
@@ -529,6 +611,65 @@ impl PyCircuitNoise {
     }
 }
 
+/// Erasure-biased circuit noise for the memory experiments: a share
+/// `erasure_share` (in [0, 1]) of every probability of `noise` (a
+/// `CircuitNoise`, or one probability for every kind of noise) is a
+/// heralded erasure (Stim's `HERALDED_ERASE`) of each qubit the operation
+/// touches, its herald a detector of the round; the rest acts as `noise`.
+/// A CNOT erases each of its qubits independently, so its total error is
+/// about (1 + e)·p.
+#[pyclass(name = "ErasureNoise", module = "metatron_qso", frozen, eq)]
+#[derive(Clone, PartialEq)]
+pub struct PyErasureNoise {
+    inner: ErasureNoise,
+}
+
+#[pymethods]
+impl PyErasureNoise {
+    #[new]
+    fn new(noise: NoiseArg, erasure_share: f64) -> PyResult<Self> {
+        let noise = match noise {
+            NoiseArg::Model(m) => m,
+            NoiseArg::Uniform(p) => CircuitNoise::uniform(p),
+            NoiseArg::Erasure(_) => {
+                return Err(PyTypeError::new_err(
+                    "noise must be a CircuitNoise or a probability",
+                ));
+            }
+        };
+        Ok(Self {
+            inner: ErasureNoise::new(noise, erasure_share).raise()?,
+        })
+    }
+
+    /// The noise whose probabilities are split.
+    #[getter]
+    fn noise(&self) -> PyCircuitNoise {
+        PyCircuitNoise {
+            inner: self.inner.noise,
+        }
+    }
+
+    /// The heralded share of each probability.
+    #[getter]
+    fn erasure_share(&self) -> f64 {
+        self.inner.erasure_share
+    }
+
+    fn __repr__(&self) -> String {
+        let n = &self.inner.noise;
+        format!(
+            "ErasureNoise(noise=CircuitNoise(after_gate1={}, after_gate2={}, measurement={}, after_reset={}, before_round={}), erasure_share={})",
+            n.after_gate1,
+            n.after_gate2,
+            n.measurement,
+            n.after_reset,
+            n.before_round,
+            self.inner.erasure_share
+        )
+    }
+}
+
 /// Independent error mechanisms of a circuit: `errors` lists
 /// `(probability, detectors, observables)` with `observables` a bit mask.
 /// Built by `DetectorCircuit.detector_error_model`, or directly from such
@@ -615,12 +756,8 @@ impl PyDetectorErrorModel {
     }
 
     #[getter]
-    fn errors(&self) -> Vec<(f64, Vec<usize>, u64)> {
-        self.inner
-            .errors
-            .iter()
-            .map(|e| (e.probability, e.detectors.clone(), e.observables))
-            .collect()
+    fn errors(&self) -> Vec<PyMechanism> {
+        mechanisms(&self.inner.errors)
     }
 
     fn __len__(&self) -> usize {
@@ -633,6 +770,135 @@ impl PyDetectorErrorModel {
             self.inner.n_detectors,
             self.inner.n_observables,
             self.inner.errors.len()
+        )
+    }
+}
+
+/// An error as Python lists it: (probability, detectors, observables).
+type PyMechanism = (f64, Vec<usize>, u64);
+
+fn mechanisms(errors: &[ErrorMechanism]) -> Vec<PyMechanism> {
+    errors
+        .iter()
+        .map(|e| (e.probability, e.detectors.clone(), e.observables))
+        .collect()
+}
+
+/// The model a `ConditionedDecoder` conditions on the heralds that fired
+/// (from `DetectorCircuit.heralded_error_model`, or built from its parts):
+/// `base`, the errors of every channel no herald detector owns;
+/// `herald_detectors`, ascending; for each herald `h` (an index into
+/// `herald_detectors`) the probability that it fires and its `outcomes`,
+/// the parts of its channel given that it fired, as
+/// `(probability, detectors, observables)` (½ each for an erasure).
+#[pyclass(name = "HeraldedErrorModel", module = "metatron_qso", frozen)]
+pub struct PyHeraldedErrorModel {
+    inner: HeraldedErrorModel,
+}
+
+impl PyHeraldedErrorModel {
+    fn check_herald(&self, h: usize) -> PyResult<()> {
+        let n = self.inner.herald_detectors().len();
+        if h >= n {
+            return Err(invalid(format!("herald {h} of {n}")));
+        }
+        Ok(())
+    }
+}
+
+#[pymethods]
+impl PyHeraldedErrorModel {
+    /// Checked: herald detectors strictly ascending and below
+    /// `base.n_detectors`; one probability (in [0, 1]) and one list of
+    /// parts per herald; no base error or part flips a herald detector.
+    /// The parts of each herald are sorted and equal parts merged.
+    #[new]
+    fn new(
+        base: &PyDetectorErrorModel,
+        herald_detectors: Vec<usize>,
+        herald_probabilities: Vec<f64>,
+        outcomes: Vec<Vec<PyMechanism>>,
+    ) -> PyResult<Self> {
+        let outcomes = outcomes
+            .into_iter()
+            .map(|parts| {
+                parts
+                    .into_iter()
+                    .map(|(probability, mut detectors, observables)| {
+                        detectors.sort_unstable();
+                        ErrorMechanism {
+                            probability,
+                            detectors,
+                            observables,
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        Ok(Self {
+            inner: HeraldedErrorModel::new(
+                base.inner.clone(),
+                herald_detectors,
+                herald_probabilities,
+                outcomes,
+            )
+            .raise()?,
+        })
+    }
+
+    /// Detectors of the circuit, herald detectors included.
+    #[getter]
+    fn n_detectors(&self) -> usize {
+        self.inner.n_detectors()
+    }
+
+    #[getter]
+    fn n_observables(&self) -> usize {
+        self.inner.n_observables()
+    }
+
+    /// The errors of every channel no herald detector owns.
+    #[getter]
+    fn base(&self) -> PyDetectorErrorModel {
+        PyDetectorErrorModel {
+            inner: self.inner.base().clone(),
+        }
+    }
+
+    /// The herald detectors, ascending.
+    #[getter]
+    fn herald_detectors(&self) -> Vec<usize> {
+        self.inner.herald_detectors().to_vec()
+    }
+
+    /// The probability that herald `h` fires.
+    fn herald_probability(&self, h: usize) -> PyResult<f64> {
+        self.check_herald(h)?;
+        Ok(self.inner.herald_probability(h))
+    }
+
+    /// The parts of herald `h`'s channel given that it fired, ascending.
+    fn outcomes(&self, h: usize) -> PyResult<Vec<PyMechanism>> {
+        self.check_herald(h)?;
+        Ok(mechanisms(self.inner.outcomes(h)))
+    }
+
+    /// The model of one shot: `base` with the parts of the fired herald
+    /// detectors `heralds` (a detector listed twice cancels) merged in as
+    /// independent errors.
+    fn conditioned(&self, heralds: Vec<usize>) -> PyResult<PyDetectorErrorModel> {
+        Ok(PyDetectorErrorModel {
+            inner: self.inner.conditioned(&heralds).raise()?,
+        })
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "HeraldedErrorModel(detectors={}, observables={}, heralds={}, base_errors={})",
+            self.inner.n_detectors(),
+            self.inner.n_observables(),
+            self.inner.herald_detectors().len(),
+            self.inner.base().errors.len()
         )
     }
 }
@@ -1280,32 +1546,7 @@ impl PyBpOsdDecoder {
         osd: &str,
         osd_order: usize,
     ) -> PyResult<Self> {
-        let method = match method {
-            "min_sum" => BpMethod::MinSum,
-            "product_sum" => BpMethod::ProductSum,
-            other => {
-                return Err(invalid(format!(
-                    "unknown method {other:?}; use \"min_sum\" or \"product_sum\""
-                )));
-            }
-        };
-        let osd = match osd {
-            "osd0" => OsdMethod::Zero,
-            "cs" => OsdMethod::CombinationSweep,
-            "exhaustive" => OsdMethod::Exhaustive,
-            other => {
-                return Err(invalid(format!(
-                    "unknown osd {other:?}; use \"osd0\", \"cs\" or \"exhaustive\""
-                )));
-            }
-        };
-        let options = BpOsdOptions {
-            max_iterations,
-            method,
-            scaling,
-            osd,
-            osd_order,
-        };
+        let options = bposd_options(max_iterations, method, scaling, osd, osd_order)?;
         let dem = &model.inner;
         Ok(Self {
             inner: py.detach(|| BpOsdDecoder::new(dem, options)).raise()?,
@@ -1350,6 +1591,222 @@ impl PyBpOsdDecoder {
             o.method,
             o.osd,
             o.osd_order
+        )
+    }
+}
+
+/// BP+OSD options from their Python names.
+fn bposd_options(
+    max_iterations: usize,
+    method: &str,
+    scaling: f64,
+    osd: &str,
+    osd_order: usize,
+) -> PyResult<BpOsdOptions> {
+    let method = match method {
+        "min_sum" => BpMethod::MinSum,
+        "product_sum" => BpMethod::ProductSum,
+        other => {
+            return Err(invalid(format!(
+                "unknown method {other:?}; use \"min_sum\" or \"product_sum\""
+            )));
+        }
+    };
+    let osd = match osd {
+        "osd0" => OsdMethod::Zero,
+        "cs" => OsdMethod::CombinationSweep,
+        "exhaustive" => OsdMethod::Exhaustive,
+        other => {
+            return Err(invalid(format!(
+                "unknown osd {other:?}; use \"osd0\", \"cs\" or \"exhaustive\""
+            )));
+        }
+    };
+    Ok(BpOsdOptions {
+        max_iterations,
+        method,
+        scaling,
+        osd,
+        osd_order,
+    })
+}
+
+/// A decoder that conditions a `HeraldedErrorModel` on the heralds that
+/// fired, shot by shot: the fired heralds' parts are merged into the
+/// model's errors as independent errors (an erased part has probability
+/// ½), the ordinary detectors are decoded with those probabilities, and
+/// the model is restored. `decoder` is `"union_find"` (erased edges joined
+/// before growing, after Delfosse and Nickerson), `"matching"` (sparse
+/// minimum-weight matching) or `"bposd"` (BP+OSD with `max_iterations`,
+/// `bp_method`, `scaling`, `osd` and `osd_order` as for `BpOsdDecoder`;
+/// the other decoders refuse values other than the defaults). Union-find
+/// and matching need every error and part to flip at most two ordinary
+/// detectors (the decomposed model, `heralded_error_model()`); give
+/// BP+OSD the model without decomposition,
+/// `heralded_error_model(decompose=False)`, which colour codes need.
+///
+/// `decode(fired, heralds)` takes the fired ordinary detectors and the
+/// fired herald detectors; with `heralds=None`, `fired` lists every fired
+/// detector and is split. An error the shot makes more likely than not
+/// (p > ½, such as a Pauli channel's X part (p_x + p_y)/t) is applied
+/// before decoding and the rest decoded with 1 − p, as PyMatching does
+/// with negative weights; a shot with no ordinary detector left to explain
+/// predicts the flips of the applied errors.
+#[pyclass(name = "ConditionedDecoder", module = "metatron_qso")]
+pub struct PyConditionedDecoder {
+    inner: ConditionedDecoder,
+}
+
+impl PyConditionedDecoder {
+    /// The fired ordinary and herald detectors: as given, or `fired`
+    /// split when `heralds` is None.
+    fn shot(&self, fired: Vec<usize>, heralds: Option<Vec<usize>>) -> (Vec<usize>, Vec<usize>) {
+        match heralds {
+            Some(h) => (fired, h),
+            None => {
+                let hd = self.inner.herald_detectors();
+                fired
+                    .into_iter()
+                    .partition(|d| hd.binary_search(d).is_err())
+            }
+        }
+    }
+}
+
+#[pymethods]
+impl PyConditionedDecoder {
+    #[new]
+    #[pyo3(signature = (model, decoder = "union_find", max_iterations = 50, bp_method = "min_sum", scaling = 0.625, osd = "cs", osd_order = 7))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        py: Python<'_>,
+        model: &PyHeraldedErrorModel,
+        decoder: &str,
+        max_iterations: usize,
+        bp_method: &str,
+        scaling: f64,
+        osd: &str,
+        osd_order: usize,
+    ) -> PyResult<Self> {
+        let options = bposd_options(max_iterations, bp_method, scaling, osd, osd_order)?;
+        let method = match decoder {
+            "union_find" | "matching" => {
+                if options != BpOsdOptions::default() {
+                    return Err(invalid(format!(
+                        "the BP+OSD options apply to decoder=\"bposd\", not {decoder:?}"
+                    )));
+                }
+                if decoder == "matching" {
+                    HeraldedMethod::Matching
+                } else {
+                    HeraldedMethod::UnionFind
+                }
+            }
+            "bposd" => HeraldedMethod::BpOsd(options),
+            other => {
+                return Err(invalid(format!(
+                    "unknown decoder {other:?}; use \"union_find\", \"matching\" or \"bposd\""
+                )));
+            }
+        };
+        let m = &model.inner;
+        Ok(Self {
+            inner: py.detach(|| ConditionedDecoder::new(m, method)).raise()?,
+        })
+    }
+
+    /// Detectors of the circuit, herald detectors included.
+    #[getter]
+    fn n_detectors(&self) -> usize {
+        self.inner.n_detectors()
+    }
+
+    /// The herald detectors, ascending.
+    #[getter]
+    fn herald_detectors(&self) -> Vec<usize> {
+        self.inner.herald_detectors().to_vec()
+    }
+
+    /// The slots (edges or columns) in decoding order as
+    /// `(probability, detectors, observables)`, with their base
+    /// probabilities (0 for a slot only heralds turn on).
+    fn slots(&self) -> Vec<PyMechanism> {
+        mechanisms(self.inner.slots())
+    }
+
+    /// Predicted observable flips (a bit mask) for the fired ordinary
+    /// detectors `fired` given the fired herald detectors `heralds`, or,
+    /// with `heralds=None`, for every fired detector `fired`.
+    #[pyo3(signature = (fired, heralds = None))]
+    fn decode(
+        &mut self,
+        py: Python<'_>,
+        fired: Vec<usize>,
+        heralds: Option<Vec<usize>>,
+    ) -> PyResult<u64> {
+        let (fired, heralds) = self.shot(fired, heralds);
+        let d = &mut self.inner;
+        py.detach(|| d.decode_heralded(&fired, &heralds)).raise()
+    }
+
+    /// Matching only: the prediction and the weight of the correction,
+    /// the sum of ln((1 − p)/p) over its errors at the shot's
+    /// probabilities (errors at p = ½ count 0, applied errors above ½
+    /// negatively).
+    #[pyo3(signature = (fired, heralds = None))]
+    fn decode_with_weight(
+        &mut self,
+        py: Python<'_>,
+        fired: Vec<usize>,
+        heralds: Option<Vec<usize>>,
+    ) -> PyResult<(u64, f64)> {
+        let (fired, heralds) = self.shot(fired, heralds);
+        let d = &mut self.inner;
+        py.detach(|| d.decode_with_weight(&fired, &heralds)).raise()
+    }
+
+    /// BP+OSD only: the correction and how it was found; its `errors`
+    /// index `slots()`, the applied errors (p > ½) included unless BP+OSD
+    /// undid them.
+    #[pyo3(signature = (fired, heralds = None))]
+    fn decode_detailed(
+        &mut self,
+        py: Python<'_>,
+        fired: Vec<usize>,
+        heralds: Option<Vec<usize>>,
+    ) -> PyResult<PyBpOsdOutcome> {
+        let (fired, heralds) = self.shot(fired, heralds);
+        let d = &mut self.inner;
+        Ok(py
+            .detach(|| d.decode_detailed(&fired, &heralds))
+            .raise()?
+            .into())
+    }
+
+    /// Decode each row of a (shots, n_detectors) boolean array of every
+    /// detector, herald detectors included; returns the predicted
+    /// observable masks.
+    fn decode_batch<'py>(
+        &mut self,
+        py: Python<'py>,
+        detectors: PyArrayLike2<'py, bool, AllowTypeChange>,
+    ) -> PyResult<Bound<'py, PyArray1<u64>>> {
+        let n = self.inner.n_detectors();
+        decode_batch(py, &mut self.inner, n, detectors)
+    }
+
+    fn __repr__(&self) -> String {
+        let method = match self.inner.method() {
+            HeraldedMethod::UnionFind => "union_find",
+            HeraldedMethod::Matching => "matching",
+            HeraldedMethod::BpOsd(_) => "bposd",
+            _ => "other",
+        };
+        format!(
+            "ConditionedDecoder(detectors={}, heralds={}, slots={}, decoder={method:?})",
+            self.inner.n_detectors(),
+            self.inner.herald_detectors().len(),
+            self.inner.slots().len()
         )
     }
 }
@@ -1636,7 +2093,8 @@ enum ScheduleArg {
 /// CNOT layers), `"bicycle"` (the depth-8 cycle of Bravyi et al. for a
 /// bivariate bicycle code with three monomials per polynomial), or, for a
 /// colour code, the order in which every face visits its six directions
-/// (a permutation of 0..6, as a list or as "0,1,2,3,4,5").
+/// (a permutation of 0..6, as a list or as "0,1,2,3,4,5"); `noise` as for
+/// `repetition_code_memory`.
 #[pyfunction]
 #[pyo3(signature = (code, rounds, noise = None, basis = "z", schedule = None))]
 fn css_code_memory(
@@ -1647,10 +2105,14 @@ fn css_code_memory(
     schedule: Option<ScheduleArg>,
 ) -> PyResult<PyDetectorCircuit> {
     let basis = parse_basis(basis)?;
-    let noise = noise.map(NoiseArg::model).unwrap_or_default();
     let schedule = parse_schedule(schedule)?;
+    let c = &code.inner;
     Ok(PyDetectorCircuit {
-        inner: qec::css_code_memory_with(&code.inner, rounds, &noise, basis, schedule).raise()?,
+        inner: match MemoryNoise::of(noise) {
+            MemoryNoise::Plain(n) => qec::css_code_memory_with(c, rounds, &n, basis, schedule),
+            MemoryNoise::Erasure(e) => qec::css_code_memory_erasure(c, rounds, &e, basis, schedule),
+        }
+        .raise()?,
     })
 }
 
@@ -1666,11 +2128,16 @@ fn css_code_memory_repeated(
     schedule: Option<ScheduleArg>,
 ) -> PyResult<PyRepeatedCircuit> {
     let basis = parse_basis(basis)?;
-    let noise = noise.map(NoiseArg::model).unwrap_or_default();
     let schedule = parse_schedule(schedule)?;
+    let c = &code.inner;
     Ok(PyRepeatedCircuit {
-        inner: qec::css_code_memory_repeated(&code.inner, rounds, &noise, basis, schedule)
-            .raise()?,
+        inner: match MemoryNoise::of(noise) {
+            MemoryNoise::Plain(n) => qec::css_code_memory_repeated(c, rounds, &n, basis, schedule),
+            MemoryNoise::Erasure(e) => {
+                qec::css_code_memory_erasure_repeated(c, rounds, &e, basis, schedule)
+            }
+        }
+        .raise()?,
     })
 }
 
@@ -1731,8 +2198,9 @@ impl PyLogicalErrorRate {
 
 /// A repetition-code memory experiment: `distance` data qubits and
 /// `distance − 1` ancillas measuring neighbouring ZZ parities for
-/// `rounds` rounds; `noise` is a `CircuitNoise` or one probability for
-/// every kind of noise.
+/// `rounds` rounds; `noise` is a `CircuitNoise`, one probability for
+/// every kind of noise, or an `ErasureNoise` (whose heralds become
+/// detectors of their rounds).
 #[pyfunction]
 #[pyo3(signature = (distance, rounds, noise = None))]
 fn repetition_code_memory(
@@ -1740,9 +2208,12 @@ fn repetition_code_memory(
     rounds: usize,
     noise: Option<NoiseArg>,
 ) -> PyResult<PyDetectorCircuit> {
-    let noise = noise.map(NoiseArg::model).unwrap_or_default();
     Ok(PyDetectorCircuit {
-        inner: qec::repetition_code_memory(distance, rounds, &noise).raise()?,
+        inner: match MemoryNoise::of(noise) {
+            MemoryNoise::Plain(n) => qec::repetition_code_memory(distance, rounds, &n),
+            MemoryNoise::Erasure(e) => qec::repetition_code_memory_erasure(distance, rounds, &e),
+        }
+        .raise()?,
     })
 }
 
@@ -1755,9 +2226,14 @@ fn repetition_code_memory_repeated(
     rounds: usize,
     noise: Option<NoiseArg>,
 ) -> PyResult<PyRepeatedCircuit> {
-    let noise = noise.map(NoiseArg::model).unwrap_or_default();
     Ok(PyRepeatedCircuit {
-        inner: qec::repetition_code_memory_repeated(distance, rounds, &noise).raise()?,
+        inner: match MemoryNoise::of(noise) {
+            MemoryNoise::Plain(n) => qec::repetition_code_memory_repeated(distance, rounds, &n),
+            MemoryNoise::Erasure(e) => {
+                qec::repetition_code_memory_erasure_repeated(distance, rounds, &e)
+            }
+        }
+        .raise()?,
     })
 }
 
@@ -1772,15 +2248,21 @@ fn surface_code_memory_repeated(
     basis: &str,
 ) -> PyResult<PyRepeatedCircuit> {
     let basis = parse_basis(basis)?;
-    let noise = noise.map(NoiseArg::model).unwrap_or_default();
     Ok(PyRepeatedCircuit {
-        inner: qec::surface_code_memory_repeated(distance, rounds, &noise, basis).raise()?,
+        inner: match MemoryNoise::of(noise) {
+            MemoryNoise::Plain(n) => qec::surface_code_memory_repeated(distance, rounds, &n, basis),
+            MemoryNoise::Erasure(e) => {
+                qec::surface_code_memory_erasure_repeated(distance, rounds, &e, basis)
+            }
+        }
+        .raise()?,
     })
 }
 
 /// A rotated surface-code memory experiment of odd `distance` protecting
 /// `|0⟩_L` (`basis="z"`: Z-type detectors, the logical Z as observable 0)
-/// or `|+⟩_L` (`basis="x"`: X-type detectors, the logical X).
+/// or `|+⟩_L` (`basis="x"`: X-type detectors, the logical X); `noise` as
+/// for `repetition_code_memory`.
 #[pyfunction]
 #[pyo3(signature = (distance, rounds, noise = None, basis = "z"))]
 fn surface_code_memory(
@@ -1790,9 +2272,14 @@ fn surface_code_memory(
     basis: &str,
 ) -> PyResult<PyDetectorCircuit> {
     let basis = parse_basis(basis)?;
-    let noise = noise.map(NoiseArg::model).unwrap_or_default();
     Ok(PyDetectorCircuit {
-        inner: qec::surface_code_memory_with(distance, rounds, &noise, basis).raise()?,
+        inner: match MemoryNoise::of(noise) {
+            MemoryNoise::Plain(n) => qec::surface_code_memory_with(distance, rounds, &n, basis),
+            MemoryNoise::Erasure(e) => {
+                qec::surface_code_memory_erasure(distance, rounds, &e, basis)
+            }
+        }
+        .raise()?,
     })
 }
 
@@ -1805,7 +2292,10 @@ fn surface_code_memory(
 /// `"parallel_window_matching"` and `"parallel_window_bposd"` in parallel
 /// windows committing `commit` rounds with `buffer` (default: `commit`)
 /// on each side. Every decoder sees the same shots. A `RepeatedCircuit`
-/// is sampled as it runs and decoded on its folded model.
+/// is sampled as it runs and decoded on its folded model. A circuit with
+/// herald detectors (`heralded_error_model`) is decoded by a
+/// `ConditionedDecoder` (`"union_find"`, `"matching"` or `"bposd"`); the
+/// other decoders refuse it.
 #[pyfunction]
 #[pyo3(signature = (
     circuit, shots, seed = 0, decoder = "union_find", window = None, commit = None, buffer = None
@@ -2053,6 +2543,9 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(leading_failures, m)?)?;
     m.add_class::<PyDetectorCircuit>()?;
     m.add_class::<PyCircuitNoise>()?;
+    m.add_class::<PyErasureNoise>()?;
+    m.add_class::<PyHeraldedErrorModel>()?;
+    m.add_class::<PyConditionedDecoder>()?;
     m.add_class::<PyDetectorErrorModel>()?;
     m.add_class::<PyUnionFindDecoder>()?;
     m.add_class::<PyMatchingDecoder>()?;

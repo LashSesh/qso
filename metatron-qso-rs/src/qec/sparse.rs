@@ -39,7 +39,10 @@ use crate::error::{QsoError, Result};
 
 const NONE: u32 = u32::MAX;
 /// Largest edge weight after rounding (as in `MatchingDecoder`), doubled.
-const WEIGHT_SCALE: f64 = (1u64 << 20) as f64;
+pub(crate) const WEIGHT_SCALE: f64 = (1u64 << 20) as f64;
+/// The weight of an edge of infinite length (probability 0): growth and
+/// matching skip it.
+pub(crate) const DISABLED: i64 = i64::MAX;
 
 /// A tight path between two detection events (or one and the boundary):
 /// `u` lies in one region, `v` in the other (`v == NONE` for the
@@ -182,10 +185,16 @@ impl SparseMatchingDecoder {
         } else {
             1.0
         };
+        Self::with_scale(graph, scale)
+    }
+
+    /// The decoder with `scale` integer units per unit of length; edges of
+    /// infinite length are [`DISABLED`].
+    pub(crate) fn with_scale(graph: MatchingGraph, scale: f64) -> Self {
         let weight = graph
             .edges()
             .iter()
-            .map(|e| 2 * (e.length * scale).round() as i64)
+            .map(|e| weight_of(e.length, scale))
             .collect();
         let n = graph.n_detectors();
         Self {
@@ -206,6 +215,13 @@ impl SparseMatchingDecoder {
 
     pub fn graph(&self) -> &MatchingGraph {
         &self.graph
+    }
+
+    /// Set the weight of edge `e` from probability `p` at the decoder's
+    /// scale (as [`SparseMatchingDecoder::new`] weighs it; [`DISABLED`] for
+    /// p = 0); a decoder conditioned shot by shot restores it.
+    pub(crate) fn set_weight(&mut self, e: usize, p: f64) {
+        self.weight[e] = weight_of(super::decoder::edge_length(p), self.scale);
     }
 
     /// Predicted observable flips for the fired detectors (a detector
@@ -443,6 +459,9 @@ impl SparseMatchingDecoder {
             let edge = &self.graph.edges()[e];
             let w = if edge.a == v as usize { edge.b } else { edge.a };
             let weight = self.weight[e];
+            if weight == DISABLED {
+                continue;
+            }
             if w == boundary || self.nodes[w].region == NONE {
                 if rate > 0 {
                     debug_assert!(weight >= lr, "node {v} overshot an edge");
@@ -485,6 +504,9 @@ impl SparseMatchingDecoder {
             let edge = &self.graph.edges()[e];
             let w = if edge.a == v as usize { edge.b } else { edge.a };
             let weight = self.weight[e];
+            if weight == DISABLED {
+                continue;
+            }
             if w == boundary {
                 if rate > 0 && lr == weight {
                     action = Some((
@@ -1018,6 +1040,15 @@ impl SparseMatchingDecoder {
             }
         }
         (obs, len / 2)
+    }
+}
+
+/// The doubled integer weight of an edge of this length.
+fn weight_of(length: f64, scale: f64) -> i64 {
+    if length.is_finite() {
+        2 * (length * scale).round() as i64
+    } else {
+        DISABLED
     }
 }
 

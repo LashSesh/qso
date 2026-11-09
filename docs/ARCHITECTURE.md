@@ -250,6 +250,38 @@ frame update for each gate is derived once.
   (TICK, or noise that cannot happen) is left out when it is built.
   Merging is associative, so the model equals the expanded one's up to
   the rounding of merged probabilities.
+- **Heralded errors** (`qec/circuit.rs`, `qec/dem.rs`, `qec/herald.rs`,
+  1.66). Stim's `HERALDED_ERASE` and `HERALDED_PAULI_CHANNEL_1` are
+  variants of the non-exhaustive `ExtendedOp`, kept in a side table of
+  the circuit (position, operation) so that `operations()` stays a slice
+  of `QecOp`; `steps()` merges both in order, and every walker (the
+  sampler, the pass backwards, the Stim reader and writer, the repeated
+  builder) matches `CircuitStep` and `ExtendedOp` exhaustively, so a new
+  variant fails to compile wherever it must be handled. Each target adds
+  a herald record. The sampler zeroes it, draws the shots that fire, and
+  for each draws the Pauli (an erasure one of four, the Pauli channel by
+  Stim's order X, Z, Y, I); circuits without them draw the same random
+  stream as before. In the pass backwards a heralded target is a
+  *disjoint* channel over the basis (Z effect, X effect, herald effect):
+  its eight outcome probabilities run Stim's merging loop
+  (`error_analyzer.cc`), which moves the mass of outcomes with equal
+  effects onto the lowest, and with decomposition Stim's per-outcome
+  decomposition without the single-error rule. The tracker remembers,
+  per record, the detector whose record list (pairs cancelled) is that
+  record alone; when the herald's pending effect is exactly that
+  detector, the detector owns the herald, and the heralded model keys
+  the channel's rate and its X and Z parts by it (`HKey::Rate`,
+  `HKey::Part`; never-empty keys, so `REPEAT` folding shifts them with
+  the rest). `ConditionedDecoder` renumbers the ordinary detectors
+  compactly, lists the base errors and then every part not yet among
+  them as slots (a slot only heralds turn on has probability 0: an
+  infinite union-find length, a disabled matching edge, the largest
+  BP prior), and per shot XORs the fired heralds' parts into the slots
+  they touch (½ absorbing exactly), sets the touched lengths, weights or
+  priors through crate-private hooks, decodes, and restores them from
+  the base arrays. Union-find first merges the erased edges (p = ½) and
+  then grows the clusters whose roots are odd; sparse matching keeps a
+  fixed weight scale chosen so that no conditioned weight overflows.
 - **Decoding.** The matching graph has a node per detector plus one
   boundary node. Union-find growth is event-driven: each round finds the
   frontier edges of the growing clusters, advances all of them by the

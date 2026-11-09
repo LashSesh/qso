@@ -68,6 +68,176 @@ pub enum QecOp {
     Observable { index: usize, records: Vec<usize> },
 }
 
+/// Operations of a detector circuit beyond [`QecOp`], one variant per Stim
+/// instruction; more will be added (Pauli channels, correlated errors, MPP,
+/// feedback). Built by the methods of [`DetectorCircuit`] (such as
+/// [`DetectorCircuit::heralded_erase`]) and listed in order with every
+/// other operation by [`DetectorCircuit::steps`].
+///
+/// The heralded channels add one measurement record per target (its
+/// herald), as Stim does; a later variant may add none (a Pauli channel)
+/// or one per product (MPP), and `n_records` says how many. Erasure stays
+/// in the qubit space: an erased qubit is replaced by a maximally mixed
+/// one, nothing leaks.
+///
+/// Adding a variant: its builder and check (`check_extended`);
+/// `n_records` and `noiseless`; `frame::run_extended`;
+/// `dem::Folder::extended`; the Stim tables (`stim::extended_instruction`,
+/// `stim::write_extended`); the fuzz builder; tests against Stim term by
+/// term and against its sampler. Inside the crate every `match` on
+/// `ExtendedOp` or [`CircuitStep`] is exhaustive, so the compiler lists
+/// every place that must learn a new variant.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum ExtendedOp {
+    /// Stim's `HERALDED_ERASE(p)`: for each target in order, with
+    /// probability `p` the qubit is replaced by a maximally mixed one (I,
+    /// X, Y or Z with p/4 each) and its herald, a new measurement record,
+    /// reads 1; otherwise the herald reads 0. Heralds are never flipped or
+    /// inverted.
+    #[non_exhaustive]
+    HeraldedErase {
+        probability: f64,
+        qubits: Vec<usize>,
+    },
+    /// Stim's `HERALDED_PAULI_CHANNEL_1(pI, pX, pY, pZ)`: for each target,
+    /// disjointly, the herald reads 1 together with I, X, Y or Z with these
+    /// probabilities (Stim's argument order); with 1 − Σ neither herald nor
+    /// error.
+    #[non_exhaustive]
+    HeraldedPauliChannel1 {
+        probabilities: [f64; 4],
+        qubits: Vec<usize>,
+    },
+}
+
+impl ExtendedOp {
+    /// The qubits it acts on, in order (repeats allowed).
+    pub(crate) fn qubits(&self) -> &[usize] {
+        match self {
+            ExtendedOp::HeraldedErase { qubits, .. }
+            | ExtendedOp::HeraldedPauliChannel1 { qubits, .. } => qubits,
+        }
+    }
+
+    /// Measurement records it adds (one herald per target).
+    pub(crate) fn n_records(&self) -> usize {
+        match self {
+            ExtendedOp::HeraldedErase { qubits, .. }
+            | ExtendedOp::HeraldedPauliChannel1 { qubits, .. } => qubits.len(),
+        }
+    }
+
+    /// The same operation with probability 0 (its records kept).
+    pub(crate) fn noiseless(&self) -> ExtendedOp {
+        match self {
+            ExtendedOp::HeraldedErase { qubits, .. } => ExtendedOp::HeraldedErase {
+                probability: 0.0,
+                qubits: qubits.clone(),
+            },
+            ExtendedOp::HeraldedPauliChannel1 { qubits, .. } => ExtendedOp::HeraldedPauliChannel1 {
+                probabilities: [0.0; 4],
+                qubits: qubits.clone(),
+            },
+        }
+    }
+}
+
+/// Stim's tolerance on the sum of a heralded Pauli channel's probabilities.
+const PROBABILITY_SUM_TOLERANCE: f64 = 1e-7;
+
+/// An extended operation with valid probabilities on qubits of a register
+/// of `n`.
+pub(super) fn check_extended(n: usize, op: &ExtendedOp) -> Result<()> {
+    match op {
+        ExtendedOp::HeraldedErase { probability, .. } => check_probability(*probability, 1.0)?,
+        ExtendedOp::HeraldedPauliChannel1 { probabilities, .. } => {
+            for &p in probabilities {
+                check_probability(p, 1.0)?;
+            }
+            let [pi, px, py, pz] = *probabilities;
+            let s = ((pi + px) + py) + pz;
+            if s > 1.0 + PROBABILITY_SUM_TOLERANCE {
+                return Err(QsoError::invalid(
+                    "probability",
+                    format!(
+                        "the probabilities of HERALDED_PAULI_CHANNEL_1 add up to {s}, more than 1"
+                    ),
+                ));
+            }
+        }
+    }
+    for &q in op.qubits() {
+        check_qubit(n, q)?;
+    }
+    Ok(())
+}
+
+/// One operation of a detector circuit, in circuit order
+/// ([`DetectorCircuit::steps`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum CircuitStep<'a> {
+    /// An operation of [`DetectorCircuit::operations`].
+    Qec(&'a QecOp),
+    /// An extended operation (heralded noise).
+    Extended(&'a ExtendedOp),
+}
+
+/// The operations of a circuit in order ([`DetectorCircuit::steps`]).
+#[derive(Clone, Debug)]
+pub struct Steps<'a> {
+    ops: &'a [QecOp],
+    extended: &'a [(usize, ExtendedOp)],
+    /// Next operation and extended operation from the front, and the ends
+    /// from the back.
+    i: usize,
+    j: usize,
+    i_end: usize,
+    j_end: usize,
+}
+
+impl<'a> Iterator for Steps<'a> {
+    type Item = CircuitStep<'a>;
+
+    fn next(&mut self) -> Option<CircuitStep<'a>> {
+        let ext_first =
+            self.j < self.j_end && (self.i == self.i_end || self.extended[self.j].0 <= self.i);
+        if ext_first {
+            self.j += 1;
+            Some(CircuitStep::Extended(&self.extended[self.j - 1].1))
+        } else if self.i < self.i_end {
+            self.i += 1;
+            Some(CircuitStep::Qec(&self.ops[self.i - 1]))
+        } else {
+            None
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let n = (self.i_end - self.i) + (self.j_end - self.j);
+        (n, Some(n))
+    }
+}
+
+impl DoubleEndedIterator for Steps<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        let ext_last = self.j < self.j_end
+            && (self.i == self.i_end || self.extended[self.j_end - 1].0 >= self.i_end);
+        if ext_last {
+            self.j_end -= 1;
+            Some(CircuitStep::Extended(&self.extended[self.j_end].1))
+        } else if self.i < self.i_end {
+            self.i_end -= 1;
+            Some(CircuitStep::Qec(&self.ops[self.i_end]))
+        } else {
+            None
+        }
+    }
+}
+
+impl ExactSizeIterator for Steps<'_> {}
+
 /// A Clifford circuit with Pauli noise, a measurement record, detectors
 /// and logical observables, in the manner of Stim (Gidney, Quantum 5, 497
 /// (2021)).
@@ -79,6 +249,9 @@ pub enum QecOp {
 pub struct DetectorCircuit {
     n: usize,
     ops: Vec<QecOp>,
+    /// Extended operations, each before `ops[position]` (at the end for
+    /// `ops.len()`); equal positions in the order they were added.
+    extended: Vec<(usize, ExtendedOp)>,
     measurements: usize,
     detectors: usize,
     observables: usize,
@@ -172,10 +345,38 @@ impl DetectorCircuit {
         self.n
     }
 
+    /// The [`QecOp`]s in order; a circuit with extended operations
+    /// interleaves them (see [`DetectorCircuit::steps`]).
     pub fn operations(&self) -> &[QecOp] {
         &self.ops
     }
 
+    /// Every operation in order, the extended ones included
+    /// ([`DetectorCircuit::operations`] lists the [`QecOp`]s only).
+    pub fn steps(&self) -> Steps<'_> {
+        Steps {
+            ops: &self.ops,
+            extended: &self.extended,
+            i: 0,
+            j: 0,
+            i_end: self.ops.len(),
+            j_end: self.extended.len(),
+        }
+    }
+
+    /// `operations().len()` plus the extended operations.
+    pub fn n_steps(&self) -> usize {
+        self.ops.len() + self.extended.len()
+    }
+
+    /// Whether the circuit has extended operations ([`ExtendedOp`]: today
+    /// heralded noise), which some functions refuse.
+    pub fn has_extended(&self) -> bool {
+        !self.extended.is_empty()
+    }
+
+    /// Measurement records, heralds included (as Stim's
+    /// `num_measurements`).
     pub fn n_measurements(&self) -> usize {
         self.measurements
     }
@@ -198,31 +399,81 @@ impl DetectorCircuit {
         let mut layers = Vec::with_capacity(self.detectors);
         let mut layer = 0;
         let mut previous_was_detector = false;
-        for op in &self.ops {
-            match op {
-                QecOp::Detector { .. } => {
+        for step in self.steps() {
+            match step {
+                CircuitStep::Qec(QecOp::Detector { .. }) => {
                     if !previous_was_detector && !layers.is_empty() {
                         layer += 1;
                     }
                     layers.push(layer);
                     previous_was_detector = true;
                 }
-                QecOp::Observable { .. } => {}
-                _ => previous_was_detector = false,
+                CircuitStep::Qec(QecOp::Observable { .. }) => {}
+                CircuitStep::Qec(_) | CircuitStep::Extended(_) => previous_was_detector = false,
             }
         }
         layers
     }
 
-    fn push(&mut self, op: QecOp) -> Result<()> {
-        if self.ops.len() >= MAX_QEC_OPERATIONS {
+    fn check_room(&self) -> Result<()> {
+        if self.n_steps() >= MAX_QEC_OPERATIONS {
             return Err(QsoError::invalid(
                 "circuit",
                 format!("more than {MAX_QEC_OPERATIONS} operations"),
             ));
         }
+        Ok(())
+    }
+
+    fn push(&mut self, op: QecOp) -> Result<()> {
+        self.check_room()?;
         self.ops.push(op);
         Ok(())
+    }
+
+    /// Append a checked extended operation; returns its records.
+    pub(super) fn push_extended(&mut self, op: ExtendedOp) -> Result<Vec<usize>> {
+        if op.n_records() == 0 {
+            return Ok(Vec::new());
+        }
+        self.check_room()?;
+        let first = self.measurements;
+        self.measurements += op.n_records();
+        self.extended.push((self.ops.len(), op));
+        Ok((first..self.measurements).collect())
+    }
+
+    /// Stim's `HERALDED_ERASE(probability)` on `qubits` (repeats allowed):
+    /// each target, in order, is erased with this probability (replaced
+    /// by a maximally mixed qubit: I, X, Y or Z with a quarter of it each)
+    /// and its herald, a new measurement record, reads whether it was.
+    /// Returns the herald's record of each target. It is kept at
+    /// probability 0 (its records exist, as Stim's `MPAD 0`); without
+    /// qubits nothing is added.
+    pub fn heralded_erase(&mut self, probability: f64, qubits: &[usize]) -> Result<Vec<usize>> {
+        let op = ExtendedOp::HeraldedErase {
+            probability,
+            qubits: qubits.to_vec(),
+        };
+        check_extended(self.n, &op)?;
+        self.push_extended(op)
+    }
+
+    /// Stim's `HERALDED_PAULI_CHANNEL_1` on `qubits`: for each target the
+    /// herald fires together with I, X, Y or Z with `probabilities` =
+    /// (pI, pX, pY, pZ) (disjointly; their sum at most 1, with Stim's
+    /// tolerance of 10⁻⁷). Returns the herald's record of each target.
+    pub fn heralded_pauli_channel_1(
+        &mut self,
+        probabilities: [f64; 4],
+        qubits: &[usize],
+    ) -> Result<Vec<usize>> {
+        let op = ExtendedOp::HeraldedPauliChannel1 {
+            probabilities,
+            qubits: qubits.to_vec(),
+        };
+        check_extended(self.n, &op)?;
+        self.push_extended(op)
     }
 
     fn check(&self, q: usize) -> Result<()> {
@@ -257,7 +508,7 @@ impl DetectorCircuit {
                 "every gate must be a Clifford gate",
             ));
         }
-        if self.ops.len() + bound.instructions().len() > MAX_QEC_OPERATIONS {
+        if self.n_steps() + bound.instructions().len() > MAX_QEC_OPERATIONS {
             return Err(QsoError::invalid(
                 "circuit",
                 format!("more than {MAX_QEC_OPERATIONS} operations"),
@@ -371,8 +622,23 @@ impl DetectorCircuit {
         Ok(self)
     }
 
-    /// The circuit without noise (measurement flips set to zero).
+    /// The circuit without noise (measurement flips set to zero; extended
+    /// operations kept with probability 0, so that their records stay).
     pub fn without_noise(&self) -> DetectorCircuit {
+        // Noise operations before each position, to move the extended
+        // operations with the rest.
+        let mut noise_before = Vec::with_capacity(self.ops.len() + 1);
+        let mut count = 0;
+        for op in &self.ops {
+            noise_before.push(count);
+            count += matches!(op, QecOp::Noise { .. }) as usize;
+        }
+        noise_before.push(count);
+        let extended = self
+            .extended
+            .iter()
+            .map(|(pos, op)| (pos - noise_before[*pos], op.noiseless()))
+            .collect();
         let ops = self
             .ops
             .iter()
@@ -386,8 +652,12 @@ impl DetectorCircuit {
             })
             .collect();
         DetectorCircuit {
+            n: self.n,
             ops,
-            ..self.clone()
+            extended,
+            measurements: self.measurements,
+            detectors: self.detectors,
+            observables: self.observables,
         }
     }
 }

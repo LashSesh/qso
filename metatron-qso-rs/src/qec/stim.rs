@@ -2,7 +2,10 @@
 
 use std::fmt::Write;
 
-use super::circuit::{DetectorCircuit, MAX_QEC_OPERATIONS, MAX_QEC_QUBITS, Noise, QecOp};
+use super::circuit::{
+    CircuitStep, DetectorCircuit, ExtendedOp, MAX_QEC_OPERATIONS, MAX_QEC_QUBITS, Noise, QecOp,
+    check_extended,
+};
 use crate::error::{QsoError, Result};
 use crate::quantum::{GateKind, Instruction, Param};
 use crate::stabilizer::{CliffordTarget, apply_clifford};
@@ -109,20 +112,50 @@ pub(super) fn write_op(
     Ok(())
 }
 
+/// One extended operation in Stim's format after `indent`.
+pub(super) fn write_extended(out: &mut String, op: &ExtendedOp, indent: &str) {
+    match op {
+        ExtendedOp::HeraldedErase {
+            probability,
+            qubits,
+        } => {
+            Writer(out, indent).line(&format!("HERALDED_ERASE({probability:?})"), qubits);
+        }
+        ExtendedOp::HeraldedPauliChannel1 {
+            probabilities: [pi, px, py, pz],
+            qubits,
+        } => {
+            Writer(out, indent).line(
+                &format!("HERALDED_PAULI_CHANNEL_1({pi:?}, {px:?}, {py:?}, {pz:?})"),
+                qubits,
+            );
+        }
+    }
+}
+
 impl DetectorCircuit {
     /// The circuit in Stim's text format (Gidney, Quantum 5, 497 (2021)),
     /// one operation per line. Gates are written as H, S, S_DAG, X, Y, Z,
     /// CX and SWAP; measurement records are relative (`rec[-k]`), as Stim
     /// requires. Probabilities are written exactly, as the shortest
     /// decimal that reads back to the same number (with an exponent for
-    /// very small ones).
+    /// very small ones). Heralded noise is written as `HERALDED_ERASE` and
+    /// `HERALDED_PAULI_CHANNEL_1`.
     pub fn to_stim(&self) -> Result<String> {
         let mut out = String::new();
         let mut measured = 0;
-        for op in self.operations() {
-            write_op(&mut out, op, "", &|r| measured - r)?;
-            if let QecOp::Measure { .. } = op {
-                measured += 1;
+        for step in self.steps() {
+            match step {
+                CircuitStep::Qec(op) => {
+                    write_op(&mut out, op, "", &|r| measured - r)?;
+                    if let QecOp::Measure { .. } = op {
+                        measured += 1;
+                    }
+                }
+                CircuitStep::Extended(op) => {
+                    write_extended(&mut out, op, "");
+                    measured += op.n_records();
+                }
             }
         }
         Ok(out)
@@ -163,7 +196,7 @@ fn parse_error(line: usize, what: impl std::fmt::Display) -> QsoError {
 const IGNORED: [&str; 4] = ["TICK", "QUBIT_COORDS", "SHIFT_COORDS", "I"];
 
 /// Every instruction the importer reads.
-const SUPPORTED: [&str; 41] = [
+const SUPPORTED: [&str; 43] = [
     "TICK",
     "QUBIT_COORDS",
     "SHIFT_COORDS",
@@ -205,6 +238,8 @@ const SUPPORTED: [&str; 41] = [
     "M",
     "MZ",
     "MX",
+    "HERALDED_ERASE",
+    "HERALDED_PAULI_CHANNEL_1",
 ];
 /// The rest of the measurements and resets.
 const SUPPORTED_MEASUREMENTS: [&str; 5] = ["MY", "MR", "MRZ", "MRX", "MRY"];
@@ -374,6 +409,8 @@ pub(super) trait Sink {
     fn measure(&mut self, qubit: usize, flip: f64) -> Result<()>;
     fn reset(&mut self, qubit: usize) -> Result<()>;
     fn noise(&mut self, noise: Noise, qubits: &[usize]) -> Result<()>;
+    /// An extended operation (checked by the sink).
+    fn extended(&mut self, op: ExtendedOp) -> Result<()>;
     /// A detector on the measurements `lookbacks` back (1: the last).
     fn detector(&mut self, lookbacks: &[usize]) -> Result<()>;
     fn observable(&mut self, index: usize, lookbacks: &[usize]) -> Result<()>;
@@ -399,6 +436,11 @@ impl Sink for DetectorCircuit {
 
     fn noise(&mut self, noise: Noise, qubits: &[usize]) -> Result<()> {
         DetectorCircuit::noise(self, noise, qubits).map(|_| ())
+    }
+
+    fn extended(&mut self, op: ExtendedOp) -> Result<()> {
+        check_extended(self.n_qubits(), &op)?;
+        self.push_extended(op).map(|_| ())
     }
 
     fn detector(&mut self, lookbacks: &[usize]) -> Result<()> {
@@ -546,6 +588,10 @@ impl<S: Sink> Builder<S> {
             }
             _ => {}
         }
+        if let Some(op) = extended_instruction(name, args, targets, line)? {
+            self.c.extended(op).map_err(fail)?;
+            return Ok(());
+        }
         let qubits: Vec<usize> = targets
             .iter()
             .map(|t| match *t {
@@ -673,15 +719,61 @@ impl<S: Sink> Builder<S> {
     }
 }
 
+/// The extended operation of a Stim instruction, if it is one: the one
+/// table of the instructions that become [`ExtendedOp`]s. Its arguments
+/// are counted strictly, as Stim counts them; its targets must be qubits
+/// (`!q` reads as `q`, as in every Stim simulator: a herald is never
+/// inverted).
+fn extended_instruction(
+    name: &str,
+    args: &[f64],
+    targets: &[Target],
+    line: usize,
+) -> Result<Option<ExtendedOp>> {
+    let wanted = match name {
+        "HERALDED_ERASE" => 1,
+        "HERALDED_PAULI_CHANNEL_1" => 4,
+        _ => return Ok(None),
+    };
+    if args.len() != wanted {
+        return Err(parse_error(
+            line,
+            if wanted == 1 {
+                format!("{name} takes 1 probability")
+            } else {
+                format!("{name} takes {wanted} probabilities")
+            },
+        ));
+    }
+    let qubits: Vec<usize> = targets
+        .iter()
+        .map(|t| match *t {
+            Target::Qubit(q) => Ok(q),
+            Target::Record(_) => Err(parse_error(line, format!("{name} takes qubit targets"))),
+        })
+        .collect::<Result<_>>()?;
+    Ok(Some(match name {
+        "HERALDED_ERASE" => ExtendedOp::HeraldedErase {
+            probability: args[0],
+            qubits,
+        },
+        _ => ExtendedOp::HeraldedPauliChannel1 {
+            probabilities: [args[0], args[1], args[2], args[3]],
+            qubits,
+        },
+    }))
+}
+
 impl DetectorCircuit {
     /// A circuit in Stim's text format: the Clifford gates H, S, S_DAG,
     /// X, Y, Z, SQRT_X(_DAG), SQRT_Y(_DAG), CX, CY, CZ, XCZ, YCZ and SWAP;
     /// measurements and resets in the X, Y and Z bases (M, MX, MY, R, RX,
     /// RY, MR, MRX, MRY, with an optional flip probability); X_ERROR,
-    /// Y_ERROR, Z_ERROR, DEPOLARIZE1 and DEPOLARIZE2; DETECTOR,
-    /// OBSERVABLE_INCLUDE and REPEAT blocks. TICK and coordinates are
-    /// ignored. The register has as many qubits as the largest target
-    /// needs. Other instructions (feedback, MPP, correlated or heralded
+    /// Y_ERROR, Z_ERROR, DEPOLARIZE1 and DEPOLARIZE2; the heralded errors
+    /// HERALDED_ERASE and HERALDED_PAULI_CHANNEL_1 (see [`ExtendedOp`]);
+    /// DETECTOR, OBSERVABLE_INCLUDE and REPEAT blocks. TICK and
+    /// coordinates are ignored. The register has as many qubits as the
+    /// largest target needs. Other instructions (feedback, MPP, correlated
     /// errors, PAULI_CHANNEL) are an error that names them.
     pub fn from_stim(text: &str) -> Result<DetectorCircuit> {
         let parsed = parse(text)?;

@@ -988,6 +988,134 @@ fn error_correction() {
 }
 
 #[test]
+fn heralded_erasure() {
+    // Nine tenths of every probability as heralded erasures: 53 herald
+    // detectors join the 8 of the repetition code, and decoding
+    // conditions on the heralds that fired.
+    let stim = Scratch::new("erasure.stim");
+    let args = [
+        "qec",
+        "--code",
+        "repetition",
+        "--distance",
+        "3",
+        "--p",
+        "0.01",
+        "--erasure-share",
+        "0.9",
+        "--shots",
+        "2000",
+    ];
+    let mut with_file = args.to_vec();
+    with_file.extend(["--stim", stim.path()]);
+    let e = qso(&with_file);
+    assert_eq!(e[0]["erasure_share"], 0.9);
+    assert_eq!(e[0]["herald_detectors"], 53);
+    assert_eq!(e[0]["detectors"], 61);
+    assert!(f(&e[0]["logical_error_rate"]["rate"]) < 0.05);
+    let text = qso_text(&args);
+    assert!(text.contains("3 rounds, erasure share 0.9:"), "{text}");
+    assert!(text.contains("union-find with heralds"), "{text}");
+    // Without the option: no heralds, and the text as before.
+    let mut without = args.to_vec();
+    without.drain(7..9);
+    let plain = qso(&without);
+    assert_eq!(plain[0]["erasure_share"], 0.0);
+    assert_eq!(plain[0]["herald_detectors"], 0);
+    assert_eq!(plain[0]["detectors"], 8);
+    assert!(!qso_text(&without).contains("erasure"));
+    // The written circuit holds Stim's HERALDED_ERASE and decodes as it
+    // is, by each decoder that uses heralds.
+    assert!(
+        std::fs::read_to_string(stim.path())
+            .unwrap()
+            .contains("HERALDED_ERASE(")
+    );
+    for decoder in ["union-find", "matching", "bposd"] {
+        let c = qso(&[
+            "qec",
+            "--circuit",
+            stim.path(),
+            "--shots",
+            "2000",
+            "--decoder",
+            decoder,
+        ]);
+        assert_eq!(c["erasure_share"], Value::Null);
+        assert_eq!(c["herald_detectors"], 53);
+        assert_eq!(c["detectors"], 61);
+        assert!(f(&c["logical_error_rate"]["rate"]) < 0.05);
+    }
+    // The share belongs to generated experiments: clap refuses it with a
+    // file.
+    let out = run(&[
+        "qec",
+        "--circuit",
+        stim.path(),
+        "--erasure-share",
+        "0.5",
+        "--shots",
+        "10",
+    ]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--erasure-share"));
+    // The circuit distance does not take heralded operations yet, from a
+    // file or generated.
+    let refusal = "the circuit distance does not take heralded operations yet";
+    let err = qso_fails(&[
+        "qec",
+        "--circuit",
+        stim.path(),
+        "--shots",
+        "10",
+        "--circuit-distance",
+    ]);
+    assert!(err.contains(refusal), "{err}");
+    let mut distance = args.to_vec();
+    distance.push("--circuit-distance");
+    assert!(qso_fails(&distance).contains(refusal));
+    // Windows and correlated matching do not use heralds yet.
+    for extra in [
+        &["--decoder", "matching", "--window", "3"][..],
+        &["--decoder", "bposd", "--parallel", "--commit", "2"][..],
+        &["--decoder", "correlated-matching"][..],
+    ] {
+        let mut refused = args.to_vec();
+        refused.extend_from_slice(extra);
+        let err = qso_fails(&refused);
+        assert!(err.contains("does not use heralds yet"), "{err}");
+        assert!(!err.contains('{'), "{err}");
+    }
+    // A share outside [0, 1] is refused.
+    let mut wrong = args.to_vec();
+    wrong[8] = "1.5";
+    assert!(qso_fails(&wrong).contains("erasure_share"));
+    // Beyond 10 000 rounds the rounds are one repeated block, heralds
+    // included: 15 a round and 8 more, as the 53 = 15 · 3 + 8 of three
+    // rounds above.
+    let long = qso(&[
+        "qec",
+        "--code",
+        "repetition",
+        "--distance",
+        "3",
+        "--rounds",
+        "20000",
+        "--p",
+        "0.001",
+        "--erasure-share",
+        "0.5",
+        "--shots",
+        "16",
+        "--decoder",
+        "matching",
+    ]);
+    assert_eq!(long[0]["rounds"], 20000);
+    assert_eq!(long[0]["detectors"], 2 * 20001 + 300008);
+    assert_eq!(long[0]["herald_detectors"], 300008);
+}
+
+#[test]
 fn pauli_propagation() {
     // GHZ on 70 qubits, beyond every state-vector and density-matrix
     // simulator: ⟨Z0 Z69⟩ = 1, ⟨X0 X69⟩ = 0 and ⟨X⊗70⟩ = 1.

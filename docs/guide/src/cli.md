@@ -26,7 +26,7 @@ machine-readable output; `qso <command> --help` lists all options.
 | `propagate FILE` | ⟨O⟩ of an OpenQASM circuit on up to 16384 qubits by Pauli propagation (gates on at most four qubits; final measurements are left out, others, resets and conditions refused): exact, or truncated with a rigorous bound on the error; with a device, its gate rules, idle relaxation and spectators as channels (readout errors are not applied). JSON keys `value`, `truncation_bound`, `terms`, `peak_terms`, `dropped_terms`, `operator` | `--observable`, `--device FILE` (up to 16384 per-qubit entries), `--state BITS` (qubit 0 on the right), `--min-coefficient`, `--max-weight`, `--max-terms`, `--operator` |
 | `molecule FILE` | Qubit Hamiltonian, Hartree–Fock and full-CI energies of an FCIDUMP molecule, and a variational solution | `--mapping jordan-wigner\|parity\|bravyi-kitaev`, `--two-qubit-reduction`, `--method none\|uccsd\|upccgsd\|adapt`, `--k`, `--roots` |
 | `trotter` | Trotter–Suzuki circuit for exp(−iHt) with its error bound | `--hamiltonian`, `--qubits`, `--time`, `--steps`, `--order`, `--output FILE` |
-| `qec` | Repetition, surface, colour or bivariate bicycle code memory experiment under circuit-level noise, or a circuit in Stim's format: logical error rate with union-find, matching, correlated matching or BP+OSD decoding; optionally the exact circuit distance, or bounds when `--max-seconds` runs out ([Error correction](qec.md)) | `--code surface\|repetition\|color\|bb`, `--basis z\|x`, `--decoder union-find\|matching\|correlated-matching\|bposd`, `--window`, `--commit`, `--schedule greedy\|bicycle\|0,1,2,3,4,5`, `--circuit-distance`, `--max-seconds`, `--symmetry`, `--distance 3,5,7`, `--rounds`, `--p 0.001,0.01`, `--shots`, `--seed`, `--stim FILE`, `--circuit FILE` |
+| `qec` | Repetition, surface, colour or bivariate bicycle code memory experiment under circuit-level noise, optionally with a share of heralded erasures, or a circuit in Stim's format: logical error rate with union-find, matching, correlated matching or BP+OSD decoding, conditioned on the heralds that fired; optionally the exact circuit distance, or bounds when `--max-seconds` runs out ([Error correction](qec.md)). JSON keys per row include `detectors`, `herald_detectors`, `erasure_share` (null with `--circuit`), `logical_error_rate` and `circuit_distance` | `--code surface\|repetition\|color\|bb`, `--basis z\|x`, `--decoder union-find\|matching\|correlated-matching\|bposd`, `--erasure-share`, `--window`, `--commit`, `--parallel`, `--buffer`, `--schedule greedy\|bicycle\|0,1,2,3,4,5`, `--circuit-distance`, `--max-seconds`, `--symmetry`, `--distance 3,5,7`, `--rounds`, `--p 0.001,0.01`, `--shots`, `--seed`, `--stim FILE`, `--circuit FILE` |
 
 Graphs are given as specifications (see [Graphs](graphs.md)), for example
 `metatron`, `fruit-of-life`, `petersen`, `hypercube:8`, `johnson:7,3` or
@@ -137,6 +137,37 @@ $ qso propagate ghz100.qasm --observable "Z0 Z99" --device chain.json
 <O> = 0.224540781668 (truncation bound 1.702e-15)
 100 qubits, 791 layers; 303 strings at the start, at most 303 held, 0 dropped
 ```
+
+`qec --erasure-share e` turns the share e of every noise probability of
+a generated memory experiment into heralded erasures (Stim's
+`HERALDED_ERASE`) of each qubit of the operation, each herald a detector
+of its round, and leaves the rest, (1 − e)·p, to the usual
+circuit-level noise (see [Error correction](qec.md)). Union-find,
+matching and BP+OSD then condition on the heralds that fired, shot by
+shot, and the decoder's name says "with heralds". Circuit files with
+`HERALDED_ERASE` or `HERALDED_PAULI_CHANNEL_1` are decoded in the same
+way without the option, which `--circuit` refuses. At p = 0.01 on the
+rotated surface code, nine tenths of the noise heralded:
+
+```text
+$ qso qec --distance 3,5 --p 0.01 --shots 10000 --decoder matching
+p = 0.01, d = 3, 3 rounds: 17 qubits, 16 detectors; logical error rate 6.030e-2 ± 2.4e-3 (603 of 10000 shots, matching)
+p = 0.01, d = 5, 5 rounds: 49 qubits, 72 detectors; logical error rate 8.370e-2 ± 2.8e-3 (837 of 10000 shots, matching)
+
+$ qso qec --distance 3,5 --p 0.01 --erasure-share 0.9 --shots 10000 --decoder matching
+p = 0.01, d = 3, 3 rounds, erasure share 0.9: 17 qubits, 285 detectors; logical error rate 5.900e-3 ± 7.7e-4 (59 of 10000 shots, matching with heralds)
+p = 0.01, d = 5, 5 rounds, erasure share 0.9: 49 qubits, 1431 detectors; logical error rate 2.100e-3 ± 4.6e-4 (21 of 10000 shots, matching with heralds)
+```
+
+The detector counts include the herald detectors. Each JSON row adds
+`erasure_share` (null for `--circuit`) and `herald_detectors`, the
+detectors the decoder conditions on. Circuits with heralded operations
+are refused, with the library's error, by `--circuit-distance` ("the
+circuit distance does not take heralded operations yet"), and circuits
+with herald detectors by `--window`, `--parallel` and `--decoder
+correlated-matching` ("does not use heralds yet"); heralds that no
+detector reads alone enter the model by Stim's rule and decode with any
+decoder.
 
 `molecule` reads an FCIDUMP file (see [Electronic structure](chemistry.md))
 and `trotter` builds a product-formula circuit (see

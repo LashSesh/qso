@@ -1,5 +1,5 @@
 //! Memory experiments: repetition and rotated surface codes with
-//! circuit-level noise.
+//! circuit-level noise, and with erasure-biased noise ([`ErasureNoise`]).
 
 use super::circuit::{DetectorCircuit, MAX_QEC_OPERATIONS, Noise};
 use super::repeat::RepeatedCircuit;
@@ -51,6 +51,58 @@ impl CircuitNoise {
     }
 }
 
+/// Erasure-biased circuit noise: a share `erasure_share` of every noise
+/// probability of [`CircuitNoise`] is a heralded erasure of each qubit of
+/// the operation (Stim's `HERALDED_ERASE`, its herald a detector of the
+/// round), the rest the noise of [`CircuitNoise`].
+///
+/// With e the share and p an operation's probability, every qubit the
+/// operation touches is erased with probability e·p before the rest,
+/// (1 − e)·p, acts as in [`CircuitNoise`]: after a reset, a one-qubit gate
+/// or a CNOT, before a measurement (whose flip is (1 − e)·p), and on the
+/// data before each round. A CNOT erases each of its two qubits
+/// independently, so its total error is about (1 + e)·p (Wu et al.'s
+/// erasure of a pair has no Stim instruction). Erasure stays in the qubit
+/// space: an erased qubit is replaced by a maximally mixed one.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct ErasureNoise {
+    pub noise: CircuitNoise,
+    /// The heralded share of each probability, in [0, 1].
+    pub erasure_share: f64,
+}
+
+impl ErasureNoise {
+    /// `noise` with the share `erasure_share` (finite, in [0, 1]) of each
+    /// probability heralded.
+    pub fn new(noise: CircuitNoise, erasure_share: f64) -> Result<Self> {
+        if !(0.0..=1.0).contains(&erasure_share) {
+            return Err(QsoError::invalid(
+                "erasure_share",
+                format!("{erasure_share} is not a share in [0, 1]"),
+            ));
+        }
+        Ok(ErasureNoise {
+            noise,
+            erasure_share,
+        })
+    }
+
+    /// [`CircuitNoise::uniform`]`(p)` with the share `erasure_share`
+    /// heralded.
+    pub fn uniform(p: f64, erasure_share: f64) -> Result<Self> {
+        Self::new(CircuitNoise::uniform(p), erasure_share)
+    }
+
+    /// `noise` without erasures.
+    pub(super) fn plain(noise: &CircuitNoise) -> Self {
+        ErasureNoise {
+            noise: *noise,
+            erasure_share: 0.0,
+        }
+    }
+}
+
 fn check(distance: usize, rounds: usize, odd: bool) -> Result<()> {
     if !(2..=MAX_DISTANCE).contains(&distance) || (odd && distance.is_multiple_of(2)) {
         return Err(QsoError::invalid(
@@ -84,8 +136,8 @@ pub(super) fn check_size(
     if rounds <= 2 {
         return Ok(());
     }
-    let one = build(1)?.operations().len();
-    let two = build(2)?.operations().len();
+    let one = build(1)?.n_steps();
+    let two = build(2)?.n_steps();
     let total = (two - one).saturating_mul(rounds - 1).saturating_add(one);
     if total > MAX_QEC_OPERATIONS {
         return Err(QsoError::invalid(
@@ -99,12 +151,15 @@ pub(super) fn check_size(
     Ok(())
 }
 
-/// A builder that adds the noise of [`CircuitNoise`] around operations,
-/// and marks where each round starts and the last ends.
+/// A builder that adds the noise of [`ErasureNoise`] around operations,
+/// and marks where each round starts and the last ends. The heralds of its
+/// erasures wait until [`Noisy::flush`] declares them as detectors.
 pub(super) struct Noisy<'a> {
     pub(super) c: DetectorCircuit,
     pub(super) noise: &'a CircuitNoise,
     pub(super) marks: Vec<usize>,
+    share: f64,
+    pending: Vec<usize>,
 }
 
 /// A memory experiment and the operation at which each round starts and
@@ -133,24 +188,53 @@ pub(super) fn repeated(
 }
 
 impl Noisy<'_> {
-    pub(super) fn new(c: DetectorCircuit, noise: &CircuitNoise) -> Noisy<'_> {
+    pub(super) fn new(c: DetectorCircuit, noise: &ErasureNoise) -> Noisy<'_> {
         Noisy {
             c,
-            noise,
+            noise: &noise.noise,
             marks: Vec::new(),
+            share: noise.erasure_share,
+            pending: Vec::new(),
         }
     }
 
     /// Mark the start of a round (or the end of the last).
     pub(super) fn mark(&mut self) {
-        self.marks.push(self.c.operations().len());
+        self.marks.push(self.c.n_steps());
+    }
+
+    /// The heralded share of probability `p` as erasures of `qs`, their
+    /// heralds kept for the next [`Noisy::flush`].
+    fn erase(&mut self, qs: &[usize], p: f64) -> Result<()> {
+        let e = self.share * p;
+        if e > 0.0 {
+            let heralds = self.c.heralded_erase(e, qs)?;
+            self.pending.extend(heralds);
+        }
+        Ok(())
+    }
+
+    /// The share of probability `p` left to the noise of [`CircuitNoise`].
+    fn rest(&self, p: f64) -> f64 {
+        (1.0 - self.share) * p
+    }
+
+    /// Declare a detector on each herald since the last flush, in record
+    /// order (right before the first detector of each round's block).
+    pub(super) fn flush(&mut self) -> Result<()> {
+        for r in std::mem::take(&mut self.pending) {
+            self.c.detector(&[r])?;
+        }
+        Ok(())
     }
 
     pub(super) fn reset(&mut self, qs: &[usize]) -> Result<()> {
         for &q in qs {
             self.c.reset(q)?;
         }
-        self.c.noise(Noise::XError(self.noise.after_reset), qs)?;
+        self.erase(qs, self.noise.after_reset)?;
+        let p = self.rest(self.noise.after_reset);
+        self.c.noise(Noise::XError(p), qs)?;
         Ok(())
     }
 
@@ -158,8 +242,9 @@ impl Noisy<'_> {
         for &q in qs {
             self.c.h(q)?;
         }
-        self.c
-            .noise(Noise::Depolarize1(self.noise.after_gate1), qs)?;
+        self.erase(qs, self.noise.after_gate1)?;
+        let p = self.rest(self.noise.after_gate1);
+        self.c.noise(Noise::Depolarize1(p), qs)?;
         Ok(())
     }
 
@@ -170,15 +255,24 @@ impl Noisy<'_> {
             self.c.cx(a, b)?;
             flat.extend([a, b]);
         }
-        self.c
-            .noise(Noise::Depolarize2(self.noise.after_gate2), &flat)?;
+        self.erase(&flat, self.noise.after_gate2)?;
+        let p = self.rest(self.noise.after_gate2);
+        self.c.noise(Noise::Depolarize2(p), &flat)?;
         Ok(())
     }
 
     pub(super) fn measure(&mut self, qs: &[usize]) -> Result<Vec<usize>> {
-        qs.iter()
-            .map(|&q| self.c.measure(q, self.noise.measurement))
-            .collect()
+        self.erase(qs, self.noise.measurement)?;
+        let flip = self.rest(self.noise.measurement);
+        qs.iter().map(|&q| self.c.measure(q, flip)).collect()
+    }
+
+    /// Depolarising noise on the data qubits before a round.
+    pub(super) fn before_round(&mut self, data: &[usize]) -> Result<()> {
+        self.erase(data, self.noise.before_round)?;
+        let p = self.rest(self.noise.before_round);
+        self.c.noise(Noise::Depolarize1(p), data)?;
+        Ok(())
     }
 }
 
@@ -194,6 +288,19 @@ pub fn repetition_code_memory(
     rounds: usize,
     noise: &CircuitNoise,
 ) -> Result<DetectorCircuit> {
+    repetition_code_memory_erasure(distance, rounds, &ErasureNoise::plain(noise))
+}
+
+/// [`repetition_code_memory`] with erasure-biased noise: every erasure's
+/// herald is a detector of its round, declared right before the round's
+/// other detectors (the heralds of the last ancilla resets go to the next
+/// round, those of the final measurements to the final block). With share
+/// 0 the circuit is that of [`repetition_code_memory`].
+pub fn repetition_code_memory_erasure(
+    distance: usize,
+    rounds: usize,
+    noise: &ErasureNoise,
+) -> Result<DetectorCircuit> {
     check(distance, rounds, false)?;
     check_size(rounds, |r| Ok(build_repetition(distance, r, noise)?.0))?;
     Ok(build_repetition(distance, rounds, noise)?.0)
@@ -207,11 +314,21 @@ pub fn repetition_code_memory_repeated(
     rounds: usize,
     noise: &CircuitNoise,
 ) -> Result<RepeatedCircuit> {
+    repetition_code_memory_erasure_repeated(distance, rounds, &ErasureNoise::plain(noise))
+}
+
+/// [`repetition_code_memory_erasure`] with rounds 2 to `rounds` as one
+/// repeated block; expanded it is the same circuit.
+pub fn repetition_code_memory_erasure_repeated(
+    distance: usize,
+    rounds: usize,
+    noise: &ErasureNoise,
+) -> Result<RepeatedCircuit> {
     check(distance, 1, false)?;
     repeated(rounds, |r| build_repetition(distance, r, noise))
 }
 
-fn build_repetition(distance: usize, rounds: usize, noise: &CircuitNoise) -> Result<Rounds> {
+fn build_repetition(distance: usize, rounds: usize, noise: &ErasureNoise) -> Result<Rounds> {
     let d = distance;
     let data: Vec<usize> = (0..d).collect();
     let anc: Vec<usize> = (d..2 * d - 1).collect();
@@ -220,12 +337,13 @@ fn build_repetition(distance: usize, rounds: usize, noise: &CircuitNoise) -> Res
     let mut previous: Option<Vec<usize>> = None;
     for _ in 0..rounds {
         b.mark();
-        b.c.noise(Noise::Depolarize1(noise.before_round), &data)?;
+        b.before_round(&data)?;
         b.cx(&(0..d - 1).map(|i| (data[i], anc[i])).collect::<Vec<_>>())?;
         b.cx(&(0..d - 1)
             .map(|i| (data[i + 1], anc[i]))
             .collect::<Vec<_>>())?;
         let m = b.measure(&anc)?;
+        b.flush()?;
         for (i, &r) in m.iter().enumerate() {
             match &previous {
                 None => b.c.detector(&[r])?,
@@ -238,6 +356,7 @@ fn build_repetition(distance: usize, rounds: usize, noise: &CircuitNoise) -> Res
     b.mark();
     let last = previous.expect("at least one round");
     let m = b.measure(&data)?;
+    b.flush()?;
     for i in 0..d - 1 {
         b.c.detector(&[last[i], m[i], m[i + 1]])?;
     }
@@ -284,6 +403,18 @@ pub fn surface_code_memory_with(
     noise: &CircuitNoise,
     basis: MemoryBasis,
 ) -> Result<DetectorCircuit> {
+    surface_code_memory_erasure(distance, rounds, &ErasureNoise::plain(noise), basis)
+}
+
+/// [`surface_code_memory_with`] with erasure-biased noise (heralds as in
+/// [`repetition_code_memory_erasure`]). With share 0 the circuit is that
+/// of [`surface_code_memory_with`].
+pub fn surface_code_memory_erasure(
+    distance: usize,
+    rounds: usize,
+    noise: &ErasureNoise,
+    basis: MemoryBasis,
+) -> Result<DetectorCircuit> {
     check(distance, rounds, true)?;
     check_size(rounds, |r| Ok(build_surface(distance, r, noise, basis)?.0))?;
     Ok(build_surface(distance, rounds, noise, basis)?.0)
@@ -298,6 +429,17 @@ pub fn surface_code_memory_repeated(
     noise: &CircuitNoise,
     basis: MemoryBasis,
 ) -> Result<RepeatedCircuit> {
+    surface_code_memory_erasure_repeated(distance, rounds, &ErasureNoise::plain(noise), basis)
+}
+
+/// [`surface_code_memory_erasure`] with rounds 2 to `rounds` as one
+/// repeated block; expanded it is the same circuit.
+pub fn surface_code_memory_erasure_repeated(
+    distance: usize,
+    rounds: usize,
+    noise: &ErasureNoise,
+    basis: MemoryBasis,
+) -> Result<RepeatedCircuit> {
     check(distance, 1, true)?;
     repeated(rounds, |r| build_surface(distance, r, noise, basis))
 }
@@ -305,7 +447,7 @@ pub fn surface_code_memory_repeated(
 fn build_surface(
     distance: usize,
     rounds: usize,
-    noise: &CircuitNoise,
+    noise: &ErasureNoise,
     basis: MemoryBasis,
 ) -> Result<Rounds> {
     let x_basis = basis == MemoryBasis::X;
@@ -350,7 +492,7 @@ fn build_surface(
     let mut previous: Option<Vec<usize>> = None;
     for _ in 0..rounds {
         b.mark();
-        b.c.noise(Noise::Depolarize1(noise.before_round), &data_qubits)?;
+        b.before_round(&data_qubits)?;
         b.h(&x_anc)?;
         for layer in 0..4 {
             let mut pairs = Vec::new();
@@ -372,6 +514,7 @@ fn build_surface(
         }
         b.h(&x_anc)?;
         let m = b.measure(&all_anc)?;
+        b.flush()?;
         for (k, &(_, _, is_x)) in plaquettes.iter().enumerate() {
             if is_x != x_basis {
                 continue;
@@ -390,6 +533,7 @@ fn build_surface(
         b.h(&data_qubits)?;
     }
     let m = b.measure(&data_qubits)?;
+    b.flush()?;
     for (k, &(i, j, is_x)) in plaquettes.iter().enumerate() {
         if is_x != x_basis {
             continue;

@@ -61,7 +61,7 @@ which withdraws the results of version 1.
 | Quantum walks | continuous- and discrete-time walks, symmetry reduction to exact low-dimensional problems (Q₃₀ in 31 dimensions), perfect state transfer, walk circuits (1.3.0); driven and decoherent walks (1.13); exact pretty-good-transfer decisions on paths, cycles and abelian Cayley graphs (1.18); interacting bosons, fermions and distinguishable particles with certificates for graph isomorphism (1.29); symmetry for driven walks, open walks on orbitals, coined walks with dephasing, hypercubes with dephasing up to d = 230 (1.38); interacting walkers on the orbits of automorphisms (three bosons on Q₉: 2284 orbits of 22.5 million configurations) and up to four particles on hypercubes (1.43); open walks on large symmetric graphs from point stabilisers (Q₁₈, H(4, 10), J(24, 4); 1.48); interacting walkers on Hamming, Johnson and Kneser graphs from canonical forms (1.53) and on any graph from minimal images under a group (three fermions on Paley(3209): 1068 orbits of 5.5·10⁹ configurations; 1.58); transport to a trap with traps, losses, site energies and dephasing per node, its efficiency and mean arrival time by linear solves, dark states and the best dephasing rate, dense to 2048 nodes, on orbitals (K₈₁₉₂ on ten orbitals) and on hypercubes to d = 61 (1.63) | interacting walkers without symmetry stop at 2²² configurations, and dense graphs with small groups stay dense on their orbits (three bosons from one node of Paley(809) exceed 2²⁶ entries; 1.58); open walks beyond 8192 nodes need a start whose stabiliser leaves few orbitals (dense graphs and circulants stay at 8192 nodes; 1.48); pretty good transfer on other graphs has no exact reference; the arrival time of transport has no error estimate and on large coherent hypercubes is limited by the conditioning (Q₄₀: 1.2·10⁻⁴ relative), and the orbital solves refactorise a banded LU at every dephasing rate (1.63) |
 | Physics and chemistry | fermion-to-qubit mappings, FCIDUMP molecules with full CI, UCCSD, k-UpCCGSD, ADAPT-VQE; product formulas with error bounds, qDRIFT; VQD, SSVQE, natural gradient, imaginary-time evolution; QUBO/QAOA mixers; amplitude estimation (1.5); Gaussian integrals (STO-3G, 6-31G, H to Ne), RHF and UHF, frozen-core active spaces and matrix-free full CI (1.15); shells up to g, 6-31G* and cc-pVDZ to argon, ROHF (1.23); MP2, CCSD and CCSD(T) with frozen cores, closed shells in spatial orbitals and UHF and ROHF in spin orbitals, equal to PySCF's to 2.1·10⁻¹⁰ Ha (1.62); nuclear spin dynamics with pulses, relaxation, spectra and parahydrogen methods, up to eleven spins (1.33); chemical exchange between spin systems (SABRE build-up, lineshapes), long-lived singlet order and field-cycling transfer (1.35); optimal control (GRAPE) of rf pulses and field profiles with exact gradients (1.36); NV centres with their nitrogen and up to eight ¹³C, sensing sequences with ideal or finite pulses, classical field noise with filter functions and exact trajectories (1.37); the ¹³C bath of an NV centre by the cluster-correlation expansion (1.39); the optical cycle, ODMR, pulsed readout and magnetometer sensitivity in fields of any direction, and ensembles (1.40); sparse relaxation blocks propagated by Krylov steps, Redfield relaxation from sparse terms and equivalent spins: seven and eight relaxing protons for seconds (1.41); optimal control with relaxation on sparse blocks and on the orbits of equivalent spins, seven and eight spins (1.46); Redfield relaxation with anisotropic diffusion and model-free internal motion (1.49); reaction kinetics with spins: PASADENA, ALTADENA and SABRE as they run (1.50); field profiles with relaxation beyond six spins, the relaxation interpolated over the field (1.51); exchange and reactions on sparse blocks with iterative steady states and field profiles: SABRE with nine spins in the complex beside seven in the substrate (1.54); reactions of two spin-carrying reactants, the product formed in the product of their states: SABRE whose complex keeps its hydrides and swaps them with a hydrogen pool, PHIP from a pool whose singlet decays (1.59); the optical cycle with the nitrogen and one ¹³C at the level anticrossings, ¹⁵N polarised to 0.95 at 51 mT, the fluorescence dip at 102.4 mT, a microwave in the laboratory frame by Floquet harmonics (1.60); Redfield relaxation applied without storing it, with its analytic field derivative: nine and ten relaxing spins whose superoperator would need 6 to 74 GB (1.55); product-formula bounds whose remainder runs over the terms that do not commute, the error averaged over states, and step counts for a target error: half the steps of the bounds of Childs et al. for Heisenberg chains of 10 to 64 spins (1.56); radical pairs with electrons and ¹⁴N in the spin system: spin-selective recombination (Haberkorn, Jones–Maeda–Hore), singlet, triplet and escape yields against the field and the CIDNP of every nucleus in each product, by Sylvester solves per block of labels or GMRES with electron relaxation, the products handed to spin systems and formed in reactions (1.65) | Schwarz screening helps extended molecules only (5 % of the quartets of butane); coupled cluster holds every integral (64 basis functions, 100 correlated spin orbitals: 1.55 GB at 96) and runs on one thread, 1.6 to 2 times PySCF's time per closed-shell iteration and 6 to 12 times per open-shell one; no (T) for ROHF (1.62); the commutator bound of product formulas (1.56) still sums its remainder by the triangle inequality, about 2.3 times the empirical step counts of Heisenberg chains and loose at few steps and order 6, where its budget stops the degree early; Redfield relaxation takes rigid-body diffusion and model-free internal motion, not correlated motions of groups (1.49), and propagations beyond 1.5·10¹² operations or 2 GiB are refused (eleven protons with dipolar relaxation, nine for 100 s; 1.41); chemical exchange and reaction kinetics take Krylov steps beyond 2048 elements per block (1.54), unaffordable in the laboratory frame at millitesla fields and more; reactants meet uncorrelated, except radical pairs born correlated in their cage (1.65), and a reaction whose partner's amount changes takes steps that resolve the frequencies of the blocks it feeds (PHIP at 1 µT with a three-spin product: 2 s of reaction in 2 s, 9 s with the hydrogen a pool with spins; a four-spin product at 5 µT over 3 s exceeds the work limit; 1.50, 1.59); field profiles with relaxation hold the relaxation at up to 33 fields (1.51), or apply Redfield relaxation without storing it where those would not fit (1.55), where work bounds them (eight spins with dipolar relaxation: two steps over 0.02 s per evaluation within the limit), and have many local optima; an evaluation of eight relaxing spins takes tens of seconds (1.46); the NV bath of 1.39 takes ideal pulses only (finite ones: the generalised expansion, 1.45), its expansion can diverge (results beyond `|L| = 1` are refused), and the nuclei next to the vacancy need given contact couplings (1.39); the optical cycle with nuclei is dense in Liouville space: 42 levels (¹⁴N and ¹³C) take 9 s for a steady state and 230 s with a microwave, and more nuclei do not fit (1.60); radical pairs take isotropic hyperfine couplings, two electrons without paramagnetic (Redfield) relaxation, exponential recombination without re-encounters and up to 2048 dimensions, about a second per field at 1536 in the laboratory frame on four cores (a start with coherences between labels: 101 s; 1.65) |
 | Interoperability | OpenQASM 2 with `gate` definitions and an OpenQASM 3 subset (1.6); a WASM build, npm package and browser playground (1.6); Stim's circuit format, written (1.8) and read (1.10); edge lists, GraphML and duck-typed NetworkX import for graphs | no bridges to other frameworks, by decision (see section 2) |
-| Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22); exact circuit distances of any model by a parallel search or the Brouwer–Zimmermann enumeration, with the lightest logical error as circuit locations (1.42); the search on the orbits of an error model's symmetries: [[144, 12, 12]] over three rounds of the depth-8 cycle has circuit distance 10 (1.47); logical failure rates far below sampling by splitting, with their leading term (surface codes to 10⁻⁹, [[72, 12, 6]] to 10⁻¹³; 1.52); decoding in sliding windows of rounds by matching or BP+OSD, round by round, at constant time per round up to 4000 rounds (1.57); error models in one pass backwards, linear in the rounds; circuits that keep their repeated blocks, sampled as they run, their models folded: 10⁵ rounds of distance 5 in 1.4 s, equal to Stim's at 10⁴; windows decoded in parallel, 2 to 2.4 times as fast on four cores (1.61) | exact circuit distances need time exponential in the distance (each weight about 17 times the last on bicycle circuits); symmetries divide it by a factor that grows with their number (41 to 43 for 72); splitting needs a burn-in long enough, which its error does not show (1.52); the folded model is still expanded into all its errors (5.6 million, about 350 MB, for 10⁵ rounds of distance 5), and parallel windows gain 2 to 2.4 on four cores, as a shot's syndrome and commits stay on one thread (1.61) |
+| Error correction | stabilizer tableaux up to 16 384 qubits (1.7); detector circuits, frame sampling, error models and union-find decoding of repetition and surface codes (1.8); exact matching decoding and X-basis memory (1.10); sparse matching at 1.1–2.3 times PyMatching's time (1.16); BP+OSD with colour and bivariate bicycle codes (1.19); circuit distance, distance-preserving schedules and correlated matching (1.22); exact circuit distances of any model by a parallel search or the Brouwer–Zimmermann enumeration, with the lightest logical error as circuit locations (1.42); the search on the orbits of an error model's symmetries: [[144, 12, 12]] over three rounds of the depth-8 cycle has circuit distance 10 (1.47); logical failure rates far below sampling by splitting, with their leading term (surface codes to 10⁻⁹, [[72, 12, 6]] to 10⁻¹³; 1.52); decoding in sliding windows of rounds by matching or BP+OSD, round by round, at constant time per round up to 4000 rounds (1.57); error models in one pass backwards, linear in the rounds; circuits that keep their repeated blocks, sampled as they run, their models folded: 10⁵ rounds of distance 5 in 1.4 s, equal to Stim's at 10⁴; windows decoded in parallel, 2 to 2.4 times as fast on four cores (1.61); heralded erasures as Stim models them, their error models equal to Stim's term by term, and union-find, matching and BP+OSD conditioned on the heralds that fired, shot by shot: the rotated surface code's threshold rises from 0.65–0.75 % to 3.5–3.7 % when 98 % of the circuit noise is heralded (1.66) | exact circuit distances need time exponential in the distance (each weight about 17 times the last on bicycle circuits); symmetries divide it by a factor that grows with their number (41 to 43 for 72); splitting needs a burn-in long enough, which its error does not show (1.52); the folded model is still expanded into all its errors (5.6 million, about 350 MB, for 10⁵ rounds of distance 5), and parallel windows gain 2 to 2.4 on four cores, as a shot's syndrome and commits stay on one thread (1.61); windows, correlated matching and splitting do not use heralds yet, and the pair erasure of Wu et al. has no Stim instruction (1.66) |
 | Large registers | matrix-product states up to 65 536 qubits with a fidelity bound (1.9), in the browser build too (1.25); expectation values by Pauli propagation on up to 16 384 qubits, exact or with a rigorous truncation bound (1.64) | — |
 | Documentation | user guide, executed tutorials and Python reference on GitHub Pages (1.2); Rust tutorials from the examples and the documentation of every release since 1.2.0 (1.25) | — |
 | Engineering | CI on Linux (x86_64, arm64), macOS and Windows; Miri, fuzzing, API checks, weekly cross-validation and benchmark tracking; Trusted Publishing (1.2); line and branch coverage, and differential tests of all simulators on random circuits (1.21); coverage of the CLI and of the Python tests (1.25) | — |
@@ -8027,7 +8027,7 @@ regression test or a corrected number:
 - **The laboratory-frame Δg assertion** used 10⁻¹² against the documented
   10⁻¹³ (measured 1.1·10⁻¹⁶); it is 10⁻¹³.
 
-### 1.66 — Erasures with heralds, and decoders that use them (M)
+### 1.66 — Erasures with heralds, and decoders that use them (M, delivered)
 
 Use case: neutral-atom qubits with erasure conversion (Wu, Kolkowitz,
 Puri and Thompson, Nat. Commun. 13, 4657 (2022); Ma et al., Nature 622,
@@ -8072,6 +8072,345 @@ weights equal to PyMatching 2.4 conditioned shot by shot (`add_edge`,
 `add_boundary_edge`), and BP+OSD equal to ldpc 2.4.1's `BpOsdDecoder`
 with `update_channel_probs`. Wu et al.'s gain is compared only
 qualitatively, since their pair erasure has no Stim instruction.
+
+Delivered in `qec/circuit.rs` (`ExtendedOp`, `CircuitStep`, `Steps`,
+`DetectorCircuit::steps`, `n_steps`, `heralded_erase`,
+`heralded_pauli_channel_1`), `qec/herald.rs` (`HeraldedErrorModel`,
+`heralded_error_model`, `ConditionedDecoder`, `HeraldedMethod`),
+`qec/mod.rs` (`HeraldedDecoder`, routing, and from the review
+`logical_error_rate_decoding` and `logical_error_rate_repeated_decoding`;
+`has_extended` public on both circuits), `qec/dem.rs`, `qec/repeat.rs`
+(`RepeatedCircuit::heralded_error_model`), `qec/frame.rs`, `qec/stim.rs`,
+`qec/codes.rs` and `qec/css.rs` (`ErasureNoise` and the six `_erasure`
+generators), with hooks in `decoder.rs`, `sparse.rs` and `bposd.rs`;
+Python `DetectorCircuit.heralded_erase`, `heralded_pauli_channel_1`,
+`heralded_error_model`, `RepeatedCircuit.heralded_error_model`,
+`ErasureNoise`, `HeraldedErrorModel` and `ConditionedDecoder`; `qso qec
+--erasure-share`:
+
+- **Operations beside `QecOp`.** `ExtendedOp` is non-exhaustive, with one
+  non-exhaustive struct variant per Stim instruction, and lives in a side
+  table of the circuit (position, operation), so `operations()` stays
+  `&[QecOp]` and `QecOp` and `Noise` gain nothing; `steps()` lists both
+  in order. Inside the crate every match on `ExtendedOp` and
+  `CircuitStep` is exhaustive, and the variant's doc comment lists the
+  places a new one must reach (builder and check, record count, sampler,
+  pass backwards, Stim tables, fuzz builder, tests against Stim), so
+  Pauli channels, correlated errors, MPP and feedback can join it. Each
+  target adds a herald record (`n_measurements` counts it, as Stim's
+  `num_measurements` does); `without_noise` keeps the operation at
+  probability 0. The importer reads both instructions (one probability,
+  or four with Stim's tolerance of 10⁻⁷ on their sum; `!q` read as `q`;
+  record, sweep and Pauli targets refused) and the writer writes them
+  back exactly.
+- **Sampling.** Per target the sampler zeroes the herald, draws the shots
+  that fire and for each the Pauli (an erasure one of four; the Pauli
+  channel in Stim's order X, Z, Y, I), in shot order, so samples do not
+  depend on the threads; circuits without heralds draw the random stream
+  they drew before.
+- **Error models.** The pass backwards of 1.61 treats a heralded target
+  as a disjoint channel over (Z effect, X effect, herald) and runs
+  Stim's merging loop over its eight outcomes, then, with decomposition,
+  Stim's decomposition per outcome with the single-error rule off. The
+  tracker keeps, per record, the detector whose cancelled record list is
+  that record alone; a herald whose pending effect is exactly that
+  detector is *owned* by it. `heralded_error_model` keys the owned
+  channels' rates and X and Z parts by their detector (keys with at least
+  one entry, so `REPEAT` folding shifts them) and every other channel's
+  errors, by Stim's rule, into the base.
+- **Decoding.** `ConditionedDecoder` numbers the ordinary detectors
+  compactly and keeps, beside the base errors, every herald part as a
+  slot of probability 0 (an infinite union-find length, a disabled
+  matching edge, the largest BP prior). Per shot it XORs the fired
+  heralds' parts into their slots (½ ⊕ q = ½ exactly), sets the touched
+  lengths, weights or priors through crate-private hooks, decodes and
+  restores them from the base arrays, also when decoding fails. A slot
+  the shot makes more likely than not (a Pauli channel's X part
+  (pX + pY)/t can be) is applied first, its detectors added to the
+  shot's and its observables to the prediction, and decoded with 1 − p,
+  PyMatching's rule for negative weights. Union-find merges the erased
+  edges before it grows; sparse matching
+  keeps one weight scale chosen so that no conditioned weight overflows.
+  `ConditionedDecoder` implements `HeraldedDecoder` (fired ordinary and
+  herald detectors apart) and `Decoder` (together); `DecoderChoice`
+  routes circuits with herald detectors to it.
+- **Erasure-biased noise.** The private noisy builder of the memory
+  experiments places `HERALDED_ERASE(e·p)` on every qubit of every noisy
+  operation (after resets and gates, before measurements, on the data
+  before each round) and `(1 − e)·p` of circuit noise as before, and
+  declares the round's heralds as detectors just before its own; at
+  share 0 the circuits are the old ones, and the repeated forms fold.
+- **Python and command line.** The memory experiments take `ErasureNoise`
+  as `noise`; `ConditionedDecoder(model, decoder="union_find" |
+  "matching" | "bposd", …)` with `decode`, `decode_with_weight`,
+  `decode_detailed` and `decode_batch`. `qso qec --erasure-share` builds
+  the erasure experiments, names the decoder "with heralds" and adds
+  `erasure_share` and `herald_detectors` to the JSON rows; `--circuit`
+  files with heralded instructions decode without it. CI runs three
+  such commands.
+
+Changes to the plan:
+
+- **Herald detectors, not every herald.** A decoder conditions only on a
+  detector that reads a herald alone and is its only reader. Heralds
+  that nothing reads, that an observable reads, or that a detector reads
+  with other records enter the model by Stim's rule, so no circuit is
+  refused for its heralds.
+- **One decoder with three methods.** The interface beside `Decoder` is
+  the trait `HeraldedDecoder` with one implementation,
+  `ConditionedDecoder` (`HeraldedMethod::UnionFind`, `Matching`,
+  `BpOsd`), on private copies of the decoders; `logical_error_rate`,
+  `DecoderChoice::build_for` and the command line route heralded circuits
+  to it, so there are no new `DecoderChoice` variants and no public hooks
+  on `MatchingGraph`, `SparseMatchingDecoder` or `BpOsdDecoder`.
+- **Stim's decomposition of disjoint channels.** Checking the plan
+  against Stim showed that it decomposes a disjoint channel's outcome
+  even when the channel has a single one (`HERALDED_PAULI_CHANNEL_1(0,
+  0.1, 0, 0)` gives `D0 ^ D1` where `Y_ERROR` stays `D0 D1`); QSO does
+  the same, and the existing channels' decomposition is unchanged bit for
+  bit.
+- **Refusals.** `explain_errors`, `splitting_failure_rate`,
+  `enumerated_failure_rate`, `leading_failures` and `qso qec
+  --circuit-distance` refuse heralded operations: they read the model's
+  errors as independent, which for `HERALDED_ERASE(0.1)` would fire the
+  herald with probability 0.095. Union-find and matching need every base
+  error and herald part to flip at most two ordinary detectors (true in
+  the repetition and rotated surface memories; colour codes need
+  BP+OSD).
+- **OSD-CS by rates.** BP+OSD with OSD-0 equals ldpc shot by shot; with
+  OSD-CS the two score candidates differently (Σ ln(1/p) against
+  Σ ln((1 − p)/p)), so their logical error rates are compared instead.
+  Sparse matching equals PyMatching's predictions except where both
+  corrections weigh the same.
+- **A finer measurement.** 10⁴ shots at d = 7 could not tell d = 5 from 7
+  above share 0.9, so every distance took 10⁵ shots on a grid of 15
+  probabilities from 0.4 % to 5 %. The folded model was measured at
+  5·10⁴ rounds of d = 5, since 10⁵ would hold 2.7·10⁷ detectors, beyond a
+  model's 2²⁴.
+
+Not done, and why:
+
+- **Windows, correlated matching and the exact matching decoder with
+  heralds.** Windows would cut the herald parts at their edges and
+  correlated matching would reweight from parts that change per shot;
+  both refuse circuits with herald detectors ("does not use heralds
+  yet"); heralds that no detector reads alone decode with them.
+- **Splitting, enumeration, explanations and the command line's circuit
+  distance of heralded circuits.** Each needs a channel's outcomes as
+  disjoint alternatives rather than independent errors.
+- **The pair erasure of Wu et al.**, which erases both qubits of a gate
+  together: Stim has no instruction for it, so a two-qubit gate erases
+  each qubit on its own, and the comparison with their thresholds is
+  qualitative.
+- **Further Stim instructions**: `PAULI_CHANNEL_1`, `PAULI_CHANNEL_2`,
+  `E`/`ELSE_CORRELATED_ERROR`, `MPP` and classical feedback, for which
+  `ExtendedOp` is prepared; and leakage, which leaves the qubit space
+  that Stim's model keeps.
+- **Fuzzing of heralded operations.** The fuzz targets' circuit builder
+  and the Stim target's seeds do not yet produce `HERALDED_*`; the
+  random circuits of the unit tests and the cross-validation cover them
+  meanwhile.
+- **Herald detectors held compactly.** A folded model of many rounds
+  stores every herald detector with its parts (5·10⁴ rounds of d = 5:
+  1.3·10⁷, 4 GB).
+
+Measured (release build, this four-core machine; the logical error
+rates with `qso qec --code surface --distance 3,5,7 --erasure-share e
+--shots 100000 --json`, seed 0, BP+OSD at d = 3 and 5 with 10⁵ shots on
+6 or 7 probabilities around each crossing, as remeasured in the review;
+costs with `measure_heralds` in the unit tests,
+twice, the ranges of both runs). Rotated surface code in the Z basis,
+`d` rounds, uniform circuit noise p, thresholds where the rates of two
+distances cross (logarithmic interpolation):
+
+| Erasure share e | 0 | 0.5 | 0.9 | 0.98 | 1 |
+|---|---|---|---|---|---|
+| Matching, d = 3/5 and 5/7 | 0.65 %, 0.75 % | 1.21 %, 1.20 % | 2.72 %, 2.64 % | 3.51 %, 3.67 % | 3.84 %, 3.93 % |
+| Union-find, d = 3/5 and 5/7 | 0.62 %, 0.71 % | 1.14 %, 1.15 % | 2.67 %, 2.48 % | 3.51 %, 3.63 % | 3.83 %, 3.92 % |
+| BP+OSD, d = 3/5 | 0.68 % | 1.21 % | 2.74 % | 3.52 % | 3.80 % |
+| Matching at p = 1 %, d = 3 / 5 / 7 | 6.0 / 8.3 / 10.3 % | 2.8 / 2.4 / 2.0 % | 0.59 / 0.17 / 0.04 % | 0.19 / 0.02 / 0.002 % | 0.09 / 0.007 % / none in 10⁵ |
+
+The threshold rises about five-fold from e = 0 to 0.98, as in Wu et
+al.'s model (0.937 % to 4.15 %, about 4.4-fold); the noise differs, as
+QSO erases each qubit of a two-qubit gate on its own and keeps its own
+circuit noise for the rest. Costs at p = 1 % (share 0.9 against 0;
+decoding per shot on one thread):
+
+| Quantity | d = 5 | d = 7 | d = 9 | d = 11 |
+|---|---|---|---|---|
+| Detectors (herald detectors) | 1431 (1359) | 4041 (3849) | — | 16 053 (15 333) |
+| `heralded_error_model` | 2 ms | 4–5 ms | — | 19 ms |
+| Union-find, µs per shot | 2.7–2.8 against 5.2–7.2 | 6.2–6.3 against 23–24 | 14.5–15 against 75–82 | — |
+| Matching, µs per shot | 4.5–4.6 against 5.1–7.1 | 11.5 against 18–19 | 28 against 48–52 | — |
+| BP+OSD (OSD-CS), µs per shot | 44–47 against 138–146 | 230–236 against 557–569 | — | — |
+
+Conditioning is cheaper than the uncertainty it removes: every method
+decodes faster with heralds. The sampler draws 1.38–1.42·10⁶ shots a
+second at d = 5 with heralds (1431 detectors) against 3.13–3.14·10⁶
+without (72). The folded model of 5·10⁴ rounds of d = 5 takes 6.1 s and
+4.0 GB (1.3·10⁷ herald detectors); the models up to d = 11 stay within
+16 MB of process memory. `ConditionedDecoder` at d = 7 holds 883 slots
+and 2961 herald parts, about 153 kB beside its inner decoder. In the
+cross-validation the heralds take 34 s (8 s with `--quick`), most of it
+PyMatching rebuilt per shot (157 µs per shot at d = 3, 1.3 ms at
+d = 5). The design expected herald detectors to outnumber the others
+about ten to one; it is 17 to 1 at d = 3, 19 to 1 at d = 5 and 21
+to 1 at d = 11.
+
+Validation: the heralded tests (20 unit tests and the ignored
+measurement in `qec/herald/tests.rs`, release build, 0.3 s; the qec
+suite, 131 tests, 23 s on three threads) check the models of small
+circuits against Stim 1.16's term by term (`HERALDED_ERASE(0.1)` before a
+measurement 0.05 and 0.05; a herald read by an observable; two erasures
+of one qubit 0.095; the Pauli channel 0.03 and 0.07; sums of exactly 1),
+decomposed models part by part, the backward pass against an
+independent forward implementation of Stim's rule on 200 random
+circuits (a third in `REPEAT` blocks), folded models against flattened
+ones (`REPEAT 6` and a repeated circuit of 38 detectors, 72 errors,
+Σp = 2.37), the heralded split (24 herald detectors of 30 heralds, every
+part exactly ½), `xor_probability(p, ½) = ½` exactly; Stim's format
+both ways with every accepted and refused form; the sampler at 10⁶ shots
+(herald rate 0.2, P(h ∧ m) = 0.25 and 0.35, P(¬h ∧ m) = 0 exactly);
+erasure memories at share 0 equal to the plain ones for repetition and
+surface codes (flat and repeated) and the colour code (flat), the
+repeated colour code equal to its flat form at share 0.5, and their
+herald counts (53 repetition, 269 surface Z, 287 surface X); the closed forms exactly: the repetition code fails
+with `p^d/2` to 10⁻¹² for d = 3, 5, 7 and p = 0.1, 0.5, 0.9 under
+union-find, matching and BP+OSD with OSD-0 and OSD-CS, only when every
+qubit is erased and on exactly 2^(d−1) of the 2^d patterns; the rotated
+surface code at erasure probability ½ fails in 65 536 of the 2¹⁸
+weighted cases at d = 3 (exactly ¼) with 256 of the 512 erased sets
+supporting the X logical, and within five standard errors at d = 5
+(unit) and d = 7 (`tests/validation.rs`), never on a set that supports
+none and on half of the others; under pure erasure at circuit level
+failures only where the fired heralds' parts combine to a logical;
+conditioned matching and BP+OSD equal to decoders built afresh from the
+shot's model, shot by shot, and the base weights restored exactly;
+routing, refusals and input errors. The command-line test and seven
+Python tests pass. In the cross-validation (34 s, no failure): models
+equal to Stim 1.16's `detector_error_model(approximate_disjoint_errors=
+True)` on 73 circuits (12 erasure memories, 60 random, one repeated;
+14 925 mechanisms; 3.6·10⁻¹⁶ relative), decomposed models and the
+heralded split identical; detection and herald rates within 3.1
+standard errors of Stim's sampler at 10⁶ shots; conditioned sparse
+matching against PyMatching 2.4 rebuilt per shot with `add_edge` and
+`add_boundary_edge`, weights to 8·10⁻⁷ relative (PyMatching's integer
+weights) and predictions differing only on ties (0.02–0.28 % of shots);
+BP+OSD OSD-0 identical to ldpc 2.4.1's `BpOsdDecoder` with
+`update_channel_probs` on every shot, OSD-CS logical error rates within
+0.9 standard errors; pure erasure with no failure where the erased set
+supports no logical and half of the rest within 2.0 standard errors;
+`p^d/2` to 9.3·10⁻¹⁶; ¼ at d = 3, 5, 7 and 9 within 1.4 standard errors.
+PyMatching ignoring the heralds fails 1.9 to 31 times as often as
+conditioned matching (surface d = 5, share 0.9: 7.4 % against 0.24 %).
+
+Review (independent, after delivery): three reviewers (the numerics, the
+API with bindings and command line, and the documentation's claims)
+checked against Stim 1.16, PyMatching 2.4 and ldpc 2.4.1 (500 random
+circuits and 760 decomposed ones term by term, 9 900 rate tests against
+Stim's sampler, 12 000 shots against PyMatching and 6 000 against ldpc,
+the closed forms with all three decoders, threads 1 and 3 bit for bit),
+built the base commit's `qso` and compared 19 configurations (identical
+output, the two JSON keys aside), and reran the guide's examples, the
+cross-validation and the builds (SemVer, serial, wasm32). Everything that
+involves only `HERALDED_ERASE` held; each finding was reproduced before it
+was fixed (ten reported and four smaller points; the default of
+`decompose` was reported twice). Findings, all fixed:
+
+- **Heralded parts above ½ were decoded as erasures, or not at all.** A
+  Pauli channel's part given its herald, (pX + pY)/t or (pZ + pY)/t, is
+  often above ½ (0.7 in the guide's own example), and union-find and
+  matching clamped its length or weight to 0, while every method returned
+  no flip when no ordinary detector fired. With
+  `HERALDED_PAULI_CHANNEL_1(0, 0.5, 0, 0)` (a certain X) the three methods
+  failed 2.98 % of 20 000 shots at d = 5, where nothing can go wrong; with
+  `X_ERROR(0.08)` and an X part of 0.9 at d = 7, union-find and matching
+  failed 0.742 % and 0.668 % against PyMatching's 0.244 % on the same
+  conditioned model. `ConditionedDecoder` now applies every slot the shot
+  makes more likely than not before decoding (its detectors added to the
+  shot's, its observables to the prediction) and gives the inner decoder
+  1 − p, PyMatching's rule for negative weights; the empty-syndrome check
+  comes after, `decode_with_weight` and `decode_detailed` count the
+  applied errors (negatively; a correction that undoes one drops it), and
+  the matching scale bounds each edge by min(p, 1 − p). On the reviewer's
+  circuits union-find and matching now equal PyMatching exactly (0.244 %,
+  0.002 %, 0.836 %). New tests: all 2⁵ herald patterns of the certain X
+  at d = 5 decoded right by union-find, matching and BP+OSD (OSD-0 and
+  OSD-CS), and none of 20 000 sampled shots failing; at d = 5 with
+  `X_ERROR(0.08)` and the 0.9 part, every herald pattern and syndrome
+  against an enumeration of all 2⁵ corrections (matching at minimum
+  weight, negative weights included, 512 cases; BP+OSD's corrections
+  explain the syndrome and their weights and observables count the
+  applied errors); the cross-validation's new section (50 000 shots at
+  d = 7: matching equals PyMatching with negative weights on every shot,
+  weights to 4·10⁻⁶; OSD-0 equals ldpc given the same applied errors on
+  every shot; the certain X fails nowhere). Without the fix these tests
+  fail.
+- **Equal X and Z parts were merged as independent.** Where a Pauli
+  channel's X and Z have the same effect (before a Y-basis readout) the
+  exact part is (pX + pZ)/t; `RY 0`, `HERALDED_PAULI_CHANNEL_1(0, 0.1, 0,
+  0.1) 0`, `MY 0` gave 0.5 for a flip that is certain. The channel now
+  gives one part at (pX + pZ)/t (a pure Y keeps its part of probability
+  0); a test checks 1 and 0.05/0.11 against the sampler (2·10⁵ shots),
+  and the cross-validation's Stim-only reference follows the same rule.
+- **A Pauli sum just over 1 gave a probability above 1.**
+  `HERALDED_PAULI_CHANNEL_1(0.1, 0.2, 0.3, 0.40000005)`, inside Stim's
+  tolerance of 10⁻⁷, gave an error of 1.00000005 that every decoder
+  refused (Stim refuses the model). The disjoint channel's summed outcomes
+  are now clamped to 1, as the herald rate already was; the sampler needed
+  no change (it fires every shot at t ≥ 1 and draws the Pauli in
+  proportion over t). Tested with both decompositions and the decoders.
+- **The default `decompose=True` of Python's `heralded_error_model`
+  failed for colour codes with BP+OSD**, and BP+OSD on the decomposed
+  model of a surface code fails more often (14 against 11 of 2000 shots).
+  The default stays (union-find, the default method, and matching need
+  it, and the guide's examples use it), but the docstrings of
+  `heralded_error_model` and `ConditionedDecoder`, the guide and the
+  limits rows now say that BP+OSD takes `decompose=False`, and the
+  refusal reads "decode it with BP+OSD, on the model without
+  decomposition"; a test decodes a colour code with heralds this way,
+  equal to `logical_error_rate`'s routed BP+OSD on the same shots.
+- **`qso qec` built the heralded model twice**, once only to count the
+  herald detectors (2.15 s of 6.96 s at 20 000 rounds of d = 5), and
+  found heralds in a repeated circuit by searching its Stim text. It now
+  builds the model once and decodes with it through the new
+  `logical_error_rate_decoding` and `logical_error_rate_repeated_decoding`
+  (any decoder built beforehand, on the same shots), and
+  `DetectorCircuit::has_extended` and `RepeatedCircuit::has_extended`
+  are public: 7.0 s against 4.8 s, the same JSON in six configurations
+  against the previous binary, peak memory unchanged at 1.88 GB (the
+  decomposed model). A test checks the routed rates against decoders
+  built by hand, flat and repeated.
+- **Limits rows** said correlated matching and windows refuse heralded
+  circuits; they refuse circuits with herald detectors (heralds that no
+  detector reads alone decode with them), as the guide, README and
+  `cli.md` now say.
+- **The BP+OSD thresholds** rested on 10⁴ shots on five probabilities;
+  at e = 0 the crossing (0.58 %) was not resolved. Rerun with 10⁵ shots on
+  6 or 7 probabilities around each crossing: 0.68 % (16–84 % of 2000
+  resamples: 0.66–0.70 %), 1.21 %, 2.74 %, 3.52 % and 3.80 %, each
+  ±0.02–0.05 %; the old values at e = 0 and 0.5 were off by 0.1 %.
+- **The refusal named Rust values** ("WindowMatching { window: 3,
+  commit: 2 } does not use heralds yet"); it names the decoder as a user
+  does ("matching in windows"), checked in the unit and command-line
+  tests.
+- **Smaller points**: the validation's herald counts are labelled (53
+  repetition, 269 surface Z, 287 surface X; the colour code is compared
+  flat at share 0, its repeated form at share 0.5);
+  `HeraldedErrorModel::herald_probability` and `outcomes` document their
+  panics; the `ExtendedOp` doc no longer says every variant adds a record
+  per target; two new doc comments say "depolarising".
+
+Not changed: correlated matching and the windows still build the heralded
+model before refusing, as only the model tells whether a herald detector
+exists. The refusal to decompose an error of three detectors where Stim
+splits it with graph-like errors already in the model predates 1.66. The
+reviewer's release build of the base commit into the shared target
+directory was repaired by the reviewer; the release `qso` and the Python
+module were rebuilt from these sources. After the fixes the herald tests
+(25 and the ignored measurement), the qec suite (136), the validation (62) and
+command-line tests, the Python tests, stubtest and mypy pass, and the
+cross-validation passes in 36 s.
 
 ### 1.67 — Molecules beyond 64 basis functions by density fitting (M–L)
 

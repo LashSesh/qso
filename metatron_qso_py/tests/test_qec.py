@@ -186,3 +186,319 @@ def test_splitting_reaches_rates_far_below_sampling() -> None:
         q.splitting_failure_rate(broken, 0.03, 1e-3)
     with pytest.raises(ValueError, match="decoder"):
         q.leading_failures(at(1e-3), decoder="nearest")  # type: ignore[arg-type]
+
+
+# Erasures with heralds (1.66).
+
+
+def erased_then_measured(channel: str) -> q.DetectorCircuit:
+    """Case A of the Rust tests (or F): a heralded channel on qubit 0, then
+    M 0; detector 0 reads the herald, detector 1 the measurement."""
+    c = q.DetectorCircuit(1)
+    if channel == "erase":
+        records = c.heralded_erase(0.1, [0])
+    else:
+        records = c.heralded_pauli_channel_1(0.3, 0.3, 0.3, 0.1, [0])
+    assert records == [0]
+    m = c.measure(0)
+    assert m == 1
+    assert c.detector(records) == 0
+    assert c.detector([m]) == 1
+    return c
+
+
+def test_heralded_builders_and_stim_format() -> None:
+    c = q.DetectorCircuit(3)
+    assert c.heralded_erase(0.2, [0, 2, 0]) == [0, 1, 2]
+    assert c.heralded_pauli_channel_1(0.01, 0.02, 0.03, 0.04, [1]) == [3]
+    assert c.heralded_erase(0.1, []) == []
+    assert c.measure(1) == 4
+    assert c.n_measurements == 5 and len(c) == 3
+    assert "operations=3" in repr(c)
+    text = c.to_stim()
+    assert "HERALDED_ERASE(0.2) 0 2 0" in text
+    assert "HERALDED_PAULI_CHANNEL_1(0.01, 0.02, 0.03, 0.04) 1" in text
+    back = q.DetectorCircuit.from_stim(text)
+    assert back.to_stim() == text and back.n_measurements == 5
+    rep = q.RepeatedCircuit.from_stim("REPEAT 3 {\n" + text + "}\n")
+    assert rep.n_measurements == 15
+    assert rep.flatten().n_measurements == 15
+    # Kept at probability 0, as Stim's MPAD 0.
+    quiet = c.without_noise()
+    assert quiet.n_measurements == 5 and "HERALDED_ERASE(0.0) 0 2 0" in quiet.to_stim()
+    with pytest.raises(ValueError):
+        c.heralded_erase(1.5, [0])
+    with pytest.raises(ValueError):
+        c.heralded_erase(0.1, [3])
+    with pytest.raises(ValueError, match="add up"):
+        c.heralded_pauli_channel_1(0.25, 0.25, 0.25, 0.2500002, [0])
+    with pytest.raises(ValueError, match="qubit targets"):
+        q.DetectorCircuit.from_stim("HERALDED_ERASE(0.1) rec[-1]")
+
+
+def test_heralded_models_follow_stims_rule() -> None:
+    # Stim 1.16, detector_error_model(approximate_disjoint_errors=True).
+    def model(c: q.DetectorCircuit) -> dict[tuple[int, ...], float]:
+        return {tuple(e[1]): e[0] for e in c.detector_error_model().errors}
+
+    a = erased_then_measured("erase")
+    got = model(a)
+    assert got.keys() == {(0,), (0, 1)}
+    assert got[(0,)] == pytest.approx(0.05, rel=1e-15)
+    assert got[(0, 1)] == pytest.approx(0.05, rel=1e-15)
+    f = model(erased_then_measured("pauli"))
+    assert f[(0,)] == pytest.approx(0.4, rel=1e-15)
+    assert f[(0, 1)] == pytest.approx(0.6, rel=1e-15)
+
+    h = a.heralded_error_model()
+    assert (h.n_detectors, h.n_observables) == (2, 0)
+    assert h.herald_detectors == [0] and len(h.base) == 0
+    assert h.herald_probability(0) == 0.1
+    assert h.outcomes(0) == [(0.5, [1], 0)]
+    assert h.conditioned([0]).errors == [(0.5, [1], 0)]
+    assert h.conditioned([0, 0]).errors == [] and h.conditioned([]).errors == []
+    with pytest.raises(ValueError, match="not a herald detector"):
+        h.conditioned([1])
+    with pytest.raises(ValueError):
+        h.herald_probability(1)
+    with pytest.raises(ValueError):
+        h.outcomes(1)
+    hf = erased_then_measured("pauli").heralded_error_model(decompose=False)
+    assert hf.herald_probability(0) == pytest.approx(1.0, abs=1e-15)
+    [(p, dets, obs)] = hf.outcomes(0)
+    assert p == pytest.approx(0.6, abs=1e-15) and dets == [1] and obs == 0
+    # The repeated form folds to the same model.
+    rep = q.RepeatedCircuit.from_stim(
+        "REPEAT 6 {\nHERALDED_ERASE(0.1) 0\nM 0\nDETECTOR rec[-2]\nDETECTOR rec[-1]\n}\n"
+    )
+    folded, flat = rep.heralded_error_model(), rep.flatten().heralded_error_model()
+    assert folded.herald_detectors == flat.herald_detectors == [0, 2, 4, 6, 8, 10]
+    assert folded.base.errors == flat.base.errors
+    assert [folded.outcomes(k) for k in range(6)] == [flat.outcomes(k) for k in range(6)]
+    assert "heralds=6" in repr(folded)
+
+
+def test_heralded_model_from_its_parts() -> None:
+    base = q.DetectorErrorModel(4, [(0.01, [2, 3], 0)], n_observables=1)
+    m = q.HeraldedErrorModel(
+        base, [0, 1], [0.1, 0.2], [[(0.5, [3, 2], 1)], [(0.5, [3], 0), (0.5, [3], 0)]]
+    )
+    assert (m.n_detectors, m.n_observables) == (4, 1)
+    assert m.herald_detectors == [0, 1]
+    assert m.herald_probability(1) == 0.2
+    # Sorted detectors; equal parts merged (½ absorbs).
+    assert m.outcomes(0) == [(0.5, [2, 3], 1)]
+    assert m.outcomes(1) == [(0.5, [3], 0)]
+    assert m.base.errors == [(0.01, [2, 3], 0)]
+    assert m.conditioned([0, 1]).errors == [
+        (0.01, [2, 3], 0),
+        (0.5, [2, 3], 1),
+        (0.5, [3], 0),
+    ]
+    # The base error and herald 0's part of the same detectors merge.
+    same = q.HeraldedErrorModel(base, [0], [0.1], [[(0.3, [2, 3], 0)]])
+    [(p, dets, obs)] = same.conditioned([0]).errors
+    assert p == pytest.approx(0.01 * 0.7 + 0.3 * 0.99, rel=1e-15)
+    assert (dets, obs) == ([2, 3], 0)
+    bad: list[tuple[list[int], list[float], list[list[tuple[float, list[int], int]]]]] = [
+        ([1, 0], [0.1, 0.1], [[], []]),  # not ascending
+        ([0, 0], [0.1, 0.1], [[], []]),  # repeated
+        ([0], [0.1, 0.1], [[]]),  # lengths differ
+        ([0], [1.5], [[]]),  # not a probability
+        ([4], [0.1], [[]]),  # no such detector
+        ([2], [0.1], [[]]),  # the base flips it
+    ]
+    for detectors, probabilities, outcomes in bad:
+        with pytest.raises(ValueError):
+            q.HeraldedErrorModel(base, detectors, probabilities, outcomes)
+    with pytest.raises(ValueError, match="herald detector"):
+        q.HeraldedErrorModel(base, [0, 1], [0.1, 0.1], [[(0.5, [1], 0)], []])
+
+
+def surface_capacity_d3() -> q.DetectorCircuit:
+    """The rotated surface code of distance 3 at code capacity: every data
+    qubit erased with probability ½ (herald detectors 0..8), then read out;
+    detectors 9..12 are the Z checks, observable 0 is Z_L."""
+    c = q.DetectorCircuit(9)
+    for k in range(9):
+        c.detector(c.heralded_erase(0.5, [k]))
+    m = [c.measure(k) for k in range(9)]
+    for check in Z_CHECKS:
+        c.detector([m[k] for k in check])
+    c.observable(0, [m[k] for k in Z_LOGICAL])
+    return c
+
+
+# Data qubit 3r + c of the 3 × 3 grid; X checks {0,1,3,4}, {4,5,7,8},
+# {3,6}, {2,5}.
+Z_CHECKS = [[0, 1], [1, 2, 4, 5], [3, 4, 6, 7], [7, 8]]
+Z_LOGICAL = [0, 3, 6]
+
+
+@pytest.mark.parametrize("decoder", ["union_find", "matching", "bposd"])
+def test_surface_code_at_half_erasure_fails_exactly_a_quarter(decoder: str) -> None:
+    # Every erased set E (probability 2⁻⁹) and every X pattern on it
+    # (2^−|E| each): the decoder fails on exactly a quarter, that is
+    # Σ_E Σ_x fail · 2^(9−|E|) = 2¹⁸ / 4.
+    model = surface_capacity_d3().heralded_error_model()
+    assert model.herald_detectors == list(range(9)) and len(model.base) == 0
+    dec = q.ConditionedDecoder(model, decoder)  # type: ignore[arg-type]
+    total = 0
+    for erased in range(512):
+        support = [k for k in range(9) if erased >> k & 1]
+        for pattern in range(1 << len(support)):
+            x = {support[i] for i in range(len(support)) if pattern >> i & 1}
+            fired = [9 + j for j, check in enumerate(Z_CHECKS) if len(x & set(check)) % 2]
+            flip = len(x & set(Z_LOGICAL)) % 2
+            if dec.decode(fired, support) != flip:
+                total += 1 << (9 - len(support))
+    assert total == 65536
+
+
+def test_conditioned_decoder_on_an_erasure_memory() -> None:
+    noise = q.ErasureNoise(0.01, erasure_share=0.9)
+    c = q.surface_code_memory(3, 3, noise)
+    det, obs = c.sample(2000, seed=5)
+    for name, decompose in [("union_find", True), ("matching", True), ("bposd", False)]:
+        model = c.heralded_error_model(decompose=decompose)
+        assert len(model.herald_detectors) > 0
+        dec = q.ConditionedDecoder(model, name)  # type: ignore[arg-type]
+        assert dec.n_detectors == c.n_detectors
+        assert dec.herald_detectors == model.herald_detectors
+        assert len(dec.slots()) >= len(model.base)
+        heralds = set(dec.herald_detectors)
+        for row in det[:200]:
+            fired = [int(d) for d in np.flatnonzero(row)]
+            ordinary = [d for d in fired if d not in heralds]
+            erased = [d for d in fired if d in heralds]
+            assert dec.decode(fired) == dec.decode(ordinary, erased)
+        predicted = dec.decode_batch(det)
+        assert predicted.dtype == np.uint64
+        rate = q.logical_error_rate(c, 2000, seed=5, decoder=name)  # type: ignore[arg-type]
+        assert rate.errors == int(np.sum(predicted != obs[:, 0]))
+    with pytest.raises(ValueError, match="heralds"):
+        q.logical_error_rate(c, 10, decoder="correlated_matching")
+    with pytest.raises(ValueError, match="heralds"):
+        q.logical_error_rate(c, 10, decoder="window_matching", window=2)
+    with pytest.raises(ValueError, match="heralds"):
+        q.logical_error_rate(c, 10, decoder="parallel_window_bposd", commit=1)
+
+
+def test_conditioned_decoder_detail_and_errors() -> None:
+    model = surface_capacity_d3().heralded_error_model()
+    matching = q.ConditionedDecoder(model, "matching")
+    # Erasing qubit 1 turns its edge on at ½: weight 0.
+    assert matching.decode_with_weight([9, 10], [1]) == (0, 0.0)
+    assert matching.decode_with_weight([9, 10, 1]) == (0, 0.0)
+    assert matching.decode_with_weight([], [1]) == (0, 0.0)
+    bposd = q.ConditionedDecoder(model, "bposd", osd="osd0")
+    out = bposd.decode_detailed([9, 10, 1])
+    assert out.observables == 0
+    assert [bposd.slots()[e][1] for e in out.errors] == [[9, 10]]
+    uf = q.ConditionedDecoder(model)
+    assert "union_find" in repr(uf)
+    with pytest.raises(ValueError, match="herald detector"):
+        uf.decode([0], [])
+    with pytest.raises(ValueError, match="not a herald detector"):
+        uf.decode([9], [9])
+    with pytest.raises(ValueError):
+        uf.decode([13])
+    with pytest.raises(ValueError):
+        uf.decode([9], [13])
+    with pytest.raises(ValueError, match="matching"):
+        uf.decode_with_weight([9])
+    with pytest.raises(ValueError, match="BP"):
+        matching.decode_detailed([9])
+    with pytest.raises(ValueError, match="bposd"):
+        q.ConditionedDecoder(model, "union_find", osd="osd0")
+    with pytest.raises(ValueError, match="bposd"):
+        q.ConditionedDecoder(model, "matching", max_iterations=10)
+    with pytest.raises(ValueError, match="unknown decoder"):
+        q.ConditionedDecoder(model, "nearest")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="unknown osd"):
+        q.ConditionedDecoder(model, "bposd", osd="none")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="columns"):
+        uf.decode_batch(np.zeros((2, 3), dtype=bool))
+    # A part that flips three detectors is not graph-like.
+    wide = q.DetectorCircuit.from_stim(
+        "HERALDED_ERASE(0.1) 0\nCX 0 1 0 2\nM 0 1 2\n"
+        "DETECTOR rec[-4]\nDETECTOR rec[-3]\nDETECTOR rec[-2]\nDETECTOR rec[-1]\n"
+    )
+    w = wide.heralded_error_model()
+    assert w.outcomes(0) == [(0.5, [1, 2, 3], 0)]
+    with pytest.raises(ValueError, match="flips 3 detectors"):
+        q.ConditionedDecoder(w, "matching")
+    assert q.ConditionedDecoder(w, "bposd").decode([1, 2, 3], [0]) == 0
+
+
+def test_parts_above_one_half_are_applied_first() -> None:
+    # HERALDED_PAULI_CHANNEL_1(0, 0.5, 0, 0): a fired herald is a certain
+    # X (part 1.0), applied before decoding, so no decoder ever fails, also
+    # when every qubit is heralded and the syndrome is empty.
+    d = 5
+    qs = " ".join(map(str, range(d)))
+    text = (
+        f"R {qs}\nHERALDED_PAULI_CHANNEL_1(0, 0.5, 0, 0) {qs}\n"
+        + "".join(f"DETECTOR rec[-{d - k}]\n" for k in range(d))
+        + f"M {qs}\n"
+        + "".join(f"DETECTOR rec[-{d - k}] rec[-{d - k - 1}]\n" for k in range(d - 1))
+        + f"OBSERVABLE_INCLUDE(0) rec[-{d}]\n"
+    )
+    c = q.DetectorCircuit.from_stim(text)
+    model = c.heralded_error_model()
+    assert model.outcomes(0) == [(1.0, [d], 1)]
+    det, obs = c.sample(5000, seed=3)
+    for name, decompose in [("union_find", True), ("matching", True), ("bposd", False)]:
+        dec = q.ConditionedDecoder(c.heralded_error_model(decompose=decompose), name)  # type: ignore[arg-type]
+        assert int(np.sum(dec.decode_batch(det) != obs[:, 0])) == 0
+        assert dec.decode([], list(range(d))) == 1
+    # A Y-basis readout: X and Z have the same effect, one part at
+    # (p_x + p_z)/t = 1, not the two merged as independent.
+    y = q.DetectorCircuit.from_stim(
+        "RY 0\nHERALDED_PAULI_CHANNEL_1(0, 0.1, 0, 0.1) 0\nDETECTOR rec[-1]\nMY 0\nDETECTOR rec[-1]\n"
+    )
+    assert y.heralded_error_model().outcomes(0) == [(1.0, [1], 0)]
+
+
+def test_erasure_noise_in_memory_experiments() -> None:
+    n = q.ErasureNoise(0.01, 0.5)
+    assert n == q.ErasureNoise(q.CircuitNoise.uniform(0.01), erasure_share=0.5)
+    assert n != q.ErasureNoise(0.01, 0.4)
+    assert n.noise == q.CircuitNoise.uniform(0.01) and n.erasure_share == 0.5
+    assert "erasure_share=0.5" in repr(n)
+    zero = q.ErasureNoise(0.01, 0.0)
+    code = q.CssCode.color_code(3)
+    pairs = [
+        (q.repetition_code_memory(3, 3, zero), q.repetition_code_memory(3, 3, 0.01)),
+        (q.surface_code_memory(3, 3, zero, "x"), q.surface_code_memory(3, 3, 0.01, "x")),
+        (q.css_code_memory(code, 3, zero), q.css_code_memory(code, 3, 0.01)),
+    ]
+    for a, b in pairs:
+        assert a.to_stim() == b.to_stim()
+    rpairs = [
+        (q.repetition_code_memory_repeated(3, 3, zero), q.repetition_code_memory_repeated(3, 3, 0.01)),
+        (q.surface_code_memory_repeated(3, 3, zero), q.surface_code_memory_repeated(3, 3, 0.01)),
+        (q.css_code_memory_repeated(code, 3, zero), q.css_code_memory_repeated(code, 3, 0.01)),
+    ]
+    for ra, rb in rpairs:
+        assert ra.to_stim() == rb.to_stim()
+    # Repetition d = 3, r = 3 at share ½: 53 herald detectors and 8 others.
+    c = q.repetition_code_memory(3, 3, n)
+    assert (c.n_detectors, c.n_measurements) == (61, 62)
+    assert len(set(c.detector_layers())) == 4
+    assert len(c.heralded_error_model().herald_detectors) == 53
+    rep = q.repetition_code_memory_repeated(3, 3, n)
+    assert rep.flatten().to_stim() == c.to_stim()
+    assert rep.heralded_error_model().herald_detectors == c.heralded_error_model().herald_detectors
+    s = q.surface_code_memory(3, 3, n)
+    assert (s.n_detectors, s.n_measurements) == (285, 302)
+    assert q.surface_code_memory_repeated(3, 3, n).flatten().to_stim() == s.to_stim()
+    assert q.css_code_memory_repeated(code, 2, n).flatten().to_stim() == q.css_code_memory(code, 2, n).to_stim()
+    # Share 1: no unheralded noise is left.
+    full = q.surface_code_memory(3, 2, q.ErasureNoise(0.01, 1.0)).to_stim()
+    assert "DEPOLARIZE" not in full and "X_ERROR" not in full and "M(" not in full
+    for share in [-0.1, 1.5, math.nan]:
+        with pytest.raises(ValueError, match="share"):
+            q.ErasureNoise(0.01, share)
+    with pytest.raises(TypeError):
+        q.ErasureNoise(n, 0.5)  # type: ignore[arg-type]

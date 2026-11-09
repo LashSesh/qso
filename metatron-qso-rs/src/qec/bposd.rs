@@ -31,7 +31,7 @@ pub const MAX_EXHAUSTIVE_ORDER: usize = 20;
 /// Largest `osd_order` of the combination sweep.
 pub const MAX_SWEEP_ORDER: usize = 1000;
 /// Messages are kept within ±this, so sums stay finite.
-const LLR_LIMIT: f64 = 1e100;
+pub(crate) const LLR_LIMIT: f64 = 1e100;
 
 /// The rule a check uses for its messages.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,6 +137,36 @@ impl BpOsdDecoder {
     /// The decoder of `dem` (errors of probability 0 and errors that flip
     /// no detector are left out).
     pub fn new(dem: &DetectorErrorModel, options: BpOsdOptions) -> Result<Self> {
+        Self::build(dem, options, false)
+    }
+
+    /// [`BpOsdDecoder::new`], but errors of probability 0 are kept as
+    /// columns with prior `+LLR_LIMIT` (counted in the rank), so that a
+    /// decoder conditioned shot by shot can turn them on
+    /// ([`BpOsdDecoder::set_prior`]).
+    pub(crate) fn with_columns(dem: &DetectorErrorModel, options: BpOsdOptions) -> Result<Self> {
+        Self::build(dem, options, true)
+    }
+
+    /// Set the prior of column `j` from probability `p` (as `new` sets
+    /// it: ln((1 − p)/p) within ±`LLR_LIMIT`); a decoder conditioned shot
+    /// by shot restores it.
+    pub(crate) fn set_prior(&mut self, j: usize, p: f64) {
+        self.prior[j] = prior_of(p);
+    }
+
+    /// The model error of every column.
+    pub(crate) fn sources(&self) -> &[usize] {
+        &self.source
+    }
+
+    /// The prior of every column (for the tests).
+    #[cfg(test)]
+    pub(crate) fn priors(&self) -> &[f64] {
+        &self.prior
+    }
+
+    fn build(dem: &DetectorErrorModel, options: BpOsdOptions, keep_zero: bool) -> Result<Self> {
         check_options(&options)?;
         let m = dem.n_detectors;
         if m > MAX_BPOSD_DETECTORS {
@@ -168,14 +198,12 @@ impl BpOsdDecoder {
                     format!("the detectors of error {k} must be ascending and distinct"),
                 ));
             }
-            if p == 0.0 || e.detectors.is_empty() {
+            if (p == 0.0 && !keep_zero) || e.detectors.is_empty() {
                 continue;
             }
             source.push(k);
             observables.push(e.observables);
-            // ln(1 − p) − ln p stays finite for subnormal p; p = 1 gives
-            // −LLR_LIMIT.
-            prior.push(((-p).ln_1p() - p.ln()).clamp(-LLR_LIMIT, LLR_LIMIT));
+            prior.push(prior_of(p));
             edge_row.extend_from_slice(&e.detectors);
             col_start.push(edge_row.len());
         }
@@ -515,7 +543,14 @@ impl BpOsdDecoder {
     }
 }
 
-fn check_options(o: &BpOsdOptions) -> Result<()> {
+/// The prior log-likelihood ratio of an error of probability `p`:
+/// ln(1 − p) − ln p, finite for subnormal p, within ±`LLR_LIMIT` (p = 1
+/// gives −`LLR_LIMIT`, p = 0 gives `LLR_LIMIT`).
+pub(crate) fn prior_of(p: f64) -> f64 {
+    ((-p).ln_1p() - p.ln()).clamp(-LLR_LIMIT, LLR_LIMIT)
+}
+
+pub(crate) fn check_options(o: &BpOsdOptions) -> Result<()> {
     if !(0.0..=1.0).contains(&o.scaling) {
         return Err(QsoError::invalid(
             "scaling",

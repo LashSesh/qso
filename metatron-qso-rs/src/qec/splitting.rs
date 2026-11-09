@@ -255,6 +255,23 @@ impl Rate {
     }
 }
 
+/// Splitting, enumeration and the leading term treat a model's errors as
+/// independent, but a heralded channel's outcomes are disjoint: its herald
+/// rate from the model would be wrong (0.17195 instead of 0.2 for
+/// `HERALDED_ERASE(0.2)`), so circuits with heralded noise are refused.
+fn refuse_heralded(circuit: &DetectorCircuit, what: &str) -> Result<()> {
+    if circuit.has_extended() {
+        return Err(QsoError::invalid(
+            "circuit",
+            format!(
+                "{what} does not take heralded operations yet: it treats the model's errors as \
+                 independent, and a heralded channel's outcomes are disjoint"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// The model of `circuit` without decomposition, its structure and rate.
 fn model_at(
     circuit_at: &(dyn Fn(f64) -> Result<DetectorCircuit> + Sync),
@@ -262,6 +279,7 @@ fn model_at(
     structure: Option<&Structure>,
 ) -> Result<(Rate, Option<Structure>)> {
     let circuit = circuit_at(p)?;
+    refuse_heralded(&circuit, "splitting_failure_rate")?;
     let dem = detector_error_model(&circuit, false)?;
     let built = match structure {
         Some(s) => {
@@ -870,6 +888,7 @@ pub fn enumerated_failure_rate(
     decoder: DecoderChoice,
     max_weight: usize,
 ) -> Result<EnumeratedFailureRate> {
+    refuse_heralded(circuit, "enumerated_failure_rate")?;
     let dem = detector_error_model(circuit, false)?;
     let s = Structure::new(&dem);
     let rate = Rate::new(0.0, circuit.clone(), &dem)?;
@@ -1145,6 +1164,7 @@ pub fn leading_failures(
     max_work: u64,
     max_configurations: u64,
 ) -> Result<LeadingFailures> {
+    refuse_heralded(circuit, "leading_failures")?;
     let dem = detector_error_model(circuit, false)?;
     let s = Structure::new(&dem);
     let rate = Rate::new(0.0, circuit.clone(), &dem)?;

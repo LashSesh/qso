@@ -1,9 +1,10 @@
 //! CSS codes given by their checks: triangular colour codes, bivariate
 //! bicycle codes, and memory experiments for any of them.
 
-use super::circuit::{DetectorCircuit, MAX_OBSERVABLES, Noise};
+use super::circuit::{DetectorCircuit, MAX_OBSERVABLES};
 use super::codes::{
-    CircuitNoise, MAX_DISTANCE, MemoryBasis, Noisy, Rounds, check_rounds, check_size, repeated,
+    CircuitNoise, ErasureNoise, MAX_DISTANCE, MemoryBasis, Noisy, Rounds, check_rounds, check_size,
+    repeated,
 };
 use super::gf2::{self, Basis};
 use super::repeat::RepeatedCircuit;
@@ -438,6 +439,20 @@ pub fn css_code_memory_with(
     basis: MemoryBasis,
     schedule: CssSchedule,
 ) -> Result<DetectorCircuit> {
+    css_code_memory_erasure(code, rounds, &ErasureNoise::plain(noise), basis, schedule)
+}
+
+/// [`css_code_memory_with`] with erasure-biased noise: every erasure's
+/// herald is a detector of its round, declared right before the round's
+/// other detectors. With share 0 the circuit is that of
+/// [`css_code_memory_with`].
+pub fn css_code_memory_erasure(
+    code: &CssCode,
+    rounds: usize,
+    noise: &ErasureNoise,
+    basis: MemoryBasis,
+    schedule: CssSchedule,
+) -> Result<DetectorCircuit> {
     check_rounds(rounds)?;
     let build = css_builder(code, noise, basis, schedule)?;
     check_size(rounds, |r| Ok(build(r)?.0))?;
@@ -454,6 +469,18 @@ pub fn css_code_memory_repeated(
     basis: MemoryBasis,
     schedule: CssSchedule,
 ) -> Result<RepeatedCircuit> {
+    css_code_memory_erasure_repeated(code, rounds, &ErasureNoise::plain(noise), basis, schedule)
+}
+
+/// [`css_code_memory_erasure`] with rounds 2 to `rounds` as one repeated
+/// block; expanded it is the same circuit.
+pub fn css_code_memory_erasure_repeated(
+    code: &CssCode,
+    rounds: usize,
+    noise: &ErasureNoise,
+    basis: MemoryBasis,
+    schedule: CssSchedule,
+) -> Result<RepeatedCircuit> {
     let build = css_builder(code, noise, basis, schedule)?;
     repeated(rounds, build)
 }
@@ -464,7 +491,7 @@ type CssBuilder<'a> = Box<dyn Fn(usize) -> Result<Rounds> + 'a>;
 
 fn css_builder<'a>(
     code: &'a CssCode,
-    noise: &'a CircuitNoise,
+    noise: &'a ErasureNoise,
     basis: MemoryBasis,
     schedule: CssSchedule,
 ) -> Result<CssBuilder<'a>> {
@@ -520,7 +547,7 @@ fn build_bicycle(
     code: &CssCode,
     bicycle: &Bicycle,
     rounds: usize,
-    noise: &CircuitNoise,
+    noise: &ErasureNoise,
     basis: MemoryBasis,
 ) -> Result<Rounds> {
     let x_basis = basis == MemoryBasis::X;
@@ -595,7 +622,7 @@ fn build_bicycle(
     let mut previous: Option<Vec<usize>> = None;
     for _ in 0..rounds {
         q.mark();
-        q.c.noise(Noise::Depolarize1(noise.before_round), &data)?;
+        q.before_round(&data)?;
         // Round 1: X ancillas to |+⟩.
         q.reset(&xs)?;
         q.h(&xs)?;
@@ -613,6 +640,7 @@ fn build_bicycle(
         let x_results = q.measure(&xs)?;
         q.reset(&zs)?;
         let detected = if x_basis { x_results } else { z_results };
+        q.flush()?;
         for (c, &r) in detected.iter().enumerate() {
             match &previous {
                 None => q.c.detector(&[r])?,
@@ -627,6 +655,7 @@ fn build_bicycle(
         q.h(&data)?;
     }
     let measured = q.measure(&data)?;
+    q.flush()?;
     let checks_of_basis = if x_basis {
         &code.x_checks
     } else {
@@ -651,7 +680,7 @@ fn build_bicycle(
 fn build_css(
     code: &CssCode,
     rounds: usize,
-    noise: &CircuitNoise,
+    noise: &ErasureNoise,
     basis: MemoryBasis,
 ) -> Result<Rounds> {
     let x_layers = layers(&code.x_checks, code.n);
@@ -664,7 +693,7 @@ fn build_css(
 fn build_layered(
     code: &CssCode,
     rounds: usize,
-    noise: &CircuitNoise,
+    noise: &ErasureNoise,
     basis: MemoryBasis,
     x_layers: &[Vec<(usize, usize)>],
     z_layers: &[Vec<(usize, usize)>],
@@ -691,7 +720,7 @@ fn build_layered(
     let mut previous: Option<Vec<usize>> = None;
     for _ in 0..rounds {
         b.mark();
-        b.c.noise(Noise::Depolarize1(noise.before_round), &data)?;
+        b.before_round(&data)?;
         if rx > 0 {
             b.h(&x_anc)?;
             for layer in x_layers {
@@ -706,6 +735,7 @@ fn build_layered(
                 .collect::<Vec<_>>())?;
         }
         let m = b.measure(&all_anc)?;
+        b.flush()?;
         for c in 0..detected.len() {
             let r = m[detected_offset + c];
             match &previous {
@@ -722,6 +752,7 @@ fn build_layered(
         b.h(&data)?;
     }
     let m = b.measure(&data)?;
+    b.flush()?;
     for (c, support) in detected.iter().enumerate() {
         let mut recs = vec![last[detected_offset + c]];
         recs.extend(support.iter().map(|&q| m[q]));

@@ -8,13 +8,21 @@
 //! carries for every qubit the detectors and observables an X or a Z there
 //! would flip (the transpose of propagating Pauli frames forwards), in
 //! time linear in the circuit; errors with the same effect are merged.
+//!
+//! A heralded channel (Stim's `HERALDED_ERASE` and
+//! `HERALDED_PAULI_CHANNEL_1`) has disjoint outcomes; it enters the model
+//! by Stim's approximate rule (`approximate_disjoint_errors`): outcomes of
+//! equal effect are summed, and each distinct effect becomes an
+//! independent error. `HERALDED_ERASE(0.1)` before a measurement gives two
+//! errors of probability 0.05, one on the herald alone and one on the
+//! herald and the measurement.
 
 use std::collections::{BTreeMap, HashMap};
 
-use super::circuit::{DetectorCircuit, Noise, QecOp};
+use super::circuit::{CircuitStep, DetectorCircuit, ExtendedOp, Noise, QecOp};
 #[cfg(test)]
 use super::frame::Frames;
-use super::repeat::{Block, Repeat, RepeatedCircuit};
+use super::repeat::{Block, Item, Repeat, RepeatedCircuit};
 use crate::error::{QsoError, Result};
 use crate::quantum::Instruction;
 use crate::stabilizer::{CliffordTarget, apply_clifford};
@@ -65,6 +73,8 @@ pub(super) enum Kind {
     X,
     Z,
     Flip,
+    /// The herald of a heralded channel.
+    Herald,
 }
 
 /// Effect of an error: flipped detectors (sorted) and observables.
@@ -146,12 +156,12 @@ fn merge<K: Ord>(merged: &mut BTreeMap<K, f64>, key: K, p: f64) {
     *e = *e * (1.0 - p) + p * (1.0 - *e);
 }
 
-fn is_empty(s: &Signature) -> bool {
+pub(super) fn is_empty(s: &Signature) -> bool {
     s.0.is_empty() && s.1 == 0
 }
 
 /// The effect of the basis errors in the bits of `k`.
-fn combination(basis: &[Signature], k: usize) -> Signature {
+pub(super) fn combination(basis: &[Signature], k: usize) -> Signature {
     basis
         .iter()
         .enumerate()
@@ -159,9 +169,9 @@ fn combination(basis: &[Signature], k: usize) -> Signature {
         .fold((Vec::new(), 0u64), |acc, (_, s)| xor(&acc, s))
 }
 
-/// The graph-like parts of every error of a channel with these basis
-/// errors (in Stim's order) and their probabilities, by combination of
-/// the basis errors; errors with no effect or probability 0 are left out.
+/// What the decomposition of a channel's combinations needs, whatever their
+/// probabilities: the combinations, their detectors as bits, the
+/// combinations that flip one detector and the irreducible pairs.
 ///
 /// Within the channel, as in Stim's error analysis: combinations that flip
 /// one detector are parts; so are combinations that flip two detectors,
@@ -172,7 +182,22 @@ fn combination(basis: &[Signature], k: usize) -> Signature {
 /// so (Stim decomposes it later against the whole model's graph-like
 /// errors), or whose parts do not add up to it, is split into its basis
 /// errors.
-fn decomposed(basis: &[Signature], probabilities: &[f64]) -> Result<Vec<(Vec<Signature>, f64)>> {
+pub(super) struct Decomposition<'a> {
+    basis: &'a [Signature],
+    pub(super) combos: Vec<Signature>,
+    masks: Vec<u64>,
+    wide: bool,
+    singles: u64,
+    pairs: Vec<usize>,
+    solved: Vec<bool>,
+    /// A channel of one error (a Y error) is no family of combinations:
+    /// as in Stim, it stays whole when it is graph-like.
+    single_rule: bool,
+}
+
+/// The decomposition of a channel with these basis errors (in Stim's
+/// order); with `single_rule`, a graph-like error stays whole.
+pub(super) fn decomposition(basis: &[Signature], single_rule: bool) -> Decomposition<'_> {
     let s = basis.len();
     let combos: Vec<Signature> = (0..1usize << s).map(|k| combination(basis, k)).collect();
     // Detectors of the channel as bits.
@@ -190,26 +215,44 @@ fn decomposed(basis: &[Signature], probabilities: &[f64]) -> Result<Vec<(Vec<Sig
     } else {
         combos.iter().map(mask).collect()
     };
-    let count = |k: usize| combos[k].0.len();
     let mut singles = 0u64;
     let mut solved = vec![false; combos.len()];
     let mut pairs = Vec::new();
     if !wide {
         for k in 1..combos.len() {
-            if count(k) == 1 {
+            if combos[k].0.len() == 1 {
                 singles |= masks[k];
                 solved[k] = true;
             }
         }
         for k in 1..combos.len() {
-            if count(k) == 2 && masks[k] & !singles != 0 {
+            if combos[k].0.len() == 2 && masks[k] & !singles != 0 {
                 pairs.push(k);
                 solved[k] = true;
             }
         }
     }
-    // The parts of an unsolved combination, if Stim's rules find them.
-    let split = |k: usize| -> Option<Vec<Signature>> {
+    Decomposition {
+        basis,
+        combos,
+        masks,
+        wide,
+        singles,
+        pairs,
+        solved,
+        single_rule,
+    }
+}
+
+impl Decomposition<'_> {
+    fn count(&self, k: usize) -> usize {
+        self.combos[k].0.len()
+    }
+
+    /// The parts of an unsolved combination, if Stim's rules find them.
+    fn split(&self, k: usize) -> Option<Vec<Signature>> {
+        let (masks, combos, singles, pairs) =
+            (&self.masks, &self.combos, self.singles, &self.pairs);
         let goal = masks[k];
         let mut parts = Vec::new();
         let mut remnants = goal;
@@ -241,52 +284,120 @@ fn decomposed(basis: &[Signature], probabilities: &[f64]) -> Result<Vec<(Vec<Sig
             if remnants == 0 {
                 break;
             }
-            if count(j) == 1 && m & !remnants == 0 {
+            if self.count(j) == 1 && m & !remnants == 0 {
                 remnants &= !m;
                 parts.push(combos[j].clone());
             }
         }
         Some(parts)
-    };
-    // A channel of one error (a Y error) is no family of combinations: as
-    // in Stim, it stays whole when it is graph-like.
-    let single = probabilities.iter().filter(|&&p| p > 0.0).count() == 1;
-    let mut out = Vec::new();
-    for (k, &p) in probabilities.iter().enumerate().skip(1) {
-        if p == 0.0 || is_empty(&combos[k]) {
-            continue;
-        }
+    }
+
+    /// The graph-like parts of combination `k` (which has an effect).
+    pub(super) fn of(&self, k: usize) -> Result<Vec<Signature>> {
+        let combos = &self.combos;
         // Stim's rules can leave parts whose effects do not add up to the
         // error's (an observable lost, a detector added); those errors are
         // split into their basis errors instead.
         let adds_up = |parts: &Vec<Signature>| {
             parts.iter().fold((Vec::new(), 0u64), |acc, s| xor(&acc, s)) == combos[k]
         };
-        let parts = if count(k) == 0 || (!wide && solved[k]) || (single && count(k) <= 2) {
-            vec![combos[k].clone()]
-        } else if let Some(parts) = (!wide).then(|| split(k)).flatten().filter(adds_up) {
-            parts
-        } else if count(k) <= 2 {
-            vec![combos[k].clone()]
-        } else {
-            // Split into the basis errors.
-            let parts: Vec<Signature> = (0..s)
-                .filter(|i| k >> i & 1 == 1)
-                .map(|i| basis[i].clone())
-                .filter(|b| !is_empty(b))
-                .collect();
-            if let Some(b) = parts.iter().find(|b| b.0.len() > 2) {
-                return Err(QsoError::invalid(
-                    "circuit",
-                    format!(
-                        "an error flips {} detectors even after splitting into single-qubit X and Z parts; the model is not a matching graph (decode it with BP+OSD)",
-                        b.0.len()
-                    ),
-                ));
+        let count = self.count(k);
+        Ok(
+            if count == 0 || (!self.wide && self.solved[k]) || (self.single_rule && count <= 2) {
+                vec![combos[k].clone()]
+            } else if let Some(parts) = (!self.wide)
+                .then(|| self.split(k))
+                .flatten()
+                .filter(adds_up)
+            {
+                parts
+            } else if count <= 2 {
+                vec![combos[k].clone()]
+            } else {
+                // Split into the basis errors.
+                let parts: Vec<Signature> = (0..self.basis.len())
+                    .filter(|i| k >> i & 1 == 1)
+                    .map(|i| self.basis[i].clone())
+                    .filter(|b| !is_empty(b))
+                    .collect();
+                if let Some(b) = parts.iter().find(|b| b.0.len() > 2) {
+                    return Err(QsoError::invalid(
+                        "circuit",
+                        format!(
+                            "an error flips {} detectors even after splitting into single-qubit X and Z parts; the model is not a matching graph (decode it with BP+OSD, on the model without decomposition)",
+                            b.0.len()
+                        ),
+                    ));
+                }
+                parts
+            },
+        )
+    }
+}
+
+/// The graph-like parts of every error of a channel with these basis
+/// errors (in Stim's order) and their probabilities, by combination of
+/// the basis errors (see [`Decomposition`]); errors with no effect or
+/// probability 0 are left out.
+fn decomposed(basis: &[Signature], probabilities: &[f64]) -> Result<Vec<(Vec<Signature>, f64)>> {
+    let single = probabilities.iter().filter(|&&p| p > 0.0).count() == 1;
+    let dec = decomposition(basis, single);
+    let mut out = Vec::new();
+    for (k, &p) in probabilities.iter().enumerate().skip(1) {
+        if p == 0.0 || is_empty(&dec.combos[k]) {
+            continue;
+        }
+        out.push((dec.of(k)?, p));
+    }
+    Ok(out)
+}
+
+/// The probabilities of a disjoint channel's outcomes after Stim's merging
+/// (`ErrorAnalyzer::add_error_combinations` with disjoint probabilities):
+/// for every combination without effect, the outcomes that differ by it
+/// are summed into the lower index. Each remaining outcome with an effect
+/// is then one independent error.
+pub(super) fn disjoint_outcomes(combos: &[Signature], probabilities: &[f64]) -> Vec<f64> {
+    let mut p = probabilities.to_vec();
+    for k in 1..combos.len() {
+        if is_empty(&combos[k]) {
+            for dst in 0..combos.len() {
+                let src = dst ^ k;
+                if src > dst {
+                    p[dst] += p[src];
+                    p[src] = 0.0;
+                }
             }
-            parts
-        };
-        out.push((parts, p));
+        }
+    }
+    // A Pauli channel's probabilities may add up to 1 + 10⁻⁷ (Stim's
+    // tolerance); a sum of them stays a probability.
+    for v in &mut p {
+        *v = v.min(1.0);
+    }
+    p
+}
+
+/// What a disjoint channel contributes by Stim's rule: each remaining
+/// outcome with an effect, its probability, and (with `decompose`) its
+/// graph-like parts by Stim's decomposition without the single-error rule.
+fn disjoint_errors(
+    basis: &[Signature],
+    probabilities: &[f64],
+    decompose: bool,
+) -> Result<Vec<(Vec<Signature>, f64)>> {
+    let dec = decomposition(basis, false);
+    let p = disjoint_outcomes(&dec.combos, probabilities);
+    let mut out = Vec::new();
+    for (k, &pk) in p.iter().enumerate().skip(1) {
+        if pk > 0.0 && !is_empty(&dec.combos[k]) {
+            let parts = if decompose {
+                dec.of(k)?
+            } else {
+                vec![dec.combos[k].clone()]
+            };
+            out.push((parts, pk));
+        }
     }
     Ok(out)
 }
@@ -383,10 +494,18 @@ pub struct CircuitFault {
 /// faults are equivalent; none for an error the circuit cannot produce).
 /// With the witness of a circuit distance this gives the lightest logical
 /// error as circuit locations.
+///
+/// Circuits with heralded noise (see [`ExtendedOp`]) are refused for now.
 pub fn explain_errors(
     circuit: &DetectorCircuit,
     errors: &[ErrorMechanism],
 ) -> Result<Vec<Vec<CircuitFault>>> {
+    if circuit.has_extended() {
+        return Err(QsoError::invalid(
+            "circuit",
+            "explain_errors does not take heralded operations yet",
+        ));
+    }
     let mut wanted: BTreeMap<Signature, Vec<usize>> = BTreeMap::new();
     for (i, e) in errors.iter().enumerate() {
         wanted
@@ -413,6 +532,7 @@ pub fn explain_errors(
                     Kind::X => 'X',
                     Kind::Z => 'Z',
                     Kind::Flip => 'M',
+                    Kind::Herald => 'H',
                 };
                 match paulis.iter_mut().find(|(q, _)| *q == qubit) {
                     Some((_, c)) if (*c, letter) == ('Z', 'X') || (*c, letter) == ('X', 'Z') => {
@@ -436,10 +556,83 @@ pub fn explain_errors(
 }
 
 /// Where a noise channel acts: its operation and, for each basis error,
-/// the qubit and kind.
+/// the qubit and kind; whether its outcomes are disjoint (a heralded
+/// channel, merged by Stim's rule), and its herald.
 pub(super) struct Channel {
     pub(super) op: usize,
     pub(super) parts: Vec<(usize, Kind)>,
+    pub(super) disjoint: bool,
+    pub(super) herald: Option<Herald>,
+}
+
+/// The herald of a heralded channel: the detector that owns it (whose
+/// only record it is, and the only reader of that record), the probability
+/// that it fires, the probabilities of the channel's X and Z parts given
+/// that it fired, and the probability that exactly one of them happened
+/// (X or Z, not Y), the part where both have the same effect.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Herald {
+    pub(super) owner: Option<usize>,
+    pub(super) probability: f64,
+    pub(super) x: f64,
+    pub(super) z: f64,
+    pub(super) xz: f64,
+}
+
+impl Herald {
+    /// The herald of one target of `op`, owned by `owner`.
+    fn of(op: &ExtendedOp, owner: Option<usize>) -> Herald {
+        match op {
+            ExtendedOp::HeraldedErase { probability, .. } => {
+                let half = if *probability > 0.0 { 0.5 } else { 0.0 };
+                Herald {
+                    owner,
+                    probability: *probability,
+                    x: half,
+                    z: half,
+                    xz: half,
+                }
+            }
+            ExtendedOp::HeraldedPauliChannel1 {
+                probabilities: [pi, px, py, pz],
+                ..
+            } => {
+                let t = ((pi + px) + py) + pz;
+                let (x, z, xz) = if t > 0.0 {
+                    (
+                        ((px + py) / t).min(1.0),
+                        ((pz + py) / t).min(1.0),
+                        ((px + pz) / t).min(1.0),
+                    )
+                } else {
+                    (0.0, 0.0, 0.0)
+                };
+                Herald {
+                    owner,
+                    probability: t.min(1.0),
+                    x,
+                    z,
+                    xz,
+                }
+            }
+        }
+    }
+}
+
+/// The probabilities of a heralded channel's outcomes over the basis (Z,
+/// X, herald): index 4 + k for the Pauli of bits k (1: Z, 2: X), each with
+/// the herald; nothing without it.
+fn herald_probabilities(op: &ExtendedOp) -> [f64; 8] {
+    match op {
+        ExtendedOp::HeraldedErase { probability, .. } => {
+            let q = probability * 0.25;
+            [0.0, 0.0, 0.0, 0.0, q, q, q, q]
+        }
+        ExtendedOp::HeraldedPauliChannel1 {
+            probabilities: [pi, px, py, pz],
+            ..
+        } => [0.0, 0.0, 0.0, 0.0, *pi, *pz, *px, *py],
+    }
 }
 
 /// Calls `f(channel, basis, probabilities)` for every noise channel of the
@@ -531,7 +724,12 @@ pub(super) fn noise_channels(
     z: &dyn Fn(usize) -> Signature,
     f: &mut ChannelSink<'_>,
 ) -> Result<()> {
-    let at = |parts: Vec<(usize, Kind)>| Channel { op: i, parts };
+    let at = |parts: Vec<(usize, Kind)>| Channel {
+        op: i,
+        parts,
+        disjoint: false,
+        herald: None,
+    };
     let zx = |q: usize| vec![(q, Kind::Z), (q, Kind::X)];
     match noise {
         Noise::XError(p) => qubits
@@ -582,6 +780,8 @@ pub(super) fn flip_channel(
         &Channel {
             op: i,
             parts: vec![(qubit, Kind::Flip)],
+            disjoint: false,
+            herald: None,
         },
         &[s],
         &[0.0, flip],
@@ -661,6 +861,10 @@ pub(super) struct Tracker {
     /// detectors descending (detectors are passed in descending order, so
     /// each is appended).
     pub(super) pending: HashMap<usize, Signature>,
+    /// Records not yet passed that are the only record (pairs cancelled)
+    /// of a detector passed: record → that detector (the lowest, if
+    /// several).
+    pub(super) sole: HashMap<usize, usize>,
     /// Entries touched so far.
     pub(super) work: u64,
     /// Whether to require every detector and observable to be
@@ -674,6 +878,7 @@ impl Tracker {
             x: vec![(Vec::new(), 0); n],
             z: vec![(Vec::new(), 0); n],
             pending: HashMap::new(),
+            sole: HashMap::new(),
             work: 0,
             strict: true,
         }
@@ -746,10 +951,25 @@ impl Tracker {
     pub(super) fn measure(&mut self, qubit: usize, record: usize) -> Result<Signature> {
         self.check_fresh(qubit)?;
         let mut s = self.pending.remove(&record).unwrap_or_default();
+        self.sole.remove(&record);
         s.0.reverse();
         xor_into(&mut self.x[qubit], &s, &mut self.work);
         self.z[qubit] = (Vec::new(), 0);
         Ok(s)
+    }
+
+    /// Passes the herald `record` (no qubit changes): returns its effect,
+    /// and the detector that owns it, if one does (its effect is that
+    /// detector alone, whose only record it is).
+    pub(super) fn herald(&mut self, record: usize) -> (Signature, Option<usize>) {
+        let mut s = self.pending.remove(&record).unwrap_or_default();
+        let sole = self.sole.remove(&record);
+        s.0.reverse();
+        let owner = match (s.0.as_slice(), s.1, sole) {
+            ([d], 0, Some(o)) if *d == o => Some(o),
+            _ => None,
+        };
+        (s, owner)
     }
 
     pub(super) fn reset(&mut self, qubit: usize) -> Result<()> {
@@ -772,6 +992,9 @@ impl Tracker {
             }
             self.work += 1;
         }
+        if let Some(r) = sole_record(records) {
+            self.sole.insert(r, id);
+        }
     }
 
     pub(super) fn observable(&mut self, index: usize, records: &[usize]) {
@@ -793,6 +1016,7 @@ impl Tracker {
                 .values()
                 .map(|s| s.0.len() as u64 + 1)
                 .sum::<u64>()
+            + self.sole.len() as u64
     }
 
     /// Whether this state is `before` with every detector `dd` and every
@@ -810,6 +1034,11 @@ impl Tracker {
                 .iter()
                 .filter(|(_, s)| !is_empty(s))
                 .all(|(&r, s)| r >= dm && self.pending.get(&(r - dm)).is_some_and(|a| same(a, s)))
+            && self.sole.len() == before.sole.len()
+            && before
+                .sole
+                .iter()
+                .all(|(&r, &d)| r >= dm && d >= dd && self.sole.get(&(r - dm)) == Some(&(d - dd)))
     }
 
     /// Every detector `dd` and every record `dm` lower.
@@ -837,7 +1066,47 @@ impl Tracker {
             pending.insert(r, s);
         }
         self.pending = pending;
+        let mut sole = HashMap::with_capacity(self.sole.len());
+        for (r, d) in std::mem::take(&mut self.sole) {
+            let Some(r) = r.checked_sub(dm).filter(|r| self.pending.contains_key(r)) else {
+                continue;
+            };
+            let d = d.checked_sub(dd).ok_or_else(|| {
+                QsoError::invalid("circuit", "a repeated block shifted below detector 0")
+            })?;
+            sole.insert(r, d);
+        }
+        self.sole = sole;
         Ok(())
+    }
+}
+
+/// The only record of a detector on `records`, pairs cancelled, if exactly
+/// one is left.
+fn sole_record(records: &[usize]) -> Option<usize> {
+    match records {
+        [r] => Some(*r),
+        [] => None,
+        _ => {
+            let mut sorted = records.to_vec();
+            sorted.sort_unstable();
+            let mut odd = None;
+            let mut k = 0;
+            while k < sorted.len() {
+                let mut end = k;
+                while end < sorted.len() && sorted[end] == sorted[k] {
+                    end += 1;
+                }
+                if (end - k) % 2 == 1 {
+                    if odd.is_some() {
+                        return None;
+                    }
+                    odd = Some(sorted[k]);
+                }
+                k = end;
+            }
+            odd
+        }
     }
 }
 
@@ -987,12 +1256,52 @@ impl<K: Key> Folder<'_, K> {
         Ok(())
     }
 
+    /// Pass the extended operation `op` backwards: each target, last
+    /// first, is a disjoint channel over the effects of a Z and an X on its
+    /// qubit and of its herald record (records are absolute here in flat
+    /// and repeated circuits alike).
+    fn extended(&mut self, op: &ExtendedOp) -> Result<()> {
+        self.op -= 1;
+        let i = self.op as usize;
+        let probabilities = herald_probabilities(op);
+        for &q in op.qubits().iter().rev() {
+            self.m -= 1;
+            let (h, owner) = self.t.herald(self.m);
+            self.t.work += (self.t.z[q].0.len() + self.t.x[q].0.len() + h.0.len()) as u64 + 3;
+            let basis = [self.t.z[q].clone(), self.t.x[q].clone(), h];
+            let channel = Channel {
+                op: i,
+                parts: vec![(q, Kind::Z), (q, Kind::X), (q, Kind::Herald)],
+                disjoint: true,
+                herald: Some(Herald::of(op, owner)),
+            };
+            self.channel(&channel, &basis, &probabilities)?;
+        }
+        if self.t.work > MAX_MODEL_WORK {
+            return Err(QsoError::invalid(
+                "circuit",
+                format!("the error model needs more than {MAX_MODEL_WORK} operations"),
+            ));
+        }
+        Ok(())
+    }
+
+    fn step(&mut self, step: CircuitStep<'_>, absolute: bool) -> Result<()> {
+        match step {
+            CircuitStep::Qec(op) => self.op(op, absolute),
+            CircuitStep::Extended(op) => self.extended(op),
+        }
+    }
+
     fn blocks(&mut self, blocks: &[Block]) -> Result<()> {
         for block in blocks.iter().rev() {
             match block {
-                Block::Ops(ops) => {
-                    for op in ops.iter().rev() {
-                        self.op(op, false)?;
+                Block::Ops(items) => {
+                    for item in items.iter().rev() {
+                        match item {
+                            Item::Qec(op) => self.op(op, false)?,
+                            Item::Ext(op) => self.extended(op)?,
+                        }
                     }
                 }
                 Block::Repeat(r) => self.repeat(r)?,
@@ -1110,15 +1419,15 @@ pub(super) fn fold_flat<'a, K: Key>(
         steps: Vec::new(),
         m: circuit.n_measurements(),
         d: circuit.n_detectors(),
-        op: circuit.operations().len() as u64,
+        op: circuit.n_steps() as u64,
         merged: BTreeMap::new(),
         open: Vec::new(),
         scratch: Vec::new(),
         entries: 0,
         contribute,
     };
-    for op in circuit.operations().iter().rev() {
-        f.op(op, true)?;
+    for step in circuit.steps().rev() {
+        f.step(step, true)?;
     }
     f.t.check_start()?;
     debug_assert_eq!((f.m, f.d, f.op), (0, 0, 0));
@@ -1127,8 +1436,13 @@ pub(super) fn fold_flat<'a, K: Key>(
 
 /// The contributions of a channel to the correlated model.
 fn correlated_contributions() -> Box<Contribute<'static, Vec<Signature>>> {
-    Box::new(|_, basis, probabilities, out| {
-        for (mut parts, p) in decomposed(basis, probabilities)? {
+    Box::new(|channel, basis, probabilities, out| {
+        let errors = if channel.disjoint {
+            disjoint_errors(basis, probabilities, true)?
+        } else {
+            decomposed(basis, probabilities)?
+        };
+        for (mut parts, p) in errors {
             parts.sort();
             out.push((parts, p));
         }
@@ -1138,7 +1452,15 @@ fn correlated_contributions() -> Box<Contribute<'static, Vec<Signature>>> {
 
 /// The contributions of a channel to the model of [`detector_error_model`].
 pub(super) fn model_contributions(decompose: bool) -> Box<Contribute<'static, Signature>> {
-    Box::new(move |_, basis, probabilities, out| {
+    Box::new(move |channel, basis, probabilities, out| {
+        if channel.disjoint {
+            for (parts, p) in disjoint_errors(basis, probabilities, decompose)? {
+                for part in parts {
+                    out.push((part, p));
+                }
+            }
+            return Ok(());
+        }
         if !decompose {
             for (k, &p) in probabilities.iter().enumerate().skip(1) {
                 let total = combination(basis, k);
@@ -1552,6 +1874,360 @@ mod backward_tests {
             }
         }
         c
+    }
+
+    /// A random circuit whose detectors and observables are deterministic,
+    /// with heralded channels (duplicate targets, probability 0) whose
+    /// heralds are read by their own detectors, by none, by observables, by
+    /// a detector and an observable, by detectors of two heralds, or by a
+    /// detector that lists them three times; and the steps at which its
+    /// items end (blocks of whole items repeat deterministically).
+    fn random_heralded(n: usize, items: usize, rng: &mut Rng) -> (DetectorCircuit, Vec<usize>) {
+        let mut c = DetectorCircuit::new(n).unwrap();
+        let mut ends = vec![0];
+        let q = |rng: &mut Rng| rng.below(n as u64) as usize;
+        let pick = |rng: &mut Rng, v: &[f64]| v[rng.below(v.len() as u64) as usize];
+        for _ in 0..items {
+            let a = q(rng);
+            let b = (a + 1 + rng.below(n as u64 - 1) as usize) % n;
+            match rng.below(11) {
+                0 => {
+                    c.h(a).unwrap();
+                }
+                1 => {
+                    c.s(a).unwrap();
+                }
+                2 => {
+                    c.cx(a, b).unwrap();
+                }
+                3 => {
+                    c.cz(a, b).unwrap();
+                }
+                4 => {
+                    let noise = [
+                        Noise::XError(0.01),
+                        Noise::YError(0.02),
+                        Noise::ZError(0.03),
+                        Noise::Depolarize1(0.01),
+                    ][rng.below(4) as usize];
+                    c.noise(noise, &[a]).unwrap();
+                }
+                5 => {
+                    c.noise(Noise::Depolarize2(0.01), &[a, b]).unwrap();
+                }
+                6 => {
+                    c.reset(a).unwrap();
+                }
+                k @ (7 | 8) => {
+                    let mut targets = vec![a];
+                    if rng.below(2) == 0 {
+                        targets.push(if rng.below(3) == 0 { a } else { b });
+                    }
+                    let records = if k == 7 {
+                        let p = pick(rng, &[0.0, 0.1, 0.03, 0.2, 1.0]);
+                        c.heralded_erase(p, &targets).unwrap()
+                    } else {
+                        let mut ps = [0.0; 4];
+                        for p in &mut ps {
+                            *p = pick(rng, &[0.0, 0.01, 0.02, 0.05, 0.1]);
+                        }
+                        c.heralded_pauli_channel_1(ps, &targets).unwrap()
+                    };
+                    for (i, &r) in records.iter().enumerate() {
+                        match rng.below(7) {
+                            0 | 1 => {
+                                c.detector(&[r]).unwrap();
+                            }
+                            2 => {}
+                            3 => {
+                                c.observable(rng.below(2) as usize, &[r]).unwrap();
+                            }
+                            4 => {
+                                c.detector(&[r]).unwrap();
+                                c.observable(0, &[r]).unwrap();
+                            }
+                            5 if i == 1 => {
+                                c.detector(&[records[0], r]).unwrap();
+                            }
+                            _ => {
+                                c.detector(&[r, r, r]).unwrap();
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    let first = c.measure(a, 0.01).unwrap();
+                    c.noise(Noise::Depolarize1(0.01), &[a]).unwrap();
+                    let second = c.measure(a, 0.0).unwrap();
+                    if rng.below(4) == 0 {
+                        c.observable(rng.below(3) as usize, &[first, second])
+                            .unwrap();
+                    } else {
+                        c.detector(&[first, second]).unwrap();
+                    }
+                }
+            }
+            ends.push(c.n_steps());
+        }
+        (c, ends)
+    }
+
+    /// The model of a flat circuit by propagating each error forwards
+    /// through Pauli frames (one shot per error), every heralded channel by
+    /// Stim's rule written out: for each target, the effects of its four
+    /// outcomes (the herald's: the detectors and observables that read its
+    /// record), summed by effect, each distinct effect an independent
+    /// error.
+    fn forward_model(c: &DetectorCircuit) -> BTreeMap<Signature, f64> {
+        let steps: Vec<CircuitStep<'_>> = c.steps().collect();
+        let mut comps = Vec::new();
+        for (i, step) in steps.iter().enumerate() {
+            let qubits: &[usize] = match step {
+                CircuitStep::Qec(QecOp::Noise { qubits, .. }) => qubits,
+                CircuitStep::Extended(op) => op.qubits(),
+                CircuitStep::Qec(QecOp::Measure { flip, .. }) if *flip > 0.0 => {
+                    comps.push(Component {
+                        op: i,
+                        qubit: 0,
+                        kind: Kind::Flip,
+                    });
+                    &[]
+                }
+                _ => &[],
+            };
+            for &qubit in qubits {
+                for kind in [Kind::X, Kind::Z] {
+                    comps.push(Component { op: i, qubit, kind });
+                }
+            }
+        }
+        comps.sort();
+        comps.dedup();
+        let n = c.n_qubits();
+        let w = comps.len().div_ceil(64).max(1);
+        let mut f = Frames::new(n, w);
+        let mut records = vec![0u64; c.n_measurements() * w];
+        let mut det = vec![0u64; c.n_detectors() * w];
+        let mut obs = vec![0u64; c.n_observables() * w];
+        let (mut measured, mut detectors) = (0, 0);
+        // The readers of every record.
+        let mut readers = vec![(Vec::new(), 0u64); c.n_measurements()];
+        let mut next = 0;
+        let bit = |v: &mut [u64], row: usize, k: usize| v[row * w + k / 64] ^= 1 << (k % 64);
+        for (i, step) in steps.iter().enumerate() {
+            let mut inject = |f: &mut Frames, records: &mut [u64], record: usize| {
+                while next < comps.len() && comps[next].op == i {
+                    let c = comps[next];
+                    match c.kind {
+                        Kind::X => bit(&mut f.x, c.qubit, next),
+                        Kind::Z => bit(&mut f.z, c.qubit, next),
+                        _ => bit(records, record, next),
+                    }
+                    next += 1;
+                }
+            };
+            match step {
+                CircuitStep::Qec(QecOp::Gate(inst)) => apply_clifford(&mut f, inst, &[]).unwrap(),
+                CircuitStep::Qec(QecOp::Noise { .. }) => inject(&mut f, &mut records, 0),
+                CircuitStep::Qec(QecOp::Measure { qubit, .. }) => {
+                    let (x, row) = (&f.x[qubit * w..(qubit + 1) * w], measured * w);
+                    records[row..row + w].copy_from_slice(x);
+                    inject(&mut f, &mut records, measured);
+                    f.z[qubit * w..(qubit + 1) * w].fill(0);
+                    measured += 1;
+                }
+                CircuitStep::Qec(QecOp::Reset { qubit }) => {
+                    f.x[qubit * w..(qubit + 1) * w].fill(0);
+                    f.z[qubit * w..(qubit + 1) * w].fill(0);
+                }
+                CircuitStep::Qec(QecOp::Detector { records: recs }) => {
+                    for &r in recs {
+                        for k in 0..w {
+                            det[detectors * w + k] ^= records[r * w + k];
+                        }
+                        let e = &mut readers[r].0;
+                        match e.iter().position(|&d| d == detectors) {
+                            Some(at) => {
+                                e.remove(at);
+                            }
+                            None => e.push(detectors),
+                        }
+                    }
+                    detectors += 1;
+                }
+                CircuitStep::Qec(QecOp::Observable {
+                    index,
+                    records: recs,
+                }) => {
+                    for &r in recs {
+                        for k in 0..w {
+                            obs[index * w + k] ^= records[r * w + k];
+                        }
+                        readers[r].1 ^= 1 << index;
+                    }
+                }
+                CircuitStep::Extended(op) => {
+                    inject(&mut f, &mut records, 0);
+                    // Herald records read 0 whatever the frame.
+                    measured += op.n_records();
+                }
+            }
+        }
+        let sig = |comp: Component| -> Signature {
+            let k = comps.binary_search(&comp).expect("a component");
+            let on = |v: &[u64], row: usize| v[row * w + k / 64] >> (k % 64) & 1 == 1;
+            let detectors = (0..c.n_detectors()).filter(|&d| on(&det, d)).collect();
+            let observables = (0..c.n_observables())
+                .filter(|&o| on(&obs, o))
+                .fold(0u64, |m, o| m | 1 << o);
+            (detectors, observables)
+        };
+        let mut model: BTreeMap<Signature, f64> = BTreeMap::new();
+        let mut measured = 0;
+        for (i, step) in steps.iter().enumerate() {
+            let x = |qubit| {
+                sig(Component {
+                    op: i,
+                    qubit,
+                    kind: Kind::X,
+                })
+            };
+            let z = |qubit| {
+                sig(Component {
+                    op: i,
+                    qubit,
+                    kind: Kind::Z,
+                })
+            };
+            match step {
+                CircuitStep::Qec(QecOp::Noise { noise, qubits }) => {
+                    let mut sink = |_: &Channel, basis: &[Signature], probabilities: &[f64]| {
+                        for (k, &p) in probabilities.iter().enumerate().skip(1) {
+                            let e = combination(basis, k);
+                            if p > 0.0 && !is_empty(&e) {
+                                merge(&mut model, e, p);
+                            }
+                        }
+                        Ok(())
+                    };
+                    noise_channels(i, *noise, qubits, &x, &z, &mut sink).unwrap();
+                }
+                CircuitStep::Qec(QecOp::Measure { flip, .. }) => {
+                    if *flip > 0.0 {
+                        let e = sig(Component {
+                            op: i,
+                            qubit: 0,
+                            kind: Kind::Flip,
+                        });
+                        if !is_empty(&e) {
+                            merge(&mut model, e, *flip);
+                        }
+                    }
+                    measured += 1;
+                }
+                CircuitStep::Extended(op) => {
+                    let [pi, px, py, pz] = match op {
+                        ExtendedOp::HeraldedErase { probability, .. } => [probability * 0.25; 4],
+                        ExtendedOp::HeraldedPauliChannel1 { probabilities, .. } => *probabilities,
+                    };
+                    for &q in op.qubits() {
+                        let mut h = readers[measured].clone();
+                        h.0.sort_unstable();
+                        let (ex, ez) = (x(q), z(q));
+                        let mut outcomes: BTreeMap<Signature, f64> = BTreeMap::new();
+                        for (e, p) in [
+                            (h.clone(), pi),
+                            (xor(&h, &ex), px),
+                            (xor(&xor(&h, &ex), &ez), py),
+                            (xor(&h, &ez), pz),
+                        ] {
+                            *outcomes.entry(e).or_insert(0.0) += p;
+                        }
+                        for (e, p) in outcomes {
+                            if p > 0.0 && !is_empty(&e) {
+                                merge(&mut model, e, p);
+                            }
+                        }
+                        measured += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        model
+    }
+
+    #[test]
+    fn heralded_channels_by_the_pass_backwards_equal_stims_rule_forwards() {
+        let mut rng = Rng::seed_from_u64(166);
+        let mut repeated = 0;
+        for trial in 0..200 {
+            let n = 2 + trial % 6;
+            let (c, ends) = random_heralded(n, 20 + 3 * (trial % 20), &mut rng);
+            let back = detector_error_model(&c, false).unwrap();
+            let forward = forward_model(&c);
+            assert_eq!(back.errors.len(), forward.len(), "trial {trial}");
+            for (e, (key, p)) in back.errors.iter().zip(&forward) {
+                assert_eq!(
+                    (&e.detectors, e.observables),
+                    (&key.0, key.1),
+                    "trial {trial}"
+                );
+                assert!(
+                    (e.probability - p).abs() <= 1e-14 * p,
+                    "trial {trial}: {} {p}",
+                    e.probability
+                );
+            }
+            // The heralded split keeps its invariants, and the folded pass
+            // of a block of whole items equals the expanded one.
+            let m = crate::qec::heralded_error_model(&c, false).unwrap();
+            let again = crate::qec::HeraldedErrorModel::new(
+                m.base().clone(),
+                m.herald_detectors().to_vec(),
+                (0..m.herald_detectors().len())
+                    .map(|h| m.herald_probability(h))
+                    .collect(),
+                (0..m.herald_detectors().len())
+                    .map(|h| m.outcomes(h).to_vec())
+                    .collect(),
+            )
+            .unwrap();
+            assert_eq!(again, m);
+            if trial % 3 == 0 && ends.len() > 4 {
+                let k = ends.len() - 1;
+                let (a, b) = (k / 3, 2 * k / 3);
+                if ends[a] < ends[b] {
+                    let r = RepeatedCircuit::from_parts(&c, ends[a]..ends[b], 3).unwrap();
+                    let flat = r.flatten().unwrap();
+                    let close = |x: &DetectorErrorModel, y: &DetectorErrorModel| {
+                        x.errors.len() == y.errors.len()
+                            && x.errors.iter().zip(&y.errors).all(|(e, f)| {
+                                e.detectors == f.detectors
+                                    && e.observables == f.observables
+                                    && (e.probability - f.probability).abs()
+                                        <= 1e-12 * f.probability
+                            })
+                    };
+                    assert!(close(
+                        &r.detector_error_model(false).unwrap(),
+                        &detector_error_model(&flat, false).unwrap()
+                    ));
+                    let (x, y) = (
+                        r.heralded_error_model(false).unwrap(),
+                        crate::qec::heralded_error_model(&flat, false).unwrap(),
+                    );
+                    assert!(close(x.base(), y.base()), "trial {trial}");
+                    assert_eq!(x.herald_detectors(), y.herald_detectors());
+                    for h in 0..x.herald_detectors().len() {
+                        assert_eq!(x.herald_probability(h), y.herald_probability(h));
+                        assert_eq!(x.outcomes(h), y.outcomes(h));
+                    }
+                    repeated += 1;
+                }
+            }
+        }
+        assert!(repeated > 50, "{repeated}");
     }
 
     #[test]

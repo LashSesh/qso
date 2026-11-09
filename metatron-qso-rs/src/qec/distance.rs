@@ -185,7 +185,10 @@ fn undetectable(errors: &[Error]) -> Option<usize> {
 /// errors (those flipping one or two detectors; the others are ignored, as
 /// by Stim's `shortest_graphlike_error`). Exact: `lower_bound` is the
 /// witness's weight, or `usize::MAX` if these errors flip no observable
-/// undetectably.
+/// undetectably. In the model of a circuit with heralded noise each outcome
+/// of a heralded channel is one error; one whose herald a detector reads is
+/// never undetectable, so only unread heralds' outcomes can make up a
+/// logical error.
 pub fn graphlike_distance(dem: &DetectorErrorModel) -> Result<CircuitDistance> {
     let errors = errors(dem)?;
     if let Some(k) = undetectable(&errors) {
@@ -349,7 +352,10 @@ fn upper_bound(
 /// Bounds on the circuit distance of a detector error model: the fewest
 /// errors that flip some observable and no detector. Exact for graph-like
 /// models; otherwise see the [module documentation](self) and
-/// [`DistanceOptions`].
+/// [`DistanceOptions`]. In the model of a circuit with heralded noise each
+/// outcome of a heralded channel counts as one error (as in Stim); one
+/// whose herald a detector reads flips that detector, so it is never
+/// undetectable on its own.
 pub fn circuit_distance(
     dem: &DetectorErrorModel,
     options: &DistanceOptions,
