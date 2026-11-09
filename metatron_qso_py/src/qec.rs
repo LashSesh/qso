@@ -808,6 +808,13 @@ impl PyHeraldedErrorModel {
 
 #[pymethods]
 impl PyHeraldedErrorModel {
+    /// Whether the base model was decomposed into graph-like parts
+    /// (`heralded_error_model(decompose=True)`); BP+OSD refuses it.
+    #[getter]
+    fn decomposed(&self) -> bool {
+        self.inner.is_decomposed()
+    }
+
     /// Checked: herald detectors strictly ascending and below
     /// `base.n_detectors`; one probability (in [0, 1]) and one list of
     /// parts per herald; no base error or part flips a herald detector.
@@ -1673,6 +1680,40 @@ impl PyConditionedDecoder {
     }
 }
 
+/// The heralded decoding method named by `decoder`, with the BP+OSD
+/// options (refused for the other methods unless they are the defaults).
+fn heralded_method(
+    decoder: &str,
+    max_iterations: usize,
+    bp_method: &str,
+    scaling: f64,
+    osd: &str,
+    osd_order: usize,
+) -> PyResult<HeraldedMethod> {
+    let options = bposd_options(max_iterations, bp_method, scaling, osd, osd_order)?;
+    let method = match decoder {
+        "union_find" | "matching" => {
+            if options != BpOsdOptions::default() {
+                return Err(invalid(format!(
+                    "the BP+OSD options apply to decoder=\"bposd\", not {decoder:?}"
+                )));
+            }
+            if decoder == "matching" {
+                HeraldedMethod::Matching
+            } else {
+                HeraldedMethod::UnionFind
+            }
+        }
+        "bposd" => HeraldedMethod::BpOsd(options),
+        other => {
+            return Err(invalid(format!(
+                "unknown decoder {other:?}; use \"union_find\", \"matching\" or \"bposd\""
+            )));
+        }
+    };
+    Ok(method)
+}
+
 #[pymethods]
 impl PyConditionedDecoder {
     #[new]
@@ -1688,33 +1729,50 @@ impl PyConditionedDecoder {
         osd: &str,
         osd_order: usize,
     ) -> PyResult<Self> {
-        let options = bposd_options(max_iterations, bp_method, scaling, osd, osd_order)?;
-        let method = match decoder {
-            "union_find" | "matching" => {
-                if options != BpOsdOptions::default() {
-                    return Err(invalid(format!(
-                        "the BP+OSD options apply to decoder=\"bposd\", not {decoder:?}"
-                    )));
-                }
-                if decoder == "matching" {
-                    HeraldedMethod::Matching
-                } else {
-                    HeraldedMethod::UnionFind
-                }
-            }
-            "bposd" => HeraldedMethod::BpOsd(options),
-            other => {
-                return Err(invalid(format!(
-                    "unknown decoder {other:?}; use \"union_find\", \"matching\" or \"bposd\""
-                )));
-            }
-        };
+        let method = heralded_method(decoder, max_iterations, bp_method, scaling, osd, osd_order)?;
         let m = &model.inner;
         Ok(Self {
             inner: py.detach(|| ConditionedDecoder::new(m, method)).raise()?,
         })
     }
 
+    /// The decoder of a `DetectorCircuit` or `RepeatedCircuit` on the
+    /// heralded model its method needs: decomposed for `"union_find"` and
+    /// `"matching"`, without decomposition for `"bposd"`.
+    #[staticmethod]
+    #[pyo3(signature = (circuit, decoder = "union_find", max_iterations = 50, bp_method = "min_sum", scaling = 0.625, osd = "cs", osd_order = 7))]
+    #[allow(clippy::too_many_arguments)]
+    fn for_circuit(
+        py: Python<'_>,
+        circuit: &Bound<'_, PyAny>,
+        decoder: &str,
+        max_iterations: usize,
+        bp_method: &str,
+        scaling: f64,
+        osd: &str,
+        osd_order: usize,
+    ) -> PyResult<Self> {
+        let method = heralded_method(decoder, max_iterations, bp_method, scaling, osd, osd_order)?;
+        if let Ok(c) = circuit.cast::<PyDetectorCircuit>() {
+            let c = c.borrow().inner.clone();
+            return Ok(Self {
+                inner: py
+                    .detach(|| ConditionedDecoder::for_circuit(&c, method))
+                    .raise()?,
+            });
+        }
+        if let Ok(c) = circuit.cast::<PyRepeatedCircuit>() {
+            let c = c.borrow().inner.clone();
+            return Ok(Self {
+                inner: py
+                    .detach(|| ConditionedDecoder::for_repeated(&c, method))
+                    .raise()?,
+            });
+        }
+        Err(invalid(
+            "circuit must be a DetectorCircuit or a RepeatedCircuit",
+        ))
+    }
     /// Detectors of the circuit, herald detectors included.
     #[getter]
     fn n_detectors(&self) -> usize {

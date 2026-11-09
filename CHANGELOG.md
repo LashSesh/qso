@@ -12,7 +12,9 @@ All notable changes to this project are documented here. The format follows
   `ExtendedOp`, `CircuitStep`, `Steps`, `DetectorCircuit::steps`,
   `n_steps`, `heralded_erase`, `heralded_pauli_channel_1`,
   `RepeatedCircuit::heralded_error_model`, the module `herald` with
-  `HeraldedErrorModel`, `heralded_error_model`, `ConditionedDecoder` and
+  `HeraldedErrorModel` (with `is_decomposed`), `heralded_error_model`,
+  `ConditionedDecoder` (with `for_circuit` and `for_repeated`, which build
+  the model each method needs; BP+OSD refuses a decomposed model) and
   `HeraldedMethod`, the trait `HeraldedDecoder`, `ErasureNoise`,
   `repetition_code_memory_erasure`, `surface_code_memory_erasure`,
   `css_code_memory_erasure` and their `_repeated` forms; Python

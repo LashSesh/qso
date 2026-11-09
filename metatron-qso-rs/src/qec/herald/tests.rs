@@ -872,7 +872,7 @@ fn the_repetition_code_with_heralds_fails_with_probability_p_to_the_d_over_two()
             let model = heralded_error_model(&c, true).unwrap();
             assert_eq!(model.herald_detectors(), (0..d).collect::<Vec<_>>());
             for method in methods() {
-                let mut dec = ConditionedDecoder::new(&model, method).unwrap();
+                let mut dec = ConditionedDecoder::for_circuit(&c, method).unwrap();
                 let mut failure = 0.0;
                 for erased in 0u32..1 << d {
                     let k = erased.count_ones() as i32;
@@ -1012,7 +1012,7 @@ fn the_surface_code_with_heralds_at_one_half_fails_exactly_a_quarter() {
     let model = heralded_error_model(&c, true).unwrap();
     assert_eq!(model.herald_detectors().len(), n);
     for method in methods() {
-        let mut dec = ConditionedDecoder::new(&model, method).unwrap();
+        let mut dec = ConditionedDecoder::for_circuit(&c, method).unwrap();
         let mut total: u64 = 0;
         for e in 0u32..1 << n {
             let heralds: Vec<usize> = (0..n).filter(|&q| e >> q & 1 == 1).collect();
@@ -1422,10 +1422,20 @@ fn heralded_circuits_are_refused_where_errors_must_be_independent() {
             .to_string();
         assert!(err.contains("flips 3 detectors"), "{err}");
     }
-    assert!(ConditionedDecoder::new(&wide, HeraldedMethod::BpOsd(BpOsdOptions::default())).is_ok());
+    // BP+OSD refuses the decomposed model and takes the whole one.
+    let err = ConditionedDecoder::new(&wide, HeraldedMethod::BpOsd(BpOsdOptions::default()))
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(err.contains("without decomposition"), "{err}");
+    let whole = heralded_error_model(&circuit(WIDE), false).unwrap();
+    assert!(!whole.is_decomposed() && wide.is_decomposed());
+    assert!(
+        ConditionedDecoder::new(&whole, HeraldedMethod::BpOsd(BpOsdOptions::default())).is_ok()
+    );
     assert!(
         ConditionedDecoder::new(
-            &wide,
+            &whole,
             HeraldedMethod::BpOsd(BpOsdOptions {
                 scaling: 2.0,
                 ..BpOsdOptions::default()
@@ -1466,8 +1476,8 @@ fn conditioned_decoders_check_their_input() {
     let mut m = ConditionedDecoder::new(&model, HeraldedMethod::Matching).unwrap();
     assert!(m.decode_detailed(&[3], &[0]).is_err());
     assert_eq!(m.decode_with_weight(&[3], &[0]).unwrap(), (1, 0.0));
-    let mut b =
-        ConditionedDecoder::new(&model, HeraldedMethod::BpOsd(BpOsdOptions::default())).unwrap();
+    let mut b = ConditionedDecoder::for_circuit(&c, HeraldedMethod::BpOsd(BpOsdOptions::default()))
+        .unwrap();
     assert!(b.decode_with_weight(&[3], &[0]).is_err());
     let outcome = b.decode_detailed(&[3], &[0]).unwrap();
     assert_eq!((outcome.observables, &outcome.errors[..]), (1, &[0][..]));
@@ -1539,7 +1549,7 @@ fn parts_above_one_half_are_applied_before_decoding() {
         0.0,
     );
     for method in methods() {
-        let mut dec = ConditionedDecoder::new(&model, method).unwrap();
+        let mut dec = ConditionedDecoder::for_circuit(&c, method).unwrap();
         for x in 0u32..1 << d {
             let heralds: Vec<usize> = (0..d).filter(|&i| x >> i & 1 == 1).collect();
             let fired: Vec<usize> = (0..d - 1)

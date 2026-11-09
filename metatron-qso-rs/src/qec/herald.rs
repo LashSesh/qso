@@ -139,6 +139,7 @@ fn assemble(
     merged: BTreeMap<HKey, f64>,
     n_detectors: usize,
     n_observables: usize,
+    decomposed: bool,
 ) -> Result<HeraldedErrorModel> {
     let mut errors = Vec::new();
     let mut herald_detectors = Vec::new();
@@ -173,6 +174,7 @@ fn assemble(
         herald_detectors,
         herald_probabilities,
         outcomes,
+        decomposed,
     })
 }
 
@@ -192,7 +194,12 @@ pub fn heralded_error_model(
 ) -> Result<HeraldedErrorModel> {
     let mut contribute = heralded_contributions(decompose);
     let merged = fold_flat::<HKey>(circuit, contribute.as_mut())?;
-    assemble(merged, circuit.n_detectors(), circuit.n_observables())
+    assemble(
+        merged,
+        circuit.n_detectors(),
+        circuit.n_observables(),
+        decompose,
+    )
 }
 
 /// [`heralded_error_model`] of a repeated circuit, by the folded pass.
@@ -202,7 +209,12 @@ pub(super) fn repeated_heralded_model(
 ) -> Result<HeraldedErrorModel> {
     let mut contribute = heralded_contributions(decompose);
     let merged = fold::<HKey>(circuit, contribute.as_mut())?;
-    assemble(merged, circuit.n_detectors(), circuit.n_observables())
+    assemble(
+        merged,
+        circuit.n_detectors(),
+        circuit.n_observables(),
+        decompose,
+    )
 }
 
 /// The model a decoder conditions on the heralds that fired: the errors of
@@ -217,6 +229,9 @@ pub struct HeraldedErrorModel {
     herald_detectors: Vec<usize>,
     herald_probabilities: Vec<f64>,
     outcomes: Vec<Vec<ErrorMechanism>>,
+    /// Whether the base model was decomposed into graph-like parts (built
+    /// with `decompose = true`); BP+OSD refuses such a model.
+    decomposed: bool,
 }
 
 fn check_probability(what: &str, p: f64) -> Result<()> {
@@ -337,7 +352,16 @@ impl HeraldedErrorModel {
             herald_detectors,
             herald_probabilities,
             outcomes: merged_outcomes,
+            decomposed: false,
         })
+    }
+
+    /// Whether the base model was decomposed into graph-like parts, as
+    /// [`heralded_error_model`] gives it with `decompose = true`. A model
+    /// built from its parts with [`HeraldedErrorModel::new`] counts as not
+    /// decomposed.
+    pub fn is_decomposed(&self) -> bool {
+        self.decomposed
     }
 
     /// Detectors of the circuit, herald detectors included.
@@ -533,14 +557,41 @@ pub struct ConditionedDecoder {
 }
 
 impl ConditionedDecoder {
+    /// The decoder of `circuit` by `method`, on the heralded model the
+    /// method needs: decomposed for union-find and matching, without
+    /// decomposition for BP+OSD (as [`DecoderChoice`](super::DecoderChoice)
+    /// builds it).
+    pub fn for_circuit(circuit: &DetectorCircuit, method: HeraldedMethod) -> Result<Self> {
+        let decompose = !matches!(method, HeraldedMethod::BpOsd(_));
+        Self::new(&heralded_error_model(circuit, decompose)?, method)
+    }
+
+    /// [`ConditionedDecoder::for_circuit`] of a repeated circuit.
+    pub fn for_repeated(circuit: &RepeatedCircuit, method: HeraldedMethod) -> Result<Self> {
+        let decompose = !matches!(method, HeraldedMethod::BpOsd(_));
+        Self::new(&repeated_heralded_model(circuit, decompose)?, method)
+    }
+
     /// The decoder of `model` by `method`. Union-find and matching need
     /// every base error and every part to flip at most two ordinary
     /// detectors; BP+OSD takes at most
     /// [`MAX_BPOSD_DETECTORS`](super::MAX_BPOSD_DETECTORS) ordinary
     /// detectors (herald detectors are not counted).
+    ///
+    /// BP+OSD decodes the model without decomposition (its parts are the
+    /// circuit's errors as they happen); a decomposed model is refused for
+    /// it. [`ConditionedDecoder::for_circuit`] builds the model each method
+    /// needs.
     pub fn new(model: &HeraldedErrorModel, method: HeraldedMethod) -> Result<Self> {
         if let HeraldedMethod::BpOsd(options) = &method {
             check_options(options)?;
+            if model.decomposed {
+                return Err(QsoError::invalid(
+                    "model",
+                    "BP+OSD decodes the heralded model without decomposition: build it \
+                     without decomposition, or build the decoder with for_circuit",
+                ));
+            }
         }
         let n = model.n_detectors();
         let mut herald_of = vec![NOT; n];

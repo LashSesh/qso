@@ -8360,16 +8360,16 @@ was fixed (ten reported and four smaller points; the default of
   are now clamped to 1, as the herald rate already was; the sampler needed
   no change (it fires every shot at t ≥ 1 and draws the Pauli in
   proportion over t). Tested with both decompositions and the decoders.
-- **The default `decompose=True` of Python's `heralded_error_model`
-  failed for colour codes with BP+OSD**, and BP+OSD on the decomposed
-  model of a surface code fails more often (14 against 11 of 2000 shots).
-  The default stays (union-find, the default method, and matching need
-  it, and the guide's examples use it), but the docstrings of
-  `heralded_error_model` and `ConditionedDecoder`, the guide and the
-  limits rows now say that BP+OSD takes `decompose=False`, and the
-  refusal reads "decode it with BP+OSD, on the model without
-  decomposition"; a test decodes a colour code with heralds this way,
-  equal to `logical_error_rate`'s routed BP+OSD on the same shots.
+- **BP+OSD ran on the decomposed model by default.** Python's
+  `heralded_error_model` builds the decomposed model by default (union-find
+  and matching need it), and `ConditionedDecoder(model, "bposd")` decoded
+  it silently: colour codes failed and a surface code failed more often
+  (14 against 11 of 2000 shots). BP+OSD now refuses a decomposed model
+  ("BP+OSD decodes the heralded model without decomposition"), the model
+  says which it is (`is_decomposed`, Python `decomposed`), and
+  `ConditionedDecoder::for_circuit` / `for_repeated` (Python
+  `ConditionedDecoder.for_circuit`) build the model each method needs, as
+  `DecoderChoice` already did; the guide's examples use it.
 - **`qso qec` built the heralded model twice**, once only to count the
   herald detectors (2.15 s of 6.96 s at 20 000 rounds of d = 5), and
   found heralds in a repeated circuit by searching its Stim text. It now

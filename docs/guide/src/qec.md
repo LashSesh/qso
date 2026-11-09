@@ -1078,9 +1078,12 @@ heralded Pauli channel, treating its X and Z parts as independent and
 merging equal parts of different channels is an approximation; for an
 erasure both are exact. Where a channel's X and Z have the same effect
 (before a Y-basis readout), it has one part, with probability
-(p_x + p_z)/t, exactly. The decomposed model, the default, is for
-union-find and matching; BP+OSD takes `heralded_error_model(decompose=False)`,
-the only one a colour code has. Read from Stim's text:
+(p_x + p_z)/t, exactly. The decomposed model, the default, is the one
+union-find and matching need; BP+OSD decodes the model without
+decomposition (`heralded_error_model(decompose=False)`, the only one a
+colour code has) and refuses a decomposed one. `model.decomposed` says
+which a model is, and `ConditionedDecoder.for_circuit(circuit, decoder)`
+builds the right one for the decoder. Read from Stim's text:
 
 ```python
 import metatron_qso as q
@@ -1099,8 +1102,10 @@ m = c.heralded_error_model()
 print(m.herald_probability(0), m.outcomes(0))   # 0.1 [(0.7…, [1], 0)]: (0.04 + 0.03)/0.1
 ```
 
-**Decoding with heralds.** A `ConditionedDecoder(model, decoder=...)`
-merges the parts of the fired heralds into each shot's model and then
+**Decoding with heralds.** `ConditionedDecoder.for_circuit(circuit,
+decoder=...)` builds the heralded model the decoder needs and the
+decoder on it (`ConditionedDecoder(model, decoder=...)` takes a model
+built before); it merges the parts of the fired heralds into each shot's model and then
 decodes on the other detectors:
 
 - `"union_find"` joins the erased edges (probability ½) into clusters
@@ -1123,8 +1128,8 @@ heralds yet"), and the exact `MatchingDecoder` is not conditioned. Union-find
 and matching need every base error and every herald part to flip at
 most two ordinary detectors: so it is in QSO's repetition and rotated
 surface-code memories, while in colour codes a single X flips three, and
-BP+OSD decodes them, on `heralded_error_model(decompose=False)` (the
-decomposed model refuses such errors).
+BP+OSD decodes them, on the model without decomposition, which
+`for_circuit` builds for it (the decomposed model refuses such errors).
 
 A repetition code whose d data qubits are each erased with probability
 p and read out perfectly fails exactly when all are erased and the
@@ -1145,7 +1150,7 @@ for k in range(d - 1):
     c.detector([data[k], data[k + 1]])        # D5..D8: Z_k Z_k+1
 c.observable(0, [data[0]])
 for method in ["union_find", "matching", "bposd"]:
-    dec = q.ConditionedDecoder(c.heralded_error_model(), decoder=method)
+    dec = q.ConditionedDecoder.for_circuit(c, decoder=method)
     fail = 0.0
     for erased in itertools.product([0, 1], repeat=d):
         E = [k for k in range(d) if erased[k]]

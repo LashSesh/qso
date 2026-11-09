@@ -342,7 +342,7 @@ def test_surface_code_at_half_erasure_fails_exactly_a_quarter(decoder: str) -> N
     # Σ_E Σ_x fail · 2^(9−|E|) = 2¹⁸ / 4.
     model = surface_capacity_d3().heralded_error_model()
     assert model.herald_detectors == list(range(9)) and len(model.base) == 0
-    dec = q.ConditionedDecoder(model, decoder)  # type: ignore[arg-type]
+    dec = q.ConditionedDecoder.for_circuit(surface_capacity_d3(), decoder)  # type: ignore[arg-type]
     total = 0
     for erased in range(512):
         support = [k for k in range(9) if erased >> k & 1]
@@ -391,7 +391,11 @@ def test_conditioned_decoder_detail_and_errors() -> None:
     assert matching.decode_with_weight([9, 10], [1]) == (0, 0.0)
     assert matching.decode_with_weight([9, 10, 1]) == (0, 0.0)
     assert matching.decode_with_weight([], [1]) == (0, 0.0)
-    bposd = q.ConditionedDecoder(model, "bposd", osd="osd0")
+    # BP+OSD refuses the decomposed model; for_circuit builds the whole one.
+    assert model.decomposed
+    with pytest.raises(ValueError, match="without decomposition"):
+        q.ConditionedDecoder(model, "bposd", osd="osd0")
+    bposd = q.ConditionedDecoder.for_circuit(surface_capacity_d3(), "bposd", osd="osd0")
     out = bposd.decode_detailed([9, 10, 1])
     assert out.observables == 0
     assert [bposd.slots()[e][1] for e in out.errors] == [[9, 10]]
@@ -428,7 +432,8 @@ def test_conditioned_decoder_detail_and_errors() -> None:
     assert w.outcomes(0) == [(0.5, [1, 2, 3], 0)]
     with pytest.raises(ValueError, match="flips 3 detectors"):
         q.ConditionedDecoder(w, "matching")
-    assert q.ConditionedDecoder(w, "bposd").decode([1, 2, 3], [0]) == 0
+    assert q.ConditionedDecoder.for_circuit(wide, "bposd").decode([1, 2, 3], [0]) == 0
+    assert not wide.heralded_error_model(decompose=False).decomposed
 
 
 def test_parts_above_one_half_are_applied_first() -> None:
@@ -448,8 +453,8 @@ def test_parts_above_one_half_are_applied_first() -> None:
     model = c.heralded_error_model()
     assert model.outcomes(0) == [(1.0, [d], 1)]
     det, obs = c.sample(5000, seed=3)
-    for name, decompose in [("union_find", True), ("matching", True), ("bposd", False)]:
-        dec = q.ConditionedDecoder(c.heralded_error_model(decompose=decompose), name)  # type: ignore[arg-type]
+    for name in ["union_find", "matching", "bposd"]:
+        dec = q.ConditionedDecoder.for_circuit(c, name)  # type: ignore[arg-type]
         assert int(np.sum(dec.decode_batch(det) != obs[:, 0])) == 0
         assert dec.decode([], list(range(d))) == 1
     # A Y-basis readout: X and Z have the same effect, one part at

@@ -2707,6 +2707,8 @@ class HeraldedErrorModel:
         outcomes: Sequence[Sequence[tuple[float, Sequence[int], int]]],
     ) -> HeraldedErrorModel: ...
     @property
+    def decomposed(self) -> bool: ...
+    @property
     def n_detectors(self) -> int: ...
     @property
     def n_observables(self) -> int: ...
@@ -2841,6 +2843,16 @@ class ConditionedDecoder:
     def __new__(
         cls,
         model: HeraldedErrorModel,
+        decoder: Literal["union_find", "matching", "bposd"] = "union_find",
+        max_iterations: int = 50,
+        bp_method: Literal["min_sum", "product_sum"] = "min_sum",
+        scaling: float = 0.625,
+        osd: Literal["osd0", "cs", "exhaustive"] = "cs",
+        osd_order: int = 7,
+    ) -> ConditionedDecoder: ...
+    @staticmethod
+    def for_circuit(
+        circuit: DetectorCircuit | RepeatedCircuit,
         decoder: Literal["union_find", "matching", "bposd"] = "union_find",
         max_iterations: int = 50,
         bp_method: Literal["min_sum", "product_sum"] = "min_sum",
